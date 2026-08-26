@@ -19,6 +19,7 @@ import {
   addressArmRequest,
   isTransientContainerCreateError,
   rankableTicks,
+  resourceNames,
 } from './bench-devbox-strategies';
 
 const tick = (
@@ -353,5 +354,18 @@ describe('container create retry classification', () => {
       'The container service is unreachable, try again later',
     )).toBe(true);
     expect(isTransientContainerCreateError('invalid strategy')).toBe(false);
+  });
+});
+
+describe('per-run resource ownership', () => {
+  test('one run owns one uniquely named Worker, bucket and container-app set', () => {
+    const resources = resourceNames('20260826003000');
+    expect(resources.worker).toBe('kinu-devbox-bench-20260826003000');
+    expect(resources.bucket).toBe(resources.worker);
+    expect(resources.containerApps).toEqual([
+      `${resources.worker}-snapshotchainbox`,
+      `${resources.worker}-r2fsbox`,
+      `${resources.worker}-overlaycasbox`,
+    ]);
   });
 });

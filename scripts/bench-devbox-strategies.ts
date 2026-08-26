@@ -36,7 +36,10 @@
  *   and polled for a sentinel.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   WRANGLER_FAILED, armSignalTeardown, delay, deleteContainerApps, describeThrown,
@@ -127,24 +130,60 @@ function parseDecisiveRun(text: string, source: string): DecisiveRun {
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 const BENCH_DIR = join(REPO_ROOT, 'packages/devbox/bench');
-const FIXTURE_WORKER = 'kinu-devbox-bench';
-/**
- * Container applications the platform derives from this fixture's Durable Object
- * classes, one per strategy arm, as `<worker>-<class lowercased>`. Teardown
- * deletes every one of them, because `wrangler delete` removes the Worker and
- * leaves these holding live instances that block the next deploy on the name.
- *
- * `max_instances` is 1 PER CLASS and three classes now compete, so the per-arm
- * container release at the end of `measureArm` is load-bearing rather than tidy:
- * without it the second arm failed every phase with `Maximum number of running
- * container instances exceeded`, and a third arm makes that likelier, not less.
- */
-const FIXTURE_CONTAINER_APPS = [
-  'kinu-devbox-bench-snapshotchainbox',
-  'kinu-devbox-bench-r2fsbox',
-  'kinu-devbox-bench-overlaycasbox',
-];
-const BUCKET = 'kinu-devbox-bench';
+const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
+const FIXTURE_BASE = 'kinu-devbox-bench';
+const FIXTURE_CLASSES = ['SnapshotChainBox', 'R2fsBox', 'OverlayCasBox'] as const;
+
+interface FixtureResources {
+  readonly worker: string;
+  readonly bucket: string;
+  readonly containerApps: readonly string[];
+  readonly configPath: string;
+  disposeConfig(): void;
+}
+
+export function resourceNames(
+  runId: string,
+): Omit<FixtureResources, 'configPath' | 'disposeConfig'> {
+  const worker = `${FIXTURE_BASE}-${runId}`;
+  return {
+    worker,
+    bucket: worker,
+    containerApps: FIXTURE_CLASSES.map((className) => `${worker}-${className.toLowerCase()}`),
+  };
+}
+
+/** One Worker, DO namespace, container-app set and bucket per run. Nothing is
+ * shared with an earlier run, and teardown can delete the complete set. */
+function createFixtureResources(runId: string): FixtureResources {
+  const names = resourceNames(runId);
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-devbox-bench-'));
+  const configPath = join(dir, 'wrangler.jsonc');
+  const basePath = join(BENCH_DIR, 'wrangler.jsonc');
+  let config = readFileSync(basePath, 'utf8');
+  const replaceOne = (before: string, after: string): void => {
+    if (config.split(before).length !== 2) {
+      throw new Error(`benchmark config expected exactly one ${before}`);
+    }
+    config = config.replace(before, after);
+  };
+  replaceOne('"name": "kinu-devbox-bench"', `"name": ${JSON.stringify(names.worker)}`);
+  replaceOne('"main": "worker.ts"', `"main": ${JSON.stringify(join(BENCH_DIR, 'worker.ts'))}`);
+  replaceOne(
+    '"$schema": "../../../node_modules/wrangler/config-schema.json"',
+    `"$schema": ${JSON.stringify(join(REPO_ROOT, 'node_modules/wrangler/config-schema.json'))}`,
+  );
+  replaceOne(
+    '"bucket_name": "kinu-devbox-bench"',
+    `"bucket_name": ${JSON.stringify(names.bucket)}`,
+  );
+  writeFileSync(configPath, config);
+  return {
+    ...names,
+    configPath,
+    disposeConfig: () => { rmSync(dir, { recursive: true, force: true }); },
+  };
+}
 const HARNESS = '/workspace/.devbox-bench';
 const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
 /**
@@ -207,7 +246,6 @@ interface Options {
    *  Off by default because it writes hundreds of megabytes per arm. */
   decisive: boolean;
   plan: boolean;
-  keep: boolean;
   /** Arms to run, from `--arms a,b`. Defaults to all three; an unknown name
    *  refuses rather than measuring an empty run. */
   arms: readonly Strategy[];
@@ -355,34 +393,43 @@ async function sh(fixture: Fixture, box: string, command: string): Promise<ExecR
 
 // ── lifecycle ───────────────────────────────────────────────────────────────
 
-async function deployFixture(token: string): Promise<{ fixture: Fixture; stop: () => void }> {
-  // A crashed earlier run can leave the container applications behind and the
-  // deploy then fails on the name.
-  const stale = deleteContainerApps(REPO_ROOT, FIXTURE_CONTAINER_APPS, log);
-  if (!stale.includes('absent')) log(`cleared stale container applications: ${stale.join(', ')}`);
+function deleteFixtureResources(resources: FixtureResources): readonly string[] {
+  let deleted = wrangler([
+    'delete', '--config', resources.configPath, '--force',
+  ], { allowFailure: true });
+  if (deleted.startsWith(WRANGLER_FAILED)) {
+    deleted = wrangler(['delete', '--name', resources.worker, '--force'], { allowFailure: true });
+  }
+  const workerResult = deleted.startsWith(WRANGLER_FAILED)
+    && !/not found|does not exist/i.test(deleted)
+    ? `worker: FAILED ${deleted.slice(0, 160)}`
+    : 'worker: deleted or absent';
+  return [
+    workerResult,
+    ...deleteContainerApps(REPO_ROOT, resources.containerApps, log),
+  ];
+}
 
-  const output = wrangler(['deploy', '--config', join(BENCH_DIR, 'wrangler.jsonc'), '--var', `BENCH_TOKEN:${token}`]);
+async function deployFixture(
+  token: string,
+  resources: FixtureResources,
+): Promise<{ fixture: Fixture; stop: () => readonly string[] }> {
+  const output = wrangler([
+    'deploy', '--config', resources.configPath, '--var', `BENCH_TOKEN:${token}`,
+  ]);
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
   if (origin === undefined) throw new Error(`deploy printed no workers.dev origin:\n${output.slice(-2500)}`);
   log(`deployed ${origin}`);
 
-  // TWO checks, and the second one exists because the first one is not enough.
-  //
-  // An unauthenticated 401 proves that SOMETHING is answering at this origin. It
-  // does not prove it is THIS deployment: the workers.dev hostname is stable, so
-  // a previous deployment answers 401 exactly the same way, and a run that
-  // started on that evidence got 401 back on its own token for every arm and
-  // reported two failed creates that were nothing of the kind. So the security
-  // assertion stays, and readiness now waits for an AUTHORIZED request to
-  // succeed — which is the only thing that proves the token this run minted is
-  // the token the live code is checking.
   const unauth = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })
     .then((r) => r.status)
     .catch((error) => {
       log(`the unauthenticated probe did not answer: ${describeThrown({ cause: error })}`);
       return 0;
     });
-  if (unauth === 200) throw new Error('the bench app answered an unauthenticated request; refusing to run');
+  if (unauth === 200) {
+    throw new Error('the bench app answered an unauthenticated request; refusing to run');
+  }
 
   const deadline = Date.now() + 180_000;
   for (;;) {
@@ -396,8 +443,7 @@ async function deployFixture(token: string): Promise<{ fixture: Fixture; stop: (
     if (authed === 200) break;
     if (Date.now() > deadline) {
       throw new Error(
-        `the deployment never accepted this run's token at ${origin} (last status ${authed}). `
-        + 'A stable workers.dev hostname means an older deployment can answer here.',
+        `the deployment never accepted this run's token at ${origin} (last status ${authed})`,
       );
     }
     await delay(3_000);
@@ -405,14 +451,7 @@ async function deployFixture(token: string): Promise<{ fixture: Fixture; stop: (
 
   return {
     fixture: { origin, token },
-    stop: () => {
-      let deleted = wrangler(['delete', '--config', join(BENCH_DIR, 'wrangler.jsonc'), '--force'], { allowFailure: true });
-      if (deleted.startsWith(WRANGLER_FAILED)) {
-        deleted = wrangler(['delete', '--name', FIXTURE_WORKER, '--force'], { allowFailure: true });
-      }
-      log(deleted.startsWith(WRANGLER_FAILED) ? `WARNING: Worker NOT deleted: ${deleted.slice(0, 200)}` : 'Worker deleted');
-      log(`container applications: ${deleteContainerApps(REPO_ROOT, FIXTURE_CONTAINER_APPS, log).join(', ')}`);
-    },
+    stop: () => deleteFixtureResources(resources),
   };
 }
 
@@ -1284,7 +1323,6 @@ function parseOptions(argv: readonly string[]): Options {
     budgetMs: Number.parseInt(value('budget-ms', '8000'), 10),
     decisive: argv.includes('--decisive'),
     plan: argv.includes('--plan'),
-    keep: argv.includes('--keep'),
     arms: value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
       const arm = STRATEGIES.find((s) => s === raw.trim());
       if (arm === undefined) {
@@ -1298,13 +1336,14 @@ function parseOptions(argv: readonly string[]): Options {
 
 async function main(): Promise<number> {
   const options = parseOptions(process.argv.slice(2));
+  const planned = resourceNames(options.runId);
   if (options.plan) {
     process.stdout.write(
-      `Devbox strategy A/B plan\n\narms          ${STRATEGIES.join(', ')}\n`
+      `Devbox strategy A/B plan\n\narms          ${options.arms.join(', ')}\n`
       + `phases        ${PHASES.join(',')}\n`
       + `process-driven ${[...PROCESS_PHASES].join(',')}\n`
       + `change sizes  ${CHANGE_SIZES_KIB.map((k) => (k >= 1024 ? `${k / 1024}MiB` : `${k}KiB`)).join(', ')}\n`
-      + `bucket        ${BUCKET}\nworker        ${FIXTURE_WORKER}\n`
+      + `bucket        ${planned.bucket}\nworker        ${planned.worker}\n`
       + `artifact      ${options.out}\n\nNothing has run. Drop --plan to execute.\n`,
     );
     return 0;
@@ -1312,28 +1351,41 @@ async function main(): Promise<number> {
   if (!existsSync(join(BENCH_DIR, 'worker.ts'))) {
     throw new Error(`the devbox bench app is not present at ${BENCH_DIR}`);
   }
-  if (wrangler(['whoami'], { allowFailure: true }).startsWith('WRANGLER_FAILED')) {
+  process.env.CLOUDFLARE_ACCOUNT_ID = BENCH_ACCOUNT_ID;
+  if (wrangler(['whoami'], { allowFailure: true }).startsWith(WRANGLER_FAILED)) {
     log('wrangler is not authenticated; nothing can be deployed');
     return 1;
   }
 
+  const resources = createFixtureResources(options.runId);
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
-  let stop: (() => void) | null = null;
+  let stop: (() => readonly string[]) | null = null;
   let failure: string | null = null;
+  publishTeardown(async (): Promise<void> => {
+    const statuses = (stop ?? (() => deleteFixtureResources(resources)))();
+    if (statuses.length > 0) log(`fixture resources: ${statuses.join(', ')}`);
+    if (statuses.some((status) => /failed/i.test(status))) {
+      failure ??= `Worker or container application cleanup failed: ${statuses.join(', ')}`;
+    }
+    const deleted = wrangler([
+      'r2', 'bucket', 'delete', resources.bucket,
+    ], { allowFailure: true });
+    const absent = /not found|does not exist/i.test(deleted);
+    if (deleted.startsWith(WRANGLER_FAILED) && !absent) {
+      const message = `bucket cleanup failed: ${deleted.slice(0, 240)}`;
+      failure ??= message;
+      log(message);
+    } else {
+      log(absent ? 'bucket already absent' : 'bucket deleted');
+    }
+    resources.disposeConfig();
+  });
 
   try {
-    const started = await deployFixture(token);
+    wrangler(['r2', 'bucket', 'create', resources.bucket]);
+    const started = await deployFixture(token, resources);
     stop = started.stop;
-    publishTeardown(async (): Promise<void> => {
-      if (stop !== null) stop();
-      if (!options.keep) {
-        const deleted = wrangler(['r2', 'bucket', 'delete', BUCKET], { allowFailure: true });
-        log(deleted.startsWith(WRANGLER_FAILED)
-          ? 'bucket not deleted (objects or pending multipart uploads remain; a lifecycle rule aborting incomplete uploads is the remedy)'
-          : 'bucket deleted');
-      }
-    });
     for (const strategy of options.arms) {
       arms.push(await measureArm(started.fixture, strategy, options));
     }
@@ -1346,13 +1398,12 @@ async function main(): Promise<number> {
 
   const meta: RunMeta = {
     date: new Date().toISOString().slice(0, 10),
-    worker: FIXTURE_WORKER,
-    bucket: BUCKET,
+    worker: resources.worker,
+    bucket: resources.bucket,
     image: 'docker.io/cloudflare/sandbox:0.12.8',
     seed: String(options.seed),
     'loop budget ms': String(options.budgetMs),
   };
-  // A run that stopped early says so in its own header rather than looking whole.
   if (failure !== null) meta['INCOMPLETE'] = failure;
   mkdirSync(dirname(join(REPO_ROOT, options.out)), { recursive: true });
   writeFileSync(join(REPO_ROOT, options.out), `${JSON.stringify({ meta, arms }, null, 2)}\n`);
