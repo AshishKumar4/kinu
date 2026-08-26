@@ -540,6 +540,20 @@ export async function run(): Promise<FuseProbeArtifact> {
     if (stage1.rangeReads.some((record) => !record.verified)) throw new Error('reference range read returned bytes that failed its shared-contract digest');
 
     await stopAndProveRestart(deployment.origin, token);
+    await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
+    const restartedIdentity = await request(
+      deployment.origin,
+      token,
+      '/prepare',
+      {},
+      RunIdentitySchema,
+    );
+    if (restartedIdentity.actualVersionDigest !== identity.actualVersionDigest) {
+      throw new Error('container restart changed the measured image identity');
+    }
+    // Container disk is ephemeral by contract. Reinstall the immutable probe
+    // bundle exactly as product onStart reinstalls its daemon.
+    await uploadProbeBundle(deployment.origin, token);
     const second = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.mjs stage2', 180_000);
     stage2 = parseExecReport('stage2', second, Stage2ReportSchema);
   } catch (error) {

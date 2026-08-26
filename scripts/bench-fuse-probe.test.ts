@@ -248,11 +248,20 @@ test('FuseProbeBox wiring: super-first onStart proof, typed mismatch, disposable
   // The token and health gates answer before body parsing or sandbox dispatch.
   const tokenGuard = indexOf('isAuthorized(env.FUSE_PROBE_TOKEN');
   const health = indexOf("pathname === '/health'");
+
   const bodyParse = indexOf('await request.json()');
   const dispatch = indexOf('handleProbeOp(pathname');
   expect(tokenGuard).toBeLessThan(health);
   expect(health).toBeLessThan(bodyParse);
   expect(bodyParse).toBeLessThan(dispatch);
+});
+test('container restart reinstalls the immutable probe before stage two', () => {
+  const restart = DRIVER_SOURCE.indexOf('await stopAndProveRestart');
+  const reupload = DRIVER_SOURCE.indexOf('await uploadProbeBundle', restart);
+  const stage2 = DRIVER_SOURCE.indexOf('probe.mjs stage2', restart);
+  expect(restart).toBeGreaterThan(-1);
+  expect(reupload).toBeGreaterThan(restart);
+  expect(stage2).toBeGreaterThan(reupload);
 });
 test('driver waits for authenticated propagation before container setup', () => {
   const readiness = DRIVER_SOURCE.indexOf('await awaitFixtureReady(deployment.origin, token)');
