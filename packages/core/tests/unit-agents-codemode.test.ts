@@ -44,9 +44,10 @@ import {
   type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index';
 // The role/tier tests read the ONE field source and the resolver DIRECTLY, so
-// this suite stays green while unrelated barrel surface is in flight.
 import {
   AGENTS_ACTION_FIELDS as ACTION_FIELDS,
+  agentsActionFieldsFor,
+  dispatchAgentsAction,
 } from '../src/tools/agents-tool';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
@@ -64,6 +65,17 @@ const AgentsInputSchemaContract = v.object({
 const ToolSchemaContract = v.object({
   jsonSchema: v.object({
     properties: v.record(v.string(), v.unknown()),
+  }),
+});
+const ActionVariantSchemaContract = v.object({
+  jsonSchema: v.object({
+    oneOf: v.array(v.object({
+      properties: v.object({
+        action: v.object({ const: v.string() }),
+        scope: v.union([v.object({ const: v.string() }), v.literal(false)]),
+      }),
+      required: v.array(v.string()),
+    })),
   }),
 });
 const SpawnCallInputSchema = v.object({
@@ -444,6 +456,29 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     // The refusal carries its classification, exactly as the declared type promises.
     expect(await member(ns, 'swarm').execute({})).toEqual({ reason: 'bad_input', error: expect.stringContaining('swarm needs `preset`') });
   });
+
+  test('native and codemode reject the same capability-inapplicable fields', async () => {
+    const deps = withBuildMode(fullDeps());
+    const nativeInput = parseAgentsToolInput({
+      action: 'hire',
+      scope: 'workspace',
+      mission: 'own the specialist workspace',
+      message: 'begin',
+      role: 'researcher',
+    });
+    const native = await dispatchAgentsAction(deps, nativeInput);
+    const codemode = await member(namespaceOf(fullDeps), 'hire').execute({
+      scope: 'workspace',
+      mission: 'own the specialist workspace',
+      message: 'begin',
+      role: 'researcher',
+    });
+    expect(native).toEqual({
+      reason: 'bad_input',
+      error: 'field "role" is not available for action "hire" on this actor',
+    });
+    expect(codemode).toEqual(native);
+  });
 });
 
 // ── The declaration the model reads ─────────────────────────────────────────
@@ -511,6 +546,37 @@ describe('agents.* codemode namespace — declared types', () => {
     const order = [...types.matchAll(/^ {2}(\w+)\(input/gm)].map((m) => m[1]);
     expect(order).toEqual([...AGENTS_TOOL_ACTIONS]);
   });
+
+  test('hire declares only the routes and requirements the native actor wires', () => {
+    const hireType = (types: string): string => {
+      const start = types.indexOf('hire(input:');
+      const end = types.indexOf('ask(input:', start);
+      return types.slice(start, end);
+    };
+
+    const teamOnly = hireType(createAgentsCodemodeProvider(
+      () => withBuildMode({ team: makeTeam().deps }),
+    ).types ?? '');
+    expect(teamOnly).toContain('role: string;');
+    expect(teamOnly).toContain('mission: string;');
+    expect(teamOnly).not.toContain('scope');
+    expect(teamOnly).not.toContain('message');
+
+    const peersOnly = hireType(createAgentsCodemodeProvider(
+      () => withBuildMode({ peers: makePeers().deps }),
+    ).types ?? '');
+    expect(peersOnly).not.toContain('role');
+    expect(peersOnly).not.toContain('tier');
+    expect(peersOnly).toContain('mission: string;');
+    expect(peersOnly).toContain('scope: "workspace";');
+    expect(peersOnly).toContain('message: string;');
+
+    const both = hireType(createAgentsCodemodeProvider(fullDeps).types ?? '');
+    expect(both).toContain('scope?: "subordinate";');
+    expect(both).toContain('scope: "workspace";');
+    expect(both).not.toContain('role?: string;');
+    expect(both).toContain('message: string;');
+  });
 });
 
 // ── one field source: native schema, codemode declaration and the parse ─────
@@ -522,9 +588,51 @@ describe('agents surface — one action-field source', () => {
       const body = types.slice(types.indexOf(`${action}(input:`));
       const open = body.indexOf('{');
       const close = body.indexOf('})', open);
-      const memberFields = [...body.slice(open, close).matchAll(/^\s{4}(\w+)/gm)].map((m) => m[1]);
-      expect(memberFields).toEqual([...ACTION_FIELDS[action]]);
+      const memberFields = [...new Set(
+        [...body.slice(open, close).matchAll(/^\s{4}(\w+)/gm)].map((m) => m[1]),
+      )];
+      expect(memberFields).toEqual([...agentsActionFieldsFor(fullDeps(), action)]);
     }
+  });
+
+  test('the native schema declares the same capability-aware hire variants', () => {
+    const hireVariants = (deps: TestAgentsToolDeps) => v.parse(
+      ActionVariantSchemaContract,
+      createAgentsTool(withBuildMode(deps)).inputSchema,
+    ).jsonSchema.oneOf.filter(variant => variant.properties.action.const === 'hire');
+
+    const teamOnly = hireVariants({ team: makeTeam().deps });
+    expect(teamOnly).toEqual([{
+      properties: { action: { const: 'hire' }, scope: { const: 'subordinate' } },
+      required: ['action', 'role', 'mission'],
+    }]);
+
+    const peersOnly = hireVariants({ peers: makePeers().deps });
+    expect(peersOnly).toEqual([{
+      properties: { action: { const: 'hire' }, scope: { const: 'workspace' } },
+      required: ['action', 'mission', 'scope', 'message'],
+    }]);
+
+    expect(hireVariants(fullDeps())).toEqual([...teamOnly, ...peersOnly]);
+  });
+
+  test('native and codemode hide fields whose transport is not wired', () => {
+    const advertised = (deps: TestAgentsToolDeps) => new Set(Object.keys(v.parse(
+      ToolSchemaContract,
+      createAgentsTool(withBuildMode(deps)).inputSchema,
+    ).jsonSchema.properties));
+
+    const teamOnly = advertised({ team: makeTeam().deps });
+    for (const field of ['scope', 'topic', 'event_id']) expect(teamOnly.has(field)).toBe(false);
+    for (const field of ['role', 'tier', 'deliverable', 'deadline_hint', 'keep_history']) {
+      expect(teamOnly.has(field)).toBe(true);
+    }
+
+    const peersOnly = advertised({ peers: makePeers().deps });
+    for (const field of ['role', 'tier', 'deliverable', 'deadline_hint', 'keep_history']) {
+      expect(peersOnly.has(field)).toBe(false);
+    }
+    for (const field of ['scope', 'topic', 'event_id']) expect(peersOnly.has(field)).toBe(true);
   });
 
   test('the swarm member carries `name` — the drift that was measured', () => {

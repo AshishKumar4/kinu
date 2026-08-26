@@ -41,10 +41,12 @@ import { TOOL_REACH, type AgentsToolAction } from './registry';
 import { SWARM_PRESET_DOCTRINE } from '../strategy/swarm';
 import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json';
 import {
+  agentsActionInputVariantsFor,
   agentsActionsFor,
   dispatchAgentsAction,
   parseAgentsToolInput,
-  AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,
+  AGENTS_FIELD_TS_TYPES,
+  type AgentsActionInputVariant,
   type AgentsToolDeps,
 } from './agents-tool';
 
@@ -121,16 +123,31 @@ const AGENTS_CODEMODE_RETURNS = {
  *  beside it, so the sandbox contract cannot drift from the surface it mirrors
  *  (this rendering is exactly where a hand-written copy once lost the swarm's
  *  `name` field). */
-function renderInputType(action: AgentsToolAction): string {
-  const required: Record<string, true> = {};
-  for (const field of AGENTS_ACTION_REQUIRED_FIELDS[action]) required[field] = true;
-  const fields = AGENTS_ACTION_FIELDS[action]
-    .map((field) => `    ${field}${required[field] ? '' : '?'}: ${AGENTS_FIELD_TS_TYPES[field]};`)
-    .join('\n');
+function renderInputVariant(
+  fields: readonly (keyof typeof AGENTS_FIELD_TS_TYPES)[],
+  variant: AgentsActionInputVariant,
+): string {
+  const required = new Set<keyof typeof AGENTS_FIELD_TS_TYPES>(variant.required);
+  return [
+    '{',
+    ...fields.map((field) => {
+      const optional = required.has(field) ? '' : '?';
+      const type = field === 'scope' && variant.scope !== undefined
+        ? `"${variant.scope}"`
+        : AGENTS_FIELD_TS_TYPES[field];
+      return `    ${field}${optional}: ${type};`;
+    }),
+    '  }',
+  ].join('\n');
+}
+
+function renderInputType(action: AgentsToolAction, deps: AgentsToolDeps): string {
+  const variants = agentsActionInputVariantsFor(deps, action);
+  const input = variants.length === 1
+    ? renderInputVariant(variants[0]!.fields, variants[0]!)
+    : variants.map(variant => renderInputVariant(variant.fields, variant)).join('\n  | ');
   return `${AGENTS_CODEMODE_MEMBER_DOCS[action]}
-  ${action}(input: {
-${fields}
-  }): ${AGENTS_CODEMODE_RETURNS[action]};`;
+  ${action}(input: ${variants.length === 1 ? input : `\n  | ${input}`}): ${AGENTS_CODEMODE_RETURNS[action]};`;
 }
 
 /** One-line member descriptions for the provider record. */
@@ -146,10 +163,10 @@ const AGENTS_CODEMODE_DESCRIPTIONS = {
 
 /** The `agents` namespace declaration for one actor's actions. Ordering comes
  *  from `agentsActionsFor`, which walks the canonical ladder. */
-function renderTypes(actions: readonly AgentsToolAction[]): string {
+function renderTypes(actions: readonly AgentsToolAction[], deps: AgentsToolDeps): string {
   return [
     'export declare const agents: {',
-    ...actions.map(renderInputType),
+    ...actions.map(action => renderInputType(action, deps)),
     '};',
     '',
   ].join('\n');
@@ -219,7 +236,7 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
     // sandbox at all, so a declaration that took that away would fail to
     // compile rather than leave this provider advertising a dead namespace.
     name: TOOL_REACH.agents.codemode,
-    types: renderTypes(actions),
+    types: renderTypes(actions, initialDeps),
     tools,
     positionalArgs: true,
   };

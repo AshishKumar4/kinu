@@ -687,6 +687,107 @@ export const AGENTS_ACTION_REQUIRED_FIELDS = {
   dismiss: ['agent'],
 } as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
 
+const HIRE_SUBORDINATE_FIELDS = [
+  'agent', 'role', 'mission', 'tier',
+] as const satisfies readonly AgentsToolInputField[];
+const HIRE_WORKSPACE_FIELDS = [
+  'agent', 'mission', 'scope', 'message',
+] as const satisfies readonly AgentsToolInputField[];
+
+export interface AgentsActionInputVariant {
+  readonly required: readonly AgentsToolInputField[];
+  readonly fields: readonly AgentsToolInputField[];
+  readonly scope?: 'subordinate' | 'workspace';
+  readonly scopeOptional?: boolean;
+}
+
+/** The accepted input variants for one action on this actor. Native JSON
+ * Schema and codemode declarations both project this table. */
+export function agentsActionInputVariantsFor(
+  deps: AgentsToolDeps,
+  action: AgentsToolAction,
+): readonly AgentsActionInputVariant[] {
+  if (action !== 'hire') {
+    return [{
+      fields: agentsActionFieldsFor(deps, action),
+      required: AGENTS_ACTION_REQUIRED_FIELDS[action],
+    }];
+  }
+  const variants: AgentsActionInputVariant[] = [];
+  if (deps.team) {
+    const fields: AgentsToolInputField[] = [...HIRE_SUBORDINATE_FIELDS];
+    if (deps.peers) fields.push('scope');
+    variants.push({
+      fields,
+      required: ['role', 'mission'],
+      scope: 'subordinate',
+      scopeOptional: true,
+    });
+  }
+  if (deps.peers) {
+    variants.push({
+      fields: HIRE_WORKSPACE_FIELDS,
+      required: ['mission', 'scope', 'message'],
+      scope: 'workspace',
+    });
+  }
+  return variants;
+}
+
+/** Fields one action actually reads under the transports this actor wires. */
+export function agentsActionFieldsFor(
+  deps: AgentsToolDeps,
+  action: AgentsToolAction,
+): readonly AgentsToolInputField[] {
+  const fields = AGENTS_ACTION_FIELDS[action];
+  switch (action) {
+    case 'swarm':
+      return deps.fork ? fields : [];
+    case 'hire':
+      if (deps.team && deps.peers) {
+        return fields.filter(field =>
+          HIRE_SUBORDINATE_FIELDS.some(candidate => candidate === field)
+          || HIRE_WORKSPACE_FIELDS.some(candidate => candidate === field));
+      }
+      if (deps.team) return HIRE_SUBORDINATE_FIELDS;
+      if (deps.peers) return HIRE_WORKSPACE_FIELDS;
+      return [];
+    case 'ask':
+      return fields.filter(field =>
+        field === 'agent'
+        || field === 'message'
+        || (field === 'topic' && deps.peers !== undefined)
+        || ((field === 'deliverable' || field === 'deadline_hint') && deps.team !== undefined));
+    case 'send':
+      return fields.filter(field =>
+        field === 'agent' || field === 'message' || (field === 'topic' && deps.peers !== undefined));
+    case 'reply':
+      return deps.peers ? fields : [];
+    case 'list':
+      return deps.team || deps.peers ? fields : [];
+    case 'dismiss':
+      return deps.team ? fields : [];
+  }
+}
+
+function agentsJsonSchemaVariants(
+  deps: AgentsToolDeps,
+  actions: readonly AgentsToolAction[],
+) {
+  return actions.flatMap(action =>
+    agentsActionInputVariantsFor(deps, action).map((variant) => {
+      const properties = {
+        action: { const: action },
+        scope: variant.scope === undefined ? false : { const: variant.scope },
+      };
+      return {
+        type: 'object' as const,
+        properties,
+        required: ['action', ...variant.required],
+      };
+    }));
+}
+
 /**
  * The model-facing parse. `strictObject`, not `object`: valibot's `object`
  * EXCLUDES an unrecognised entry rather than rejecting it, which on this surface
@@ -1010,6 +1111,7 @@ interface BadInputRefusal {
 function badInput(error: string): BadInputRefusal {
   return { reason: 'bad_input', error };
 }
+
 
 /**
  * The mission scope this call runs under: the caller's, narrowed to a fresh child
@@ -1418,14 +1520,12 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       type: 'string',
       description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for hire (auto-generated from the role when omitted) and detail filter for list.`,
     },
-    role: { type: 'string', maxLength: 64, description: `For action=hire: the catalog role to hire — one of the ids listed below.${roleSummaryText(deps)}` },
     // Says what a mission is FOR, because the hire rung's context fact makes it
     // load-bearing: this text plus a bounded digest of the caller's recent
     // messages is the subordinate's whole starting knowledge. The sentence is
     // DELEGATION_INHERITANCE.hire.brief — the fork brief's opposite, from the
     // same per-action source, so neither field can be handed the other's rule.
     mission: { type: 'string', maxLength: 20000, description: `For action=hire: the helper's mission — it seeds its identity and runs as its first turn. ${DELEGATION_INHERITANCE.hire.brief}` },
-    tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
     message: {
       type: 'string', maxLength: 20000,
       description: 'The work or note for ask/send, the answer for reply, or the first delegated task for hire scope=workspace.',
@@ -1444,12 +1544,21 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   }
   if (deps.team) {
     Object.assign(properties, {
+      role: { type: 'string', maxLength: 64, description: `For action=hire: the catalog role to hire — one of the ids listed below.${roleSummaryText(deps)}` },
+      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
       deliverable: { type: 'string', maxLength: 2000, description: 'For ask to a subordinate: what the finished result should be (optional).' },
       deadline_hint: { type: 'string', maxLength: 200, description: 'For ask to a subordinate: optional urgency/deadline hint.' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
     });
   }
   return properties;
+}
+
+function agentsInputProperties(deps: AgentsToolDeps) {
+  return {
+    ...swarmProperties(deps),
+    ...converseProperties(deps),
+  };
 }
 
 /**
@@ -1550,6 +1659,12 @@ export async function dispatchAgentsAction(
                 + 'hire a subordinate here instead (omit scope), or run a search.',
             } satisfies DelegationDepthRefusal;
           }
+          if (input.role !== undefined) {
+            return badInput('field "role" is not available for action "hire" on this actor');
+          }
+          if (input.tier !== undefined) {
+            return badInput('field "tier" is not available for action "hire" on this actor');
+          }
           if (!input.mission || !input.message) return badInput('hire scope=workspace requires mission and message');
           const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
             purpose: input.mission,
@@ -1567,6 +1682,12 @@ export async function dispatchAgentsAction(
             reason: 'denied',
             error: 'hiring subordinates is not available on this actor',
           } satisfies DelegationDepthRefusal;
+        }
+        if (!peers && input.scope !== undefined) {
+          return badInput('field "scope" is not available for action "hire" on this actor');
+        }
+        if (input.message !== undefined) {
+          return badInput('field "message" is not available for action "hire" on this actor');
         }
         if (!input.role || !input.mission) return badInput('hire requires role and mission');
         // The role is a CATALOG id here — validated, spawn-checked and carried
@@ -1736,9 +1857,9 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
             ...(team ? ['dismiss = retire a subordinate (archived by default — its context is kept).'] : []),
           ].join(' '),
         },
-        ...swarmProperties(deps),
-        ...converseProperties(deps),
+        ...agentsInputProperties(deps),
       },
+      oneOf: agentsJsonSchemaVariants(deps, actions),
       // No `additionalProperties: false` here, deliberately. The AI SDK
       // validates a tool call against this schema BEFORE `execute`, so the
       // declaration refusing unknown properties would replace the message below
