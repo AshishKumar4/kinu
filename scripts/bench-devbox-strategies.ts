@@ -880,7 +880,7 @@ async function measureArm(
       }
       if (verified.ok !== true || verified.checks === undefined) {
         const error = verified.error ?? 'verify returned no checks';
-        const transient = /OperationInterrupted|container service is unreachable|no container instance|timed out|TimeoutError/i
+        const transient = /OperationInterrupted|container service is unreachable|no container instance|timed out|TimeoutError|squashfuse mount failed.*No such file|lower .*does not exist/i
           .test(error);
         if (transient && attempt < attempts) {
           log(`${strategy}: verify attempt ${attempt}/${attempts} returned a transient error; retrying`);
