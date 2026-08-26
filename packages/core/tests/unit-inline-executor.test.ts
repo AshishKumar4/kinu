@@ -12,7 +12,6 @@ import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import { createInlineExecutor } from '../src/execution/inline';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { initCraftScoreTables } from '../src/craft/schemas';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
 import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/views/index';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
@@ -431,13 +430,12 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
 describe('workspace.createTool — the tool is born scorable', () => {
   test('a created tool gets a neutral prior, so the floor can ever see it', async () => {
     const { rt } = createTestRuntime();
-    initCraftScoreTables(rt.storage.execRaw);
     const exec = buildExec(rt);
 
     await exec.tools.createTool.execute('summarize', 'summarizes', 'async (x) => x');
 
     const row = rt.storage.sql<{ score: number; uses: number }>`
-      SELECT score, uses FROM craft_scores WHERE tool_name = 'summarize'`[0];
+      SELECT score, uses FROM crafted_tools WHERE name = 'summarize'`[0];
     if (!row) throw new Error('created tool did not receive a score row');
     expect(row.score).toBe(CRAFT_NEUTRAL_PRIOR);
     expect(row.uses).toBe(0);
@@ -445,15 +443,14 @@ describe('workspace.createTool — the tool is born scorable', () => {
 
   test('re-crafting an existing tool never wipes what it earned', async () => {
     const { rt } = createTestRuntime();
-    initCraftScoreTables(rt.storage.execRaw);
     const exec = buildExec(rt);
 
     await exec.tools.createTool.execute('summarize', 'v1', 'async (x) => x');
-    void rt.storage.sql`UPDATE craft_scores SET score = 0.88, uses = 7 WHERE tool_name = 'summarize'`;
+    void rt.storage.sql`UPDATE crafted_tools SET score = 0.88, uses = 7 WHERE name = 'summarize'`;
     await exec.tools.createTool.execute('summarize', 'v2', 'async (x) => x + 1');
 
     const row = rt.storage.sql<{ score: number; uses: number }>`
-      SELECT score, uses FROM craft_scores WHERE tool_name = 'summarize'`[0];
+      SELECT score, uses FROM crafted_tools WHERE name = 'summarize'`[0];
     if (!row) throw new Error('recrafted tool lost its score row');
     expect(row.score).toBe(0.88);
     expect(row.uses).toBe(7);
@@ -461,7 +458,6 @@ describe('workspace.createTool — the tool is born scorable', () => {
 
   test('a vetoed tool is neither stored nor scored', async () => {
     const { rt } = createTestRuntime();
-    initCraftScoreTables(rt.storage.execRaw);
     const exec = buildExec(rt);
 
     const res = v.parse(ToolOkSchema, await exec.tools.createTool.execute(
@@ -469,7 +465,8 @@ describe('workspace.createTool — the tool is born scorable', () => {
     ));
     expect(res.ok).toBe(false);
     expect(rt.craftStore.get('sneaky')).toBeUndefined();
-    expect(rt.storage.sql`SELECT score FROM craft_scores WHERE tool_name = 'sneaky'`).toEqual([]);
+    expect(rt.craftStore.get('sneaky')).toBeUndefined();
+    expect(rt.storage.sql`SELECT name FROM crafted_tools WHERE name = 'sneaky'`).toEqual([]);
   });
 });
 

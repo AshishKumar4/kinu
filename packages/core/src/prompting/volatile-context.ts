@@ -89,6 +89,18 @@ export interface DynamicApproval {
   readonly detail: string;
 }
 
+/**
+ * One active roster crossing the prompt boundary: every item that passes its
+ * store's open/running filter, plus the TRUE count of that filtered set. A
+ * store may bound `items` for transport, but never silently — the renderer
+ * states its elision from `total`, so a capped read cannot lie about what it
+ * dropped (and an item behind many closed siblings can never vanish).
+ */
+export interface ActiveRoster<T> {
+  readonly items: readonly T[];
+  readonly total: number;
+}
+
 /** The live state of the system at one model step. Every field is read from
  *  its existing source of truth at render time; this type owns no state.
  *
@@ -109,17 +121,17 @@ export interface DynamicContext {
    *  doctrine itself lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
   /** Background work still running (newest first). */
-  jobs?: readonly DynamicJob[];
+  jobs?: ActiveRoster<DynamicJob>;
   /** The agent's own open task list, in write order, each task followed by its
    *  open subtasks. Settled items are omitted — they are read back with
    *  `tasks({action:'list'})`, and carrying them here would grow the block for
    *  the life of the workspace. */
-  tasks?: readonly DynamicTask[];
+  tasks?: ActiveRoster<DynamicTask>;
   /** Subordinates and forked head runs still open (most recent first). */
-  delegates?: readonly DynamicDelegate[];
+  delegates?: ActiveRoster<DynamicDelegate>;
   /** Approvals/consent waiting on the user (oldest first — the one that has
    *  been blocked longest matters most). */
-  approvals?: readonly DynamicApproval[];
+  approvals?: ActiveRoster<DynamicApproval>;
   /** Capabilities the agent was configured to have that are NOT on this
    *  turn's surface — an MCP server that missed its startup budget, say.
    *  Without this the tools are simply absent: the model plans as if a
@@ -187,21 +199,26 @@ export interface DynamicContextSources {
    *  so a finding recorded mid-turn is visible on the very next step. */
   readonly recoveryFindings: readonly string[];
   readonly executors: readonly PromptExecutorInfo[];
-  readonly runningJobs: ReadonlyArray<{ id: string; kind: string; label: string | null }>;
-  /** The open half of the agent's task list — TaskListStore.listOpen(). */
-  readonly openTasks: ReadonlyArray<{
+  /** The running half of the background-job registry, with its true count —
+   *  BackgroundJobStore.listRunning(). */
+  readonly runningJobs: ActiveRoster<{ id: string; kind: string; label: string | null }>;
+  /** The open half of the agent's task list — TaskListStore.listOpen(), which
+   *  filters open items BEFORE its transport bound and reports both. */
+  readonly openTasks: ActiveRoster<{
     id: string; title: string; status: string;
     subtasks: ReadonlyArray<{ id: string; title: string; status: string }>;
   }>;
-  readonly liveHeadRuns: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>;
-  /** Subordinates THIS backend alone knows about — its own hires, before the
-   *  search roster below is added. Absent where a backend has no roster store;
-   *  an absent plane renders nothing rather than inventing an empty one. */
+  /** Live search runs — HeadJournal.listLive(), bounded page plus true total. */
+  readonly liveHeadRuns: ActiveRoster<{ rootId: string; rationale: string; running: number; total: number }>;
+  /** Subordinates THIS backend alone knows about — its own hires, listed ahead
+   *  of the search roster. A workspace roster is small and already excludes
+   *  dismissed rows, so it rides whole. Absent where a backend has no roster
+   *  store; an absent plane renders nothing rather than inventing an empty one. */
   readonly subordinateDelegates?: readonly DynamicDelegate[];
   /** Decisions parked on the user — consents awaiting an answer and deferred
    *  approvals parked for later. The plane that tells a blocked agent whether
    *  it is stuck on itself or stuck on the human. */
-  readonly approvals?: readonly DynamicApproval[];
+  readonly approvals?: ActiveRoster<DynamicApproval>;
    readonly missingCapabilities: readonly MissingCapability[];
 }
 
@@ -214,21 +231,30 @@ export interface DynamicContextSources {
  * each backend built the object itself: a plane added on one side simply did
  * not exist for the other agent, with nothing to say so. Nothing here is
  * clock-derived; a wall-clock field would re-fingerprint the block every
- * request and append one per step.
- */
+ *  request and append one per step. */
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
+  const subordinateDelegates = sources.subordinateDelegates ?? [];
+  const headDelegates = searchDelegates(sources.liveHeadRuns.items);
   const context: DynamicContext = {
     // Re-listed per step: a sandbox provisioned or a device connected mid-turn
     // flips availability, and the whole point of the block is to say so.
     executors: sources.executors,
-    jobs: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
-    tasks: flattenTaskList(sources.openTasks),
-    delegates: [
-      ...(sources.subordinateDelegates ?? []),
-      ...searchDelegates(sources.liveHeadRuns),
-    ],
+    jobs: {
+      items: sources.runningJobs.items.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
+      total: sources.runningJobs.total,
+    },
+    tasks: {
+      items: flattenTaskList(sources.openTasks.items),
+      // The store already counts flattened open rows — the same unit the cap
+      // below spends.
+      total: sources.openTasks.total,
+    },
+    delegates: {
+      items: [...subordinateDelegates, ...headDelegates],
+      total: subordinateDelegates.length + sources.liveHeadRuns.total,
+    },
   };
-  if (sources.approvals && sources.approvals.length > 0) context.approvals = sources.approvals;
+  if (sources.approvals && sources.approvals.total > 0) context.approvals = sources.approvals;
   if (sources.factsBlock) context.factsBlock = sources.factsBlock;
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
   if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
@@ -385,25 +411,30 @@ const RECOVERY_ENTRY_CHARS = 480;
  *  line at most — the model needs to recognize the item, not re-read it. */
 const ENTRY_CHARS = 120;
 
+/** Head+tail-free one-liner: collapse whitespace, cut at the bound. */
 function clip(text: string, max = ENTRY_CHARS): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
   return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
 /** One capped roster section: `title`, the first `cap` rendered rows, and an
- *  honest elision line when the caller had more. Null when it had none. */
+ *  honest elision line counted from the roster's TRUE total — never from the
+ *  page a store happened to return. Null when there was nothing active. */
 function rosterSection<T>(
   title: string,
-  items: readonly T[],
+  roster: ActiveRoster<T>,
   cap: number,
   row: (item: T) => string,
 ): string | null {
-  if (items.length === 0) return null;
-  const lines = items.slice(0, cap).map(row);
-  const elided = items.length - lines.length;
+  if (roster.total === 0) return null;
+  const lines = roster.items.slice(0, cap).map(row);
+  const elided = roster.total - lines.length;
   if (elided > 0) lines.push(`- …and ${elided} more, not shown`);
   return [title, ...lines].join('\n');
 }
+
+/** Shared empty page: an absent plane renders nothing, never "(none)". */
+const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 /**
  * The ledger-fed dynamic-context block (or null when there is nothing to say).
@@ -423,7 +454,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
 
   sections.push(rosterSection(
     '## Proven by execution (the runtime watched each of these calls keep failing until a CHANGED call ran clean — evidence about this environment, not a verdict on correctness)',
-    ctx.recoveries ?? [], MAX_RECOVERIES,
+    { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, MAX_RECOVERIES,
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
 
@@ -449,31 +480,31 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
 
   sections.push(rosterSection(
     '## Your task list — what is still open (you keep this with the `tasks` tool)',
-    ctx.tasks ?? [], MAX_TASK_ROWS,
+    ctx.tasks ?? EMPTY_ROSTER, MAX_TASK_ROWS,
     (task) => `${task.parentId ? '  - ' : '- '}${task.id} [${task.status}] ${clip(task.title)}`,
   ));
 
   sections.push(rosterSection(
     '## Background work still running (collect it before you finish)',
-    ctx.jobs ?? [], MAX_JOBS,
+    ctx.jobs ?? EMPTY_ROSTER, MAX_JOBS,
     (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
   ));
 
   sections.push(rosterSection(
     '## Delegates working for you',
-    ctx.delegates ?? [], MAX_DELEGATES,
+    ctx.delegates ?? EMPTY_ROSTER, MAX_DELEGATES,
     (d) => `- ${d.name} (${d.kind}) — ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
   ));
 
   sections.push(rosterSection(
     '## Waiting on the user (not on you)',
-    ctx.approvals ?? [], MAX_APPROVALS,
+    ctx.approvals ?? EMPTY_ROSTER, MAX_APPROVALS,
     (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
   ));
 
   sections.push(rosterSection(
     '## Configured but NOT available this turn — plan without these, and say so if asked',
-    ctx.missingCapabilities ?? [], MAX_MISSING_CAPABILITIES,
+    { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, MAX_MISSING_CAPABILITIES,
     (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
   ));
 

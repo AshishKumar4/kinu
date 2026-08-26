@@ -11,9 +11,10 @@ import { describe, expect, test } from 'bun:test';
 import {
   EventLog, ReplyChannelStore, TriggerRegistry,
   acceptWebhookDelivery, createWebhookSecretStore, hmacSha256Hex,
-  initEventsHubTables, initWebhookRateLimitTables, registerDurableWebhook,
+  initEventsHubTables, initWebhookRateLimitTables, registerDurableWebhook, cancelTrigger,
   type SqlExec, type WebhookDelivery,
 } from '../src/index';
+import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 
@@ -315,5 +316,56 @@ describe('webhook registration', () => {
   test('a secret store with no table yet answers null rather than throwing', async () => {
     const db = new Database(':memory:');
     expect(await createWebhookSecretStore(makeSql(db)).get('webhook_secret_absent')).toBeNull();
+  });
+});
+
+describe('revocation closes the trigger and deletes its secret together', () => {
+  test('revoking deletes the secret material and retains the byte-free audit row', async () => {
+    const h = hub();
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
+    const spec: Partial<WebhookTriggerSpec> = h.triggers.get(trigger_id)!.spec;
+
+    expect(cancelTrigger(h.triggers, trigger_id, NOW, h.secrets)).toEqual({ ok: true, changed: true });
+
+    // The plaintext is gone from storage the moment the trigger closed — one
+    // host call, one transaction on the single-threaded SQLite both backends run.
+    expect(await h.secrets.get(spec.secret_id!)).toBeNull();
+    // The audit half survives, and it never carried the secret.
+    const row = h.triggers.get(trigger_id)!;
+    expect(row.state).toBe('revoked');
+    expect(row.revoked_at).toBe(NOW);
+    expect(JSON.stringify(row.spec)).not.toContain('shhh');
+    // A delivery against the revoked trigger reports why, and reads no secret.
+    expect(await h.deliver({ trigger_id, bearer_header: 'Bearer shhh' }))
+      .toEqual({ status: 'rejected', http_status: 503, reason: 'trigger revoked' });
+  });
+
+  test('repeat revocation is idempotent', async () => {
+    const h = hub();
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'k' });
+    expect(cancelTrigger(h.triggers, trigger_id, NOW, h.secrets).changed).toBe(true);
+    expect(cancelTrigger(h.triggers, trigger_id, NOW + 1, h.secrets)).toEqual({ ok: true, changed: false });
+  });
+
+  test('secrets whose trigger is gone or terminal are purged; a live one survives', async () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    initEventsHubTables(sql);
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
+
+    const live = await registerDurableWebhook(triggers, { label: 'live', auth_mode: 'bearer' }, NOW);
+    const dying = await registerDurableWebhook(triggers, { label: 'old', auth_mode: 'bearer' }, NOW);
+    triggers.revoke(dying.trigger_id, NOW);
+
+    const secrets = createWebhookSecretStore(sql);
+    secrets.put(live.secret_id, live.trigger_id, 'keep-me', NOW);
+    secrets.put(dying.secret_id, dying.trigger_id, 'orphan-by-revocation', NOW);
+    secrets.put('webhook_secret_ghost', 'trg-never-existed', 'orphan-by-absence', NOW);
+
+    // A fresh activation rebuilds the store; the sweep runs with it.
+    createWebhookSecretStore(sql);
+    expect(await secrets.get(live.secret_id)).toBe('keep-me');
+    expect(await secrets.get(dying.secret_id)).toBeNull();
+    expect(await secrets.get('webhook_secret_ghost')).toBeNull();
   });
 });

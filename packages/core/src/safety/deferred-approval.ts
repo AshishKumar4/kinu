@@ -48,6 +48,7 @@
 import type { DynamicApproval } from '../prompting/volatile-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { SignalDeliverer } from '../types/signals';
+import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
 import {
   formatApproval, gatedGrants, reviewCommand,
@@ -78,15 +79,14 @@ export type DeferredApprovalStatus =
   /** The owner said yes. The command has not run; the grant is unspent. */
   | 'approved'
   /** The owner said no. */
-  | 'denied'
-  /** The owner said yes and the agent has since re-issued the command, so the
-   *  grant is spent — a second run needs a second approval. */
-  | 'used';
+  | 'denied';
+  // A spent grant is NOT a status: spending DELETES the row, and the
+  // `approval_consumed` run event is the durable audit that it was used.
 
-/** What the owner can pick. `queued` and `used` are states the queue reaches
- *  on its own. `always` is `approved` plus a standing grant for the rules this
- *  command tripped on the executor it was bound for — the same
- *  ask-once-then-remember shape device consent uses for a device. */
+/** What the owner can pick. `queued` is a state the queue reaches on its own.
+ *  `always` is `approved` plus a standing grant for the rules this command
+ *  tripped on the executor it was bound for — the same ask-once-then-remember
+ *  shape device consent uses for a device. */
 export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
 
 /** One action parked on the owner. */
@@ -124,7 +124,7 @@ interface Row {
 }
 
 function toAction(r: Row): DeferredApproval {
-  const status = v.safeParse(v.picklist(['queued', 'approved', 'denied', 'used']), r.status);
+  const status = v.safeParse(v.picklist(['queued', 'approved', 'denied']), r.status);
   return {
     id: r.id,
     command: r.command,
@@ -149,6 +149,10 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor
   // A workspace that parked an action before the gate knew about executors has
   // rows without one; they read back as '' and fail closed everywhere.
   reconcileColumns(sql, execRaw, 'deferred_approvals', { executor: `TEXT NOT NULL DEFAULT ''` });
+  // Spending deletes its row and writes the approval_consumed run event
+  // instead, so a surviving status='used' row is pre-cutover history no reader
+  // can name — remove it rather than let it linger unreadable.
+  execRaw(`DELETE FROM deferred_approvals WHERE status = 'used'`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status ON deferred_approvals(status)`);
 }
 
@@ -162,9 +166,10 @@ export class DeferredApprovalStore {
   /** The live row for this exact command ON THIS EXECUTOR, if there is one.
    *  'queued' (waiting) and 'approved' (grant unspent) are the two live
    *  states; 'denied' is the owner's standing answer and is also read back
-   *  here, so a refusal is reported rather than re-asked. A spent grant
-   *  ('used') is history. The executor is part of the key because an approval
-   *  for the agent's own workspace is not an approval for the owner's laptop.
+   *  here, so a refusal is reported rather than re-asked. A spent grant is
+   *  not here at all: spending deleted its row. The executor is part of the
+   *  key because an approval for the agent's own workspace is not an approval
+   *  for the owner's laptop.
    */
   standing(command: string, executor: string): DeferredApproval | null {
     const rows = this.sql<Row>`
@@ -203,12 +208,17 @@ export class DeferredApprovalStore {
     return this.get(id);
   }
 
-  /** Spend an approved grant, reporting true only if this call is what spent
-   *  it — so one approval can never authorise two runs. */
-  spend(id: string): boolean {
-    if (this.get(id)?.status !== 'approved') return false;
-    void this.sql`UPDATE deferred_approvals SET status='used' WHERE id=${id} AND status='approved'`;
-    return this.get(id)?.status === 'used';
+  /** Spend an approved grant by DELETING its row, returning the action this
+   *  call consumed — or null when another call got there first. Deletion is
+   *  what makes one approval unrepeatable: there is nothing left to spend,
+   *  and the `approval_consumed` run event (the queue's audit sink) is the
+   *  record that it happened. */
+  spend(id: string): DeferredApproval | null {
+    const rows = this.sql<Row>`
+      DELETE FROM deferred_approvals
+      WHERE id = ${id} AND status = 'approved'
+      RETURNING id, command, executor, reason, status, requested_at, decided_at`;
+    return rows[0] ? toAction(rows[0]) : null;
   }
 
   get(id: string): DeferredApproval | null {
@@ -302,6 +312,13 @@ export interface DeferredApprovalQueueDeps {
    *  so the queue only says WHAT was granted. Required, not optional: an
    *  'always' button whose grant went nowhere is the worst of both. */
   remember(grants: readonly ApprovalGrant[]): void;
+  /** The durable audit for a CONSUMED grant — where the `approval_consumed`
+   *  run event is written. A host records it into the run-event log of the
+   *  turn that spent the approval, which is the read model that replaces the
+   *  deleted row. Optional only so a gate can run unrecorded in tests; a
+   *  production host wires it, because without it a spent grant leaves no
+   *  trace at all. */
+  audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id. Injected so a host keeps its own id vocabulary and
    *  tests stay deterministic. */
   newId?(): string;
@@ -360,9 +377,14 @@ export class DeferredApprovalQueue {
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
     if (standing?.status === 'approved') {
       // The grant is spent HERE, before the command runs, so a crash between
-      // the two costs an approval rather than granting one twice.
-      if (this.deps.store.spend(standing.id)) {
-        return { outcome: 'run', action: { ...standing, status: 'used' } };
+      // the two costs an approval rather than granting one twice. Spending
+      // DELETES the row; the audit event is what remains of it.
+      const spent = this.deps.store.spend(standing.id);
+      if (spent) {
+        this.deps.audit?.({
+          approvalId: spent.id, command: spent.command, executor: spent.executor,
+        });
+        return { outcome: 'run', action: spent };
       }
       // Lost the race to a concurrent re-issue: fall through and park again.
     }

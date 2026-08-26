@@ -85,7 +85,7 @@ function nextStepBlock(w: ReturnType<typeof workspace>): string | null {
   return renderDynamicContextBlock(agentDynamicContext({
     factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
     runningJobs: w.jobs.listRunning(),
-    openTasks: [],
+    openTasks: { items: [], total: 0 },
     liveHeadRuns: w.journal.listLive(),
     missingCapabilities: [],
   }));
@@ -111,12 +111,13 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // The registry is right.
     expect(w.jobs.get('bgjob-fork')?.status).toBe('cancelled');
     expect(w.jobs.get('bgjob-fork')?.error).toBe('cancelled by operator');
-    expect(w.jobs.listRunning()).toEqual([]);
+    expect(w.jobs.listRunning()).toEqual({ items: [], total: 0 });
 
     // The journal is wrong, and the roster it feeds says so out loud.
-    expect(w.journal.listLive()).toEqual([
-      { rootId: ROOT, rationale: RATIONALE, running: HEADS, total: HEADS },
-    ]);
+    expect(w.journal.listLive()).toEqual({
+      items: [{ rootId: ROOT, rationale: RATIONALE, running: HEADS, total: HEADS }],
+      total: 1,
+    });
     expect(nextStepBlock(w)).toContain(`${HEADS} of ${HEADS} nodes running`);
   });
 
@@ -129,7 +130,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     expect(settled).toEqual([
       { rootId: ROOT, rationale: RATIONALE, abandoned: HEADS, total: HEADS },
     ]);
-    expect(w.journal.listLive()).toEqual([]);
+    expect(w.journal.listLive()).toEqual({ items: [], total: 0 });
     // Nothing left to say: the roster is the only plane this workspace had.
     expect(nextStepBlock(w)).toBeNull();
     // And the run stops reading as in-flight on the Exploration surface, which
@@ -216,7 +217,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     expect(recorder.read(RUN)).toEqual([]);
     // The journal is still settled — the ledger is an additional record, never
     // a precondition for retiring a stale head.
-    expect(w.journal.listLive()).toEqual([]);
+    expect(w.journal.listLive()).toEqual({ items: [], total: 0 });
   });
 
   /**
@@ -302,7 +303,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // The step that read the lie.
     const before = ledger.weave(history, agentDynamicContext({
       factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
-      runningJobs: [], openTasks: [], liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
+      runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
     expect(String(before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
 
@@ -312,7 +313,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // frozen bytes before it untouched — the prefix-cache contract.
     const after = ledger.weave([...history, { role: 'assistant', content: 'working' }], agentDynamicContext({
       factsBlock: 'workspace = kinu', memoryTail: undefined, recoveryFindings: [], executors: [],
-      runningJobs: [], openTasks: [], liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
+      runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
     expect(ledger.size).toBe(2);
     expect(after[1]).toEqual(before.at(-1)!);
@@ -357,7 +358,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // named in the wake the agent was sent.
     expect(w.journal.readHead('resumed-node')?.status).toBe('running');
     expect(w.journal.readHead('resumed-node')?.error_message).toBeNull();
-    expect(w.journal.listLive().map((run) => run.rootId)).toEqual(['root-resumed']);
+    expect(w.journal.listLive().items.map((run) => run.rootId)).toEqual(['root-resumed']);
     expect(String(agent.enqueued[0]?.text)).not.toContain('root-resumed');
   });
 });
@@ -369,10 +370,10 @@ describe('the operator cancel of ONE job reaches the agent', () => {
   // quiet roster does not retract a promise the runtime already made.
   test('a cancelled job leaves the roster with nothing to correct the record', () => {
     const w = workspace();
-    expect(w.jobs.listRunning()).toEqual([]);
+    expect(w.jobs.listRunning()).toEqual({ items: [], total: 0 });
     const block = renderDynamicContextBlock(agentDynamicContext({
       factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
-      runningJobs: w.jobs.listRunning(), openTasks: [], liveHeadRuns: [], missingCapabilities: [],
+      runningJobs: w.jobs.listRunning(), openTasks: { items: [], total: 0 }, liveHeadRuns: { items: [], total: 0 }, missingCapabilities: [],
     }));
     expect(block).toBeNull();
   });

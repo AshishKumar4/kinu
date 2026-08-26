@@ -67,11 +67,6 @@ function requiredCraftedTool(tools: CraftedToolSet, name: string) {
 describe('crafted-tool execution integration', () => {
   test('codemode.<name>(arg) round-trips a stored tool', async () => {
     const { rt } = createTestRuntime();
-    // craft_scores table needs to exist for the score filter to query it
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
 
     // Store the tool (simulates a successful workspace.createTool from an earlier turn)
     rt.craftStore.create({
@@ -99,10 +94,6 @@ describe('crafted-tool execution integration', () => {
 
   test('a crafted tool that raises leaves the sandbox stamped with its identity', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'exploder',
       description: 'always throws',
@@ -128,10 +119,6 @@ describe('crafted-tool execution integration', () => {
 
   test('a tool that RETURNS normally is not stamped', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'quiet', description: 'fine', params: null,
       code: 'async () => "ok"', scope: 'local',
@@ -151,10 +138,6 @@ describe('crafted-tool execution integration', () => {
 
   test('a body is compiled once, and again only when the tool is rewritten', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'identity',
       description: 'returns arg',
@@ -201,10 +184,6 @@ describe('crafted-tool execution integration', () => {
 
   test('low-scoring tools are filtered out before the factory is invoked', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'noisy',
       description: 'noisy',
@@ -212,7 +191,7 @@ describe('crafted-tool execution integration', () => {
       code: 'async () => "nope"',
       scope: 'local',
     });
-    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('noisy', 0.01, ${Date.now()})`;
+    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'noisy'`;
 
     let factoryCalls = 0;
     const factory: CraftedToolExecute = () => {

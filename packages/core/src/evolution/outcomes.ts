@@ -81,6 +81,16 @@ export const TURN_OUTCOME_SOURCES = [
   'explicit', 'classifier', 'session_end', 'take_pick', 'execution',
 ] as const;
 
+/** Who wins when one turn carries several observations. Higher rank = the
+ *  verdict an operational consumer should see: a person's thumb beats a
+ *  take pick, which beats the follow-up classifier, which beats the
+ *  environment's verdict; the session-end rule is the weakest evidence.
+ *  Recency decides only within one source. The SQL CASE in
+ *  `selectEffectiveTurnOutcomes` encodes this same order — keep them in step. */
+export const TURN_OUTCOME_SOURCE_PRECEDENCE = [
+  'explicit', 'take_pick', 'classifier', 'execution', 'session_end',
+] as const;
+
 export type TurnOutcomeSource = (typeof TURN_OUTCOME_SOURCES)[number];
 
 /** Sources that carry a HUMAN's opinion of the turn. The complement is
@@ -383,8 +393,8 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
     execRaw(`DROP TABLE turn_outcomes_legacy`);
   }
   // Lessons ledger — reflection prose with provenance. Self-scored lessons
-  // (no real user signal behind them) stay 'provisional' and OUT of
-  // MEMORY.md until a real negative outcome on one of their turns
+  // (no real user signal behind them) stay 'provisional' and OUT of the
+  // derived view until a real negative outcome on one of their turns
   // corroborates them (the audit's net-negative-lessons fix). Same
   // CHECK-widening discipline as turn_outcomes above: the probe is the source
   // LIST, the resume branch finishes an interrupted rebuild.
@@ -550,17 +560,19 @@ export interface RecordTurnOutcomeInput {
   evidence?: string | null;
   now?: number;
 }
-
-/** Record (or, for a known turn id, replace — explicit thumbs override the
- *  classifier) one turn's outcome. Texts are windowed to keep rows bounded —
- *  and this is the ceiling for everything downstream, since the GEPA eval
- *  instances and the replay judge both read these rows and can never see more
- *  than was stored. */
+/** Record one observation of a turn's outcome. APPEND-ONLY: a second verdict
+ *  on the same turn inserts another row and never touches prior ones, because
+ *  each observation is evidence calibration labels address by id — deleting or
+ *  rewriting the classifier's row orphaned every human/ensemble label spent on
+ *  it and erased exactly the data calibration exists to measure.
+ *
+ *  Readers never see both rows as verdicts: `listTurnOutcomes` (and everything
+ *  built on it) resolves one EFFECTIVE outcome per turn by source precedence.
+ *  Texts are windowed to keep rows bounded — and this is the ceiling for
+ *  everything downstream, since the GEPA eval instances and the replay judge
+ *  both read these rows and can never see more than was stored. */
 export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInput): string {
   const id = `outc-${nanoid()}`;
-  if (input.turnId) {
-    void sql`DELETE FROM turn_outcomes WHERE turn_id = ${input.turnId}`;
-  }
   void sql`INSERT INTO turn_outcomes
         (id, turn_id, session_id, outcome, confidence, source,
          user_message, assistant_response, followup, scaffold_version, created_at, evidence)
@@ -590,27 +602,57 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
     evidence: r.evidence ?? null,
   };
 }
-
-/** Recorded outcomes, newest first, optionally filtered by outcome kinds.
+/** Recorded outcomes resolved to ONE EFFECTIVE verdict per turn, newest first,
+ *  optionally filtered by outcome kinds.
  *
- *  The filter is applied in SQL so `limit` bounds the rows actually wanted.
- *  Filtering a bounded window in JS instead silently dropped the rare outcomes
- *  (`corrected`/`frustrated` — the only ones the optimizer learns from) as soon
- *  as enough newer `accepted` rows existed to fill the window. */
+ *  The ledger is append-only (every observation stays, because calibration
+ *  labels address rows by id), so a raw read would show both a classifier's
+ *  guess and the explicit thumb that later overruled it — double-counting the
+ *  turn in every rate and split downstream. This read picks, per identified
+ *  turn, the observation that wins {@link TURN_OUTCOME_SOURCE_PRECEDENCE},
+ *  recency breaking ties within a source. Unidentified observations (no
+ *  `turn_id` — possible only for turns that predate ids) each stand alone.
+ *
+ *  The filter is applied to the EFFECTIVE verdicts, so `limit` bounds the rows
+ *  actually wanted without silently dropping the rare outcomes
+ *  (`corrected`/`frustrated` — the only ones the optimizer learns from). */
 export function listTurnOutcomes(
   sql: SqlExecutor,
   opts: { limit?: number; outcomes?: ReadonlyArray<TurnOutcome> } = {},
 ): TurnOutcomeRow[] {
-  const limit = opts.limit ?? 50;
-  // The outcome set is closed, so a fixed four-slot IN list expresses every
-  // filter with the tagged-template executor's fixed-arity binding. Unused
-  // slots bind '' — a value the CHECK constraint forbids, so it matches nothing.
-  const wanted = TURN_OUTCOMES.filter((o) => !opts.outcomes || opts.outcomes.includes(o));
+  return selectEffectiveTurnOutcomes(sql, opts.limit ?? 50, opts.outcomes);
+}
+
+/** One effective-verdict read over the append-only ledger, shared by every
+ *  operational consumer (rates, splits, gates). The CASE ranks sources in the
+ *  order {@link TURN_OUTCOME_SOURCE_PRECEDENCE} declares — keep them in step.
+ *  A fixed four-slot IN list expresses every outcome filter with the
+ *  tagged-template executor's fixed-arity binding; unused slots bind '' — a
+ *  value the CHECK constraint forbids, so it matches nothing. */
+function selectEffectiveTurnOutcomes(
+  sql: SqlExecutor,
+  limit: number | undefined,
+  outcomes?: ReadonlyArray<TurnOutcome>,
+): TurnOutcomeRow[] {
+  const wanted = TURN_OUTCOMES.filter((o) => !outcomes || outcomes.includes(o));
   const [w0, w1, w2, w3] = [wanted[0] ?? '', wanted[1] ?? '', wanted[2] ?? '', wanted[3] ?? ''];
-  return sql<RawOutcomeRow>`
-    SELECT * FROM turn_outcomes
-    WHERE outcome IN (${w0}, ${w1}, ${w2}, ${w3})
-    ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toOutcomeRow);
+  const ranked = sql<RawOutcomeRow & { eff_rn: number }>`
+    SELECT * FROM (
+      SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY turn_id
+        ORDER BY CASE source WHEN 'explicit' THEN 0 WHEN 'take_pick' THEN 1
+                 WHEN 'classifier' THEN 2 WHEN 'execution' THEN 3 ELSE 4 END ASC,
+                 created_at DESC, id DESC
+      ) AS eff_rn
+      FROM turn_outcomes
+      WHERE turn_id IS NOT NULL
+    )
+    WHERE eff_rn = 1 AND outcome IN (${w0}, ${w1}, ${w2}, ${w3})
+    UNION ALL
+    SELECT *, 1 AS eff_rn FROM turn_outcomes WHERE turn_id IS NULL
+    ORDER BY created_at DESC, id DESC
+    LIMIT ${limit === undefined ? -1 : limit}`;
+  return ranked.map(toOutcomeRow);
 }
 
 /** The outcome an Alternate Takes pick already recorded for this turn, if
@@ -623,15 +665,15 @@ export function takePickOutcome(sql: SqlExecutor, turnId: string | null | undefi
   return rows[0]?.outcome ?? null;
 }
 
-/** True when any of the given turn ids has a recorded corrected/frustrated
- *  outcome — the session-reflection gate's real-signal check. */
+/** True when any of the given turn ids has an EFFECTIVE corrected/frustrated
+ *  outcome — the session-reflection gate's real-signal check. Effective, not
+ *  raw: an old classifier `corrected` that a later explicit thumb overruled
+ *  must not keep a turn flagged negative forever. */
 export function hasNegativeOutcome(sql: SqlExecutor, turnIds: ReadonlyArray<string>): boolean {
   if (turnIds.length === 0) return false;
-  const rows = sql<{ turn_id: string | null; outcome: TurnOutcome }>`
-    SELECT turn_id, outcome FROM turn_outcomes
-    WHERE outcome IN ('corrected','frustrated') AND turn_id IS NOT NULL`;
   const wanted = new Set(turnIds);
-  return rows.some((r) => r.turn_id !== null && wanted.has(r.turn_id));
+  return selectEffectiveTurnOutcomes(sql, undefined, NEGATIVE_TURN_OUTCOMES)
+    .some((r) => r.turnId !== null && wanted.has(r.turnId));
 }
 
 // ── Real-outcome scaffold rates (route into R2's archive priors) ─
@@ -642,16 +684,20 @@ export interface RealOutcomeRate {
 }
 
 /** Per-scaffold-version real-outcome record: how turns SERVED by each version
- *  actually landed with the user. The component R2's shadow win-rates lack. */
+ *  actually landed with the user. The component R2's shadow win-rates lack.
+ *  Counts EFFECTIVE verdicts only — one observation per turn, so a turn the
+ *  user explicitly accepted after a classifier `corrected` is counted once,
+ *  on their word. */
 export function realOutcomeScaffoldRates(sql: SqlExecutor): Map<number, RealOutcomeRate> {
-  const rows = sql<{ scaffold_version: number; accepted: number; negative: number }>`
-    SELECT scaffold_version,
-           SUM(CASE WHEN outcome = 'accepted' THEN 1 ELSE 0 END) AS accepted,
-           SUM(CASE WHEN outcome IN ('corrected','frustrated') THEN 1 ELSE 0 END) AS negative
-    FROM turn_outcomes
-    WHERE scaffold_version IS NOT NULL
-    GROUP BY scaffold_version`;
-  return new Map(rows.map((r) => [r.scaffold_version, { accepted: r.accepted ?? 0, negative: r.negative ?? 0 }]));
+  const rates = new Map<number, RealOutcomeRate>();
+  for (const row of selectEffectiveTurnOutcomes(sql, undefined)) {
+    if (row.scaffoldVersion === null) continue;
+    const rate = rates.get(row.scaffoldVersion) ?? { accepted: 0, negative: 0 };
+    if (row.outcome === 'accepted') rate.accepted++;
+    else if (isNegativeOutcome(row.outcome)) rate.negative++;
+    rates.set(row.scaffoldVersion, rate);
+  }
+  return rates;
 }
 
 /** Blend real user outcomes into the archive's shadow-eval win-rates for
@@ -1079,10 +1125,18 @@ export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): Outcome
  *    execution_recovery  — the step clock's machine observation: a failure
  *                          streak broken by a changed call that ran clean
  *                          (evolution/recovery.ts). Bound to no turn, so the
- *                          corroboration gate structurally never admits it to
- *                          MEMORY.md — it lives in the dynamic-context
- *                          injection window and nowhere wider. */
-export const LESSON_SOURCES = ['turn_reflection', 'session_reflection', 'execution_recovery'] as const;
+ *                          corroboration gate structurally never admits it.
+ *    import              — an experience imported from another workspace,
+ *                          adopted only on this workspace's own accepted-turn
+ *                          verdict; born corroborated on that evidence.
+ *
+ *  Corroboration lives ONLY in the row's status. Nothing is ever copied into
+ *  MEMORY.md, and every reader that wants recent lessons reads them here
+ *  (`renderRecentLessons`, `searchCorroboratedLessons`) — so a workspace reset
+ *  can never hide a lesson its corroborated row still holds. */
+export const LESSON_SOURCES = [
+  'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
+] as const;
 export type LessonSource = (typeof LESSON_SOURCES)[number];
 export type LessonStatus = 'provisional' | 'corroborated';
 
@@ -1160,9 +1214,38 @@ export function getLesson(sql: SqlExecutor, id: string): LessonRow | null {
   return rows[0] ? toLessonRow(rows[0]) : null;
 }
 
+/**
+ * The newest corroborated lessons as one prose block — what a turn's dynamic
+ * context weaves in place of the MEMORY.md copies this module stopped writing.
+ * Derived from the ledger, so it is exactly what corroboration admits, no more.
+ */
+export function renderRecentLessons(sql: SqlExecutor, limit = 5): string {
+  return listLessons(sql, { status: 'corroborated', limit })
+    .map((lesson) => lesson.text)
+    .join('\n');
+}
+
+/**
+ * Corroborated lessons whose text contains `query` (case-sensitive LIKE, so
+ * callers quoting SQL wildcards get literal behavior), newest first — the
+ * lessons half of any memory-search union over independent notes.
+ */
+export function searchCorroboratedLessons(
+  sql: SqlExecutor,
+  query: string,
+  limit = 10,
+): LessonRow[] {
+  if (query.length === 0) return [];
+  const rows = sql<RawLessonRow>`
+    SELECT * FROM lessons
+    WHERE status = 'corroborated' AND text LIKE ${`%${query}%`}
+    ORDER BY created_at DESC LIMIT ${limit}`;
+  return rows.map(toLessonRow);
+}
+
 /** A real negative outcome landed on `turnId`: flip every provisional lesson
- *  tied to that turn to corroborated. Returns the newly corroborated lessons
- *  so the caller can append them to durable memory (MEMORY.md). */
+ *  tied to that turn to corroborated. Corroboration is a row-status change
+ *  only — nothing is appended to MEMORY.md; readers derive from these rows. */
 export function corroborateLessonsForTurn(sql: SqlExecutor, turnId: string, now = nowMs()): LessonRow[] {
   const provisional = listLessons(sql, { status: 'provisional', limit: 200 });
   const matched = provisional.filter((l) => l.turnIds.includes(turnId));

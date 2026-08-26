@@ -23,6 +23,7 @@ import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
 import type { TurnFileLedger } from './tools/file-ledger';
 import { resolveModelRoute } from './profiles/model-route';
+import { createScaffoldSurface } from './scaffold/surface';
 import type { ModelRouteResolution } from './profiles/model-route';
 import type { ResolvedTurnProfile } from './profiles/resolve';
 import type { SpendSource } from './events/model-call';
@@ -131,17 +132,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   const identity: Identity = {
     id: components.agentId,
     name: components.agentName,
-    scaffold: {
-      path: 'scaffold/agent.js',
-      exists: () => agentStateVfs.exists('scaffold/agent.js'),
-      read: async () => {
-        const content = await agentStateVfs.readFile('scaffold/agent.js', { encoding: 'utf8' });
-        return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
-      },
-      write: (code: string) => agentStateVfs.writeFile('scaffold/agent.js', code),
-      version: async () =>
-        (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
-    },
+    scaffold: createScaffoldSurface({ vfs: agentStateVfs, sql, path: 'scaffold/agent.js' }),
   };
   const lanes = components.modelLanes;
   const pinned: PinnedLanes = {};

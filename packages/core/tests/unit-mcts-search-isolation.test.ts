@@ -17,7 +17,6 @@ import { createTestRuntime, createMockSession, makeSql } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { LLM } from '../src/types/primitives';
@@ -25,7 +24,6 @@ import type { LLM } from '../src/types/primitives';
 function initTables(rt: AgentRuntime): void {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftScoreTables(rt.storage.execRaw);
   initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
 }
 

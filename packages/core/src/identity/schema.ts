@@ -46,15 +46,6 @@ const ACTOR_DDL = [
   // Canonical DDL owned by views/store.ts (initViewTables, run below), for the
   // same reason the scaffold tables are: one owner per table.
 
-  // ── CraftStore quality tracking ────────────────────────────────
-  `CREATE TABLE IF NOT EXISTS craft_scores (
-    tool_name    TEXT PRIMARY KEY,
-    score        REAL NOT NULL DEFAULT 0.5,
-    uses         INTEGER NOT NULL DEFAULT 0,
-    last_used_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    created_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`,
-
   // ── Durable fibers (CLI equivalent of cf_agents_runs) ──────────
   `CREATE TABLE IF NOT EXISTS fibers (
     id         TEXT PRIMARY KEY,
@@ -96,6 +87,8 @@ const ACTOR_DDL = [
   )`,
 
   // ── CraftStore tools ───────────────────────────────────────────
+  // ── CraftStore tools — quality lives ON the row (craft/schemas.ts owns
+  // the column reconciliation + legacy backfill) ──────────────────
   `CREATE TABLE IF NOT EXISTS crafted_tools (
     name        TEXT PRIMARY KEY,
     description TEXT NOT NULL DEFAULT '',
@@ -103,7 +96,10 @@ const ACTOR_DDL = [
     code        TEXT NOT NULL DEFAULT '',
     scope       TEXT NOT NULL DEFAULT 'local',
     created_at  INTEGER NOT NULL DEFAULT 0,
-    updated_at  INTEGER NOT NULL DEFAULT 0
+    updated_at  INTEGER NOT NULL DEFAULT 0,
+    score       REAL NOT NULL DEFAULT 0.5,
+    uses        INTEGER NOT NULL DEFAULT 0,
+    last_used_at INTEGER NOT NULL DEFAULT 0
   )`,
 
   // ── Executor output log ────────────────────────────────────────

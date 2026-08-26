@@ -494,8 +494,8 @@ export interface AdvisorLaneDeps {
  * question and one nobody asked.
  *
  * Serializable by construction: {@link CompletedTurnSchema} is the same mirror
- * `session_window` and `turn_review_queue` already persist a turn through, so a
- * turn that cannot be snapshotted here could not have been stored there either.
+ * `completed_turns` persists a turn through, so a turn that cannot be
+ * snapshotted here could not have been stored there either.
  */
 export const AdvisorRecoverySnapshotSchema = v.object({
   turn: CompletedTurnSchema,

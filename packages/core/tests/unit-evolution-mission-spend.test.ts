@@ -26,8 +26,6 @@ import { EvolutionEngine } from '../src/evolution/engine';
 import { MissionGovernor } from '../src/mission-budget';
 import type { CompletedTurn } from '../src/evolution/types';
 import { listTurnOutcomes } from '../src/evolution/outcomes';
-import { countQueuedTurnReviews } from '../src/evolution/review-queue';
-import { initCraftScoreTables } from '../src/craft/schemas';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 const CLASSIFY = 'Classify what the follow-up reveals';
@@ -55,7 +53,6 @@ function workspace() {
   const { rt } = createTestRuntime({
     llmResponses: { [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"test"}' },
   });
-  initCraftScoreTables(rt.storage.execRaw);
   let completions = 0;
   const inner = rt.llm.complete.bind(rt.llm);
   const counted: AgentRuntime = {
@@ -153,7 +150,7 @@ describe('a deferred review carries its mission across processes', () => {
 
     expect(await ws.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
     expect(ws.governor.snapshot('checkout-fixes')[0]!.calls).toBeGreaterThan(0);
-    expect(countQueuedTurnReviews(ws.rt.storage.sql)).toBe(0);
+    expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(0);
   });
 
   test('a spent mission leaves its row queued, named `budget`, and a raised cap runs it', async () => {
@@ -167,7 +164,7 @@ describe('a deferred review carries its mission across processes', () => {
     expect(drain.refused.map((r) => r.reason)).toEqual(['budget']);
     // Re-queued, explicitly: the turn is sound and the evidence is not thrown
     // away because the mission happens to be out of money right now.
-    expect(countQueuedTurnReviews(ws.rt.storage.sql)).toBe(1);
+    expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
     expect(listTurnOutcomes(ws.rt.storage.sql)).toEqual([]);
 
     // Raise the cap by declaring a roomier parent the label already nests under
@@ -177,7 +174,7 @@ describe('a deferred review carries its mission across processes', () => {
       WHERE label = 'checkout-fixes'`;
 
     expect(await ws.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
-    expect(countQueuedTurnReviews(ws.rt.storage.sql)).toBe(0);
+    expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(0);
     expect(listTurnOutcomes(ws.rt.storage.sql)).toHaveLength(1);
   });
 });

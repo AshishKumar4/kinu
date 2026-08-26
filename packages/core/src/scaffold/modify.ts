@@ -14,6 +14,7 @@ import {
 } from './safety-patterns';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
+import { readScaffoldVersion } from './shadow';
 
 /** Outcome of one scaffold proposal through the 4-gate pipeline. */
 export interface ModifyResult {
@@ -107,13 +108,19 @@ export async function modifyScaffold(
     }
   }
 
-  // Ensure the current content is backed up at its own version file so
-  // rollback can restore it.
-  const current = await rt.identity.scaffold.read();
-  // The version archive sits beside the live scaffold, on the same plane — the
-  // agent's own. A shared project directory holds neither.
+  // Ensure the current content is archived at its own version file so
+  // rollback can restore it. The archive file is canonical — only seed it
+  // when missing, never overwrite from the live view.
   const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
-  await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${currentVersion}`, current);
+  const currentPath = `${rt.identity.scaffold.path}.v${currentVersion}`;
+  if (!(await scaffoldVfs.exists(currentPath))) {
+    const current = await readScaffoldVersion(rt, currentVersion);
+    if (current !== null) await scaffoldVfs.writeFile(currentPath, current);
+  }
+  // Gate 4: source before metadata. Both version files are on disk before
+  // the pending row exists, so a crash at any point leaves either no
+  // proposal or a complete one — never a row whose source is missing.
+  await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${newVersion}`, code);
   // The failure cell the proposal claims to target, read off the code's own
   // `// pathology: <id>` tag. Parsed HERE rather than at each call site so
   // every proposal path — session evolution, agent.proposeScaffold, a GEPA
@@ -123,17 +130,6 @@ INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_ve
     VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion}, ${parsePathologyTag(code)})
   `;
 
-  // Gate 4: write the pending code to the VERSIONED file, NOT the live file.
-  //
-  // Why: shadow rollout (auto-judge.ts) reads pending via readScaffoldVersion,
-  // which prefers `scaffold/agent.js.v{N}` over the live file when version != current.
-  // If we wrote the pending into `scaffold/agent.js` here, the live and pending
-  // files would be identical during the entire shadow window — the judge would
-  // be comparing the new code to itself. Promotion in that world was a flag
-  // flip with no on-disk consequence. Now the live `scaffold/agent.js` stays
-  // on the current version's content throughout shadow eval; promotion is a
-  // genuine file swap. See applyPromotionDecision in shadow.ts.
-  await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${newVersion}`, code);
   await rt.memory.append(
     `memory/logs/${today()}.md`,
     `\n## Scaffold v${newVersion} (pending)\n${rationale}\n`,

@@ -16,6 +16,7 @@ import type { AgentSignal, SignalDeliverer, SignalUndeliveredReason } from '../t
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
+import type { ActiveRoster } from '../prompting/volatile-context';
 import { nanoid } from '../utils/nanoid';
 import type { WorkMode } from '../prompting/surface';
 import * as v from 'valibot';
@@ -179,11 +180,11 @@ export interface BackgroundJobRunnerDeps {
 /** What the model reads when a detach is refused. Honest about what happened to
  *  its call, and specific about the work already in flight, so the answer is
  *  "wait for these" rather than "try launching it again". */
-function refusalMessage(kind: string, running: readonly BackgroundJob[]): string {
-  const roster = running.map((j) => `${j.id} (${j.kind})`).join(', ');
+function refusalMessage(kind: string, running: ActiveRoster<BackgroundJob>): string {
+  const roster = running.items.map((j) => `${j.id} (${j.kind})`).join(', ');
   return (
     `The "${kind}" call needed to move to the background, but this workspace already has ` +
-    `${running.length} background job(s) running — the maximum — so it was CANCELLED instead of ` +
+    `${running.total} background job(s) running — the maximum — so it was CANCELLED instead of ` +
     `being detached. Nothing was left running from this call. Already in flight: ${roster}. ` +
     `Wait for those to finish (you are woken as each one settles, and agent.jobResult('<id>') ` +
     `reads a settled one), or cancel the ones you no longer need, before starting more ` +

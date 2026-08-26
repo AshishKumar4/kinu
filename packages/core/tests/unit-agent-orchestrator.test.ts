@@ -7,11 +7,7 @@ import { createTestSql } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { MissionGovernor } from '../src/mission-budget';
-import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window';
-import {
-  initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
-  countQueuedTurnReviews,
-} from '../src/evolution/review-queue';
+import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { AgentSignal } from '../src/types/signals';
@@ -44,8 +40,8 @@ function fakeEngine(opts?: { enabled?: boolean }) {
   /** One entry per cadence pass that ran the promotion gate's queued trials. */
   const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
-  initSessionWindowTable(execRaw);
-  initTurnReviewQueueTable(execRaw);
+  initCompletedTurnTable(execRaw, sql);
+  const store = createCompletedTurnStore(sql);
   // The crafted-tool ledger the engine owns in production, over a real store,
   // so the in-episode clock is exercised through the same seam.
   const crafted: string[] = [];
@@ -55,7 +51,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
   };
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
-    sessionWindow: createSessionWindowStore(sql),
+    sessionWindow: store,
     craftLedger: {
       names: () => crafted,
       observe: (names: readonly string[], quality: number) => {
@@ -67,20 +63,26 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
     runDueShadowTrials: async () => { trials.push(Date.now()); },
     recordRecovery: () => {},
-    // The real queue, so a deferral is exercised against the durable table and
+    // The real store, so a deferral is exercised against the durable row and
     // the drain replays through the SAME reviewTurn above — exactly the
-    // production wiring.
-    deferTurnReview: (turn, followup) => queueTurnReview(sql, { turn, followup }),
+    // production wiring, settle included.
+    deferTurnReview: (turn, followup, opts) => store.enqueueReview(turn, followup, opts),
     runDeferredTurnReviews: async () => {
-      const taken = takeQueuedTurnReviews(sql, 5);
+      const taken = store.takeQueuedReviews(5);
+      let reviewed = 0;
       for (const row of taken.reviews) {
-        await reviewTurn(row.turn, row.followup);
-        dropQueuedTurnReview(sql, row.id);
+        await engine.reviewTurn(row.turn, row.followup);
+        store.settleReview(row.id);
+        reviewed++;
       }
-      return { reviewed: taken.reviews.length, refused: taken.refused };
+      return { reviewed, refused: taken.refused };
+    },
+    runStoredTurnReview: async (rowId, turn, followup) => {
+      await engine.reviewTurn(turn, followup);
+      store.settleReview(rowId);
     },
   };
-  return { engine, reviews, sessions, crafted, observed, trials, sql };
+  return { engine, reviews, sessions, crafted, observed, trials, sql, store };
 }
 function fakeHost(opts?: { activeTurn?: boolean }) {
   const enqueued: ProgrammaticTurn[] = [];
@@ -202,7 +204,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   });
 
   test('a one-shot host DEFERS the turn review — settle waits on nothing, a durable row is owed', async () => {
-    const { engine, reviews, sql } = fakeEngine();
+    const { engine, reviews, store } = fakeEngine();
     const { host } = fakeHost();
     // A review that never finishes: on a host that joins the lane this is the
     // whole join, which is exactly why the exec process must not START the
@@ -213,11 +215,11 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 
     await orch.settleEvolution();
     expect(reviews).toEqual([]);                        // nothing ran in the exec process
-    expect(countQueuedTurnReviews(sql)).toBe(1);        // and the review is owed, durably
+    expect(store.countQueuedReviews()).toBe(1);        // and the review is owed, durably
   });
 
   test('an interactive host JOINS the inline review until it settles — no elapsed bound', async () => {
-    const { engine, sql } = fakeEngine();
+    const { engine, store } = fakeEngine();
     const { host } = fakeHost();
     // The review resolves only when the test releases it; settleEvolution
     // must still be pending while it runs, then return only once it has run.
@@ -236,11 +238,11 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     gate.resolve();
     await settle;
     expect(reviewed).toBe(true);
-    expect(countQueuedTurnReviews(sql)).toBe(0);   // nothing was deferred
+    expect(store.countQueuedReviews()).toBe(0);   // nothing was deferred
   });
 
   test('the deferred review is re-driven at the next open, with the same inputs', async () => {
-    const { engine, reviews, sql } = fakeEngine();
+    const { engine, reviews, store } = fakeEngine();
     const { host } = fakeHost();
     const eventLog = newEventLog();
     const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
@@ -255,11 +257,11 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(reviews).toHaveLength(1);
     expect(reviews[0].turn.turnId).toBe('m7');
     expect(reviews[0].followup).toBeNull();
-    expect(countQueuedTurnReviews(sql)).toBe(0);       // retired once it ran
+    expect(store.countQueuedReviews()).toBe(0);       // retired once it ran
   });
 
   test('a one-shot host does not re-drive either — that would only move the cost', async () => {
-    const { engine, reviews, sql } = fakeEngine();
+    const { engine, reviews, store } = fakeEngine();
     const { host } = fakeHost();
     const eventLog = newEventLog();
     new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
@@ -267,7 +269,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const nextExec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
     expect(await nextExec.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });
     expect(reviews).toEqual([]);
-    expect(countQueuedTurnReviews(sql)).toBe(1);       // still owed, for a host that can pay
+    expect(store.countQueuedReviews()).toBe(1);       // still owed, for a host that can pay
   });
 
   test('a deferred review carries the follow-up that grades it, not a re-guess', async () => {

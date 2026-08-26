@@ -411,14 +411,12 @@ describe('agent status', () => {
   test('the tool list carries each crafted tool with its live score', async () => {
     const { rt, db } = createTestRuntime();
     const sql = makeSql(db);
-    // craft_scores is created by the runtime's own schema. A local
-    // `CREATE TABLE IF NOT EXISTS` naming a 3-column subset was a silent no-op
-    // against the real 5-column table, and the positional INSERT below then
-    // bound three values into five columns.
+    // Quality lives on the crafted_tools row itself; the store's create seeds
+    // the neutral prior, and this UPDATE stands in for a real usage history.
     await rt.craftStore.create({
       name: 'summarize', description: 'sum', params: null, code: 'x', scope: 'local',
     });
-    void sql`INSERT INTO craft_scores (tool_name, score, uses) VALUES ('summarize', 0.9, 7)`;
+    void sql`UPDATE crafted_tools SET score = 0.9, uses = 7 WHERE name = 'summarize'`;
 
     const list = getToolList(sql, rt.craftStore);
     expect(list.builtIn.length).toBeGreaterThan(0);
@@ -426,7 +424,7 @@ describe('agent status', () => {
       { name: 'summarize', description: 'sum', scope: 'local', qualityScore: 0.9, usageCount: 7 },
     ]);
     // An unscored tool reads as the neutral prior, never as zero.
-    void sql`DELETE FROM craft_scores`;
+    void sql`UPDATE crafted_tools SET score = 0.5, uses = 0 WHERE name = 'summarize'`;
     expect(getToolList(sql, rt.craftStore).crafted[0]).toMatchObject({ qualityScore: 0.5, usageCount: 0 });
     db.close();
   });

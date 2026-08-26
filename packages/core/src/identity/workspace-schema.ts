@@ -4,7 +4,7 @@
  * It used to be four answers. `ensureSchema` on the orchestrator DO, a second
  * `ensureSchema` on the subordinate DO, an eleven-call block in the CLI
  * session constructor, and `openWorkspaceCLI` each named their own subset, and
- * the subsets disagreed: `craft_scores` was never created by any local path
+ * the subsets disagreed: crafted-tool quality was never created by every local path
  * except `kinu create`, so every EMA read on a workspace opened any other
  * way silently no-opped; `imported_experience` was never created on cf, so the
  * `experience` tool's import action hard-errored in production. Neither is a
@@ -26,7 +26,7 @@ import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initAllTables, migrateWorkspaceStorage, tableExists } from './schema';
 import { reconcileColumns } from './columns';
 import { initAgentConfigTable } from '../config/store';
-import { initCraftScoreTables } from '../craft/schemas';
+import { initCraftQualityColumns } from '../craft/schemas';
 import { initCurriculumTable } from '../curriculum/proposer';
 import { initEventsHubTables } from '../events/hub/schema';
 import { initRunEventTables } from '../events/recorder';
@@ -203,7 +203,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // table only a search creates would be a declared capability nothing could measure.
   initSwarmNodeRecords(execRaw);
   initScaffoldTables(execRaw, sql);
-  initCraftScoreTables(execRaw);
+  initCraftQualityColumns(execRaw, sql);
   // The R3 outcome ledger, including its take_pick CHECK-widening rebuild.
   // Must run here rather than only in the lazy EvolutionEngine constructor: a
   // freshly-woken actor can serve pickAlternateTake → recordTurnOutcome before
@@ -227,8 +227,8 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initFactsTable(execRaw);
   // Voyager curriculum proposed-tasks queue.
   initCurriculumTable(execRaw);
-  // GEPA run + candidate history (gepa_runs, gepa_candidates,
-  // gepa_pareto_membership), written by the evolution control plane.
+  // GEPA run + candidate history (gepa_runs, gepa_candidates), written by
+  // the evolution control plane. The Pareto front is derived at read time.
   initGepaTables(execRaw);
   // Background-job registry — work auto-detached past the 30s threshold.
   initBackgroundJobsTable(execRaw, sql);
@@ -259,6 +259,6 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // memory_chunks + its FTS5 index. Every composition root that builds a
   // MemoryStore also calls ensureSchema(), but a workspace opened by a path
   // that does not (a fork target, an archive restore) still has readers — the
-  // same hole `craft_scores` had. The DDL stays owned by agent-utils.
+  // same hole an unindexed memory plane had. The DDL stays owned by agent-utils.
   initMemoryChunkTables(sql);
 }

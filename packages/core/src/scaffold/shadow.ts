@@ -595,10 +595,10 @@ export function decidePromotion(
 }
 
 /**
- * Apply a promotion decision. For 'promote': the pending becomes current
- * and the previous current is archived. For 'rollback': the pending is
- * removed from disk and marked rolled_back; the agent's scaffold/agent.js
- * is restored from the version before the pending was written.
+ * Apply a promotion decision. For 'promote': the current pointer moves to
+ * the pending version in one atomic statement and the live view file is
+ * refreshed after. For 'rollback': the pending is marked rolled_back; the
+ * pointer and executed source stay on the incumbent version.
  *
  * Returns the new current version and the action ACTUALLY applied: a
  * 'promote' request is converted to 'rollback' (with `vetoReason` set) when
@@ -613,10 +613,10 @@ export async function applyPromotionDecision(
 ): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
   const sql = rt.storage.sql;
   if (decision === 'promote') {
-    // Copy the pending version's code (versioned file written by
-    // modifyScaffold gate 4) into the live `scaffold/agent.js`. The previous
-    // current's content is already archived at `scaffold/agent.js.v{pending-1}`,
-    // so rollback can recover.
+    // The pending's canonical source is its version file, written before the
+    // pending row existed (modifyScaffold gate 4). Verify it, re-check the
+    // misevolution gate against the bytes that will actually run, then flip
+    // the pointer.
     const pendingCode = await readScaffoldVersion(rt, pending.version);
     if (pendingCode == null) {
       throw new Error(`promote failed: no scaffold code found for v${pending.version}`);
@@ -630,24 +630,26 @@ export async function applyPromotionDecision(
       const result = await applyPromotionDecision(rt, pending, 'rollback');
       return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
     }
+    // One statement — the old-current retirement and the pending promotion
+    // are a single atomic write on every backend, so no crash window can
+    // leave zero or two current rows.
+    void sql`UPDATE scaffold_versions
+        SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
+        WHERE version = ${pending.version}
+           OR (status = 'current' AND version != ${pending.version})`;
+    // Pointer committed. The live file is the rebuildable view, refreshed
+    // after; execution reads the pointer's version file either way.
     await rt.identity.scaffold.write(pendingCode);
-    void sql`UPDATE scaffold_versions SET status = 'historical'
-        WHERE status = 'current' AND version != ${pending.version}`;
-    void sql`UPDATE scaffold_versions SET status = 'current'
-        WHERE version = ${pending.version}`;
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
-  // Rollback: the live `scaffold/agent.js` already holds the current version's
-  // code (modifyScaffold no longer overwrites it on proposal), so flipping the
-  // pending to rolled_back reverts the user-visible behaviour.
+  // Rollback: the pointer never moved, so retiring the pending IS the whole
+  // state change. The view refresh afterwards only heals drift.
+  void sql`UPDATE scaffold_versions SET status = 'rolled_back'
+      WHERE version = ${pending.version}`;
   const currentVersion = getCurrentScaffoldVersion(sql) ?? (pending.version - 1);
-  // Re-write the live file from the current version defensively, in case it
-  // was tampered with mid-trial.
   const currentCode = await readScaffoldVersion(rt, currentVersion);
   if (currentCode != null) {
     await rt.identity.scaffold.write(currentCode);
   }
-  void sql`UPDATE scaffold_versions SET status = 'rolled_back'
-      WHERE version = ${pending.version}`;
   return { newCurrentVersion: currentVersion, action: 'rollback' };
 }

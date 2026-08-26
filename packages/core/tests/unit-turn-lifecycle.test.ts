@@ -214,6 +214,28 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(() => openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 })).not.toThrow();
     expect(() => closeTurnRun(broken, 'r', { turnIndex: 0, reason: 'completed' })).not.toThrow();
   });
+
+describe('turn_end workMode — the durable GEPA-cadence field', () => {
+  test('a completed turn carries the mode it ran in', () => {
+    const rec = recorder();
+    closeTurnRun(rec, 'run-plan', { turnIndex: 0, reason: 'completed', workMode: 'plan' });
+    closeTurnRun(rec, 'run-build', { turnIndex: 1, reason: 'completed', workMode: 'build' });
+
+    const plan = rec.read('run-plan').find((e) => e.type === 'turn_end');
+    const build = rec.read('run-build').find((e) => e.type === 'turn_end');
+    expect(plan).toMatchObject({ type: 'turn_end', workMode: 'plan' });
+    expect(build).toMatchObject({ type: 'turn_end', workMode: 'build' });
+  });
+
+  test('no caller-supplied mode writes no invented one', () => {
+    // Pre-cutover rows look exactly like this, and the cadence query reads
+    // their absence as "before the denominator started", never as build.
+    const rec = recorder();
+    closeTurnRun(rec, 'run-plain', { turnIndex: 0, reason: 'completed' });
+    const end = rec.read('run-plain').find((e) => e.type === 'turn_end');
+    expect(end && !('workMode' in end)).toBe(true);
+  });
+});
 });
 
 describe('snapshotCompletedTurn', () => {

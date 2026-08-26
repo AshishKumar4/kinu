@@ -88,7 +88,11 @@ export {
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './replay';
 export {
-  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore, type ClaimedWindow,
+  initCompletedTurnTable, createCompletedTurnStore, CompletedTurnSchema,
+  MAX_TURN_REVIEWS_PER_OPEN,
+  type CompletedTurnStore, type ClaimedWindow, type PendingTurnReview,
+  type DeferredTurnReview, type RefusedTurnReview, type TakenTurnReviews,
+  type EnqueueOutcome, type DeferredReviewDrain, type AppendTurnOpts,
 } from './session-window';
 export {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,

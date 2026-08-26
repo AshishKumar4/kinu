@@ -256,7 +256,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
    * test before the call was added.
    */
   roster(): Promise<readonly string[]> {
-    const roster = new SubordinateRosterStore(makeSqlExec(this.db), this.runtime.storage.sql);
+    const roster = new SubordinateRosterStore(makeSqlExec(this.db));
     roster.ensureSchema();
     return Promise.resolve(roster.list().map((entry) => entry.name).sort());
   }

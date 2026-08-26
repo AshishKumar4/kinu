@@ -146,9 +146,11 @@ export const RunEventSchema = v.variant('type', [
     spent: v.object({ tokens: v.number(), usd: v.number() }), note: v.string() }),
   v.object({ ...BaseFields, type: v.literal('fiber_recovered'), fiberName: v.string(),
     fiberId: v.string(), snapshot: v.optional(v.unknown()) }),
+  v.object({ ...BaseFields, type: v.literal('approval_consumed'), approvalId: v.string(),
+    command: v.string(), executor: v.string() }),
   v.object({ ...BaseFields, type: v.literal('error'), message: v.string(), details: v.optional(v.unknown()) }),
   v.object({ ...BaseFields, type: v.literal('turn_end'), turnIndex: v.number(),
-    usage: v.optional(UsageSchema) }),
+    workMode: v.optional(v.picklist(['plan', 'build'])), usage: v.optional(UsageSchema) }),
   v.object({ ...BaseFields, type: v.literal('run_end'), reason: v.optional(v.string()), error: v.optional(v.string()) }),
 ]);
 
@@ -405,6 +407,29 @@ export class RunEventRecorder {
       events.filter((event) => event.phase === 'end').map((event) => event.operationId),
     );
     return events.filter((event) => event.phase === 'start' && !ended.has(event.operationId));
+  }
+
+  /**
+   * Completed non-plan turns across ALL runs, strictly after an ISO boundary —
+   * the auto-GEPA cadence's durable denominator.
+   *
+   * This is a SOURCE QUERY, not a counter: the count lives in these rows, so
+   * it survives every activation loss that the log survives. `sinceTs` is the
+   * timestamp of whatever marks the last GEPA pass (null = count everything).
+   * A row without `workMode` predates the field and counts nothing: the
+   * denominator starts at the cutover rather than inventing history, and
+   * `json_extract` returning NULL for those rows is what makes absence read
+   * as "before it started", never as build. Timestamps are millisecond ISO,
+   * and a turn stamped in the SAME millisecond as the boundary is excluded —
+   * a tie reads as "before", which keeps a re-driven pass from recounting.
+   */
+  completedWorkTurns(sinceTs: string | null): number {
+    const rows = this.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM run_events
+      WHERE type = ${'turn_end' satisfies RunEventType}
+        AND (${sinceTs} IS NULL OR ts > ${sinceTs})
+        AND json_extract(payload, '$.workMode') != 'plan'`;
+    return rows[0]?.n ?? 0;
   }
 
   /** Replay all events strictly after `afterIndex` — for SSE Last-Event-ID resume. */

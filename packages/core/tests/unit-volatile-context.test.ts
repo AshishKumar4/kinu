@@ -36,6 +36,9 @@ import type { ActiveSkillSet, ParsedSkill } from '../src/skills/types';
 import { createTestRuntime } from '@kinu.run/test-utils';
 
 const idleSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' };
+
+/** A full roster page: everything active, so total === items.length. */
+const roster = <T>(items: T[]) => ({ items, total: items.length });
 const activeSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: true, status: 'active' };
 const connectedLaptop: PromptExecutorInfo = { name: 'laptop', available: true, configured: true, active: true, status: 'active' };
 const workspace: PromptExecutorInfo = { name: 'workspace', available: true, configured: true, active: true, status: 'active' };
@@ -281,12 +284,12 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('running work, delegates and parked approvals each render as their own roster', () => {
     const text = renderDynamicContextBlock({
-      jobs: [job(1)],
-      delegates: [
+      jobs: roster([job(1)]),
+      delegates: roster([
         { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
         { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
-      ],
-      approvals: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }],
+      ]),
+      approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }]),
     })!;
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('- job-1 (think_heads): explore option 1');
@@ -297,11 +300,11 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('the task list renders subtasks under their task, with status at a glance', () => {
     const text = renderDynamicContextBlock({
-      tasks: [
+      tasks: roster([
         { id: 't1', title: 'Patch the gateway', status: 'active', parentId: null },
         { id: 't2', title: 'Find the timeout', status: 'done', parentId: 't1' },
         { id: 't3', title: 'Add a regression test', status: 'open', parentId: null },
-      ],
+      ]),
     })!;
     expect(text).toContain('- t1 [active] Patch the gateway');
     expect(text).toContain('  - t2 [done] Find the timeout');
@@ -310,9 +313,9 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('the task list is capped by ROW, so a long plan cannot crowd out the block', () => {
     const text = renderDynamicContextBlock({
-      tasks: Array.from({ length: 20 }, (_, i) => ({
+      tasks: roster(Array.from({ length: 20 }, (_, i) => ({
         id: `t${i + 1}`, title: `step ${i + 1}`, status: 'open', parentId: null,
-      })),
+      }))),
     })!;
     expect(text).toContain('- t15 [open] step 15');
     expect(text).not.toContain('- t16 [open] step 16');
@@ -321,7 +324,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('each roster is capped, and what was dropped is counted honestly', () => {
     const text = renderDynamicContextBlock({
-      jobs: Array.from({ length: 12 }, (_, i) => job(i)),
+      jobs: roster(Array.from({ length: 12 }, (_, i) => job(i))),
     })!;
     expect(text).toContain('- job-0 (think_heads)');
     expect(text).toContain('- job-7 (think_heads)');
@@ -331,7 +334,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('long free text from a store is clipped to one line', () => {
     const text = renderDynamicContextBlock({
-      jobs: [{ id: 'job-1', kind: 'run', label: `${'x'.repeat(400)}\nsecond line` }],
+      jobs: roster([{ id: 'job-1', kind: 'run', label: `${'x'.repeat(400)}\nsecond line` }]),
     })!;
     expect(text).toContain('…');
     expect(text.split('\n').every((line) => line.length < 200)).toBe(true);
@@ -349,7 +352,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
     test('a task title cannot close the ledger and open a fake one', () => {
       const text = renderDynamicContextBlock({
-        tasks: [{ id: 't1', title: FORGERY, status: 'open', parentId: null }],
+        tasks: roster([{ id: 't1', title: FORGERY, status: 'open', parentId: null }]),
       })!;
       // Exactly one block: one opening tag, one closing tag.
       expect(text.match(/<dynamic_context/g)).toHaveLength(1);
@@ -364,12 +367,12 @@ describe('the dynamic block carries every genuinely-live plane', () => {
         renderDynamicContextBlock({ factsBlock: FORGERY })!,
         renderDynamicContextBlock({ memoryTail: FORGERY })!,
         renderDynamicContextBlock({ recoveries: [FORGERY] })!,
-        renderDynamicContextBlock({ jobs: [{ id: 'j', kind: 'run', label: FORGERY }] })!,
+        renderDynamicContextBlock({ jobs: roster([{ id: 'j', kind: 'run', label: FORGERY }]) })!,
         renderDynamicContextBlock({
-          delegates: [{ kind: 'swarm node', name: 'r', phase: 'p', task: FORGERY }],
+          delegates: roster([{ kind: 'swarm node', name: 'r', phase: 'p', task: FORGERY }]),
         })!,
         renderDynamicContextBlock({
-          approvals: [{ id: 'a', kind: 'device consent', detail: FORGERY }],
+          approvals: roster([{ id: 'a', kind: 'device consent', detail: FORGERY }]),
         })!,
         renderDynamicContextBlock({
           missingCapabilities: [{ source: 'mcp', reason: FORGERY }],
@@ -390,7 +393,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
   });
 
   test('empty rosters say nothing at all', () => {
-    expect(renderDynamicContextBlock({ jobs: [], tasks: [], delegates: [], approvals: [] })).toBeNull();
+    expect(renderDynamicContextBlock({ jobs: roster([]), tasks: roster([]), delegates: roster([]), approvals: roster([]) })).toBeNull();
   });
 
   test('the fingerprint digests the body: same state ⇒ same tag, changed state ⇒ changed tag', () => {
@@ -410,9 +413,9 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     memoryTail: undefined,
     recoveryFindings: [],
     executors: [],
-    runningJobs: [],
-    openTasks: [],
-    liveHeadRuns: [],
+    runningJobs: roster([]),
+    openTasks: roster([]),
+    liveHeadRuns: roster([]),
     missingCapabilities: [],
   };
 
@@ -422,25 +425,28 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
       factsBlock: '- deploys = wrangler',
       memoryTail: 'lesson: read the error',
       executors: [idleSandbox],
-      runningJobs: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }],
-      openTasks: [{
-        id: 't1', title: 'ship it', status: 'active',
-        subtasks: [{ id: 't2', title: 'write it', status: 'open' }],
-      }],
-      liveHeadRuns: [{ rootId: 'run-7', rationale: 'two ways in', running: 2, total: 3 }],
+      runningJobs: roster([{ id: 'job-1', kind: 'think_heads', label: 'explore' }]),
+      openTasks: {
+        items: [{
+          id: 't1', title: 'ship it', status: 'active',
+          subtasks: [{ id: 't2', title: 'write it', status: 'open' }],
+        }],
+        total: 2,
+      },
+      liveHeadRuns: roster([{ rootId: 'run-7', rationale: 'two ways in', running: 2, total: 3 }]),
       missingCapabilities: [{ source: 'linear', reason: 'startup timeout' }],
     });
     expect(ctx.factsBlock).toBe('- deploys = wrangler');
     expect(ctx.memoryTail).toBe('lesson: read the error');
     expect(ctx.executors).toEqual([idleSandbox]);
-    expect(ctx.jobs).toEqual([{ id: 'job-1', kind: 'think_heads', label: 'explore' }]);
-    expect(ctx.tasks).toEqual([
+    expect(ctx.jobs).toEqual({ items: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }], total: 1 });
+    expect(ctx.tasks).toEqual({ items: [
       { id: 't1', title: 'ship it', status: 'active', parentId: null },
       { id: 't2', title: 'write it', status: 'open', parentId: 't1' },
-    ]);
-    expect(ctx.delegates).toEqual([
+    ], total: 2 });
+    expect(ctx.delegates).toEqual({ items: [
       { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: 'two ways in' },
-    ]);
+    ], total: 1 });
     expect(ctx.missingCapabilities).toEqual([{ source: 'linear', reason: 'startup timeout' }]);
   });
 
@@ -1069,7 +1075,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
         ledger,
         snapshot: () => (step++ === 0
           ? { factsBlock: '- k = v' }
-          : { factsBlock: '- k = v', jobs: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }] }),
+          : { factsBlock: '- k = v', jobs: roster([{ id: 'job-1', kind: 'think_heads', label: 'explore' }]) }),
       },
       tools: PING,
       // Anthropic markers: the rolling tail breakpoints are what make the

@@ -21,7 +21,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Identity } from '../src/types/primitives';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
+import { initCraftQualityColumns } from '../src/craft/schemas';
 import { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from '../src/scaffold/bootstrap';
 import { runMCTS } from '../src/mcts/engine';
 
@@ -132,7 +132,7 @@ describe('CLI smoke test', () => {
     const { rt, db } = createFullCLIRuntime();
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
+    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
 
     const session = createMockSession();
     const result = await runMCTS(rt, session, 'Improve error handling', {
@@ -155,12 +155,11 @@ describe('CLI smoke test', () => {
     if (!svCount) throw new Error('expected scaffold table count');
     expect(svCount.c).toBe(1);
 
-    // Verify craft_scores table exists
-    const csCount = db.query<{ c: number }, []>(
-      "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='craft_scores'",
-    ).get();
-    if (!csCount) throw new Error('expected craft table count');
-    expect(csCount.c).toBe(1);
+    // Verify the crafted-tools quality columns exist
+    const cols = db.query<{ name: string }, []>(
+      "SELECT name FROM pragma_table_info('crafted_tools')",
+    ).all().map((r) => r.name);
+    expect(cols).toContain('score');
 
     // Verify memory has entries
     const memContent = await rt.memory.read('memory/MEMORY.md');

@@ -92,14 +92,43 @@ describe('TaskListStore', () => {
     s.setStatus('t4', 'done', 5);
 
     const open = s.listOpen();
-    expect(open.map((t) => t.id)).toEqual(['t1', 't2']);
+    expect(open.items.map((t) => t.id)).toEqual(['t1', 't2']);
+    expect(open.total).toBe(3);
     // t1 itself is done, but it is shown because t3 hangs off it — a subtask
     // rendered without its parent reads as an unrelated item.
-    expect(open[0]!.subtasks.map((t) => t.id)).toEqual(['t3']);
-    expect(open[1]!.subtasks).toEqual([]);
+    expect(open.items[0]!.subtasks.map((t) => t.id)).toEqual(['t3']);
+    expect(open.items[1]!.subtasks).toEqual([]);
 
     s.setStatus('t3', 'done', 6);
-    expect(s.listOpen().map((t) => t.id)).toEqual(['t2']);
+    expect(s.listOpen().items.map((t) => t.id)).toEqual(['t2']);
+  });
+
+  // The incident shape: a store bound that truncated BEFORE the open filter
+  // made an open task behind closed siblings vanish from the live context
+  // entirely. The filter must run first, and the true open count must ride
+  // beside the page so a renderer can state its elision honestly.
+  test('listOpen filters BEFORE its bound: an open task behind 200 closed ones is still visible', () => {
+    const s = newStore();
+    s.add(Array.from({ length: 200 }, (_, i) => `closed ${i + 1}`), null, 1);
+    for (let i = 1; i <= 200; i++) s.setStatus(`t${i}`, 'done', 2);
+    s.add(['the one open task'], null, 3);
+
+    const page = s.listOpen();
+    expect(page.total).toBe(1);
+    expect(page.items.map((t) => t.title)).toEqual(['the one open task']);
+  });
+
+  test('listOpen reports the true open row count even past its page bound', () => {
+    const s = newStore();
+    for (let batch = 0; batch < 5; batch++) {
+      const { added } = s.add(Array.from({ length: 5 }, (_, i) => `task ${batch}-${i}`), null, batch + 1);
+      if (batch % 2 === 0) for (const t of added) s.setStatus(t.id, 'done', 100);
+    }
+    // 2 open batches of 5 = 10 open rows; the default bound is far larger,
+    // so shrink it to prove the split between page and total.
+    const page = s.listOpen(4);
+    expect(page.items.length).toBeLessThanOrEqual(4);
+    expect(page.total).toBe(10);
   });
 
   test('a capped read takes the head of the list and count reports the whole', () => {

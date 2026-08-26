@@ -110,11 +110,13 @@ export interface ResumableSearch {
  * One still-running SWARM row, as {@link MctsSearchStore.findRunningSwarms} hands it
  * back.
  *
- * The progress columns are the swarm's own units — `iteration` is children finished
- * and `budget` is children unspent — and they are the ledger's LAST WORD rather than
- * the truth: a swarm checkpoints at its level barriers, so a run cut inside a level
- * left the row reading the level before it. The tree is what a re-entry counts spent
- * expansions from; these two are carried so a caller can say what the ledger believed.
+ * The progress numbers are DERIVED at read time from the durable tree: `iteration`
+ * is the children `search_nodes` records below the run's root row, and `budget` is
+ * the initial expansion budget the row's persisted config carries minus those
+ * children. The tree is what a run actually expanded, so a poll halfway through a
+ * level and a poll after re-entry both read exactly what happened — there is no
+ * second progress record to lag the tree or disagree with it. The row's own integer
+ * columns are the MCTS loop's checkpoint fields and are never consulted for a swarm.
  */
 export interface ResumableSwarm {
   readonly rootId: string;
@@ -146,9 +148,9 @@ interface Row {
 export interface MctsSearchRunSummary {
   rootId: string;
   task: string;
-  /** Which engine ran it. Two do, and their rows differ in what the progress
-   *  columns mean: a swarm's `iteration` is the children it finished at its last
-   *  level barrier and its `budget` is what it had left there. */
+  /** Which engine ran it. Their rows differ in what their progress numbers mean:
+   *  an MCTS row checkpoints its loop into the columns; a swarm's are derived from
+   *  its tree at read time ({@link ResumableSwarm}). */
   engine: SearchEngine;
   status: SearchStatus;
   iteration: number;
@@ -241,12 +243,49 @@ export class MctsSearchStore {
       SET judge_samples_realised = MIN(COALESCE(judge_samples_realised, ${realised}), ${realised})
       WHERE root_id = ${rootId}`;
   }
-
-  /** Persist loop progress. Fenced: a stale epoch (a zombie executor after a
-   *  reclaim) is a no-op. */
+  /** Persist the MCTS loop's progress — its iteration count and remaining budget.
+   *  Fenced: a stale epoch (a zombie executor after a reclaim) is a no-op.
+   *
+   *  A swarm does NOT call this: its progress is derived from its tree
+   *  ({@link ResumableSwarm}), so its only live-row write is {@link touch}. */
   checkpoint(rootId: string, epoch: number, iteration: number, budget: number, now: number): void {
     void this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
       WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+  }
+
+  /** Refresh a SWARM run's heartbeat — `updated_at` alone, fenced on epoch like every
+   *  write of this table. Progress needs no row write (the tree IS the progress), but
+   *  freshness still answers "is this search hung or working" for every reader that
+   *  keys on recency. */
+  touch(rootId: string, epoch: number, now: number): void {
+    void this.sql`UPDATE mcts_search_runs SET updated_at=${now}
+      WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+  }
+
+  /** A swarm run's initial expansion budget, read off the config its `begin` froze.
+   *  Unparseable is corruption, not zero: a fabricated budget would understate what
+   *  the run was given and overstate what is left. */
+  private storedBudget(rootId: string, configJson: string): number {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(configJson);
+    } catch (error) {
+      throw new Error(`swarm run ${rootId}: its ledger config_json will not parse`, { cause: error });
+    }
+    const parsed = v.safeParse(v.object({ budget: v.number() }), raw);
+    if (!parsed.success) {
+      throw new Error(`swarm run ${rootId}: its ledger config_json carries no budget`);
+    }
+    return parsed.output.budget;
+  }
+
+  /** Children the TREE records below a run's root row — every node that names the
+   *  run and has a parent. This is the swarm's spent expansions, one fact read one
+   *  way by every consumer. */
+  private childrenOf(rootId: string): number {
+    return this.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM search_nodes
+      WHERE root_id = ${rootId} AND parent_id IS NOT NULL`[0]?.n ?? 0;
   }
 
   /**
@@ -323,16 +362,19 @@ export class MctsSearchStore {
    * happen. Every write the rule needs is {@link supersede} and {@link reclaim}.
    */
   findRunningSwarms(task: string): readonly ResumableSwarm[] {
-    return this.sql<Row & { created_at: number }>`
-      SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch, created_at
-      FROM mcts_search_runs WHERE status='running' AND task=${task} AND engine='swarm'
-      ORDER BY updated_at DESC, created_at DESC, root_id DESC`
-      .map((row) => ({
-        rootId: row.root_id,
-        iteration: row.iteration,
-        budget: row.budget,
-        epoch: row.epoch,
-      }));
+    const rows = this.sql<{ root_id: string; config_json: string; epoch: number; children: number }>`
+      SELECT r.root_id, r.config_json, r.epoch,
+        (SELECT COUNT(*) FROM search_nodes s
+         WHERE s.root_id = r.root_id AND s.parent_id IS NOT NULL) AS children
+      FROM mcts_search_runs r
+      WHERE status='running' AND task=${task} AND engine='swarm'
+      ORDER BY updated_at DESC, created_at DESC, root_id DESC`;
+    return rows.map((row) => ({
+      rootId: row.root_id,
+      iteration: row.children,
+      budget: Math.max(0, this.storedBudget(row.root_id, row.config_json) - row.children),
+      epoch: row.epoch,
+    }));
   }
 
   private readStoredSwarmConfig(
@@ -454,12 +496,23 @@ export class MctsSearchStore {
   }
 
   get(rootId: string): { status: SearchStatus; iteration: number; budget: number; epoch: number } | null {
-    const rows = this.sql<Row>`SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch
+    const rows = this.sql<Row & { engine: string }>`
+      SELECT root_id, task, root_msg_id, config_json, engine, iteration, budget, status, epoch
       FROM mcts_search_runs WHERE root_id=${rootId} LIMIT 1`;
     const r = rows[0];
     if (!r) return null;
+    if (r.engine === 'swarm') {
+      const children = this.childrenOf(r.root_id);
+      return {
+        status: readStatus(r.status),
+        iteration: children,
+        budget: Math.max(0, this.storedBudget(r.root_id, r.config_json) - children),
+        epoch: r.epoch,
+      };
+    }
     return { status: readStatus(r.status), iteration: r.iteration, budget: r.budget, epoch: r.epoch };
   }
+
 
   /** Recent search runs, newest-updated first — the run-level ledger a
    *  debugging surface needs to tell "how many searches has this workspace
@@ -470,16 +523,20 @@ export class MctsSearchStore {
       SELECT root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
              created_at, updated_at
       FROM mcts_search_runs ORDER BY updated_at DESC LIMIT ${limit}`;
-    return rows.map((r) => ({
-      rootId: r.root_id,
-      task: r.task,
-      engine: r.engine === 'swarm' ? 'swarm' : 'mcts',
-      status: readStatus(r.status),
-      iteration: r.iteration,
-      budget: r.budget,
-      epoch: r.epoch,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    }));
+    return rows.map((r) => {
+      const swarm = r.engine === 'swarm';
+      const children = swarm ? this.childrenOf(r.root_id) : null;
+      return {
+        rootId: r.root_id,
+        task: r.task,
+        engine: swarm ? 'swarm' : 'mcts',
+        status: readStatus(r.status),
+        iteration: swarm ? children! : r.iteration,
+        budget: swarm ? Math.max(0, this.storedBudget(r.root_id, r.config_json) - children!) : r.budget,
+        epoch: r.epoch,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      };
+    });
   }
 }

@@ -112,8 +112,12 @@ export async function createWorkspace(
   await seedSoul(workspace.vfs, sql, { name: config.name, mission: config.purpose });
 
   await workspace.vfs.mkdir('scaffold', { recursive: true });
-  await workspace.vfs.writeFile('scaffold/agent.js', config.scaffold ?? INITIAL_SCAFFOLD_SOURCE);
+  // Canonical source lands before the live view: the archive is authoritative
+  // from birth, and agent.js is only its rebuildable view.
+  const scaffoldSource = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
+  await workspace.vfs.writeFile('scaffold/agent.js.v0', scaffoldSource);
   void sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale) VALUES (0, ${nowMs()}, ${'initial bootstrap'})`;
+  await workspace.vfs.writeFile('scaffold/agent.js', scaffoldSource);
 
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`);

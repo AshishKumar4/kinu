@@ -4,7 +4,7 @@
  * The transparency layer that lets the autonomy defaults ship ON: evolution
  * acts first, this reports honestly, and every line is revertable. It is a
  * READ MODEL over the durable ledgers that already exist (scaffold_versions +
- * shadow record, crafted_tools + craft_scores EMA, agent_facts, gepa_runs,
+ * shadow record, crafted_tools + its EMA columns, agent_facts, gepa_runs,
  * replay_evals, turn_outcomes) — no parallel event system, no new write path.
  * The only state it owns is the `changelog_seen_at` config marker (unseen
  * badge), and reverts dispatch to the REAL existing paths: scaffold rollback,
@@ -148,23 +148,18 @@ function scaffoldEntries(sql: SqlExecutor): ChangelogEntry[] {
   });
 }
 
-function craftScoreMap(sql: SqlExecutor): Map<string, { score: number; uses: number }> {
-  const rows = sql<{ tool_name: string; score: number; uses: number }>`
-    SELECT tool_name, score, uses FROM craft_scores`;
-  return new Map(rows.map((r) => [r.tool_name, { score: r.score, uses: r.uses }]));
-}
 
 function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  const rows = sql<{ name: string; description: string; created_at: number; updated_at: number }>`
-    SELECT name, description, created_at, updated_at
+  const rows = sql<{ name: string; description: string; created_at: number; updated_at: number; score: number; uses: number }>`
+    SELECT name, description, created_at, updated_at, score, uses
     FROM crafted_tools ORDER BY updated_at DESC LIMIT ${limit}`;
-  const scores = craftScoreMap(sql);
   return rows.map((r) => {
     const at = Math.max(r.updated_at, r.created_at);
     const verb = r.updated_at > r.created_at ? 'Updated crafted tool' : 'Crafted tool';
-    const s = scores.get(r.name);
     const readableName = r.name.replace(/[._-]+/g, ' ');
-    const score = s ? `EMA ${s.score.toFixed(2)} over ${s.uses} uses` : 'unscored (new)';
+    // Every tool is born scored at the neutral prior, so the EMA line is
+    // always real — there is no unscored case to label.
+    const score = `EMA ${r.score.toFixed(2)} over ${r.uses} uses`;
     return {
       id: `tool:${r.name}:${at}`,
       kind: 'tool' as const,
@@ -529,16 +524,15 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
     return { ok: false, error: `scaffold v${version} is already ${row.status} — nothing to revert` };
   }
 
-  // Revert a promoted (live) version: restore the predecessor's code via the
-  // existing rollback API, then record the status flip in the archive.
+  // Revert a promoted (live) version through the pointer-first rollback API:
+  // one atomic statement retires this version and promotes its predecessor,
+  // then the live view is refreshed from the predecessor's canonical source.
   const prev = sql<{ version: number }>`
     SELECT version FROM scaffold_versions WHERE version < ${version}
     ORDER BY version DESC LIMIT 1`[0];
   if (!prev) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
   const restored = await rollbackScaffold(rt, prev.version);
   if (!restored.ok) return { ok: false, error: restored.error };
-  void sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = ${version}`;
-  void sql`UPDATE scaffold_versions SET status = 'current' WHERE version = ${prev.version}`;
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
@@ -611,7 +605,7 @@ export async function executeChangelogRevert(
         return { ok: false, error: `crafted tool ${action.target} is already retired` };
       }
       ctx.rt.craftStore.delete(action.target);
-      void ctx.rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${action.target}`;
+      // One DELETE removes the tool AND its quality — they are the same row.
       return { ok: true, detail: `retired crafted tool ${action.target}` };
     }
     case 'view_revert': {

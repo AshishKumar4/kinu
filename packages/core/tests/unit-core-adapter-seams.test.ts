@@ -23,7 +23,7 @@ import {
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, CRAFTED_TOOL_ALIAS_NAMESPACE,
   attributeCraftedFailure, wrapCraftedBodyWithAttribution, craftFailureMarker,
-  initSessionWindowTable, createSessionWindowStore,
+  initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
   type ModelPricing, type CompletedTurn, type SqlExec,
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
@@ -263,12 +263,13 @@ describe('the mid-work invariant is loud when it breaks', () => {
 function seamOrchestrator(opts?: { enabled?: boolean }) {
   const recorded: CompletedTurn[] = [];
   const { sql, execRaw } = createTestSql();
-  initSessionWindowTable(execRaw);
+  initCompletedTurnTable(execRaw, sql);
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
-    sessionWindow: createSessionWindowStore(sql),
+    sessionWindow: createCompletedTurnStore(sql),
     craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async (turn) => { recorded.push(turn); },
+    runStoredTurnReview: async (rowId, turn) => { recorded.push(turn); void rowId; },
     onSessionComplete: async () => {},
     runDueShadowTrials: async () => {},
     recordRecovery: () => {},

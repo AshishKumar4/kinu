@@ -13,9 +13,9 @@ import { makeSql, makeExecRaw } from './helpers';
 import {
   CRAFT_INVOCATION_QUALITY, CRAFT_NEUTRAL_PRIOR,
   craftCreatesTool, craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
-  createCraftLedger, seedCraftScore, stripNonCode,
+  createCraftLedger, stripNonCode,
 } from '../src/craft/in-episode';
-import { initCraftScoreTables } from '../src/craft/schemas';
+import { initCraftQualityColumns } from '../src/craft/schemas';
 import { feedbackToQuality } from '../src/evolution/outcomes';
 
 describe('craftInvocationSites — what the runtime saw called', () => {
@@ -107,8 +107,7 @@ describe('craftFailureBlame — attribution by stamp only', () => {
 function ledgerFixture() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initCraftScoreTables(makeExecRaw(db));
-  db.exec(`CREATE TABLE IF NOT EXISTS crafted_tools (name TEXT PRIMARY KEY)`);
+  initCraftQualityColumns(makeExecRaw(db), sql);
   const ledger = createCraftLedger({
     craftStore: { list: () => db.query<{ name: string }, []>('SELECT name FROM crafted_tools').all() },
     sql,
@@ -128,15 +127,13 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     const { ledger, db } = ledgerFixture();
     const sql = makeSql(db);
     db.run(`INSERT INTO crafted_tools (name) VALUES ('kept'), ('retired')`);
-    seedCraftScore(sql, 'kept');
-    seedCraftScore(sql, 'retired');
-    void sql`UPDATE craft_scores SET score = 0.01 WHERE tool_name = 'retired'`;
+    // Column defaults seed the neutral prior; the retired tool's score is set low.
+    void sql`UPDATE crafted_tools SET score = 0.01 WHERE name = 'retired'`;
     expect(ledger.names()).toEqual(['kept']);
   });
 
   test('a store that cannot answer is a fault, not a runtime with no crafted tools', () => {
     const db = new Database(':memory:');
-    initCraftScoreTables(makeExecRaw(db));
     const ledger = createCraftLedger({
       craftStore: { list: () => { throw new Error('not initialized'); } },
       sql: makeSql(db),
@@ -149,9 +146,9 @@ describe('the craft ledger — where an in-episode observation lands', () => {
 
   test('observations accumulate through the existing EMA, not a parallel score', () => {
     const { ledger, db } = ledgerFixture();
-    seedCraftScore(makeSql(db), 'summarize');
+    db.run(`INSERT INTO crafted_tools (name) VALUES ('summarize')`);
     const before = db.query<{ score: number; uses: number }, []>(
-      `SELECT score, uses FROM craft_scores WHERE tool_name='summarize'`,
+      `SELECT score, uses FROM crafted_tools WHERE name='summarize'`,
     ).get();
     if (!before) throw new Error('expected seeded craft score');
     expect(before.score).toBe(CRAFT_NEUTRAL_PRIOR);
@@ -159,7 +156,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
 
     ledger.observe(['summarize'], CRAFT_INVOCATION_QUALITY.returned);
     const after = db.query<{ score: number; uses: number }, []>(
-      `SELECT score, uses FROM craft_scores WHERE tool_name='summarize'`,
+      `SELECT score, uses FROM crafted_tools WHERE name='summarize'`,
     ).get();
     if (!after) throw new Error('expected observed craft score');
     expect(after.score).toBeGreaterThan(before.score);
@@ -169,7 +166,6 @@ describe('the craft ledger — where an in-episode observation lands', () => {
   test('a tool that keeps raising falls below the injection floor, and says which', () => {
     const { ledger, db } = ledgerFixture();
     db.run(`INSERT INTO crafted_tools (name) VALUES ('broken')`);
-    seedCraftScore(makeSql(db), 'broken');
 
     const dropped: string[] = [];
     for (let i = 0; i < 4; i++) {
@@ -182,7 +178,6 @@ describe('the craft ledger — where an in-episode observation lands', () => {
   test('one success is enough to keep a tool that merely stumbled', () => {
     const { ledger, db } = ledgerFixture();
     db.run(`INSERT INTO crafted_tools (name) VALUES ('flaky')`);
-    seedCraftScore(makeSql(db), 'flaky');
     expect(ledger.observe(['flaky'], CRAFT_INVOCATION_QUALITY.raised)).toEqual([]);
     expect(ledger.observe(['flaky'], CRAFT_INVOCATION_QUALITY.returned)).toEqual([]);
     expect(ledger.observe(['flaky'], CRAFT_INVOCATION_QUALITY.raised)).toEqual([]);
@@ -195,29 +190,18 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     expect(CRAFT_INVOCATION_QUALITY.raised).toBeLessThan(CRAFT_NEUTRAL_PRIOR);
   });
 
-  test('seeding is idempotent — an upsert never wipes what a tool earned', () => {
-    const { ledger, db } = ledgerFixture();
-    const sql = makeSql(db);
-    seedCraftScore(sql, 'earned');
-    ledger.observe(['earned'], CRAFT_INVOCATION_QUALITY.returned);
-    const earnedRow = db.query<{ score: number }, []>(
-      `SELECT score FROM craft_scores WHERE tool_name='earned'`,
+  test('a creation carries its neutral prior in the same INSERT — nothing to seed', () => {
+    const { db } = ledgerFixture();
+    db.run(`INSERT INTO crafted_tools (name) VALUES ('fresh')`);
+    const row = db.query<{ score: number; uses: number }, []>(
+      `SELECT score, uses FROM crafted_tools WHERE name='fresh'`,
     ).get();
-    if (!earnedRow) throw new Error('expected earned craft score');
-    const earned = earnedRow.score;
-    seedCraftScore(sql, 'earned');
-    const reseeded = db.query<{ score: number }, []>(
-      `SELECT score FROM craft_scores WHERE tool_name='earned'`,
-    ).get();
-    expect(reseeded?.score).toBe(earned);
+    expect(row).toEqual({ score: CRAFT_NEUTRAL_PRIOR, uses: 0 });
   });
 
-  test('an observation of a never-seeded tool opens its row rather than retiring it', () => {
+  test('an observation of a tool outside the store is a no-op, not a resurrection', () => {
     const { ledger, db } = ledgerFixture();
-    expect(ledger.observe(['x'], CRAFT_INVOCATION_QUALITY.returned)).toEqual([]);
-    const opened = db.query<{ score: number; uses: number }, []>(
-      `SELECT score, uses FROM craft_scores WHERE tool_name='x'`,
-    ).get();
-    expect(opened).toEqual({ score: CRAFT_INVOCATION_QUALITY.returned, uses: 1 });
+    expect(ledger.observe(['ghost'], CRAFT_INVOCATION_QUALITY.returned)).toEqual([]);
+    expect(db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM crafted_tools`).get()?.n).toBe(0);
   });
 });

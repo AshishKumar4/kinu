@@ -24,6 +24,7 @@ import {
   admitSubordinateTask,
   createTeamToolDeps,
   describeSubordinateHandoff,
+  subordinateDescriptorSource,
   normalizeReportContent,
   parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
@@ -37,12 +38,16 @@ import {
   type SubordinateReportPayload,
   type SubordinateReportStatus,
   type SubordinateRosterEntry,
+  type SubordinatesChangedEvent,
   type SubordinateRuntime,
   type KinuEvent,
+  createAgentConfigStore,
+  initAgentConfigTable,
+  type AgentConfigStore,
 } from '../src/index';
 import { CODE_IS_REFUSAL } from '../src/obs/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
-import { makeSql as makeTagged, makeSqlExec } from './helpers';
+import { makeSql as makeTagged, makeSqlExec, makeExecRaw } from './helpers';
 
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));
@@ -69,11 +74,6 @@ function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
 }
 const identityInput = {
   name: 'researcher',
-  displayName: 'Researcher',
-  roleId: 'researcher',
-  legacyRole: null,
-  tier: null,
-  catalogVersion: 1,
   mission: 'Map the market.',
   parentWorkspace: 'kinu-main',
   ownerUserId: 'owner-123',
@@ -143,22 +143,81 @@ describe('subordinate identity', () => {
     const db = new Database(':memory:');
     db.exec(`CREATE TABLE subordinate_identity (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      name TEXT NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL,
-      mission TEXT NOT NULL, parent_workspace TEXT NOT NULL, owner_user_id TEXT NOT NULL
+      name TEXT NOT NULL,
+      mission TEXT NOT NULL,
+      parent_workspace TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL
     )`);
-    db.exec(`INSERT INTO subordinate_identity VALUES (1, 'researcher', 'Researcher',
-      'market researcher', 'Map the market.', 'kinu-main', 'owner-123')`);
+    db.exec(`INSERT INTO subordinate_identity VALUES (1, 'researcher', 'Map the market.', 'kinu-main', 'owner-123')`);
 
     const identity = makeIdentityStore(db);
     identity.ensureSchema();
 
-    expect(identity.read()).toEqual({
-      ...identityInput,
-      roleId: null,
-      legacyRole: 'market researcher',
-      catalogVersion: null,
-    });
+    expect(identity.read()).toEqual(identityInput);
     expect(identity.delegationBudget()).toEqual({ depth: 1, maxDepth: 3 });
+  });
+});
+
+describe('the child descriptor authority', () => {
+  // S2: displayName, nameOrigin, role selection and tier live ONLY in the
+  // child's agent_config. A rename or role switch must be visible on a COLD
+  // reopen of the config store — no parent-side mirror involved anywhere.
+  function makeConfig(db: Database): AgentConfigStore {
+    initAgentConfigTable(makeExecRaw(db));
+    return createAgentConfigStore(makeTagged(db));
+  }
+
+  test('rename and role switch read back from agent_config after a cold reopen', () => {
+    const db = new Database(':memory:');
+    const config = makeConfig(db);
+    config.setDisplayNameOrigin('Jarvis', 'user');
+    config.setRoleSelection({ kind: 'catalog', roleId: 'researcher' });
+    config.setAssignedTier('deep');
+
+    const cold = makeConfig(db);
+    expect(subordinateDescriptorSource(cold).read()).toEqual({
+      displayName: 'Jarvis',
+      nameOrigin: 'user',
+      role: { kind: 'catalog', roleId: 'researcher' },
+      tier: 'deep',
+    });
+  });
+
+  test('an unset config reads as a blank auto-titled general-hire descriptor', () => {
+    const source = subordinateDescriptorSource(makeConfig(new Database(':memory:')));
+    expect(source.read()).toEqual({
+      displayName: '',
+      nameOrigin: 'auto',
+      role: { kind: 'catalog', roleId: 'general' },
+      tier: null,
+    });
+  });
+
+  test('a legacy freeform line and a catalog id are mutually exclusive, atomically', () => {
+    const db = new Database(':memory:');
+    const config = makeConfig(db);
+    config.setRoleSelection({ kind: 'legacy', text: 'market researcher' });
+    expect(config.getRoleSelection()).toEqual({ kind: 'legacy', text: 'market researcher' });
+
+    // The catalog assignment REPLACES the legacy line in one statement.
+    config.setRoleSelection({ kind: 'catalog', roleId: 'researcher' });
+    expect(subordinateDescriptorSource(config).read()?.role)
+      .toEqual({ kind: 'catalog', roleId: 'researcher' });
+  });
+
+  // The identity row holds immutable lineage ONLY: mutable presentation
+  // changing around it must never touch it, and it can never be re-seeded.
+  test('identity stays immutable lineage while presentation changes around it', () => {
+    const db = new Database(':memory:');
+    const identity = makeIdentityStore(db);
+    identity.ensureSchema();
+    identity.seed(identityInput);
+    const config = makeConfig(db);
+    config.setDisplayNameOrigin('New Name', 'user');
+
+    expect(identity.read()).toEqual(identityInput);
+    expect(() => identity.seed({ ...identityInput, mission: 'different' }))
+      .toThrow('already initialized');
   });
 });
 
@@ -201,8 +260,6 @@ describe('the delegation depth cap', () => {
 });
 const initialRosterEntry: SubordinateRosterEntry = {
   name: 'researcher',
-  displayName: 'Researcher',
-  role: 'market researcher',
   createdBy: 'orchestrator',
   status: 'working',
   currentTask: 'Map the market.',
@@ -302,10 +359,11 @@ interface TeamHarness {
    *  state a child is born with is only observable here. */
   seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
   broadcasts: number[];
+  /** Every broadcast event, whole — what proves the event's exact payload. */
+  events: SubordinatesChangedEvent[];
   tasks: Array<{ subordinate: string; content: string; timestamp: number }>;
   failures: Set<keyof SubordinateRuntime>;
 }
-
 /** The workspace mission this harness's actor holds — what an owner-created
  *  additional agent inherits when the owner supplies none. */
 const HARNESS_OWN_MISSION = 'Keep the release train moving.';
@@ -317,6 +375,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
   const assignments: Array<{ body: string; inheritedContext?: string }> = [];
   const seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]> = [];
   const broadcasts: number[] = [];
+  const events: SubordinatesChangedEvent[] = [];
   const tasks: Array<{ subordinate: string; content: string; timestamp: number }> = [];
   const failures = new Set<keyof SubordinateRuntime>();
   const fail = (operation: keyof SubordinateRuntime) => {
@@ -360,27 +419,32 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     now: () => 1_700_000_000_000,
     inheritedContext: () => inheritedContext,
     ownMission: () => HARNESS_OWN_MISSION,
-    broadcast: () => { broadcasts.push(Date.now()); },
+    broadcast: (event) => { broadcasts.push(Date.now()); events.push(event); },
     broadcastTask: (event) => { tasks.push(event); },
   });
-  return { roster, team, calls, seeds, assignments, broadcasts, tasks, failures };
+  return { roster, team, calls, seeds, assignments, broadcasts, events, tasks, failures };
 }
 
 describe('team action routing', () => {
   test('owner creation seeds an idle identity without starting work or mirroring a task', async () => {
     const h = makeTeamHarness();
 
-    expect(await h.team.create({ role: 'research partner', mission: 'Understand the domain.' })).toEqual({
+    expect(await h.team.create({ role: { kind: 'legacy', text: 'research partner' }, mission: 'Understand the domain.' })).toEqual({
       name: 'researcher-a1b2c3', displayName: 'Research Partner',
       subordinate: {
-        name: 'researcher-a1b2c3', displayName: 'Research Partner', role: 'research partner',
-        nameOrigin: 'auto',
+        name: 'researcher-a1b2c3',
         createdBy: 'user', status: 'idle', currentTask: null,
         createdAt: 1_700_000_000_000, dismissedAt: null,
       },
     });
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
       createdBy: 'user', status: 'idle', currentTask: null,
+    });
+    // The title and role ride ONLY on the seed handed to the child — never
+    // onto any parent-side row.
+    expect(h.seeds[0]).toMatchObject({
+      displayName: 'Research Partner', nameOrigin: 'auto',
+      role: { kind: 'legacy', text: 'research partner' },
     });
     expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Understand the domain.']);
     expect(h.assignments).toEqual([]);
@@ -391,17 +455,13 @@ describe('team action routing', () => {
   // The owner adding a second agent to a workspace has usually decided nothing
   // about it. Every field is optional, and what fills the gaps is the workspace
   // itself, never an invented default.
-  test('an owner-created agent with nothing said about it inherits the mission and the general role', async () => {
+  test('an owner-created agent with nothing said about it inherits the mission and the general catalog role', async () => {
     const h = makeTeamHarness();
 
     const created = await h.team.create({});
 
     expect(created.subordinate).toEqual({
       name: 'researcher-a1b2c3',
-      // Blank, and that is the point: nothing the owner said can name it yet.
-      displayName: '',
-      role: 'general',
-      nameOrigin: 'auto',
       createdBy: 'user',
       status: 'idle',
       currentTask: null,
@@ -415,7 +475,7 @@ describe('team action routing', () => {
       displayName: '',
       nameOrigin: 'auto',
       mission: HARNESS_OWN_MISSION,
-      legacyRole: 'general',
+      role: { kind: 'catalog', roleId: 'general' },
     }]);
     // Idle: a mission defines it, and does not become a task.
     expect(h.assignments).toEqual([]);
@@ -428,7 +488,7 @@ describe('team action routing', () => {
     expect(named.seeds[0]).toMatchObject({ displayName: 'Jarvis', nameOrigin: 'user' });
 
     const byRole = makeTeamHarness();
-    await byRole.team.create({ role: 'auditor' });
+    await byRole.team.create({ role: { kind: 'catalog', roleId: 'auditor' } });
     expect(byRole.seeds[0]).toMatchObject({ displayName: 'Auditor', nameOrigin: 'auto' });
   });
 
@@ -437,35 +497,42 @@ describe('team action routing', () => {
   test('a model hire still refuses to invent a role or a mission', async () => {
     const h = makeTeamHarness();
 
-    await expect(h.team.spawn({ role: '', mission: 'Do the thing.', mode: 'build' }))
+    await expect(h.team.spawn({ role: { kind: 'legacy', text: '' }, mission: 'Do the thing.', mode: 'build' }))
       .rejects.toThrow('role must be non-empty');
-    await expect(h.team.spawn({ role: 'auditor', mission: '   ', mode: 'build' }))
+    // SAFETY: the input omits the required `role` field, so it fails spawn's own
+    // type contract by construction — the cast only reaches the runtime refusal
+    // guarding that same boundary.
+    await expect(h.team.spawn({ mission: 'Do the thing.', mode: 'build' } as never))
+      .rejects.toThrow('role must be non-empty');
+    await expect(h.team.spawn({ role: { kind: 'catalog', roleId: 'auditor' }, mission: '   ', mode: 'build' }))
       .rejects.toThrow('mission must be non-empty');
     expect(h.seeds).toEqual([]);
     expect(h.roster.list()).toEqual([]);
   });
 
-  test('a rename writes the child and the roster together, and marks the title the owner\'s', async () => {
+  test('a rename delegates to the child and refreshes the roster once', async () => {
     const h = makeTeamHarness();
     await h.team.create({});
 
     const renamed = await h.team.rename({ name: 'researcher-a1b2c3', displayName: '  Release Warden  ' });
 
     expect(renamed).toMatchObject({ ok: true, displayName: 'Release Warden' });
-    expect(renamed.subordinate.displayName).toBe('Release Warden');
-    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Release Warden');
     // `user` is what makes it permanent: planWorkspaceTitle refuses that origin.
     expect(h.calls).toContain('rename:researcher-a1b2c3:Release Warden:user');
+    // Exactly one refresh for the settled operation, and NO title copy on the
+    // parent row — the child descriptor is the only place the name lives.
+    expect(h.broadcasts).toHaveLength(2);
+    expect('displayName' in h.roster.requireActive('researcher-a1b2c3')).toBe(false);
   });
 
-  test('a rename the child refuses leaves the roster exactly as it was', async () => {
+  test('a rename the child refuses broadcasts nothing and writes nothing locally', async () => {
     const h = makeTeamHarness();
     await h.team.create({ displayName: 'Before' });
     h.failures.add('rename');
 
     await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: 'After' }))
       .rejects.toThrow('rename failed');
-    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Before');
+    expect(h.broadcasts).toHaveLength(1);
   });
 
   test('an empty rename is refused rather than blanking a name somebody chose', async () => {
@@ -474,48 +541,27 @@ describe('team action routing', () => {
 
     await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: '  ' }))
       .rejects.toThrow('displayName must be non-empty');
-    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Jarvis');
+    expect(h.calls).not.toContain(expect.stringContaining('rename:'));
   });
 
   // The child titles itself, because only the child sees its own owner-driven
-  // turns. It then reports the text, and the roster is the half that has to
-  // learn it — without the parent calling back into a child that is mid-turn.
-  test('a title the child settled on reaches the roster without touching the child again', async () => {
+  // turns. The parent holds no mirror, so this only refreshes listeners —
+  // every reader re-projects from the child descriptor.
+  test('a title the child settled on only refreshes the roster listeners', async () => {
     const h = makeTeamHarness();
     await h.team.create({});
 
     await h.team.recordTitle({ name: 'researcher-a1b2c3', displayName: 'Callback Audit' });
 
-    expect(h.roster.requireActive('researcher-a1b2c3').displayName).toBe('Callback Audit');
     expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Keep the release train moving.']);
     expect(h.broadcasts).toHaveLength(2);
+    expect('displayName' in h.roster.requireActive('researcher-a1b2c3')).toBe(false);
   });
 
-  test('a stale automatic title cannot replace an owner rename on the parent roster', async () => {
-    const h = makeTeamHarness();
-    await h.team.create({});
-    const first = await h.team.recordTitle({
-      name: 'researcher-a1b2c3',
-      displayName: 'Callback Audit',
-    });
-    expect(first.applied).toBe(true);
-
-    await h.team.rename({ name: 'researcher-a1b2c3', displayName: 'Jarvis' });
-    const stale = await h.team.recordTitle({
-      name: 'researcher-a1b2c3',
-      displayName: 'Another automatic title',
-    });
-
-    expect(stale.applied).toBe(false);
-    expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
-      displayName: 'Jarvis',
-      nameOrigin: 'user',
-    });
-  });
 
   test('only the owner can dismiss an owner-created subordinate', async () => {
     const h = makeTeamHarness();
-    await h.team.create({ role: 'researcher', mission: 'Own this role.' });
+    await h.team.create({ role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Own this role.' });
 
     await expect(h.team.dismiss({ name: 'researcher-a1b2c3' }))
       .rejects.toThrow('only the owner can dismiss it');
@@ -535,7 +581,7 @@ describe('team action routing', () => {
     ];
     const h = makeTeamHarness(inheritedContext);
 
-    await h.team.spawn({ mode: 'build', role: 'auth engineer', mission: 'Repair the auth flow.' });
+    await h.team.spawn({ mode: 'build', role: { kind: 'legacy', text: 'auth engineer' }, mission: 'Repair the auth flow.' });
 
     const digest = h.assignments[0]?.inheritedContext;
     expect(digest).toContain('<inherited_context>');
@@ -562,15 +608,29 @@ describe('team action routing', () => {
     );
   });
 
+  // S22: an assignment fires exactly ONE roster refresh and ONE task event —
+  // the task rides its own event, never a duplicate payload on the roster one.
+  test('an assignment fires exactly one roster refresh and one task event', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: { kind: 'legacy', text: 'market researcher' }, mission: 'Map the market.' });
+    expect(h.broadcasts).toHaveLength(1);
+    expect(h.tasks).toHaveLength(1);
+
+    await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Compare vendors' });
+    expect(h.broadcasts).toHaveLength(2);
+    expect(h.tasks).toHaveLength(2);
+    // The dead duplicate payload is gone from every event, whole.
+    expect(h.events.every((event) => !('assignedTask' in event))).toBe(true);
+  });
+
   test('successful actions expose one canonical roster and nested live status', async () => {
     const h = makeTeamHarness();
 
-    expect(await h.team.spawn({ mode: 'build', role: 'market researcher', mission: 'Map the market.' })).toEqual({
+    expect(await h.team.spawn({ mode: 'build', role: { kind: 'legacy', text: 'market researcher' }, mission: 'Map the market.' })).toEqual({
       name: 'researcher-a1b2c3', displayName: 'Market Researcher',
     });
     expect(await h.team.list()).toEqual([{
-      name: 'researcher-a1b2c3', displayName: 'Market Researcher', role: 'market researcher',
-      nameOrigin: 'auto',
+      name: 'researcher-a1b2c3',
       createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.',
       createdAt: 1_700_000_000_000, dismissedAt: null,
     }]);
@@ -611,14 +671,14 @@ describe('team action routing', () => {
 
     for (const operation of operations) {
       const h = makeTeamHarness();
-      if (operation !== 'spawn') await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
+      if (operation !== 'spawn') await h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Initial mission' });
       if (operation === 'message') h.roster.applyReport('researcher-a1b2c3', 'blocked');
       const before = h.roster.get('researcher-a1b2c3');
       const broadcastsBefore = h.broadcasts.length;
       h.failures.add(operation);
 
       const action = operation === 'spawn'
-        ? h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' })
+        ? h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Mission' })
         : operation === 'assign'
           ? h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' })
           : operation === 'message'
@@ -636,7 +696,7 @@ describe('team action routing', () => {
     const h = makeTeamHarness();
     h.failures.add('assign');
 
-    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }))
+    await expect(h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Mission' }))
       .rejects.toThrow('assign failed');
     expect(h.roster.get('researcher-a1b2c3')).toBeNull();
     expect(h.calls).toEqual([
@@ -652,7 +712,7 @@ describe('team action routing', () => {
     h.failures.add('assign');
     h.failures.add('dismiss');
 
-    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }))
+    await expect(h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Mission' }))
       .rejects.toThrow('facet cleanup also failed');
     expect(h.roster.get('researcher-a1b2c3')).toMatchObject({
       status: 'working',
@@ -691,7 +751,7 @@ describe('team action routing', () => {
       broadcastTask: () => {},
     });
 
-    await team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
+    await team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Initial mission' });
     await team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' });
     roster.applyReport('researcher-a1b2c3', 'blocked');
     await team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' });
@@ -707,7 +767,7 @@ describe('team action routing', () => {
 
   test('status preserves roster authority and isolates an unavailable facet', async () => {
     const h = makeTeamHarness();
-    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
+    await h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Mission' });
     h.failures.add('status');
 
     expect(await h.team.status({})).toEqual([{
@@ -723,7 +783,7 @@ describe('team action routing', () => {
     // addressable — and a follow-up assignment must run on the SAME facet
     // with its context intact (no respawn, no deletion anywhere).
     const h = makeTeamHarness();
-    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' });
+    await h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Map the market.' });
 
     h.roster.applyReport('researcher-a1b2c3', 'completed');
     const afterCompletion = await h.team.list();
@@ -744,7 +804,7 @@ describe('team action routing', () => {
 
   test('EVICTION FIX: dismissal archives by default — storage wipe only on explicit keepHistory=false', async () => {
     const h = makeTeamHarness();
-    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
+    await h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Mission' });
 
     expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
       .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true });

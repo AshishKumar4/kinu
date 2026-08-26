@@ -75,7 +75,7 @@ describe('workspace schema is the only path', () => {
     expect(owned).toEqual(
       expect.arrayContaining([
         'initAgentConfigTable', 'initAllTables', 'initAlternateTakesTable',
-        'initBackgroundJobsTable', 'initCraftScoreTables',
+        'initBackgroundJobsTable', 'initCraftQualityColumns',
         'initCurriculumTable', 'initEventsHubTables', 'initFactsTable', 'initGepaTables',
         'initHeadsTables', 'initImportedExperienceTable', 'initMctsSearchTable', 'initRunEventTables',
         'initScaffoldTables', 'initSearchTables', 'initShadowTables', 'initTurnOutcomeTables',
@@ -103,7 +103,7 @@ describe('workspace schema is the only path', () => {
     // workspace opened by any other path (a fork target, an archive restore)
     // had readers and no table — and those readers papered over it with
     // `catch { return [] }`, making "no such table" indistinguishable from
-    // "indexed nothing". The same hole `craft_scores` had.
+    // "indexed nothing". The same hole an unindexed memory plane had.
     const db = new Database(':memory:');
     initWorkspaceSchema(schemaSql(db));
     const rows = db.query<{ name: string }, []>(

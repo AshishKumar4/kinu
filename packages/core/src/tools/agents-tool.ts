@@ -64,6 +64,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
 import { nanoid } from '../utils/nanoid';
+import type { RoleSelection } from '../config/store';
 import { diagnostics, renderThrownChain } from '../obs/index';
 import {
   delegationDepthRefusal,
@@ -86,14 +87,12 @@ import {
 
 export type SubordinateStatus = 'idle' | 'working' | 'awaiting_input' | 'dismissed';
 
-/** One row of the workspace_subordinates roster (parent-DO source of truth). */
+/** One row of the workspace_subordinates roster: lifecycle and task facts
+ *  ONLY. The title and role a subordinate presents live in its own
+ *  agent_config (subordinates/support.ts SubordinateDescriptorSource) — the
+ *  parent never mirrors them. */
 export interface SubordinateRosterEntry {
   name: string;
-  displayName: string;
-  role: string;
-  /** Who owns the current title. Stored on the parent row so an automatic
-   * child update can never overwrite an owner rename that raced it. */
-  nameOrigin?: 'user' | 'auto';
   createdBy: 'orchestrator' | 'user';
   status: SubordinateStatus;
   currentTask: string | null;
@@ -162,26 +161,22 @@ export interface TeamToolDeps {
    *  first-interaction title policy claim it (identity/naming.ts). The
    *  model's `hire` goes through {@link spawn} and stays strict.
    *
-   *  `role` is a catalog role id when the caller validated one (`roleId`
-   *  set, with its tier override and catalog version); otherwise it is the
-   *  legacy freeform line. */
+   *  `role` is ONE typed selection — catalog id or legacy freeform line,
+   *  written to the child's own config store at seed time. */
   create(input: {
     name?: string;
     /** A title the owner typed. Given, the name is THEIRS: origin `user`,
      *  never auto-retitled. */
     displayName?: string;
-    role?: string;
-    mission?: string;
-    roleId?: string;
+    role?: RoleSelection;
     tier?: TierId;
-    catalogVersion?: number;
+    mission?: string;
   }): Promise<{
     name: string; displayName: string; subordinate: SubordinateRosterEntry;
   }>;
-  /** Retitle a subordinate on the OWNER's behalf: the child's own naming
-   *  state and this authoritative roster row, written together, with the
-   *  title marked the OWNER'S — which is what permanently stops auto-titling,
-   *  since `planWorkspaceTitle` refuses a `user` origin. */
+  /** Retitle a subordinate on the OWNER's behalf: writes the child's own
+   *  naming state with a `user` origin — which permanently stops
+   *  auto-titling, since `planWorkspaceTitle` refuses that origin. */
   rename(input: { name: string; displayName: string }): Promise<{
     ok: true; name: string; displayName: string; subordinate: SubordinateRosterEntry;
   }>;
@@ -189,23 +184,18 @@ export interface TeamToolDeps {
    *  the first-interaction auto-title, which only the child can run because
    *  only the child sees its own owner-driven turns.
    *
-   *  Roster-only, and deliberately so: this is called BY the child, mid-turn,
-   *  and writing back into it would be a re-entrant call into a Durable
-   *  Object that is busy running the turn that produced the title. The child
-   *  is the authority on whose title it is; this row carries only the text
-   *  every roster reader shows. */
+   *  The child IS the naming authority, so this writes nothing: it refreshes
+   *  roster listeners so every reader re-projects from the child descriptor. */
   recordTitle(input: { name: string; displayName: string }): Promise<{
-    ok: true; name: string; displayName: string; applied: boolean;
+    ok: true; name: string; displayName: string;
   }>;
   /** Create a durable subordinate; its first turn is the mission. Same role
    *  vocabulary as {@link create}. */
   spawn(input: {
     name?: string;
-    role: string;
+    role: RoleSelection;
     mission: string;
-    roleId?: string;
     tier?: TierId;
-    catalogVersion?: number;
     mode: WorkMode;
   }): Promise<{
     name: string; displayName: string;
@@ -1706,19 +1696,19 @@ export async function dispatchAgentsAction(
           // roleId, so storing it twice would be a second source of truth.
           const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
           request = {
-            role: input.role,
+            role: { kind: 'catalog', roleId: delegated.resolved.role.id },
             mission: input.mission,
-            roleId: input.role,
             mode,
           };
           if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
-          if (delegated.resolved.catalogVersion !== null) {
-            Object.assign(request, { catalogVersion: delegated.resolved.catalogVersion });
-          }
         } else {
           // No catalog wired: the freeform line hires as the labelled legacy
           // block, exactly as it did before roles existed.
-          request = { role: input.role, mission: input.mission, mode };
+          request = {
+            role: { kind: 'legacy', text: input.role },
+            mission: input.mission,
+            mode,
+          };
         }
         if (input.agent) Object.assign(request, { name: input.agent });
         return await team.spawn(request);

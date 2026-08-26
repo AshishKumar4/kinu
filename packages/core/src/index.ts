@@ -149,17 +149,15 @@ export {
   initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay';
-// The durable evolution window + pending outcome review — the state neither
-// backend's instance outlives (one process per `kinu exec`; DO eviction).
+// Every completed turn still owed evolution work — the durable window plus its
+// typed review obligation, ONE row per turn, owned by EvolutionEngine.
 export {
-  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore, type ClaimedWindow,
-} from './evolution/session-window';
-export {
-  initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
-  countQueuedTurnReviews, MAX_TURN_REVIEWS_PER_OPEN,
+  initCompletedTurnTable, createCompletedTurnStore, CompletedTurnSchema,
+  MAX_TURN_REVIEWS_PER_OPEN,
+  type CompletedTurnStore, type ClaimedWindow, type PendingTurnReview,
   type DeferredTurnReview, type RefusedTurnReview, type TakenTurnReviews,
-  type TurnReviewQueueOutcome, type DeferredReviewDrain,
-} from './evolution/review-queue';
+  type EnqueueOutcome, type DeferredReviewDrain, type AppendTurnOpts,
+} from './evolution/session-window';
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {
@@ -184,7 +182,7 @@ export {
   canonicalConversationId,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
   DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
-  type AgentConfigStore, type MctsOverrides, type ShellApprovalMode,
+  type AgentConfigStore, type MctsOverrides, type RoleSelection, type ShellApprovalMode,
 } from './config/index';
 
 // Types
@@ -489,7 +487,10 @@ export {
   parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
   renderSubordinateInheritedContext,
+  subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
+  type SubordinateDescriptor,
+  type SubordinateDescriptorSource,
   type SubordinateIdentity,
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
@@ -646,6 +647,7 @@ export {
   DYNAMIC_CONTEXT_HEADER,
   TURN_CONTEXT_HEADER,
   type DynamicApproval,
+  type ActiveRoster,
   type DynamicContext,
   type DynamicDelegate,
   type DynamicJob,
@@ -769,12 +771,13 @@ export {
   type MctsSearchRunSummary,
 } from './mcts/search-store';
 export { initScaffoldTables } from './scaffold/schemas';
-export { initCraftScoreTables } from './craft/schemas';
+export { initCraftQualityColumns } from './craft/schemas';
 
 // Scaffold management
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
 export { modifyScaffold, type ModifyResult, type ModifyScaffoldOpts } from './scaffold/modify';
 export { rollbackScaffold } from './scaffold/rollback';
+export { createScaffoldSurface, type ScaffoldSurfaceOpts } from './scaffold/surface';
 // Misevolution gate — fixed safety criteria over every evolution surface
 // (scaffold acceptance + promotion, extracted tools, agent-authored tools,
 // imported experience).
@@ -1389,7 +1392,7 @@ export {
   DEFAULT_GEPA_BUDGET,
   // SQL persistence — needed by the orchestrator to create tables + run.
   initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, makePersistingHook,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHook,
 } from './evolution/gepa/index';
 export type {
   EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
@@ -1398,6 +1401,7 @@ export type {
   RunScaffoldGepaOpts, RunScaffoldGepaResult,
   RunSectionGepaOpts, RunSectionGepaResult,
   GepaRunSummary,
+  GepaParetoEntry,
 } from './evolution/gepa/index';
 // Evolved prompt sections. A backend needs two things: the promoted wording to
 // hand `buildSystemPromptSync` as `sectionOverrides`, and the type of that map.

@@ -44,12 +44,16 @@ function setup(opts: {
    *  would hold it. */
   const granted: string[] = [];
   let seq = 0;
+  /** The durable audit trail a consumed grant must leave behind — what proves
+   *  an approval was spent once the row that held it is gone. */
+  const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
   const queue = new DeferredApprovalQueue({
     store,
     signals: { deliver: async (signal) => { delivered.push(signal); return 'queued'; } },
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
     newId: () => `defer-${++seq}`,
     now: () => 1_000 + seq,
+    audit: (record) => { audited.push(record); },
   });
 
   const executed: string[] = [];
@@ -72,7 +76,7 @@ function setup(opts: {
   const run: RunTool = {
     execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
   };
-  return { queue, store, shell, executed, delivered, granted, run };
+  return { queue, store, shell, executed, delivered, granted, audited, run };
 }
 
 describe('a gated action nobody is there to approve', () => {
@@ -351,6 +355,59 @@ describe('what an approval actually buys', () => {
     expect(granted).toEqual(['git-force-push@workspace']);
     expect(await run.execute({ command: 'npm publish' })).toContain('NOT RUN');
     expect(executed).toEqual([]);
+  });
+});
+
+describe('the spent grant leaves an audit, not a row', () => {
+  test('consuming a grant records the approval once and deletes its row', async () => {
+    const { run, queue, store, audited } = setup();
+    await run.execute({ command: GATED });
+    await queue.decide(['defer-1'], 'approved');
+
+    expect(await run.execute({ command: GATED })).toBe('ran');
+    expect(audited).toEqual([
+      { approvalId: 'defer-1', command: GATED, executor: 'workspace' },
+    ]);
+    // The row is GONE, not flipped to a terminal status: a second run needs a
+    // second approval because there is nothing left to spend.
+    expect(store.get('defer-1')).toBeNull();
+  });
+
+  test('one grant is one audit and one run — a re-issue parks, never replays', async () => {
+    const { run, queue, executed, audited } = setup();
+    await run.execute({ command: GATED });
+    await queue.decide(['defer-1'], 'approved');
+
+    await run.execute({ command: GATED });   // spends defer-1, runs
+    await run.execute({ command: GATED });   // no grant left: parks defer-2
+
+    expect(executed).toEqual([GATED]);
+    expect(audited).toHaveLength(1);
+  });
+
+  test('store.spend returns the consumed action, then null on any later call', () => {
+    const db = new Database(':memory:');
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    const store = new DeferredApprovalStore(makeSql(db));
+    store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
+    expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
+
+    const spent = store.spend('defer-s');
+    expect(spent?.id).toBe('defer-s');
+    expect(store.spend('defer-s')).toBeNull();
+    expect(store.get('defer-s')).toBeNull();
+  });
+
+  test('a legacy used row is purged at table init, never resurrected as queued', () => {
+    const db = new Database(':memory:');
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    void makeSql(db)`INSERT INTO deferred_approvals (id, command, executor, reason, status, requested_at, decided_at)
+      VALUES ('defer-old', ${GATED}, 'workspace', 'gate', 'used', 1, 2)`;
+
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    const reopened = new DeferredApprovalStore(makeSql(db));
+    expect(reopened.get('defer-old')).toBeNull();
+    expect(reopened.standing(GATED, 'workspace')).toBeNull();
   });
 });
 

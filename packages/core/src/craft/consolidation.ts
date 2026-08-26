@@ -11,7 +11,6 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { CraftScoreEntry } from '../types/craft';
 import { effectiveScore } from './ema';
 import { isoDate, nowMs } from '../utils/date';
 import { DEFAULT_CONFIG } from '../config';
@@ -32,10 +31,10 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
 
   const now = nowMs();
 
-  const scores = rt.storage.sql<CraftScoreEntry>`
-    SELECT * FROM craft_scores
+  const scores = rt.storage.sql<{ name: string; score: number; uses: number; last_used_at: number }>`
+    SELECT name, score, uses, last_used_at FROM crafted_tools
   `;
-  const scoreMap = new Map(scores.map(s => [s.tool_name, s]));
+  const scoreMap = new Map(scores.map(s => [s.name, s]));
 
   const toRetire: string[] = [];
   for (const tool of allTools) {
@@ -59,8 +58,8 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
   if (toRetire.length === 0) return;
 
   for (const name of toRetire) {
+    // One DELETE removes the tool AND its quality — they are the same row.
     rt.craftStore.delete(name);
-    void rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${name}`;
   }
 
   await rt.memory.append(

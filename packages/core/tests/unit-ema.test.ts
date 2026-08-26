@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { emaUpdate, effectiveScore, filterByEffectiveScore } from '../src/craft/ema';
-import { initCraftScoreTables } from '../src/craft/schemas';
+import { initCraftQualityColumns } from '../src/craft/schemas';
 import { makeSql, makeExecRaw } from './helpers';
 
 describe('EMA scoring', () => {
@@ -59,32 +59,36 @@ describe('Time decay', () => {
 describe('filterByEffectiveScore — the one injection policy', () => {
   function setup() {
     const db = new Database(':memory:');
-    initCraftScoreTables(makeExecRaw(db));
+    initCraftQualityColumns(makeExecRaw(db), makeSql(db));
     return { db, sql: makeSql(db) };
   }
-  const tools = [{ name: 'good' }, { name: 'stale' }, { name: 'unscored' }];
+  const tools = [{ name: 'good' }, { name: 'stale' }, { name: 'unstored' }];
+  const seedTool = (sql: ReturnType<typeof makeSql>, name: string, score: number, at: number): void => {
+    // The quality columns live ON the tool row a real creation writes.
+    void sql`INSERT INTO crafted_tools (name, code, score, uses, last_used_at)
+        VALUES (${name}, '', ${score}, 1, ${at})`;
+  };
 
-  test('drops below-threshold tools, keeps healthy + unscored ones', () => {
+  test('drops below-threshold tools, keeps healthy + unstored ones', () => {
     const { sql } = setup();
     const now = Date.now();
-    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${now})`;
-    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale', 0.05, 5, ${now})`;
+    seedTool(sql, 'good', 0.8, now);
+    seedTool(sql, 'stale', 0.05, now);
     const kept = filterByEffectiveScore(sql, tools, 0.2, now);
-    expect(kept.map((t) => t.name)).toEqual(['good', 'unscored']);
+    expect(kept.map((t) => t.name)).toEqual(['good', 'unstored']);
   });
 
   test('time decay retires a once-good tool', () => {
     const { sql } = setup();
     const now = Date.now();
     const ninetyDaysAgo = now - 90 * 86_400_000; // 3 half-lives → 0.8 → 0.1
-    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${ninetyDaysAgo})`;
+    seedTool(sql, 'good', 0.8, ninetyDaysAgo);
     const kept = filterByEffectiveScore(sql, [{ name: 'good' }], 0.2, now);
     expect(kept).toEqual([]);
   });
 
-  test('missing craft_scores table → everything passes', () => {
+  test('missing crafted_tools table is a fault, not an empty toolbox', () => {
     const db = new Database(':memory:');
-    const kept = filterByEffectiveScore(makeSql(db), tools);
-    expect(kept.map((t) => t.name)).toEqual(['good', 'stale', 'unscored']);
+    expect(() => filterByEffectiveScore(makeSql(db), tools)).toThrow();
   });
 });

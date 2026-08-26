@@ -142,7 +142,7 @@ describe('forkWorkspaceStorage', () => {
     expect(events[0]!.c).toBe(0);
   });
 
-  test('4. resets craft_scores (fork starts fresh EMA)', async () => {
+  test('4. resets craft quality on fork (fork starts fresh EMA)', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -151,15 +151,14 @@ describe('forkWorkspaceStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
       craftedTools: [{ name: 'foo', description: 'x', code: '() => 1', scope: 'local', created_at: 500, updated_at: 500 }],
     });
-    void src.sql`INSERT INTO craft_scores (tool_name, score, uses) VALUES (${'foo'}, ${0.9}, ${12})`;
+    void src.sql`UPDATE crafted_tools SET score = ${0.9}, uses = ${12}, last_used_at = ${Date.now()} WHERE name = ${'foo'}`;
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
-    const scores = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM craft_scores`;
-    expect(scores[0]!.c).toBe(0);
-    // But the tool itself IS copied
-    const tools = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools WHERE name = ${'foo'}`;
-    expect(tools[0]!.c).toBe(1);
+    // The fork copies the TOOL but not its earned quality: the copy carries
+    // the column defaults, so its EMA starts from the neutral prior.
+    const quality = tgt.sql<{ score: number; uses: number }>`SELECT score, uses FROM crafted_tools WHERE name = ${'foo'}`;
+    expect(quality[0]).toEqual({ score: 0.5, uses: 0 });
   });
 
   test('5. copies memory files but not the scaffold', async () => {

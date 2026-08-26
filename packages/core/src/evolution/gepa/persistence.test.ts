@@ -6,9 +6,8 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from '../../../tests/helpers';
 import {
-  initGepaTables, startGepaRun, persistGepaCandidate,
-  persistGepaParetoSnapshot, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, makePersistingHook,
+  initGepaTables, startGepaRun, persistGepaCandidate, finishGepaRun,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHook,
   runGepa,
   type GepaCandidate, type EvalInstance, type MetricOutcome,
 } from './index';
@@ -32,14 +31,14 @@ function mkCandidate(id: string, source: string, scores: Record<string, number>)
 }
 
 describe('initGepaTables', () => {
-  test('creates gepa_runs, gepa_candidates, gepa_pareto_membership; idempotent', () => {
+  test('creates gepa_runs and gepa_candidates only — no membership table; idempotent', () => {
     const { sql, execRaw } = setup();
     initGepaTables(execRaw);
     initGepaTables(execRaw); // double-call OK
     const tables = sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'gepa_%'`;
     const names = tables.map(t => t.name).sort();
-    expect(names).toEqual(['gepa_candidates', 'gepa_pareto_membership', 'gepa_runs']);
+    expect(names).toEqual(['gepa_candidates', 'gepa_runs']);
   });
 });
 
@@ -114,30 +113,31 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
   });
 });
 
-describe('persistGepaParetoSnapshot', () => {
-  test('wipes prior pareto rows on each call', () => {
+describe('loadGepaParetoFront — the derived front', () => {
+  test('derives the per-instance front from accepted candidates alone', () => {
     const { sql } = setup();
-    const runId = startGepaRun(sql, {
-      target: 'scaffold',
-      budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1 },
-    });
+    const runId = startGepaRun(sql, { target: 'scaffold', budget: {} });
+    // A specialist per instance: neither dominates the other. The old
+    // membership table stored this shape after every iteration; the
+    // derivation must reproduce it from scores_json with no stored
+    // membership at all.
     const a = mkCandidate('a', 'src-a', { i1: 0.9, i2: 0.3 });
     const b = mkCandidate('b', 'src-b', { i1: 0.3, i2: 0.9 });
-    persistGepaParetoSnapshot(sql, { runId, pool: [a, b], instanceIds: ['i1', 'i2'] });
-    let rows = sql<{ candidate_id: string; instance_id: string; score: number }>`
-      SELECT candidate_id, instance_id, score FROM gepa_pareto_membership
-        WHERE run_id = ${runId} ORDER BY instance_id, candidate_id`;
-    expect(rows.length).toBe(2);
-    expect(rows.find(r => r.instance_id === 'i1')?.candidate_id).toBe('a');
-    expect(rows.find(r => r.instance_id === 'i2')?.candidate_id).toBe('b');
+    for (const cand of [a, b]) {
+      persistGepaCandidate(sql, { runId, candidate: cand, iteration: 0, accepted: true });
+    }
 
-    // Replace with a different pool — must wipe.
-    const c = mkCandidate('c', 'src-c', { i1: 0.95, i2: 0.95 });
-    persistGepaParetoSnapshot(sql, { runId, pool: [c], instanceIds: ['i1', 'i2'] });
-    rows = sql`SELECT candidate_id, instance_id, score FROM gepa_pareto_membership
-                 WHERE run_id = ${runId} ORDER BY instance_id`;
-    expect(rows.length).toBe(2);
-    expect(rows.every(r => r.candidate_id === 'c')).toBe(true);
+    expect(loadGepaParetoFront(sql, runId)).toEqual([
+      { candidateId: 'a', instanceId: 'i1', score: 0.9 },
+      { candidateId: 'b', instanceId: 'i1', score: 0.3 },
+      { candidateId: 'a', instanceId: 'i2', score: 0.3 },
+      { candidateId: 'b', instanceId: 'i2', score: 0.9 },
+    ]);
+  });
+
+  test('an empty or absent run yields an empty front', () => {
+    const { sql } = setup();
+    expect(loadGepaParetoFront(sql, 'gepa-none')).toEqual([]);
   });
 });
 
@@ -154,7 +154,7 @@ describe('runGepa with makePersistingHook end-to-end', () => {
 
     // Seed: persist before the loop.
     const persisted = new Set<string>();
-    const hook = makePersistingHook({ sql, runId, evalSet, persisted });
+    const hook = makePersistingHook({ sql, runId, persisted });
 
     let lmCall = 0;
     const reflectionLm = async () => { lmCall++; return `improved-${lmCall}`; };

@@ -51,8 +51,13 @@ describe('BackgroundJobStore', () => {
     for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'run', workMode: 'build', now: i });
     s.settle('j1', 0, 'ok', 9);
     s.fail('j3', 0, 'boom', 9);
-    expect(s.listRunning().map((j) => j.id)).toEqual(['j4', 'j2', 'j0']);
-    expect(s.listRunning(2).map((j) => j.id)).toEqual(['j4', 'j2']);
+    expect(s.listRunning().items.map((j) => j.id)).toEqual(['j4', 'j2', 'j0']);
+    expect(s.listRunning().total).toBe(3);
+    // The bound cuts the PAGE, never the count: the renderer's elision line
+    // is computed from `total`, so it stays honest past the cap.
+    const capped = s.listRunning(2);
+    expect(capped.items.map((j) => j.id)).toEqual(['j4', 'j2']);
+    expect(capped.total).toBe(3);
   });
 
   test('cancel marks a running job cancelled; no-op once settled', () => {

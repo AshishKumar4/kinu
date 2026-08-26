@@ -11,11 +11,12 @@ import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index';
 import { DELEGATION_RUBRIC } from '../src/evolution/delegation-features';
-import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes';
+import {
+  listTurnOutcomes, listLessons, recordLesson, renderRecentLessons,
+} from '../src/evolution/outcomes';
 import { alignmentConvergence } from '../src/evolution/alignment';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
 
 const CLASSIFY = 'Classify what the follow-up reveals';
 
@@ -43,7 +44,7 @@ function classifierResponses(outcome: 'accepted' | 'corrected' | 'frustrated', e
 }
 
 describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
-  test('corrected follow-up: records outcome, populates feedback, reflects into MEMORY.md', async () => {
+  test('corrected follow-up: records outcome, populates feedback, reflects into the corroborated ledger', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
     const prompts: string[] = [];
     const complete = rt.llm.complete.bind(rt.llm);
@@ -67,7 +68,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(events.some(e => e.type === 'reflection')).toBe(true);
     // Real negative outcome ⇒ the lesson is corroborated and durable.
     expect(listLessons(rt.storage.sql, { status: 'corroborated' })).toHaveLength(1);
-    expect(await rt.memory.read('memory/MEMORY.md')).toContain('Lesson');
+    // …and durable through the DERIVED view, not a MEMORY.md copy.
+    expect(renderRecentLessons(rt.storage.sql)).not.toBe('');
     const reflectionPrompt = prompts.find((prompt) => prompt.includes('In one sentence')) ?? '';
     expect(reflectionPrompt).toContain(
       'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
@@ -87,7 +89,6 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
         'Extract a reusable pattern': '{"name":"compute_value","description":"Execute code and return result","params":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]},"code":"async (args) => { return args.code; }"}',
       }),
     });
-    initCraftScoreTables(rt.storage.execRaw);
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
@@ -105,9 +106,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
   test('craft EMA moves on outcomes: corrected pushes a tool score down, accepted up', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
-    initCraftScoreTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
-                   VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
+        VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine = new EvolutionEngine(rt);
 
     const turn = makeTurn({
@@ -116,22 +116,21 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     });
     await engine.reviewTurn(turn, 'wrong again — that broke the deploy');
     const after = rt.storage.sql<{ score: number }>`
-      SELECT score FROM craft_scores WHERE tool_name = 'my_crafted_tool'`[0];
+      SELECT score FROM crafted_tools WHERE name = 'my_crafted_tool'`[0];
     expect(after.score).toBeLessThan(0.5);
 
     const { rt: rt2 } = createTestRuntime({
       llmResponses: classifierResponses('accepted', { 'Extract a reusable pattern': 'not json' }),
     });
-    initCraftScoreTables(rt2.storage.execRaw);
-    void rt2.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
-                    VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
+    void rt2.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
+        VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine2 = new EvolutionEngine(rt2);
     await engine2.reviewTurn(makeTurn({
       toolCalls: [{ name: 'execute_tools', args: {}, result: 'x' }],
       craftedToolsUsed: ['my_crafted_tool'],
     }), 'thanks, that worked — next please deploy it');
     const after2 = rt2.storage.sql<{ score: number }>`
-      SELECT score FROM craft_scores WHERE tool_name = 'my_crafted_tool'`[0];
+      SELECT score FROM crafted_tools WHERE name = 'my_crafted_tool'`[0];
     expect(after2.score).toBeGreaterThan(0.5);
   });
 
@@ -140,13 +139,12 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     // which crafted tools are never in (they are codemode-only) — so the EMA
     // was written against MCP and extension tools exclusively.
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
-    initCraftScoreTables(rt.storage.execRaw);
     const engine = new EvolutionEngine(rt);
     await engine.reviewTurn(makeTurn({
       toolCalls: [{ name: 'mcp__github__create_issue', args: {}, result: 'x' }],
       craftedToolsUsed: [],
     }), 'wrong again — that broke the deploy');
-    expect(rt.storage.sql`SELECT tool_name FROM craft_scores`).toEqual([]);
+    expect(rt.storage.sql`SELECT name FROM crafted_tools WHERE uses > 0`).toEqual([]);
   });
 
   test('trivial turn (greeting): no LLM call, no outcome row, no events', async () => {
@@ -221,10 +219,11 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(row!.outcome).toBe('corrected');
     expect(row!.source).toBe('execution');
     // The corroboration gate is a USER-verdict gate: a machine verdict still
-    // earns a reflection, but nothing is promoted into durable memory by it.
+    // earns a reflection, but nothing is promoted into the corroborated view
+    // by it.
     const lessons = listLessons(rt.storage.sql);
     expect(lessons.every(l => l.status === 'provisional')).toBe(true);
-    expect((await rt.memory.read('memory/MEMORY.md')) ?? '').not.toContain('Lesson');
+    expect(renderRecentLessons(rt.storage.sql)).toBe('');
   });
 
   test('K_align stays a USER-correction rate — execution rows are counted apart', async () => {
@@ -240,8 +239,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(k.overall.negatives).toBe(0);
     expect(k.overall.executionGraded).toBe(1);  // and the row is not lost either
   });
-
-  test('ungraded turn with an error: reflects, but the lesson stays provisional and OUT of MEMORY.md', async () => {
+  test('ungraded turn with an error: reflects, but the lesson stays provisional and OUT of the derived view', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
 
@@ -249,8 +247,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const lessons = listLessons(rt.storage.sql);
     expect(lessons).toHaveLength(1);
     expect(lessons[0].status).toBe('provisional');
-    expect(lessons[0].turnIds).toEqual(['err-turn']);
-    expect((await rt.memory.read('memory/MEMORY.md')) ?? '').not.toContain('Lesson');
+    expect(renderRecentLessons(rt.storage.sql)).toBe('');
   });
 
   test('classifier failure records nothing rather than guessing', async () => {
@@ -311,7 +308,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(events.filter(e => e.type === 'turn_complete')).toHaveLength(1); // visibility only
   });
 
-  test('a later negative outcome corroborates a provisional lesson into MEMORY.md', async () => {
+  test('a later negative outcome corroborates a provisional lesson into the derived view', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('frustrated') });
     const engine = new EvolutionEngine(rt);
     recordLesson(rt.storage.sql, {
@@ -321,9 +318,12 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     await engine.reviewTurn(makeTurn(), 'this is useless, you keep breaking staging');
     expect(listLessons(rt.storage.sql, { status: 'provisional' })).toHaveLength(0);
-    expect(await rt.memory.read('memory/MEMORY.md')).toContain('verify cluster names before acting');
+    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+      .some(l => l.text.includes('verify cluster names before acting'))).toBe(true);
+    // The corroboration is a row-status change only: MEMORY.md is untouched.
+    expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
+    expect(renderRecentLessons(rt.storage.sql)).toContain('verify cluster names before acting');
   });
-
   test('applyExplicitFeedback (late thumbs) upserts the ledger and corroborates lessons', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
@@ -336,9 +336,11 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     await engine.applyExplicitFeedback('a1', 'negative');
     const rows = listTurnOutcomes(rt.storage.sql);
     expect(rows[0]).toMatchObject({ turnId: 'a1', outcome: 'corrected', source: 'explicit', userMessage: 'the task' });
-    expect(await rt.memory.read('memory/MEMORY.md')).toContain('late-corroborated lesson');
+    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+      .some(l => l.text.includes('late-corroborated lesson'))).toBe(true);
+    expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
+    expect(renderRecentLessons(rt.storage.sql)).toContain('late-corroborated lesson');
   });
-
   test('respects enabled=false config', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt, { enabled: false });
@@ -356,10 +358,13 @@ describe('EvolutionEngine — Session-level', () => {
     return { sessionId: 'test', turns, startedAt: Date.now() - 60000, endedAt: Date.now() };
   }
 
-  test('reflects on a ≥3-turn window carrying negative signal (corroborated into MEMORY.md)', async () => {
+  test('reflects on a ≥3-turn window carrying negative signal (a corroborated session lesson)', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
     const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
-    await rt.memory.append('memory/MEMORY.md', '\n### Lesson\nPrevious lesson content\n');
+    recordLesson(rt.storage.sql, {
+      turnIds: ['w1'], text: 'Previous lesson content',
+      source: 'turn_reflection', status: 'corroborated',
+    });
 
     // A corrected outcome lands on one window turn — real negative signal.
     const graded = makeTurn({ turnId: 'w2' });
@@ -367,33 +372,38 @@ describe('EvolutionEngine — Session-level', () => {
 
     await engine.onSessionComplete(session([makeTurn({ turnId: 'w1' }), graded, makeTurn({ turnId: 'w3' })]));
 
-    const memory = await rt.memory.read('memory/MEMORY.md');
-    expect(memory).toContain('Session reflection');
-    expect(listLessons(rt.storage.sql, { status: 'corroborated' }).some(l => l.source === 'session_reflection')).toBe(true);
+    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+      .some(l => l.source === 'session_reflection')).toBe(true);
+    // Nothing was copied into MEMORY.md — the derived view carries it.
+    expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
   });
 
   test('accepted streak lowers the cadence: an all-good window skips reflection', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('accepted') });
     const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
-    await rt.memory.append('memory/MEMORY.md', '\n### Lesson\nPrevious lesson content\n');
 
     const turns = [makeTurn({ turnId: 's1' }), makeTurn({ turnId: 's2' }), makeTurn({ turnId: 's3' })];
     for (const t of turns) await engine.reviewTurn(t, 'perfect, moving on to the next piece of work');
 
     await engine.onSessionComplete(session(turns));
-    expect(await rt.memory.read('memory/MEMORY.md')).not.toContain('Session reflection');
+    expect(listLessons(rt.storage.sql, { source: 'session_reflection' })).toHaveLength(0);
   });
 
   test('an errored window still reflects, but the self-scored lesson stays provisional', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
-    await rt.memory.append('memory/MEMORY.md', '\n### Lesson\nPrevious lesson content\n');
+    recordLesson(rt.storage.sql, {
+      turnIds: ['seed'], text: 'Previous lesson content',
+      source: 'turn_reflection', status: 'corroborated',
+    });
 
     await engine.onSessionComplete(session([
       makeTurn({ turnId: 'e1', hadError: true }), makeTurn({ turnId: 'e2' }), makeTurn({ turnId: 'e3' }),
     ]));
 
-    expect(await rt.memory.read('memory/MEMORY.md')).not.toContain('Session reflection');
+    // The self-scored reflection never reaches MEMORY.md; it waits in the
+    // ledger as provisional until a user verdict corroborates it.
+    expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
     const provisional = listLessons(rt.storage.sql, { status: 'provisional' });
     expect(provisional.some(l => l.source === 'session_reflection' && l.turnIds.includes('e1'))).toBe(true);
   });
@@ -402,7 +412,6 @@ describe('EvolutionEngine — Session-level', () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
     const window = session([makeTurn(), makeTurn(), makeTurn()]);
 
     // Five windows, each closed by a DIFFERENT engine instance — one per
@@ -423,7 +432,6 @@ describe('EvolutionEngine — Lifetime-level', () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
 
     const engine = new EvolutionEngine(rt);
 
@@ -445,7 +453,6 @@ describe('the turn-reflection prompt', () => {
     const { rt } = createTestRuntime({
       llmResponses: { ...classifierResponses('corrected'), 'In one sentence': answer },
     });
-    initCraftScoreTables(rt.storage.execRaw);
     const prompts: string[] = [];
     const complete = rt.llm.complete.bind(rt.llm);
     rt.llm.complete = async (prompt: string) => {
@@ -460,23 +467,23 @@ describe('the turn-reflection prompt', () => {
     return {
       prompt: prompts.find((text) => text.includes('In one sentence')) ?? '',
       lesson: listLessons(rt.storage.sql, { status: 'corroborated' })[0]?.text ?? '',
-      memory: await rt.memory.read('memory/MEMORY.md'),
+      view: renderRecentLessons(rt.storage.sql),
     };
   }
 
   test('states a length bound as a number, and the code cuts the answer to that same number', async () => {
     // "In one sentence" is a request a model is free to interpret, and the answer
-    // is appended verbatim to memory/MEMORY.md once a user verdict corroborates
-    // it — where an unbounded paragraph costs context on every later turn,
-    // permanently. The advisor note already had this pairing (the prompt states
-    // the cap, the parse enforces it); the reflection had neither half. Read from
-    // the prompt so the two cannot drift apart silently.
-    const { prompt, lesson, memory } = await reflect('y'.repeat(2_000));
+    // reaches every later turn through the corroborated derived view — where an
+    // unbounded paragraph costs context permanently. The advisor note already
+    // had this pairing (the prompt states the cap, the parse enforces it); the
+    // reflection had neither half. Read from the prompt so the two cannot drift
+    // apart silently.
+    const { prompt, lesson, view } = await reflect('y'.repeat(2_000));
     const stated = Number(/at most (\d+) characters/.exec(prompt)?.[1]);
     expect(stated).toBe(240);
     expect(lesson).toBe('y'.repeat(stated));
-    expect(memory).toContain('y'.repeat(stated));
-    expect(memory).not.toContain('y'.repeat(stated + 1));
+    expect(view).toContain('y'.repeat(stated));
+    expect(view).not.toContain('y'.repeat(stated + 1));
   });
 
   test('asks for a trigger and an action by contrast, because the reader has no evidence', async () => {

@@ -26,7 +26,11 @@ describe('workspace diff lifecycle', () => {
     });
 
     expect((await getWorkspaceDiff(rt)).files).toEqual([]);
-    expect(db.query("SELECT COUNT(*) AS count FROM vfs_baseline WHERE active = 1 AND path <> ''").get()).toEqual({ count: 4 });
+    const baseline = db.query<{ path: string }, []>(
+      "SELECT path FROM vfs_baseline WHERE active = 1 AND path <> '' ORDER BY path",
+    ).all().map((row) => row.path);
+    expect(baseline).toEqual(Object.keys(await collectWorkspaceTextFiles(rt)).sort());
+    expect(baseline).toContain('scaffold/agent.js.v0');
   });
 
   test('work completed before the first Output read remains visible', async () => {

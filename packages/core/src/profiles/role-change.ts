@@ -15,6 +15,9 @@ import {
   DEFAULT_ROLE_ID, effectiveRoleCatalog, isValidRoleId, validateProfileCatalogEnvelope,
   type ProfileCatalogEnvelope, type RoleDefinition, type RoleId,
 } from './catalog';
+import {
+  encodeRoleSelection, parseRoleSelectionRow,
+} from '../config/store';
 
 export type RoleChangeActor = 'user' | 'agent';
 export type RoleChangePolicy = 'allow' | 'approval' | 'locked';
@@ -87,7 +90,7 @@ export interface RoleStateStore {
 }
 
 const ROLE_POLICY_KEY = 'role_change_policy';
-const ACTIVE_ROLE_KEY = 'active_role_id';
+const ROLE_SELECTION_KEY = 'role_selection';
 const PENDING_ROLE_KEY = 'pending_role_id';
 
 /** Whether `to` can reach any tool `from` could not. An absent allowedTools
@@ -117,7 +120,7 @@ function applyRole(
   to: RoleId,
   actor: RoleChangeActor,
 ): void {
-  config.set(ACTIVE_ROLE_KEY, to);
+  config.set(ROLE_SELECTION_KEY, encodeRoleSelection({ kind: 'catalog', roleId: to }));
   // An applied change supersedes any request waiting on the owner: the owner
   // setting a role IS the answer to one, and a pending id nothing can clear
   // would outlive the request forever.
@@ -138,7 +141,10 @@ export function changeActiveRole(input: {
   actor: RoleChangeActor;
 }): RoleChangeOutcome {
   const envelope = validateProfileCatalogEnvelope(input.envelope);
-  const from = input.config.get(ACTIVE_ROLE_KEY) ?? DEFAULT_ROLE_ID;
+  const current = parseRoleSelectionRow(input.config.get(ROLE_SELECTION_KEY));
+  // A legacy selection has no catalog id to change FROM; the change targets
+  // the catalog arm, so the default is the honest `from`.
+  const from = current?.kind === 'catalog' ? current.roleId : DEFAULT_ROLE_ID;
   if (!isValidRoleId(input.to)) return { kind: 'refused', reason: 'invalid-role-id' };
   const target = roleOf(envelope, input.to);
   if (!target) return { kind: 'refused', reason: 'unknown-role' };

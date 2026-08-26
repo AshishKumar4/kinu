@@ -18,6 +18,7 @@ import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../heads/types';
 import type { Usage } from '../usage';
+import type { WorkMode } from '../prompting/surface';
 import type {
   SpendSource, ModelOperationKind, ModelOperationOutcome, ModelOperationPhase,
 } from './model-call';
@@ -60,6 +61,7 @@ export type RunEventType =
   | 'completion_gate'
   | 'craft_cycle'
   | 'execution_recovery'
+  | 'approval_consumed'
   | 'execution_escalation'
   | 'budget_exhausted'
   | 'fiber_recovered'
@@ -377,11 +379,24 @@ export type RunEvent =
    *  which cap stopped which run rather than leaving an unexplained short turn. */
   | (RunEventBase & { type: 'budget_exhausted' } & Omit<MissionBudgetRefusal, 'error'>)
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
+  /** A deferred-approval grant was CONSUMED: the owner approved a parked
+   *  command, an agent re-issued it, and this row is what proves the grant was
+   *  spent — exactly once. It replaces the deleted `used` status row as the
+   *  only durable consumption record (safety/deferred-approval.ts spends by
+   *  deleting), so the audit outlives the state it audited. */
+  | (RunEventBase & { type: 'approval_consumed'; approvalId: string;
+      command: string; executor: string })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
   /** `usage` is what the turn's steps reported, accumulated field by field —
    *  absent entirely when no step reported anything, and absent per field where
    *  no step's provider mentioned it. */
-  | (RunEventBase & { type: 'turn_end'; turnIndex: number; usage?: Usage })
+  | (RunEventBase & { type: 'turn_end'; turnIndex: number;
+      /** The work mode the turn ran in, resolved at turn start. The
+       *  auto-GEPA cadence counts completed non-plan turns from these rows
+       *  instead of an activation-local counter. Absent on rows written
+       *  before the field existed — absence reads as "before the denominator
+       *  started", never as build. */
+      workMode?: WorkMode; usage?: Usage })
   | (RunEventBase & { type: 'run_end'; reason?: string;
       /** The provider/stream error text (truncated) when the run ended in
        *  status 'error' — the durable evidence a post-hoc investigation needs
@@ -421,6 +436,12 @@ export type CraftCycleRecord =
  *  same reason as the records above: one declaration, no drift. */
 export type ExecutionRecoveryRecord =
   Omit<Extract<RunEvent, { type: 'execution_recovery' }>, keyof RunEventBase | 'type'>;
+
+/** One consumed deferred-approval grant — what the queue hands its audit sink
+ *  when a spend deletes the row, derived from the durable schema for the same
+ *  reason as the records above: one declaration, no drift. */
+export type ApprovalConsumedRecord =
+  Omit<Extract<RunEvent, { type: 'approval_consumed' }>, keyof RunEventBase | 'type'>;
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {

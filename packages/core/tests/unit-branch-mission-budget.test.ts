@@ -31,7 +31,7 @@ import { createTestRuntime, createMockSession, makeSql, makeExecRaw } from './he
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
+import { initCraftQualityColumns } from '../src/craft/schemas';
 import {
   MissionGovernor, localMissionScope, type MissionScope,
 } from '../src/mission-budget';
@@ -90,7 +90,7 @@ function branchingRuntime() {
   });
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftScoreTables(rt.storage.execRaw);
+  initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
   return { rt, rollouts: () => rollouts, reflections: () => reflections };
 }
 

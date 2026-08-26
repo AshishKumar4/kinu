@@ -8,6 +8,7 @@
 // against the documented API survives the executor's smoke path.
 import { describe, test, expect } from 'bun:test';
 import { buildScaffoldProposalPrompt, EvolutionEngine } from '../src/evolution/engine';
+import { recordLesson } from '../src/evolution/outcomes';
 import { renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
 import { modifyScaffold } from '../src/scaffold/modify';
 import { initScaffoldTables } from '../src/scaffold/schemas';
@@ -105,9 +106,13 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
-  await rt.memory.append('memory/MEMORY.md', '\n### Lesson\nThe loop re-read the same file.\n');
-
   const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 1000 });
+  recordLesson(rt.storage.sql, {
+    turnIds: ['t1'],
+    text: 'The loop re-read the same file.',
+    source: 'session_reflection',
+    status: 'corroborated',
+  });
   const turns = [1, 2, 3].map((number) => ({
     userMessage: 'rotate the staging keys',
     assistantResponse: 'a response with enough substance to be graded on',

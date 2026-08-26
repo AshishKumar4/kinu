@@ -80,9 +80,12 @@ const ActionVariantSchemaContract = v.object({
   }),
 });
 const SpawnCallInputSchema = v.object({
-  roleId: v.optional(v.string()),
+  role: v.object({
+    kind: v.picklist(['catalog', 'legacy']),
+    roleId: v.optional(v.string()),
+    text: v.optional(v.string()),
+  }),
   tier: v.optional(v.string()),
-  catalogVersion: v.optional(v.number()),
 });
 
 /** The namespace as sandbox code sees it: one callable per exposed member. */
@@ -123,7 +126,7 @@ function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
 }
 
 const rosterEntry: SubordinateRosterEntry = {
-  name: 'researcher', displayName: 'Researcher', role: 'competitive research',
+  name: 'researcher',
   createdBy: 'orchestrator', status: 'idle', currentTask: null,
   createdAt: 1000, dismissedAt: null,
 };
@@ -755,10 +758,10 @@ describe('agents delegation — role/tier/preset precedence', () => {
     const call = team.calls.find((c) => c.action === 'spawn');
     expect(call).toBeDefined();
     const input = v.parse(SpawnCallInputSchema, call!.input);
-    expect(input.roleId).toBe('researcher');
+    expect(input.role).toEqual({ kind: 'catalog', roleId: 'researcher' });
     // The ROLE-default tier is NOT stored — the child re-derives it from its
     // roleId at its own turn boundary. Only an explicit override rides along.
-    expect(input.catalogVersion).toBeDefined();
+    expect(input.tier).toBeUndefined();
   });
 
   test('an explicit tier override rides to the identity; a spawn-forbidden role is refused', async () => {
@@ -837,7 +840,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
       SpawnCallInputSchema,
       team.calls.find((call) => call.action === 'spawn')!.input,
     );
-    expect(input.roleId).toBeUndefined(); // freeform text rides the legacy path
+    expect(input.role.kind).toBe('legacy'); // freeform text rides the legacy path
   });
 
   test('role summaries project into the native schema from the same catalog', () => {

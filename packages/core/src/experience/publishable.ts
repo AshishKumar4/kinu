@@ -38,7 +38,6 @@ import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { getLesson, listLessons } from '../evolution/outcomes';
-import { classify } from '../obs/index';
 import {
   DEFAULT_SHADOW_CONFIG, decidePromotion, getCurrentScaffoldVersion, readShadowVerdict,
   type ScaffoldStatus,
@@ -82,18 +81,13 @@ function titleOf(text: string, maxChars = 90): string {
   return line.length > maxChars ? `${line.slice(0, maxChars)}…` : line || 'untitled';
 }
 
-interface CraftScoreRow { tool_name: string; score: number; uses: number; last_used_at: number }
+interface CraftScoreRow { name: string; score: number; uses: number; last_used_at: number }
 
 function craftScores(sql: SqlExecutor): Map<string, CraftScoreRow> {
-  try {
-    return new Map(
-      sql<CraftScoreRow>`SELECT tool_name, score, uses, last_used_at FROM craft_scores`
-        .map((r) => [r.tool_name, r]),
-    );
-  } catch (error) {
-    if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
-    return new Map();
-  }
+  return new Map(
+    sql<CraftScoreRow>`SELECT name, score, uses, last_used_at FROM crafted_tools`
+      .map((r) => [r.name, r]),
+  );
 }
 
 function craftCandidate(

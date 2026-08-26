@@ -14,6 +14,7 @@ import type { EventLog } from '../hub/log';
 import type { TriggerRegistry } from '../hub/triggers';
 import type { TriggerRow, TrustLevel } from '../hub/types';
 import { nextCronFire } from '../hub/cron';
+import type { WebhookSecretStore } from './secrets';
 import { JsonObjectSchema, type JsonObject } from '../../utils/json';
 
 export interface TimerTriggerOpts {
@@ -107,11 +108,21 @@ export function listTriggers(registry: TriggerRegistry) {
   };
 }
 
-/** Cancel a trigger (revoke). Idempotent. */
+/** Cancel a trigger (revoke). Idempotent.
+ *
+ * `secrets` is the webhook secret store over the SAME workspace SQLite as the
+ * registry, when the caller has one: with it, closing a trigger and deleting
+ * its plaintext happen back to back in this one host call — one transaction on
+ * the single-threaded SQLite both backends run, so a revoked webhook never
+ * leaves its credential behind. The trigger row itself is kept, byte-free:
+ * revocation history is audit, not state to erase. */
 export function cancelTrigger(
   registry: TriggerRegistry, trigger_id: string, now: number,
+  secrets?: Pick<WebhookSecretStore, 'deleteByTrigger'>,
 ) {
-  return { ok: true, changed: registry.revoke(trigger_id, now) };
+  const changed = registry.revoke(trigger_id, now);
+  if (changed) secrets?.deleteByTrigger(trigger_id);
+  return { ok: true, changed };
 }
 
 export interface TimerFireDeps {

@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { checkConflictsBeforeAdding, upsertCraftedTool } from '../src/craft/conflict';
-import { initCraftScoreTables } from '../src/craft/schemas';
+import { initCraftQualityColumns } from '../src/craft/schemas';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { ExecuteResult, Executor } from '../src/types/primitives';
 
@@ -79,12 +79,12 @@ describe('upsertCraftedTool — the admission check', () => {
   // `//`" — nothing ever compiled the code the runtime would have to compile.
   function runtime(): AgentRuntime {
     const { rt } = createTestRuntime();
-    initCraftScoreTables(rt.storage.execRaw);
+    initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
     return { ...rt, executor: evaluatingExecutor() };
   }
 
   const scored = (rt: AgentRuntime, name: string): number =>
-    rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM craft_scores WHERE tool_name = ${name}`[0]?.n ?? 0;
+    rt.craftStore.list().filter((t) => t.name === name).length;
 
   test('rejects the verbatim production body that calls an object literal', async () => {
     const rt = runtime();

@@ -23,6 +23,8 @@ import {
   type DelegationBudget,
 } from './depth';
 import type { WorkMode } from '../prompting/surface';
+import type { AgentConfigStore, RoleSelection } from '../config/store';
+import type { TierId } from '../profiles/catalog';
 import type {
   SubordinateHandoff,
   SubordinateRosterEntry,
@@ -71,24 +73,14 @@ export function readSubordinateLiveStatus(sql: SqlExec): SubordinateLiveStatus {
   };
 }
 
+/**
+ * The immutable lineage of one subordinate — the facts nothing may retarget
+ * after the facet exists. Everything MUTABLE about how the agent presents
+ * (title, role selection, tier) lives only in its own `agent_config`, read
+ * through {@link SubordinateDescriptorSource}; this row never mirrors it.
+ */
 export interface SubordinateIdentity {
   name: string;
-  displayName: string;
-  /**
-   * The catalog role this subordinate runs under, or null when it was hired
-   * by an actor with no profile catalog. A catalog role REPLACES any legacy
-   * freeform line; the two never both carry instructions.
-   */
-  roleId: string | null;
-  /** The freeform role text a pre-catalog hire carried — rendered as the
-   *  labelled leading block of the role section until an explicit catalog
-   *  assignment replaces and clears it. Null for a catalog hire. */
-  legacyRole: string | null;
-  /** Optional inference-tier override (`tiny|fast|default|slow|deep`); absent
-   *  resolves through the role's default tier at the child's turn boundary. */
-  tier: string | null;
-  /** Catalog version the roleId was validated against, when known. */
-  catalogVersion: number | null;
   mission: string;
   /** The WORKSPACE this subordinate belongs to — its exec planes, credentials
    *  and capability all present this name. Inherited unchanged down a nested
@@ -101,47 +93,28 @@ export interface SubordinateIdentity {
 
 interface IdentityRow {
   name: string;
-  display_name: string;
-  role_id: string | null;
-  legacy_role: string | null;
-  tier: string | null;
-  catalog_version: number | null;
   mission: string;
   parent_workspace: string;
   owner_user_id: string;
   depth: number;
 }
 
-const IdentityRowSchema: v.GenericSchema<IdentityRow & { role?: string | null }> = v.object({
+const IdentityRowSchema = v.object({
   name: v.string(),
-  display_name: v.string(),
-  role: v.optional(v.nullable(v.string())),
-  role_id: v.nullable(v.string()),
-  legacy_role: v.nullable(v.string()),
-  tier: v.nullable(v.string()),
-  catalog_version: v.nullable(v.number()),
   mission: v.string(),
   parent_workspace: v.string(),
   owner_user_id: v.string(),
   depth: v.number(),
 });
 
-function parseIdentityRow<Input>(row: Input): (IdentityRow & { role?: string | null }) | null {
+function parseIdentityRow<Input>(row: Input): IdentityRow | null {
   const parsed = v.safeParse(IdentityRowSchema, row);
   return parsed.success ? parsed.output : null;
 }
 
-
-function mapIdentityRow(row: IdentityRow & { role?: string | null }): SubordinateIdentity {
+function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
   return {
     name: row.name,
-    displayName: row.display_name,
-    roleId: row.role_id,
-    // A pre-roles row stored its freeform text in `role`; that column becomes
-    // the legacy block exactly once, at the read boundary.
-    legacyRole: row.role_id === null ? row.legacy_role ?? row.role ?? null : null,
-    tier: row.tier,
-    catalogVersion: row.catalog_version,
     mission: row.mission,
     parentWorkspace: row.parent_workspace,
     ownerUserId: row.owner_user_id,
@@ -151,11 +124,6 @@ function mapIdentityRow(row: IdentityRow & { role?: string | null }): Subordinat
 
 function identitiesEqual(a: SubordinateIdentity, b: SubordinateIdentity): boolean {
   return a.name === b.name
-    && a.displayName === b.displayName
-    && a.roleId === b.roleId
-    && a.legacyRole === b.legacyRole
-    && a.tier === b.tier
-    && a.catalogVersion === b.catalogVersion
     && a.mission === b.mission
     && a.parentWorkspace === b.parentWorkspace
     && a.ownerUserId === b.ownerUserId
@@ -176,8 +144,6 @@ export class SubordinateIdentityStore {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS subordinate_identity (
       id               INTEGER PRIMARY KEY CHECK (id = 1),
       name             TEXT NOT NULL,
-      display_name     TEXT NOT NULL,
-      role             TEXT NOT NULL,
       mission          TEXT NOT NULL,
       parent_workspace TEXT NOT NULL,
       owner_user_id    TEXT NOT NULL,
@@ -188,12 +154,6 @@ export class SubordinateIdentityStore {
     // compatibility guess.
     reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'subordinate_identity', {
       depth: 'INTEGER NOT NULL DEFAULT 1',
-      // Catalog-role identity. A row seeded before roles existed leaves these
-      // null; its original `role` text reads back as the legacy block.
-      role_id: 'TEXT',
-      legacy_role: 'TEXT',
-      tier: 'TEXT',
-      catalog_version: 'INTEGER',
     });
   }
 
@@ -203,22 +163,11 @@ export class SubordinateIdentityStore {
       if (identitiesEqual(existing, identity)) return;
       throw new Error('Subordinate identity is already initialized and cannot be changed.');
     }
-    // One column holds the role story: a catalog hire stores roleId and may
-    // carry its tier override; a legacy hire stores the freeform line in the
-    // `role` column it always lived in and reads back as legacyRole. The two
-    // are mutually exclusive by construction.
     this.sql.exec(
       `INSERT INTO subordinate_identity
-         (id, name, display_name, role, role_id, legacy_role, tier, catalog_version,
-          mission, parent_workspace, owner_user_id, depth)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, name, mission, parent_workspace, owner_user_id, depth)
+       VALUES (1, ?, ?, ?, ?, ?)`,
       identity.name,
-      identity.displayName,
-      identity.roleId ?? identity.legacyRole ?? '',
-      identity.roleId,
-      identity.roleId === null ? identity.legacyRole : null,
-      identity.tier,
-      identity.catalogVersion,
       identity.mission,
       identity.parentWorkspace,
       identity.ownerUserId,
@@ -228,8 +177,7 @@ export class SubordinateIdentityStore {
 
   read(): SubordinateIdentity | null {
     const rows = this.sql.exec(
-      `SELECT name, display_name, role, role_id, legacy_role, tier, catalog_version,
-              mission, parent_workspace, owner_user_id, depth
+      `SELECT name, mission, parent_workspace, owner_user_id, depth
        FROM subordinate_identity WHERE id = 1`,
     ).toArray();
     if (rows.length === 0) return null;
@@ -261,18 +209,50 @@ export class SubordinateIdentityStore {
   }
 }
 
-const ROSTER_COLUMNS =
-  'name, display_name, name_origin, role, created_by, status, current_task, created_at, dismissed_at';
+/**
+ * Everything MUTABLE about how one subordinate presents, read from ITS OWN
+ * `agent_config` — the single authority. Nothing here is persisted anywhere
+ * else; a parent that needs to show or prompt with this data asks the child
+ * (or its local config store) through {@link SubordinateDescriptorSource}.
+ */
+export interface SubordinateDescriptor {
+  displayName: string;
+  nameOrigin: 'user' | 'auto';
+  /** The catalog role, or the freeform line a pre-catalog hire carries. */
+  role: RoleSelection;
+  /** The tier a parent pinned at hire; null derives from the role. */
+  tier: TierId | null;
+}
+
+/**
+ * Read-side view of one child's descriptor. Answers null when the child
+ * cannot be asked — callers render unavailable rather than stale.
+ */
+export interface SubordinateDescriptorSource {
+  read(): SubordinateDescriptor | null;
+}
+
+/** The concrete source over a subordinate's own config store. */
+export function subordinateDescriptorSource(config: AgentConfigStore): SubordinateDescriptorSource {
+  return {
+    read: () => ({
+      displayName: config.getDisplayName() ?? '',
+      nameOrigin: config.getNameOrigin() ?? 'auto',
+      role: config.getRoleSelection(),
+      tier: config.getAssignedTier(),
+    }),
+  };
+}
+
+const ROSTER_COLUMNS = 'name, created_by, status, current_task, created_at, dismissed_at';
 const ROSTER_PROJECTION =
-  'name, display_name AS displayName, name_origin AS nameOrigin, role, '
-  + 'created_by AS createdBy, status, current_task AS currentTask, '
+  'name, created_by AS createdBy, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt';
 
+/** Lifecycle and task facts only — the title and role a subordinate presents
+ *  live in ITS agent_config ({@link SubordinateDescriptorSource}), never here. */
 const RosterEntrySchema: v.GenericSchema<SubordinateRosterEntry> = v.object({
   name: v.string(),
-  displayName: v.string(),
-  nameOrigin: v.picklist(['user', 'auto']),
-  role: v.string(),
   createdBy: v.picklist(['orchestrator', 'user']),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
   currentTask: v.nullable(v.string()),
@@ -289,34 +269,23 @@ function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
 /** Parent-DO product roster. All status policy lives here so tools, report
  * ingress, snapshots, and the future UI cannot drift. */
 export class SubordinateRosterStore {
-  constructor(private readonly sql: SqlExec, private readonly tagged?: SqlExecutor) {}
+  constructor(private readonly sql: SqlExec) {}
 
   ensureSchema(): void {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_subordinates (
       name          TEXT PRIMARY KEY,
-      display_name  TEXT NOT NULL,
-      name_origin   TEXT NOT NULL DEFAULT 'auto' CHECK (name_origin IN ('user','auto')),
-      role          TEXT NOT NULL,
       created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
       status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
       current_task  TEXT,
       created_at    INTEGER NOT NULL,
       dismissed_at INTEGER
     )`);
-    if (this.tagged) {
-      reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'workspace_subordinates', {
-        name_origin: "TEXT NOT NULL DEFAULT 'auto' CHECK (name_origin IN ('user','auto'))",
-      });
-    }
   }
 
   create(entry: SubordinateRosterEntry): void {
     this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
       entry.name,
-      entry.displayName,
-      entry.nameOrigin ?? 'auto',
-      entry.role,
       entry.createdBy,
       entry.status,
       entry.currentTask,
@@ -328,20 +297,14 @@ export class SubordinateRosterStore {
   /** Exact upsert used only for compensating a failed facet operation. */
   restore(entry: SubordinateRosterEntry): void {
     this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
-         display_name = excluded.display_name,
-         name_origin = excluded.name_origin,
-         role = excluded.role,
          created_by = excluded.created_by,
          status = excluded.status,
          current_task = excluded.current_task,
          created_at = excluded.created_at,
          dismissed_at = excluded.dismissed_at`,
       entry.name,
-      entry.displayName,
-      entry.nameOrigin ?? 'auto',
-      entry.role,
       entry.createdBy,
       entry.status,
       entry.currentTask,
@@ -385,37 +348,6 @@ export class SubordinateRosterStore {
     return this.sql.exec(
       `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates ORDER BY created_at, name`,
     ).toArray().map(parseStoredRosterRow);
-  }
-
-  /** Retitle one roster row and record who owns the new title. */
-  setDisplayName(
-    name: string,
-    displayName: string,
-    nameOrigin: 'user' | 'auto',
-  ): void {
-    this.requireActive(name);
-    this.sql.exec(
-      `UPDATE workspace_subordinates SET display_name = ?, name_origin = ? WHERE name = ?`,
-      displayName,
-      nameOrigin,
-      name,
-    );
-  }
-
-  /** Claim an automatic title only while the row remains auto-owned. The read
-   * and write are synchronous in the parent actor, so a concurrent owner
-   * rename is wholly before or after this operation and wins in either order. */
-  setProvisionalDisplayName(name: string, displayName: string): boolean {
-    const entry = this.requireActive(name);
-    if (entry.nameOrigin !== 'auto') return false;
-    this.sql.exec(
-      `UPDATE workspace_subordinates
-       SET display_name = ?, name_origin = 'auto'
-       WHERE name = ?`,
-      displayName,
-      name,
-    );
-    return true;
   }
 
   assign(name: string, task: string): void {
@@ -708,13 +640,10 @@ export interface SubordinateRuntime {
      *  nobody chose, so the first-interaction policy may replace it once.
      *  `user` is final. */
     nameOrigin: 'user' | 'auto';
-    /** Catalog role id, when the caller resolved one. */
-    roleId?: string;
-    /** The freeform line a pre-catalog caller supplied — the labelled legacy
-     *  block until an explicit catalog assignment replaces it. */
-    legacyRole?: string;
-    tier?: string;
-    catalogVersion?: number;
+    /** The child's initial role selection — catalog id or legacy freeform
+     *  line, written to the CHILD's config store. */
+    role: RoleSelection;
+    tier?: TierId;
     mission: string;
   }): Promise<void>;
   assign(name: string, input: {
@@ -736,14 +665,10 @@ export interface SubordinateRuntime {
 export interface SubordinatesChangedEvent {
   type: 'subordinates_changed';
   subordinates: SubordinateRosterEntry[];
-  assignedTask?: {
-    name: string;
-    task: string;
-  };
 }
 
 /** The catalog role an additional agent gets when the owner named none. It is
- *  the same default `AgentConfigStore.getActiveRoleId` answers with, so an
+ *  the same default `AgentConfigStore.getRoleSelection` answers with, so an
  *  agent created with nothing said about it runs as the workspace's own kind
  *  of agent rather than a specialist nobody asked for. */
 const DEFAULT_SUBORDINATE_ROLE_ID = 'general';
@@ -838,23 +763,19 @@ export function createTeamToolDeps(deps: {
   broadcast(event: SubordinatesChangedEvent): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
 }): TeamToolDeps {
-  const changed = (assignedTask?: SubordinatesChangedEvent['assignedTask']) => {
-    const event: SubordinatesChangedEvent = {
-      type: 'subordinates_changed',
-      subordinates: deps.roster.list(),
-    };
-    if (assignedTask) Object.assign(event, { assignedTask });
-    deps.broadcast(event);
+  /** One roster refresh per settled operation — the ONLY payload is the
+   *  lifecycle roster; task content travels on its own task event. */
+  const changed = () => {
+    deps.broadcast({ type: 'subordinates_changed', subordinates: deps.roster.list() });
   };
 
   const provision = async (input: {
     name?: string;
     displayName?: string;
-    /** Catalog role id, when the caller resolved one; else the legacy line. */
-    role?: string;
-    roleId?: string;
-    tier?: string;
-    catalogVersion?: number;
+    /** The caller's resolved role selection; absent only for an owner who
+     *  said nothing, which reads as the general catalog role. */
+    role?: RoleSelection;
+    tier?: TierId;
     mission?: string;
   }, ownerCreated: boolean, mode: WorkMode | null): Promise<{
     name: string;
@@ -862,17 +783,25 @@ export function createTeamToolDeps(deps: {
     createdAt: number;
     subordinate: SubordinateRosterEntry;
   }> => {
-    // The owner may say nothing at all; the model must say both. `spawn` has
-    // already refused an empty mission by the time it reaches here, and the
-    // agents tool refuses a hire without a role before that, so these two
-    // defaults are only ever the owner's.
-    const role = ownerCreated
-      ? optionalText(input.role) ?? DEFAULT_SUBORDINATE_ROLE_ID
-      : requiredText(input.role ?? '', 'role');
+    let selection: RoleSelection;
+    if (input.role !== undefined) {
+      if (input.role.kind === 'legacy' && optionalText(input.role.text) === undefined) {
+        throw new Error('role must be non-empty');
+      }
+      selection = input.role;
+    } else if (ownerCreated) {
+      // The owner may say nothing at all. `spawn` has already refused an empty
+      // mission by the time it reaches here, so this default is only ever the
+      // owner's.
+      selection = { kind: 'catalog', roleId: DEFAULT_SUBORDINATE_ROLE_ID };
+    } else {
+      throw new Error('role must be non-empty');
+    }
+    const roleLabel = selection.kind === 'catalog' ? selection.roleId : selection.text;
     const mission = ownerCreated
       ? requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
       : requiredText(input.mission ?? '', 'mission');
-    const name = input.name?.trim() || deps.createName(role);
+    const name = input.name?.trim() || deps.createName(roleLabel);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
       throw new Error('subordinate name must be a lowercase URL-safe slug (letters, digits, hyphens)');
     }
@@ -886,30 +815,23 @@ export function createTeamToolDeps(deps: {
     // shared title policy reads as a placeholder it may claim once, from the
     // first thing the owner actually says to this agent.
     const chosen = optionalText(input.displayName);
-    const provisional = ownerCreated && optionalText(input.role) === undefined;
-    const displayName = chosen ?? (provisional ? '' : displayNameForRole(role));
+    const provisional = ownerCreated && input.role === undefined;
+    const displayName = chosen ?? (provisional ? '' : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';
-    // Exactly one role story per identity: a validated catalog id (with its
-    // optional tier override and catalog version) REPLACES any freeform text;
-    // without one, `role` is the labelled legacy block.
-    const spawnInput: Parameters<SubordinateRuntime['spawn']>[0] = {
+    const seed: Parameters<SubordinateRuntime['spawn']>[0] = {
       name,
       displayName,
       nameOrigin,
       mission,
-      ...(input.roleId !== undefined
-        ? { roleId: input.roleId, tier: input.tier, catalogVersion: input.catalogVersion }
-        : { legacyRole: role }),
+      role: selection,
     };
-    await deps.runtime.spawn(spawnInput);
+    if (input.tier !== undefined) seed.tier = input.tier;
+    await deps.runtime.spawn(seed);
     let rosterCreated = false;
     const createdAt = deps.now();
     try {
       const subordinate: SubordinateRosterEntry = {
         name,
-        displayName,
-        role,
-        nameOrigin,
         createdBy: ownerCreated ? 'user' : 'orchestrator',
         status: ownerCreated ? 'idle' : 'working',
         currentTask: ownerCreated ? null : mission,
@@ -951,19 +873,11 @@ export function createTeamToolDeps(deps: {
       return { name, displayName, subordinate };
     },
 
+    // The child's own agent_config is the only naming authority: a rename
+    // delegates to it and refreshes the roster listeners once it settles.
     rename: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
-      const before = deps.roster.requireActive(input.name);
-      // Roster first, then the facet, restored exactly if the facet refuses —
-      // the same order every other operation here uses, and the reason is the
-      // same: the roster write is local and synchronous, so it is the half
-      // that can be undone reliably.
-      deps.roster.setDisplayName(input.name, displayName, 'user');
-      try {
-        await deps.runtime.rename(input.name, displayName, 'user');
-      } catch (error) {
-        rollback(error, () => deps.roster.restore(before), 'subordinate rename');
-      }
+      await deps.runtime.rename(input.name, displayName, 'user');
       changed();
       return {
         ok: true, name: input.name, displayName,
@@ -971,17 +885,18 @@ export function createTeamToolDeps(deps: {
       };
     },
 
+    /** The child already settled this title on its own naming state; the
+     *  parent holds no mirror, so this only refreshes roster listeners. */
     recordTitle: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
-      const applied = deps.roster.setProvisionalDisplayName(input.name, displayName);
-      if (applied) changed();
-      return { ok: true, name: input.name, displayName, applied };
+      changed();
+      return { ok: true, name: input.name, displayName };
     },
 
     spawn: async (input) => {
       const mission = requiredText(input.mission, 'mission');
       const { name, displayName, createdAt } = await provision(input, false, input.mode);
-      changed({ name, task: mission });
+      changed();
       deps.broadcastTask({ subordinate: name, content: mission, timestamp: createdAt });
       return { name, displayName };
     },
@@ -1006,7 +921,7 @@ export function createTeamToolDeps(deps: {
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
       }
-      changed({ name: input.name, task });
+      changed();
       deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
       return { ok: true, name: input.name, ...handoff };
     },

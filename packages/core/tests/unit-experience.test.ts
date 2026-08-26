@@ -24,7 +24,6 @@ import {
   findPublishable,
   getCurrentScaffoldVersion,
   getPendingScaffold,
-  initCraftScoreTables,
   initExperienceLibraryTables,
   initFactsTable,
   initImportedExperienceTable,
@@ -34,7 +33,7 @@ import {
   listScaffoldArchive,
   modifyScaffold,
   readScaffoldVersion,
-  recordLesson,
+  recordLesson, listLessons,
   recordShadowEvaluation,
   recordTurnOutcome,
   type ExperienceEntry,
@@ -92,7 +91,6 @@ const ImportSchema = v.object({
 function workspace(name: string, library: ExperienceLibraryStore, llmResponses?: Record<string, string>): Workspace {
   const { rt, db } = createTestRuntime(llmResponses ? { llmResponses } : undefined);
   initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftScoreTables(rt.storage.execRaw);
   initFactsTable(rt.storage.execRaw);
   initImportedExperienceTable(rt.storage.execRaw, rt.storage.sql);
   db.exec(`CREATE TABLE IF NOT EXISTS evolution_events (
@@ -126,8 +124,8 @@ function proveCraft(ws: Workspace, input: { name: string; description: string; c
     name: input.name, description: input.description, params: { url: 'string' },
     code: input.code, scope: 'local',
   });
-  void ws.rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
-    VALUES (${input.name}, ${input.score}, ${input.uses}, ${Date.now()})`;
+  void ws.rt.storage.sql`UPDATE crafted_tools SET score = ${input.score}, uses = ${input.uses}, last_used_at = ${Date.now()}
+    WHERE name = ${input.name}`;
 }
 
 /** The publish-side view of one workspace — the seam the RPC builds. */
@@ -461,7 +459,10 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     expect(beta.facts.recall('deploy.target')).toMatchObject({
       value: 'kinu.workers.dev', source: 'experience:alpha',
     });
-    expect(await beta.rt.memory.read('memory/MEMORY.md')).toContain('Read the error before rerunning.');
+    // The lesson's real home is the corroborated lessons ledger, not a
+    // MEMORY.md copy.
+    expect(listLessons(beta.rt.storage.sql, { status: 'corroborated' })
+      .some(l => l.text.includes('Read the error before rerunning.'))).toBe(true);
 
     const rows = await importedRows(beta);
     expect(rows).toHaveLength(3);

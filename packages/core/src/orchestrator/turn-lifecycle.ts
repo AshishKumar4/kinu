@@ -212,6 +212,10 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
    *  Absent when no step reported anything — then `turn_end` carries no usage
    *  rather than a row of zeros nothing measured. */
   usage?: Usage | undefined;
+  /** The turn's resolved work mode. Present on every completed turn_end a
+   *  current backend writes — the durable GEPA-cadence field; absent rather
+   *  than invented when a caller does not supply one. */
+  workMode?: WorkMode | undefined;
   /** From {@link classifyRunEnd}, never hand-picked — a bare string here is
    *  what let one backend seal a user Stop as `'error'`. */
   reason: RunEndReason;
@@ -270,6 +274,7 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
       type: 'turn_end',
       turnIndex: opts.turnIndex,
     };
+    if (opts.workMode) turnEnd.workMode = opts.workMode;
     if (opts.usage !== undefined && usageReported(opts.usage)) turnEnd.usage = opts.usage;
     recorder.emit(runId, turnEnd);
     const runEnd: Extract<RunEventInput, { type: 'run_end' }> = {

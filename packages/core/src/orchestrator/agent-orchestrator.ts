@@ -26,7 +26,7 @@
 //     A `oneShot` host does not run it at all. Joining it was the largest item
 //     on that process's exit tail — 64.9s of `evolution.settled
 //     waitedOn:"Turn review"` against a 27.4s turn (TB2.1, 2026-08-20) — so the
-//     turn writes one durable row (evolution/review-queue.ts) carrying exactly
+//     turn writes one durable row (evolution/session-window.ts) carrying exactly
 //     `reviewTurn`'s two inputs, and the next host that can afford the work
 //     drains it through the SAME code path at session open
 //     (`runDeferredTurnReviews`). Deferred, never dropped: same call, same
@@ -48,7 +48,7 @@
 //     nothing but time.
 //
 // What makes deferral safe is that the session window is DURABLE and is now
-// closed only AFTER the pass it fed settles (`SessionWindowStore.claim`). A
+// closed only AFTER the pass it fed settles (`CompletedTurnStore.claim`). A
 // process that dies mid-pass leaves its turns in the window, and the next host
 // that can afford the work picks up the same turns. Nothing is lost by not
 // waiting — which is exactly what the durable window is for.
@@ -67,8 +67,7 @@ import type { PrepareStepContext, KinuExtension } from '../extension';
 import type { BackendHost } from '../types/backend-host';
 import type { AgentSignal } from '../types/signals';
 import type { EvolutionEngine } from '../evolution/engine';
-import type { DeferredReviewDrain } from '../evolution/review-queue';
-import type { ClaimedWindow } from '../evolution/session-window';
+import type { ClaimedWindow, DeferredReviewDrain } from '../evolution/session-window';
 import type { RecoveryFinding } from '../evolution/recovery';
 import type { CompletedTurn } from '../evolution/types';
 import {
@@ -113,6 +112,7 @@ export interface AgentOrchestratorDeps {
     | 'craftLedger'
     | 'recordRecovery'
     | 'reviewTurn'
+    | 'runStoredTurnReview'
     | 'deferTurnReview'
     | 'runDeferredTurnReviews'
     | 'onSessionComplete'
@@ -304,10 +304,10 @@ export class AgentOrchestrator {
    */
   observeUserTurn(userText: string, continuity: TurnContinuity): void {
     if (!this.turnEvolutionEnabled) return;
-    const previous = this.window.takePendingReview();
+    const previous = this.window.claimPendingReview();
     if (!previous) return;
     const followup = continuity === 'conversation' ? userText : null;
-    this.dispatchReview(previous, followup);
+    this.dispatchReview(previous.turn, followup, previous.rowId);
   }
 
   /**
@@ -337,9 +337,16 @@ export class AgentOrchestrator {
     if (!this.turnEvolutionEnabled) return;
     const scoped = this.scopeTurn(turn);
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
-    this.window.append(scoped, { awaitsFollowup });
+    // An independent task's arrival proves the parked turn's follow-up can
+    // never come — this prompt was written without reading the answer it
+    // waits on. Its review is still owed, so it demotes to the queue. A
+    // programmatic turn proves nothing about the conversation and leaves the
+    // park alone, and a conversational arrival already claimed the pending
+    // review through observeUserTurn.
+    if (continuity === 'independent_task') this.window.expireAwaitingReviews();
+    const rowId = this.window.append(scoped, { awaitsFollowup });
     if (!awaitsFollowup) {
-      this.dispatchReview(scoped, null);
+      this.dispatchReview(scoped, null, rowId ?? undefined);
     }
     // A one-shot host is about to exit — it must not open work it cannot
     // finish. The window keeps the turns; the daemon runs the pass.
@@ -377,12 +384,12 @@ export class AgentOrchestrator {
    * The mode is structural: `deps.oneShot`, fixed at construction from the
    * host's InvocationSurface, never inferred inside the review path.
    */
-  private dispatchReview(turn: CompletedTurn, followup: string | null): void {
+  private dispatchReview(turn: CompletedTurn, followup: string | null, storedRowId?: string): void {
     if (this.deps.oneShot) {
-      this.deps.engine.deferTurnReview(turn, followup);
+      this.deps.engine.deferTurnReview(turn, followup, { storedRowId });
       return;
     }
-    this.detach(this.deps.engine.reviewTurn(turn, followup), 'Turn review');
+    this.detach(this.deps.engine.runStoredTurnReview(storedRowId ?? '', turn, followup), 'Turn review');
   }
 
   /**

@@ -573,10 +573,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('crafted tools become bare callables under codemode.<name>', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'double', description: 'doubles a number', params: null,
       code: 'async (x) => x * 2', scope: 'local',
@@ -593,15 +589,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('low-scoring crafted tools filtered out of codemode namespace', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'weak', description: 'low quality', params: null,
       code: 'async () => "should never run"', scope: 'local',
     });
-    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('weak', 0.01, ${Date.now()})`;
+    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'weak'`;
 
     const t = tools(rt);
     const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };

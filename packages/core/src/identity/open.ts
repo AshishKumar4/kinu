@@ -7,7 +7,7 @@
  * 2. Read SOUL.md → get the workspace identity text
  * 3. Read scaffold_versions → get current version
  * 4. Read scaffold/agent.js from VFS → current agentic loop
- * 5. Read craft_scores → quality metrics
+ * 5. Read crafted_tools → quality metrics
  * 6. Detect orphaned fibers → recover or clean up
  */
 

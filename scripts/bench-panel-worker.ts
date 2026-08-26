@@ -32,7 +32,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
   HeadController, HeadJournal, MissionGovernor,
-  initSearchTables, initScaffoldTables, initCraftScoreTables,
+  initSearchTables, initScaffoldTables, initCraftQualityColumns,
   type LLMProviderConfig, type MergeResult, type WebSearchProvider,
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
     const execRaw = (ddl: string): void => { db.exec(ddl); };
     initSearchTables(execRaw, sql);
     initScaffoldTables(execRaw, sql);
-    initCraftScoreTables(execRaw);
+    initCraftQualityColumns(execRaw, sql);
   }
 
   const rt = createCLIRuntime(backendDb, { dbPath: input.dbPath, llm: analyst });

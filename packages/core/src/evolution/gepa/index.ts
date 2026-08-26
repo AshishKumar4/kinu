@@ -32,9 +32,9 @@ export {
 } from './section-bridge';
 export {
   initGepaTables, startGepaRun, finishGepaRun,
-  persistGepaCandidate, persistGepaParetoSnapshot,
+  persistGepaCandidate,
   updateGepaRunCounters,
-  listGepaRuns, loadGepaCandidates,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront,
   makePersistingHook,
-  type GepaRunSummary,
+  type GepaRunSummary, type GepaParetoEntry,
 } from './persistence';

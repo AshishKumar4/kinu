@@ -165,7 +165,10 @@ export function createTasksDispatcher(
       }
       case 'mode': {
         // No argument = read the current one.
-        if (args.role === undefined) return { role: config.getActiveRoleId() };
+        if (args.role === undefined) {
+          const selection = config.getRoleSelection();
+          return { role: selection.kind === 'catalog' ? selection.roleId : 'general', roleSource: selection.kind };
+        }
         const envelope = roleAuthority?.();
         if (!isValidRoleId(args.role)) {
           return { error: 'tasks.mode requires `role` — a kebab-case role id like general or researcher' };

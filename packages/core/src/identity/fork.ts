@@ -6,7 +6,7 @@
  *
  *   Copy:   SOUL.md, the cut message's ancestry in the session tree,
  *           memory/* VFS rows + memory_chunks, crafted_tools, agent_config
- *   Reset:  search_nodes, scaffold_versions, task_history, craft_scores,
+ *   Reset:  search_nodes, scaffold_versions, task_history, craft quality,
  *           fibers, evolution_events, executor_output, activity_log,
  *           agent_tasks, scaffold/* VFS rows
  *   Rewrite: workspace_identity (new id/name/created_at)

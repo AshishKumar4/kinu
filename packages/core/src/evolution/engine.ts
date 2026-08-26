@@ -45,14 +45,12 @@ import type {
   EvolutionConfig,
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
-import { isoDate } from '../utils/date';
 import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured';
 import { renderThrownChain, tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
 import { updateCraftScores } from '../craft/ema';
-import { initCraftScoreTables } from '../craft/schemas';
 import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { readSoul, summarizeSoul } from '../identity/soul';
@@ -67,21 +65,18 @@ import {
   outcomeToFeedback, outcomeQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
+  recordLesson, corroborateLessonsForTurn, renderRecentLessons,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
-  recordLesson, corroborateLessonsForTurn,
 } from './outcomes';
 import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
 } from '../experience/imports';
 import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay';
 import {
-  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+  initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore,
+  MAX_TURN_REVIEWS_PER_OPEN,
+  type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
 } from './session-window';
-import {
-  initTurnReviewQueueTable, queueTurnReview, takeQueuedTurnReviews, dropQueuedTurnReview,
-  countQueuedTurnReviews, MAX_TURN_REVIEWS_PER_OPEN,
-  type TurnReviewQueueOutcome, type DeferredReviewDrain, type RefusedTurnReview,
-} from './review-queue';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
@@ -209,10 +204,10 @@ export function buildScaffoldProposalPrompt(
  * The one sentence a corrected, frustrated or errored turn leaves behind.
  *
  * Bounded for the same reason the advisor note is (ADVISOR_NOTE_MAX_CHARS): the
- * answer is stored as a lesson row and, once a user verdict corroborates it,
- * appended verbatim to `memory/MEMORY.md`, which every later session reads. An
- * unbounded paragraph there costs context on every future turn, forever, and
- * "one sentence" without a number is a request a model is free to interpret.
+ * answer is stored as a lesson row and reaches later turns through the
+ * corroborated derived view once a user verdict backs it. An unbounded
+ * paragraph there costs context on every future turn, forever, and "one
+ * sentence" without a number is a request a model is free to interpret.
  */
 const TURN_REFLECTION_MAX_CHARS = 240;
 
@@ -265,10 +260,11 @@ export class EvolutionEngine {
    *  also the home of the durable closed-window count the lifetime timescale
    *  paces itself by. */
   private agentConfig: AgentConfigStore;
-  /** The open reflection window + the turn awaiting its outcome review.
+  /** Every completed turn still owed evolution work: its open-window
+   *  membership and its typed review obligation, one row per turn.
    *  AgentOrchestrator owns the cadence policy; the engine owns the ledger,
    *  as it does for outcomes, lessons and replays. */
-  readonly sessionWindow: SessionWindowStore;
+  readonly sessionWindow: CompletedTurnStore;
   /** The crafted-tool ledger the IN-EPISODE loop writes through (the step
    *  clock, orchestrator/craft-cycle.ts). Same division of labour as the
    *  window above: the orchestrator decides when an observation is taken, the
@@ -281,22 +277,18 @@ export class EvolutionEngine {
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
 
-    // The engine owns the outcome + lessons + replay + session-window ledgers,
+    // The engine owns the outcome + lessons + replay + completed-turn ledgers,
     // and the config table it paces the lifetime timescale in — created here so
     // both backends (and tests) get them without per-backend schema wiring.
-    // `craft_scores` joins them: the engine writes it from the turn clock and
-    // the in-episode clock writes it through `craftLedger`, and it was ensured
-    // at actor attach on cf but only at `kinu create` on the CLI — so a
-    // workspace that predated the table, or one built over a bare database,
-    // silently scored nothing at all.
-    initCraftScoreTables(rt.storage.execRaw);
     initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
     initReplayTables(rt.storage.execRaw, rt.storage.sql);
-    initSessionWindowTable(rt.storage.execRaw);
-    initTurnReviewQueueTable(rt.storage.execRaw);
     initAgentConfigTable(rt.storage.execRaw);
     this.agentConfig = createAgentConfigStore(rt.storage.sql);
-    this.sessionWindow = createSessionWindowStore(rt.storage.sql);
+    initCompletedTurnTable(rt.storage.execRaw, rt.storage.sql);
+    this.sessionWindow = createCompletedTurnStore(rt.storage.sql);
+    // A review some earlier host claimed and died inside is owed again, not
+    // lost — the claim was never the work, only its lease.
+    this.sessionWindow.resetStaleClaims();
   }
 
   /**
@@ -616,20 +608,9 @@ export class EvolutionEngine {
         source: 'turn_reflection',
         status: corroborated ? 'corroborated' : 'provisional',
       });
-      if (corroborated) {
-        await this.rt.memory.append(
-          'memory/MEMORY.md',
-          `\n### Lesson (${isoDate()}, ${outcome}, quality=${quality.toFixed(2)})\n${reflection}\n`,
-        );
-        await this.rt.memory.index('memory/MEMORY.md');
-      }
       this.emit({ type: 'reflection', message: corroborated ? reflection : `[provisional] ${reflection}` });
     }
 
-    // Acceptance with tool usage → extract pattern to CraftStore. Both
-    // provenances qualify: a headless turn whose tools all ran is the one
-    // positive a headless workspace can produce, and it is the counterweight
-    // that keeps the craft EMA from being driven by failures alone.
     if (outcome === 'accepted' && turn.toolCalls.length > 0) {
       await this.extractPattern(turn, quality);
     }
@@ -639,31 +620,50 @@ export class EvolutionEngine {
    * Defer this turn's review to the next host that can afford it, instead of
    * running it now.
    *
-   * The one-shot exit path (see evolution/review-queue.ts for the measurement
+   * The one-shot exit path (see evolution/session-window.ts for the measurement
    * that put it there). Everything `reviewTurn` would have received is written
    * durably — the snapshotted turn and the follow-up that grades it — so the
    * drain replays the same call with the same inputs rather than re-deriving
-   * them from a workspace that has moved on.
+   * them from a workspace that has moved on. With `storedRowId`, the turn is
+   * ALREADY the claimed row in `completed_turns` (taken by
+   * `claimPendingReview`), so that row itself becomes the owed review instead
+   * of a second copy of it.
    *
    * Returns the queue's answer, so the caller can state a refusal rather than
    * report a deferral that did not happen.
    */
-  deferTurnReview(turn: CompletedTurn, followup: string | null): TurnReviewQueueOutcome {
+  deferTurnReview(
+    turn: CompletedTurn,
+    followup: string | null,
+    opts?: { storedRowId?: string },
+  ): EnqueueOutcome {
     if (!this.config.enabled) return 'queued';
-    const outcome = queueTurnReview(this.rt.storage.sql, { turn, followup });
+    const outcome = this.sessionWindow.enqueueReview(turn, followup, opts);
     if (outcome !== 'queued') {
       diagnostics.failure(
         'evolution.turn_review_not_deferred',
         toKinuError({
           doing: 'defer a turn review for the next host',
           cause: new Error(outcome === 'queue_full'
-            ? `the review queue is full (${countQueuedTurnReviews(this.rt.storage.sql)} owed) — nothing has drained it`
+            ? `the review queue is full (${this.sessionWindow.countQueuedReviews()} owed) — nothing has drained it`
             : 'the turn does not serialize'),
           otherwise: outcome === 'queue_full' ? 'unavailable' : 'bad_input',
         }),
       );
     }
     return outcome;
+  }
+
+  /**
+   * Run ONE stored turn's review on the INLINE lane — the interactive host's
+   * detached path after `claimPendingReview` — and settle the row's obligation
+   * only once the review actually ran. A review that throws leaves the row
+   * `claimed`; the engine's activation recovery re-queues it for the next
+   * host, which is exactly the loss the old destructive take could not repair.
+   */
+  async runStoredTurnReview(rowId: string, turn: CompletedTurn, followup: string | null): Promise<void> {
+    await this.reviewTurn(turn, followup);
+    this.sessionWindow.settleReview(rowId);
   }
 
   /**
@@ -686,7 +686,7 @@ export class EvolutionEngine {
    */
   async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
     if (!this.config.enabled) return { reviewed: 0, refused: [] };
-    const taken = takeQueuedTurnReviews(this.rt.storage.sql, MAX_TURN_REVIEWS_PER_OPEN);
+    const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
     const refused: RefusedTurnReview[] = [...taken.refused];
     let reviewed = 0;
     for (const row of taken.reviews) {
@@ -694,20 +694,23 @@ export class EvolutionEngine {
         await this.reviewTurn(row.turn, row.followup);
       } catch (err) {
         // The governor declining a call is a decision, not a failure. The row
-        // stays exactly where it is: the turn is sound, the mission is simply
-        // spent, and a raised cap makes this review runnable again.
+        // goes back to the queue exactly as it was: the turn is sound, the
+        // mission is simply spent, and a raised cap makes this review runnable
+        // again. Any other throw releases it too — the review did not run, so
+        // the obligation is not settled.
         if (err instanceof MissionBudgetExhausted) {
           refused.push({ id: row.id, reason: 'budget' });
-          continue;
+        } else {
+          diagnostics.failure(
+            'evolution.deferred_review_failed',
+            toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
+            { reviewId: row.id },
+          );
         }
-        diagnostics.failure(
-          'evolution.deferred_review_failed',
-          toKinuError({ doing: 'run a deferred turn review', cause: err, otherwise: 'unavailable' }),
-          { reviewId: row.id },
-        );
+        this.sessionWindow.releaseQueuedReview(row.id);
         continue;
       }
-      dropQueuedTurnReview(this.rt.storage.sql, row.id);
+      this.sessionWindow.settleReview(row.id);
       reviewed++;
     }
     return { reviewed, refused };
@@ -762,19 +765,15 @@ export class EvolutionEngine {
       SELECT feedback FROM turn_feedback WHERE message_id = ${turnId} LIMIT 1`[0]?.feedback ?? null;
   }
 
-  /** Append newly corroborated lessons to durable memory. */
+  /** Corroborate the provisional lessons tied to this turn. A row-status
+   *  change only: the lesson stays in the ledger it was written to, and every
+   *  reader (`renderRecentLessons`, `searchCorroboratedLessons`, the
+   *  experience library) derives from that status — no copy goes to
+   *  MEMORY.md, so nothing can hide a lesson its row still holds. */
   private async corroborateLessons(turnId?: string): Promise<void> {
     if (!turnId) return;
-    const upgraded = corroborateLessonsForTurn(this.rt.storage.sql, turnId);
-    for (const lesson of upgraded) {
-      const header = lesson.source === 'session_reflection'
-        ? `## Session reflection (corroborated ${isoDate()})`
-        : `### Lesson (corroborated ${isoDate()})`;
-      await this.rt.memory.append('memory/MEMORY.md', `\n${header}\n${lesson.text}\n`);
-    }
-    if (upgraded.length > 0) await this.rt.memory.index('memory/MEMORY.md');
+    corroborateLessonsForTurn(this.rt.storage.sql, turnId);
   }
-
   /**
    * Settle the experience this workspace imported from the owner's other
    * workspaces against the verdict of a turn it has just graded.
@@ -913,12 +912,14 @@ export class EvolutionEngine {
   }
 
   /** Session-level reflection: patterns, what worked, what didn't. The
-   *  reflection prose is self-scored, so it enters MEMORY.md only when a
-   *  recorded outcome already backs the window; otherwise it waits in the
-   *  lessons ledger as provisional until one corroborates it. */
+   *  reflection prose is self-scored, so it enters the corroborated-lesson
+   *  surface only when a recorded outcome already backs the window; otherwise
+   *  it waits in the lessons ledger as provisional until one corroborates it. */
   private async onSessionReflection(session: CompletedSession, windowsClosed: number): Promise<void> {
-    const recentMemory = await this.rt.memory.read('memory/MEMORY.md') ?? '';
-    const recentLessons = recentMemory.split('\n### Lesson').slice(-5).join('\n### Lesson');
+    // The reflection input is the ledger's newest CORROBORATED lessons — not a
+    // MEMORY.md heading parse, which only ever saw the copies this module no
+    // longer writes.
+    const recentLessons = renderRecentLessons(this.rt.storage.sql, 5);
 
     if (!recentLessons.trim()) return;
 
@@ -937,13 +938,6 @@ export class EvolutionEngine {
       source: 'session_reflection',
       status: corroborated ? 'corroborated' : 'provisional',
     });
-    if (corroborated) {
-      await this.rt.memory.append(
-        'memory/MEMORY.md',
-        `\n## Session reflection (${isoDate()})\n${reflection}\n`,
-      );
-      await this.rt.memory.index('memory/MEMORY.md');
-    }
 
     this.emit({ type: 'reflection', message: `Session reflection${corroborated ? '' : ' [provisional]'}: ${reflection.slice(0, 100)}...` });
 

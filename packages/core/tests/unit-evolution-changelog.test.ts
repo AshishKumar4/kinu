@@ -19,7 +19,7 @@ import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   initScaffoldTables, initShadowTables, initTurnOutcomeTables, initReplayTables,
-  initCraftScoreTables, initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
+  initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
   startGepaRun, finishGepaRun,
   recordTurnOutcome, recordShadowEvaluation,
   modifyScaffold, applyPromotionDecision, getPendingScaffold,
@@ -40,7 +40,6 @@ function setup() {
   initShadowTables(execRaw);
   initTurnOutcomeTables(execRaw, rt.storage.sql);
   initReplayTables(execRaw, rt.storage.sql);
-  initCraftScoreTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
   return { rt, facts: createFactsStore(rt.storage.sql) };
@@ -104,8 +103,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       name: 'fetch_and_summarize', description: 'Fetch a URL and summarize it',
       code: 'async (args) => args.url', params: null, scope: 'shared',
     });
-    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
-                   VALUES ('fetch_and_summarize', 0.82, 5, ${Date.now()})`;
+    void rt.storage.sql`UPDATE crafted_tools SET score = 0.82, uses = 5, last_used_at = ${Date.now()}
+        WHERE name = 'fetch_and_summarize'`;
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
     expect(entry.summary).toBe('Created a tool: fetch and summarize');
@@ -450,13 +449,13 @@ describe('reverts — real paths only', () => {
   test('craft retire removes the tool and its score; double-revert errors', async () => {
     const { rt, facts } = setup();
     rt.craftStore.create({ name: 'tmp_tool', description: 'temp', code: 'async () => 1', params: null, scope: 'local' });
-    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
-                   VALUES ('tmp_tool', 0.5, 2, ${Date.now()})`;
+    void rt.storage.sql`UPDATE crafted_tools SET score = 0.5, uses = 2, last_used_at = ${Date.now()}
+        WHERE name = 'tmp_tool'`;
 
     const result = await executeChangelogRevert({ rt, facts }, { type: 'craft_retire', target: 'tmp_tool' });
     expect(result.ok).toBe(true);
     expect(rt.craftStore.get('tmp_tool')).toBeFalsy();
-    expect(rt.storage.sql`SELECT * FROM craft_scores WHERE tool_name = 'tmp_tool'`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT name FROM crafted_tools WHERE name = 'tmp_tool'`).toHaveLength(0);
 
     const again = await executeChangelogRevert({ rt, facts }, { type: 'craft_retire', target: 'tmp_tool' });
     expect(again.ok).toBe(false);
@@ -759,12 +758,14 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     expect(entry.id).toBe(`tool:skewed:${created}`);
   });
 
-  test('a tool with no EMA row is labelled unscored rather than losing its evidence', () => {
+  test('a brand-new tool shows its neutral prior rather than losing its evidence', () => {
     const { rt } = setup();
     rt.craftStore.create({ name: 'brand_new', description: 'fresh', code: 'async () => 1', params: null, scope: 'local' });
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
-    expect(entry.evidence).toContain('unscored (new)');
+    // Born scored: the column defaults are the EMA line, so a fresh tool
+    // reads as unexercised, never as missing.
+    expect(entry.evidence).toContain('EMA 0.50 over 0 uses');
     expect(entry.evidence).not.toContain('undefined');
   });
 

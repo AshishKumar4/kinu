@@ -490,11 +490,12 @@ export async function runSwarm(
   // omitted by `JSON.stringify`, and the read model reports an absent knob as
   // unrecorded rather than as a default it invented.
   //
-  // A RE-ENTRY CHECKPOINTS THE ROW IT CLAIMED instead of writing one. `begin` is an
+  // A RE-ENTRY TOUCHES THE ROW IT CLAIMED instead of writing one. `begin` is an
   // INSERT OR REPLACE that resets the status to `running` and the epoch to zero, so
   // calling it here would throw away the lease this run just took and un-fence the
-  // executor it was taken from. What the row needs is the truth about progress, which
-  // is what the checkpoint carries.
+  // executor it was taken from. And the row carries no progress for a swarm to write:
+  // progress is derived from the tree at read time (*search-store.ts*), so a re-entry
+  // refreshes only the heartbeat.
   const ledgerConfig: PersistedSearchKnobs = {
     budget: expansionBudget,
     branches,
@@ -509,9 +510,7 @@ export async function runSwarm(
     originContext: deps.originContext,
   });
   if (reentry) {
-    searchLedger.checkpoint(
-      rootId, ledgerEpoch, inheritedExpansions, budget.remaining, Date.now(),
-    );
+    searchLedger.touch(rootId, ledgerEpoch, Date.now());
   } else {
     searchLedger.begin({
       rootId,
@@ -882,18 +881,14 @@ export async function runSwarm(
       );
     }
 
-    // THE LEVEL BARRIER IS THIS RUN'S CHECKPOINT, and it is what makes the ledger row
-    // readable while the search is alive. The row used to be written once at `begin`
-    // and once at the settle barrier, so an evicted run left `iter=0/5` on disk
-    // forever — the state two rows of the live incident were still in eleven hours
-    // later — and a re-entry had nothing to read progress from. The barrier is the
-    // right grain rather than a timer: it is the point at which a wave is measured,
-    // compared and recorded, so the numbers written here are facts the tree agrees
-    // with. Fenced on this run's lease, so an executor from a superseded activation
-    // cannot write over it.
-    searchLedger.checkpoint(
-      rootId, ledgerEpoch, candidates.length, budget.remaining, Date.now(),
-    );
+    // THE LEVEL BARRIER IS THIS RUN'S HEARTBEAT, and it is what makes the row readable
+    // while the search is alive: `updated_at` freshness is how every reader tells a
+    // working search from a hung one. The barrier is the right grain rather than a
+    // timer — it is the point at which a wave is measured, compared and recorded.
+    // Progress itself needs no write here: it is derived from the tree at read time
+    // (*search-store.ts*), so the tree's own rows are the record. Fenced on this run's
+    // lease, so an executor from a superseded activation cannot move even this.
+    searchLedger.touch(rootId, ledgerEpoch, Date.now());
     // AND IT IS SAID OUT LOUD, the way `mcts.checkpoint_reached` is. The ledger row is
     // the only real heartbeat a hosted search has, and the MCTS half of that lesson was
     // learned once already: a durably-checkpointed search ran for hours and produced

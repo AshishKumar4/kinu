@@ -93,12 +93,11 @@ interface CurriculumContext {
 
 function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext {
   const skills = rt.storage.sql<CurriculumSkill>`
-    SELECT ct.name, COALESCE(ct.description, '') as description,
-           COALESCE(cs.score, 0.5) as score,
-           COALESCE(cs.uses, 0) as uses
-      FROM crafted_tools ct
-      LEFT JOIN craft_scores cs ON cs.tool_name = ct.name
-      ORDER BY cs.uses DESC NULLS LAST, ct.name`;
+    SELECT name, COALESCE(description, '') as description,
+           COALESCE(score, 0.5) as score,
+           COALESCE(uses, 0) as uses
+      FROM crafted_tools
+      ORDER BY uses DESC NULLS LAST, name`;
 
   // The durable outcome ledger (evolution/outcomes.ts) — the one record of how
   // turns landed. This read used to name `completed_turns`, a table no schema

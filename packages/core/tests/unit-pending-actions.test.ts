@@ -163,7 +163,6 @@ describe('buildPendingActions', () => {
       deferredActions: [
         parked({ id: 'd1', status: 'approved', decidedAt: 3000 }),
         parked({ id: 'd2', status: 'denied', decidedAt: 3000 }),
-        parked({ id: 'd3', status: 'used', decidedAt: 3000 }),
       ],
     })).toEqual([]);
   });

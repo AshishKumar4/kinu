@@ -618,7 +618,7 @@ export async function runScaffoldGepaOptimization(
       metric,
       reflectionLm,
       budget,
-      onIteration: makePersistingHook({ sql: control.sql, runId, evalSet, persisted }),
+      onIteration: makePersistingHook({ sql: control.sql, runId, persisted }),
     });
   } catch (err) {
     const message = renderThrownChain({ cause: err });
@@ -777,9 +777,7 @@ async function runPromptSectionGepaOptimization(
       metric: sectionMetric(control, opts.sectionId),
       reflectionLm,
       budget,
-      onIteration: makePersistingHook({
-        sql: control.sql, runId, evalSet: split.val, persisted,
-      }),
+      onIteration: makePersistingHook({ sql: control.sql, runId, persisted }),
     });
   } catch (err) {
     finishGepaRun(control.sql, {

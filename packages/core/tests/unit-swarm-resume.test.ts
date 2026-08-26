@@ -74,6 +74,7 @@ const TASK = 'find the largest of 12 opaque tokens in the fewest oracle calls';
 function ledgerOnly() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
+  initSearchTables(makeExecRaw(db), sql);
   initMctsSearchTable(makeExecRaw(db), sql);
   return new MctsSearchStore(sql);
 }
@@ -156,6 +157,92 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
     expect(store.readSwarmOriginContext('context-root')).toEqual([
       { role: 'user', content: 'frozen caller context' },
     ]);
+  });
+});
+
+/**
+ * S12: A SWARM'S PROGRESS LIVES IN THE TREE, NOT THE ROW. The ledger row's
+ * integer columns are the MCTS loop's checkpoint; a swarm used to write its
+ * level barriers into them, so a run cut inside a level read the level before
+ * it. Now every swarm progress reader derives iteration (children the tree
+ * records) and remaining budget (the persisted initial budget minus those
+ * children) at read time, and the row's own writes shrink to an epoch-fenced
+ * liveness touch.
+ */
+describe('swarm progress reads the durable tree, not the row', () => {
+  function treeAndLedger() {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    initSearchTables(execRaw, sql);
+    initMctsSearchTable(execRaw, sql);
+    const ledger = new MctsSearchStore(sql);
+    ledger.begin({
+      rootId: 'mid-level', task: TASK, engine: 'swarm', rootMsgId: null,
+      config: { budget: 6, branches: 3, mode: 'build', maxDepth: 2 }, budget: 6, now: 1_000,
+    });
+    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
+      VALUES ('mid-level', 'mid-level', ${TASK}, 'root')`;
+    return { sql, ledger };
+  }
+
+  function expand(sql: SqlExecutor, ids: readonly (readonly [string, string | null])[], depth: number): void {
+    for (const [id, parent] of ids) {
+      void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+        VALUES (${id}, ${parent}, 'mid-level', ${TASK}, 'node', ${depth})`;
+    }
+  }
+
+  test('a poll halfway through a level reads the children on disk, with no checkpoint written', () => {
+    const { sql, ledger } = treeAndLedger();
+    expand(sql, [['c1', 'mid-level'], ['c2', 'mid-level'], ['c3', 'mid-level']], 1);
+
+    // Every reader agrees, and none of them read the row's integer columns:
+    // those still hold what `begin` wrote, because nothing has written since.
+    expect(ledger.findRunningSwarms(TASK)).toEqual([
+      { rootId: 'mid-level', iteration: 3, budget: 3, epoch: 0 },
+    ]);
+    expect(ledger.get('mid-level')).toMatchObject({ iteration: 3, budget: 3 });
+    expect(ledger.list(10)[0]).toMatchObject({ iteration: 3, budget: 3 });
+    const cols = sql<{ iteration: number; budget: number }>`
+      SELECT iteration, budget FROM mcts_search_runs WHERE root_id = 'mid-level'`[0];
+    expect(cols).toEqual({ iteration: 0, budget: 6 });
+  });
+
+  test('after re-entry the same readers count what the new attempt added', () => {
+    const { sql, ledger } = treeAndLedger();
+    expand(sql, [['c1', 'mid-level'], ['c2', 'mid-level']], 1);
+    const epoch = ledger.reclaim('mid-level');
+    expect(epoch).toBe(1);
+    expand(sql, [['g1', 'c1'], ['g2', 'c1']], 2);
+
+    expect(ledger.findRunningSwarms(TASK)).toEqual([
+      { rootId: 'mid-level', iteration: 4, budget: 2, epoch: 1 },
+    ]);
+    expect(ledger.get('mid-level')).toMatchObject({ iteration: 4, budget: 2, epoch: 1 });
+  });
+
+  test('touch is the only row write a live swarm makes: heartbeat, fenced on epoch', () => {
+    const { sql, ledger } = treeAndLedger();
+    expand(sql, [['c1', 'mid-level']], 1);
+
+    ledger.touch('mid-level', 0, 5_000);
+    const row = sql<{ updated_at: number; status: string; iteration: number; budget: number; epoch: number }>`
+      SELECT updated_at, status, iteration, budget, epoch FROM mcts_search_runs WHERE root_id = 'mid-level'`[0];
+    expect(row?.updated_at).toBe(5_000);
+    expect(row).toMatchObject({ status: 'running', iteration: 0, budget: 6, epoch: 0 });
+
+    // A zombie holding a stale lease cannot even move the heartbeat.
+    ledger.touch('mid-level', 7, 6_000);
+    expect(sql<{ updated_at: number }>`
+      SELECT updated_at FROM mcts_search_runs WHERE root_id = 'mid-level'`[0]?.updated_at).toBe(5_000);
+
+    // And once the run settled, nothing re-livens it.
+    ledger.converge('mid-level', 0, 7_000);
+    ledger.touch('mid-level', 0, 8_000);
+    expect(ledger.get('mid-level')).toMatchObject({ status: 'converged' });
+    expect(sql<{ updated_at: number }>`
+      SELECT updated_at FROM mcts_search_runs WHERE root_id = 'mid-level'`[0]?.updated_at).toBe(7_000);
   });
 });
 
@@ -655,7 +742,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     expect(treeOf(sql).filter((node) => node.depth === 2)).toHaveLength(0);
     // …and the run holds the two level-2 nodes it was starting, journalled `running`
     // with nothing left that could report them. Exactly the incident's shape.
-    expect(journal.listLive().find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
+    expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
     // Nothing charged: this attempt was handed no mission scope, so every token below is
     // the SECOND attempt's and a re-charge of settled nodes cannot hide in the total.
     expect(governor.snapshot(MISSION_LABEL)[0]?.spent.tokens ?? 0).toBe(0);
@@ -762,10 +849,11 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     expect(second.script.inherited).toHaveLength(2);
     for (const turns of second.script.inherited) expect(turns).toBeGreaterThan(0);
 
-    // THE ZOMBIE IS FENCED. If the first attempt's activation ever came back, its writes
-    // carry epoch 0 and cannot move the row this run settled — which is what makes the
-    // wake idempotent rather than merely unlikely.
-    ledger.checkpoint(rootId, 0, 99, 99, Date.now());
+    // THE ZOMBIE IS FENCED. If the first attempt's activation ever came back, its
+    // writes carry epoch 0: its heartbeat touch cannot move the row this run settled,
+    // and neither can its settle — which is what makes the wake idempotent rather than
+    // merely unlikely.
+    ledger.touch(rootId, 0, Date.now());
     ledger.fail(rootId, 0, Date.now());
     expect(ledger.get(rootId)).toMatchObject({ status: 'converged', iteration: 4 });
 
@@ -818,7 +906,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
     expect(ledger.get(rootId)).toMatchObject({ status: 'running' });
-    expect(journal.listLive().find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
+    expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
 
     // ── THE NEXT ACTIVATION ────────────────────────────────────────────────
     const second = nodeModel();
@@ -874,7 +962,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // AND THE ROSTER STOPPED LYING ANYWAY. The two frozen nodes are no longer
     // counted as running — that was the whole point of the sweep and it is not
     // given up to keep the run alive.
-    expect(journal.listLive().find((run) => run.rootId === rootId)?.running ?? 0)
+    expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running ?? 0)
       .not.toBe(FROZEN_NODES);
   }, 300_000);
 
@@ -909,7 +997,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_journal
       WHERE error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(FROZEN_NODES);
-    expect(journal.listLive()).toEqual([]);
+    expect(journal.listLive()).toEqual({ items: [], total: 0 });
   }, 300_000);
 });
 
@@ -1166,9 +1254,15 @@ describe('a second search over a task already running is refused', () => {
     const ledger = new MctsSearchStore(sql);
     const log = createRecordingLogger();
 
-    // The state the first attempt left: its own root, still running, mid-search.
+    // The state the first attempt left: its own root, still running, two children
+    // expanded — written where progress actually lives, the tree, not a checkpoint.
     beganSwarm(ledger, 'root-in-flight', Date.now());
-    ledger.checkpoint('root-in-flight', 0, 2, 3, Date.now());
+    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
+      VALUES ('root-in-flight', 'root-in-flight', ${TASK}, 'root')`;
+    for (const id of ['c1', 'c2']) {
+      void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+        VALUES (${id}, 'root-in-flight', 'root-in-flight', ${TASK}, 'node', 1)`;
+    }
     expect(ledger.findRunningSwarms(TASK).map((row) => row.rootId)).toEqual(['root-in-flight']);
 
     const second = nodeModel();
@@ -1189,10 +1283,14 @@ describe('a second search over a task already running is refused', () => {
     // NOTHING WAS CREATED. This is the assertion the incident fails: no second root,
     // no second ledger row, and the live row untouched — not superseded, because this
     // call had no standing to take it over.
-    expect(treeOf(sql)).toEqual([]);
+    const seededTree = sql<{ id: string }>`SELECT id FROM search_nodes ORDER BY id`.map((r) => r.id);
     expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
       .toEqual(['root-in-flight']);
     expect(ledger.get('root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });
+
+    // …and the refusal ADDED nothing to the tree it read.
+    expect(sql<{ id: string }>`SELECT id FROM search_nodes ORDER BY id`.map((r) => r.id))
+      .toEqual(seededTree);
 
     // And no model call was made at all: the refusal lands before the first wave, so a
     // re-spawn costs nothing rather than costing a level.

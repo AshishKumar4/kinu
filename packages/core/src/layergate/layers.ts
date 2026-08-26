@@ -65,6 +65,8 @@ export interface Layer<S = PipelineSubjects> {
 
 // ── shared fixtures ──────────────────────────────────────────────
 
+
+const EMPTY = { items: [], total: 0 } as const;
 const EXECUTORS = Object.freeze([
   { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
   { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' },
@@ -414,16 +416,16 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'volatile-context/live-rosters-are-bounded',
         asserts: 'the task list, running jobs, delegates and pending approvals render capped, with an honest elided count',
         observe: (s) => s.renderDynamicContextBlock({
-          jobs: Array.from({ length: 10 }, (_, i) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` })),
-          tasks: Array.from({ length: 17 }, (_, i) => ({
+          jobs: { items: Array.from({ length: 10 }, (_, i) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` })), total: 10 },
+          tasks: { items: Array.from({ length: 17 }, (_, i) => ({
             id: `t${i + 1}`, title: `step ${i + 1}`, status: i === 0 ? 'active' : 'open',
             parentId: i % 3 === 0 ? null : `t${i - (i % 3) + 1}`,
-          })),
-          delegates: [
+          })), total: 17 },
+          delegates: { items: [
             { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
             { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
-          ],
-          approvals: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }],
+          ], total: 2 },
+          approvals: { items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }], total: 1 },
         }),
       },
       {
@@ -433,7 +435,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           empty: s.renderDynamicContextBlock({}),
           blank: s.renderDynamicContextBlock({ factsBlock: '   ', memoryTail: '' }),
           unselectableOnly: s.renderDynamicContextBlock({ executors: [EXECUTORS[3]] }),
-          emptyRosters: s.renderDynamicContextBlock({ jobs: [], tasks: [], delegates: [], approvals: [] }),
+          emptyRosters: s.renderDynamicContextBlock({ jobs: EMPTY, tasks: EMPTY, delegates: EMPTY, approvals: EMPTY }),
         }),
       },
       {

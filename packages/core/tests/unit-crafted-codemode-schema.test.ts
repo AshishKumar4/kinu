@@ -69,10 +69,6 @@ function captureExecuteTool(): CapturedExecuteTool {
 describe('Phase D — crafted tools reach createExecuteTool under codemode.*', () => {
   test('crafted tool appears in the tools map passed to createExecuteTool', () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'double',
       description: 'Doubles its numeric argument',
@@ -117,10 +113,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
 
   test('a tool crafted after the toolset was built is callable on the next resolve', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     const capture = captureExecuteTool();
     buildBuiltinTools({
       rt,
@@ -147,10 +139,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
 
   test('invoking the captured execute dispatches into craftedToolExecute', async () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'triple',
       description: 'Triples',
@@ -181,10 +169,6 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
 
   test('low-score tool is filtered BEFORE reaching createExecuteTool', () => {
     const { rt } = createTestRuntime();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
-      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
-      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
-    )`);
     rt.craftStore.create({
       name: 'forgotten',
       description: 'old tool',
@@ -192,7 +176,7 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       code: 'async () => null',
       scope: 'local',
     });
-    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('forgotten', 0.01, ${Date.now()})`;
+    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'forgotten'`;
 
     let factoryCalls = 0;
     const factory: CraftedToolExecute = () => {

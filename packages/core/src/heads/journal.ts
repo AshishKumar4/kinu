@@ -21,6 +21,7 @@ import { headProducedFindings } from './head-summary';
 import { USAGE_FIELDS, type Usage } from '../usage';
 import { HEAD_USAGE_COLUMNS, type StoredHeadUsage } from './schema';
 import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+import type { ActiveRoster } from '../prompting/volatile-context';
 
 
 /** The whole-trace totals a paged transcript reports beside its page. */
@@ -513,8 +514,10 @@ export class HeadJournal {
    * `idx_head_journal_status` first bounds the aggregate to those roots, and
    * the result is identical: every root with a running head, and no other.
    */
-  listLive(limit = 8): LiveHeadRun[] {
-    return this.sql<{ root_id: string; rationale: string | null; running: number; total: number; spawned_at: number }>`
+  listLive(limit = 8): ActiveRoster<LiveHeadRun> {
+    const total = this.sql<{ n: number }>`
+      SELECT COUNT(DISTINCT root_id) AS n FROM head_journal WHERE status = 'running'`[0]?.n ?? 0;
+    const items = this.sql<{ root_id: string; rationale: string | null; running: number; total: number; spawned_at: number }>`
       SELECT j.root_id AS root_id,
              MAX(r.rationale) AS rationale,
              SUM(CASE WHEN j.status = 'running' THEN 1 ELSE 0 END) AS running,
@@ -530,6 +533,7 @@ export class HeadJournal {
         running: row.running,
         total: row.total,
       }));
+    return { items, total };
   }
 
   listRuns(limit: number): HeadRunView[] {

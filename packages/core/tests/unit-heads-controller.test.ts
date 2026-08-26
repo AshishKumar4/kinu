@@ -605,9 +605,10 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     spawn(journal, 'root-a', 'h2');
     journal.recordReport(fakeReport('h1'));
 
-    expect(journal.listLive()).toEqual([
-      { rootId: 'root-a', rationale: 'explore two angles', running: 1, total: 2 },
-    ]);
+    expect(journal.listLive()).toEqual({
+      items: [{ rootId: 'root-a', rationale: 'explore two angles', running: 1, total: 2 }],
+      total: 1,
+    });
   });
 
   test('a run whose heads have all settled is no longer live', () => {
@@ -615,15 +616,17 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     journal.recordSplit('root-a', 'why', Date.now());
     spawn(journal, 'root-a', 'h1');
     journal.recordReport(fakeReport('h1'));
-    expect(journal.listLive()).toEqual([]);
+    expect(journal.listLive()).toEqual({ items: [], total: 0 });
   });
 
   test('an unlabelled split still reports, and the roster is capped', () => {
     const { journal } = newJournal();
     for (let i = 0; i < 4; i++) spawn(journal, `root-${i}`, `h${i}`);
     const live = journal.listLive(2);
-    expect(live).toHaveLength(2);
-    expect(live.every((run) => run.rationale === '')).toBe(true);
+    expect(live.items).toHaveLength(2);
+    // The bound cut the PAGE, not the truth: four open roots exist.
+    expect(live.total).toBe(4);
+    expect(live.items.every((run) => run.rationale === '')).toBe(true);
   });
 
   // The roster is read on every model step and the journal has no GC, so its
@@ -650,17 +653,21 @@ describe('HeadJournal.listLive — the live fork roster', () => {
       spawn(journal, `root-old-${i}`, `old-${i}`);
       journal.recordReport(fakeReport(`old-${i}`));
     }
-
     statements.length = 0;
-    expect(journal.listLive()).toEqual([
-      { rootId: 'root-live', rationale: 'still going', running: 1, total: 1 },
-    ]);
+    expect(journal.listLive()).toEqual({
+      items: [{ rootId: 'root-live', rationale: 'still going', running: 1, total: 1 }],
+      total: 1,
+    });
 
-    expect(statements).toHaveLength(1);
-    const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${statements[0]}`).all(8);
-    const details = plan.map((row) => row.detail).join('\n');
-    expect(details).not.toMatch(/\bSCAN\b/);
-    expect(details).toContain('idx_head_journal_status');
+    // Two statements: the count and the page. BOTH are bounded by the status
+    // index — neither may scan the settled journal.
+    expect(statements).toHaveLength(2);
+    for (const statement of statements) {
+      const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${statement}`).all(8);
+      const details = plan.map((row) => row.detail).join('\n');
+      expect(details).not.toMatch(/\bSCAN\b/);
+      expect(details).toContain('idx_head_journal_status');
+    }
   });
 });
 

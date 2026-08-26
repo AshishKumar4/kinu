@@ -3,14 +3,12 @@ import { createMockSession, createTestRuntime } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../src/mcts/search-store';
 import type { WorkMode } from '../src/prompting/surface';
 
 function initTables(runtime: ReturnType<typeof createTestRuntime>['rt']): void {
   initSearchTables(runtime.storage.execRaw, runtime.storage.sql);
   initScaffoldTables(runtime.storage.execRaw, runtime.storage.sql);
-  initCraftScoreTables(runtime.storage.execRaw);
   initMctsSearchTable(runtime.storage.execRaw, runtime.storage.sql);
 }
 

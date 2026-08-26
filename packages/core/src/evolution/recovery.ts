@@ -41,8 +41,9 @@
  * That is why a finding gates NOTHING. It is injected as a bounded hint plane
  * (prompting/volatile-context.ts), displaced by newer findings, and it is
  * structurally barred from every wider surface: recorded provisional and bound
- * to no turn, so the corroboration gate that admits lessons into MEMORY.md can
- * never fire for it, and the experience library (corroborated-only) can never
+ * to no turn, so the corroboration gate that admits lessons into the shared
+ * derived view can never fire for it, and the experience library
+ * (corroborated-only) can never
  * export it. The blast radius of a junk pairing is one line of hint text.
  *
  * ── Why the lessons ledger, and why durable ─────────────────────────────

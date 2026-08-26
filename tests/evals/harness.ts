@@ -739,6 +739,7 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
     availableModels: [llm.model],
   };
   const config = createAgentConfigStore(rt.storage.sql);
+  const role = config.getRoleSelection();
   if (!rt.setProfileResolver) {
     throw new Error('this runtime exposes no setProfileResolver, so its model lanes cannot be '
       + 'wired and every judge, fast and reflection call would fail before reaching a model');
@@ -746,7 +747,7 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
   rt.setProfileResolver(() => Promise.resolve(resolveAgentTurnProfile({
     envelope,
     provider,
-    activeRoleId: config.getActiveRoleId(),
+    activeRoleId: role.kind === 'catalog' ? role.roleId : 'general',
     workMode: 'build',
     availableTools: [],
     activeSkills: [],

@@ -14,7 +14,7 @@ import { createTestRuntime, createMockSession, captureConsole, makeSql } from '.
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
+import { initCraftQualityColumns } from '../src/craft/schemas';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts';
 import type { Executor, LLM } from '../src/types/primitives';
@@ -58,7 +58,7 @@ function countingLLM(json: string): LLM & { judgeCalls: () => number } {
 function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftScoreTables(rt.storage.execRaw);
+  initCraftQualityColumns(rt.storage.execRaw, rt.storage.sql);
 }
 
 describe('MCTS integration', () => {

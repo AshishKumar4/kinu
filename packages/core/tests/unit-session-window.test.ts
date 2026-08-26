@@ -1,13 +1,13 @@
 // SessionWindow — the durable evolution window + pending outcome review.
 import { describe, test, expect } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
-import { initSessionWindowTable, createSessionWindowStore, type SessionWindowStore } from '../src/evolution/session-window';
+import { initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore } from '../src/evolution/session-window';
 import type { CompletedTurn } from '../src/evolution/types';
 
-function newStore(): SessionWindowStore {
+function newStore(): CompletedTurnStore {
   const { sql, execRaw } = createTestSql();
-  initSessionWindowTable(execRaw);
-  return createSessionWindowStore(sql);
+  initCompletedTurnTable(execRaw, sql);
+  return createCompletedTurnStore(sql);
 }
 
 const aTurn = (i: number, extra: Partial<CompletedTurn> = {}): CompletedTurn => ({
@@ -68,17 +68,26 @@ describe('SessionWindow — the open window', () => {
     const win = newStore();
     win.append(aTurn(0), { awaitsFollowup: true });
     win.claim()!.settle();
-    expect(win.takePendingReview()).toEqual(aTurn(0));
+    expect(win.claimPendingReview()!.turn).toEqual(aTurn(0));
+    expect(win.claimPendingReview()).toBeNull(); // taken once, then claimed
   });
 });
 
 describe('SessionWindow — the pending outcome review', () => {
-  test('the newest turn awaiting a follow-up is the one waiting, and it is taken once', () => {
+  test('the newest awaiting turn waits first, and every awaiting turn is owed', () => {
     const win = newStore();
     win.append(aTurn(0), { awaitsFollowup: true, now: 1 });
     win.append(aTurn(1), { awaitsFollowup: true, now: 2 });
-    expect(win.takePendingReview()).toEqual(aTurn(1));
-    expect(win.takePendingReview()).toBeNull();
+    // Newest first, and claiming PARKS the row until its review settles
+    // instead of destroying it — a claim whose process dies is recoverable.
+    const first = win.claimPendingReview()!;
+    expect(first.turn).toEqual(aTurn(1));
+    const second = win.claimPendingReview()!;
+    expect(second.turn).toEqual(aTurn(0));
+    expect(win.claimPendingReview()).toBeNull();
+    win.settleReview(first.rowId);
+    win.settleReview(second.rowId);
+    expect(win.claimPendingReview()).toBeNull();
   });
 
   test('a turn with no follow-up coming joins the window but never waits for one', () => {
@@ -88,18 +97,19 @@ describe('SessionWindow — the pending outcome review', () => {
     // follow-up can grade it, so it must not displace the turn that IS waiting.
     win.append(aTurn(1, { origin: 'programmatic' }), { awaitsFollowup: false, now: 2 });
     expect(win.size()).toBe(2);
-    expect(win.takePendingReview()).toEqual(aTurn(0));
+    expect(win.claimPendingReview()!.turn).toEqual(aTurn(0));
   });
 
   test('a settled turn is dropped — the table holds the window plus one pending review', () => {
     const { sql, execRaw } = createTestSql();
-    initSessionWindowTable(execRaw);
-    const win = createSessionWindowStore(sql);
+    initCompletedTurnTable(execRaw, sql);
+    const win = createCompletedTurnStore(sql);
     for (let i = 0; i < 4; i++) {
       win.append(aTurn(i), { awaitsFollowup: true, now: i });
       win.claim()!.settle();
-      win.takePendingReview();
+      const p = win.claimPendingReview();
+      if (p) win.settleReview(p.rowId);
     }
-    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM session_window`[0]?.n).toBe(0);
+    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n).toBe(0);
   });
 });

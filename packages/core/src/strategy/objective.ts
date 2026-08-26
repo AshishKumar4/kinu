@@ -671,12 +671,11 @@ export interface ScalarObjective {
  * configuration, i.e. the sole technique that earns the axis value. GEPA's front is
  * over TASK INSTANCES under ONE metric: arXiv:2507.19457 Algorithm 2 line 4 is
  * `s*[i] <- max_k S_P[k][i]` with `i` indexing instances, and *The objective*
- * defines a single metric. Our own implementation says the same thing and is the
- * first-hand proof:
- * `gepa_pareto_membership` is keyed `(run_id, instance_id, candidate_id)` with ONE
- * `score` (evolution/gepa/persistence.ts:89-95), `scores_json` is
- * `Map<instanceId, number>` (:23), and `computeParetoFront(pool, instanceIds)`
- * comments "For each instance, find the max score" (gepa/pareto.ts:39).
+ * defines a single metric. Our own implementation says the same thing and is
+ * the first-hand proof — the stored per-instance score maps:
+ * `scores_json` is `Map<instanceId, number>` (evolution/gepa/persistence.ts),
+ * and `computeParetoFront(pool, instanceIds)` comments "For each instance,
+ * find the max score" (gepa/pareto.ts:39).
  *
  * The spec had the right reading elsewhere and disagreed with itself: *What the
  * engine refuses outright* already said `advance:'pareto'` needs a gradient ACROSS

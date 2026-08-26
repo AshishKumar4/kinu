@@ -15,14 +15,12 @@ import { createTestRuntime, createMockSession, makeSql, captureConsole } from '.
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 function initTables(rt: AgentRuntime): void {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftScoreTables(rt.storage.execRaw);
   initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
 }
 
@@ -141,7 +139,6 @@ describe('MCTS per-iteration checkpoint logging', () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
     const { stdout, stderr } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1 }),
     );

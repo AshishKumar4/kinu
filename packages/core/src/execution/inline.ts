@@ -25,7 +25,6 @@ import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
 import { KinuError, refusalOf, toKinuError } from '../obs/index';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
-import { seedCraftScore } from '../craft/in-episode';
 import { createView, deleteView, viewSlug } from '../views/store';
 import { VIEW_DATA_SOURCES } from '../views/sources';
 import { createFileDispatcher } from '../tools/file-tool';
@@ -67,7 +66,7 @@ export interface InlineExecutorDeps {
    *  runs inside the Worker/process and declares none unless the host measured
    *  one (the CLI passes its own cgroup's). */
   resourceLimits?: ResourceLimits;
-  /** Optional — used to look up craft_scores for listTools(). Falls back to 0.7 if missing. */
+  /** Optional — used to look up crafted-tool quality columns for listTools(). */
   sql?: SqlExecutor;
   /**
    * Optional mid-turn notification — fires synchronously from workspace.createTool
@@ -280,16 +279,15 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // Return a real array so LLM code like `const tools = await workspace.listTools(); tools.filter(...)` works.
         // Previous implementation returned a joined markdown string and broke .filter/.map.
         const crafted = craftStore.list();
-        // Pull EMA scores; default to 0.7 when unscored. `craft_scores` is part
-        // of the one workspace schema (identity/workspace-schema.ts) and the
-        // evolution engine's constructor re-ensures it, so a read that fails is
-        // a broken database, not a workspace that has not scored anything yet.
+        // Pull quality scores. The columns live on the crafted_tools row the
+        // store just wrote (identity/workspace-schema.ts ensures the shape),
+        // so a read that fails is a broken database, not an unscored tool.
         const scoreByName = new Map<string, number>();
         if (sql) {
-          const rows = sql<{ tool_name: string; score: number }>`
-            SELECT tool_name, score FROM craft_scores
+          const rows = sql<{ name: string; score: number }>`
+            SELECT name, score FROM crafted_tools
           `;
-          for (const r of rows) scoreByName.set(r.tool_name, r.score);
+          for (const r of rows) scoreByName.set(r.name, r.score);
         }
         return crafted.map(t => ({
           name: t.name,
@@ -379,11 +377,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             scope: 'local',
             params: null,
           });
-          // The tool is born with a neutral prior, so the decay + injection
-          // floor can see it at all: an unscored tool is exempt from the
-          // filter forever, which is what kept a tool crafted here from ever
-          // being retired no matter how it behaved.
-          if (sql) seedCraftScore(sql, toolName);
+          // The column defaults seed the neutral prior inside the same INSERT,
+          // so the decay + injection floor can see the new tool at all — one
+          // statement, no second write to race it.
           // Optional eager notification; PreambleCraftedExecutor reads
           // craftStore.list() live, so CF leaves this as a no-op.
           onToolRegistered?.({ name: toolName, description: desc, code: codeStr });

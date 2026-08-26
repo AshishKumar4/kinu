@@ -11,7 +11,6 @@ import { wilsonInterval } from '../src/utils/stats';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
 
 function setup() {
   const db = new Database(':memory:');
@@ -149,7 +148,6 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     });
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
     const engine = new EvolutionEngine(rt, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
@@ -172,7 +170,6 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
     });
     initSearchTables(rt.storage.execRaw, rt.storage.sql);
     initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-    initCraftScoreTables(rt.storage.execRaw);
 
     const engine = new EvolutionEngine(rt, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,

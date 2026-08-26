@@ -17,7 +17,6 @@ import { describe, test, expect } from 'bun:test';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
-import { initCraftScoreTables } from '../src/craft/schemas';
 import type { MCTSProgressEvent } from '../src/types/mcts';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime, createMockSession } from './helpers';
@@ -81,5 +80,4 @@ describe('runMCTS reports progress while the search runs', () => {
 function initTables(rt: AgentRuntime) {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initCraftScoreTables(rt.storage.execRaw);
 }

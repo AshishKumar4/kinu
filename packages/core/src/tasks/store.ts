@@ -13,6 +13,7 @@
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import * as v from 'valibot';
+import type { ActiveRoster } from '../prompting/volatile-context';
 
 export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -156,17 +157,30 @@ export class TaskListStore {
     return nest(this.rows(limit));
   }
 
-  /** Only the items still to be done, in write order — the live-context roster.
-   *  A parent is included when it or any of its subtasks is still open, so a
-   *  subtask never renders orphaned from the task it belongs to. */
-  listOpen(limit = 200): AgentTaskTree[] {
-    const trees = nest(this.rows(limit));
-    const open: AgentTaskTree[] = [];
+  /** Only the items still to be done, in write order — the live-context
+   *  roster. A parent is included when it or any of its subtasks is still
+   *  open, so a subtask never renders orphaned from the task it belongs to.
+   *
+   *  OPEN items are selected BEFORE the bound: `limit` bounds only the
+   *  returned page, while `total` counts every flattened open row — so an
+   *  open task behind hundreds of closed siblings is still visible, and the
+   *  elision a renderer states from `total` is the truth. */
+  listOpen(limit = 200): ActiveRoster<AgentTaskTree> {
+    const trees = nest(this.rows());
+    const items: AgentTaskTree[] = [];
+    let rowsShown = 0;
+    let total = 0;
     for (const tree of trees) {
       const subtasks = tree.subtasks.filter((t) => OPEN_STATUSES.has(t.status));
-      if (OPEN_STATUSES.has(tree.status) || subtasks.length > 0) open.push({ ...tree, subtasks });
+      if (!OPEN_STATUSES.has(tree.status) && subtasks.length === 0) continue;
+      const open = { ...tree, subtasks };
+      total += 1 + subtasks.length;
+      if (rowsShown < limit) {
+        items.push(open);
+        rowsShown += 1 + subtasks.length;
+      }
     }
-    return open;
+    return { items, total };
   }
 
   /** How many items the list holds in total — what a capped read elided. */
@@ -175,10 +189,13 @@ export class TaskListStore {
     return rows[0]?.n ?? 0;
   }
 
-  private rows(limit: number): AgentTask[] {
+  /** Write order, newest last. `limit` is a transport bound (-1 = whole list);
+   *  `listOpen` reads unbounded so its filter runs before any bound. */
+  private rows(limit = -1): AgentTask[] {
     return this.sql<Row>`SELECT id, parent_id, title, status, created_at, updated_at
       FROM agent_tasks ORDER BY seq ASC LIMIT ${limit}`.map(toTask);
   }
+
 
   private nextSeq(): number {
     const rows = this.sql<{ n: number | null }>`SELECT MAX(seq) AS n FROM agent_tasks`;

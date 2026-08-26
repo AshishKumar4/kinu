@@ -95,24 +95,27 @@ export async function upsertCraftedTool(
   const { conflicting } = checkConflictsBeforeAdding(rt, candidate);
 
   if (conflicting.length > 0) {
-    // Update existing tool if new code scores significantly better
+    // Replace the existing tool only if the new code scores significantly
+    // better. ONE statement: content and quality move together, so a half-
+    // written tool (new body, stale score — or the reverse) is impossible.
     const existingScore = rt.storage.sql<{ score: number }>`
-      SELECT score FROM craft_scores WHERE tool_name = ${conflicting[0]!}
-    `[0];
-    if (!existingScore || candidate.score > existingScore.score + 0.1) {
-      rt.craftStore.update(conflicting[0]!, {
-        code: candidate.code,
-        description: candidate.description,
-        params: candidate.params,
-      });
+      SELECT score FROM crafted_tools WHERE name = ${conflicting[0]!}
+    `[0]?.score ?? 0;
+    if (candidate.score > existingScore + 0.1) {
       void rt.storage.sql`
-        UPDATE craft_scores SET score = ${candidate.score}, last_used_at = ${nowMs()}
-        WHERE tool_name = ${conflicting[0]!}
+        UPDATE crafted_tools
+        SET code = ${candidate.code}, description = ${candidate.description},
+            params = ${candidate.params == null ? null : JSON.stringify(candidate.params)},
+            updated_at = ${nowMs()}, score = ${candidate.score}, last_used_at = ${nowMs()}
+        WHERE name = ${conflicting[0]!}
       `;
     }
     return { accepted: true };
   }
 
+  // Creation seeds the neutral prior through the column defaults inside the
+  // store's own INSERT — one statement, no second write to race it. The
+  // extraction's own score lands with the first real observation.
   rt.craftStore.create({
     name: candidate.name,
     description: candidate.description,
@@ -120,10 +123,6 @@ export async function upsertCraftedTool(
     code: candidate.code,
     scope: 'local',
   });
-  void rt.storage.sql`
-    INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
-    VALUES (${candidate.name}, ${candidate.score}, 0, ${nowMs()})
-  `;
   return { accepted: true };
 }
 

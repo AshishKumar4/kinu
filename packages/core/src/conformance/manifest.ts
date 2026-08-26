@@ -179,7 +179,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     workspace_identity: EVERYWHERE,
     messages: EVERYWHERE,
     crafted_tools: EVERYWHERE,
-    craft_scores: EVERYWHERE,
     search_nodes: EVERYWHERE,
     fibers: EVERYWHERE,
     evolution_events: EVERYWHERE,
@@ -273,7 +272,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ── gepa ──
     gepa_runs: EVERYWHERE,
     gepa_candidates: EVERYWHERE,
-    gepa_pareto_membership: EVERYWHERE,
 
     // ── evolved prompt sections ──
     // The promoted rows are read by the prompt builder on every turn, on every
@@ -386,8 +384,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     crafted_tools_fts: EVERYWHERE,
 
     // ── core evolution stores created at engine/session construction ──
-    session_window: EVERYWHERE,
-    turn_review_queue: EVERYWHERE,
+    completed_turns: EVERYWHERE,
     replay_evals: EVERYWHERE,
     mission_budget: EVERYWHERE,
 

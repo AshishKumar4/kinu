@@ -27,13 +27,6 @@
  *     iteration         INTEGER (0 = seed)
  *     accepted          INTEGER (0/1; whether it entered the pool)
  *
- *   gepa_pareto_membership
- *     run_id            TEXT
- *     instance_id       TEXT
- *     candidate_id      TEXT
- *     score             REAL
- *     PK (run_id, instance_id, candidate_id)
- *
  * Idempotent inits via CREATE TABLE IF NOT EXISTS.
  */
 
@@ -46,7 +39,7 @@ import {
 } from './pareto';
 import { DEFAULT_GEPA_BUDGET } from './types';
 import type {
-  EvalInstance, GepaBudget, GepaCandidate, GepaResult, GepaIterationState,
+  GepaBudget, GepaCandidate, GepaResult, GepaIterationState,
 } from './types';
 
 const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
@@ -87,13 +80,6 @@ export function initGepaTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_aggregate
            ON gepa_candidates(run_id, aggregate DESC)`);
 
-  execRaw(`CREATE TABLE IF NOT EXISTS gepa_pareto_membership (
-    run_id        TEXT NOT NULL,
-    instance_id   TEXT NOT NULL,
-    candidate_id  TEXT NOT NULL,
-    score         REAL NOT NULL,
-    PRIMARY KEY (run_id, instance_id, candidate_id)
-  )`);
 }
 
 /** Start a new run row and return its id. Accepts a partial budget (same as
@@ -139,28 +125,6 @@ export function persistGepaCandidate(
                 ${args.iteration}, ${args.accepted ? 1 : 0})`;
 }
 
-/** Replace the Pareto-membership snapshot for the current state. Wipes the
- *  prior rows for this run + inserts fresh ones; cheap because pool is
- *  typically tens of candidates. */
-export function persistGepaParetoSnapshot(
-  sql: SqlExecutor,
-  args: {
-    runId: string;
-    pool: ReadonlyArray<GepaCandidate>;
-    instanceIds: ReadonlyArray<string>;
-  },
-): void {
-  void sql`DELETE FROM gepa_pareto_membership WHERE run_id = ${args.runId}`;
-  const { perInstanceBest } = computeParetoFront(args.pool, args.instanceIds);
-  for (const [instanceId, bests] of perInstanceBest.entries()) {
-    for (const c of bests) {
-      const score = c.scores.get(instanceId) ?? 0;
-      void sql`INSERT OR REPLACE INTO gepa_pareto_membership
-            (run_id, instance_id, candidate_id, score)
-            VALUES (${args.runId}, ${instanceId}, ${c.id}, ${score})`;
-    }
-  }
-}
 
 /** Update counters mid-run so a hibernating DO can resume. */
 export function updateGepaRunCounters(
@@ -287,19 +251,18 @@ export function loadGepaCandidates(
   });
 }
 
-/** Build an onIteration hook that persists every state snapshot. The hook
- *  inserts each newly-accepted candidate, refreshes the Pareto snapshot,
- *  and updates run counters. */
-export function makePersistingHook<I, E>(args: {
+/** Build an onIteration hook that persists every accepted candidate and the
+ *  run counters. The Pareto front is NOT persisted: it is derived at read time
+ *  from the stored per-instance scores (`loadGepaParetoFront`), so there is no
+ *  membership state to keep in step with the candidate pool. */
+export function makePersistingHook(args: {
   sql: SqlExecutor;
   runId: string;
-  evalSet: ReadonlyArray<EvalInstance<I, E>>;
   /** Set of candidate ids already persisted in this hook lifetime so we
    *  don't double-insert. The seed is persisted via persistGepaCandidate
    *  separately before the loop starts; pre-populate that id here. */
   persisted: Set<string>;
 }): (state: GepaIterationState) => Promise<void> {
-  const instanceIds = args.evalSet.map(i => i.id);
   return async (state) => {
     for (const cand of state.pool) {
       if (args.persisted.has(cand.id)) continue;
@@ -307,19 +270,58 @@ export function makePersistingHook<I, E>(args: {
         runId: args.runId,
         candidate: cand,
         iteration: state.iteration,
-        accepted: state.accepted,
+        accepted: true,
       });
       args.persisted.add(cand.id);
     }
-    persistGepaParetoSnapshot(args.sql, {
-      runId: args.runId,
-      pool: state.pool,
-      instanceIds,
-    });
     updateGepaRunCounters(args.sql, {
       runId: args.runId,
       metricCalls: state.metricCallsUsed,
       iterations: state.iteration + 1,
     });
   };
+}
+
+/** One row of the Pareto front, computed from the candidates' own score
+ *  maps — there is no persisted membership state to keep in step. */
+export interface GepaParetoEntry {
+  readonly candidateId: string;
+  readonly instanceId: string;
+  readonly score: number;
+}
+
+/**
+ * The run's per-instance Pareto front, DERIVED from accepted candidates.
+ *
+ * Instance ids come from the stored score keys themselves, so a run is fully
+ * described by `gepa_candidates` and nothing else. Rejected candidates are
+ * excluded — they never entered the pool the engine maintained its front over.
+ */
+export function loadGepaParetoFront(sql: SqlExecutor, runId: string): GepaParetoEntry[] {
+  const rows = sql<{ id: string; scores_json: string }>`
+    SELECT id, scores_json FROM gepa_candidates
+    WHERE run_id = ${runId} AND accepted = 1`;
+  if (rows.length === 0) return [];
+  const pool = rows.map((r): GepaCandidate => {
+    const scoresObj = v.parse(ScoreMapSchema, JSON.parse(r.scores_json));
+    return {
+      id: r.id,
+      parentId: null,
+      source: '',
+      scores: new Map(Object.entries(scoresObj)),
+      feedback: new Map(),
+      aggregateScore: 0,
+      createdAt: 0,
+    };
+  });
+  const instanceIds = [...new Set(pool.flatMap((c) => [...c.scores.keys()]))];
+  const { front } = computeParetoFront(pool, instanceIds);
+  const entries: GepaParetoEntry[] = [];
+  for (const candidate of front) {
+    for (const [instanceId, score] of candidate.scores) {
+      entries.push({ candidateId: candidate.id, instanceId, score });
+    }
+  }
+  return entries.sort((a, b) =>
+    a.instanceId.localeCompare(b.instanceId) || a.candidateId.localeCompare(b.candidateId));
 }

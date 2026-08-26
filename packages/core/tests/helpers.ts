@@ -27,6 +27,7 @@ import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
 import { createWorkspace, nextWorkspaceGeneration } from '../src/vfs/nimbus-workspace';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
 
 /** One in-memory workspace database with the three SQL handles onto it. */
@@ -88,10 +89,14 @@ export function makeSql(db: Database): SqlExecutor {
     const bound: SQLQueryBindings[] = values.map((value) =>
       value instanceof ArrayBuffer ? new Uint8Array(value) : value);
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
+    // DELETE … RETURNING is a write that yields rows, exactly as the
+    // production executors answer it (agent-utils craft store spends this).
     const stmt = db.prepare<T, SQLQueryBindings[]>(query);
-    if (isRead) return stmt.all(...bound);
-    stmt.run(...bound);
-    return [];
+    if (!isRead && !/\bRETURNING\b/i.test(query)) {
+      stmt.run(...bound);
+      return [];
+    }
+    return stmt.all(...bound);
   };
 }
 
@@ -415,13 +420,7 @@ export function createTestRuntime(opts?: {
   const identity: Identity = {
     id: 'test-agent-id',
     name: 'test-agent',
-    scaffold: {
-      path: 'scaffold/agent.js',
-      exists: () => vfs.exists('scaffold/agent.js'),
-      read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
-      write: (code) => vfs.writeFile('scaffold/agent.js', code),
-      version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
-    },
+    scaffold: createScaffoldSurface({ vfs, sql, path: 'scaffold/agent.js' }),
   };
 
   const mockBranch: BranchHandle = {

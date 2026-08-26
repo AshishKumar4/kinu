@@ -3,7 +3,8 @@
  * a surface makes before it can show anything.
  *
  * All three are folds over storage the agent already owns (`workspace_identity`,
- * SOUL.md, the message tables, `craft_scores` and the CraftStore), which is why
+ * SOUL.md, the message tables, the crafted_tools quality columns and the
+ * CraftStore), which is why
  * none of them is backend-shaped: what a workspace IS does not depend on where
  * it runs.
  */
@@ -276,7 +277,7 @@ function chronological(
 export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
   const crafted = craftStore.list().map((t) => {
     const scoreRow = sql<{ score: number; uses: number }>`
-      SELECT score, uses FROM craft_scores WHERE tool_name = ${t.name} LIMIT 1`;
+      SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
     return {
       name: t.name, description: t.description, scope: t.scope,
       qualityScore: scoreRow[0]?.score ?? 0.5,

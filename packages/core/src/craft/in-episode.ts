@@ -270,22 +270,6 @@ export interface CraftLedger {
   observe(names: readonly string[], quality: number): readonly string[];
 }
 
-/**
- * Give a freshly crafted tool its neutral prior, at the moment it is created.
- *
- * Without a row a tool is exempt from the injection filter FOREVER (an
- * unscored tool passes by design, so a new one gets a chance to earn a score),
- * which meant the agent's own `workspace.createTool` path produced tools that
- * could never decay and could never be retired however badly they behaved.
- * `OR IGNORE` because an upsert of an existing tool must never wipe what that
- * tool has earned. Bookkeeping the store owes itself, so it is unconditional
- * — it is not scored, and nothing about it is an evolution decision.
- */
-export function seedCraftScore(sql: SqlExecutor, name: string, now = nowMs()): void {
-  void sql`INSERT OR IGNORE INTO craft_scores (tool_name, score, uses, last_used_at)
-      VALUES (${name}, ${CRAFT_NEUTRAL_PRIOR}, 0, ${now})`;
-}
-
 /** Structural deps — deliberately not `AgentRuntime`: this module is a leaf
  *  and the ledger needs exactly two things. */
 export interface CraftLedgerDeps {

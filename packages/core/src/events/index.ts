@@ -13,6 +13,7 @@ export type {
   TurnSteeringRecord,
   TurnSteeringTrigger,
   CraftCycleRecord,
+  ApprovalConsumedRecord,
   ExecutionRecoveryRecord,
   StepCost,
 } from './types';

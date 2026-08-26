@@ -15,7 +15,7 @@ import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-  initSearchTables, initScaffoldTables, initCraftScoreTables,
+  initSearchTables, initScaffoldTables, initCraftQualityColumns,
 } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { openWorkspaceCLI, LocalAgentSession } from '../packages/cli-backend/src/index';
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
     const execRaw = (ddl: string): void => { db.exec(ddl); };
     initSearchTables(execRaw, sql);
     initScaffoldTables(execRaw, sql);
-    initCraftScoreTables(execRaw);
+    initCraftQualityColumns(execRaw, sql);
   }
 
   const { rt } = await openWorkspaceCLI(backendDb, input.dbPath, { llm: meteredLLM });

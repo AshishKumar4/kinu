@@ -104,7 +104,7 @@ function actionDescription(input: { value: unknown }): string {
 }
 
 const rosterEntry: SubordinateRosterEntry = {
-  name: 'researcher', displayName: 'Researcher', role: 'competitive research',
+  name: 'researcher',
   createdBy: 'orchestrator', status: 'idle', currentTask: null,
   createdAt: 1000, dismissedAt: null,
 };
@@ -557,7 +557,7 @@ describe('agents tool — subordinate actions', () => {
     });
     expect(result).toEqual({ name: 'scout', displayName: 'Researcher' });
     expect(calls[0].input).toEqual({
-      name: 'scout', role: 'researcher', mission: 'Map the landscape', mode: 'build',
+      name: 'scout', role: { kind: 'legacy', text: 'researcher' }, mission: 'Map the landscape', mode: 'build',
     });
   });
 

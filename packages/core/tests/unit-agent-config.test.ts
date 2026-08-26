@@ -307,7 +307,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setDisplayName('Ada'),
     (c) => c.setNameOrigin('user'),
     (c) => c.setRoleChangePolicy('approval'),
-    (c) => c.setActiveRoleId('auditor'),
+    (c) => c.setRoleSelection({ kind: 'catalog', roleId: 'auditor' }),
     (c) => c.setAssignedTier('deep'),
     (c) => c.setShellApprovalMode('allow_all'),
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'laptop' }]),
@@ -366,9 +366,9 @@ describe('AgentConfigStore — every key has a write path', () => {
 describe('the hired assignment a child reads at its turn boundary', () => {
   test('role and tier round-trip through the typed accessors', () => {
     const c = setup();
-    c.setActiveRoleId('auditor');
+    c.setRoleSelection({ kind: 'catalog', roleId: 'auditor' });
     c.setAssignedTier('deep');
-    expect(c.getActiveRoleId()).toBe('auditor');
+    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'auditor' });
     expect(c.getAssignedTier()).toBe('deep');
   });
 
@@ -377,7 +377,7 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     // resolver takes the role's own — the documented promise that a role's
     // default tier is re-derived from its roleId at the next boundary.
     const c = setup();
-    c.setActiveRoleId('auditor');
+    c.setRoleSelection({ kind: 'catalog', roleId: 'auditor' });
     expect(c.getAssignedTier()).toBeNull();
   });
 
@@ -398,11 +398,24 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     expect(c.getAssignedTier()).toBeNull();
   });
 
-  test('a role id the catalog cannot carry reads as general', () => {
-    // The reader's existing rule, restated against the new writer: the typed
-    // setter is what keeps an uninterpretable value out in the first place.
+  test('a malformed role_selection row reads as general, never as a crash', () => {
+    // The row is schema-parsed on every read: garbage reads as the default.
     const c = setup();
-    c.set(AGENT_CONFIG_KEYS.activeRoleId, 'not a role id');
-    expect(c.getActiveRoleId()).toBe('general');
+    c.set(AGENT_CONFIG_KEYS.roleSelection, 'not json');
+    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
+  });
+
+  test('exactly one role row persists after selection changes; legacy keys die on read', () => {
+    const c = setup();
+    c.set('active_role_id', 'auditor'); // a pre-union row
+    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'auditor' }); // backfilled
+    c.setRoleSelection({ kind: 'legacy', text: 'market researcher' });
+    c.setRoleSelection({ kind: 'catalog', roleId: 'researcher' });
+    const roleKeys = Object.keys(c.all()).filter((k) =>
+      k === AGENT_CONFIG_KEYS.roleSelection || k === 'active_role_id'
+      || k === 'role_legacy_text' || k === 'agent_stance');
+    expect(roleKeys).toEqual([AGENT_CONFIG_KEYS.roleSelection]);
+    expect(JSON.parse(c.get(AGENT_CONFIG_KEYS.roleSelection)!))
+      .toEqual({ kind: 'catalog', roleId: 'researcher' });
   });
 });

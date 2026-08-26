@@ -31,7 +31,6 @@ import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initShadowTables } from '../src/scaffold/shadow';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { initReplayTables } from '../src/evolution/replay';
-import { initCraftScoreTables } from '../src/craft/schemas';
 import { initFactsTable, createFactsStore, type FactsStore } from '../src/memory/facts';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import { initAllTables } from '../src/identity/schema';
@@ -63,7 +62,6 @@ function setup(): Harness {
   initShadowTables(execRaw);
   initTurnOutcomeTables(execRaw, rt.storage.sql);
   initReplayTables(execRaw, rt.storage.sql);
-  initCraftScoreTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
   return { rt, facts: createFactsStore(rt.storage.sql) };

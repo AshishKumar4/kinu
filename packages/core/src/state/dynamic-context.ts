@@ -22,6 +22,7 @@ import {
   type DynamicContext,
   type DynamicDelegate,
   type MissingCapability,
+  type ActiveRoster,
 } from '../prompting/volatile-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
@@ -47,7 +48,7 @@ export interface DynamicContextInput {
    * boundary instead of widening this shared contract with a one-sided field.
    */
   readonly subordinateDelegates?: () => readonly DynamicDelegate[];
-  readonly approvals?: () => readonly DynamicApproval[];
+  readonly approvals?: () => ActiveRoster<DynamicApproval>;
 }
 
 export function subordinateDelegatesOf(

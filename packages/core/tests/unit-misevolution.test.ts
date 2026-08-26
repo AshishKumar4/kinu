@@ -19,7 +19,6 @@ import {
   getPendingScaffold,
   initScaffoldTables,
   initShadowTables,
-  initCraftScoreTables,
   INITIAL_SCAFFOLD_SOURCE,
 } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -35,7 +34,6 @@ function setupScaffoldRt(): AgentRuntime {
   const { rt } = createTestRuntime();
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
   initShadowTables(rt.storage.execRaw);
-  initCraftScoreTables(rt.storage.execRaw);
   rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS evolution_events (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
     type TEXT NOT NULL, message TEXT NOT NULL, data TEXT,

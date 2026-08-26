@@ -401,3 +401,33 @@ describe('RunEventRecorder.spendByProducer', () => {
     expect(setup().recorder.spendByProducer().size).toBe(0);
   });
 });
+
+describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
+  test('counts completed non-plan turns after the boundary, across runs, and only those', () => {
+    const { recorder, sql } = setup();
+    // Twenty-five qualifying completed turns across twenty-five runs — the
+    // shape the cadence contract is stated over: one run fires exactly once.
+    // The first ten are backdated below an explicit boundary: emit stamps
+    // millisecond ISO times, so the two batches must not share one.
+    for (let i = 0; i < 10; i++) {
+      recorder.emit(`run-a${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
+    }
+    void sql`UPDATE run_events SET ts = '2026-01-01T00:00:00.000Z' WHERE run_id LIKE 'run-a%'`;
+    const boundary = '2026-06-01T00:00:00.000Z';
+    for (let i = 0; i < 15; i++) {
+      recorder.emit(`run-b${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
+    }
+    // A plan turn answers with a plan; it never ticks the improvement lane.
+    recorder.emit('run-plan', { type: 'turn_end', turnIndex: 0, workMode: 'plan' });
+    // A row from before the field existed carries no mode and counts nothing:
+    // the denominator starts at the cutover rather than inventing history.
+    recorder.emit('run-legacy', { type: 'turn_end', turnIndex: 0 });
+
+    expect(recorder.completedWorkTurns(null)).toBe(25);
+    expect(recorder.completedWorkTurns(boundary)).toBe(15);
+  });
+
+  test('an empty log has a zero denominator', () => {
+    expect(setup().recorder.completedWorkTurns(null)).toBe(0);
+  });
+});

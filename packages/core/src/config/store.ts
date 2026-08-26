@@ -7,6 +7,7 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import * as v from 'valibot';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import { isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
@@ -19,7 +20,45 @@ import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
 } from '../advisor/review';
 
+/**
+ * The ONE role authority for an agent: either a validated catalog id or the
+ * freeform line a pre-catalog hire carries. Never both — {@link AgentConfigStore.setRoleSelection}
+ * writes its side and blanks the other in one statement, so no reader can ever
+ * see two current roles.
+ */
+export type RoleSelection =
+  | { readonly kind: 'catalog'; readonly roleId: RoleId }
+  | { readonly kind: 'legacy'; readonly text: string };
+
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
+
+/** Encode a selection for its single `role_selection` storage row. */
+export function encodeRoleSelection(selection: RoleSelection): string {
+  return JSON.stringify(selection);
+}
+
+const RoleSelectionSchema = v.union([
+  v.object({
+    kind: v.literal('catalog'),
+    roleId: v.pipe(v.string(), v.transform((roleId) => (isValidRoleId(roleId) ? roleId : 'general'))),
+  }),
+  v.object({ kind: v.literal('legacy'), text: v.string() }),
+]);
+/** Schema-parse a stored row. Null when absent or malformed — callers decide
+ *  what an unreadable row means (the store backfills `general`). */
+export function parseRoleSelectionRow(value: string | null): RoleSelection | null {
+  if (value === null || value === '') return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(value);
+  } catch (error) {
+    // Unparseable text is absence for this purpose; anything else propagates.
+    if (!(error instanceof SyntaxError)) throw error;
+    return null;
+  }
+  const parsed = v.safeParse(RoleSelectionSchema, raw);
+  return parsed.success ? parsed.output : null;
+}
 
 /** Known config keys. Adding one here forces a typed getter/setter — that
  *  catches typos at compile time. */
@@ -32,21 +71,13 @@ export const AGENT_CONFIG_KEYS = {
   displayName: 'display_name',
   /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
   nameOrigin: 'name_origin',
-  /** The agent's durable active role (profiles/catalog.ts). The NEXT turn
-   *  resolves it; a running step keeps the profile it already resolved.
-   *  Unset reads as `general` — and a pre-profile `agent_stance` value
-   *  migrates into it on first read. */
-  activeRoleId: 'active_role_id',
+  /** The ONE role authority row: a JSON-encoded {@link RoleSelection}. */
+  roleSelection: 'role_selection',
   /** The owner's self-switch policy: 'allow' | 'approval' | 'locked'. */
   roleChangePolicy: 'role_change_policy',
-  /** The inference tier a PARENT pinned on this agent when it hired it.
-   *
-   *  Unset is the ordinary case and it is not a default: it means no tier was
-   *  pinned, so the turn boundary derives one from the role, which is the
-   *  documented promise that "a role's own default tier is re-derived by the
-   *  child at its next turn boundary from its roleId". A pin is what a hire
-   *  with an EXPLICIT tier leaves behind, because that choice is not
-   *  recoverable from the roleId. */
+  /** The inference tier a PARENT pinned on this agent when it hired it. Unset
+   *  means no pin, so the turn boundary derives one from the role. A pin is
+   *  what a hire with an EXPLICIT tier leaves behind. */
   assignedTier: 'assigned_tier',
   /** The shell-approval MODE the owner set (strict | allow_all | deny_all). */
   shellApprovalMode: 'shell_approval_mode',
@@ -134,22 +165,17 @@ export interface AgentConfigStore {
   setNameOrigin(origin: 'user' | 'auto'): void;
   /** Persist the visible title and its ownership in one SQLite statement. */
   setDisplayNameOrigin(name: string, origin: 'user' | 'auto'): void;
-  /** The agent's durable active role. Always answers: unset reads as
-   *  `general`, and a pre-profile `agent_stance` value migrates into the
-   *  role on first read (research→researcher, build→implementer,
-   *  audit→auditor). */
-  getActiveRoleId(): RoleId;
-  /** Set the agent's durable active role. The NEXT resolved turn reads it; a
-   *  running step keeps the profile it already resolved (profiles/
-   *  role-change.ts). This is the writer a hire uses to seed a child's role,
-   *  and the reason it is typed: the value must be a catalog role id, and a
-   *  generic `set` let an unvalidated string reach a reader that answers
-   *  `general` for anything it does not recognise — a dropped assignment that
-   *  looks exactly like an agent nobody assigned. */
-  setActiveRoleId(roleId: RoleId): void;
-  /** The tier a parent pinned at hire, or null when none was. Null is the
-   *  instruction to derive from the role rather than a tier of its own, so
-   *  callers pass `?? undefined` as the resolver's `explicitTier`. */
+  /** The agent's whole current role selection — the ONE role authority
+   *  (catalog id or legacy freeform line). Unset reads as the `general`
+   *  catalog role; a pre-profile `agent_stance` value migrates into it on
+   *  first read (research→researcher, build→implementer, audit→auditor).
+   *  The NEXT resolved turn reads it; a running step keeps its profile. */
+  getRoleSelection(): RoleSelection;
+  /** Replace the whole role selection: ONE row, schema-parsed on read.
+   *  A catalog selection REPLACES any legacy line and vice versa. */
+  setRoleSelection(selection: RoleSelection): void;
+  /** The tier a parent pinned at hire, or null when none was. Null derives
+   *  from the role at the child's turn boundary. */
   getAssignedTier(): TierId | null;
   /** Pin the hired tier, or clear it with null. */
   setAssignedTier(tier: TierId | null): void;
@@ -288,6 +314,37 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     void sql`INSERT INTO agent_config (key, value) VALUES (${key}, ${value})
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
   };
+  /**
+   * The role selection lives in ONE `role_selection` row encoding the tagged
+   * union (`{"kind":"catalog","roleId":…}` / `{"kind":"legacy","text":…}`),
+   * schema-parsed on every read. A row that predates this key is backfilled
+   * EXACTLY ONCE from the legacy `active_role_id`/`role_legacy_text`/stance
+   * rows, which are then deleted — no second copy survives the read.
+   */
+  const readRoleSelection = (): RoleSelection => {
+    const parsed = parseRoleSelectionRow(get(AGENT_CONFIG_KEYS.roleSelection));
+    if (parsed !== null) return parsed;
+    // One-time backfill from the pre-union rows, then they die.
+    const catalog = get('active_role_id');
+    const legacyText = get('role_legacy_text');
+    let migrated: RoleSelection | null = null;
+    if (catalog !== null && catalog !== '') migrated = { kind: 'catalog', roleId: isValidRoleId(catalog) ? catalog : 'general' };
+    else if (legacyText !== null && legacyText !== '') migrated = { kind: 'legacy', text: legacyText };
+    if (migrated === null) {
+      // Pre-profile stance maps onto the catalog role with the same intent.
+      const stance = get('agent_stance');
+      const mapped = stance === 'research' ? 'researcher'
+        : stance === 'build' ? 'implementer'
+        : stance === 'audit' ? 'auditor'
+        : stance === 'general' ? 'general'
+        : null;
+      migrated = { kind: 'catalog', roleId: mapped ?? 'general' };
+    }
+    void sql`INSERT INTO agent_config (key, value) VALUES (${AGENT_CONFIG_KEYS.roleSelection}, ${encodeRoleSelection(migrated)})
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+    void sql`DELETE FROM agent_config WHERE key IN (${'active_role_id'}, ${'role_legacy_text'}, ${'agent_stance'})`;
+    return migrated;
+  };
   /** Read-modify-write of a monotone counter, returning the new value. Shared by
    *  the two lifetime counters here — closed session windows, and isolate
    *  generations — because they differ only in their key and a byte-identical
@@ -353,23 +410,12 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `;
     },
-    getActiveRoleId(): RoleId {
-      const stored = get(AGENT_CONFIG_KEYS.activeRoleId);
-      if (stored !== null) return isValidRoleId(stored) ? stored : 'general';
-      // One-time stance→role migration: the pre-profile behavior selection
-      // maps onto the catalog role that carries the same intent, then the
-      // legacy key dies. Unknown values read as `general` and are dropped.
-      const legacy = get('agent_stance');
-      const mapped = legacy === 'research' ? 'researcher'
-        : legacy === 'build' ? 'implementer'
-        : legacy === 'audit' ? 'auditor'
-        : legacy === 'general' ? 'general'
-        : null;
-      if (mapped !== null) set(AGENT_CONFIG_KEYS.activeRoleId, mapped);
-      if (legacy !== null) void sql`DELETE FROM agent_config WHERE key = ${'agent_stance'}`;
-      return mapped ?? 'general';
+    getRoleSelection: readRoleSelection,
+    setRoleSelection(selection) {
+      void sql`INSERT INTO agent_config (key, value)
+        VALUES (${AGENT_CONFIG_KEYS.roleSelection}, ${encodeRoleSelection(selection)})
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
     },
-    setActiveRoleId(roleId) { set(AGENT_CONFIG_KEYS.activeRoleId, roleId); },
     getAssignedTier(): TierId | null {
       const stored = get(AGENT_CONFIG_KEYS.assignedTier);
       // An unrecognised value reads as unpinned rather than throwing: the

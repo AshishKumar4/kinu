@@ -41,8 +41,9 @@ import { modifyScaffold } from '../scaffold/modify';
 import { upsertCraftedTool } from '../craft/conflict';
 import { createFactsStore } from '../memory/facts';
 import { nanoid } from '../utils/nanoid';
-import { isoDate, nowMs } from '../utils/date';
+import { nowMs } from '../utils/date';
 import * as v from 'valibot';
+import { recordLesson } from '../evolution/outcomes';
 import {
   EXPERIENCE_KINDS,
   misevolutionSourceOf,
@@ -279,11 +280,16 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Prom
       return accepted.accepted;
     }
     case 'lesson': {
-      await rt.memory.append(
-        'memory/MEMORY.md',
-        `\n### Lesson (${isoDate()}, ${from})\n${row.payload.text}\n`,
-      );
-      await rt.memory.index('memory/MEMORY.md');
+      // The lesson joins THIS workspace's ledger as an already-corroborated
+      // row — the same store every other lesson lives in, so prompt weaving,
+      // memory search and re-publication all read it through one path. A
+      // MEMORY.md copy would be a second home for text the ledger owns.
+      recordLesson(rt.storage.sql, {
+        turnIds: [],
+        text: `${row.payload.text}\n(${from})`,
+        source: 'import',
+        status: 'corroborated',
+      });
       return true;
     }
     case 'fact': {

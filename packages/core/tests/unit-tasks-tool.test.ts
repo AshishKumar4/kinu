@@ -260,9 +260,9 @@ describe('tasks action=mode — the agent\'s durable role', () => {
 
   test('a role switch persists for the next prompt', async () => {
     const { tasks, rt, config } = roleSetup();
-    expect(config.getActiveRoleId()).toBe('general');
-    expect(await tasks({ action: 'mode', role: 'researcher' })).toEqual({ role: 'researcher' });
-    expect(config.getActiveRoleId()).toBe('researcher');
+    expect(config.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
+    expect(await tasks({ action: 'mode', role: 'researcher' })).toEqual({ role: 'researcher'});
+    expect(config.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'researcher' });
 
     const prompt = buildSystemPromptSync(rt, { roleSection: roleSection('researcher') });
     expect(prompt).toContain('Role: Researcher');
@@ -271,9 +271,9 @@ describe('tasks action=mode — the agent\'s durable role', () => {
 
   test('mode with no role reads the current role', async () => {
     const { tasks } = roleSetup();
-    expect(await tasks({ action: 'mode' })).toEqual({ role: 'general' });
+    expect(await tasks({ action: 'mode' })).toEqual({ role: 'general', roleSource: 'catalog' });
     await tasks({ action: 'mode', role: 'auditor' });
-    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
+    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor', roleSource: 'catalog' });
   });
 
   test('an unknown role is refused and changes nothing', async () => {
@@ -281,12 +281,12 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     await tasks({ action: 'mode', role: 'auditor' });
     expect(await tasks({ action: 'mode', role: 'yolo' }))
       .toMatchObject({ error: expect.stringContaining('unknown role yolo') });
-    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
+    expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor', roleSource: 'catalog' });
   });
 
   test('switching to implementer during a Plan turn does not lift the Plan bar', async () => {
     const { tasks, rt } = roleSetup();
-    expect(await tasks({ action: 'mode', role: 'implementer' })).toEqual({ role: 'implementer' });
+    expect(await tasks({ action: 'mode', role: 'implementer' })).toEqual({ role: 'implementer'});
 
     const plan = buildSystemPromptSync(rt, {
       workMode: 'plan',
