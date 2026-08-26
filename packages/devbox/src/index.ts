@@ -104,16 +104,28 @@ export type {
 
 export {
   DURABILITY_AWAIT_POINTS,
+  CapturedCutSchema,
+  DURABILITY_OPERATION_KINDS,
+  DURABILITY_OPERATION_PHASES,
   DURABLE_ROOT_FORMATS,
   ImmutableObjectRefSchema,
   ObjectReceiptSchema,
+  OperationRecordSchema,
+  PayloadGrantSchema,
+  RangeReadIntentSchema,
   RestoreWorkSchema,
   RootEnvelopeV1Schema,
+  UploadIntentSchema,
 } from './durability/contracts';
 export type {
   DurabilityAwaitPoint,
+  CapturedCut,
   ImmutableObjectRef,
   ObjectReceipt,
+  OperationRecord,
+  PayloadGrant,
+  RangeReadIntent,
   RestoreWork,
   RootEnvelopeV1,
+  UploadIntent,
 } from './durability/contracts';

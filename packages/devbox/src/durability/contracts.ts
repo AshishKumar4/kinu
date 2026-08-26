@@ -55,6 +55,70 @@ export const RestoreWorkSchema = v.strictObject({
 });
 export type RestoreWork = v.InferOutput<typeof RestoreWorkSchema>;
 
+export const UploadIntentSchema = v.strictObject({
+  operationId: IdSchema,
+  attemptId: IdSchema,
+  boxId: IdSchema,
+  epoch: DecimalSchema,
+  exactKey: ObjectKeySchema,
+  method: v.literal('PUT'),
+  byteLength: DecimalSchema,
+  sha256: Sha256Schema,
+  expiresAt: DecimalSchema,
+});
+export type UploadIntent = v.InferOutput<typeof UploadIntentSchema>;
+
+export const RangeReadIntentSchema = v.strictObject({
+  operationId: IdSchema,
+  attemptId: IdSchema,
+  boxId: IdSchema,
+  epoch: DecimalSchema,
+  exactKey: ObjectKeySchema,
+  method: v.literal('GET'),
+  byteOffset: DecimalSchema,
+  byteLength: DecimalSchema,
+  sha256: Sha256Schema,
+  expiresAt: DecimalSchema,
+});
+export type RangeReadIntent = v.InferOutput<typeof RangeReadIntentSchema>;
+
+export const PayloadGrantSchema = v.strictObject({
+  operationId: IdSchema,
+  attemptId: IdSchema,
+  expiresAt: DecimalSchema,
+  opaque: v.pipe(v.string(), v.minLength(1), v.maxLength(4096)),
+});
+export type PayloadGrant = v.InferOutput<typeof PayloadGrantSchema>;
+
+export const CapturedCutSchema = v.strictObject({
+  captureId: IdSchema,
+  epoch: DecimalSchema,
+  baseRevision: DecimalSchema,
+  cut: DecimalSchema,
+  stableStageHandle: IdSchema,
+  manifestSha256: Sha256Schema,
+});
+export type CapturedCut = v.InferOutput<typeof CapturedCutSchema>;
+
+export const DURABILITY_OPERATION_KINDS = [
+  'tick', 'barrier', 'gc', 'cleanup',
+] as const;
+export const DURABILITY_OPERATION_PHASES = [
+  'intent', 'transferring', 'sealed', 'published', 'acknowledged', 'failed',
+] as const;
+export const OperationRecordSchema = v.strictObject({
+  operationId: IdSchema,
+  kind: v.picklist(DURABILITY_OPERATION_KINDS),
+  epoch: DecimalSchema,
+  bootId: IdSchema,
+  baseRevision: DecimalSchema,
+  expectedParent: v.nullable(Sha256Schema),
+  phase: v.picklist(DURABILITY_OPERATION_PHASES),
+  currentAttemptId: v.nullable(IdSchema),
+  resultRootId: v.nullable(Sha256Schema),
+});
+export type OperationRecord = v.InferOutput<typeof OperationRecordSchema>;
+
 /** Every external await where reset/re-drive behavior must be fault-injected. */
 export const DURABILITY_AWAIT_POINTS = [
   'issue-payload-grant',

@@ -2,10 +2,15 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   DURABILITY_AWAIT_POINTS,
+  CapturedCutSchema,
   ImmutableObjectRefSchema,
   ObjectReceiptSchema,
+  OperationRecordSchema,
+  PayloadGrantSchema,
+  RangeReadIntentSchema,
   RestoreWorkSchema,
   RootEnvelopeV1Schema,
+  UploadIntentSchema,
 } from '../src/durability/contracts';
 
 const SHA = 'a'.repeat(64);
@@ -88,6 +93,65 @@ describe('durability v1 wire contracts', () => {
       mounts: 1,
       replayUnits: 0,
     });
+  });
+
+  test('payload grants bind one attempt, method, object, and expiry', () => {
+    const intent = v.parse(UploadIntentSchema, {
+      operationId: 'op-1',
+      attemptId: 'attempt-1',
+      boxId: 'box-1',
+      epoch: '7',
+      exactKey: object.key,
+      method: 'PUT',
+      byteLength: object.byteLength,
+      sha256: SHA,
+      expiresAt: '100',
+    });
+    expect(intent.method).toBe('PUT');
+    expect(v.parse(PayloadGrantSchema, {
+      operationId: intent.operationId,
+      attemptId: intent.attemptId,
+      expiresAt: intent.expiresAt,
+      opaque: 'provider-owned-capability',
+    }).opaque).toBe('provider-owned-capability');
+    expect(() => v.parse(UploadIntentSchema, { ...intent, method: 'GET' })).toThrow();
+  });
+
+  test('range reads and captures carry exact re-drive coordinates', () => {
+    expect(v.parse(RangeReadIntentSchema, {
+      operationId: 'op-1',
+      attemptId: 'attempt-2',
+      boxId: 'box-1',
+      epoch: '7',
+      exactKey: object.key,
+      method: 'GET',
+      byteOffset: '4096',
+      byteLength: '8192',
+      sha256: SHA,
+      expiresAt: '100',
+    }).byteOffset).toBe('4096');
+    expect(v.parse(CapturedCutSchema, {
+      captureId: 'capture-1',
+      epoch: '7',
+      baseRevision: '8',
+      cut: '42',
+      stableStageHandle: 'stage-1',
+      manifestSha256: SHA,
+    }).cut).toBe('42');
+  });
+
+  test('operation state is durable before its first external await', () => {
+    expect(v.parse(OperationRecordSchema, {
+      operationId: 'op-1',
+      kind: 'tick',
+      epoch: '7',
+      bootId: 'boot-1',
+      baseRevision: '8',
+      expectedParent: SHA,
+      phase: 'intent',
+      currentAttemptId: null,
+      resultRootId: null,
+    }).phase).toBe('intent');
   });
 
   test('the reset fault register has one unique name per external await', () => {
