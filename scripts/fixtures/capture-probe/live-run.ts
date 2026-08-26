@@ -106,7 +106,7 @@ export function renderWranglerConfig(plan: LiveRunPlan, repoRoot: string, worker
         class_name: 'CaptureProbeBox',
         image: plan.image,
         max_instances: 1,
-        instance_type: { vcpu: 2, memory_mib: 4096, disk_mb: 8000 },
+        instance_type: { vcpu: 2, memory_mib: 6144, disk_mb: 8000 },
       },
     ],
   };

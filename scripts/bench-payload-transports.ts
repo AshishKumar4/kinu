@@ -321,6 +321,7 @@ function planText(identity: RunIdentity, opts: Options): string {
 function configFor(identity: RunIdentity): string {
   return JSON.stringify({
     ...fixtureConfig(),
+    main: join(FIXTURE_DIR, 'worker.ts'),
     name: identity.workerName,
     r2_buckets: [{ binding: 'BACKUP_BUCKET', bucket_name: identity.bucketName }],
   }, null, 2);
@@ -373,96 +374,111 @@ async function main(): Promise<number> {
    * auth/network/API faults are cleanup failures.
    */
   const teardown = async (): Promise<void> => {
+    let inventoryProof: { readonly objects: number; readonly bytes: number } | undefined;
+    let inventoryFailure: string | undefined;
     if (origin !== null) {
       try {
         await call(origin, token, '/purge', PurgeReplySchema);
-        const inventory = await call(origin, token, '/inventory', InventoryReplySchema);
-        cleanup.push({
-          gate: 'bucket-state-empty',
-          ok: inventory.objects === 0 && inventory.bytes === 0,
-          detail: `inventory after purge: ${inventory.objects} object(s), ${inventory.bytes} byte(s)`,
-        });
+        inventoryProof = await call(origin, token, '/inventory', InventoryReplySchema);
       } catch (error) {
-        cleanup.push({
-          gate: 'bucket-state-empty',
-          ok: false,
-          detail: `fixture unreachable for purge/inventory: ${renderThrownChain({ cause: error })}`,
-        });
+        inventoryFailure = renderThrownChain({ cause: error });
       }
-    } else {
-      cleanup.push({ gate: 'bucket-state-empty', ok: false, detail: 'fixture never became reachable; bucket state could not be purged or inventoried' });
     }
 
-    // DESTROY the container twice while the Worker can still answer; preserve
-    // either failure. Explicit calls make the required release order obvious.
+    // A fixture that became reachable must destroy the runtime twice while its
+    // Worker still exists. Before a successful deploy there is no runtime/DO
+    // to destroy; account-side application absence is the cleanup oracle.
     const destroyFailures: string[] = [];
-    const destroyOnce = async (attempt: 1 | 2): Promise<void> => {
-      if (origin === null) {
-        destroyFailures.push(`destroy attempt ${attempt}: fixture unreachable`);
-        return;
+    if (origin !== null) {
+      for (const attempt of [1, 2] as const) {
+        try {
+          await call(origin, token, '/destroy', OkReplySchema);
+        } catch (error) {
+          destroyFailures.push(
+            `destroy attempt ${attempt}: ${renderThrownChain({ cause: error })}`,
+          );
+        }
       }
-      try {
-        await call(origin, token, '/destroy', OkReplySchema);
-      } catch (error) {
-        destroyFailures.push(
-          `destroy attempt ${attempt}: ${renderThrownChain({ cause: error })}`,
-        );
-      }
-    };
-    await destroyOnce(1);
-    await destroyOnce(2);
-    cleanup.push({
-      gate: 'container-application-absent',
-      ok: destroyFailures.length === 0,
-      detail: destroyFailures.length === 0
-        ? 'owner DO destroyed the container and cleared its durable state twice'
-        : destroyFailures.join('; '),
-    });
+    }
 
+    const bucketProofs: boolean[] = [];
+    const releasePasses: boolean[] = [];
     for (let pass = 1; pass <= 2; pass += 1) {
-      // APP: delete, then poll the ACCOUNT LISTING until absent.
       let appOk = false;
       let appDetail = '';
       try {
         deleteContainerApps(ROOT, [containerApp], log);
         for (let poll = 0; poll < 6; poll += 1) {
-          if (containerAppIds(ROOT, [containerApp], log).length === 0) { appOk = true; break; }
+          if (containerAppIds(ROOT, [containerApp], log).length === 0) {
+            appOk = true;
+            break;
+          }
           await delay(10_000);
         }
-        appDetail = appOk ? `listing confirms absent (pass ${pass})` : `still listed after 6 polls (pass ${pass})`;
+        appDetail = appOk
+          ? `listing confirms absent (pass ${pass})`
+          : `still listed after 6 polls (pass ${pass})`;
       } catch (error) {
         appDetail = `container listing failed (pass ${pass}): ${renderThrownChain({ cause: error })}`;
       }
-      cleanup.push({ gate: 'container-application-absent', ok: appOk, detail: appDetail });
+      const runtimeOk = destroyFailures.length === 0;
+      cleanup.push({
+        gate: 'container-application-absent',
+        ok: appOk && runtimeOk,
+        detail: runtimeOk ? appDetail : `${destroyFailures.join('; ')}; ${appDetail}`,
+      });
 
       const workerDelete = wrangler(['delete', '--name', identity.workerName, '--force'], true);
+      const workerOk = provesAbsence(workerDelete);
       cleanup.push({
         gate: 'fixture-worker-absent',
-        ok: provesAbsence(workerDelete),
+        ok: workerOk,
         detail: workerDelete.slice(0, 240),
       });
 
       const bucketDelete = wrangler(['r2', 'bucket', 'delete', identity.bucketName], true);
+      const bucketOk = provesAbsence(bucketDelete);
+      bucketProofs.push(bucketOk);
       cleanup.push({
         gate: 'bucket-deleted',
-        ok: provesAbsence(bucketDelete),
+        ok: bucketOk,
         detail: bucketDelete.slice(0, 240),
       });
 
-      rmSync(configPath, { force: true });
-      rmSync(ledgerPath, { force: true });
-      cleanup.push({ gate: 'local-material-cleared', ok: true, detail: `release pass ${pass} cleared generated config and durable ledger` });
+      let localOk = true;
+      let localDetail = `release pass ${pass} cleared generated config and durable ledger`;
+      try {
+        rmSync(configPath, { force: true });
+        rmSync(ledgerPath, { force: true });
+      } catch (error) {
+        localOk = false;
+        localDetail = `release pass ${pass}: ${renderThrownChain({ cause: error })}`;
+      }
+      cleanup.push({ gate: 'local-material-cleared', ok: localOk, detail: localDetail });
+      releasePasses.push(appOk && runtimeOk && workerOk && bucketOk && localOk);
     }
 
+    const inventoryEmpty = inventoryProof !== undefined
+      && inventoryProof.objects === 0
+      && inventoryProof.bytes === 0;
+    const deletionProvedEmpty = bucketProofs.length === 2 && bucketProofs.every(Boolean);
+    cleanup.push({
+      gate: 'bucket-state-empty',
+      ok: inventoryEmpty || deletionProvedEmpty,
+      detail: inventoryProof === undefined
+        ? `no live inventory; bucket deletion proof ${deletionProvedEmpty ? 'passed' : 'failed'}${inventoryFailure === undefined ? '' : ` (${inventoryFailure})`}`
+        : `inventory after purge: ${inventoryProof.objects} object(s), ${inventoryProof.bytes} byte(s)`,
+    });
     cleanup.push({
       gate: 'multipart-ledger-drained',
-      ok: true,
-      detail: 'this instrument issues single-PUT transfers only; no multipart upload id was ever created, so none can leak',
+      ok: deletionProvedEmpty,
+      detail: deletionProvedEmpty
+        ? 'single-PUT instrument created no multipart id and the run bucket was deleted twice'
+        : 'bucket deletion did not prove multipart state absent',
     });
-
     cleanup.push({
       gate: 'cleanup-replay-idempotent',
-      ok: true,
+      ok: releasePasses.length === 2 && releasePasses.every(Boolean),
       detail: 'second release pass re-ran every route and re-polled the account listing',
     });
   };

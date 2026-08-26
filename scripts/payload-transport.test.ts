@@ -151,6 +151,7 @@ describe('credentials never reach a command line or the artifact', () => {
     expect(section).not.toContain('R2_ACCESS_KEY_ID');
     expect(section).not.toContain('SECRET');
     expect(section).not.toContain('BENCH_TOKEN');
+    expect(section).toContain("main: join(FIXTURE_DIR, 'worker.ts')");
   });
 });
 
@@ -177,16 +178,16 @@ describe('disposable shutdown destroys and orders teardown', () => {
     expect(workerSource).toContain('await this.ctx.storage.deleteAll()');
   });
   test('teardown is destroy,destroy,app,worker,bucket,config twice', () => {
-    const firstDestroy = driverSource.indexOf('await destroyOnce(1)');
-    const secondDestroy = driverSource.indexOf('await destroyOnce(2)');
+    const destroyLoop = driverSource.indexOf('for (const attempt of [1, 2]');
+    const destroyCall = driverSource.indexOf("await call(origin, token, '/destroy'");
     const appDelete = driverSource.indexOf('deleteContainerApps(ROOT');
     const workerDelete = driverSource.indexOf("'delete', '--name'");
     const bucketDelete = driverSource.indexOf("'r2', 'bucket', 'delete'");
     const configClear = driverSource.indexOf('rmSync(configPath');
     const twoPassLoop = driverSource.indexOf('for (let pass = 1; pass <= 2; pass += 1)');
-    expect(firstDestroy).toBeGreaterThan(-1);
-    expect(secondDestroy).toBeGreaterThan(firstDestroy);
-    expect(twoPassLoop).toBeGreaterThan(secondDestroy);
+    expect(destroyLoop).toBeGreaterThan(-1);
+    expect(destroyCall).toBeGreaterThan(destroyLoop);
+    expect(twoPassLoop).toBeGreaterThan(destroyCall);
     // One loop body pins the complete release order; pass=1 and pass=2 run it.
     expect(appDelete).toBeGreaterThan(twoPassLoop);
     expect(workerDelete).toBeGreaterThan(appDelete);
@@ -198,6 +199,12 @@ describe('disposable shutdown destroys and orders teardown', () => {
     expect(driverSource).toContain('for (let poll = 0; poll < 6; poll += 1)');
     expect(driverSource).toContain('await delay(10_000)');
   });
+  test('a pre-deploy failure proves absence from account deletion, not live RPCs', () => {
+    expect(driverSource).not.toContain('fixture never became reachable');
+    expect(driverSource).toContain('bucketProofs.length === 2');
+    expect(driverSource).toContain('inventoryEmpty || deletionProvedEmpty');
+  });
+
   test('the gate list itself encodes C1..C7 in execution order', () => {
     expect(CLEANUP_GATES.map((gate) => `${gate.id}:${gate.name}`)).toEqual([
       'C1:multipart-ledger-drained',

@@ -73,7 +73,9 @@ export function accountId(repoRoot: string): string {
       + 'environment, so wrangler cannot pick an account non-interactively.',
     );
   }
-  return found[1]!;
+  const id = found[1];
+  if (id === undefined) throw new Error('account_id match contained no capture');
+  return id;
 }
 
 export interface WranglerOptions {
@@ -117,21 +119,29 @@ export function containerAppIds(
   repoRoot: string,
   names: readonly string[],
   log: (message: string) => void,
+  wrangle: typeof runWrangler = runWrangler,
 ): { id: string; name: string }[] {
-  const output = runWrangler(repoRoot, ['containers', 'list', '--json'], { allowFailure: true });
-  if (output.startsWith(WRANGLER_FAILED)) return [];
+  const output = wrangle(repoRoot, ['containers', 'list', '--json'], { allowFailure: true });
+  if (output.startsWith(WRANGLER_FAILED)) {
+    log(`container application listing failed: ${output.slice(0, 240)}`);
+    throw new Error('container application listing failed; absence is unproved');
+  }
   const start = output.indexOf('[');
-  if (start === -1) return [];
+  if (start === -1) {
+    log(`container application listing returned no JSON array: ${output.slice(0, 240)}`);
+    throw new Error('container application listing had no JSON array; absence is unproved');
+  }
   try {
     const apps = v.parse(ContainerAppListSchema, JSON.parse(output.slice(start)));
     return apps
       .filter((app): app is { id: string; name: string } =>
         app.id !== undefined && app.name !== undefined && names.includes(app.name))
       .map((app) => ({ id: app.id, name: app.name }));
-  } catch {
-    // A listing this driver cannot parse must not read as "nothing to clean up".
-    log('WARNING: could not parse `wrangler containers list --json`; check for a leaked application');
-    return [];
+  } catch (error) {
+    log('container application listing did not match its schema');
+    throw new Error('container application listing was invalid; absence is unproved', {
+      cause: error,
+    });
   }
 }
 

@@ -171,7 +171,10 @@ async function requestJson<T>(
   try {
     return { status: raw.status, parsed: v.parse(schema, JSON.parse(raw.text)) };
   } catch (error) {
-    throw new Error(`${path} did not return JSON: ${describeThrown({ cause: error })}`, { cause: error });
+    throw new Error(
+      `${path} (${raw.status}) did not return JSON: ${raw.text.slice(0, 300)}`,
+      { cause: error },
+    );
   }
 }
 
@@ -190,6 +193,42 @@ async function request<T>(
 async function exec(origin: string, token: string, command: string, timeoutMs: number): Promise<ExecResponse> {
   return request(origin, token, '/exec', { command, timeoutMs }, ExecResponseSchema);
 }
+async function awaitFixtureReady(origin: string, token: string): Promise<void> {
+  const deadline = Date.now() + 180_000;
+  let last = 'no response';
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(new URL('/health', origin), {
+        headers: { 'x-fuse-probe-token': token },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (response.status === 200) return;
+      last = `status ${response.status}`;
+    } catch (error) {
+      last = describeThrown({ cause: error });
+    }
+    await delay(2_000);
+  }
+  throw new Error(`fixture did not accept its token: ${last}`);
+}
+
+async function setupExec(
+  origin: string,
+  token: string,
+  command: string,
+): Promise<ExecResponse> {
+  let last = 'setup was not attempted';
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      return await exec(origin, token, command, 60_000);
+    } catch (error) {
+      last = describeThrown({ cause: error });
+      if (attempt < 4) await delay(attempt * 5_000);
+    }
+  }
+  throw new Error(`container setup failed after four attempts: ${last}`);
+}
+
 
 async function upload(origin: string, token: string, localName: string): Promise<void> {
   const content = await readFile(join(FIXTURE_DIR, localName));
@@ -456,11 +495,11 @@ export async function run(): Promise<FuseProbeArtifact> {
     deployment = await deploy(runId, token);
     publishTeardown(async () => { await teardown(deployment); });
     console.log(`fuse probe origin ${deployment.origin}`);
-    // The fixture deliberately has no GET readiness endpoint. A token-guarded
-    // exec is its first necessary operation, so it is also the authenticated
-    // readiness check — unlike a bare 401 it proves this run's secret reached
-    // this run's Worker.
-    await exec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe', 60_000);
+    // Prove the freshly deployed Worker accepts this run's token before any
+    // container call. A workers.dev hostname can still serve the old Worker
+    // while the new deployment propagates.
+    await awaitFixtureReady(deployment.origin, token);
+    await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
     // Identity before measurement: what this boot proved about its own image
     // and runtime is part of the run's immutable identity, and a boot that
     // cannot prove it must not cost minutes of probing on the wrong platform.

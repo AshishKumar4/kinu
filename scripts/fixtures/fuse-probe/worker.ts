@@ -127,6 +127,11 @@ export default {
     if (!isAuthorized(env.FUSE_PROBE_TOKEN, request.headers.get("x-fuse-probe-token"))) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
+    const pathname = new URL(request.url).pathname;
+    if (request.method === 'GET' && pathname === '/health') {
+      return Response.json({ ok: true });
+    }
+
 
     // getSandbox returns the typed FuseProbeBox; its RPC proxy serves the
     // public DO surface (including runIdentity) straight to handleProbeOp.
@@ -142,7 +147,7 @@ export default {
     }
 
     try {
-      return await handleProbeOp(new URL(request.url).pathname, sandbox, command);
+      return await handleProbeOp(pathname, sandbox, command);
     } catch (error) {
       return Response.json(
         { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },

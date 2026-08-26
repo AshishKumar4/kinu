@@ -40,6 +40,7 @@ describe('the ephemeral live probe run', () => {
     expect(rendered).toContain(PROBE_SANDBOX_IMAGE);
     expect(rendered).toContain('"new_sqlite_classes"');
     expect(rendered).toContain('"workers_dev": true');
+    expect(rendered).toContain('"memory_mib": 6144');
     // The bearer token travels through --var; a token in the file would be a
     // secret that outlives a crash.
     expect(rendered.includes(plan.token)).toBe(false);

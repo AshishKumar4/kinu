@@ -21,6 +21,7 @@ import {
 } from './bench-fuse-probe';
 
 const attemptId = 'fuse-attempt';
+const DRIVER_SOURCE = readFileSync(new URL('./bench-fuse-probe.ts', import.meta.url), 'utf8');
 
 function stage1(overrides: Partial<Stage1Report> = {}) {
   const base = {
@@ -213,13 +214,25 @@ test('FuseProbeBox wiring: super-first onStart proof, typed mismatch, disposable
   const superDestroy = indexOf('await super.destroy();');
   const storageClear = indexOf('storage.deleteAll()');
   expect(superDestroy).toBeLessThan(storageClear);
-  // The token guard answers before any dispatch reaches the sandbox.
+  // The token and health gates answer before body parsing or sandbox dispatch.
   const tokenGuard = indexOf('isAuthorized(env.FUSE_PROBE_TOKEN');
-  const dispatch = indexOf('handleProbeOp(new URL(request.url).pathname');
-  expect(tokenGuard).toBeGreaterThan(-1);
-  expect(dispatch).toBeGreaterThan(-1);
-  expect(tokenGuard).toBeLessThan(dispatch);
+  const health = indexOf("pathname === '/health'");
+  const bodyParse = indexOf('await request.json()');
+  const dispatch = indexOf('handleProbeOp(pathname');
+  expect(tokenGuard).toBeLessThan(health);
+  expect(health).toBeLessThan(bodyParse);
+  expect(bodyParse).toBeLessThan(dispatch);
 });
+test('driver waits for authenticated propagation before container setup', () => {
+  const readiness = DRIVER_SOURCE.indexOf('await awaitFixtureReady(deployment.origin, token)');
+  const setup = DRIVER_SOURCE.indexOf("await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe')");
+  const identity = DRIVER_SOURCE.indexOf("'/identity'");
+  expect(readiness).toBeGreaterThan(-1);
+  expect(setup).toBeGreaterThan(readiness);
+  expect(identity).toBeGreaterThan(setup);
+  expect(DRIVER_SOURCE).toContain('did not return JSON: ${raw.text.slice(0, 300)}');
+});
+
 
 test('the pure token gate refuses an unset secret or any other header value', () => {
   expect(isAuthorized(undefined, 'right')).toBe(false);
