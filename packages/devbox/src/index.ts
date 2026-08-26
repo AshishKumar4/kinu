@@ -101,3 +101,19 @@ export type {
   OverlayCasState,
   UpperSignature,
 } from './overlay-cas';
+
+export {
+  DURABILITY_AWAIT_POINTS,
+  DURABLE_ROOT_FORMATS,
+  ImmutableObjectRefSchema,
+  ObjectReceiptSchema,
+  RestoreWorkSchema,
+  RootEnvelopeV1Schema,
+} from './durability/contracts';
+export type {
+  DurabilityAwaitPoint,
+  ImmutableObjectRef,
+  ObjectReceipt,
+  RestoreWork,
+  RootEnvelopeV1,
+} from './durability/contracts';
