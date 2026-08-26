@@ -689,8 +689,21 @@ async function verify(
   add({
     name: 'the pre-stop write survived the recycle',
     pass: survived.stdout.includes(marker),
-    detail: survived.stdout.trim().slice(0, 80),
+    detail: `exit ${survived.exitCode}: ${survived.stdout.trim().slice(0, 80)} `
+      + `${survived.stderr.trim().slice(0, 80)}`.trim(),
   });
+  if (strategy === 'overlay-cas') {
+    const lowerSurvived = await box.exec(
+      `cat ${CAS_TREE_MOUNT}/verify-a.txt 2>/dev/null || echo MISSING`,
+    );
+    add({
+      name: 'the mounted tree lower exposes the pre-stop write',
+      pass: lowerSurvived.stdout.includes(marker),
+      detail: `exit ${lowerSurvived.exitCode}: ${lowerSurvived.stdout.trim().slice(0, 80)} `
+        + `${lowerSurvived.stderr.trim().slice(0, 80)}`.trim(),
+    });
+  }
+
 
   // Assertion three and four: a second write, a forced checkpoint, and the
   // object that checkpoint's byte count refers to, read from the store.
