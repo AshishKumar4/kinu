@@ -47,6 +47,7 @@ import {
 import {
   AGENTS_ACTION_FIELDS as ACTION_FIELDS,
   agentsActionFieldsFor,
+  agentsActionInputVariantsFor,
   dispatchAgentsAction,
 } from '../src/tools/agents-tool';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
@@ -633,6 +634,50 @@ describe('agents surface — one action-field source', () => {
       expect(peersOnly.has(field)).toBe(false);
     }
     for (const field of ['scope', 'topic', 'event_id']) expect(peersOnly.has(field)).toBe(true);
+  });
+
+  test('every dependency combination projects one native and codemode contract', () => {
+    const combinations: TestAgentsToolDeps[] = [
+      { fork: forkDeps() },
+      { team: makeTeam().deps },
+      { peers: makePeers().deps },
+      { team: makeTeam().deps, peers: makePeers().deps },
+      fullDeps(),
+    ];
+    for (const deps of combinations) {
+      const resolved = withBuildMode(deps);
+      const actions = agentsActionsFor(resolved);
+      const types = createAgentsCodemodeProvider(() => resolved).types ?? '';
+      const native = v.parse(ActionVariantSchemaContract, createAgentsTool(resolved).inputSchema);
+      const advertised = new Set(Object.keys(v.parse(
+        ToolSchemaContract,
+        createAgentsTool(resolved).inputSchema,
+      ).jsonSchema.properties));
+      const expectedAdvertised = new Set([
+        'action',
+        ...actions.flatMap(action => [...agentsActionFieldsFor(resolved, action)]),
+      ]);
+      expect(advertised).toEqual(expectedAdvertised);
+
+      for (const [at, action] of actions.entries()) {
+        const start = types.indexOf(`${action}(input:`);
+        const next = actions[at + 1];
+        const end = next === undefined ? types.indexOf('};', start) : types.indexOf(`${next}(input:`, start);
+        const memberFields = new Set(
+          [...types.slice(start, end).matchAll(/^\s{4}(\w+)/gm)].map(match => match[1]),
+        );
+        expect(memberFields).toEqual(new Set(agentsActionFieldsFor(resolved, action)));
+
+        const actualVariants = native.jsonSchema.oneOf
+          .filter(variant => variant.properties.action.const === action);
+        const expectedVariants = agentsActionInputVariantsFor(resolved, action);
+        expect(actualVariants.map(variant =>
+          variant.properties.scope === false ? false : variant.properties.scope.const))
+          .toEqual(expectedVariants.map(variant => variant.scope ?? false));
+        expect(actualVariants.map(variant => variant.required.slice(1)))
+          .toEqual(expectedVariants.map(variant => [...variant.required]));
+      }
+    }
   });
 
   test('the swarm member carries `name` — the drift that was measured', () => {
