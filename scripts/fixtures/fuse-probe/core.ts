@@ -253,8 +253,8 @@ export const INIT_FLAGS = {
 export const FUSE_PROTOCOL_MAJOR = 7;
 export const FUSE_PROTOCOL_MINOR_MAX = 38;
 
-/** struct fuse_attr — 84 bytes. */
-export const FUSE_ATTR_SIZE = 84;
+/** struct fuse_attr — 88 bytes. */
+export const FUSE_ATTR_SIZE = 88;
 
 export interface FuseAttrInput {
   ino: number;
@@ -264,7 +264,7 @@ export interface FuseAttrInput {
 }
 
 /** Layout: ino u64, size u64, blocks u64, atime u64, mtime u64, ctime u64,
- *  then nine u32s (three nsecs, mode, nlink, uid, gid, rdev, blksize). */
+ *  then ten u32s (three nsecs, mode, nlink, uid, gid, rdev, blksize, flags). */
 export function packFuseAttr(input: FuseAttrInput, into: Buffer, offset: number): void {
   const blocks = Math.ceil(input.size / 512);
   into.writeBigUInt64LE(BigInt(input.ino), offset);
@@ -282,29 +282,29 @@ export function packFuseAttr(input: FuseAttrInput, into: Buffer, offset: number)
   into.writeUInt32LE(0, offset + 72);
   into.writeUInt32LE(0, offset + 76);
   into.writeUInt32LE(4096, offset + 80);
+  into.writeUInt32LE(0, offset + 84);
 }
 
-/** struct fuse_entry_out: nodeid u64, generation u64, attr(84),
- *  entry_valid u64, attr_valid u64, entry_valid_nsec u32, attr_valid_nsec u32. */
-export const ENTRY_OUT_SIZE = 124;
+/** struct fuse_entry_out: nodeid u64, generation u64, entry_valid u64,
+ *  attr_valid u64, two validity nsecs u32, then attr(88). */
+export const ENTRY_OUT_SIZE = 128;
 
 export function packEntryOut(nodeid: number, attr: FuseAttrInput): Buffer {
   const buf = Buffer.alloc(ENTRY_OUT_SIZE);
   buf.writeBigUInt64LE(BigInt(nodeid), 0);
   buf.writeBigUInt64LE(0n, 8);
-  packFuseAttr(attr, buf, 16);
-  // Zero validity windows: this fs wants every lookup re-asked, which keeps
-  // the measurement honest about lookup cost and avoids stale-cache masking.
-  buf.writeBigUInt64LE(0n, 100);
-  buf.writeBigUInt64LE(0n, 108);
-  buf.writeUInt32LE(0, 116);
-  buf.writeUInt32LE(0, 120);
+  // Zero validity windows keep every lookup observable.
+  buf.writeBigUInt64LE(0n, 16);
+  buf.writeBigUInt64LE(0n, 24);
+  buf.writeUInt32LE(0, 32);
+  buf.writeUInt32LE(0, 36);
+  packFuseAttr(attr, buf, 40);
   return buf;
 }
 
-/** struct fuse_getattr_out: attr_valid u64, attr_valid_nsec u32, dummy u32,
- *  attr(84). */
-export const GETATTR_OUT_SIZE = 100;
+/** struct fuse_attr_out: attr_valid u64, attr_valid_nsec u32, dummy u32,
+ *  attr(88). */
+export const GETATTR_OUT_SIZE = 104;
 
 export function packGetattrOut(attr: FuseAttrInput): Buffer {
   const buf = Buffer.alloc(GETATTR_OUT_SIZE);
@@ -373,12 +373,15 @@ export function packInitOut(kernelMinor: number, kernelFlags: number, maxReadahe
   buf.writeUInt32LE(minor, 4);
   buf.writeUInt32LE(maxReadahead, 8);
   buf.writeUInt32LE(flags, 12);
-  buf.writeUInt32LE(0, 16); // max_background
-  buf.writeUInt32LE(0, 20); // congestion_threshold
-  buf.writeUInt32LE(1024 * 1024, 24); // max_write
-  buf.writeUInt32LE(1, 28); // time_gran
-  buf.writeUInt16LE(256, 32); // max_pages
-  buf.writeUInt16LE(0, 34); // map_alignment
+  buf.writeUInt16LE(0, 16); // max_background
+  buf.writeUInt16LE(0, 18); // congestion_threshold
+  buf.writeUInt32LE(1024 * 1024, 20); // max_write
+  buf.writeUInt32LE(1, 24); // time_gran
+  buf.writeUInt16LE(256, 28); // max_pages
+  buf.writeUInt16LE(0, 30); // map_alignment
+  buf.writeUInt32LE(0, 32); // flags2
+  buf.writeUInt32LE(0, 36); // max_stack_depth
+  buf.writeUInt16LE(0, 40); // request_timeout
   void kernelFlags;
   return buf;
 }

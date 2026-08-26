@@ -10,7 +10,7 @@ import {
   Stage2ReportSchema, SANDBOX_IMAGE, SANDBOX_IMAGE_VERSION, align8, buildRangeIntent,
   canonicalRange, classifyBootstrap, classifyMaterialization, classifyRun, handleProbeOp,
   imageMismatchVerdict, isAuthorized,
-  packDirent, packEntryOut, packOpenHow, packOutHeader, sha256Hex, verifyChunk,
+  packDirent, packEntryOut, packGetattrOut, packInitOut, packOpenHow, packOutHeader, sha256Hex, verifyChunk,
 } from './fixtures/fuse-probe/core';
 import type { ProbeBox, RunIdentity, Stage1Report, Stage2Report } from './fixtures/fuse-probe/core';
 import type { Deployment, TeardownHooks } from './bench-fuse-probe';
@@ -99,10 +99,25 @@ test('FUSE ABI packers preserve the kernel-required layouts and alignment', () =
   expect(dirent.toString('utf8', 24, 38)).toBe('range-file.bin');
 
   const entry = packEntryOut(12, { ino: 12, size: 4096, mode: 0o100755, nlink: 2 });
-  expect(entry.length).toBe(124);
+  expect(entry.length).toBe(128);
   expect(entry.readBigUInt64LE(0)).toBe(12n);
-  expect(entry.readUInt32LE(16 + 60)).toBe(0o100755);
-  expect(entry.readUInt32LE(16 + 64)).toBe(2);
+  expect(entry.readUInt32LE(40 + 60)).toBe(0o100755);
+  expect(entry.readUInt32LE(40 + 64)).toBe(2);
+
+  const getattr = packGetattrOut({ ino: 12, size: 4096, mode: 0o100755, nlink: 2 });
+  expect(getattr.length).toBe(104);
+  expect(getattr.readUInt32LE(16 + 60)).toBe(0o100755);
+
+  // linux/fuse.h `fuse_init_out`: the u16 fields at 16/18 and 28/30
+  // cannot be widened without shifting every negotiated limit.
+  const init = packInitOut(38, 0, 4096);
+  expect(init.length).toBe(64);
+  expect(init.readUInt16LE(16)).toBe(0);
+  expect(init.readUInt16LE(18)).toBe(0);
+  expect(init.readUInt32LE(20)).toBe(1024 * 1024);
+  expect(init.readUInt32LE(24)).toBe(1);
+  expect(init.readUInt16LE(28)).toBe(256);
+  expect(init.readUInt16LE(30)).toBe(0);
 
   const header = packOutHeader(64, 99n, -5);
   expect(header.readUInt32LE(0)).toBe(80);
