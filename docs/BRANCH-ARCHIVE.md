@@ -98,6 +98,60 @@ Untraced branches wait on an owner ruling.
 index, and 272 of 1,179 files at `df014c73`. Its work had landed:
 `packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1 and §A3.
 
+
+### The 2026-08-28 consolidation prune wave
+
+The integration landed on `consolidate/final-history` (`5d98f3973`), the
+gitignored valuables moved to the primary checkout, and every remaining
+worktree was pruned: 102 worktrees removed, 100 branches deleted, each tip
+tagged first. Dirty residue was exported per worktree to
+`~/Proteus-backups/worktree-residue/` as a tracked-diff patch plus an
+untracked-files tarball before removal.
+
+Novel-object counts against `consolidate/final-history` are dominated by the
+pre-reroot history every old branch carries (the baseline history is short
+after the two re-roots), so the decisive column is SOLE COPY, measured with
+the membership counter across all 239 refs on 2026-08-28. 69 of the 102 new
+tags carry zero sole-copy objects; the 33 that do are listed. No tag is safe
+to delete while its count is nonzero; re-measure after any tag deletion.
+
+| Tag | Branch (deleted) | Sole copy |
+|---|---|---|
+| `archive/landing-demos` | `motion/landing-demos` | 127 |
+| `archive/mcts-grounding` | `fix/mcts-grounding` | 85 |
+| `archive/landing-seam` | `scratch/landing-seam` | 61 |
+| `archive/exploration-depth` | `verify/exploration-depth` | 57 |
+| `archive/nimbus-long-process` | `fix/nimbus-long-process` | 47 |
+| `archive/stack-agnostic` | `fix/stack-agnostic` | 44 |
+| `archive/contradiction-sweep` | `docs/contradiction-sweep` | 43 |
+| `archive/fork-verb` | `cutover/fork-verb` | 39 |
+| `archive/swarm-node-hang` | `fix/swarm-node-hang` | 36 |
+| `archive/prompt-surface` | `audit/prompt-surface` | 34 |
+| `archive/test-quality` | `audit/test-quality` | 34 |
+| `archive/ui-polish-followup` | `fix/ui-polish-followup` | 32 |
+| `archive/numeric-bounds` | `audit/numeric-bounds` | 26 |
+| `archive/stale-and-citations` | `chore/stale-and-citations` | 26 |
+| `archive/platform-depth` | `test/platform-depth` | 24 |
+| `archive/full-families` | `evals/full-families` | 21 |
+| `archive/agent-class-dedup` | `refactor/agent-class-dedup` | 18 |
+| `archive/core-extraction-2` | `core-extraction-2` | 18 |
+| `archive/bench-polish` | `eval/bench-polish` | 16 |
+| `archive/swarm-live` | `eval/swarm-live` | 15 |
+| `archive/superseded-cleanup` | `docs/superseded-cleanup` | 15 |
+| `archive/cli-suite-red` | `fix/cli-suite-red` | 14 |
+| `archive/live-tier-proof` | `feat/live-tier-proof` | 13 |
+| `archive/provability` | `gate/provability` | 9 |
+| `archive/vfs-node-facet-wiring` | `feat/vfs-node-facet-wiring` | 7 |
+| `archive/behaviour-assertions` | `eval/behaviour-assertions` | 5 |
+| `archive/landing-no-proof` | `polish/landing-no-proof` | 4 |
+| `archive/lean-citation-order` | `fix/lean-citation-order` | 4 |
+| `archive/swarm-run-read-model` | `fix/swarm-run-read-model` | 4 |
+| `archive/three-kinds-one-suite` | `test/three-kinds-one-suite` | 3 |
+| `archive/tq-tui-behaviour` | `audit/tq-tui-behaviour` | 3 |
+| `archive/archive-store` | `archive-store` | 3 |
+| `archive/vfs-mounts` | `feat/vfs-mounts` | 1 |
+
+The full 102-row manifest with head SHAs: `~/Proteus-backups/worktree-residue/prune-manifest-20260828.json`.
 ## Reproduce the test
 
 `git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none
