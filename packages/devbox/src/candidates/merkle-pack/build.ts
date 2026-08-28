@@ -514,9 +514,36 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
       loc.length,
     ])
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  // THE INDEX DECLARES EVERY PACK ITS OWN EXTENTS NAME, and not one pack less.
+  //
+  // `e` above carries a location for every reachable chunk and node, and an
+  // incremental generation's locations point INTO ITS PARENT'S packs. Listing
+  // only `dependencies` — the packs THIS generation staged — left the reader
+  // with extents it could not bound, so `referencedObjects()` refused the index
+  // with "index extent is outside its declared pack" the moment anything asked
+  // it for its closure. Nothing asks on a restore, and a second generation asks
+  // its parent rather than itself, which is why two commits always worked and
+  // every commit after them failed: the third build is the first reader of an
+  // incremental index. The same omission also made that index unusable as a
+  // parent, because `reachable` is built from this very list.
+  //
+  // Insertion order, deliberately not sorted: the fresh packs keep the order
+  // they were filled in and the reused refs follow in the order the extent
+  // table names them, both of which are pure functions of the snapshot. A
+  // generation with nothing reused therefore encodes byte for byte as before.
+  const parentRefs = new Map(options.parent?.reachable.map((ref) => [ref.key, ref]));
+  const packRefs = new Map(dependencies.map((object) => [object.ref.key, object.ref]));
+  for (const loc of located.values()) {
+    if (packRefs.has(loc.key)) continue;
+    const ref = parentRefs.get(loc.key);
+    if (ref === undefined) {
+      throw new MerklePackError('invalid-parameter', `published parent closure omits reused object ${loc.key}`);
+    }
+    packRefs.set(ref.key, ref);
+  }
   const indexBytes = utf8.encode(JSON.stringify({
     v: 1,
-    p: dependencies.map((object) => object.ref),
+    p: [...packRefs.values()],
     e: indexTuples,
   }));
   if (indexBytes.byteLength > maxPackBytes) {
@@ -550,16 +577,14 @@ export async function buildMerklePack(auditedInput: AuditedCapture, options: Bui
   const rootObject = await options.sink.stage(rootKey(rootId), rootManifestBytes);
   staged.push(rootObject);
 
-  const parentRefs = new Map(options.parent?.reachable.map((ref) => [ref.key, ref]));
+  // The publication's reused closure is the same set the index just declared,
+  // minus everything this generation staged. One computation, one place: the
+  // two lists disagreeing is exactly the defect above.
   const reusedRefs = new Map<string, ImmutableObjectRef>();
   const stagedKeys = new Set(dependencies.map((object) => object.ref.key));
-  for (const loc of located.values()) {
-    if (stagedKeys.has(loc.key)) continue;
-    const ref = parentRefs.get(loc.key);
-    if (ref === undefined) {
-      throw new MerklePackError('invalid-parameter', `published parent closure omits reused object ${loc.key}`);
-    }
-    reusedRefs.set(ref.key, ref);
+  for (const [key, ref] of packRefs) {
+    if (stagedKeys.has(key)) continue;
+    reusedRefs.set(key, ref);
   }
   const plan = await planCandidatePublication({
     format: MERKLE_PACK_FORMAT,

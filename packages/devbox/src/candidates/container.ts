@@ -381,7 +381,14 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
           if (head === null) throw new Error('candidate finalization did not publish a head');
           await seedJournal(ports, await ports.restoreState());
           await retireRunnerAttempt(ports, paths.processId, paths.resultPath);
-          if (active.kind !== kind) continue;
+          // AGAINST THE OPERATION KIND, never against the checkpoint kind. A
+          // record's kind is `tick` or `barrier`; a checkpoint's is `tick` or
+          // `quiesce`. Comparing the two made every published quiesce take the
+          // `continue` — `barrier !== 'quiesce'` is always true — so the loop
+          // published a fresh generation forever and no candidate box could
+          // ever stop. The no-change branch above already compares the right
+          // one; this is the same question and now asks it the same way.
+          if (active.kind !== operationKind) continue;
           return {
             kind: 'committed',
             reason: `candidate ${ports.format} ${kind} published ${head.rootEnvelopeId}`,
