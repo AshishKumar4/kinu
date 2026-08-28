@@ -1,0 +1,67 @@
+diff --git a/dist/index.js b/dist/index.js
+index 842842699328780d3f5256a5224cdd0e5c43a65b..9eb765e4a4817090f8b3ee03a62800f9cf160971 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3027,26 +3027,34 @@
+ 		const fiberRecoveryMaxAgeMs = this._resolvedOptions.fiberRecoveryMaxAgeMs;
+ 		let madeProgress = false;
+ 		try {
+-			const rows = this.sql`SELECT id, name, snapshot, created_at FROM cf_agents_runs`;
+-			for (const row of rows) {
+-				if (scanDeadlineMs > 0 && Date.now() - scanStartedAt > scanDeadlineMs) {
+-					this._emit("fiber:recovery:skipped", {
+-						fiberId: row.id,
+-						fiberName: row.name,
+-						reason: "scan_deadline_exceeded",
+-						elapsedMs: Date.now() - scanStartedAt
+-					});
+-					break;
+-				}
+-				if (this._runFiberActiveFibers.has(row.id)) continue;
+-				const snapshot = this._parseFiberRecoverySnapshot(row.id, row.snapshot);
+-				const ctx = {
+-					id: row.id,
+-					name: row.name,
+-					snapshot,
+-					createdAt: row.created_at,
+-					recoveryReason: "interrupted"
+-				};
++			const boundaryRow = this.sql`SELECT MAX(rowid) AS boundary FROM cf_agents_runs`;
++			const runBoundary = boundaryRow[0]?.boundary ?? null;
++			let runCursor = 0;
++			let scanning = runBoundary !== null;
++			while (scanning) {
++				if (scanDeadlineMs > 0 && Date.now() - scanStartedAt > scanDeadlineMs) break;
++				const page = this.sql`SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs WHERE rowid > ${runCursor} AND rowid <= ${runBoundary} ORDER BY rowid ASC LIMIT 1`;
++				if (page.length === 0) break;
++				for (const meta of page) {
++					runCursor = meta.rowid;
++					if (scanDeadlineMs > 0 && Date.now() - scanStartedAt > scanDeadlineMs) {
++						this._emit("fiber:recovery:skipped", { fiberId: meta.id, fiberName: meta.name, reason: "scan_deadline_exceeded", elapsedMs: Date.now() - scanStartedAt });
++						scanning = false;
++						break;
++					}
++					if (this._runFiberActiveFibers.has(meta.id)) continue;
++					const managedAhead = this._readFiber(meta.id);
++					if (!managedAhead && fiberRecoveryMaxAgeMs > 0 && Date.now() - meta.created_at > fiberRecoveryMaxAgeMs) {
++						this._emit("fiber:recovery:skipped", { fiberId: meta.id, fiberName: meta.name, reason: "max_age_exceeded", elapsedMs: Date.now() - meta.created_at });
++						this.sql`DELETE FROM cf_agents_runs WHERE id = ${meta.id}`;
++						madeProgress = true;
++						continue;
++					}
++					const loaded = this.sql`SELECT id, name, snapshot, created_at FROM cf_agents_runs WHERE id = ${meta.id}`;
++					const row = loaded[0];
++					if (!row) continue;
++					const snapshot = this._parseFiberRecoverySnapshot(row.id, row.snapshot);
++					const ctx = { id: row.id, name: row.name, snapshot, createdAt: row.created_at, recoveryReason: "interrupted" };
+ 				const managedRow = this._readFiber(row.id);
+ 				this._emit("fiber:recovery:detected", {
+ 					...this._fiberRecoveryPayload(ctx, managedRow),
+@@ -3092,6 +3100,7 @@
+ 					madeProgress = true;
+ 				}
+ 				if (managedRow) this._notifyManagedFiberTerminal(row.id);
++				}
+ 			}
+ 			const ledgerOnlyRows = this.sql`
+         SELECT f.fiber_id, f.idempotency_key, f.name, f.status, f.snapshot,

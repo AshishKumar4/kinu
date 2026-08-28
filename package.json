@@ -129,9 +129,12 @@
   "patchedDependencies": {
     "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch",
     "@cloudflare/sandbox@0.12.8": "patches/@cloudflare%2Fsandbox@0.12.8.patch",
+    "agents@0.20.1": "patches/agents@0.20.1.patch",
     "@nimbus-sh/core@0.6.0": "patches/@nimbus-sh%2Fcore@0.6.0.patch"
   },
+  "//overrides": "@cloudflare/containers is pinned here because @cloudflare/sandbox@0.12.8 declares `^0.3.5`, and the lock resolved that range to a SECOND copy at 0.3.6 nested under the SDK. That nested copy was the only one the deployed Worker ever bound: the top-level 0.3.7 both workspaces pin contributed zero runtime bytes, because the one import of it in the tree is a type import. So the pinned and documented version was not the version that ran, and 0.3.7's container state-machine fix \u2014 setStoppedIfUnchanged, `setRunning` moved later in the start path, and the pre-onStop state threaded through callOnStop so a stop cannot overwrite a newer state \u2014 never shipped. 0.3.7 satisfies the SDK's own range, so this reconciles the two resolutions rather than forcing an incompatible one. Removing the entry is only safe once the SDK's own range no longer resolves to anything else; scripts/nested-container-resolution.test.ts holds the manifests, the lockfile, the installed graph and the emitted artifact to one version, so a reintroduced copy is red.",
   "overrides": {
+    "@cloudflare/containers": "0.3.7",
     "fast-uri": "^3.1.3"
   }
 }
