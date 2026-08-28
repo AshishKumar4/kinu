@@ -35,6 +35,25 @@
  *      squashfs verifies its own superblock, so the mount is the validator. A
  *      crash the other way round — cleanup first — could delete the only copy.
  *
+ * TWO GENERATIONS, TWO ROLES, so a restore is never down to one hope.
+ *
+ *   A rebase writes a whole new generation, and the outgoing one used to be
+ *   deleted by the same commit's sweep. From that moment the box held exactly
+ *   one copy of itself, so a base object that went missing — or came back at a
+ *   size the record does not describe — made every later attach refuse forever
+ *   with nothing left to try, and the answer on offer was "discard this box's
+ *   stored state to start fresh", which is the whole workspace.
+ *
+ *   The record therefore names a second generation: `fallback`, the newest one
+ *   an attach has PROVEN it can serve. It is retained until a NEWER generation
+ *   has passed that same proof. That is what bounds the count without anyone
+ *   choosing a number — current and fallback are the two roles a restore has,
+ *   so the record names two generations and never a third.
+ *
+ *   A restore reads them newest-first, verifies a candidate before serving it,
+ *   stamps the candidate it refused on the record's own failure field, and
+ *   publishes which generation recovered. It never serves half of one.
+ *
  * EXTRACTION IS LOCAL DEVELOPMENT ONLY, and it is stated rather than hidden.
  * A store mount needs container outbound interception, which does not exist
  * under a plain local `wrangler dev`. With no mount there is no lazy layer, so
@@ -59,6 +78,7 @@ import {
   type DevboxStorage,
   type StoredValue,
   recordCheckpointFailure,
+  stampFailure,
 } from './storage';
 
 /** Where this chain's own object-store subtree is mounted read-only inside the
@@ -70,6 +90,25 @@ class ContainerChangedDuringAttach extends Error {
   constructor() {
     super('the container generation changed while snapshot-chain attached its lower layers');
     this.name = 'ContainerChangedDuringAttach';
+  }
+}
+
+/**
+ * One of a generation's OWN archives would not mount, or would not read.
+ *
+ * TYPED, because the caller has a decision to make: this generation cannot be
+ * served, and the record may still name an older one that can. Every other
+ * attach failure — a host with no FUSE, a store subtree that will not mount, a
+ * container replaced mid-attach — says nothing about any generation's bytes, so
+ * it must never cost the record a promotion or send the box down the recovery
+ * path to fail there a second time.
+ */
+class LayerUnreadable extends Error {
+  constructor(layer: string, generation: string, thrown: { readonly cause: unknown }) {
+    super(`the ${layer} layer of generation ${generation} could not be read`, {
+      cause: thrown.cause,
+    });
+    this.name = 'LayerUnreadable';
   }
 }
 
@@ -100,16 +139,82 @@ export const EXTRACT_TTL_SECONDS = 30 * 24 * 60 * 60;
  * sandbox tool doctrine: a restored workspace may need one `bun install`
  * before its dependencies are back.
  *
+ * GIT METADATA IS NOT REGENERABLE, and `.git` used to be on this list. It
+ * holds the only copy of every commit that was never pushed, plus the index,
+ * the config, the hooks, the reflog and the refs; for a linked worktree, the
+ * top-level `.git` is a FILE whose one line is what makes the tree a
+ * repository at all. None of it is reproducible from a lockfile or a build,
+ * which is the only test this list applies, so no part of it is excluded —
+ * not `objects`, not `refs`, not `index`, not `logs`, not `hooks`.
+ *
+ * The loss was measured rather than argued. `mksquashfs -e '.git'` dropped a
+ * top-level `.git` whether it was the repository's directory or a worktree's
+ * pointer file, so an agent that committed without pushing restored a tree
+ * with the work in it and no history to explain it — and, for a worktree, a
+ * tree that `git` no longer recognised as a repository.
+ *
  * A box may replace this list — see `SnapshotChainPorts.archiveExcludes` — so a
  * workspace whose `target/` really is the work can keep it.
  *
  * Applied to whole-tree bases only: a changed set holds no derived tree that
  * was not written after the base.
+ *
+ * The patterns mean the same thing in both modes; see
+ * {@link archiveExcludeFile} for what they match and how that is arranged.
  */
 export const CHAIN_EXCLUDES = [
-  'node_modules', '.git', '*.log', '.cache',
+  'node_modules', '*.log', '.cache',
   '.bun', '__pycache__', '.venv', 'target', '.next', '.turbo', 'dist',
 ] as const;
+
+/**
+ * One pattern, as mksquashfs and the SDK both read it, or null when it means
+ * nothing.
+ *
+ * THE SDK'S OWN NORMALISATION, on purpose and to the letter: the extraction
+ * path hands these patterns to `@cloudflare/sandbox`, whose `BackupService`
+ * strips a leading globstar segment, collapses an interior one, drops a
+ * trailing one, and refuses a pattern that is empty or globstar alone — the
+ * four rules the code below spells out. A chain-mode archive that normalised
+ * differently would exclude a different set of files from the same policy, and
+ * a box would then hold two different ideas of its own workspace depending on
+ * which mode wrote the layer.
+ */
+export function normalizeArchiveExclude(pattern: string): string | null {
+  let normalized = pattern;
+  while (normalized.startsWith('**/')) normalized = normalized.slice(3);
+  while (normalized.includes('/**/')) normalized = normalized.replaceAll('/**/', '/');
+  if (normalized.endsWith('/**')) normalized = normalized.slice(0, -3);
+  if (normalized === '' || normalized === '**') return null;
+  return normalized;
+}
+
+/**
+ * The exclude policy as an exclude FILE, which is the only form that says what
+ * this policy means.
+ *
+ * TWO LINES PER PATTERN, and both are load-bearing. mksquashfs anchors an
+ * exclude to the source directory unless the line is prefixed with `... `, so
+ * one line alone can only ever mean "at the top level". Measured on the real
+ * archiver: with anchored lines only, `node_modules` dropped
+ * `<source>/node_modules` and KEPT `<source>/sub/deep/node_modules`, and
+ * `*.log` matched nothing at all without `-wildcards`. With both lines and
+ * `-wildcards`, every depth goes — which is what a policy about regenerable
+ * trees has always claimed to mean, and what the SDK's own path already did.
+ *
+ * A FILE RATHER THAN ARGUMENTS. Patterns are data: they are written to a file
+ * as base64 and decoded container-side, so no glob, quote or space in a
+ * caller's pattern can ever reach a shell as syntax. See {@link archiveCommand}.
+ */
+export function archiveExcludeFile(patterns: readonly string[]): string {
+  const lines: string[] = [];
+  for (const pattern of patterns) {
+    const normalized = normalizeArchiveExclude(pattern);
+    if (normalized === null) continue;
+    lines.push(normalized, `... ${normalized}`);
+  }
+  return lines.map(line => `${line}\n`).join('');
+}
 
 /**
  * Rebase when the delta has outgrown the base by this factor.
@@ -142,6 +247,42 @@ export function shouldRebase(state: ChainState | null, kind: CheckpointKind): bo
   if (kind !== 'quiesce' || state === null || state.mode !== 'chain') return false;
   if (state.delta === undefined) return false;
   return state.delta.bytes > REBASE_DELTA_RATIO * state.base.bytes;
+}
+
+/**
+ * The two generation roles, after a publication supersedes the one the record
+ * names.
+ *
+ * ONE POLICY, ONE PLACE, AND NO NUMBER IN IT. A record retains exactly one
+ * older generation because a restore has exactly two roles for one: the
+ * generation it serves, and the generation it falls back to.
+ *
+ *   - An empty slot means an attach has PROVEN the current generation — see
+ *     {@link ChainState.fallback} — so the outgoing generation is the newest
+ *     proven one, and it takes the slot.
+ *   - A full slot means the outgoing generation was never proven. The proven
+ *     occupant stays and the unproven outgoing generation becomes an orphan,
+ *     which loses no work: the publication superseding it archives the same
+ *     live work directory, so nothing still in the workspace goes with it.
+ *
+ * The second arm is what stops a run of publications with no restart between
+ * them from evicting the only proven copy, and it needs no history — after any
+ * number of them the record still names one proven generation and one current
+ * one.
+ */
+export function supersedeGeneration(
+  previous: ChainState,
+): Pick<ChainState, 'fallback' | 'orphans'> {
+  if (previous.fallback === undefined) {
+    return {
+      fallback: { base: previous.base, delta: previous.delta },
+      orphans: previous.orphans,
+    };
+  }
+  return {
+    fallback: previous.fallback,
+    orphans: [...(previous.orphans ?? []), previous.base.id],
+  };
 }
 
 // ── identity and keys ───────────────────────────────────────────────────────
@@ -224,18 +365,64 @@ export function isOverlayMounted(procMounts: string, dir: string): boolean {
  * recorded when the layer was written is compared against what the store holds
  * now, so a mismatch refuses the attach before the container-start budget is
  * spent on a transfer that cannot succeed.
+ *
+ * A SIZE IS NOT AN IDENTITY, which is the whole reason the digest and the
+ * version are here. Two different archives of the same length pass every
+ * byte-count check ever written, and a squashfs that is still structurally
+ * valid mounts and serves the wrong content.
+ *
+ * TWO INDEPENDENT IDENTITIES, and they fail over for each other. `digest` is
+ * the SHA-256 of the bytes that landed — see `LandedObject` — which the store
+ * itself can confirm only for an object it was handed a checksum for, meaning a
+ * single-request PUT. `objectVersion` is the store's OWN name for the upload
+ * that wrote the object: R2 mints one per upload, hands it back from `put` and
+ * from multipart `complete`, and reports it from `head` forever after. So a
+ * large archive, which the Workers multipart API will not checksum, still has
+ * an identity the store will answer for — and a replacement written to look
+ * identical, right down to matching metadata, is a different upload and cannot
+ * carry the recorded version.
+ *
+ * WHAT THE RECORD DOES NOT KNOW, IT DOES NOT CLAIM. Either identity may be
+ * absent on either side: a row written before this code existed carries
+ * neither, and the store answers no digest for a multipart object. Absent means
+ * UNKNOWN, so that comparison is skipped and the size check stands alone —
+ * weaker, and said out loud rather than passed off as sound.
  */
 export function layerIntegrityFailure(input: {
-  declaredBytes: number | undefined;
-  storedBytes: number | undefined;
+  /** What the record says this layer is, or undefined when it names none. */
+  declared: ChainLayer | undefined;
+  /** What the store answers for the object, or undefined when it holds none. */
+  stored: ChainLayer | undefined;
   label: string;
 }): string | null {
-  const { declaredBytes, storedBytes, label } = input;
-  if (declaredBytes === undefined) return `${label} declares no size`;
-  if (storedBytes === undefined) return `${label} archive object is missing from the store`;
-  if (declaredBytes <= 0) return `${label} declares ${declaredBytes} bytes`;
-  if (storedBytes !== declaredBytes) {
-    return `${label} archive is ${storedBytes} bytes, state declares ${declaredBytes}`;
+  const { declared, stored, label } = input;
+  if (declared === undefined) return `${label} declares no size`;
+  if (stored === undefined) return `${label} archive object is missing from the store`;
+  if (declared.bytes <= 0) return `${label} declares ${declared.bytes} bytes`;
+  if (stored.bytes !== declared.bytes) {
+    return `${label} archive is ${stored.bytes} bytes, state declares ${declared.bytes}`;
+  }
+  // THE DIGEST DECIDES WHEN BOTH SIDES HAVE ONE, and the version only speaks
+  // when it cannot. A store version is minted per UPLOAD, not per content: an
+  // archive re-put with byte-identical content — which this chain can do, since
+  // a change under an excluded path moves the skip-gate fingerprint while the
+  // archive bytes stay the same — gets a new version under the same key. If a
+  // crash then loses that commit's state write, the record still names the old
+  // version, and refusing on version alone would burn the fallback on a healthy
+  // object. So agreement on content is the stronger answer and it wins.
+  if (declared.digest !== undefined && stored.digest !== undefined) {
+    if (stored.digest === declared.digest) return null;
+    return `${label} archive is ${stored.bytes} bytes, exactly as recorded, and its content `
+      + `digest is ${stored.digest}, while the record describes ${declared.digest}. That is a `
+      + 'different archive of the same length, so the count proves nothing about it.';
+  }
+  if (declared.objectVersion !== undefined && stored.objectVersion !== undefined
+    && stored.objectVersion !== declared.objectVersion) {
+    return `${label} archive is ${stored.bytes} bytes, exactly as recorded, and the store holds `
+      + `version ${stored.objectVersion} where the record describes `
+      + `${declared.objectVersion}. Nothing here can compare content — the Workers multipart `
+      + 'API carries no checksum — and the object under this key was written by a different '
+      + 'upload, so it is a different archive of the same length however its metadata reads.';
   }
   return null;
 }
@@ -253,17 +440,92 @@ export type ChainMode = 'chain' | 'extract';
  *  so the directory has to be treated as changed. */
 export type ChangeStatus = 'unchanged' | 'changed' | 'resync';
 
+/**
+ * ONE LAYER, as the record declares it and as the store answers for it.
+ *
+ * The same three facts either way, so the same type either way: a comparison
+ * between a record's claim and a store's answer that had to enumerate fields at
+ * every call site is a comparison that silently stops covering the field
+ * somebody adds next. Every construction goes through {@link chainLayer} or the
+ * parse, and {@link layerIntegrityFailure} takes whole layers rather than loose
+ * parts.
+ *
+ * `digest` and `objectVersion` are both optional and both mean UNKNOWN when
+ * absent, never "sound" \u2014 see the note below this interface.
+ */
+export interface ChainLayer {
+  readonly bytes: number;
+  /** Lowercase hex SHA-256 of the bytes that landed, when it is known. */
+  readonly digest: string | undefined;
+  /** The store's own name for the upload that wrote the object, when it is
+   *  known. R2 mints one per upload and reports it from `head` forever after. */
+  readonly objectVersion: string | undefined;
+}
+
+/** The base layer, which additionally NAMES the generation: its UUID is the
+ *  store prefix every key in that generation is built from. */
+export interface ChainBaseLayer extends ChainLayer {
+  readonly id: string;
+}
+
+/** The record's descriptor for a layer that just landed. The ONE place a layer
+ *  is built from an upload's answer, so a new fact cannot be forgotten at one
+ *  of several call sites. */
+export function chainLayer(landed: {
+  readonly bytes: number;
+  readonly digest: string;
+  readonly objectVersion: string;
+}): ChainLayer {
+  return { bytes: landed.bytes, digest: landed.digest, objectVersion: landed.objectVersion };
+}
+
+/**
+ * ONE GENERATION of the chain: the immutable base, and the cumulative changed
+ * set on top of it once one has landed. Both live under a single
+ * `backups/<uuid>/` prefix, which is what makes a generation either wholly
+ * referenced or wholly garbage.
+ *
+ * ONE SHAPE, TWO ROLES. A record names the generation it serves and the
+ * generation it falls back to, and those are the same thing described twice, so
+ * they are the same type. `ChainState` IS its current generation rather than
+ * holding one under a name: every reader keeps the fields it already spells,
+ * and promoting the fallback is a spread rather than a rewrite.
+ */
+export interface ChainGeneration {
+  /** The full base. Immutable once written. */
+  readonly base: ChainBaseLayer;
+  /** The cumulative changed set, or undefined until the first delta lands. */
+  readonly delta: ChainLayer | undefined;
+}
+
+/**
+ * WHY AN IDENTITY MAY BE ABSENT, and it is not a compatibility shim.
+ *
+ * A layer's digest is known only while its bytes are being uploaded, and its
+ * store version only from the reply to that upload: recovering either
+ * afterwards means reading or re-heading the object, and the digest cannot be
+ * recovered at all without reading every byte back — the cost this strategy
+ * exists to avoid. So a record written before these fields existed carries
+ * neither, and a deployed box holding such a record is a real box with a real
+ * workspace: `Devbox.strategy` defaults to the chain and the product's own
+ * sandbox class is deployed on it, so those rows exist and refusing them would
+ * be the data loss this file is otherwise about.
+ *
+ * Absent therefore means UNKNOWN, never "sound": the size check stands, the
+ * comparison that has nothing to compare is skipped for that layer only, and
+ * the record heals itself as layers are rewritten — every delta commit records
+ * both, and a base's pair arrives with the rebase that writes the next base.
+ * Nothing backfills by re-reading an object, and nothing carries a version
+ * flag: one path, one record, two optional facts.
+ */
+
 /** Everything a box needs to know about its own chain. One record, one writer,
  *  replaced whole. */
-export interface ChainState {
+export interface ChainState extends ChainGeneration {
   readonly mode: ChainMode;
-  /** Monotonic revision, bumped on every successful state write. */
+  /** Monotonic revision. Every publication bumps it, and so does a restore that
+   *  promotes the fallback, because that replaces the pointer too. */
   readonly rev: number;
-  /** The full base. Its UUID keys the store prefix; `bytes` is what the store
-   *  held when the layer was recorded. Immutable once written. */
-  readonly base: { readonly id: string; readonly bytes: number };
-  /** The cumulative changed set, or undefined until the first delta lands. */
-  readonly delta: { readonly bytes: number } | undefined;
   /** Epoch ms the checkpoint completed. The interval gate reads this. */
   readonly at: number;
   /** The change version this checkpoint is relative to. Advanced when a
@@ -271,8 +533,31 @@ export interface ChainState {
    *  NEVER advanced after a change that was not archived: that would discard
    *  the change signal and the next tick would believe it was already saved. */
   readonly changeVersion: string | undefined;
+  /** The changed set's fingerprint at the last successful commit. The skip gate
+   *  compares against it; see `chainShell.upperFingerprint`. */
+  readonly upperMark: string | undefined;
   /**
-   * Generations this box has superseded and not yet deleted.
+   * The generation a restore falls back to, or undefined when the current one
+   * needs no fallback.
+   *
+   * ONE ROLE, ONE SLOT, AND ITS ABSENCE IS ALSO A FACT. A publication that
+   * supersedes a generation puts the outgoing one here. The attach that PROVES
+   * the current generation — by verifying it against the store and mounting it
+   * — moves this one to `orphans` and clears the slot. So an empty slot says
+   * "nothing older is retained, because the current generation has been
+   * served", and a publication that finds the slot already full therefore knows
+   * its own outgoing generation was never proven: it keeps the proven one and
+   * orphans the unproven one instead. That is what stops a second unproven
+   * publication from evicting the only proven copy, and it needs no count and
+   * no history array — current and fallback are the two roles a restore has.
+   *
+   * Its sizes are here for the same reason the current generation's are: the
+   * integrity probe compares what the record declares against what the store
+   * holds, and a candidate nobody can check is not a candidate.
+   */
+  readonly fallback: ChainGeneration | undefined;
+  /**
+   * Generations this box has superseded and no longer retains.
    *
    * WRITTEN BEFORE THE DELETE, cleared after it, for the same reason the record
    * is written before any other cleanup: a crash between the rebase's state
@@ -283,13 +568,12 @@ export interface ChainState {
    * live generations. The box therefore remembers them, and the sweep is
    * re-runnable: a crash mid-sweep leaves the ids in place for the next one.
    */
-  /** The changed set's fingerprint at the last successful commit. The skip gate
-   *  compares against it; see `chainShell.upperFingerprint`. */
-  readonly upperMark: string | undefined;
   readonly orphans: readonly string[] | undefined;
   /** The last attempt that failed. Kept because a thrown scheduled callback is
    *  reduced to a console line by the alarm loop, so durable state is the only
-   *  way a repeatedly failing checkpoint stays visible. */
+   *  way a repeatedly failing checkpoint stays visible. A restore that refused
+   *  a generation and recovered from an older one records it here too: the box
+   *  is running afterwards, so nothing else would say what it lost. */
   readonly lastFailure: { readonly at: number; readonly reason: string } | undefined;
 }
 
@@ -301,18 +585,61 @@ export interface ChainState {
  * this code did not write reads as ABSENT, which makes a fresh box, rather than
  * as a chain whose base cannot be found, which makes a box that refuses to
  * start forever.
+ *
+ * The generation's fields are spread into the row rather than restated, so the
+ * schema has the same one authority for a generation's shape that the types do.
  */
+const DigestSchema = v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)));
+/** The store's own version string. Its FORM is the store's business, not this
+ *  record's, so this asks only that it be a non-empty string: inventing a shape
+ *  rule for a value another system mints is how a reader refuses a row that is
+ *  perfectly good. */
+const ObjectVersionSchema = v.optional(v.pipe(v.string(), v.minLength(1)));
+
+const ChainGenerationSchema = v.object({
+  base: v.object({
+    id: v.pipe(v.string(), v.regex(CHAIN_ID_RE)),
+    bytes: v.number(),
+    digest: DigestSchema,
+    objectVersion: ObjectVersionSchema,
+  }),
+  delta: v.optional(v.object({
+    bytes: v.number(),
+    digest: DigestSchema,
+    objectVersion: ObjectVersionSchema,
+  })),
+});
+
 const ChainStateSchema = v.object({
+  ...ChainGenerationSchema.entries,
   mode: v.picklist(['chain', 'extract']),
   rev: v.number(),
-  base: v.object({ id: v.pipe(v.string(), v.regex(CHAIN_ID_RE)), bytes: v.number() }),
-  delta: v.optional(v.object({ bytes: v.number() })),
   at: v.number(),
   changeVersion: v.optional(v.string()),
   upperMark: v.optional(v.string()),
+  fallback: v.optional(ChainGenerationSchema),
   orphans: v.optional(v.array(v.pipe(v.string(), v.regex(CHAIN_ID_RE)))),
   lastFailure: v.optional(v.object({ at: v.number(), reason: v.string() })),
 });
+
+/** One parsed generation, written out rather than spread so an absent delta, an
+ *  absent digest or an absent version becomes present-and-undefined: what the
+ *  contract declares, and what every reader checks. */
+function generationOf(row: v.InferOutput<typeof ChainGenerationSchema>): ChainGeneration {
+  return {
+    base: {
+      id: row.base.id,
+      bytes: row.base.bytes,
+      digest: row.base.digest,
+      objectVersion: row.base.objectVersion,
+    },
+    delta: row.delta === undefined ? undefined : {
+      bytes: row.delta.bytes,
+      digest: row.delta.digest,
+      objectVersion: row.delta.objectVersion,
+    },
+  };
+}
 
 export function normalizeChainState(raw: StoredValue): ChainState | null {
   const parsed = v.safeParse(ChainStateSchema, raw);
@@ -324,11 +651,11 @@ export function normalizeChainState(raw: StoredValue): ChainState | null {
   return {
     mode: row.mode,
     rev: row.rev,
-    base: row.base,
-    delta: row.delta,
+    ...generationOf(row),
     at: row.at,
     changeVersion: row.changeVersion,
     upperMark: row.upperMark,
+    fallback: row.fallback === undefined ? undefined : generationOf(row.fallback),
     orphans: row.orphans,
     lastFailure: row.lastFailure,
   };
@@ -427,15 +754,30 @@ export interface SnapshotChainPorts {
   unmountStore(): Promise<void>;
   /** Stream a container file out as binary, with no base64 framing. */
   readFileStream(path: string): Promise<{ stream: ReadableStream<Uint8Array>; size: number }>;
-  /** Put one object into the store. The visible object appears complete or not
-   *  at all. */
-  /** Put one object into the store and answer HOW MANY BYTES LANDED. The
-   *  visible object appears complete or not at all. The returned count is
-   *  what the record must carry: a size measured before the upload can
-   *  disagree with the object, and the integrity probe compares the two. */
-  putObject(key: string, stream: ReadableStream<Uint8Array>, size: number): Promise<number>;
-  /** What the store currently holds for one object, or undefined. */
-  objectBytes(key: string): Promise<number | undefined>;
+  /**
+   * Put one object into the store and answer WHAT LANDED. The visible object
+   * appears complete or not at all.
+   *
+   * All three facts are what the record must carry. A size measured before the
+   * upload can disagree with the object — measured on a deployed run — and a
+   * size cannot tell one archive from another archive of the same length. The
+   * digest is taken over the bytes as they stream past and is not recoverable
+   * afterwards without reading the object back; `objectVersion` is the store's
+   * own name for this upload, which is the identity that survives where the
+   * digest cannot be compared.
+   */
+  putObject(key: string, stream: ReadableStream<Uint8Array>, size: number):
+    Promise<{ bytes: number; digest: string; objectVersion: string }>;
+  /**
+   * What the store currently holds for one object, or undefined when it holds
+   * nothing.
+   *
+   * `digest` and `objectVersion` are the store's OWN answers, not the record's,
+   * and either may be undefined when the store has none to give — see
+   * {@link layerIntegrityFailure}. This is one metadata read, the same call the
+   * byte count always cost.
+   */
+  objectFacts(key: string): Promise<ChainLayer | undefined>;
   /** Delete objects. Used by discard, and to drop a superseded extraction
    *  archive after its replacement is durably recorded. */
   deleteObjects(keys: readonly string[]): Promise<void>;
@@ -452,13 +794,26 @@ export interface SnapshotChainPorts {
 
 /** Canonical archive options for the extraction path. The TTL is HERE and only
  *  here: the SDK enforces it at restore time on archives its own backup API
- *  wrote, which is exactly this path. See {@link EXTRACT_TTL_SECONDS}. */
-export function chainBackupOptions(localBucket: boolean): BackupOptions {
+ *  wrote, which is exactly this path. See {@link EXTRACT_TTL_SECONDS}.
+ *
+ *  THE EXCLUDES ARE THE CALLER'S, and they are a parameter for a reason: this
+ *  used to spell {@link CHAIN_EXCLUDES} itself while the chain path asked
+ *  `SnapshotChainPorts.archiveExcludes`, so a box that replaced the policy was
+ *  obeyed in one mode and ignored in the other. One question, one authority.
+ *
+ *  The patterns are passed on RAW, because the SDK normalises them itself and
+ *  {@link normalizeArchiveExclude} is that same normalisation: one list, one
+ *  meaning, whichever mode writes the layer. See {@link archiveExcludeFile} for
+ *  what a pattern matches. */
+export function chainBackupOptions(
+  localBucket: boolean,
+  excludes: readonly string[],
+): BackupOptions {
   return {
     dir: DEVBOX_WORKDIR,
     localBucket,
     gitignore: true,
-    excludes: [...CHAIN_EXCLUDES],
+    excludes: [...excludes],
     ttl: EXTRACT_TTL_SECONDS,
     // zstd because every byte is paid twice: once on upload, again on every
     // attach that reads it.
@@ -582,13 +937,15 @@ function chainShell(exec: ContainerExec) {
     makeSquashfs: async (
       sourceDir: string, archivePath: string, excludes: readonly string[],
     ): Promise<number> => {
-      const args = excludes.map(entry => `-e ${shellPath(entry)}`).join(' ');
-      const result = await exec(`/usr/bin/mksquashfs ${shellPath(sourceDir)} `
-        + `${shellPath(archivePath)} -comp zstd -no-progress ${args} >/dev/null; rc=$?; `
-        + `printf '%s %s' "$rc" "$(stat -c %s ${shellPath(archivePath)} 2>/dev/null || echo 0)"`);
+      const result = await exec(archiveCommand({
+        sourceDir, archivePath, excludeFile: `${stageDir}/excludes.txt`, excludes,
+      }));
       const [code, size] = result.stdout.trim().split(/\s+/);
       if (code !== '0') {
-        throw new Error(`mksquashfs failed (${code ?? '?'}): ${result.stderr.trim() || 'no output'}`);
+        throw new Error(
+          `staging the exclude list or building the squashfs failed (${code ?? '?'}): `
+          + `${result.stderr.trim() || 'no output'}`,
+        );
       }
       const bytes = Number(size);
       if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -602,24 +959,26 @@ function chainShell(exec: ContainerExec) {
     /**
      * Why there is not room to stage an archive of `sourceDir`, or null.
      *
-     * `du` measures the tree MINUS the same exclusions the archive will skip,
-     * so the requirement is the archive's true worst case (squashfs never
-     * exceeds the uncompressed input) rather than a number anyone chose. `df`
-     * reports what the staging filesystem has. Both in one command, so a
-     * container replacement cannot land between the two readings and make them
-     * describe different disks.
+     * THE ESTIMATE WALKS WHAT THE ARCHIVE WILL WALK. The requirement is the
+     * archive's true worst case — squashfs never exceeds its uncompressed
+     * input — rather than a number anyone chose, and that only holds while the
+     * two agree about which files travel. They used to disagree: this pruned
+     * `-name` at every depth while the archiver excluded the top level only, so
+     * the estimate was under the truth for exactly the trees that dominate a
+     * work directory. Both sides now come from {@link archiveSizeCommand} and
+     * {@link archiveExcludeFile}, off one policy list.
+     *
+     * `df` reports what the staging filesystem has. Both readings in one
+     * command, so a container replacement cannot land between them and make
+     * them describe different disks.
      */
     stagingShortfall: async (
       sourceDir: string,
       excludes: readonly string[],
     ): Promise<string | null> => {
-      const pruned = excludes
-        .map(entry => `-name ${shellPath(entry)} -prune -o`)
-        .join(' ');
       const measured = await exec(
         `mkdir -p ${shellPath(stageDir)}; `
-        + `need=$(find ${shellPath(sourceDir)} ${pruned} -type f -printf '%s\\n' 2>/dev/null `
-        + `| awk '{t+=$1} END {print t+0}'); `
+        + `need=$(${archiveSizeCommand(sourceDir, excludes)}); `
         + `free=$(df -Pk ${shellPath(stageDir)} | awk 'NR==2 {print $4*1024}'); `
         + `echo "$need $free"`,
       );
@@ -670,8 +1029,6 @@ function chainShell(exec: ContainerExec) {
 export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const shell = chainShell(ports.exec);
 
-  /** Is every layer the record names still backed by the store? Answered before
-   *  the container-start budget is spent on an attach that cannot land. */
   /**
    * Why a stored layer must not be attached from, or null when it is sound.
    *
@@ -698,47 +1055,77 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * So a delta the store still holds is adopted and its size re-recorded. A
    * delta the record names and the store does NOT hold is still a refusal:
    * that is real content loss, not a stale number.
+   *
+   * TWO IDENTITIES SPLIT THAT ADOPTION IN TWO, which is what closes same-length
+   * corruption without reopening the brick. A delta whose SIZE disagrees is the
+   * crash-window delta the header describes — a different, complete archive the
+   * record does not mention yet — so it is adopted whole: size, digest and
+   * store version together. A delta whose size matches EXACTLY while its digest
+   * or its store version does not is not that: it is a different archive of
+   * identical length under the key the record already describes, and no count
+   * can tell them apart. That is refused, and because the record retains a
+   * fallback generation the refusal is a recovery rather than a dead end.
+   *
+   * The base is judged as it always was: immutable, so any disagreement of any
+   * kind means the object is not the one the record describes.
    */
-  const probe = async (state: ChainState): Promise<
-    { refusal: string } | { refusal: null; deltaBytes: number | undefined }
+  const probe = async (
+    mode: ChainMode,
+    generation: ChainGeneration,
+  ): Promise<
+    { refusal: string } | { refusal: null; delta: ChainLayer | undefined }
   > => {
-    if (state.mode === 'extract') return { refusal: null, deltaBytes: undefined };
+    if (mode === 'extract') return { refusal: null, delta: undefined };
     const unsound = layerIntegrityFailure({
-      declaredBytes: state.base.bytes,
-      storedBytes: await ports.objectBytes(baseObjectKey(state.base.id)),
+      declared: generation.base,
+      stored: await ports.objectFacts(baseObjectKey(generation.base.id)),
       label: 'base',
     });
     if (unsound !== null) return { refusal: unsound };
-    if (state.delta === undefined) return { refusal: null, deltaBytes: undefined };
-    const stored = await ports.objectBytes(deltaObjectKey(state.base.id));
+    if (generation.delta === undefined) return { refusal: null, delta: undefined };
+    const stored = await ports.objectFacts(deltaObjectKey(generation.base.id));
     if (stored === undefined) {
       return {
         refusal: `delta archive is missing from the store, but the record names one of `
-          + `${state.delta.bytes} bytes. Refusing rather than attaching a chain whose changed `
-          + 'set is gone.',
+          + `${generation.delta.bytes} bytes. Refusing rather than attaching a chain whose `
+          + 'changed set is gone.',
       };
     }
-    return { refusal: null, deltaBytes: stored };
+    if (stored.bytes === generation.delta.bytes) {
+      const corrupt = layerIntegrityFailure({
+        declared: generation.delta,
+        stored,
+        label: 'delta',
+      });
+      if (corrupt !== null) return { refusal: corrupt };
+    }
+    return { refusal: null, delta: stored };
   };
 
-  const attachExtract = async (state: ChainState): Promise<AttachOutcome> => {
+  const attachExtract = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const result = await ports.restoreExtract({
-      id: state.base.id, dir: DEVBOX_WORKDIR, localBucket: true,
+      id: generation.base.id, dir: DEVBOX_WORKDIR, localBucket: true,
     });
+    // AN ARCHIVE THAT WILL NOT EXTRACT is that generation's own failure, so it
+    // travels as one: a box with an older generation may still start.
     if (!result.success) {
-      throw new Error(`extraction of ${DEVBOX_WORKDIR} reported failure.`);
+      throw new LayerUnreadable('extraction', generation.base.id, {
+        cause: new Error(`extraction of ${DEVBOX_WORKDIR} reported failure.`),
+      });
     }
     if ((await ports.countEntries(DEVBOX_WORKDIR)) === 0) {
-      throw new Error(
-        `extraction of ${DEVBOX_WORKDIR} reported success, but the directory is empty.`,
-      );
+      throw new LayerUnreadable('extraction', generation.base.id, {
+        cause: new Error(
+          `extraction of ${DEVBOX_WORKDIR} reported success, but the directory is empty.`,
+        ),
+      });
     }
-    ports.log(`${DEVBOX_WORKDIR} extracted from ${state.base.id}`);
-    return { kind: 'attached', detail: `extract ${state.base.id}` };
+    ports.log(`${DEVBOX_WORKDIR} extracted from ${generation.base.id}`);
+    return { kind: 'attached', detail: `extract ${generation.base.id}` };
   };
 
-  const attachChainOnce = async (state: ChainState): Promise<AttachOutcome> => {
-    const generation = await ports.containerGeneration?.();
+  const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
+    const containerGeneration = await ports.containerGeneration?.();
     // Release any mount the SDK still believes it holds at this path before
     // asking for a new one. A previous container generation's entry survives in
     // that registry, and it refuses the mount rather than replacing it.
@@ -749,25 +1136,38 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it came: the platform's own words are the diagnosis, and this code has no
     // better one.
     try {
-      await ports.mountStore(state.base.id);
+      await ports.mountStore(generation.base.id);
     } catch (error) {
       throw new Error(
-        `chain ${state.base.id} is stored as lazy layers and its store subtree could not `
+        `chain ${generation.base.id} is stored as lazy layers and its store subtree could not `
         + `be mounted here: ${describe({ cause: error })}`,
         { cause: error },
       );
     }
     const mountedGeneration = await ports.containerGeneration?.();
-    if (generation !== undefined && mountedGeneration !== generation) {
+    if (containerGeneration !== undefined && mountedGeneration !== containerGeneration) {
       throw new ContainerChangedDuringAttach();
     }
+    /** A layer that will not mount, or will not read, is THIS generation's own
+     *  failure — unless the container was replaced underneath, which is the
+     *  attach's failure and is retried on the replacement. */
+    const layerFailed = async (
+      layer: string,
+      thrown: { readonly cause: unknown },
+    ): Promise<never> => {
+      const failedGeneration = await ports.containerGeneration?.();
+      if (mountedGeneration !== undefined && failedGeneration !== mountedGeneration) {
+        throw new ContainerChangedDuringAttach();
+      }
+      throw new LayerUnreadable(layer, generation.base.id, thrown);
+    };
     const mountedBase = `${CHAIN_STORE_MOUNT}/data.sqsh`;
     const visible = ports.waitForPath === undefined
       ? (await shell.pathExists(mountedBase)) ? 'ready' : 'missing'
       : await ports.waitForPath(mountedBase, mountedGeneration);
     if (visible === 'replaced') throw new ContainerChangedDuringAttach();
     if (visible !== 'ready') {
-      throw new Error(`chain ${state.base.id} store mount does not expose ${mountedBase}`);
+      throw new Error(`chain ${generation.base.id} store mount does not expose ${mountedBase}`);
     }
     await shell.unmountPath(DEVBOX_WORKDIR);
     await shell.unmountPath(lowerBase);
@@ -778,21 +1178,23 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // NO directory was recreated — correctness hung on every later command
     // re-creating its own path. Worse, had the mount ever been read-write,
     // rm -rf would have deleted the chain's archives through it.
+    //
+    // THE UPPER IS EMPTIED HERE, BEFORE ANY ARCHIVE CONTENT IS COPIED INTO IT,
+    // and that is also what keeps a hostile archive inside its own tree: the
+    // seeding copy below preserves symlinks instead of following them, so the
+    // only way out of the upper would be a symlink ALREADY sitting at a path
+    // the copy writes through. This reset is what guarantees there is none.
     await shell.resetDirs([lowerBase, lowerDelta, upperDir, workDir]);
     try {
-      await shell.mountLayer(baseObjectKey(state.base.id), lowerBase);
+      await shell.mountLayer(baseObjectKey(generation.base.id), lowerBase);
     } catch (error) {
-      const failedGeneration = await ports.containerGeneration?.();
-      if (mountedGeneration !== undefined && failedGeneration !== mountedGeneration) {
-        throw new ContainerChangedDuringAttach();
-      }
-      throw error;
+      await layerFailed('base', { cause: error });
     }
 
     // An unreferenced but complete delta — a previous run crashed between the
     // atomic PUT and the state write — is adopted. See this file's header.
-    const haveDelta = state.delta !== undefined
-      || (await ports.objectBytes(deltaObjectKey(state.base.id))) !== undefined;
+    const haveDelta = generation.delta !== undefined
+      || (await ports.objectFacts(deltaObjectKey(generation.base.id))) !== undefined;
 
     // SEED BEFORE THE OVERLAY LANDS, and this order is the whole correctness of
     // a re-driven attach.
@@ -812,9 +1214,18 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // copy. With this order a mounted overlay PROVES the seeding finished,
     // which is what the early return already assumed — and it needs no durable
     // marker, so idempotence is still asked of the container, not stored.
+    //
+    // IT IS ALSO WHERE THE DELTA IS READ END TO END, which is the only full
+    // read of an archive anywhere on this path: a delta that mounts and then
+    // fails mid-copy is a delta this generation cannot serve, and it says so
+    // through `layerFailed` rather than as a bare host failure.
     if (haveDelta) {
-      await shell.mountLayer(deltaObjectKey(state.base.id), lowerDelta);
-      await shell.seedUpper(lowerDelta, upperDir);
+      try {
+        await shell.mountLayer(deltaObjectKey(generation.base.id), lowerDelta);
+        await shell.seedUpper(lowerDelta, upperDir);
+      } catch (error) {
+        await layerFailed('delta', { cause: error });
+      }
       await shell.unmountPath(lowerDelta);
       // Only the DELTA's mount point is removable. `lowerBase` becomes an ACTIVE
       // lower of the overlay below, so removing it would be refused by the
@@ -825,30 +1236,34 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // means by "the upper alone is the whole cumulative changed set" — now true
     // from the instant the overlay exists rather than a step later.
     await shell.overlayAttach(DEVBOX_WORKDIR, [lowerBase]);
-    await assertOverlayLanded(`chain ${state.base.id}`);
+    await assertOverlayLanded(`chain ${generation.base.id}`);
     await ports.unmountStore();
 
-    const bytes = state.base.bytes + (state.delta?.bytes ?? 0);
+    const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
     // One mounted layer, plus the delta if there was one — reported separately
     // because they are different things now: the layer is lazy and moves no
     // bytes, the seed is a copy that already happened.
     const restored = haveDelta ? 'base+seeded delta' : 'base';
     ports.log(
-      `${DEVBOX_WORKDIR} attached from ${state.base.id} (chain, ${bytes} bytes, ${restored})`,
+      `${DEVBOX_WORKDIR} attached from ${generation.base.id} `
+      + `(chain, ${bytes} bytes, ${restored})`,
     );
     return {
       kind: 'attached',
-      detail: `chain ${state.base.id} ${bytes}B ${restored}`,
+      detail: `chain ${generation.base.id} ${bytes}B ${restored}`,
     };
   };
 
-  const attachChain = async (state: ChainState): Promise<AttachOutcome> => {
+  const attachChain = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     for (;;) {
       try {
-        return await attachChainOnce(state);
+        return await attachChainOnce(generation);
       } catch (error) {
         if (!(error instanceof ContainerChangedDuringAttach)) throw error;
-        ports.log(`container changed while chain ${state.base.id} attached; retrying on its replacement`);
+        ports.log(
+          `container changed while chain ${generation.base.id} attached; `
+          + 'retrying on its replacement',
+        );
       }
     }
   };
@@ -909,13 +1324,191 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
+  /**
+   * Serve one candidate generation, or answer why its own bytes cannot be
+   * served.
+   *
+   * A REFUSAL IS ALWAYS ABOUT THIS GENERATION. The integrity probe compares
+   * what the record declares against what the store holds, and the layer mounts
+   * are the only thing that reads an archive at all: squashfuse parses the
+   * superblock, and a delta is read end to end by the seeding copy. Everything
+   * else — a host with no FUSE, a store subtree that will not mount, a
+   * container replaced mid-attach — is not this generation's fault and travels
+   * as a throw, because trying an older generation against a broken host would
+   * only fail twice and hide the reason.
+   *
+   * That pair is the strongest proof this path can make, and it is not a
+   * content digest: a base whose bytes rot after a successful mount surfaces on
+   * the read that needs them. Hashing every byte on every start is the cost
+   * this strategy exists to avoid — see {@link stageAndPut}.
+   */
+  const serve = async (
+    mode: ChainMode,
+    candidate: ChainGeneration,
+  ): Promise<{ served: AttachOutcome; generation: ChainGeneration } | { refusal: string }> => {
+    const sound = await probe(mode, candidate);
+    if (sound.refusal !== null) return { refusal: sound.refusal };
+    // ADOPT a delta whose recorded size went stale, so the disagreement cannot
+    // outlive this attach. A size that disagrees is a DIFFERENT archive — the
+    // crash-window delta this file's header describes — so its digest is
+    // adopted with it. Same size, different digest never reaches here: `probe`
+    // refuses it, because that is corruption rather than supersession.
+    let generation = candidate;
+    if (candidate.delta !== undefined && sound.delta !== undefined
+      && sound.delta.bytes !== candidate.delta.bytes) {
+      const drift = sound.delta.bytes - candidate.delta.bytes;
+      ports.log(
+        `delta record was stale by ${drift} bytes (${Math.abs(drift) / 4096} squashfs blocks); `
+        + `adopting the stored archive of ${sound.delta.bytes} bytes`,
+      );
+      generation = { ...candidate, delta: sound.delta };
+    }
+    try {
+      const served = mode === 'chain'
+        ? await attachChain(generation)
+        : await attachExtract(generation);
+      return { served, generation };
+    } catch (error) {
+      if (!(error instanceof LayerUnreadable)) throw error;
+      return { refusal: describe({ cause: error }) };
+    }
+  };
+
+  /**
+   * The attach landed, so the generation the record names is PROVEN.
+   *
+   * Nothing older can serve this box better from here, so the retained fallback
+   * becomes garbage and the slot is cleared for the next publication to fill.
+   * Named before deleted, like every other generation this file drops: the
+   * sweep is the next commit's, and it is re-runnable.
+   *
+   * One write, and only when there is something to write: a box whose current
+   * generation was already proven and whose delta size was accurate leaves the
+   * record untouched, which is every ordinary start.
+   *
+   * BEST EFFORT, LIKE EVERY OTHER NOTE ABOUT SOMETHING THAT ALREADY HAPPENED.
+   * The workspace is mounted by the time this runs, so a failed write must not
+   * fail the start: the container-start hook would report a failure over a
+   * container that is serving correctly, and the retry would find the overlay
+   * up and take the already-attached path anyway. Nothing is lost by deferring
+   * it — the ids are still named, so the next attach retires the fallback and
+   * the next probe re-adopts the delta's size.
+   */
+  const recordProven = async (record: ChainState, served: ChainGeneration): Promise<void> => {
+    const adopted = served.delta?.bytes !== record.delta?.bytes
+      || served.delta?.digest !== record.delta?.digest;
+    if (record.fallback === undefined && !adopted) return;
+    try {
+      await ports.writeState({
+        ...record,
+        ...served,
+        fallback: undefined,
+        orphans: record.fallback === undefined
+          ? record.orphans
+          : [...(record.orphans ?? []), record.fallback.base.id],
+      });
+    } catch (error) {
+      ports.log(
+        `${DEVBOX_WORKDIR} is attached from generation ${served.base.id} and the record could `
+        + `not be updated to say so, so the next attach repeats it: `
+        + `${describe({ cause: error })}`,
+      );
+    }
+  };
+
+  /**
+   * Serve the newest generation this record can prove, and publish which one it
+   * was.
+   *
+   * A REFUSAL IS NO LONGER A DEAD END. The refused generation is stamped on the
+   * record's own failure field, the retained fallback is tried, and the
+   * promotion is ONE state write that swaps the two roles: the proven fallback
+   * becomes the generation this box serves, and the refused one takes the
+   * fallback slot. It takes the slot rather than the bin because a broken
+   * generation is still a generation whose objects have exactly one name, and
+   * the sweep that finally removes it runs only after its replacement has been
+   * proven — the ordinary verified-attach transition, not a special case.
+   *
+   * PROMOTED BEFORE SERVED, and that order is the correctness. Serving first
+   * and writing after leaves a window where a crash has the box running on the
+   * fallback's bytes under a record that still names the generation it refused
+   * — and the next checkpoint would write a delta into a generation whose base
+   * is gone.
+   *
+   * When both generations refuse, the start fails carrying both causes and
+   * NOTHING is deleted. Two bad generations are two chances for an operator;
+   * one bad generation and a tidy bucket is none.
+   */
+  const attachStored = async (state: ChainState): Promise<AttachOutcome> => {
+    // THE PERSISTED MODE IS THE CONTRACT. A chain-mode record must end as an
+    // overlay or the attach throws; an extract-mode record is only legal where
+    // extraction is permitted. A deployed box holding an extract record is a box
+    // that took a silent fallback, and serving it would hide that a second time.
+    if (state.mode === 'extract' && !ports.allowExtraction()) {
+      throw new Error(
+        `chain ${state.base.id} was archived by extraction, which is not permitted here. `
+        + 'That record can only have come from a host that allowed it, so this box is '
+        + 'refusing rather than serving a work directory whose changes are never archived.',
+      );
+    }
+    const current = await serve(state.mode, state);
+    if ('served' in current) {
+      await recordProven(state, current.generation);
+      return current.served;
+    }
+    if (state.fallback === undefined) {
+      throw new Error(
+        `Cannot attach ${DEVBOX_WORKDIR} from chain ${state.base.id}: ${current.refusal}. The `
+        + 'record names no earlier generation to fall back to, so this box is refusing to '
+        + 'start rather than serve an empty work directory. Nothing has been deleted.',
+      );
+    }
+    const reason = `chain ${state.base.id} was refused at attach: ${current.refusal}`;
+    const promoted: ChainState = {
+      ...state,
+      ...state.fallback,
+      rev: state.rev + 1,
+      // The mark described the changed set of a generation this box is not
+      // serving any more, and a mark that cannot describe the upper must never
+      // be able to match it: an undefined mark never does, so the next tick
+      // archives rather than skips.
+      upperMark: undefined,
+      fallback: { base: state.base, delta: state.delta },
+      lastFailure: { at: ports.now(), reason },
+    };
+    ports.log(`${DEVBOX_WORKDIR} ${reason}; falling back to generation ${promoted.base.id}`);
+    await ports.writeState(promoted);
+    const fallback = await serve(promoted.mode, promoted);
+    if (!('served' in fallback)) {
+      throw new Error(
+        `Cannot attach ${DEVBOX_WORKDIR}: ${reason}, and the fallback generation `
+        + `${promoted.base.id} cannot be served either: ${fallback.refusal}. Refusing to `
+        + 'start, and deleting neither generation.',
+      );
+    }
+    await recordProven(promoted, fallback.generation);
+    ports.log(
+      `${DEVBOX_WORKDIR} recovered from generation ${promoted.base.id}; `
+      + `${state.base.id} is superseded and kept for cleanup`,
+    );
+    return {
+      kind: fallback.served.kind,
+      detail: `recovered ${fallback.served.detail}`,
+    };
+  };
+
   const attach = async (): Promise<AttachOutcome> => {
-    let state = await ports.readState();
+    const state = await ports.readState();
 
     // Idempotence without a marker: ask the container. The container-start hook
     // fires at least once per start, and a stored "attached" marker is exactly
     // what latched the last time. An overlay that already landed is visible in
     // /proc/mounts, which is the fact rather than a note about the fact.
+    //
+    // It is NOT a proof of the current generation: the overlay may have been
+    // mounted from the generation a later rebase superseded, so the fallback
+    // stays exactly where it is until an attach really mounts what the record
+    // now names.
     if (isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
       ports.log(`${DEVBOX_WORKDIR} already attached — attach skipped`);
       return {
@@ -924,40 +1517,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       };
     }
     if (state === null) return await attachFresh();
-
-    const sound = await probe(state);
-    if (sound.refusal !== null) {
-      throw new Error(
-        `Cannot attach ${DEVBOX_WORKDIR} from chain ${state.base.id}: ${sound.refusal}. Refusing `
-        + 'to start the container rather than serve an empty work directory. Discard this '
-        + "box's stored state to start fresh.",
-      );
-    }
-    // ADOPT a delta whose recorded size went stale, and re-record it, so the
-    // disagreement cannot outlive this attach. See `probe`.
-    if (state.delta !== undefined && sound.deltaBytes !== undefined
-      && sound.deltaBytes !== state.delta.bytes) {
-      const drift = sound.deltaBytes - state.delta.bytes;
-      ports.log(
-        `delta record was stale by ${drift} bytes (${Math.abs(drift) / 4096} squashfs blocks); `
-        + `adopting the stored archive of ${sound.deltaBytes} bytes`,
-      );
-      state = { ...state, delta: { bytes: sound.deltaBytes } };
-      await ports.writeState(state);
-    }
-    // THE PERSISTED MODE IS THE CONTRACT. A chain-mode record must end as an
-    // overlay or the attach throws; an extract-mode record is only legal where
-    // extraction is permitted. A deployed box holding an extract record is a box
-    // that took a silent fallback, and serving it would hide that a second time.
-    if (state.mode === 'chain') return await attachChain(state);
-    if (!ports.allowExtraction()) {
-      throw new Error(
-        `chain ${state.base.id} was archived by extraction, which is not permitted here. `
-        + 'That record can only have come from a host that allowed it, so this box is '
-        + 'refusing rather than serving a work directory whose changes are never archived.',
-      );
-    }
-    return await attachExtract(state);
+    return await attachStored(state);
   };
 
   /**
@@ -977,7 +1537,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     key: string,
     sourceDir: string,
     excludes: readonly string[],
-  ): Promise<{ bytes: number }> => {
+  ): Promise<{ bytes: number; digest: string; objectVersion: string }> => {
     const archivePath = `${stageDir}/layer.sqsh`;
     // ROOM TO WRITE IT, ASKED BEFORE WRITING IT. An archiver that fills the
     // container's disk takes the whole box down with it, and a box that dies
@@ -996,9 +1556,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // 700387328` — and every wake then refused, because the integrity probe
     // compares the two. The staged size is measured before the bytes are read,
     // so a file still settling reads short; the upload counts what it actually
-    // sent. One truth, captured after landing.
-    const landed = await ports.putObject(key, stream, staged);
-    return { bytes: landed };
+    // sent. One truth, captured after landing — and the digest with it, taken
+    // over the same bytes on their way past, because a count cannot tell this
+    // archive from another archive of the same length.
+    return await ports.putObject(key, stream, staged);
   };
 
   const commitExtract = async (
@@ -1006,45 +1567,45 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     version: string,
   ): Promise<CheckpointOutcome> => {
     // LOCAL DEVELOPMENT ONLY. The SDK archives the whole tree and the binding
-    // moves it. The superseded archive is deleted only AFTER its replacement is
-    // durably recorded, so a crash leaves two archives and never zero.
-    const backup = await ports.createExtractSnapshot(chainBackupOptions(true));
-    const storedBytes = await ports.objectBytes(baseObjectKey(backup.id));
-    if (storedBytes === undefined || storedBytes <= 0) {
+    // moves it.
+    const backup = await ports.createExtractSnapshot(
+      chainBackupOptions(true, ports.archiveExcludes()),
+    );
+    const stored = await ports.objectFacts(baseObjectKey(backup.id));
+    if (stored === undefined || stored.bytes <= 0) {
       throw new Error(`archive ${backup.id} is not sound: the object is missing or empty`);
     }
-    await ports.writeState({
+    const storedBytes = stored.bytes;
+    const committed: ChainState = {
       mode: 'extract',
       rev: (previous?.rev ?? 0) + 1,
-      base: { id: backup.id, bytes: storedBytes },
+      // THE SDK WROTE THIS ARCHIVE, not `putObject`, so its identity is
+      // whatever the store itself reports — which is no digest at all when the
+      // SDK uploaded it in parts, though the store's version is always there.
+      // Recording the store's own answer keeps the record honest either way:
+      // absent means unknown, and the probe skips the comparison it cannot make
+      // rather than inventing one.
+      base: { id: backup.id, ...stored },
       delta: undefined,
       at: ports.now(),
       changeVersion: version,
       upperMark: undefined,
-      orphans: previous?.orphans,
+      // The superseded archive is NAMED by the new record before anything
+      // deletes it, and it is RETAINED as the fallback rather than deleted
+      // outright — the same two roles the chain path publishes, decided by the
+      // same policy. This path used to delete it inline, so a crash in that
+      // window stranded it forever: `backups/<uuid>/` is shared by every box,
+      // and an id no record carries can never be swept.
+      ...(previous !== null && previous.base.id !== backup.id
+        ? supersedeGeneration(previous)
+        : { fallback: previous?.fallback, orphans: previous?.orphans }),
       lastFailure: undefined,
-    });
-    if (previous !== null && previous.base.id !== backup.id) {
-      await ports.deleteObjects([
-        baseObjectKey(previous.base.id),
-        deltaObjectKey(previous.base.id),
-        metadataObjectKey(previous.base.id),
-      ]);
-    }
+    };
+    await publish(committed);
     ports.log(`${DEVBOX_WORKDIR} archived as ${backup.id} (${storedBytes} bytes, extract)`);
     return { kind: 'committed', reason: undefined, bytes: storedBytes, movedBytes: storedBytes };
   };
 
-  /**
-   * Commit a delta, a first base, or a REBASE onto a fresh generation.
-   *
-   * `rebasing` collapses the chain: the merged work directory is archived as a
-   * new base under a NEW generation id, and the old generation's objects are
-   * deleted only after the new record is durable. A generation is therefore a
-   * prefix that is either wholly referenced or wholly garbage, which is what
-   * makes an orphan sweep possible at all and why no lifecycle rule is needed
-   * to bound growth.
-   */
   /**
    * Delete every generation this box has superseded, then forget them.
    *
@@ -1069,6 +1630,59 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     ports.log(`${orphans.length} superseded generation(s) deleted`);
   };
 
+  /**
+   * Write the record, then delete everything the new record supersedes.
+   *
+   * THE POINTER IS THE COMMIT, and this is the only function that crosses it.
+   * `writeState(committed)` is therefore the ONLY step here that may throw: a
+   * failure there committed nothing, so the caller's catch is right to stamp the
+   * record it read. Every step below that line deletes bytes the committed
+   * record no longer names, none of them can un-commit anything, and NONE OF
+   * THEM MAY THROW — the caller's catch is bound to the PRE-COMMIT record, and
+   * re-writing that over the committed pointer means, after a rebase, a record
+   * naming the generation the sweep had just begun deleting: every later attach
+   * then refuses on a base the store no longer holds, and `orphans` is dropped
+   * so the generation this commit had just written becomes unnameable and
+   * therefore unsweepable.
+   *
+   * So a cleanup failure is stamped on the PUBLISHED revision, and the stamp is
+   * best effort — see {@link stampFailure}, which is that policy for every
+   * strategy. Letting the stamp's own failure travel is the reversion this
+   * boundary exists to make unrepresentable.
+   *
+   * The sweep is re-runnable and it runs on every commit, not just the rebase
+   * that created an orphan, so the next checkpoint finishes what this one could
+   * not — the stamp included, which the next failure rewrites and the next
+   * commit clears.
+   */
+  const publish = async (
+    committed: ChainState,
+    cleanup?: () => Promise<void>,
+  ): Promise<void> => {
+    await ports.writeState(committed);
+    let reason: string;
+    try {
+      await cleanup?.();
+      await sweepOrphans(committed);
+      return;
+    } catch (error) {
+      reason = `chain ${committed.base.id} rev ${committed.rev} is committed and its `
+        + `cleanup is not: ${describe({ cause: error })}`;
+    }
+    ports.log(`${DEVBOX_WORKDIR} ${reason}`);
+    await stampFailure(ports, committed, reason);
+  };
+
+  /**
+   * Commit a delta, a first base, or a REBASE onto a fresh generation.
+   *
+   * `rebasing` collapses the chain: the merged work directory is archived as a
+   * new base under a NEW generation id, and the old generation's objects are
+   * deleted only after the new record is durable. A generation is therefore a
+   * prefix that is either wholly referenced or wholly garbage, which is what
+   * makes an orphan sweep possible at all and why no lifecycle rule is needed
+   * to bound growth.
+   */
   const commitChain = async (
     previous: ChainState | null,
     version: string,
@@ -1115,7 +1729,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     await shell.resetDirs([stageDir]);
-    let layer: { bytes: number };
+    let layer: { bytes: number; digest: string; objectVersion: string };
     if (fresh) {
       layer = await stageAndPut(
         baseObjectKey(chainId), DEVBOX_WORKDIR, ports.archiveExcludes(),
@@ -1167,26 +1781,23 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const committed: ChainState = {
       mode: 'chain',
       rev: (previous?.rev ?? 0) + 1,
-      base: fresh ? { id: chainId, bytes: layer.bytes } : previous.base,
-      delta: fresh ? undefined : { bytes: layer.bytes },
+      base: fresh ? { id: chainId, ...chainLayer(layer) } : previous.base,
+      delta: fresh ? undefined : chainLayer(layer),
       at: ports.now(),
       changeVersion: version,
       upperMark,
-      orphans: rebasing && previous !== null
-        ? [...(previous.orphans ?? []), previous.base.id]
-        : previous?.orphans,
+      // A REBASE SUPERSEDES A GENERATION, so the two roles move — see
+      // {@link supersedeGeneration}, which is the whole retention policy. A
+      // delta commit stays inside the generation it is relative to and moves
+      // neither role.
+      ...(rebasing && previous !== null
+        ? supersedeGeneration(previous)
+        : { fallback: previous?.fallback, orphans: previous?.orphans }),
       lastFailure: undefined,
     };
-    await ports.writeState(committed);
-    // The superseded generation is NAMED in the record before it is deleted, so
-    // a crash in the window that used to orphan it forever leaves an id the
-    // next sweep can find. UNCONDITIONAL, not just on the rebase that created
-    // the orphan: a crash between the flip and the delete is followed by
-    // ordinary checkpoints, and a sweep that only ran on rebases would wait for
-    // the next one to strand the bytes further. It costs nothing when the list
-    // is empty. See `ChainState.orphans`.
-    await sweepOrphans(committed);
-    await ports.exec(`rm -rf ${shellPath(stageDir)}`);
+    await publish(committed, async () => {
+      await ports.exec(`rm -rf ${shellPath(stageDir)}`);
+    });
     ports.log(
       `${DEVBOX_WORKDIR} ${rebasing ? 'rebase' : first ? 'base' : 'delta'} ${chainId} `
       + `(${layer.bytes} bytes)`,
@@ -1278,9 +1889,28 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const comparable = state?.changeVersion !== undefined;
     const effective: ChangeStatus = comparable ? change : 'changed';
     if (comparable && change === 'unchanged') {
-      // Advance the watermark so the next check is relative to now. A change
-      // this code DECLINED to archive must not advance it, or it is forgotten.
-      await ports.writeState({ ...state, changeVersion: version });
+      // ADVANCE THE WATERMARK, AND IT IS ADVISORY BY CONSTRUCTION. The next
+      // check is then relative to now. The hazard is the opposite one, which is
+      // why it is stated in the negative: a change this code DECLINED to archive
+      // must never advance it, or it is forgotten.
+      //
+      // So a rejection here is a console line and the skip still stands. An
+      // unadvanced watermark makes the next check ask about a WIDER window,
+      // which can only over-report change, and over-reporting means archiving —
+      // the safe direction; a token the platform has lost answers `resync`,
+      // which this strategy already treats as changed. Answering `failed`
+      // instead would be a false claim about work at risk, and it would refuse
+      // the quiesce this may be running under: `Devbox.quiesce` declines to
+      // stop a box on a failed checkpoint, so a flaky durable write would hold
+      // open a box whose work directory has nothing to archive.
+      try {
+        await ports.writeState({ ...state, changeVersion: version });
+      } catch (error) {
+        ports.log(
+          `${DEVBOX_WORKDIR} is unchanged and its change watermark could not be advanced, so `
+          + `the next check asks about a wider window: ${describe({ cause: error })}`,
+        );
+      }
       return { kind: 'skipped', ...idle, reason: 'work directory is unchanged' };
     }
     if (!comparable && (await ports.countEntries(DEVBOX_WORKDIR)) === 0) {
@@ -1309,11 +1939,16 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (state === null) return;
     // Objects first, then the pointer. Reversed, a crash orphans both: nothing
     // would name the objects and nothing would delete them.
-    // Every generation the record still NAMES goes with it — the orphans a
-    // rebase crash left behind included. clearState erases the only record
-    // naming them, and `backups/<uuid>/` is shared by every box, so a leak
-    // here was permanent by construction: no sweep may ever list them.
-    await ports.deleteObjects([state.base.id, ...(state.orphans ?? [])].flatMap(
+    // Every generation the record still NAMES goes with it — the retained
+    // fallback and the orphans a rebase crash left behind included. clearState
+    // erases the only record naming them, and `backups/<uuid>/` is shared by
+    // every box, so a leak here was permanent by construction: no sweep may
+    // ever list them.
+    await ports.deleteObjects([
+      state.base.id,
+      ...(state.fallback === undefined ? [] : [state.fallback.base.id]),
+      ...(state.orphans ?? []),
+    ].flatMap(
       (generation) => [
         baseObjectKey(generation),
         deltaObjectKey(generation),
@@ -1332,6 +1967,78 @@ function shellPath(path: string): string {
 
 function shellPaths(paths: readonly string[]): string {
   return paths.map(shellPath).join(' ');
+}
+
+/**
+ * The archiver command: stage the exclude list, build the squashfs, and report
+ * `<exit> <bytes>`.
+ *
+ * ONE COMMAND, and every part of that is a defect this file already paid for.
+ * Build and measure were two execs, and a spot container can be replaced
+ * between two RPCs: the build reported exit 0 on one container and the stat
+ * found no file on the next, which surfaced as "the archiver did not land"
+ * three times in one deployed run while mksquashfs had in fact succeeded. The
+ * exclude list is written here for the same reason — a list staged by an
+ * earlier exec is a list the next container does not have, and mksquashfs would
+ * then archive a tree with no policy applied.
+ *
+ * PATTERNS ARE DATA, NEVER SYNTAX. The list travels as base64 and is decoded
+ * container-side, so a pattern containing a quote, a space or a semicolon
+ * cannot become shell syntax. `-wildcards` is what makes a glob a glob, and
+ * `-ef` is the only exclude form that can carry the non-anchored lines
+ * {@link archiveExcludeFile} writes.
+ *
+ * STDERR IS KEPT by the caller. It used to go to /dev/null, so the one run that
+ * needed mksquashfs's own words to explain itself did not have them.
+ */
+export function archiveCommand(input: {
+  sourceDir: string;
+  archivePath: string;
+  excludeFile: string;
+  excludes: readonly string[];
+}): string {
+  let bytes = '';
+  for (const byte of new TextEncoder().encode(archiveExcludeFile(input.excludes))) {
+    bytes += String.fromCharCode(byte);
+  }
+  const encoded = btoa(bytes);
+  return `printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)} `
+    + `&& /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
+    + `-comp zstd -no-progress -wildcards -ef ${shellPath(input.excludeFile)} >/dev/null; `
+    + `rc=$?; printf '%s %s' "$rc" `
+    + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
+}
+
+/**
+ * The uncompressed size of what an archive of `sourceDir` would hold, as a
+ * command that prints one number.
+ *
+ * THE SAME MATCHER AS THE ARCHIVE, expressed in the only vocabulary `find` has.
+ * {@link archiveExcludeFile} writes each pattern twice, anchored to the source
+ * directory and non-anchored, so the policy means "at any depth". Here that is
+ * two `-path` predicates per pattern: one anchored at `<source>` for the top
+ * level, and one under a wildcard segment for everything below it. find's
+ * `-path` glob lets a wildcard cross a directory separator, so the pair covers
+ * every depth exactly as the exclude file does. `-prune` then keeps the walk
+ * out of an excluded tree rather than merely skipping its files, which is what
+ * makes the number the archive's own worst case.
+ *
+ * A failed walk prints 0, which reads as "no requirement" and lets the
+ * checkpoint proceed: refusing every checkpoint because a probe could not walk
+ * would lose more work than a full disk would.
+ */
+export function archiveSizeCommand(sourceDir: string, excludes: readonly string[]): string {
+  const pruned: string[] = [];
+  for (const pattern of excludes) {
+    const normalized = normalizeArchiveExclude(pattern);
+    if (normalized === null) continue;
+    pruned.push(
+      `-path ${shellPath(`${sourceDir}/${normalized}`)} -prune -o`,
+      `-path ${shellPath(`${sourceDir}/*/${normalized}`)} -prune -o`,
+    );
+  }
+  return `find ${shellPath(sourceDir)} ${pruned.join(' ')} -type f -printf '%s\\n' 2>/dev/null `
+    + `| awk '{t+=$1} END {print t+0}'`;
 }
 
 /**

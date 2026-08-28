@@ -125,7 +125,7 @@ describe('drained event parsing', () => {
       id: 'ev-1',
       ingress: 'subordinate',
       variant: 'subordinate_report',
-      payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps', kinu_mode: 'build' },
+      payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps', kinu_mode: 'build', sequence_id: 'u-1/a-1' },
     })])!;
     expect(parseDrainedEvents(batch.text)).toEqual([{
       variant: 'subordinate_report',
@@ -162,6 +162,7 @@ describe('drained event parsing', () => {
       payload: {
         from_agent_name: 'atlas', from_user_id: 'u1', topic: 'schema', body: 'which shape?',
         sender_event_id: 'out-1', reply_expected: true, kinu_mode: 'build',
+        sequence_id: 'seq-1',
       },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);
@@ -193,6 +194,7 @@ describe('drained event parsing', () => {
         from_workspace: 'atlas', kind: 'task' as const, body: 'check the CLI',
         inherited_context: 'Context line one.\nContext line two.',
         kinu_mode: 'build',
+        sequence_id: 'seq-1',
       },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);

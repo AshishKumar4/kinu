@@ -1,5 +1,5 @@
 import { useTerminalDimensions } from '@opentui/react';
-import type { ReasoningEffort, ResolvedTurnProfile } from '@kinu.run/core';
+import { TUI_MARKS, type ReasoningEffort, type ResolvedTurnProfile } from '@kinu.run/core';
 
 import type { AgentClientMode } from '../agent-client';
 import { VERSION } from '../display';
@@ -24,14 +24,14 @@ interface Props {
   profile?: ResolvedTurnProfile;
 }
 
-const IDENTITY_PREFIX = 'kinu ❯ ';
+const IDENTITY_PREFIX = `kinu ${TUI_MARKS.prompt} `;
 
 export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0, profile }: Props) {
   const { width } = useTerminalDimensions();
   const { colors } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
   const innerWidth = Math.max(0, width - 4);
-  const connection = connected ? '●' : '○';
+  const connection = connected ? TUI_MARKS.connected : TUI_MARKS.disconnected;
   const compactVersionTail = ` cli ${VERSION} ${connection}`;
   const tail = width >= 48
     ? `  cli ${VERSION}  ${connection}`

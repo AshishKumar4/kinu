@@ -136,6 +136,53 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     forked_at                     INTEGER NOT NULL
   )`;
 
+/**
+ * Fork transfer staging — the state of the ONE unpublished fork transfer this
+ * workspace is receiving. Empty on every workspace that is not mid-fork.
+ *
+ * A single row, because a target receives one transfer at a time: a second
+ * `begin` replaces the first rather than racing it. Its columns are what
+ * `identity/fork-staging.ts`'s `ForkStagingState` reads and writes; the reason
+ * they are a TABLE rather than instance fields is written down there.
+ */
+const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
+    id                       INTEGER PRIMARY KEY CHECK (id = 1),
+    head_declared            INTEGER NOT NULL DEFAULT 0,
+    head_source_id           TEXT    NOT NULL DEFAULT '',
+    head_source_name         TEXT    NOT NULL DEFAULT '',
+    head_cut_message_id      TEXT    NOT NULL DEFAULT '',
+    head_cut_created_at      INTEGER NOT NULL DEFAULT 0,
+    mission                  TEXT    NOT NULL DEFAULT '',
+    pane_table_created       INTEGER NOT NULL DEFAULT 0,
+    staged_agent_config      INTEGER NOT NULL DEFAULT 0,
+    staged_crafted_tools     INTEGER NOT NULL DEFAULT 0,
+    staged_memory_chunks     INTEGER NOT NULL DEFAULT 0,
+    staged_pane_messages     INTEGER NOT NULL DEFAULT 0,
+    staged_messages          INTEGER NOT NULL DEFAULT 0,
+    staged_files             INTEGER NOT NULL DEFAULT 0,
+    transfer_id              TEXT,
+    expected_seq             INTEGER NOT NULL DEFAULT 0,
+    section_cursor           INTEGER NOT NULL DEFAULT 0,
+    stream                   TEXT    NOT NULL DEFAULT '',
+    file_path                TEXT,
+    file_bytes               INTEGER NOT NULL DEFAULT 0,
+    want_agent_config        INTEGER NOT NULL DEFAULT 0,
+    want_crafted_tools       INTEGER NOT NULL DEFAULT 0,
+    want_memory_chunks       INTEGER NOT NULL DEFAULT 0,
+    want_pane_messages       INTEGER NOT NULL DEFAULT 0,
+    want_messages            INTEGER NOT NULL DEFAULT 0,
+    want_files               INTEGER NOT NULL DEFAULT 0,
+    published                INTEGER NOT NULL DEFAULT 0
+  )`;
+
+/** The files an unpublished transfer has already published into the target's
+ *  plane. A replacement `begin` removes exactly these paths, so an abandoned
+ *  attempt cannot leave a file behind — and the list survives the activation
+ *  that wrote it, which is the whole point of it being a table. */
+const FORK_STAGED_FILES_DDL = `CREATE TABLE IF NOT EXISTS fork_staged_files (
+    path TEXT PRIMARY KEY
+  )`;
+
 /** Initialize state local to one full-loop actor without materializing a
  * workspace ownership root or independent fork lineage. */
 export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
@@ -160,6 +207,8 @@ export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   reconcileColumns(sql, execRaw, 'workspace_identity', { mission: `TEXT NOT NULL DEFAULT ''` });
   initActorTables(execRaw, sql);
   execRaw(FORK_LINEAGE_DDL);
+  execRaw(FORK_TRANSFER_DDL);
+  execRaw(FORK_STAGED_FILES_DDL);
 }
 
 /**

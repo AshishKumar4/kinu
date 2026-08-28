@@ -159,7 +159,7 @@ function fullDeps(): AgentsToolDeps {
         displayName: 'N',
         subordinate: {
           name: 'n', displayName: 'N', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null,
+          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
         },
       }),
       rename: async () => ({
@@ -168,12 +168,13 @@ function fullDeps(): AgentsToolDeps {
         displayName: 'N',
         subordinate: {
           name: 'n', displayName: 'N', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null,
+          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
         },
       }),
       recordTitle: async () => ({ ok: true as const, name: 'n', displayName: 'N', applied: true }),
       spawn: async () => ({ name: 'n', displayName: 'N' }),
       assign: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
+      knows: async () => true,
       status: async () => ({}),
       message: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
       dismiss: async () => ({ ok: true, name: 'n', historyKept: true }),
@@ -243,7 +244,7 @@ describe('agents.* in the cf codemode tool', () => {
       expect(description).toContain(member);
     }
     // Its neighbours are untouched — this is one more namespace, not a rewrite.
-    expect(description).toContain('export declare const llm: {');
+    expect(description).toContain('export declare const web: {');
   });
 
   test('a search-only actor is told about swarm and nothing else', () => {
@@ -261,7 +262,7 @@ describe('agents.* in the cf codemode tool', () => {
     // is the absent dep, exactly as it is for the top-level tool.
     const description = executeToolsDescription();
     expect(description).not.toContain('const agents');
-    expect(description).toContain('export declare const llm: {');
+    expect(description).toContain('export declare const web: {');
   });
 });
 

@@ -208,7 +208,12 @@ describe("executor lifecycle state", () => {
     if (!provided.supported) expect(provided.reason).toContain("not configured");
   });
 
-  test("sandbox exec strips AbortSignal before remote SDK calls", async () => {
+  // KINU-033. This used to assert the opposite — that the signal was STRIPPED
+  // before the SDK call — which is precisely why an abort cancelled nothing: the
+  // adapter owns the container process id, so a signal that never reaches it
+  // cannot kill anything, and core answered `cancelled` over a command still
+  // writing to /workspace.
+  test("sandbox exec hands the AbortSignal to the container, and no work deadline", async () => {
     const handle = sandboxHandle();
     const executor = createSandboxExecutor(handle, "kinu.example.test");
     const signal = new AbortController().signal;
@@ -216,10 +221,18 @@ describe("executor lifecycle state", () => {
     const result = await executor.tools.exec.execute("echo ok", { signal });
 
     expect(result).toBe("ok");
-    // /workspace is the executor's own default cwd, passed explicitly — and it
-    // is the ONLY option sent. No `timeout`: this lane carries no work deadline,
-    // because a lane deadline outranks every detach window above it (see
+    // /workspace is the executor's own default cwd, passed explicitly. No
+    // `timeout`: this lane carries no work deadline, because a lane deadline
+    // outranks every detach window above it (see
     // unit-exec-detach-ceiling.test.ts).
+    expect(handle.execOptions).toEqual([{ cwd: "/workspace", signal }]);
+  });
+
+  test("sandbox exec with no caller signal sends none", async () => {
+    const handle = sandboxHandle();
+    const executor = createSandboxExecutor(handle, "kinu.example.test");
+
+    expect(await executor.tools.exec.execute("echo ok")).toBe("ok");
     expect(handle.execOptions).toEqual([{ cwd: "/workspace" }]);
   });
 
@@ -238,6 +251,35 @@ describe("executor lifecycle state", () => {
     const executor = createSandboxExecutor(handle, "kinu.example.test");
 
     await expect(executor.listExposedPorts!()).rejects.toThrow("preview registry unavailable");
+  });
+
+  test("a transient failure never starts a second supervised process", async () => {
+    // KINU-N031: the START was inside the transient retry. Creating the process
+    // and recording its durable spec are two steps inside the container, so a
+    // "network connection lost" between them left a live process with no spec —
+    // and the retry, which can only look for a spec, started a second one. Two
+    // servers then fought over one port and the unrecorded one could not be
+    // listed, stopped or restored.
+    const handle = sandboxHandle();
+    let starts = 0;
+    let readies = 0;
+    handle.ensureReady = async () => {
+      readies += 1;
+      if (readies === 1) throw new Error("network connection lost");
+    };
+    handle.startSupervisedProcess = async () => {
+      starts += 1;
+      throw new Error("network connection lost");
+    };
+    const executor = createSandboxExecutor(handle);
+
+    const out = await executor.tools.startProcess.execute("bun run server.ts");
+
+    // Waking the container creates nothing, so that half is still retried...
+    expect(readies).toBe(2);
+    // ...while the creation ran exactly once, and its failure is stated.
+    expect(starts).toBe(1);
+    expect(String(out)).toContain("network connection lost");
   });
 
   test("Nimbus adapter uses the SDK sandbox handle shape", async () => {

@@ -1,18 +1,63 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { memberBody } from '@kinu.run/test-utils';
+import { memberBody, toolExecute } from '@kinu.run/test-utils';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, effectiveRoleCatalog, profileCatalogDigest,
+  WORKSPACE_RUN_ID,
   type CompletedTurn, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import {
-  orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
+  orchestratorHarness, reactivateOrchestratorHarness,
+  type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import type { ToolSet, UIMessage } from 'ai';
+import type { ModelMessage, ToolSet, UIMessage } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { PrepareStepContext } from '@cloudflare/think';
 import * as v from 'valibot';
 
-const TasksToolProbeSchema = v.object({ execute: v.function() });
+/** The provider handle a live streamText also passes. `beforeStep` forwards
+ *  only `stepNumber` and `messages` to the shared pipeline, so this is supplied
+ *  as the model a step carries rather than asserted away. */
+const STEP_MODEL = new MockLanguageModelV3();
+
+/** The override half of a `PrepareStepResult`. `v.custom` keeps the element
+ *  type without restating the SDK's message union. */
+const StepOverrideSchema = v.object({
+  messages: v.array(v.custom<ModelMessage>(() => true)),
+});
+
+/**
+ * The messages one step actually carries, driven through the real Think hook.
+ *
+ * Awaited: the shared pipeline is promoted to a Promise whenever a registered
+ * extension must finish I/O before the model sees its rewrite, and this actor
+ * registers three. Reading the result synchronously takes a pending Promise for
+ * "nothing changed" and silently passes the input back.
+ */
+async function stepMessages(
+  agent: HarnessOrchestratorAgent, stepNumber: number, messages: ModelMessage[],
+): Promise<ModelMessage[]> {
+  const context: PrepareStepContext = {
+    stepNumber, messages, steps: [], model: STEP_MODEL, experimental_context: undefined,
+  };
+  const rewritten = v.safeParse(StepOverrideSchema, await agent.beforeStep(context));
+  return rewritten.success ? rewritten.output.messages : messages;
+}
+
+/** The turn-local block the ledger weaves into every step's request. */
+function isDynamicContextBlock(message: ModelMessage): boolean {
+  if (message.role !== 'user') return false;
+  const { content } = message;
+  return !Array.isArray(content) && content.includes('<dynamic_context');
+}
+
+/** No `TasksToolProbeSchema` here: `v.function()` erases the SIGNATURE, so a
+ *  hand-driven `execute(input)` compiled with the SDK's `options` argument
+ *  missing and only failed at runtime, inside the effect-claim wrapper reading
+ *  `options.toolCallId`. `toolExecute` is the typed drive every other suite uses
+ *  and it supplies the canonical `ToolExecutionOptions`, which is what the SDK
+ *  hands a tool in production. */
 const RoleResultSchema = v.object({ role: v.string() });
 
 // The turn pipeline is split across the actor substrate (actor-agent.ts —
@@ -20,7 +65,6 @@ const RoleResultSchema = v.object({ role: v.string() });
 // the orchestrator (onChatResponse sequencing, schema, callables).
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
-const subordinate = readFileSync(join(import.meta.dir, '..', 'src', 'subordinate-agent.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
@@ -184,18 +228,24 @@ describe('turn-pipeline correctness wiring', () => {
     expect(snapshot).toContain('stores: this.stores');
   });
 
-  test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', () => {
+  test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', async () => {
     // Per-step, because the state it carries changes mid-turn: a job detaches,
     // a sandbox comes up, a consent card lands. Assembling it once per turn
-    // would show the model a snapshot that is already stale by step 2.
-    const beforeStep = actor.slice(actor.indexOf('beforeStep(ctx: PrepareStepContext)'));
-    expect(beforeStep).toContain('composePrepareStep({');
-    expect(beforeStep).toContain('dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() }');
-    const assembleArgs = actor.slice(
-      actor.indexOf('const assembly: Parameters<typeof assembleTurnMessages>[0] = {'),
-      actor.indexOf('cfg.messages = await assembleTurnMessages(assembly)'),
-    );
-    expect(assembleArgs).not.toContain('ledger:');
+    // would show the model a snapshot that is already stale by step 2 — and a
+    // prepareStep override never feeds the next step's input, so a block woven
+    // at turn assembly would be gone from every request after the first.
+    //
+    // Driven rather than read: `beforeStep` is the hook streamText calls, and
+    // the two facts here — the block is absent from what the step is HANDED and
+    // present in what it CARRIES, on every step — are the operational content of
+    // "per step, not per turn". A source scan for the wiring cannot tell a live
+    // weave from a dead one.
+    const { agent } = orchestratorHarness();
+    const handed: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
+
+    expect(handed.filter(isDynamicContextBlock)).toHaveLength(0);
+    expect((await stepMessages(agent, 0, handed)).filter(isDynamicContextBlock)).toHaveLength(1);
+    expect((await stepMessages(agent, 4, handed)).filter(isDynamicContextBlock)).toHaveLength(1);
   });
 
   test('beforeTurn merges profile reasoning effort with cache provider options', () => {
@@ -258,6 +308,13 @@ describe('turn-pipeline correctness wiring', () => {
   // model spends its budget thinking before it emits anything, so a cap
   // truncates or starves the answer. Cost is controlled by reasoning effort.
   // An explicitly configured cap is still honoured; a hardcoded literal is not.
+  //
+  // `maxOutputTokens` means exactly one thing in this repo and this gate is why:
+  // an output cap on a model REQUEST. Context admission reserves the resolved
+  // model's answer allowance under its own name (`ModelWindow.modelOutputLimit`,
+  // prompting/step-prune.ts) precisely so this stays strict — a second meaning
+  // for the same identifier would have needed an exception here, and an
+  // exception in a gate is the gate.
   test('no production source hardcodes an output-token cap', () => {
     const root = join(import.meta.dir, '..', '..');
     const offenders: string[] = [];
@@ -311,13 +368,14 @@ describe('turn-pipeline correctness wiring', () => {
     expect(actor).not.toContain('reenqueue');
   });
 
-  test('an INTERRUPTED turn still projects the session tree into `messages`', async () => {
+  test('an INTERRUPTED turn is complete through every reader, with no mirror write', async () => {
     // The bug the operator hit: he forked from a message the chat pane was
-    // showing and got `fork point not found`. `messages` was written by a
-    // turn-end summary that ran only on the completed path, so an interrupted
-    // turn left the pane and the fork substrate disagreeing. This asserts the
-    // BEHAVIOUR, not the source text — delete the `reconcileSessionTree` call in
-    // `onChatResponse` and this goes red.
+    // showing and got `fork point not found`, because every reader but the
+    // fork cut read the `messages` projection, and the projection skipped
+    // anything that had not been reconciled. The readers now go through the
+    // canonical conversation store — the SDK's own transcript — so nothing
+    // may be written into `messages` for the default chat, and the
+    // interrupted turn must still be served by the paged history read.
     const harness = orchestratorHarness();
     harness.db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
@@ -341,13 +399,17 @@ describe('turn-pipeline correctness wiring', () => {
       message, requestId: 'req-interrupted', continuation: false, status: 'aborted',
     });
 
-    const rows = harness.db.prepare<{ id: string; parent_id: string | null; content: string }, []>(
-      `SELECT id, parent_id, content FROM messages WHERE session_id = 'default' ORDER BY rowid`,
-    ).all();
-    expect(rows.map((r) => r.id)).toEqual(['u-live', 'a-live']);
-    expect(rows[1]!.parent_id).toBe('u-live');
-    // Flattened for search and the evolution outcome join, not the raw UI JSON.
-    expect(rows[1]!.content).toBe('partial answer');
+    // No projection row anywhere.
+    const mirrored = harness.db.prepare<{ c: number }, []>(
+      `SELECT COUNT(*) AS c FROM messages WHERE session_id = 'default'`,
+    ).get();
+    expect(mirrored?.c).toBe(0);
+
+    // The paged history read serves the interrupted turn straight from the
+    // authority, text flattened, edges intact.
+    const page = await harness.agent.getChatHistoryPage({ limit: 10 });
+    expect(page.items.map((entry) => entry.id)).toEqual(['u-live', 'a-live']);
+    expect(page.items[1]!.content).toBe('partial answer');
   });
 
   test('an ABORTED turn is still recorded as evidence', async () => {
@@ -361,6 +423,10 @@ describe('turn-pipeline correctness wiring', () => {
     // extension half is core's (it runs unconditionally inside settleTurn), so
     // what THIS asserts is the half that was unprovable here — the durable row.
     const harness = orchestratorHarness();
+    // What `beforeTurn` establishes for a turn with no durable identity: this
+    // session records evolution state, and the settled response carries that
+    // fact into the recording rather than asking the host that recovers it.
+    harness.agent.declareTurnEvolutionGate();
 
     await harness.agent.onChatResponse({
       message: {
@@ -435,6 +501,126 @@ describe('turn-pipeline correctness wiring', () => {
     });
   });
 
+  // A delivery's recovery lease says "a running turn still owes this an
+  // answer", and `onStart`'s sweep re-pends every lease it finds open. So the
+  // settle has to close the lease for EVERY way a drain reaches a turn, and
+  // only when the turn's answer is durable — otherwise the sweep either
+  // re-delivers an answered event or abandons an unanswered one.
+  describe('a settled turn closes the delivery leases it answered, and only those', () => {
+    /**
+     * When the lease was taken. A LIVE stamp, not a literal: the activation
+     * reconcile sweeps leases stranded past a grace, so a 1970 stamp would make
+     * every case measure the sweep instead of the closure. unit-durable-terminal
+     * uses the same shape for the same reason.
+     */
+    const LEASE_TAKEN_AT = Date.now();
+
+    /** One admitted event, bound to `turnId` with its recovery lease OPEN —
+     *  what a drain leaves behind on its way to the turn. */
+    function boundDelivery(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string): void {
+      harness.db.prepare(
+        `INSERT INTO agent_log
+           (id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+            trust, priority, payload_visibility, payload, received_at,
+            schema_version, dedupe_key, consumed_at)
+         VALUES ('ev-1', 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
+                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
+      ).run(turnId, JSON.stringify({
+        webhook_id: 'hook-1',
+        http_method: 'POST',
+        http_headers: { 'content-type': 'application/json' },
+        body: { text: 'a build finished' },
+        delivery_id: 'delivery-1',
+      }), LEASE_TAKEN_AT);
+    }
+
+    /** The lease once every owed effect of the turn has reported. The write is
+     *  the tail of a detached dispatch, so reading the row synchronously would
+     *  pin the absence of a guarantee nobody makes. Bounded, so the two
+     *  recoverable cases — where it must NEVER close — still fail loudly. */
+    async function settledLease(
+      harness: ActorHarness<HarnessOrchestratorAgent>,
+    ): Promise<{ turn_id: string | null; consumed_at: number | null }> {
+      for (let tick = 0; tick < 50 && lease(harness).consumed_at !== null; tick++) {
+        await Bun.sleep(1);
+      }
+      return lease(harness);
+    }
+
+    function lease(harness: ActorHarness<HarnessOrchestratorAgent>): { turn_id: string | null; consumed_at: number | null } {
+      return v.parse(
+        v.object({ turn_id: v.nullable(v.string()), consumed_at: v.nullable(v.number()) }),
+        harness.db.query('SELECT turn_id, consumed_at FROM agent_log WHERE id = \'ev-1\'').get(),
+      );
+    }
+
+    /** Splice a drain into the live turn, exactly as the reactor does: the seam
+     *  routes on `turnInFlight`, and the step boundary is what absorbs it. */
+    async function spliceDrain(
+      harness: ActorHarness<HarnessOrchestratorAgent>, replyTurnId: string,
+    ): Promise<void> {
+      if (!Reflect.set(harness.agent, '_inFlight', true)) {
+        throw new Error('failed to put the harness actor in a turn');
+      }
+      const signals = harness.agent.observeOrch().signals;
+      expect(await signals.deliver({ kind: 'event_drain', text: 'a build finished', replyTurnId }))
+        .toBe('mid-turn');
+      signals.prepareStep({ stepNumber: 0, messages: [] });
+    }
+
+    test('a spliced drain settles once, and the activation sweep will not redeliver it', async () => {
+      const harness = orchestratorHarness();
+      boundDelivery(harness, 'evt-spliced');
+      await spliceDrain(harness, 'evt-spliced');
+
+      await harness.agent.onChatResponse({
+        message: { id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] },
+        requestId: 'req-spliced', continuation: false, status: 'completed',
+      });
+
+      // Answered: the lease is closed and the BINDING is kept, so no drain can
+      // select it again either.
+      expect(await settledLease(harness)).toEqual({ turn_id: 'evt-spliced', consumed_at: null });
+      // What the next activation's sweep would take: nothing.
+      expect(harness.db.query(
+        `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND consumed_at IS NOT NULL`,
+      ).get()).toMatchObject({ n: 0 });
+    });
+
+    test('a turn with no durable answer leaves the delivery recoverable', async () => {
+      const harness = orchestratorHarness();
+      boundDelivery(harness, 'evt-nodurable');
+      await spliceDrain(harness, 'evt-nodurable');
+
+      // Think reported a completed stream, but no assistant row carries the
+      // answer — a later activation reads this turn back as never having
+      // happened, so the delivery is still owed.
+      await harness.agent.onChatResponse({
+        message: { id: '', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] },
+        requestId: 'req-nodurable', continuation: false, status: 'completed',
+      });
+
+      expect(await settledLease(harness)).toEqual({
+        turn_id: 'evt-nodurable', consumed_at: LEASE_TAKEN_AT,
+      });
+    });
+
+    test('a failed turn leaves the delivery recoverable', async () => {
+      const harness = orchestratorHarness();
+      boundDelivery(harness, 'evt-failed');
+      await spliceDrain(harness, 'evt-failed');
+
+      await harness.agent.onChatResponse({
+        message: { id: 'a-3', role: 'assistant', parts: [] },
+        requestId: 'req-failed', continuation: false, status: 'error', error: 'provider exploded',
+      });
+
+      expect(await settledLease(harness)).toEqual({
+        turn_id: 'evt-failed', consumed_at: LEASE_TAKEN_AT,
+      });
+    });
+  });
+
   test('programmatic turns succeed only after Think completes the turn and keep their own drain identity', () => {
     const host = actor.slice(
       actor.indexOf('protected get host(): BackendHost'),
@@ -446,7 +632,14 @@ describe('turn-pipeline correctness wiring', () => {
     expect(host).toContain('finally {');
     expect(host).toContain('this._activeProgrammaticUserMessage === message');
     const settle = actor.slice(actor.indexOf('protected settleTurnEvents(result: ChatResponseResult)'));
-    expect(settle).toContain('this._activeDrainTurnId ?? this._pendingDrainReplyTurns.get(result.requestId)');
+    // Three sources for one identity, and the third is what a DURABLY ADMITTED
+    // drain needs: the activation that runs it is not the one that submitted it,
+    // so it holds neither the stash nor the re-delivery entry, and the only
+    // remaining witness is the `drainTurnId` the enqueue seam persisted on the
+    // driving message.
+    expect(settle).toContain('this._activeDrainTurnId');
+    expect(settle).toContain('this._pendingDrainReplyTurns.get(result.requestId)');
+    expect(settle).toContain('this.turnDrainTurnId()');
     const response = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
     expect(response).toContain('const lastUserMsg = programmaticUserMessage ??');
     expect(response).not.toContain('metadata.drainTurnId');
@@ -466,9 +659,21 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('standalone drain identity survives Think auto-continuations until reply settlement', () => {
-    const response = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
-    expect(response).toContain('this._pendingDrainReplyTurns.set(result.requestId, drainTurnId)');
-    expect(response).toContain('this._pendingDrainReplyTurns.delete(result.requestId)');
+    // The reply is one CLAIMED terminal effect now, so the identity bookkeeping
+    // lives in that effect's body rather than inline in the response hook — which
+    // is also what makes it survive an eviction rather than only a continuation.
+    const replyEffect = source.slice(
+      source.indexOf('event_reply: terminalEffect({'),
+      source.indexOf('branches: terminalEffect({'),
+    );
+    // Registered for the QUEUED drain only: that identity has to outlive an
+    // auto-continuation, while a spliced one is reported afresh on every
+    // absorbed signal and has nothing to carry forward.
+    expect(replyEffect).toContain('this._pendingDrainReplyTurns.set(requestId, drainTurnId)');
+    expect(replyEffect).toContain('this._pendingDrainReplyTurns.delete(requestId)');
+    // The request id is part of the RECORDED input, so a replay on a later
+    // activation re-registers under the same identity instead of inventing one.
+    expect(replyEffect).toContain('requestId: v.string()');
     const clear = actor.slice(
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
       actor.indexOf('/** The settled turn\'s actor-generic front half'),
@@ -476,10 +681,38 @@ describe('turn-pipeline correctness wiring', () => {
     expect(clear).toContain('this._pendingDrainReplyTurns.clear()');
   });
 
-  test('activation runs one stale-delivery sweep and schedules the standard drain when it recovers rows', () => {
+  test('activation finishes the replies it owes BEFORE the stale sweep re-asks anything', () => {
+    // Activation reaches one reconcile…
     const onStart = memberBody(source, 'onStart(): void', 'orchestrator.ts');
-    expect(onStart).toContain('this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS)');
-    expect(onStart).toContain('this.orch.scheduleDrain()');
+    expect(onStart).toContain('this.reconcileEventDeliveries()');
+
+    // …and that reconcile does the two acts in the ONE order that cannot lose
+    // work. An open lease is either a question nobody answered or an answer
+    // nobody delivered; re-pending the second asks the sender its own question
+    // again while the reply it is waiting on already exists. So the resume is
+    // AWAITED first, and the exclusion handed to the sweep is the invariant
+    // backup that holds even if a later caller reverses them.
+    const reconcile = memberBody(
+      source, 'protected async reconcileEventDeliveries(): Promise<void>', 'orchestrator.ts',
+    );
+    const resumedAt = reconcile.indexOf('await this.terminal.resumeAll()');
+    const sweptAt = reconcile.indexOf('this.eventLog.unbindStale(');
+    expect(resumedAt).toBeGreaterThan(-1);
+    expect(sweptAt).toBeGreaterThan(resumedAt);
+    expect(reconcile).toContain('STALE_EVENT_DELIVERY_MS');
+    expect(reconcile).toContain('this.owedDrainReplies()');
+    expect(reconcile).toContain('this.orch.scheduleDrain()');
+  });
+
+  test('cloud admission counts precisely the active tool surface Think submits', () => {
+    const beforeTurn = actor.slice(
+      actor.indexOf('async beforeTurn(ctx: TurnContext)'),
+      actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
+    );
+    expect(beforeTurn).toContain('const submittedTools = { ...ctx.tools, ...effectiveTools };');
+    expect(beforeTurn).toContain('effectiveActiveTools.flatMap((name) => {');
+    expect(beforeTurn).toContain('const entry = submittedTools[name];');
+    expect(beforeTurn).toContain('tools: { ...ctx.tools, ...cfg.tools }');
   });
 
   test('attachment sanitization runs on the whole history BEFORE the extension transform', () => {
@@ -559,14 +792,14 @@ describe('turn-pipeline correctness wiring', () => {
     expect(turnMode).toContain('if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();');
   });
 
-  test('BOTH prompt paths advertise the RLM provider the sandbox always wires', async () => {
-    // `createRLMProvider` is unconditional in buildCfExecuteTools, so `llm.query`
-    // is wired on every turn this backend runs — and `rlmAvailable` was set on the
+  test('BOTH prompt paths advertise the temporary rung the child substrate always wires', async () => {
+    // Every cf actor with room below it holds team deps, so the temporary rung is
+    // wired on every turn this backend runs — and the flag used to be set on the
     // cached base alone. TurnConfig.system overrides that base for every turn, so
     // the ONE prompt the model actually receives was the one surface that never
-    // said the capability existed: 143 tokens of decomposition doctrine plus the
-    // ladder's zeroth rung, absent from every shipped turn. Both paths, because
-    // one path knowing is exactly the state that shipped.
+    // said the capability existed: the ladder's middle rung, absent from every
+    // shipped turn. Both paths, because one path knowing is exactly the state
+    // that shipped.
     const { agent } = orchestratorHarness();
     const config = await agent.beforeTurn({
       system: 'sys',
@@ -577,8 +810,8 @@ describe('turn-pipeline correctness wiring', () => {
       body: {},
     });
     for (const prompt of [config?.system ?? '', agent.getSystemPrompt()]) {
-      expect(prompt).toContain('`llm.query(text, { model?, reasoning_effort? })` is available');
-      expect(prompt).toContain('The cheapest helper is not an agent');
+      expect(prompt).toContain('agents.ask({ role, message, context_ref');
+      expect(prompt).toContain('One question (action=ask with `role`)');
     }
   });
 
@@ -594,8 +827,8 @@ describe('turn-pipeline correctness wiring', () => {
       body: {},
     });
     await turn('open the turn');
-    const tasks = v.parse(TasksToolProbeSchema, agent.getTools().tasks);
-    const result = v.parse(RoleResultSchema, await tasks.execute({ action: 'mode', role: 'auditor' }));
+    const setMode = toolExecute<{ action: 'mode'; role: string }, unknown>(agent.getTools().tasks);
+    const result = v.parse(RoleResultSchema, await setMode({ action: 'mode', role: 'auditor' }));
     expect(result.role).toBe('auditor');
     const config = await turn('audit this change');
     expect(config?.system).toContain('## Role: Auditor (auditor)');
@@ -673,7 +906,7 @@ describe('turn-pipeline correctness wiring', () => {
     // CAN afford the heavy pass, which is why a one-shot `kinu exec` defers it.
     const settle = actor.slice(
       actor.indexOf('protected settleEvolutionInBackground(): void'),
-      actor.indexOf("   * The settled turn's spine"),
+      actor.indexOf('  protected warmUserMcpInBackground(): void {'),
     );
     expect(settle).toContain('if (this._evolutionSettling) return;');
     expect(settle).toContain('await this.orch.settleEvolution();');
@@ -693,11 +926,15 @@ describe('turn-pipeline correctness wiring', () => {
     // loss. Typed, so a field dropped from the snapshot is a build error rather
     // than a review that silently re-runs against different inputs.
     const advisor = actor.slice(
-      actor.indexOf('private reviewTurnInBackground(turn: CompletedTurn): void'),
+      actor.indexOf('protected reviewTurnInBackground('),
       actor.indexOf('protected get scaffoldControl()'),
     );
     expect(advisor).toContain('void this.runFiber(ADVISOR_LANE_FIBER');
-    expect(advisor).toContain('const snapshot: AdvisorRecoverySnapshot = {');
+    // The snapshot is RECORDED by the effect that owes the review and handed in,
+    // because `_lastTurnOpts` is null on a cold activation — a lane that
+    // re-derived `reachable` there would review a different tool surface.
+    expect(advisor).toContain('recorded ?? this.advisorSnapshotFor(turn)');
+    expect(actor).toContain('protected advisorSnapshotFor(turn: CompletedTurn): AdvisorRecoverySnapshot {');
     expect(advisor).toContain('ctx.stash(snapshot);');
     expect(advisor).not.toContain('keepAliveWhile');
     // ONE body for the live lane and its recovery. Two would drift on exactly
@@ -714,37 +951,27 @@ describe('turn-pipeline correctness wiring', () => {
     expect(advisorRecovery).toContain('transports.reviewAdvisorSnapshot(snapshot)');
     expect(advisorRecovery).toContain('transports.hasAdvisorNoteForTurn(turnId)');
 
-    // …and the shared post-turn spine actually calls it, after the settle
-    // dispatched the recording — for EVERY actor, not just the orchestrator.
-    const spine = actor.slice(
-      actor.indexOf('protected async settleTurnSpine('),
-      actor.indexOf('private reviewTurnInBackground(turn: CompletedTurn): void'),
+    // The lanes themselves are now separately CLAIMED effects rather than one
+    // compound spine, and they live on the shared base because both cf actors run
+    // the identical body — so what is pinned here is that the recovery arm exists
+    // and that the lane verdict is core's single derivation. The behaviour is
+    // asserted below, through the effect production dispatches.
+    const lanes = actor.slice(
+      actor.indexOf("improvement_lanes: terminalEffect({"),
+      actor.indexOf("  protected terminalEffectTable(): TerminalEffectTable {"),
     );
-    const record = spine.indexOf('await this.orch.settleTurn({');
-    const settleCall = spine.indexOf('this.settleEvolutionInBackground();');
-    expect(record).toBeGreaterThan(-1);
-    expect(spine).not.toContain('this.orch.recordTurn(');
-    expect(settleCall).toBeGreaterThan(record);
-    // WHICH lanes may run is not spelled here at all: core's `settleTurn`
-    // returns the completed-and-build verdict, derived from the beginTurn
-    // metadata its recording gate already used, so neither backend can answer
-    // the question independently (the CLI once queued shadow trials for turns
-    // that FAILED while this spine did not).
-    expect(spine).toContain('if (!improvementLanesOpen) return false;');
-    expect(spine).not.toContain("input.workMode === 'plan'");
-    expect(subordinate).not.toContain('workMode: turnMode');
-    // The ROOT still computes turnMode — creditedTurnId legitimately takes it
-    // — so the pin is the settle call itself, not the whole file.
-    const rootSettle = source.slice(
-      source.indexOf('const settle = () => this.settleTurnSpine({'),
-      source.indexOf('if (result.status !== "completed")'),
-    );
-    expect(rootSettle).not.toContain('workMode');
-    // The promotion gate's trial is queued THROUGH the engine, which holds the
-    // one auto-evolution gate. Calling core's queueTurnShadowTrial from here
-    // instead is how a `--no-auto-evolve` run came to leave trial rows behind.
-    expect(spine).toContain('this.engine.queueShadowTrial(input.turn,');
-    expect(spine).not.toContain('queueTurnShadowTrial(');
+    expect(lanes).toContain('this.orch.improvementLanesOpen(status, workMode)');
+    expect(lanes).toContain('this.settleEvolutionInBackground();');
+    expect(lanes).toContain('this.engine.queueShadowTrial(');
+    // Queued THROUGH the engine, which holds the one auto-evolution gate.
+    // Calling core's queueTurnShadowTrial from here instead is how a
+    // `--no-auto-evolve` run came to leave trial rows behind.
+    expect(lanes).not.toContain('queueTurnShadowTrial(');
+    // WHICH lanes may run is not spelled here at all: core's predicate answers
+    // it from the RECORDED mode, so neither backend can answer it independently
+    // (the CLI once queued shadow trials for turns that FAILED while the cloud
+    // spine did not).
+    expect(lanes).not.toContain("workMode === 'plan'");
   });
 
   test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {
@@ -759,10 +986,10 @@ describe('turn-pipeline correctness wiring', () => {
   });
 });
 
-describe('settleTurnSpine — one verdict gates the improvement lanes', () => {
-  // Behavioral, not source-shaped: the spine is driven the way both actor
-  // classes drive it, and what each verdict leaves behind is read from
-  // storage. A FAILED build turn has no subject to replay and no answer to
+describe('improvement_lanes — one verdict gates the improvement lanes', () => {
+  // Behavioral, not source-shaped: the lanes are driven through the CLAIMED
+  // effect both actor classes dispatch, and what each verdict leaves behind is
+  // read from storage. A FAILED build turn has no subject to replay and no answer to
   // review; a plan turn belongs in neither evidence set. Both facts are ONE
   // core decision (settleTurn's verdict) — these arms fail independently on
   // any backend that starts spelling its own condition again.
@@ -797,7 +1024,10 @@ describe('settleTurnSpine — one verdict gates the improvement lanes', () => {
   test('a completed PLAN turn feeds no lane', async () => {
     const { agent } = advisorHarness();
     agent.observeOrch().beginTurn(Date.now(), { kinuMode: 'plan' });
-    await agent.harnessSettleSpine({ status: 'completed', turn: turnOf() });
+    // The mode is stated because the effect READS it from its row: a replay on a
+    // fresh activation has no live turn to derive it from, and defaulting to
+    // build is exactly what would feed a plan turn into the lanes.
+    await agent.harnessSettleSpine({ status: 'completed', turn: turnOf(), workMode: 'plan' });
     expect(agent.harnessAdvisorNotes()).toBe(0);
   });
 
@@ -805,5 +1035,62 @@ describe('settleTurnSpine — one verdict gates the improvement lanes', () => {
     const { agent } = advisorHarness();
     await agent.harnessSettleSpine({ status: 'aborted', turn: turnOf() });
     expect(agent.harnessAdvisorNotes()).toBe(0);
+  });
+});
+
+/**
+ * A queued shadow trial is re-drivable after an interruption, and its candidate
+ * reaches the LIVE tool surface — so its calls pass the same once-only claim an
+ * ordinary turn's calls do. That claim is keyed on the turn, the call id and
+ * the arguments: the rollout's scope fixes the call id, and it has to fix the
+ * turn half too, because the ambient one is the last turn's checkpoint while
+ * the trial is queued and `_workspace` once the isolate that queued it is gone.
+ */
+describe('a recoverable rollout claims its tool calls on the rollout', () => {
+  /** A claimed capability that runs entirely on this actor's own storage, so
+   *  what the claim admits or refuses is observable without a network. */
+  const RECALL = { action: 'recall', key: 'trial-probe' };
+
+  test('the scope is the claim identity, not whatever turn is ambient', async () => {
+    const harness = orchestratorHarness();
+    harness.agent.declareTurnCheckpoint('u-live');
+
+    await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
+
+    expect(harness.agent.harnessToolClaims('trial-7')).toEqual(['trial-7#0']);
+    expect(harness.agent.harnessToolClaims('u-live')).toEqual([]);
+    expect(harness.agent.harnessToolClaims(WORKSPACE_RUN_ID)).toEqual([]);
+  });
+
+  /**
+   * The defect, end to end: the same trial re-driven on an activation that
+   * shares nothing with the one that queued it. The world is moved in between,
+   * so a call that ran a second time would answer differently — and the row the
+   * first attempt left is what makes it answer the same.
+   */
+  test('a cold replay is answered from the first attempt row', async () => {
+    const harness = orchestratorHarness();
+    harness.agent.declareTurnCheckpoint('u-live');
+    harness.agent.harnessFacts().upsert('trial-probe', 'as the trial saw it');
+    const first = await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
+
+    harness.agent.harnessFacts().upsert('trial-probe', 'as the world moved on');
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+    const replay = await restarted.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
+
+    expect(replay).toEqual(first);
+    expect(restarted.agent.harnessToolClaims('trial-7')).toEqual(['trial-7#0']);
+  });
+
+  /** A rollout with no durable identity — a live preview, a GEPA candidate — is
+   *  re-driven by nothing, so it keeps the ambient turn rather than inventing a
+   *  scope that would claim to be recoverable. */
+  test('an unscoped rollout still claims against the live turn', async () => {
+    const harness = orchestratorHarness();
+    harness.agent.declareTurnCheckpoint('u-live');
+
+    await harness.agent.harnessScaffoldCallTool()('memory', RECALL);
+
+    expect(harness.agent.harnessToolClaims('u-live')).toHaveLength(1);
   });
 });

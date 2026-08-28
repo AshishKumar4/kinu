@@ -66,7 +66,7 @@ export function isAuthorized(envToken: string | undefined, presented: string | n
   return envToken !== undefined && presented === envToken;
 }
 
-/** Shared secret-bearing command body every fixture route accepts. */
+/** Shared command body for the short synchronous fixture routes. */
 export const CommandSchema = v.object({
   command: v.optional(v.string()),
   path: v.optional(v.string()),
@@ -76,10 +76,63 @@ export const CommandSchema = v.object({
 });
 export type ProbeCommand = v.InferOutput<typeof CommandSchema>;
 
-/** Exec options the /exec route forwards verbatim. */
+/** Stable driver-owned identity for one durable process record. */
+export const OperationIdSchema = v.pipe(
+  v.string(),
+  v.regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u, 'operationId must be a safe process identifier'),
+);
+
+/** `/start` accepts no ambient execution controls. A driver names both the
+ * durable process record and the command it intends to run. */
+export const StartProcessSchema = v.strictObject({
+  operationId: OperationIdSchema,
+  command: v.pipe(v.string(), v.minLength(1)),
+});
+export type StartProcessRequest = v.InferOutput<typeof StartProcessSchema>;
+
+/** `/poll` is intentionally smaller than `/start`: a redrive can only observe
+ * the process it named, never replace its command. */
+export const PollProcessSchema = v.strictObject({
+  operationId: OperationIdSchema,
+});
+export type PollProcessRequest = v.InferOutput<typeof PollProcessSchema>;
+
+export type ProbeRequest = ProbeCommand | StartProcessRequest | PollProcessRequest;
+
+/** Parsed JSON may be one of the three route bodies. Keeping this schema-
+ * derived type at the boundary prevents an untyped request dictionary from
+ * leaking into route dispatch. */
+type ProbeRequestInput =
+  | v.InferInput<typeof CommandSchema>
+  | v.InferInput<typeof StartProcessSchema>
+  | v.InferInput<typeof PollProcessSchema>;
+
+/** Parse the body against the route's exact vocabulary. This is the request
+ * boundary; malformed requests become JSON errors in the Worker. */
+export function parseProbeRequest(pathname: string, input: ProbeRequestInput): ProbeRequest {
+  switch (pathname) {
+    case '/start': return v.parse(StartProcessSchema, input);
+    case '/poll': return v.parse(PollProcessSchema, input);
+    default: return v.parse(CommandSchema, input);
+  }
+}
+
+/** Exec options the synchronous setup and read-only stages forward verbatim. */
 export interface ProbeExecOptions {
   timeout?: number;
   cwd?: string;
+}
+
+export interface ProbeProcess {
+  readonly id: string;
+  readonly status: string;
+  readonly exitCode?: number;
+  getLogs(): Promise<{ stdout: string; stderr: string }>;
+}
+
+export interface ProbeProcessStartOptions {
+  processId: string;
+  autoCleanup: false;
 }
 
 /** What a successful write proves. Structural on purpose: the SDK's richer
@@ -98,34 +151,131 @@ export interface ProbeBox {
     stdout: string;
     stderr: string;
   }>;
+  startProcess(command: string, options: ProbeProcessStartOptions): Promise<ProbeProcess>;
+  getProcess(processId: string): Promise<ProbeProcess | null>;
   writeFile(path: string, content: string, options?: { encoding?: string }): Promise<ProbeWriteReceipt | void>;
   stop(signal?: "SIGTERM" | "SIGINT" | "SIGKILL"): Promise<void>;
   destroy(): Promise<void>;
   prepare(): Promise<RunIdentity>;
 }
 
-/** One route, one SDK method. `/prepare` proves runtime identity outside
- *  Durable Object startup; `/destroy` tears down and `/stop` is restart-only. */
-export function handleProbeOp(pathname: string, box: ProbeBox, command: ProbeCommand): Promise<Response> {
+/** Destroy a probe's disposable runtime without leaving a process behind.
+ * Every process is signalled even if another signal fails; container teardown
+ * and durable-storage clearance then run before the accumulated failure is
+ * returned to the driver. */
+export async function destroyProbeRuntime(
+  listProcesses: () => Promise<readonly { readonly id: string }[]>,
+  killProcess: (processId: string) => Promise<void>,
+  destroySandbox: () => Promise<void>,
+  clearStorage: () => Promise<void>,
+): Promise<void> {
+  const failures: unknown[] = [];
+  let processes: readonly { readonly id: string }[] = [];
+  try {
+    processes = await listProcesses();
+  } catch (error) {
+    failures.push(error);
+  }
+  for (const process of processes) {
+    try {
+      await killProcess(process.id);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  try {
+    await destroySandbox();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await clearStorage();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'failed to terminate every fuse probe process before destroy');
+  }
+}
+
+
+function startRequest(request: ProbeRequest): StartProcessRequest {
+  if ('operationId' in request && 'command' in request) return request;
+  throw new Error('start request did not pass StartProcessSchema');
+}
+
+function pollRequest(request: ProbeRequest): PollProcessRequest {
+  if ('operationId' in request && !('command' in request)) return request;
+  throw new Error('poll request did not pass PollProcessSchema');
+}
+
+function commandRequest(request: ProbeRequest): ProbeCommand {
+  if (!('operationId' in request)) return request;
+  throw new Error('synchronous route did not pass CommandSchema');
+}
+
+async function processResponse(
+  operationId: string,
+  process: ProbeProcess,
+  started?: boolean,
+): Promise<Response> {
+  const settled = process.status !== 'starting' && process.status !== 'running';
+  const state = {
+    operationId,
+    status: process.status,
+    exitCode: settled ? process.exitCode ?? null : null,
+    started,
+  };
+  if (!settled) return Response.json(state);
+  return Response.json({ ...state, ...(await process.getLogs()) });
+}
+
+/** Route process control through durable Sandbox process records. `/start`
+ * redrives by operation id; `/poll` observes a settled record and returns its
+ * complete logs. */
+export function handleProbeOp(pathname: string, box: ProbeBox, command: ProbeRequest): Promise<Response> {
   switch (pathname) {
-    case "/exec": {
+    case '/start': {
+      const request = startRequest(command);
+      return box.getProcess(request.operationId).then(async (existing) => {
+        if (existing !== null) return processResponse(request.operationId, existing, false);
+        const process = await box.startProcess(request.command, {
+          processId: request.operationId,
+          autoCleanup: false,
+        });
+        return processResponse(request.operationId, process, true);
+      });
+    }
+    case '/poll': {
+      const request = pollRequest(command);
+      return box.getProcess(request.operationId).then(async (process) => {
+        if (process === null) {
+          return Response.json({ error: `process ${request.operationId} not found` }, { status: 404 });
+        }
+        return processResponse(request.operationId, process);
+      });
+    }
+    case '/exec': {
+      const request = commandRequest(command);
       return (async () => {
         const started = Date.now();
-        const options: ProbeExecOptions = { timeout: command.timeoutMs ?? 30_000 };
-        const res = await box.exec(command.command ?? "", options);
+        const options: ProbeExecOptions = { timeout: request.timeoutMs ?? 30_000 };
+        const res = await box.exec(request.command ?? '', options);
         return Response.json({ ...res, wallMs: Date.now() - started });
       })();
     }
-    case "/put":
-      return box.writeFile(command.path ?? "", command.contentBase64 ?? "", { encoding: "base64" })
+    case '/put': {
+      const request = commandRequest(command);
+      return box.writeFile(request.path ?? '', request.contentBase64 ?? '', { encoding: 'base64' })
         .then(() => Response.json({ ok: true }));
-    case "/stop":
-      return box.stop("SIGTERM").then(() => Response.json({ ok: true }));
-    case "/destroy":
+    }
+    case '/stop':
+      return box.stop('SIGTERM').then(() => Response.json({ ok: true }));
+    case '/destroy':
       return box.destroy().then(() => Response.json({ ok: true }));
-    case "/prepare":
+    case '/prepare':
       return box.prepare().then((identity) => Response.json(identity));
     default:
-      return Promise.resolve(Response.json({ error: "unknown op" }, { status: 404 }));
+      return Promise.resolve(Response.json({ error: 'unknown op' }, { status: 404 }));
   }
 }

@@ -1,4 +1,5 @@
 import { Button, Tabs, type TabsItem } from '@cloudflare/kumo';
+import { CHANGE_KIND_GLYPH, TUI_ADVERTISED_HINTS, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS } from '@kinu.run/core';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { UIMessage } from 'ai';
 
@@ -134,7 +135,7 @@ function WorkspacePreview(): ReactElement {
             <div>
               <div className="mb-2 text-[11.5px] font-semibold p-text-4">Journal</div>
               <div className="overflow-hidden rounded-xl border p-border p-surface">
-                {[['◈', 'Crafted a tool: dedupe-bench', '2m'], ['✓', 'Graded 2 turns', '18h'], ['✓', 'Mapped 7 packages', '19h']].map(([icon, label, age], index) => (
+                {[[CHANGE_KIND_GLYPH.tool, 'Crafted a tool: dedupe-bench', '2m'], [CHANGE_KIND_GLYPH.outcomes, 'Graded 2 turns', '18h'], [CHANGE_KIND_GLYPH.fact, 'Remembered the coupon schema', '19h']].map(([icon, label, age], index) => (
                   <div key={label} className={`flex items-baseline gap-2 px-3.5 py-2.5 ${index < 2 ? 'border-b border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-[10px] p-gold">{icon}</span><span className="flex-1 text-xs p-text-2">{label}</span><span className="text-[10px] p-text-4">{age}</span></div>
                 ))}
               </div>
@@ -148,10 +149,14 @@ function WorkspacePreview(): ReactElement {
 }
 
 function TuiPreview(): ReactElement {
+  // `status` carries the real navigator's semantics (tui-shell NavigatorRow):
+  // the dot marks RUNNING vs IDLE in accent vs muted ink — selection is the
+  // left border and raised background, never the dot.
   const agents = {
     audit: {
       label: 'audit',
       location: 'local',
+      status: 'idle',
       subordinate: 'reviewer · auditor',
       prompt: 'Audit the checkout flow, fix the coupon failure, and keep the tests green.',
       answer: 'The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.',
@@ -160,6 +165,7 @@ function TuiPreview(): ReactElement {
     migrations: {
       label: 'migrations',
       location: 'local',
+      status: 'idle',
       subordinate: null,
       prompt: 'Review the migration plan and identify any destructive step.',
       answer: 'The plan now ships the backfill first, verifies both coupon kinds, then adds the constraint in a later release.',
@@ -168,6 +174,7 @@ function TuiPreview(): ReactElement {
     jarvis: {
       label: 'Jarvis',
       location: 'cloud',
+      status: 'running',
       subordinate: null,
       prompt: 'Summarize the overnight research and flag the decision I need to make.',
       answer: 'The evidence supports staged rollout. Decide whether the first cohort should be 5% or 10%; the rest is ready.',
@@ -208,7 +215,7 @@ function TuiPreview(): ReactElement {
     ids.filter((id) => !filtered || drawerMatches(id)).map((id) => (
       <div key={id}>
         <button type="button" onClick={() => onChoose(id)} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs ${selectClass(id)}`}>
-          <span><span className={agents[id].location === 'cloud' ? 'p-success' : 'p-gold'}>{id === agentId ? '● ' : '○ '}</span>{agents[id].label}</span>
+          <span><span className={agents[id].status === 'running' ? 'p-gold' : 'p-text-4'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>{agents[id].label}</span>
           {agents[id].location === 'cloud' && <span className="p-success">live</span>}
         </button>
         {agents[id].subordinate !== null && (
@@ -245,7 +252,7 @@ function TuiPreview(): ReactElement {
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden items-center gap-4 sm:flex"><span>{agent.location}</span><span>general · default</span><span>Claude Opus 4</span></div>
-          <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 py-1 p-text-3 hover:p-text lg:hidden">Alt+W workspaces</button>
+          <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 py-1 p-text-3 hover:p-text lg:hidden">{TUI_ADVERTISED_HINTS[1].keys} {TUI_ADVERTISED_HINTS[1].label}</button>
         </div>
       </div>
       <div className="relative grid min-h-[600px] lg:grid-cols-[220px_minmax(0,1fr)]">
@@ -283,16 +290,16 @@ function TuiPreview(): ReactElement {
         <div className="flex min-h-[600px] min-w-0 flex-col font-mono text-xs leading-[1.65]">
           <div className="flex-1 overflow-hidden px-4 py-5 sm:px-7 sm:py-6">
             <div data-tui-role="user" className="mb-5 grid grid-cols-[52px_minmax(0,1fr)] gap-3">
-              <span className="text-[10px] uppercase tracking-[.12em] p-gold">YOU</span>
+              <span className="text-[10px] uppercase tracking-[.12em] p-gold">{TUI_MARKS.userGutter}</span>
               <p className="p-text">{agent.prompt}</p>
             </div>
             <div className="border-y border-[var(--c-border-strong)]">
               {agent.tools.map(([tool, action, result], index) => (
                 <div key={`${tool}-${action}`} className={index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}>
                   <div className="grid grid-cols-[14px_120px_minmax(0,1fr)] gap-3 px-1 pb-1 pt-2.5 sm:grid-cols-[14px_150px_minmax(0,1fr)]">
-                    <span className="p-gold">›</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
+                    <span className="p-gold">{TUI_MARKS.toolCall}</span><strong className="font-normal p-text-2">{tool}</strong><span className="truncate p-text-4">{action}</span>
                   </div>
-                  <div className="pb-2.5 pl-[17px] p-text-4">↳ <span className="p-success">{result}</span></div>
+                  <div className="pb-2.5 pl-[17px] p-text-4">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></div>
                 </div>
               ))}
             </div>
@@ -301,8 +308,8 @@ function TuiPreview(): ReactElement {
             </div>
           </div>
           <div className="border-t border-[var(--c-border-strong)] p-recessed px-4 pb-3 pt-3">
-            <div className="border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4"><span className="mr-2 p-gold">❯</span>Send a message…</div>
-            <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · {agent.location} workspace · connected</span><span>Ctrl+K commands · Alt+W workspaces · Alt+A agents · Alt+P tiers</span></div>
+            <div className="border border-[var(--c-border-strong)] bg-[var(--c-bg)] px-3 py-2.5 p-text-4"><span className="mr-2 p-gold">{TUI_MARKS.prompt}</span>{TUI_COMPOSER_PLACEHOLDER}</div>
+            <div className="mt-2 flex flex-wrap justify-between gap-3 text-[10px] p-text-4"><span>auto · {agent.location} workspace · connected</span><span>{TUI_ADVERTISED_HINTS.map(({ keys, label }) => `${keys} ${label}`).join(' · ')}</span></div>
           </div>
         </div>
       </div>

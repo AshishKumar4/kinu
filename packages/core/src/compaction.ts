@@ -24,7 +24,8 @@ const CHECKPOINT_PREAMBLE =
   'completed prior work: build on it, do not redo finished steps, and do not re-ask questions it ' +
   'already answers. Compacted ranges are archived verbatim at the VFS paths indexed by the archive ' +
   'manifest below — for detail beyond the summary, read the archived transcript with ' +
-  'workspace.readFile inside execute_tools, or slice it and llm.query each slice, then aggregate. ' +
+  'workspace.readFile inside execute_tools, or hand its path to a temporary agent as ' +
+  '`context_ref` on an agents ask. ' +
   'When a phase of work finishes, call agent.compactNow() to fold it yourself rather than carrying ' +
   'its traffic until the token trigger fires.';
 

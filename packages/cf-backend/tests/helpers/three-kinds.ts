@@ -74,10 +74,13 @@ import {
 import { createRecordingLogger, renderCauseChain } from '@kinu.run/core/obs';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
-import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
+// Harness FIRST: its module body installs the SDK mocks, and the provider
+// registry's graph reaches the whole `../src/server` barrel — evaluated before
+// the mock, that graph would bake the REAL Agents SDK into Think.
 import {
   orchestratorHarness, subordinateHarness, type ActorHarness,
 } from './actor-harness';
+import { createAgentProviderRegistry } from '../../src/providers/agent-registry';
 import { userCredentialSource } from './user-credentials';
 
 /** The three kinds, named the way the conformance manifest names its roots. */
@@ -1026,7 +1029,7 @@ function actorFixture(
       Reflect.set(agent, '_inFlight', true);
       try {
         await background.runner.wake(jobId);
-        const spliced = orch.turnExtension.prepareStep?.({
+        const spliced = await orch.turnExtension.prepareStep?.({
           stepNumber: 1, messages: [{ role: 'user', content: 'waiting on that job' }],
         });
         return textOfMessages(spliced);

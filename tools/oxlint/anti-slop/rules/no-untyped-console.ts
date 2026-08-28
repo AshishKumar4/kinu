@@ -73,12 +73,15 @@ export const CONSOLE_ALLOWED = [
 	/** The BROWSER half of the cf-backend bundle. `src/index.tsx` mounts these with
 	 *  `createRoot(document.getElementById('root'))`, so their `console` reaches neither of the two
 	 *  sinks `diagnostics` exists for — not Workers Logs, not the daemon journal — only a developer
-	 *  with devtools open, which is the same audience as the CLI's terminal output. And the conversion
-	 *  is not merely pointless there: `ErrorBoundary` logs a live `Error` plus a multi-KB
-	 *  `componentStack`, and log fields are scalars, so routing it through the logger would flatten
-	 *  the expandable, source-mapped Error that is the only reason the line exists. `Sidebar`'s
-	 *  failure is already surfaced as product UI (`setListError(true)` renders the roster's error
-	 *  affordance); its console line is the developer's companion to a handled UI state.
+	 *  with devtools open, which is the same audience as the CLI's terminal output. Converting one
+	 *  would not improve traceability; it would move a developer artefact into a sink nobody reads it
+	 *  from.
+	 *
+	 *  The tree is at ZERO calls today, and this entry is the BOUNDARY rather than cover for any of
+	 *  them. `ErrorBoundary` was the last, and it went when the browser gained a real destination:
+	 *  it now POSTs a bounded report to `/api/client-errors`, which `client-error/route.ts` writes to
+	 *  Workers Logs through the typed logger against the deployed build sha. That is what a console
+	 *  line could never be, and it is why the line is gone rather than kept beside it.
 	 *
 	 *  This is a DIRECTORY, so the whole client tree is out — a React component's console is a
 	 *  developer artefact wherever it sits, and enumerating files would fail on the next component. */

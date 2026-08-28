@@ -19,7 +19,7 @@ import { Button, Loader } from "@cloudflare/kumo";
 import {
   GitBranchIcon, PackageIcon, BrainIcon,
   SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon, SquaresFourIcon,
-  NotePencilIcon,
+  NotePencilIcon, ArrowsClockwiseIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
 import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@kinu.run/core";
@@ -42,6 +42,7 @@ const KIND_ICON = {
   replay: TimerIcon,
   outcomes: ChecksIcon,
   prompt_section: NotePencilIcon,
+  refinement: ArrowsClockwiseIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
 /**
@@ -249,6 +250,112 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   );
 }
 
+interface StagedSkillView {
+  requestId: string; routeIndex: number; target: string;
+  digest: string; source: string; intact: boolean;
+}
+type StagedSkillResult = { ok: true; view: StagedSkillView } | { ok: false; error: string };
+
+/**
+ * READ THE BYTES, THEN DECIDE.
+ *
+ * A staged skill is instructions, and the only thing that can grant instructions
+ * is the owner. So this opens the WHOLE file — never an excerpt, because a
+ * truncated approval surface asks for a decision about bytes the decider could
+ * not see — and sends back the digest it displayed. The backend refuses any
+ * other digest, so a proposal that changed between the reading and the clicking
+ * cannot be approved by accident.
+ */
+function StagedSkillDecision(
+  { decision, rpc, onDecided }: {
+    decision: { requestId: string; routeIndex: number };
+    rpc: Rpc;
+    onDecided: () => void;
+  },
+) {
+  const [staged, setStaged] = useState<AsyncResource<StagedSkillView> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const open = useCallback(() => {
+    if (staged !== null) { setStaged(null); return; }
+    setStaged({ status: "loading" });
+    rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]).then(
+      (result) => setStaged((previous) => result.ok
+        ? loadSucceeded(result.view)
+        : loadFailed(previous ?? { status: "loading" }, new Error(result.error))),
+      (error) => setStaged((previous) => loadFailed(previous ?? { status: "loading" }, error)),
+    );
+  }, [rpc, decision.requestId, decision.routeIndex, staged]);
+
+  const decide = useCallback(async (verdict: "approve" | "reject", digest: string) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await rpc<{ ok: boolean; detail?: string; error?: string }>(
+        "decideRefinement",
+        [{
+          requestId: decision.requestId,
+          routeIndex: decision.routeIndex,
+          expectedDigest: digest,
+          decision: verdict,
+        }],
+      );
+      setNotice({ text: result.ok ? (result.detail ?? "done") : (result.error ?? "failed"), ok: result.ok });
+      if (result.ok) onDecided();
+    } catch (error) {
+      setNotice({ text: renderThrownChain({ cause: error }), ok: false });
+    } finally {
+      setBusy(false);
+    }
+  }, [rpc, decision.requestId, decision.routeIndex, onDecided]);
+
+  return (
+    <div className="mt-1.5">
+      <Button size="sm" variant="ghost" onClick={open}>
+        {staged === null ? "Read the proposed skill" : "Hide"}
+      </Button>
+      {staged?.status === "error" && (
+        <div className="mt-1.5 text-[11px] p-danger">{staged.message}</div>
+      )}
+      {staged?.status === "loading" && (
+        <div className="flex justify-center py-3"><Loader size="sm" /></div>
+      )}
+      {staged?.status === "ready" && (
+        <div className="mt-1.5 rounded-md border p-border overflow-hidden">
+          <div className="px-3 py-1.5 border-b p-border text-[10.5px] p-text-3 font-mono break-all">
+            {staged.value.target} · {staged.value.digest}
+          </div>
+          {!staged.value.intact && (
+            <div className="px-3 py-1.5 border-b p-border text-[11px] p-danger">
+              These bytes are not the ones the refinement recorded — something rewrote the staging.
+              Approving is refused until the refinement is re-run.
+            </div>
+          )}
+          {/* The WHOLE file. No clamp, deliberately: see the note above. */}
+          <pre className="max-h-96 overflow-auto px-3 py-2 text-[10.5px] font-mono leading-relaxed whitespace-pre-wrap break-words p-text-2">
+            {staged.value.source}
+          </pre>
+          <div className="flex items-center gap-2 px-3 py-2 border-t p-border">
+            <Button size="sm" disabled={busy || !staged.value.intact}
+              onClick={() => { void decide("approve", staged.value.digest); }}>
+              Approve these bytes
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy}
+              onClick={() => { void decide("reject", staged.value.digest); }}>
+              Reject
+            </Button>
+            {busy && <Loader size="sm" />}
+          </div>
+        </div>
+      )}
+      {notice && (
+        <div className={`mt-1.5 text-[11px] ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+      )}
+    </div>
+  );
+}
+
 /** A grouped entry's members — same actions, no icon or diff of their own. */
 function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc; onReverted: () => void }) {
   const [kept, setKept] = useState(false);
@@ -281,6 +388,9 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
           )}
           {notice && (
             <div className={`mt-1.5 text-[11px] ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+          )}
+          {entry.decision && (
+            <StagedSkillDecision decision={entry.decision} rpc={rpc} onDecided={onReverted} />
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">

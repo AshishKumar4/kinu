@@ -27,12 +27,16 @@
  *                 out to be observable fails too, so the blind spot can only
  *                 shrink and can only shrink deliberately.
  *
- * SECRETS ARE CHECKED BY PRESENCE, NEVER BY VALUE. `wrangler secret list`
- * returns names; Cloudflare will not return a value and nothing here asks for
- * one. A missing required secret fails loudly — `NIMBUS_RUNTIME_CACHE` was
- * declared a `string` for months while being an R2 bucket, and the reason that
- * survived is that no program ever asked whether the names in `Env` were
- * satisfied by anything.
+ * SUPPLIED VALUES ARE CHECKED BY PRESENCE, NEVER BY VALUE, AND PER ENVIRONMENT.
+ * `wrangler secret list` returns names; Cloudflare will not return a value and
+ * nothing here asks for one. An ordinary config var is checked the same way
+ * against that environment's own `vars`. Per environment is the load-bearing
+ * half: the census used to union every environment's bindings and vars before
+ * comparing, so production's `EMAIL_DOMAIN` answered for staging, which has
+ * none, and every `config-var` entry was skipped outright. A missing required
+ * value fails loudly — `NIMBUS_RUNTIME_CACHE` was declared a `string` for months
+ * while being an R2 bucket, and the reason that survived is that no program ever
+ * asked whether the names in `Env` were satisfied by anything.
  *
  * It needs a Cloudflare session, so it runs at the deploy tier and carries a
  * `CI_EXEMPT` entry. Without a session the whole assertion is unreachable, which
@@ -48,7 +52,8 @@ import {
 } from './infra-cloudflare';
 import {
   type InfraEnvironment, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, UNOBSERVABLE,
-  deriveInfrastructure, envFields, readSites, requiredIn, supplyCensus, vectorizeGeometry,
+  WRANGLER_CONFIG, deriveInfrastructure, envFields, readSites, requiredIn, supplyCensus,
+  vectorizeGeometry,
 } from './infra-manifest';
 import { isProductSource, readMatching } from './sources';
 
@@ -192,9 +197,9 @@ async function observe(
   }
 }
 
-/* ── Secrets ──────────────────────────────────────────────────────────── */
+/* ── Supplied values ──────────────────────────────────────────────────── */
 
-export interface SecretRow {
+export interface SupplyRow {
   readonly environment: string;
   readonly name: string;
   readonly verdict: Verdict;
@@ -202,31 +207,47 @@ export interface SecretRow {
   readonly detail: string;
 }
 
-/** What `SUPPLY` says must exist, checked against what the Worker actually
- *  carries. `config-var` entries are not secrets and are checked against the
- *  environment's `vars` instead — a plain value put in the secret store still
- *  works, so both stores count. */
-function secretRows(environment: InfraEnvironment, observed: Observation & { readonly names?: readonly string[] }): readonly SecretRow[] {
-  if (observed.state === 'unknown') {
-    return [{
+/**
+ * What `SUPPLY` says must exist IN THIS ENVIRONMENT, against what this
+ * environment actually carries: secrets against the Worker's secret names,
+ * ordinary config vars against that environment's `vars`.
+ *
+ * A `config-var` entry used to be skipped here entirely, while the comment said
+ * it was checked against `vars` — so an ordinary variable present in production
+ * and missing from staging was checked by nothing at all. A plain value put in
+ * the secret store still works, so both stores count for one.
+ */
+export function supplyRows(
+  environment: InfraEnvironment,
+  observed: Observation & { readonly names?: readonly string[] },
+): readonly SupplyRow[] {
+  const rows: SupplyRow[] = [];
+  const secretsReadable = observed.state !== 'unknown';
+  if (!secretsReadable) {
+    rows.push({
       environment: environment.key,
-      name: '(all)',
+      name: '(all secrets)',
       verdict: 'unknown',
       required: true,
       detail: observed.reason,
-    }];
+    });
   }
   const held = new Set(observed.state === 'present' ? observed.names ?? [] : []);
-  const rows: SecretRow[] = [];
   for (const [name, supply] of SUPPLY) {
-    if (supply.handling === 'config-var') continue;
+    const configVar = supply.handling === 'config-var';
+    // A secret whose names could not be listed is already reported once, above.
+    // A config var is read from the config this run derived, so it is checkable
+    // whatever the session can see.
+    if (!configVar && !secretsReadable) continue;
+    const inVars = configVar && environment.vars.has(name);
+    const present = inVars || held.has(name);
     rows.push({
       environment: environment.key,
       name,
-      verdict: held.has(name) ? 'present' : 'absent',
+      verdict: present ? 'present' : 'absent',
       required: requiredIn(name, environment),
-      detail: held.has(name)
-        ? `set (${supply.handling})`
+      detail: present
+        ? `${inVars ? "declared in this environment's `vars`" : 'set on the Worker'} (${supply.handling})`
         : `${supply.handling} — absent ⇒ ${supply.absent}`,
     });
   }
@@ -249,22 +270,34 @@ function secretRows(environment: InfraEnvironment, observed: Observation & { rea
 
 /* ── Pins ─────────────────────────────────────────────────────────────── */
 
-/** `SUPPLY` must describe exactly the Env fields the manifest does not supply.
- *  Equality in both directions: an unclassified field is a value nobody decided
- *  how to obtain, and a stale entry reads as a considered decision about a name
- *  that no longer exists. */
+/**
+ * `SUPPLY` must describe exactly the `Env` fields the manifest does not supply,
+ * in every environment separately.
+ *
+ * Equality in both directions: an unclassified field is a value nobody decided
+ * how to obtain, and a stale entry reads as a considered decision about a name
+ * that no longer exists. The census used to be unioned across environments
+ * first, which made "supplied" mean "supplied somewhere" — production's
+ * `EMAIL_DOMAIN` var answered for staging, which has none.
+ */
 export function supplyDrift(infrastructure: Infrastructure): readonly string[] {
-  const census = supplyCensus(infrastructure).map((field) => field.name);
+  const fields = envFields();
+  const unsuppliedIn = new Map<string, string[]>();
+  for (const environment of infrastructure.environments) {
+    for (const field of supplyCensus(environment, fields)) {
+      unsuppliedIn.set(field.name, [...unsuppliedIn.get(field.name) ?? [], environment.key]);
+    }
+  }
   const classified = [...SUPPLY.keys()];
   return [
-    ...census.filter((name) => !classified.includes(name)).map((name) =>
-      `${name} is read from \`Env\`, supplied by no binding and no var, and classified in no `
-      + 'SUPPLY entry. Say whether provisioning prompts for it, whether it comes from outside, '
-      + 'or whether it is a plain var — a value nobody decided how to obtain is a value nobody '
-      + 'sets'),
-    ...classified.filter((name) => !census.includes(name)).map((name) =>
-      `${name} has a SUPPLY entry and is no longer an unsupplied \`Env\` field. Remove it: a `
-      + 'stale entry excuses the next name that happens to be spelled the same way'),
+    ...[...unsuppliedIn].filter(([name]) => !classified.includes(name)).map(([name, environments]) =>
+      `${name} is read from \`Env\`, supplied by no binding and no var in `
+      + `${environments.join(' and ')}, and classified in no SUPPLY entry. Say whether `
+      + 'provisioning prompts for it, whether it comes from outside, or whether it is a plain '
+      + 'var — a value nobody decided how to obtain is a value nobody sets'),
+    ...classified.filter((name) => !unsuppliedIn.has(name)).map((name) =>
+      `${name} has a SUPPLY entry and is supplied by a binding or a var in every environment. `
+      + 'Remove it: a stale entry excuses the next name that happens to be spelled the same way'),
   ];
 }
 
@@ -291,7 +324,7 @@ export function unobservableDrift(rows: readonly Row[]): readonly string[] {
 
 export interface Audit {
   readonly rows: readonly Row[];
-  readonly secrets: readonly SecretRow[];
+  readonly supplied: readonly SupplyRow[];
   readonly findings: readonly string[];
   /** True statements the verdict tolerates but must not swallow — printed on
    *  the success path so a pass never reads as "nothing to say". */
@@ -302,7 +335,7 @@ export interface Audit {
 export function audit(
   infrastructure: Infrastructure,
   rows: readonly Row[],
-  secrets: readonly SecretRow[],
+  supplied: readonly SupplyRow[],
   unreadFields: readonly string[],
 ): Audit {
   const findings: string[] = [];
@@ -364,36 +397,43 @@ export function audit(
     }
   }
 
-  for (const secret of secrets) {
-    if (secret.verdict === 'unknown') {
+  for (const value of supplied) {
+    if (value.verdict === 'unknown') {
       findings.push(finding({
-        at: `${secret.environment} secrets`,
+        at: `${value.environment} secrets`,
         invariant: 'the secret NAMES set on the Worker are readable. Presence is the only '
           + 'property of a secret anything can check, and this could not check it.',
-        found: secret.detail,
+        found: value.detail,
         silently: 'a deployment with no root secret answers 503 on every signed-in surface while '
           + 'public routes answer 200, so the site looks healthy.',
         fix: 'restore the wrangler session and re-run.',
       }));
       continue;
     }
-    if (secret.verdict === 'absent' && secret.required) {
+    if (value.verdict === 'absent' && value.required) {
+      const configVar = SUPPLY.get(value.name)?.handling === 'config-var';
       findings.push(finding({
-        at: `${secret.environment}/${secret.name}`,
-        invariant: `it is set on the Worker. ${secret.detail}`,
-        found: 'absent from `wrangler secret list`',
+        at: `${value.environment}/${value.name}`,
+        invariant: `it is supplied in ${value.environment}. ${value.detail}`,
+        found: configVar
+          ? `absent from the \`vars\` block for ${value.environment} and from its secret store`
+          : 'absent from `wrangler secret list`',
         silently: 'nothing at deploy time. The Worker uploads, the smoke gate passes on public '
           + 'routes, and the signed-in half of the product is gone.',
-        fix: 'bun run infra:provision — it prompts for this one, because a secret the program '
-          + 'invents and never shows anyone cannot be restored.',
+        fix: configVar
+          ? `add it to the \`vars\` block for ${value.environment} in ${WRANGLER_CONFIG}. An `
+            + 'environment inherits no vars from another one.'
+          : 'bun run infra:provision — it prompts for this one, because a secret the program '
+            + 'invents and never shows anyone cannot be restored.',
       }));
     }
   }
 
   findings.push(...supplyDrift(infrastructure).map((detail) => finding({
     at: 'scripts/infra-manifest.ts SUPPLY',
-    invariant: 'SUPPLY classifies exactly the `Env` fields no binding and no var supplies. The '
-      + 'census is derived; the handling of each name is a judgement that must not be guessed.',
+    invariant: 'SUPPLY classifies exactly the `Env` fields no binding and no var supplies, in '
+      + 'every environment separately. The census is derived; the handling of each name is a '
+      + 'judgement that must not be guessed.',
     found: detail,
     silently: 'a new secret ships undocumented and unset, and the feature that needs it is off '
       + 'with no error anywhere.',
@@ -421,7 +461,7 @@ export function audit(
     }));
   }
 
-  return { rows, secrets, findings, notes };
+  return { rows, supplied, findings, notes };
 }
 
 /* ── Reporting ────────────────────────────────────────────────────────── */
@@ -433,19 +473,39 @@ const SYMBOL = {
   unobservable: ' blind',
 } satisfies Record<Verdict, string>;
 
-function print(rows: readonly Row[], secrets: readonly SecretRow[]): void {
+function print(
+  environments: readonly InfraEnvironment[],
+  rows: readonly Row[],
+  supplied: readonly SupplyRow[],
+): void {
   console.log('\nResources');
   for (const entry of rows) {
     const flag = entry.required ? '' : ' (optional)';
     console.log(`  [${SYMBOL[entry.verdict]}] ${entry.id}${flag}\n           ${entry.detail}`);
   }
-  console.log('\nSecrets — presence only; no value is ever requested or printed');
-  for (const secret of secrets) {
-    const flag = secret.required ? 'required' : 'optional';
-    console.log(`  [${SYMBOL[secret.verdict]}] ${secret.environment}/${secret.name} (${flag})\n           ${secret.detail}`);
+  console.log('\nSupplied values — presence only; no value is ever requested or printed');
+  for (const value of supplied) {
+    const flag = value.required ? 'required' : 'optional';
+    console.log(`  [${SYMBOL[value.verdict]}] ${value.environment}/${value.name} (${flag})\n           ${value.detail}`);
   }
+  const fields = envFields();
+  for (const environment of environments) console.log(`\n${supplySummary(environment, fields)}`);
   console.log('\nDeclared by nothing the manifest can express — check these by hand:');
   for (const item of UNCAPTURED) console.log(`  · ${item.what}\n      evidence: ${item.evidence}\n      check:    ${item.check}`);
+}
+
+/**
+ * One environment's measured supply, on the success path, named rather than
+ * counted: a reader who cannot see WHICH fields an environment supplies itself
+ * and which ones `SUPPLY` answers for cannot tell a complete pass from a pass
+ * over an empty set — and the set was, for every ordinary config var, empty.
+ */
+export function supplySummary(environment: InfraEnvironment, fields = envFields()): string {
+  const census = supplyCensus(environment, fields);
+  return `${environment.key} supplies ${String(fields.length - census.length)} of `
+    + `${String(fields.length)} \`Env\` fields from its own ${String(environment.bindings.length)} `
+    + `bindings and ${String(environment.vars.size)} vars. SUPPLY governs the other `
+    + `${String(census.length)}:\n  ${census.map((field) => field.name).join(', ')}`;
 }
 
 /**
@@ -481,7 +541,7 @@ async function main(): Promise<number> {
   }
 
   const rows: Row[] = [];
-  const secrets: SecretRow[] = [];
+  const supplied: SupplyRow[] = [];
   for (const environment of selected) {
     const live = deployment(environment.wranglerEnv);
     const owned = infrastructure.resources.filter((resource) =>
@@ -497,22 +557,30 @@ async function main(): Promise<number> {
       // UNOBSERVABLE entry.
       rows.push(await observe(resource, environment, live));
     }
-    secrets.push(...secretRows(environment, secretNames(environment.wranglerEnv)));
+    supplied.push(...supplyRows(environment, secretNames(environment.wranglerEnv)));
   }
 
   const sources = readMatching(isProductSource);
   const unread = [...SUPPLY.keys()].filter((name) => readSites(name, sources).length === 0);
-  const verdict = audit(infrastructure, rows, secrets, unread);
+  const verdict = audit(infrastructure, rows, supplied, unread);
 
+  const fields = envFields();
   const measured = assertMeasured(GATE, [
     ['environments checked', selected.length],
     ['resources declared', rows.length],
     ['resources observed present', rows.filter((entry) => entry.verdict === 'present').length],
     ['secrets and supplied values classified', SUPPLY.size],
+    ['`Env` fields this run measured supply for', fields.length],
+    // Per environment, and never a union: the count below is what SUPPLY has to
+    // answer for in THIS environment, whatever another one declares.
+    ['`Env` fields SUPPLY governs here', selected.reduce(
+      (total, environment) => total + supplyCensus(environment, fields).length, 0,
+    )],
+    ['supplied values checked against this environment', supplied.length],
     ['product sources read for `env.` sites', sources.size],
   ]);
 
-  print(rows, secrets);
+  print(selected, rows, supplied);
 
   const unchecked = infrastructure.environments.filter((entry) => !selected.includes(entry));
   if (unchecked.length > 0) {

@@ -65,21 +65,33 @@ export interface UserSteerDrainDeps {
    *  same tick as the buffer push, so the turn observed is the turn whose
    *  `prepareStep` drains it. */
   readonly turnInFlight: () => boolean;
-  /** Fired with the steers of a drain that actually happened — the moment they
-   *  stop being "queued" and become something the model has — and the index of
-   *  the step they were spliced into. A backend uses it to persist the verbatim
-   *  user rows and to tell every open surface they landed. Never fired for an
-   *  empty drain.
+  /**
+   * Persist a drain before the rewritten messages can reach the provider.
    *
-   *  `atStep` is the whole difference between a transcript that shows a steer
-   *  where the model read it and one that shows it after the turn: a turn is
-   *  ONE assistant message, so a row appended beside it can only sort before or
-   *  after the entire thing. The step index is the position inside it. */
-  readonly onDrain?: (steers: readonly UserSteer[], atStep: number) => void;
+   * A backend that stores queued steers uses this boundary to write their
+   * durable conversation rows and retire the queue rows. Rejection aborts the
+   * step; the drain restores the same steers to its pending prefix so a retry
+   * cannot deliver words that persistence failed to record.
+   *
+   * `atStep` is the whole difference between a transcript that shows a steer
+   * where the model read it and one that shows it after the turn: a turn is
+   * ONE assistant message, so a row appended beside it can only sort before or
+   * after the entire thing. The step index is the position inside it.
+   */
+  readonly onDrain?: (
+    steers: readonly UserSteer[],
+    atStep: number,
+  ) => void | Promise<void>;
 }
 
 export class UserSteerDrain {
   private pending: UserSteer[] = [];
+  /** The prefix currently crossing the durable drain boundary. It remains
+   * queued until onDrain succeeds and the provider-visible injection exists. */
+  private landing: UserSteer[] = [];
+  /** The complete prepareStep operation for the prefix above. Stop waits on
+   * this before deciding which steers remain returnable. */
+  private landingTask: Promise<ModelMessage[] | undefined> | null = null;
   private readonly injections = new StepInjections<DrainedSteers>();
 
   constructor(private readonly deps: UserSteerDrainDeps) {}
@@ -94,9 +106,42 @@ export class UserSteerDrain {
     return 'mid-turn';
   }
 
-  /** How many steers are waiting for a step boundary. */
+  /** Steers the model has not received yet, in their accepted order. A copy:
+   * callers can observe or persist the queue but never mutate its authority. */
+  pendingSteers(): readonly UserSteer[] {
+    return [...this.landing, ...this.pending];
+  }
+
+  /** Replace process-local queue state from its durable authority on reset.
+   * Only valid before a step drain is in flight or this turn has recorded an
+   * injection — mixing two authorities would duplicate delivery. */
+  restorePending(steers: readonly UserSteer[]): void {
+    if (this.landing.length > 0 || this.injections.recorded.length > 0) {
+      throw new Error('cannot restore pending steers after this turn started draining');
+    }
+    this.pending = [...steers];
+  }
+
+  /** Roll an interrupted prefix back after its durable delete failed. Earlier
+   * landed injections may exist; only an active landing blocks the rollback.
+   * The caller must use exactly the array returned by the preceding interrupt. */
+  restoreInterrupted(steers: readonly UserSteer[]): void {
+    if (this.landing.length > 0) {
+      throw new Error('cannot restore interrupted steers while a drain is landing');
+    }
+    this.pending = [...steers, ...this.pending];
+  }
+
+  /** How many steers have not reached the provider. */
   get pendingCount(): number {
-    return this.pending.length;
+    return this.landing.length + this.pending.length;
+  }
+
+  /** Wait until a prefix has either become a durable provider-visible
+   * injection or returned to pending after failure. Cancellation uses this
+   * barrier before deleting and returning the exact remaining rows. */
+  async waitForLanding(): Promise<void> {
+    await this.landingTask;
   }
 
   /** Start of a turn: the previous turn's splice coordinates mean nothing to
@@ -106,16 +151,43 @@ export class UserSteerDrain {
     this.injections.reset();
   }
 
-  /** The `prepareStep` body: everything buffered becomes ONE user message at
-   *  this step's tail, re-applied at that index for the rest of the turn. */
-  prepareStep(ctx: PrepareStepContext): ModelMessage[] | undefined {
+  /**
+   * The `prepareStep` body: persist everything buffered, then admit it as ONE
+   * user message at this step's tail and re-apply it there for later steps.
+   * Persistence is awaited before the injection is recorded or returned, so
+   * the provider can never see a steer whose durable landed row failed.
+   */
+  async prepareStep(ctx: PrepareStepContext): Promise<ModelMessage[] | undefined> {
     const drained = this.pending.splice(0);
     if (drained.length === 0) return this.injections.drain(ctx, []);
-    const rewritten = this.injections.drain(ctx, [{
-      message: steerUserMessage(drained), texts: drained.map((steer) => steer.text),
-    }]);
-    this.deps.onDrain?.(drained, ctx.stepNumber);
-    return rewritten;
+    this.landing = drained;
+    const task = this.persistDrain(ctx, drained);
+    this.landingTask = task;
+    try {
+      return await task;
+    } finally {
+      if (this.landingTask === task) this.landingTask = null;
+    }
+  }
+
+  private async persistDrain(
+    ctx: PrepareStepContext,
+    drained: UserSteer[],
+  ): Promise<ModelMessage[] | undefined> {
+    try {
+      await this.deps.onDrain?.(drained, ctx.stepNumber);
+      const rewritten = this.injections.drain(ctx, [{
+        message: steerUserMessage(drained), texts: drained.map((steer) => steer.text),
+      }]);
+      this.landing = [];
+      return rewritten;
+    } catch (cause) {
+      // New steers may arrive while persistence is awaited. The failed prefix
+      // keeps its durable order ahead of them for the next step attempt.
+      this.pending = [...drained, ...this.pending];
+      this.landing = [];
+      throw cause;
+    }
   }
 
   /** The verbatim texts the model actually saw this turn, in drain order —

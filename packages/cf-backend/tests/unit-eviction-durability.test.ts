@@ -22,7 +22,9 @@ import {
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
-import { SANDBOX_LIFECYCLE_STAGES, sandboxLifecycleIncidentKey } from '../src/sandbox-lifecycle';
+import {
+  SANDBOX_LIFECYCLE_ENVELOPE_VERSION, SANDBOX_LIFECYCLE_STAGES, sandboxLifecycleIncidentKey,
+} from '../src/sandbox-lifecycle';
 // The PRODUCER's own stage list, by relative path rather than through
 // `@kinu.run/devbox`: the barrel exports the Devbox class, which imports the
 // Sandbox runtime and therefore `cloudflare:workers`, which does not exist
@@ -348,9 +350,11 @@ describe('a fiber nobody defined a recovery for', () => {
 
 describe('a sandbox lifecycle failure', () => {
   const incident = {
+    version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
     incidentId: 'inc-1',
     stage: 'checkpoint' as const,
     reason: 'mksquashfs exited 1',
+    attempts: 1,
   };
 
   test('becomes ONE blocker turn however many times the container retries', async () => {
@@ -382,14 +386,18 @@ describe('a sandbox lifecycle failure', () => {
     });
 
     const refused = await agent.acceptSandboxLifecycleFailure(incident);
-    expect(refused).toMatchObject({ status: 'queued', signal: 'undelivered', duplicate: false });
+    // `undelivered`, NOT `queued`. The box maps `queued` to `deliveredAt` and
+    // stops offering the row, so answering it here for an announcement nobody
+    // received is how an incident went permanently unseen while this side's
+    // ledger still held it as re-deliverable.
+    expect(refused).toMatchObject({ status: 'undelivered', duplicate: false });
 
     const submitted = recordSubmissions(agent);
     const retried = await agent.acceptSandboxLifecycleFailure(incident);
 
     // NOT reported as a duplicate: nothing had been announced, so the retry is
     // the first announcement and the caller can stop retrying now.
-    expect(retried).toMatchObject({ status: 'queued', signal: 'queued', duplicate: false });
+    expect(retried).toMatchObject({ status: 'queued', duplicate: false });
     expect(submitted).toHaveLength(1);
   });
 
@@ -405,9 +413,11 @@ describe('a sandbox lifecycle failure', () => {
     });
 
     await agent.acceptSandboxLifecycleFailure({
+      version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
       incidentId: 'inc-2',
       stage: 'attach',
       reason: 'archive size 0 did not match the declared 918_224',
+      attempts: 1,
     });
 
     expect(texts).toHaveLength(1);
@@ -455,7 +465,8 @@ describe('a sandbox lifecycle failure', () => {
 
     for (const stage of INCIDENT_STAGES) {
       const answer = await agent.acceptSandboxLifecycleFailure({
-        incidentId: `inc-${stage}`, stage, reason: 'measured failure',
+        version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+        incidentId: `inc-${stage}`, stage, reason: 'measured failure', attempts: 1,
       });
       expect({ stage, status: answer.status }).toEqual({ stage, status: 'queued' });
     }
@@ -472,7 +483,8 @@ describe('a sandbox lifecycle failure', () => {
   test('a stage outside the closed set is refused rather than given a generic consequence', async () => {
     const { agent } = orchestratorHarness();
     const answer = await agent.acceptSandboxLifecycleFailure({
-      incidentId: 'inc-4', stage: 'defrost', reason: 'measured failure',
+      version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
+      incidentId: 'inc-4', stage: 'defrost', reason: 'measured failure', attempts: 1,
     });
     expect(answer.status).toBe('rejected');
   });
@@ -515,7 +527,7 @@ describe('whether the container may be disturbed', () => {
     agent.harnessRoster().create({
       name: 'helper',
       createdBy: 'orchestrator', status: 'working', currentTask: 'building in the container',
-      createdAt: Date.now(), dismissedAt: null,
+      createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null,
     });
 
     // The harness `subAgent` stub refuses every call, which is exactly the

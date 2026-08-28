@@ -128,7 +128,7 @@ function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
 const rosterEntry: SubordinateRosterEntry = {
   name: 'researcher',
   createdBy: 'orchestrator', status: 'idle', currentTask: null,
-  createdAt: 1000, dismissedAt: null,
+  createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null,
 };
 
 const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
@@ -143,6 +143,18 @@ function makeTeam() {
     calls,
     deps: {
       delegation: ROOT_DELEGATION_BUDGET,
+      temporary: {
+        run: async () => ({
+          status: 'completed' as const,
+          agent: 'ask-auditor-x',
+          lifetime: 'task' as const,
+          role: 'auditor',
+          answer: 'answered',
+          transcript: 'kept' as const,
+          elapsed_ms: 1,
+        }),
+        settle: () => false,
+      },
       snapshot: () => [rosterEntry],
       list: async () => [rosterEntry],
       create: async (input) => ({
@@ -150,7 +162,7 @@ function makeTeam() {
         displayName: 'Researcher',
         subordinate: {
           name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
         },
       }),
       rename: async (input) => {
@@ -169,6 +181,7 @@ function makeTeam() {
         return { name: input.name ?? 'researcher', displayName: 'Researcher' };
       },
       assign: async (input) => { recordCall(calls, 'assign', input); return { ok: true, name: input.name, ...handoff('queued', true) }; },
+      knows: async () => true,
       status: async (input) => { recordCall(calls, 'status', input); return { roster: [rosterEntry] }; },
       message: async (input) => { recordCall(calls, 'message', input); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
       dismiss: async (input) => {
@@ -293,7 +306,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(stale.error).toContain('unknown field "settle"');
     expect(stale.error).toContain(
       'action "swarm" takes: task, preset, objective, key, config, from, label, name, branches, '
-      + 'depth, role, tier, budget_usd, budget_tokens, budget_label',
+      + 'depth, nodes, role, tier, budget_usd, budget_tokens, budget_label',
     );
   });
 

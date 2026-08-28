@@ -22,8 +22,10 @@ import {
 } from "@phosphor-icons/react";
 import type { AgentViewSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import type { HeadDeltas } from "@/components/head-chat";
 import { tabCls } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
+import type { AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@/lib/executors";
 import type { ToolInfo, MemoryEntry, ForkNode, BackgroundJob, ExecutorCommandResult, Rpc, TabPresence } from "@/lib/protocol";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
@@ -74,16 +76,20 @@ export interface WorkSurfaceProps {
   /** The actor that owns `plan`. Other surfaces remain workspace-scoped. */
   planRpc?: Rpc;
   // Agent
-  agentStatus: AgentStatus | null;
+  snapshot: AsyncResource<AgentStatus>;
   tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
+  onRetryLoad: () => void;
   onSearchMemory: (q: string) => void;
   // Exploration — the tree of the search in flight, pushed by the engine.
   mctsTrees: ReadonlyMap<string, ForkNode>;
   /** Per-branch journal-write counter, pushed by `head_activity` — what makes an
    *  open branch's transcript grow while that branch works. */
   headActivity: ReadonlyMap<string, number>;
+  /** The live deltas — what a running branch is writing right now, drawn under
+   *  the durable steps until each one lands. */
+  headDeltas?: HeadDeltas;
   /** A turn is in flight — the live surfaces revalidate while it is. */
   isStreaming: boolean;
   // Environment (mounts + terminals)
@@ -223,6 +229,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             <ExplorationSurface
               liveTrees={props.mctsTrees}
               headActivity={props.headActivity}
+              headDeltas={props.headDeltas}
               isStreaming={props.isStreaming}
               backgroundJobs={props.backgroundJobs}
               rpc={props.rpc}
@@ -230,9 +237,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {surface === "Agent" && (
             <AgentSurface
-              agentStatus={props.agentStatus} tools={props.tools}
+              snapshot={props.snapshot} tools={props.tools}
               memory={props.memory} memoryContent={props.memoryContent}
-              onSearchMemory={props.onSearchMemory} rpc={props.rpc}
+              onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
+              rpc={props.rpc}
             />
           )}
           {surface === "Environment" && (

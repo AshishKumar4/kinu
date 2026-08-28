@@ -197,6 +197,21 @@ describe('the cause chain is the language `%w` and is never broken', () => {
     first.cause = second;
     expect(renderCauseChain(first)).toBe('first: second');
   });
+
+  test('a wrapper that embeds its cause renders those words once', () => {
+    // `toProviderError` puts the refined provider text in its own message and
+    // keeps the raw cause for sinks. Before the join-boundary dedup this
+    // rendered `calling the model: Your account is not active.: Your account
+    // is not active.` on the product surface (packages/cli behavior suite).
+    const provider = new Error('Your account is not active.');
+    const outer = new Error('calling the model: Your account is not active.', { cause: provider });
+    expect(renderCauseChain(outer)).toBe('calling the model: Your account is not active.');
+    // A link that says anything NEW still renders whole — dedup is exact
+    // containment at the tail, never similarity.
+    const refined = new Error('calling the model: account inactive', { cause: provider });
+    expect(renderCauseChain(refined))
+      .toBe('calling the model: account inactive: Your account is not active.');
+  });
 });
 
 describe('toKinuError', () => {

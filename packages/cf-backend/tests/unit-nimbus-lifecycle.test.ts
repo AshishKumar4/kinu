@@ -17,11 +17,15 @@ import * as v from 'valibot';
 // 2026-08-20: 59/2 in a fresh worktree, 61/0 in the primary — same files).
 // So this file owns the module for its own run: `getSandbox` resolves through
 // whatever `env.Sandbox` binding each test installed, exactly like the SDK.
+// Everything this file does NOT fake keeps the REAL export — the mock outlives
+// this file, and a throwing `proxyToSandbox` stub was what unit-transport-
+// security's preview-route test inherited under full-suite order.
+import * as actualSandboxSdk from '@cloudflare/sandbox';
 mock.module('@cloudflare/sandbox', () => ({
+  ...actualSandboxSdk,
   getSandbox: (namespace: SandboxNamespaceProbe, name: string) =>
     namespace.get(namespace.idFromName(name)),
   Sandbox: class {},
-  proxyToSandbox: () => { throw new Error('proxyToSandbox is not exercised by this suite.'); },
 }));
 
 const OWNER = '0123456789abcdef0123456789abcdef';
@@ -186,13 +190,21 @@ describe('canonical Nimbus workspace lifecycle', () => {
 
   test('a Nimbus teardown failure preserves actor storage and the user registry', async () => {
     const harness = createTestUserDO({ destroyWorkspaceError: 'Nimbus destroy failed' });
-    const token = await provisionTestWorkspace(harness, 'doomed');
+    await provisionTestWorkspace(harness, 'doomed');
 
     await expect(harness.userDO.removeWorkspace(await testOwner(), 'doomed', OWNER))
       .rejects.toThrow('Nimbus destroy failed');
 
-    expect((await harness.userDO.listWorkspaces(await testOwner())).entries.map((row) => row.name)).toContain('doomed');
-    expect(await harness.userDO.hasWorkspace({ workspaceToken: token }, 'doomed')).toBe(true);
+    // The ROW survives — that is what fail-closed means here, because a
+    // same-name recreate must not reconnect to resources nothing destroyed. It
+    // survives MARKED (KINU-024), so the owner's list and every ownership gate
+    // stop showing a workspace whose teardown has started, while the marker is
+    // what gives the unfinished cleanup an owner.
+    expect(harness.db.prepare(
+      `SELECT delete_pending FROM user_workspaces WHERE name = 'doomed'`,
+    ).get()).toEqual({ delete_pending: 1 });
+    expect((await harness.userDO.listWorkspaces(await testOwner())).entries.map((row) => row.name))
+      .not.toContain('doomed');
     harness.close();
   });
 

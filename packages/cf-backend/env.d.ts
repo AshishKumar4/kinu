@@ -107,6 +107,14 @@ declare global {
      *  only. Populate during a rotation and drop once every UserDO has been
      *  touched — see user/credential-envelope.ts. */
     CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
+    /** Signs the route capability every public webhook delivery URL carries.
+     *  A Wrangler secret, never a var. Without it a workspace cannot be given a
+     *  webhook: creation answers 503, and every delivery URL answers 404
+     *  without waking a workspace. Rotating it revokes every URL already given
+     *  to an external system; owners re-read the new one from the triggers
+     *  list. Generate with `openssl rand -base64 32`.
+     *  See events/webhook-route.ts. */
+    WEBHOOK_ROUTE_SECRET?: string;
     /** Cloudflare account OAuth client settings. Client secret must be a Wrangler secret. */
     CLOUDFLARE_OAUTH_CLIENT_ID?: string;
     CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;
@@ -114,9 +122,16 @@ declare global {
     CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
     /** AI Gateway id used with the user's Cloudflare OAuth token for Workers AI. */
     CLOUDFLARE_AI_GATEWAY_ID?: string;
-    /** Local dev backdoor — synthesize an authenticated identity for this
-     *  email without an OAuth browser session. Production must leave this unset. */
+    /** Names the ONE identity a caller may act as without an OAuth browser
+     *  session. Says WHICH identity, never that anyone may have it: off a
+     *  developer's own machine, `DEV_IDENTITY_SECRET` is what grants it.
+     *  Production must leave this unset. */
     DEV_USER_EMAIL?: string;
+    /** The shared secret a caller presents in `x-kinu-dev-identity` to act as
+     *  `DEV_USER_EMAIL` on a deployment that is not localhost. Set with
+     *  `wrangler secret put DEV_IDENTITY_SECRET --env staging`; without it a
+     *  published deployment grants no synthetic identity at all. */
+    DEV_IDENTITY_SECRET?: string;
     /** Cloudflare Email Sending binding (`send_email` in wrangler.jsonc).
      *  OPTIONAL — without it, outbound email (thread replies, owner
      *  notifications) skips quietly. */

@@ -64,6 +64,53 @@ type SandboxPty = {
 const TERMINAL_SESSION = "kinu-terminal";
 
 /**
+ * The handshake, and nothing else, is what the container's PTY endpoint needs.
+ *
+ * The SDK re-wraps whatever request it is handed (`new Request(ptyUrl, request)`
+ * in its `proxyTerminal`), so every header still present at the call below
+ * reaches the shell's view of the upgrade — including the browser's
+ * `__Host-kinu_session` cookie and the `x-kinu-user-id` header server.ts appends
+ * for the DO hop. A container runs agent-chosen code, so it is across a trust
+ * boundary from both: an allowlist rather than a strip list, because the set a
+ * WebSocket upgrade legitimately carries is closed and the set of credentials a
+ * browser might attach is not.
+ */
+const PTY_UPGRADE_HEADERS = {
+  "upgrade": true,
+  "connection": true,
+  "sec-websocket-key": true,
+  "sec-websocket-version": true,
+  "sec-websocket-protocol": true,
+  "sec-websocket-extensions": true,
+};
+
+function ptyUpgradeRequest(request: Request): Request {
+  const headers = new Headers(request.headers);
+  for (const name of Array.from(headers.keys())) {
+    if (!(name in PTY_UPGRADE_HEADERS)) headers.delete(name);
+  }
+  return new Request(request, { headers });
+}
+
+/** The client left before the shell opened. A sentinel rather than a rejection:
+ *  a departed client is an ordinary outcome, not a failure to classify. */
+const CLIENT_GONE = Symbol("terminal client went away");
+
+function clientGone(signal: AbortSignal): Promise<typeof CLIENT_GONE> {
+  const { promise, resolve } = Promise.withResolvers<typeof CLIENT_GONE>();
+  if (signal.aborted) resolve(CLIENT_GONE);
+  else signal.addEventListener("abort", () => resolve(CLIENT_GONE), { once: true });
+  return promise;
+}
+
+/** Nobody reads this: the connection it would travel on is already gone. It
+ *  exists because a handler must answer, and it says what happened for a log
+ *  reader who finds it. */
+function abandonedAttach(): Response {
+  return err(503, "terminal attach abandoned: the client disconnected before the shell opened");
+}
+
+/**
  * Attach a terminal, or say why this environment has none.
  *
  * Auth, CSRF and workspace ownership are settled by the caller (server.ts);
@@ -73,6 +120,7 @@ export async function handleTerminalRequest(
   request: Request,
   env: Env,
   agentName: string,
+  ctx: Pick<ExecutionContext, 'waitUntil'>,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const attach = url.pathname === `/api/workspaces/${agentName}/terminal`;
@@ -82,6 +130,13 @@ export async function handleTerminalRequest(
 
   const executor = url.searchParams.get("executor");
   if (!executor) return err(400, "executor query parameter required");
+
+  // ONE diagnostic scope for this request, and every failure below carries it.
+  // These two tags are what make a terminal failure answerable at all: whose
+  // container, and which environment it was asked for. They used to be spelled
+  // at the attach, lease and reset sites only, so a readiness refusal — the most
+  // common way a terminal does not open — reached the fleet with neither.
+  const scope = { workspace: agentName, executor };
 
   const lane = terminalLane(executor);
   // A refusal a UI can render as a labelled mode rather than as a failure: it
@@ -136,7 +191,7 @@ export async function handleTerminalRequest(
         cause,
         otherwise: "unavailable",
       });
-      diagnostics.failure("terminal.lease_renewal_failed", error, { workspace: agentName, executor });
+      diagnostics.failure("terminal.lease_renewal_failed", error, scope);
       return err(503, renderCauseChain(error));
     }
   }
@@ -165,7 +220,7 @@ export async function handleTerminalRequest(
         cause,
         otherwise: "unavailable",
       });
-      diagnostics.failure("terminal.reset_failed", error, { workspace: agentName, executor });
+      diagnostics.failure("terminal.reset_failed", error, scope);
       return err(503, renderCauseChain(error));
     }
   }
@@ -179,9 +234,37 @@ export async function handleTerminalRequest(
   // that may install them. Both are the sandbox lane's own preflight, so a
   // terminal waits on exactly what an exec waits on — never a second start
   // path, and never a container whose network is still unconfigured.
-  const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
-  const ready = await agent.prepareTerminal(executor);
-  if ("error" in ready) return err(503, ready.error);
+  //
+  // Both halves run inside the SAME tagged scope the attach uses. Routing and
+  // the preflight are how a terminal most often fails to open, and they used to
+  // be the only failures on this route that reached the fleet with no workspace
+  // and no executor: the refusal was rendered to the pane and recorded nowhere,
+  // and an unreachable workspace object escaped the handler with no cause chain
+  // either. The scope stops at the preflight, deliberately — everything past it
+  // is the attach's own, under the attach's own cancellation fence.
+  try {
+    const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+    const ready = await agent.prepareTerminal(executor);
+    if ("error" in ready) {
+      // The refusal is ALREADY a rendered chain from the other side of the RPC,
+      // so it rides as the cause rather than being restated. The pane shows what
+      // it always showed; the fleet row is the part that did not exist.
+      diagnostics.failure("terminal.not_ready", toKinuError({
+        doing: "preparing this workspace's container for a terminal",
+        cause: ready.error,
+        otherwise: "unavailable",
+      }), scope);
+      return err(503, ready.error);
+    }
+  } catch (cause) {
+    const error = toKinuError({
+      doing: "reaching this workspace to prepare a terminal",
+      cause,
+      otherwise: "unavailable",
+    });
+    diagnostics.failure("terminal.preflight_failed", error, scope);
+    return err(503, renderCauseChain(error));
+  }
 
   // Geometry from the client, so the first frame the shell paints already fits.
   // Bounded: these reach `Bun.Terminal` directly, and a query string is a
@@ -198,6 +281,17 @@ export async function handleTerminalRequest(
     if (Number.isInteger(value) && value > 0 && value <= 1000) size[axis] = value;
   }
 
+  // ONE OWNER, AND IT IS THIS REQUEST — for everything from here down, which is
+  // everything that creates container-side state a client has to be present to
+  // want: a lease beat, a shell session, a PTY. The fence is the platform's own
+  // cancellation rather than a clock: `request.signal` aborts when the client
+  // goes away, and an outer deadline would have to be both longer than a cold
+  // container start and shorter than a browser tab left open, which is not one
+  // number. The preflight above is NOT fenced, deliberately: the container is
+  // the Durable Object's to start, that start is shared and idempotent, and
+  // cancelling it would abandon work another attach is already waiting on.
+  if (request.signal.aborted) return abandonedAttach();
+
   try {
     // `shell` is deliberately not named: the container's default is `bash`, and
     // `PtyOptions.shell` is spawned as ONE argv token (`Bun.spawn([shell])`),
@@ -206,14 +300,44 @@ export async function handleTerminalRequest(
     // why `top` and `htop` paint instead of refusing.
     await sandbox.noteTerminalActivity();
     const session = await sandbox.getSession(TERMINAL_SESSION);
-    return await session.terminal(request, size);
+    const upgrade = session.terminal(ptyUpgradeRequest(request), size);
+    const settled = await Promise.race([upgrade, clientGone(request.signal)]);
+    if (settled === CLIENT_GONE) {
+      // The upgrade is still in flight and nobody wants its socket, so it is
+      // released rather than left pending: a 101 whose WebSocket is never
+      // accepted and never returned leaves the container's end of the PTY
+      // holding an open stream until the edge reaps it for idleness
+      // (PLATFORM_CATALOG `edge.websocket_idle_reap_ms`). `accept()` first
+      // because ownership has to be taken before it can be released.
+      // The response returns NOW, while the container-side upgrade can settle
+      // later. Retain its one cleanup promise in this request's execution
+      // context so isolate teardown cannot discard the only owner of that late
+      // socket. `waitUntil` is retention, not a second owner: the cleanup still
+      // accepts and closes exactly this abandoned upgrade and every failure is
+      // recorded inside the promise rather than left unhandled.
+      ctx.waitUntil((async () => {
+        try {
+          const response = await upgrade;
+          response.webSocket?.accept();
+          response.webSocket?.close(1001, "terminal client went away");
+        } catch (cause) {
+          diagnostics.failure("terminal.abandoned_upgrade_not_released", toKinuError({
+            doing: "releasing the terminal upgrade a departed client left behind",
+            cause,
+            otherwise: "unavailable",
+          }), scope);
+        }
+      })());
+      return abandonedAttach();
+    }
+    return settled;
   } catch (cause) {
     const error = toKinuError({
       doing: "attaching a terminal to the sandbox container",
       cause,
       otherwise: "unavailable",
     });
-    diagnostics.failure("terminal.attach_failed", error, { workspace: agentName, executor });
+    diagnostics.failure("terminal.attach_failed", error, scope);
     return err(503, renderCauseChain(error));
   }
 }

@@ -8,6 +8,7 @@ import type {
   AgentClientEvent,
   AgentClientStatus,
   DeviceConsentSurface,
+  LocalSessionControls,
 } from '../../src/agent-client';
 import type { AgentModelMenu } from '../../src/model-catalog';
 import { createCliSession } from '../../src/session';
@@ -35,6 +36,9 @@ interface FakeClientOptions {
   mode?: 'local' | 'cloud';
   status?: () => Promise<AgentClientStatus>;
   consents?: DeviceConsentSurface | null;
+  /** Lets command tests supply an honest local boundary without mutating the
+   * readonly AgentClient surface after construction. */
+  localControls?: LocalSessionControls;
   listModels?: () => Promise<AgentModelMenu>;
   setModel?: AgentClient['setModel'];
   connect?: AgentClient['connect'];
@@ -52,14 +56,18 @@ export function fakeClient(options: FakeClientOptions) {
     agentName: options.name,
     cliSession: createCliSession(options.name, { noTranscript: true }),
     consents: options.consents ?? null,
-    localControls: mode === 'local' ? {
+    localControls: mode === 'local' ? (options.localControls ?? {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},
       getShellApprovalMode: () => 'strict',
       setShellApprovalMode: (approval) => approval,
       setShellApprovalHandler: () => () => {},
       listModelProviders: async () => [],
-    } : null,
+      listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
+      readInstructionApproval: async () => null,
+      approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
+      revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
+    }) : null,
     checkpoints: null,
     inlineAttachmentLimitBytes: 1024,
     connect: options.connect ?? (async () => {}),
@@ -82,6 +90,10 @@ export function fakeClient(options: FakeClientOptions) {
     })),
     describeTools: async () => ({ builtIn: [], crafted: [] }),
     changelog: async () => ({ entries: [], unseenCount: 0 }),
+    refinements: async () => ({ requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no unresolved corrections — nothing is owed a refinement' } }),
+    decideRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
+    showRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
+    requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
     revertChangelogEntry: async () => ({ ok: false }),
     readMemory: async () => '',
     searchNodes: async () => [],

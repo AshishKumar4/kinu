@@ -13,7 +13,7 @@
 //   * a model that will not stream is refused by name instead of being served
 //     from a buffer, which is the failure the buffering hid.
 import { describe, test, expect, afterEach } from 'bun:test';
-import { streamText } from 'ai';
+import { streamText, tool, jsonSchema } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '@kinu.run/core/obs';
@@ -44,6 +44,7 @@ const ToolCallDeltaSchema = v.looseObject({
 });
 
 const ChunkSchema = v.looseObject({
+  id: v.string(),
   object: v.optional(v.string()),
   model: v.optional(v.string()),
   choices: v.array(v.looseObject({
@@ -59,6 +60,7 @@ const ChunkSchema = v.looseObject({
 });
 
 const CompletionSchema = v.looseObject({
+  id: v.string(),
   object: v.string(),
   model: v.string(),
   choices: v.array(v.looseObject({
@@ -197,6 +199,26 @@ function chunks(payloads: readonly string[]): Chunk[] {
   return payloads
     .filter((payload) => payload !== '[DONE]')
     .map((payload) => v.parse(ChunkSchema, JSON.parse(payload)));
+}
+
+/** One streamed response, drained. Every frame of one response carries the SAME
+ *  id, and that id is the response-unique half of a synthesized tool-call id.
+ *  Holding it here makes that property true of every test that reads a call. */
+async function drainStreamed(direct: typeof globalThis.fetch) {
+  const emitted = chunks(await frames((await direct(ENDPOINT, {
+    method: 'POST',
+    body: chatBody({ stream: true }),
+  })).body).rest());
+  const ids = [...new Set(emitted.map((chunk) => chunk.id))];
+  const [responseId] = ids;
+  if (ids.length !== 1 || responseId === undefined) {
+    throw new Error(`one streamed response carried ${String(ids.length)} chunk ids`);
+  }
+  return {
+    responseId,
+    chunks: emitted,
+    toolCalls: emitted.flatMap((chunk) => chunk.choices[0]?.delta?.tool_calls ?? []),
+  };
 }
 
 function deltaOf(payload: string | null): Chunk['choices'][number]['delta'] {
@@ -397,25 +419,111 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     expect(finished[0]?.usage).toEqual({ prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 });
   });
 
-  test('native tool calls stream as indexed deltas and finish as tool_calls', async () => {
+  test('native tool calls stream as indexed deltas that share one response id', async () => {
     const { fetch: direct } = directFetch(() => eventStreamOf([
       sse({ response: '' }),
-      sse({ tool_calls: [{ name: 'read_file', arguments: { path: 'AGENTS.md' } }] }),
-      sse({ tool_calls: [{ id: 'call-upstream', name: 'run', arguments: '{"cmd":"ls"}' }] }),
+      sse({ tool_calls: [
+        { name: 'read_file', arguments: { path: 'AGENTS.md' } },
+        { name: 'read_file', arguments: { path: 'README.md' } },
+      ] }),
+      sse({ tool_calls: [
+        { name: 'run', arguments: { cmd: 'ls' } },
+        { id: 'call-upstream', name: 'run', arguments: '{"cmd":"pwd"}' },
+      ] }),
       DONE,
     ].join('')));
 
-    const emitted = chunks(await frames((await direct(ENDPOINT, {
-      method: 'POST',
-      body: chatBody({ stream: true }),
-    })).body).rest());
+    const streamed = await drainStreamed(direct);
 
-    const calls = emitted.flatMap((chunk) => chunk.choices[0]?.delta?.tool_calls ?? []);
-    expect(calls).toEqual([
-      { index: 0, id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"AGENTS.md"}' } },
-      { index: 1, id: 'call-upstream', type: 'function', function: { name: 'run', arguments: '{"cmd":"ls"}' } },
+    // The index keeps counting across frames, so a synthesized id is stable and
+    // unique within the response however the upstream split its deltas. The
+    // other half is the response id `drainStreamed` held to one value, so the
+    // name is unique across responses too. A usable upstream id stays readable
+    // INSIDE the key rather than being replaced by a position, and it is scoped
+    // like every other one: an upstream id can itself be a per-response counter
+    // that repeats on the next response.
+    expect(streamed.toolCalls).toEqual([
+      {
+        index: 0, id: `call-${streamed.responseId}-i-1`, type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"AGENTS.md"}' },
+      },
+      {
+        index: 1, id: `call-${streamed.responseId}-i-2`, type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+      },
+      {
+        index: 2, id: `call-${streamed.responseId}-i-3`, type: 'function',
+        function: { name: 'run', arguments: '{"cmd":"ls"}' },
+      },
+      {
+        index: 3, id: `call-${streamed.responseId}-n-call-upstream`, type: 'function',
+        function: { name: 'run', arguments: '{"cmd":"pwd"}' },
+      },
     ]);
-    expect(emitted.at(-1)?.choices[0]?.finish_reason).toBe('tool_calls');
+    expect(streamed.chunks.at(-1)?.choices[0]?.finish_reason).toBe('tool_calls');
+  });
+
+  test('two streamed responses in one turn cannot produce the same tool-call id', async () => {
+    // KINU-N002: the fallback was `call-${index + 1}`, so a turn whose second
+    // step also opened with an unnamed tool call produced a second `call-1`.
+    // Every consumer keys on that string: the durable transcript pairs a result
+    // with a call by it, and the surface renders a row by it — so the second
+    // step's result could land against the first step's call.
+    const { fetch: direct } = directFetch(() => eventStreamOf([
+      sse({ tool_calls: [{ name: 'run', arguments: { cmd: 'ls' } }] }),
+      DONE,
+    ].join('')));
+
+    const first = await drainStreamed(direct);
+    const second = await drainStreamed(direct);
+
+    // Same tool, same arguments, same index — and still two distinct names,
+    // because the response is half of the identity.
+    expect(first.responseId).not.toBe(second.responseId);
+    expect(first.toolCalls[0]?.id).toBe(`call-${first.responseId}-i-1`);
+    expect(second.toolCalls[0]?.id).toBe(`call-${second.responseId}-i-1`);
+  });
+
+  test('two responses whose native tool-call ids are both "0" cannot produce the same id', async () => {
+    // A native id is not an identity on its own. A provider that numbers calls
+    // per RESPONSE hands back `"0"` again on the next response of the same
+    // turn, so forwarding it verbatim reproduced exactly the collision the
+    // position had — and `??` never fired, because the id was present.
+    const { fetch: direct } = directFetch(() => eventStreamOf([
+      sse({ tool_calls: [{ id: '0', name: 'run', arguments: { cmd: 'ls' } }] }),
+      DONE,
+    ].join('')));
+
+    const first = await drainStreamed(direct);
+    const second = await drainStreamed(direct);
+
+    expect(first.toolCalls[0]?.id).not.toBe(second.toolCalls[0]?.id);
+    // The provider's own name for the call survives inside each key.
+    expect(first.toolCalls[0]?.id).toBe(`call-${first.responseId}-n-0`);
+    expect(second.toolCalls[0]?.id).toBe(`call-${second.responseId}-n-0`);
+  });
+
+  test('an empty or unusable native tool-call id never becomes the pairing key', async () => {
+    // An empty id pairs with every other empty id, so an empty id is the worst
+    // case of all: it pairs everything with everything. A space or a `/` is not
+    // a character every family's JSON id field round-trips. Both degrade to the
+    // position, which is unique within the response.
+    const { fetch: direct } = directFetch(() => eventStreamOf([
+      sse({ tool_calls: [
+        { id: '', name: 'run', arguments: { cmd: 'ls' } },
+        { id: '   ', name: 'run', arguments: { cmd: 'pwd' } },
+        { id: 'read file/1', name: 'run', arguments: { cmd: 'id' } },
+      ] }),
+      DONE,
+    ].join('')));
+
+    const streamed = await drainStreamed(direct);
+
+    expect(streamed.toolCalls.map((call) => call.id)).toEqual([
+      `call-${streamed.responseId}-i-1`,
+      `call-${streamed.responseId}-i-2`,
+      `call-${streamed.responseId}-i-3`,
+    ]);
   });
 
   test('OpenAI-shaped chunks pass through verbatim and their finish reason is not duplicated', async () => {
@@ -434,6 +542,58 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     })).body).rest();
 
     expect(payloads).toEqual([upstreamChunk, finishChunk, '[DONE]']);
+  });
+
+  test('a usage-only frame that omits choices still reports its usage after an upstream finish', async () => {
+    // KINU-049: a usage report can arrive as a frame of its own with no
+    // `choices` at all, which parses in neither chunk shape. It was recorded
+    // and then dropped, because the synthesized frame that carried the recorded
+    // usage was emitted only when NO finish reason had gone out — and an
+    // OpenAI-shaped stream sends one. The turn then reported no tokens.
+    const finishChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
+      + '"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}';
+    const { fetch: direct } = directFetch(() => eventStreamOf(
+      `data: ${finishChunk}\n\n${sse({ usage: { prompt_tokens: 21, completion_tokens: 5, total_tokens: 26 } })}${DONE}`,
+    ));
+
+    const payloads = await frames((await direct(ENDPOINT, {
+      method: 'POST',
+      body: chatBody({ stream: true }),
+    })).body).rest();
+
+    const emitted = chunks(payloads);
+    // One finish state on the wire, and the usage reported exactly once.
+    expect(emitted.filter((chunk) => (chunk.choices[0]?.finish_reason ?? null) !== null)).toHaveLength(1);
+    const reported = emitted.filter((chunk) => chunk.usage !== undefined);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.usage).toEqual({ prompt_tokens: 21, completion_tokens: 5, total_tokens: 26 });
+    expect(payloads.filter((payload) => payload === '[DONE]')).toHaveLength(1);
+  });
+
+  test('a usage-only frame with empty choices does not put two terminal frames on the wire', async () => {
+    // The same report in the shape that DOES parse as an OpenAI chunk. Forwarded
+    // verbatim it marked no finish, so the synthesized finish frame followed it
+    // and one response ended twice.
+    const head = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m"';
+    const delta = `${head},"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}`;
+    const usageOnly = `${head},"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}`;
+    const { fetch: direct } = directFetch(() => eventStreamOf(
+      `data: ${delta}\n\ndata: ${usageOnly}\n\n${DONE}`,
+    ));
+
+    const payloads = await frames((await direct(ENDPOINT, {
+      method: 'POST',
+      body: chatBody({ stream: true }),
+    })).body).rest();
+
+    const emitted = chunks(payloads);
+    const terminal = emitted.filter((chunk) =>
+      (chunk.choices[0]?.finish_reason ?? null) !== null || chunk.usage !== undefined);
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.choices[0]?.finish_reason).toBe('stop');
+    expect(terminal[0]?.usage).toEqual({ prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 });
+    expect(emitted[0]?.choices[0]?.delta).toEqual({ role: 'assistant', content: 'hi' });
+    expect(payloads.filter((payload) => payload === '[DONE]')).toHaveLength(1);
   });
 
   // A frame this adapter cannot translate cannot be forwarded either, and
@@ -551,7 +711,10 @@ describe('direct Workers AI binding — whole completions', () => {
     expect(completion.choices[0]?.message.role).toBe('assistant');
     expect(completion.choices[0]?.message.content).toBe('done');
     expect(completion.choices[0]?.message.tool_calls).toEqual([
-      { id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } },
+      {
+        id: `call-${completion.id}-i-1`, type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+      },
     ]);
     expect(completion.choices[0]?.finish_reason).toBe('tool_calls');
     expect(completion.usage).toEqual({ prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 });
@@ -562,6 +725,46 @@ describe('direct Workers AI binding — whole completions', () => {
       messages: [{ role: 'user', content: PROMPT }],
       stream: false,
     });
+  });
+
+  test('a completion indexes its synthesized tool-call ids within its own id', async () => {
+    const { fetch: direct } = directFetch(() => ({
+      response: '',
+      tool_calls: [
+        { name: 'run', arguments: { cmd: 'ls' } },
+        { name: 'run', arguments: { cmd: 'pwd' } },
+      ],
+    }));
+
+    const response = await direct(ENDPOINT, { method: 'POST', body: chatBody() });
+
+    // The response half is the completion's OWN id, which is minted once and
+    // carried on the wire — so the persisted id is the id the caller read, and
+    // replay reproduces it rather than minting a new one.
+    const completion = v.parse(CompletionSchema, await response.json());
+    expect(completion.choices[0]?.message.tool_calls?.map((call) => call.id)).toEqual([
+      `call-${completion.id}-i-1`,
+      `call-${completion.id}-i-2`,
+    ]);
+  });
+
+  test('two non-streamed responses in one turn cannot produce the same tool-call id', async () => {
+    const { fetch: direct } = directFetch(() => ({
+      response: '',
+      tool_calls: [{ name: 'run', arguments: { cmd: 'ls' } }],
+    }));
+
+    const completions = [];
+    for (const _step of [1, 2]) {
+      const response = await direct(ENDPOINT, { method: 'POST', body: chatBody() });
+      completions.push(v.parse(CompletionSchema, await response.json()));
+    }
+
+    const [first, second] = completions;
+    if (!first || !second) throw new Error('the turn produced fewer than two completions');
+    expect(first.id).not.toBe(second.id);
+    expect(first.choices[0]?.message.tool_calls?.[0]?.id).toBe(`call-${first.id}-i-1`);
+    expect(second.choices[0]?.message.tool_calls?.[0]?.id).toBe(`call-${second.id}-i-1`);
   });
 
   test('an already OpenAI-shaped output passes through unchanged', async () => {
@@ -632,5 +835,70 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     const usage = await result.usage;
     expect(usage.inputTokens).toBe(4);
     expect(usage.outputTokens).toBe(2);
+  });
+
+  test('streamText reports the tokens of a usage-only frame that follows the finish', async () => {
+    // The end of KINU-049: an OpenAI-shaped stream announces its finish reason
+    // on a content frame and the platform reports usage on a frame of its own.
+    // The recorded usage reached no frame at all, so the SDK saw none and the
+    // whole turn was accounted at zero tokens.
+    const finishChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
+      + '"choices":[{"index":0,"delta":{"role":"assistant","content":"counted"},"finish_reason":"stop"}]}';
+    const { fetch: direct } = directFetch(() => eventStreamOf(
+      `data: ${finishChunk}\n\n${sse({ usage: { prompt_tokens: 31, completion_tokens: 7, total_tokens: 38 } })}${DONE}`,
+    ));
+    const model = createOpenAICompatible({
+      name: 'workers-ai',
+      baseURL: 'https://kinu-direct-workers-ai.invalid',
+      fetch: direct,
+    }).chatModel(MODEL);
+
+    const result = streamText({ model, prompt: 'ping' });
+    let text = '';
+    for await (const delta of result.textStream) text += delta;
+
+    expect(text).toBe('counted');
+    expect(await result.finishReason).toBe('stop');
+    const usage = await result.usage;
+    expect(usage.inputTokens).toBe(31);
+    expect(usage.outputTokens).toBe(7);
+  });
+
+  test('a tool result pairs back to its own call across two responses in one turn', async () => {
+    // The id is a PAIRING KEY: a tool result travels as `{ toolCallId, output }`
+    // and the transcript finds the call it answers by that string. Two steps of
+    // one turn that both open with an unnamed tool call used to mint the same
+    // `call-1`, so the second step's result resolved against the first's call.
+    const commands = [{ cmd: 'ls' }, { cmd: 'pwd' }];
+    let step = 0;
+    const { fetch: direct } = directFetch(() => eventStreamOf([
+      sse({ tool_calls: [{ name: 'run', arguments: commands[step++] ?? {} }] }),
+      DONE,
+    ].join('')));
+    const model = createOpenAICompatible({
+      name: 'workers-ai',
+      baseURL: 'https://kinu-direct-workers-ai.invalid',
+      fetch: direct,
+    }).chatModel(MODEL);
+    const tools = {
+      run: tool({
+        description: 'Run a shell command in the workspace.',
+        inputSchema: jsonSchema<{ cmd: string }>({
+          type: 'object', required: ['cmd'], properties: { cmd: { type: 'string' } },
+        }),
+      }),
+    };
+
+    const answered = new Map<string, unknown>();
+    for (const _step of commands) {
+      const result = streamText({ model, tools, prompt: 'ping' });
+      await result.consumeStream();
+      for (const call of await result.toolCalls) answered.set(call.toolCallId, call.input);
+    }
+
+    // Two calls, two keys. A colliding id would leave ONE entry here, and the
+    // second step's result would answer the first step's call.
+    expect(answered.size).toBe(2);
+    expect([...answered.values()]).toEqual(commands);
   });
 });

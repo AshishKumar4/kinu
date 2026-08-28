@@ -4,13 +4,13 @@
  * is synthesized server-side), so these fetches are bare.
  */
 import {
-  JsonObjectSchema,
   ProfileCatalogEnvelopeSchema,
   type Credential,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
+import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
 import * as v from 'valibot';
 
 export interface UserProfile {
@@ -136,6 +136,12 @@ async function api<Schema extends v.GenericSchema, Body>(
     method,
     headers: { 'content-type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    // The same deadline every agent RPC already runs under — the agents SDK's
+    // own call backstop, imported rather than restated. Bound reads only: an
+    // aborted mutation may already have landed server-side, which would turn
+    // an honest timeout into an ambiguous retry. A stalled read instead settles
+    // as a failure its surface can show and retry (KINU-073).
+    signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
   });
   if (!res.ok) throw new Error(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`);
   return v.parse(schema, await res.json());
@@ -176,6 +182,10 @@ export interface UserDevice {
   lastIp: string | null;
   lastAgent: string | null;
   replacedAt: number | null;
+  /** Revoked device rows with an unconfirmed-stop incident stay visible until acknowledged. */
+  revokedAt: number | null;
+  /** The owner revoked this device while a command lacked confirmed termination. */
+  unstoppedAt: number | null;
 }
 export interface RegisteredDevice {
   origin: string;
@@ -185,6 +195,7 @@ const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
   lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
+  revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
 });
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });
 export const listDevices    = () => api(v.array(UserDeviceSchema), 'GET', '/devices');
@@ -193,7 +204,9 @@ export const registerDevice = (label?: string) =>
 export const renameDevice   = (id: string, name: string) =>
   api(OkSchema, 'PATCH', `/devices/${encodeURIComponent(id)}`, { name });
 export const revokeDevice   = (id: string) =>
-  api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}`);
+  api(v.object({ ok: v.literal(true), unstoppedCommands: v.number() }), 'DELETE', `/devices/${encodeURIComponent(id)}`);
+export const acknowledgeUnstoppedDevice = (id: string) =>
+  api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}/unstopped`);
 
 /** Per-(agent, device) remembered consent: native file actions inside the
  *  connected folder, or full-filesystem plus unrestricted shell access. */
@@ -379,19 +392,6 @@ export const updateMcpServer = (id: string, patch: Partial<Pick<McpServerInput, 
 
 // ── EventsHub: triggers + events (per-agent endpoints) ─────────────
 
-export interface TriggerSummary {
-  id: string;
-  kind: 'webhook_durable' | 'webhook_ephemeral' | 'timer_oneshot' | 'timer_cron'
-      | 'process_watch' | 'file_watch' | 'peer_inbox' | 'mcp_route';
-  spec: import('@kinu.run/core').JsonObject;
-  creator_trust: 'external' | 'authenticated' | 'owner' | 'self';
-  state: 'active' | 'paused' | 'revoked';
-  created_at: number;
-  paused_at: number | null;
-  revoked_at: number | null;
-  rate_limit_per_min: number;
-}
-
 export interface CreateWebhookOpts {
   label: string;
   auth_mode: 'hmac' | 'bearer' | 'mtls';
@@ -422,22 +422,10 @@ async function agentApi<Schema extends v.GenericSchema, Body>(
   return v.parse(schema, await res.json());
 }
 
-const TriggerSummarySchema = v.object({
-  id: v.string(),
-  kind: v.picklist(['webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron',
-    'process_watch', 'file_watch', 'peer_inbox', 'mcp_route']),
-  spec: JsonObjectSchema,
-  creator_trust: v.picklist(['external', 'authenticated', 'owner', 'self']),
-  state: v.picklist(['active', 'paused', 'revoked']), created_at: v.number(),
-  paused_at: v.nullable(v.number()), revoked_at: v.nullable(v.number()), rate_limit_per_min: v.number(),
-});
 const CreateWebhookResultSchema = v.object({
   trigger_id: v.string(), url: v.string(), auth_mode: v.picklist(['hmac', 'bearer', 'mtls']),
   secret: v.nullable(v.string()),
 });
-
-export const listTriggers = (agentName: string) =>
-  agentApi(v.object({ triggers: v.array(TriggerSummarySchema) }), 'GET', agentName, '/triggers');
 
 export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts) =>
   agentApi(CreateWebhookResultSchema, 'POST', agentName, '/triggers', opts);

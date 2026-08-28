@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initUserTables } from '../src/user/schema';
-import { sqlExec, taggedSql } from './helpers/user-do';
+import { sqlExec } from './helpers/user-do';
 
 function columns(db: Database, table: string): string[] {
   return db.prepare<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((row) => row.name);
@@ -16,7 +16,7 @@ describe('UserDO schema bootstrap', () => {
   test('creates hash-only CLI agent websocket ticket table', () => {
     const db = new Database(':memory:');
 
-    initUserTables(sqlExec(db), taggedSql(db));
+    initUserTables(sqlExec(db));
 
     const ticketColumns = columns(db, 'cli_agent_connect_tickets');
     expect(ticketColumns).toContain('ticket_hash');
@@ -31,21 +31,13 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
-  test('reconciles the catalog CAS version onto user_config, with no parallel table', () => {
+  test('the catalog CAS version is part of user_config, with no parallel table', () => {
     const db = new Database(':memory:');
-    db.run(`
-      CREATE TABLE user_config (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `);
+    initUserTables(sqlExec(db));
     db.run(
       `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)`,
       ['default_model', 'workers-ai/example', 1],
     );
-
-    initUserTables(sqlExec(db), taggedSql(db));
 
     expect(columns(db, 'user_config')).toEqual(['key', 'value', 'updated_at', 'version']);
     const row = required(db.query<{ value: string; version: number }, []>(
@@ -61,7 +53,7 @@ describe('UserDO schema bootstrap', () => {
 
   test('peer-grant store: default deny, idempotent grant, revoke', () => {
     const db = new Database(':memory:');
-    initUserTables(sqlExec(db), taggedSql(db));
+    initUserTables(sqlExec(db));
 
     const has = (u: string, a: string) =>
       !!db.prepare(`SELECT 1 FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`).get(u, a);
@@ -83,6 +75,48 @@ describe('UserDO schema bootstrap', () => {
     db.prepare(`DELETE FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`)
       .run(foreign, 'scout');
     expect(has(foreign, 'scout')).toBe(false);
+    db.close();
+  });
+
+  test('every column a writer names is in the CREATE that owns the table', () => {
+    // The device rotation and provenance columns were reconciled in after the
+    // fact for a database that no longer exists. `user_devices` is created whole
+    // now, so the CREATE is the only place that can be wrong — and a writer
+    // naming a column the CREATE lacks fails with `no such column` at runtime,
+    // where nothing catches it.
+    const db = new Database(':memory:');
+    initUserTables(sqlExec(db));
+
+    expect(columns(db, 'user_devices')).toEqual([
+      'id', 'token_hash', 'prev_token_hash', 'label', 'os', 'hostname',
+      'created_at', 'connected_at', 'last_seen_at', 'expires_at', 'revoked_at',
+      'last_ip', 'last_agent', 'replaced_at', 'unstopped_at',
+    ]);
+    expect(columns(db, 'device_inflight_requests')).toEqual([
+      'request_id', 'device_id', 'workspace', 'turn_id', 'background_job_id',
+      'cancel_claim', 'cancel_outcome',
+    ]);
+    expect(columns(db, 'device_consent')).toEqual([
+      'agent_name', 'device_id', 'policy', 'scope', 'last_method',
+      'last_summary', 'updated_at',
+    ]);
+    // NOT NULL with a default, so no row can carry the NULL a backfill existed
+    // to repair.
+    expect(columns(db, 'user_workspaces')).toContain('name_origin');
+    db.close();
+  });
+
+  test('the MCP server-name constraint is unconditional', () => {
+    // It used to be built only when the table held no duplicates, with a plain
+    // non-unique index as the fallback. A fresh database has no duplicates to
+    // find, so the constraint is simply always there.
+    const db = new Database(':memory:');
+    initUserTables(sqlExec(db));
+
+    const indexes = db.prepare<{ name: string }, []>(`PRAGMA index_list(user_mcp_servers)`).all()
+      .map((row) => row.name);
+    expect(indexes).toContain('idx_user_mcp_servers_name_unique');
+    expect(indexes).not.toContain('idx_user_mcp_servers_name');
     db.close();
   });
 });

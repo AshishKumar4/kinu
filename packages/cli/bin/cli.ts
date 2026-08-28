@@ -18,7 +18,7 @@ if (topLevelArgs.length === 0) {
     try {
       await chatCommand(undefined, {});
     } catch (err) {
-      printFailure(err);
+      printFailure({ cause: err });
       process.exit(1);
     }
   } else {

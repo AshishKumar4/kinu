@@ -37,9 +37,14 @@ export {
 } from './file-changes';
 export { initHeadsTables } from './schema';
 export {
-  HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
+  HeadJournal, UNREPORTED_AT_MERGE_REASON,
+  type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
 } from './journal';
 export { LiveHeadJournal, type AnnounceHeadActivity } from './live-journal';
+export {
+  type HeadStreamFrame, type HeadStreamKind,
+  type ReportHeadDelta, type PublishHeadStream,
+} from './head-stream';
 export {
   reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
@@ -48,7 +53,6 @@ export {
 export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema';
 export {
   HeadController,
-  RECLAIMED_RUN_REASON,
   type HeadRuntime,
   type HeadGrounding,
   type SpawnedHead,

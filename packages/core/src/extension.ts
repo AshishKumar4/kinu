@@ -96,11 +96,14 @@ export interface KinuExtension {
   onTurnEnd?(ctx: TurnEndContext): void | Promise<void>;
   /**
    * Message-transform hook at each step boundary: return a replacement message
-   * array to rewrite what the model sees for that step (e.g. drain mid-turn
-   * steering), or `undefined` to leave it unchanged. Chained across extensions
-   * — each sees the prior extension's output.
+   * array to rewrite what the model sees for that step (for example, a durable
+   * mid-turn steer), or `undefined` to leave it unchanged. Chained across
+   * extensions — each sees the prior extension's output. Async is load-bearing:
+   * a persisted injection must land before the provider can receive it.
    */
-  prepareStep?(ctx: PrepareStepContext): ModelMessage[] | undefined;
+  prepareStep?(
+    ctx: PrepareStepContext,
+  ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined>;
   /**
    * Async context-transform hook, fired ONCE per turn assembly before the
    * model streams (and before the turn-local tail is spliced).
@@ -151,19 +154,51 @@ export class ExtensionHost {
     return merged;
   }
 
-  /** Run every prepareStep hook in order, chaining outputs. Returns the final
-   *  rewritten messages, or `undefined` if no extension changed anything. */
-  runPrepareStep(ctx: PrepareStepContext): ModelMessage[] | undefined {
+  /** Run every prepareStep hook in order, chaining outputs. The synchronous
+   * fast path stays synchronous for extensions that need no I/O; the first
+   * Promise promotes only that invocation to the awaited path. */
+  runPrepareStep(
+    ctx: PrepareStepContext,
+  ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined> {
     let messages = ctx.messages;
     let changed = false;
-    for (const ext of this.extensions) {
-      const next = ext.prepareStep?.({ stepNumber: ctx.stepNumber, messages });
+    for (let index = 0; index < this.extensions.length; index += 1) {
+      const next = this.extensions[index]?.prepareStep?.({
+        stepNumber: ctx.stepNumber,
+        messages,
+      });
+      if (next instanceof Promise) {
+        return this.continuePrepareStep(index + 1, ctx.stepNumber, messages, changed, next);
+      }
       if (next) {
         messages = next;
         changed = true;
       }
     }
     return changed ? messages : undefined;
+  }
+
+  private async continuePrepareStep(
+    start: number,
+    stepNumber: number,
+    messages: ModelMessage[],
+    changed: boolean,
+    first: Promise<ModelMessage[] | undefined>,
+  ): Promise<ModelMessage[] | undefined> {
+    const firstResult = await first;
+    let current = firstResult ?? messages;
+    let rewritten = changed || firstResult !== undefined;
+    for (let index = start; index < this.extensions.length; index += 1) {
+      const next = await this.extensions[index]?.prepareStep?.({
+        stepNumber,
+        messages: current,
+      });
+      if (next) {
+        current = next;
+        rewritten = true;
+      }
+    }
+    return rewritten ? current : undefined;
   }
 
   /** Run every transformContext hook in registration order, chaining outputs

@@ -8,17 +8,17 @@
  * (outbound interception — and therefore the R2-binding chain mounts — does
  * not exist without it). A Worker that HOLDS the `Sandbox` binding needs no
  * HTTP route of its own: it calls the Durable Object's public methods on the
- * stub. No `@callable`, no rpc-surface change.
+ * stub. No `@callable`, no product rpc-surface change.
  *
- * The token-guarded JSON API is a thin forwarder: every operation maps onto
- * one public KinuSandbox / SDK method, so what the probe measures is the
- * product's own lifecycle, not this file.
+ * The token-guarded JSON API is a thin forwarder: every operation maps onto a
+ * public KinuSandbox / SDK method, so what the probe measures is the product's
+ * own lifecycle against a real container, process, port and R2 binding — not a
+ * fake process, port or storage implementation.
  */
 
 import * as v from "valibot";
 
-import { ContainerProxy } from "@cloudflare/sandbox";
-import { getSandbox } from "@cloudflare/sandbox";
+import { ContainerProxy, getSandbox } from "@cloudflare/sandbox";
 import type { KinuSandbox } from "../../../packages/cf-backend/src/kinu-sandbox";
 
 export { KinuSandbox } from "../../../packages/cf-backend/src/kinu-sandbox";
@@ -78,9 +78,9 @@ export default {
     try {
       switch (url.pathname) {
         case "/configure": {
-          // Minimal egress binding — no granted bindings, so no secret
-          // material exists anywhere in this probe. Required BEFORE the first
-          // container use; installs the interception the chain mounts need.
+          // Minimal egress binding — no granted bindings, so no secret material
+          // exists anywhere in this probe. Required BEFORE the first container
+          // use; installs the product interception the chain mounts need.
           await sandbox.configureEgress({
             workspaceName: command.workspaceName ?? "durability-probe",
             ownerUserId: "",
@@ -95,6 +95,9 @@ export default {
         case "/exec": {
           const started = Date.now();
           const timeoutMs = command.timeoutMs ?? 30_000;
+          // Supervised processes own their process id, not the exec session.
+          // The SDK runs this health command independently, so there is no
+          // session-routing control to expose in the probe protocol.
           const res = await sandbox.exec(
             command.command ?? "",
             command.cwd === undefined ? { timeout: timeoutMs } : { timeout: timeoutMs, cwd: command.cwd },

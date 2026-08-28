@@ -58,6 +58,7 @@ import {
   type HeadReport,
   type WebSearchProvider,
   type HeadStep,
+  type ReportHeadDelta,
   type Decision,
   type MergeStrategy,
   type HeadBudget,
@@ -81,17 +82,41 @@ import {
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
 import { createHeadRuntime } from "./head-runtime";
-import { bindAgentSql, createCFRuntime, type CFRuntime, type CFRuntimeHooks } from "./runtime";
+import {
+  bindAgentSql, createCFRuntime,
+  type CFRuntime, type CFRuntimeHooks, type HostedNodeHome,
+} from "./runtime";
 import { createExecuteToolsTool } from "./execute-tools";
 import { buildHeadToolSet } from "@kinu.run/core";
 import {
-  createAgentTracing, createConsoleLogger, diagnostics, toKinuError, type AgentTracing,
+  createAgentTracing, createConsoleLogger, diagnostics, renderThrownChain, toKinuError,
+  type AgentTracing,
 } from "@kinu.run/core/obs";
 import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
 import { forwardFacetModelOperations } from "./obs/facet-operations";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { installAnalyticsDiagnostics } from "./analytics/install";
 import { openAnalyticsWindow } from "./analytics/writer";
+
+/**
+ * One turn of the conversation a BRANCH is asked to continue from.
+ *
+ * Named rather than left as an inline `{ role, content }` on the RPC signature: this
+ * is a public `@callable` boundary, so the shape is a contract two isolates agree on
+ * and the caller's own value is checked against a name rather than against a literal
+ * repeated at the call site.
+ */
+interface PriorTurn {
+  readonly role: string;
+  readonly content: string;
+}
+
+/** One head a recursive split asks for: what it works on, and why it exists. Named
+ *  for the same reason {@link PriorTurn} is — it crosses the facet-spawn boundary. */
+interface SubheadRequest {
+  readonly task: string;
+  readonly rationale: string;
+}
 
 export class ExplorationAgent extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
@@ -215,7 +240,7 @@ export class ExplorationAgent extends Agent<Env> {
    * filed against the route that chose differently.
    */
   private async facetModelSpec(
-    source: 'head' | 'swarm' | 'sandbox',
+    source: 'head' | 'swarm',
     pinned: string | null | undefined,
   ): Promise<string> {
     if (pinned) return pinned;
@@ -270,29 +295,28 @@ export class ExplorationAgent extends Agent<Env> {
    *  `SqliteVFS` is keyed `${ownerUserId}|${workspaceName}`, so a facet that named
    *  itself would derive a SECOND, EMPTY filesystem — the empty-workspace
    *  regression pinned by tests/unit-head-fork.test.ts. */
-  private facetRuntime(scope: 'head' | 'node', hooks: CFRuntimeHooks): CFRuntime {
+  private facetRuntime(
+    scope: 'head' | 'node',
+    hooks: CFRuntimeHooks,
+    workspaceExecution?: HostedNodeHome,
+  ): CFRuntime {
     const parent = this.getSharedParentStub();
     const workspaceName = this.identity.parentWorkspace();
     if (!parent || !workspaceName) {
       throw new Error(`This ${scope} was spawned without a parent workspace; setSharedParent must run before it can run.`);
     }
+    const runtimeHooks: CFRuntimeHooks = {
+      ...hooks,
+      resolveProfile: () => this.facetProfile(),
+    };
+    if (workspaceExecution !== undefined) runtimeHooks.workspaceExecution = workspaceExecution;
     return createCFRuntime(this, { env: this.env, ctx: this.ctx }, {
       ownerUserId: () => this.identity.ownerUserId(),
       workspaceName,
       shellId: `${scope}:${this.name}`,
       scaffoldPath: `.kinu/${scope}s/${encodeURIComponent(this.name)}/scaffold/agent.js`,
       capabilityToken: async () => this.identity.capabilityToken(),
-    }, {
-      ...hooks,
-      // The profile seam every lane on this runtime reads. Absent, `rt.llm`
-      // threw 'reflection model lane has no active profile' and `judgeModel` /
-      // `fastLlm` / `advisorLlm` were all UNDEFINED — which a facet-hosted MCTS
-      // search then met as an evaluation that throws, a band floor of 0 and a
-      // false `no_acceptable_candidate` over branches that had really answered.
-      // Assigned after the spread because no caller may override it: a facet
-      // has exactly one profile and it is the parent's.
-      resolveProfile: () => this.facetProfile(),
-    });
+    }, runtimeHooks);
   }
 
   /** A head's runtime: the shared plane above wrapped with this run's observer
@@ -378,7 +402,7 @@ export class ExplorationAgent extends Agent<Env> {
    *  seam that makes the call, which is this one. */
   @callable()
   async explore(
-    priorHistory: Array<{ role: string; content: string }>,
+    priorHistory: readonly PriorTurn[],
     craftedTools: CraftedTool[],
     languages: readonly [string, ...string[]],
     mode: WorkMode,
@@ -515,12 +539,11 @@ export class ExplorationAgent extends Agent<Env> {
       // supplies its model + the forked tool surface. Abort is driven by
       // abortHead() flipping this.headAborted.
       const modelSpec = await this.facetModelSpec('head', input.model);
-      const sandboxSpec = await this.facetModelSpec('sandbox', input.model);
       const headOptions = invocation.span('head.deps', (): Parameters<typeof runHeadInference>[1] => {
         const mission = this.missionScope(input);
         const options: Parameters<typeof runHeadInference>[1] = {
           model: this.ownedModelServices.resolveModel(modelSpec),
-          tools: this.buildHeadTools(input, capture, sandboxSpec),
+          tools: this.buildHeadTools(input, capture),
           capture,
           workspaceLayout: 'shared-workspace',
           isAborted: () => this.headAborted,
@@ -529,7 +552,10 @@ export class ExplorationAgent extends Agent<Env> {
         if (mission) options.mission = mission;
         // Null only when this facet has no parent, which is an MCTS branch.
         const parent = this.getSharedParentStub();
-        if (parent) options.reportStep = this.stepSink(parent, input.id);
+        if (parent) {
+          options.reportStep = this.stepSink(parent, input.id);
+          options.reportDelta = this.deltaSink(parent, input.id);
+        }
         return options;
       });
       return await invocation.span('head.inference', async (span) => {
@@ -570,22 +596,21 @@ export class ExplorationAgent extends Agent<Env> {
     const spec = this.nodeSpec;
     return await this.tracing.invocation('rpc', 'swarm.node', async (invocation, root) => {
       root.setAttribute('kinu.node_id', spec.headInput.id);
-      // Resolved before the span because the route is an await and the deps
-      // builder is synchronous — and it must stay synchronous, since the span's
-      // whole diagnostic value is that it either ends or names where it blocked.
       const modelSpec = await this.facetModelSpec('swarm', spec.headInput.model);
-      const sandboxSpec = await this.facetModelSpec('sandbox', spec.headInput.model);
+      const parent = this.getSharedParentStub();
+      if (!parent) {
+        throw new Error('This node was spawned without a parent search; setSharedParent must run before runAsNode.');
+      }
+      const nodeId = spec.headInput.id;
+      const workspaceExecution = await invocation.span(
+        'swarm.node.home',
+        () => parent.resolveHostedNodeHome(nodeId, spec.headInput.rootId, spec.headInput.depth),
+      );
+      if (workspaceExecution.home !== spec.home) {
+        throw new Error(`Node ${nodeId} home differs from the provisioned node spec`);
+      }
       const deps = invocation.span('swarm.node.deps', (): NodeLoopDeps => {
-        // Named `parent` like every other acquisition of this stub, and not only for
-        // style: unit-rpc-surface.test.ts derives a facet's cross-DO calls by that
-        // local's name, so a second spelling shrinks the scan silently. It did —
-        // `nodeArbitrate` went unchecked while this one was called something else.
-        const parent = this.getSharedParentStub();
-        if (!parent) {
-          throw new Error('This node was spawned without a parent search; setSharedParent must run before runAsNode.');
-        }
-        const nodeId = spec.headInput.id;
-        const rt = this.facetRuntime('node', {});
+        const rt = this.facetRuntime('node', {}, workspaceExecution);
         const webSearch = this.ownedModelServices.getWebSearchProvider();
         const built: NodeLoopDeps = {
           rt,
@@ -596,7 +621,8 @@ export class ExplorationAgent extends Agent<Env> {
           // presence alone cannot answer whether a branch could be granted.
           arbitrate: spec.canPropose ? (proposal) => parent.nodeArbitrate(nodeId, proposal) : null,
           reportStep: this.stepSink(parent, nodeId),
-          executeTool: this.facetExecuteTool(rt, sandboxSpec, webSearch),
+          reportDelta: this.deltaSink(parent, nodeId),
+          executeTool: this.facetExecuteTool(rt, webSearch),
           webSearch,
         };
         // Assigned rather than spread: an unbudgeted node must leave the key ABSENT,
@@ -639,6 +665,44 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   /**
+   * Where this facet's transient frames go: the parent's socket, over the stub it
+   * already holds. One sink for a head and a node alike, for the same reason
+   * {@link stepSink} is one.
+   *
+   * NOT AWAITED, and that is the difference from {@link stepSink}. A step is the
+   * branch's durable record and the next request must not be issued while it is
+   * in flight; a frame is a repaint. One frame is one provider delta, so awaiting
+   * would put the model's own stream behind a cross-isolate round trip per delta
+   * — paid for nothing, since the step that lands afterwards states the same
+   * text.
+   *
+   * A rejection is therefore reported and dropped. The client is corrected by the
+   * `head_activity` the parent sends when this step lands, so a channel that has
+   * gone quiet costs a stale pane and never the run.
+   */
+  private deltaSink(
+    parent: DurableObjectStub<OrchestratorAgent>,
+    headId: HeadId,
+  ): ReportHeadDelta {
+    return (kind, delta) => {
+      // NOT AWAITED, and not a `.catch` with an annotated thrown parameter either:
+      // the catch BINDING is where a thrown value is narrowed in this repo, and
+      // `renderThrownChain` is the one reader of it. A frame is a repaint, so a
+      // parent gone quiet costs a stale pane and never the run.
+      void (async () => {
+        try {
+          await parent.publishHeadStream(headId, kind, delta);
+        } catch (cause) {
+          diagnostics.event('head.stream_frame_dropped', {
+            headId,
+            reason: renderThrownChain({ cause }),
+          });
+        }
+      })();
+    };
+  }
+
+  /**
    * The mission ledger this head charges, or null when it charges none.
    *
    * The ledger lives on the parent workspace — a facet has its own storage and
@@ -666,38 +730,38 @@ export class ExplorationAgent extends Agent<Env> {
 
   // ── Head-mode tool builders ─────────────────────────────────────
 
-  private buildHeadTools(input: HeadInput, capture: HeadCapture, sandboxSpec: string) {
+  private buildHeadTools(input: HeadInput, capture: HeadCapture) {
     const rt = this.headRuntime(capture);
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     return buildHeadToolSet({
       input,
       capture,
       rt,
-      executeTool: this.facetExecuteTool(rt, sandboxSpec, webSearch),
+      executeTool: this.facetExecuteTool(rt, webSearch),
       webSearch,
       split: (request) => this.runRecursiveSplit(request, input.budget, input),
     });
   }
 
-  /** The `execute_tools` surface a facet's mode gets over its own runtime. One
-   *  builder for a head and a node, because they differ in nothing but which
-   *  model a crafted script may call — and that spec now arrives already routed
-   *  (`MODEL_ROUTE_POLICY.sandbox` is `invocation`), rather than being read off
-   *  the `HeadInput` where an absent pin fell through to the account default. */
-  private facetExecuteTool(rt: CFRuntime, sandboxSpec: string, webSearch: WebSearchProvider) {
+  /** The `execute_tools` surface a facet's mode gets over its own runtime. ONE
+   *  builder for a head and a node: they differ in nothing this tool can see,
+   *  now that a crafted script has no model of its own to call. */
+  private facetExecuteTool(rt: CFRuntime, webSearch: WebSearchProvider) {
     return createExecuteToolsTool({
       loader: this.env.LOADER,
       rt,
       sql: this.boundSql,
-      registry: this.ownedModelServices.providerRegistry(),
-      modelSpec: () => sandboxSpec,
       webSearch,
     });
   }
 
   // ── Recursive split — head spawns more heads (itself ExplorationAgent facets)
   private async runRecursiveSplit(
-    request: { rationale: string; heads: Array<{ task: string; rationale: string }>; mergeStrategy: MergeStrategy },
+    request: {
+      readonly rationale: string;
+      readonly heads: readonly SubheadRequest[];
+      readonly mergeStrategy: MergeStrategy;
+    },
     parentBudget: HeadBudget,
     parentInput: HeadInput,
   ): Promise<{
@@ -758,7 +822,7 @@ export class ExplorationAgent extends Agent<Env> {
       parentHeadId: parentInput.id,
       rootId: parentInput.rootId,
       inheritedContext: parentInput.inheritedContext,
-      request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
+      request: { rationale: request.rationale, heads: [...request.heads], mergeStrategy: request.mergeStrategy },
       parentBudget,
       mode: parentInput.mode,
       model: parentInput.model,

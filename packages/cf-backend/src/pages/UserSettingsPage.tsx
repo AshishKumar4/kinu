@@ -10,7 +10,7 @@
  *   3. Defaults
  *      - default model new agents inherit
  */
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Combobox, Loader } from "@cloudflare/kumo";
 import {
@@ -26,16 +26,16 @@ import {
   listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
-  listDevices, registerDevice, renameDevice, revokeDevice,
+  acknowledgeUnstoppedDevice, listDevices, registerDevice, renameDevice, revokeDevice,
   listDeviceConsents, revokeDeviceConsent,
-  type UserProfile, type CredentialSummary, type CodexStatus,
-  type ModelMenu, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
+  type CredentialSummary, type CodexStatus,
+  type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
   type CloudflareGatewayStatus, type CloudflareAccountStatus, type UserDevice,
   type DeviceConsent,
 } from "../lib/user-api";
 import { Card, inputCls } from "@/components/ui/form";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
@@ -56,16 +56,34 @@ function providerCatalogEntry<Input>(input: Input): ProviderCatalogEntry | null 
   return parsed.success ? parsed.output : null;
 }
 
-
-interface Account {
-  profile: UserProfile | null;
-  creds: CredentialSummary[];
-  codex: CodexStatus | null;
-  models: ModelMenu;
-  catalog: ProviderCatalogEntry[];
-  gateways: CloudflareGatewayStatus | null;
-  accounts: CloudflareAccountStatus | null;
-  defaultModel: string | null;
+/** One account read, rendered branch-locally: its card shows ITS data, ITS
+ *  failure with the retry, or a quiet loader — one read stalling or rejecting
+ *  never blanks the cards beside it (KINU-073). */
+function CardSlot<T>({ resource, what, onRetry, children }: {
+  resource: AsyncResource<T>;
+  what: string;
+  onRetry: () => void;
+  children: (value: T) => ReactNode;
+}) {
+  if (resource.status === "error") {
+    return (
+      <div className="contents" data-settings-resource={what} data-resource-state="error">
+        <LoadFailure what={what} message={resource.message} onRetry={onRetry} />
+      </div>
+    );
+  }
+  if (resource.status === "loading") {
+    return (
+      <div className="flex justify-center py-4" data-settings-resource={what} data-resource-state="loading">
+        <Loader size="sm" />
+      </div>
+    );
+  }
+  return (
+    <div className="contents" data-settings-resource={what} data-resource-state="ready">
+      {children(resource.value)}
+    </div>
+  );
 }
 
 export default function UserSettingsPage() {
@@ -75,23 +93,27 @@ export default function UserSettingsPage() {
   // Every one of these reads describes what the account HAS connected, so none
   // of them may fail quietly: a swallowed rejection turned into "Connect
   // ChatGPT", no API keys and a Cloudflare OAuth CTA for an account that is
-  // fully connected, walking the user into a needless re-grant. They load or
-  // the page says it couldn't read them.
-  const load = useCallback(async (): Promise<Account> => {
-    const [profile, creds, codex, models, catalog, config, gateways, accounts] = await Promise.all([
-      getProfile(),
-      listCredentials(),
-      codexStatus(),
-      listAvailableModels(),
-      listProviderCatalog(),
-      getConfig('default_model'),
-      listCloudflareGateways(),
-      listCloudflareAccounts(),
-    ]);
-    return { profile, creds, codex, models, catalog, gateways, accounts, defaultModel: config?.value ?? null };
-  }, []);
-  const { resource, reload } = useAsyncResource(load);
-  const account = lastValue(resource);
+  // fully connected, walking the user into a needless re-grant. Each read is
+  // its own resource so each also PUBLISHES independently: one unavailable
+  // dependency stalls or fails its own card, never the seven beside it, and
+  // every read runs under the api() helper's shared deadline rather than
+  // waiting forever (KINU-073).
+  const profile = useAsyncResource(getProfile);
+  const creds = useAsyncResource(listCredentials);
+  const codex = useAsyncResource(codexStatus);
+  const models = useAsyncResource(listAvailableModels);
+  const catalog = useAsyncResource(listProviderCatalog);
+  const gateways = useAsyncResource(listCloudflareGateways);
+  const accounts = useAsyncResource(listCloudflareAccounts);
+  const storedDefault = useAsyncResource(useCallback(() => getConfig("default_model"), []));
+
+  const reads = [profile, creds, codex, models, catalog, gateways, accounts, storedDefault];
+  // One retry affordance: a mutation's onChanged and every card's Retry re-read
+  // the whole account, because the mutators invalidate more than their own row
+  // (connecting a provider changes the model menu, the catalog and the creds).
+  // A plain closure: every consumer calls it from an event handler, none keys
+  // an effect on it, so its per-render identity buys simplicity for free.
+  const reloadAll = () => { for (const read of reads) read.reload(); };
 
   // The install command is derivable from the origin, so its read failing
   // costs nothing and claims nothing.
@@ -99,7 +121,7 @@ export default function UserSettingsPage() {
 
   // The picker is optimistic on the user's own pick; the loaded value is the
   // fallback until it is re-read.
-  const selectedDefaultModel = defaultModel ?? account?.defaultModel ?? '';
+  const selectedDefaultModel = defaultModel ?? lastValue(storedDefault.resource)?.value ?? '';
 
   const header = (
     <header>
@@ -113,43 +135,45 @@ export default function UserSettingsPage() {
     </header>
   );
 
-  if (!account) {
+  // Before ANY read settles there is one quiet page loader, and when EVERY read
+  // failed there is one failure — eight stacked copies of either say nothing
+  // more. Any mixed state renders the page and lets each card speak for itself.
+  const failures = reads.flatMap((read) => read.resource.status === "error" ? [read.resource.message] : []);
+  const allLoading = reads.every((read) => read.resource.status === "loading");
+  if (allLoading || failures.length === reads.length) {
     return (
       <div className="h-full overflow-y-auto">
         <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
           {header}
-          {resource.status === "error"
-            ? <LoadFailure what="your account" message={resource.message} onRetry={reload} />
-            : <div className="flex justify-center py-10"><Loader size="base" /></div>}
+          {allLoading
+            ? <div className="flex justify-center py-10"><Loader size="base" /></div>
+            : <LoadFailure what="your account" message={failures[0] ?? ""} onRetry={reloadAll} />}
         </div>
       </div>
     );
   }
-
-  const { profile, creds, codex, models, catalog, gateways, accounts } = account;
-  const workersAIConnected = models.models.some((model) => model.provider === 'workers-ai');
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
         {header}
 
-        {resource.status === "error" && (
-          <LoadFailure what="the latest account state" message={resource.message} onRetry={reload} />
-        )}
-
         {/* Profile */}
         <Card title="Profile" icon={UserCircleIcon}>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="space-y-1">
-              <div className="p-text-3">Email</div>
-              <div className="font-mono">{profile?.email ?? '—'}</div>
-            </div>
-            <div className="space-y-1">
-              <div className="p-text-3">Member since</div>
-              <div>{profile?.createdAt ? new Date(profile.createdAt).toLocaleDateString() : '—'}</div>
-            </div>
-          </div>
+          <CardSlot resource={profile.resource} what="your profile" onRetry={reloadAll}>
+            {(p) => (
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="space-y-1">
+                  <div className="p-text-3">Email</div>
+                  <div className="font-mono">{p?.email ?? '—'}</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="p-text-3">Member since</div>
+                  <div>{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'}</div>
+                </div>
+              </div>
+            )}
+          </CardSlot>
         </Card>
         <ProfileCatalogSettings />
 
@@ -168,32 +192,46 @@ export default function UserSettingsPage() {
         <DevicesCard />
 
         <Card title="Cloudflare AI" icon={PlugIcon}>
-          {workersAIConnected ? (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs p-success">
-                <CheckIcon size={13} /> Connected
+          <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
+            {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-xs p-success">
+                  <CheckIcon size={13} /> Connected
+                </div>
+                {/* Which account serves Workers AI is upstream of which gateway
+                    is reachable, so it is asked first. */}
+                <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
+                  {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
+                </CardSlot>
+                <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
+                  {(status) => <CloudflareGatewaySection status={status} onChanged={reloadAll} />}
+                </CardSlot>
               </div>
-              {/* Which account serves Workers AI is upstream of which gateway
-                  is reachable, so it is asked first. */}
-              <CloudflareAccountSection status={accounts} onChanged={reload} />
-              <CloudflareGatewaySection status={gateways} onChanged={reload} />
-            </div>
-          ) : (
-            <CloudflareAIConnectNotice
-              returnTo="/user/settings"
-              message="Connect Cloudflare so your workspaces can use your Workers AI quota and your own AI Gateway."
-            />
-          )}
+            ) : (
+              <CloudflareAIConnectNotice
+                returnTo="/user/settings"
+                message="Connect Cloudflare so your workspaces can use your Workers AI quota and your own AI Gateway."
+              />
+            )}
+          </CardSlot>
         </Card>
 
         {/* Codex */}
         <Card title="ChatGPT (Codex)" icon={PlugIcon}>
-          <CodexConnect status={codex} onChanged={reload} />
+          <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
+            {(status) => <CodexConnect status={status} onChanged={reloadAll} />}
+          </CardSlot>
         </Card>
 
         {/* BYO API keys */}
         <Card title="API keys" icon={KeyIcon}>
-          <ApiKeyManager creds={creds} catalog={catalog} onChanged={reload} />
+          <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
+            {(credentials) => (
+              <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
+                {(providers) => <ApiKeyManager creds={credentials} catalog={providers} onChanged={reloadAll} />}
+              </CardSlot>
+            )}
+          </CardSlot>
         </Card>
 
         {/* MCP servers */}
@@ -213,24 +251,32 @@ export default function UserSettingsPage() {
 
         {/* Defaults */}
         <Card title="Defaults" icon={GearSixIcon}>
-          <div className="space-y-2">
-            <div className="text-xs p-text-2">Default model for new workspaces</div>
-            <ModelPicker
-              models={models.models}
-              failures={models.failures}
-              value={selectedDefaultModel}
-              onChange={async (spec) => {
-                setDefaultModel(spec);
-                try { await setConfig('default_model', spec); }
-                catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
-              }}
-              clearable
-              placeholder="(use system default)"
-            />
-            <p className="p-meta p-text-3">
-              New workspaces pick this up at creation. Existing workspaces keep their own choice (change per-workspace under "Workspace settings").
-            </p>
-          </div>
+          <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
+            {(menu) => (
+              <CardSlot resource={storedDefault.resource} what="your default model" onRetry={reloadAll}>
+                {() => (
+                  <div className="space-y-2">
+                    <div className="text-xs p-text-2">Default model for new workspaces</div>
+                    <ModelPicker
+                      models={menu.models}
+                      failures={menu.failures}
+                      value={selectedDefaultModel}
+                      onChange={async (spec) => {
+                        setDefaultModel(spec);
+                        try { await setConfig('default_model', spec); }
+                        catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
+                      }}
+                      clearable
+                      placeholder="(use system default)"
+                    />
+                    <p className="p-meta p-text-3">
+                      New workspaces pick this up at creation. Existing workspaces keep their own choice (change per-workspace under "Workspace settings").
+                    </p>
+                  </div>
+                )}
+              </CardSlot>
+            )}
+          </CardSlot>
         </Card>
       </div>
     </div>
@@ -250,7 +296,8 @@ const DEVICE_LAPSE_NOTICE_MS = 14 * 24 * 60 * 60 * 1000;
 
 function lapsingDevices(devices: UserDevice[] | null): UserDevice[] {
   const soon = Date.now() + DEVICE_LAPSE_NOTICE_MS;
-  return (devices ?? []).filter((d) => d.expiresAt !== null && d.expiresAt <= soon);
+  return (devices ?? []).filter((device) =>
+    device.revokedAt === null && device.expiresAt !== null && device.expiresAt <= soon);
 }
 
 function DevicesCard() {
@@ -260,6 +307,9 @@ function DevicesCard() {
   const [issuing, setIssuing] = useState(false);
   const { status: copyStatus, copy } = useCopy();
   const [err, setErr] = useState<string | null>(null);
+  /** Counts come from the revoke response. The durable incident timestamp
+   * keeps the row across reloads; count is shown when this tab observed it. */
+  const [unstoppedCounts, setUnstoppedCounts] = useState<ReadonlyMap<string, number>>(new Map());
   const [rosterErr, setRosterErr] = useState<string | null>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
 
@@ -318,9 +368,33 @@ function DevicesCard() {
   const revoke = useCallback(async (id: string, label: string) => {
     if (!confirm(`Revoke "${label}"? Agents lose access to this device immediately.`)) return;
     setErr(null);
-    try { await revokeDevice(id); }
-    catch (e) { setErr(`Could not revoke device: ${renderThrownChain({ cause: e })}`); }
+    try {
+      const result = await revokeDevice(id);
+      if (result.unstoppedCommands > 0) {
+        setUnstoppedCounts((current) => new Map(current).set(id, result.unstoppedCommands));
+      }
+    } catch (e) {
+      setErr(`Could not revoke device: ${renderThrownChain({ cause: e })}`);
+    }
     refreshDevices();
+  }, [refreshDevices]);
+
+  const acknowledgeIncident = useCallback(async (id: string) => {
+    setErr(null);
+    try {
+      await acknowledgeUnstoppedDevice(id);
+      setUnstoppedCounts((current) => {
+        const next = new Map(current);
+        next.delete(id);
+        return next;
+      });
+      // The acknowledged revoked row is no longer owner-visible. Remove it
+      // immediately from the confirmed response, then reconcile the roster.
+      setDevices((current) => current?.filter((device) => device.id !== id) ?? null);
+      refreshDevices();
+    } catch (e) {
+      setErr(`Could not acknowledge the command warning: ${renderThrownChain({ cause: e })}`);
+    }
   }, [refreshDevices]);
 
   return (
@@ -343,12 +417,15 @@ function DevicesCard() {
                 onGrantsChanged={refreshGrants}
                 onError={setErr}
                 onRevoke={() => revoke(d.id, d.label)}
+                unstoppedCommands={unstoppedCounts.get(d.id)}
+                onAcknowledge={() => acknowledgeIncident(d.id)}
               />
             ))}
           </div>
         )}
         {rosterErr && <div className="text-xs p-danger">{rosterErr}</div>}
-        {devices && devices.length > 0 && !devices.some((d) => d.connected) && (
+        {devices && devices.some((device) => device.revokedAt === null)
+          && !devices.some((device) => device.revokedAt === null && device.connected) && (
           <p className="p-meta p-text-3">
             Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
           </p>
@@ -400,17 +477,52 @@ function DevicesCard() {
  * One linked machine: its name (editable — this is the name every surface
  * shows, from the agent's executor row to a consent card), its platform, its
  * liveness, and the workspaces that hold a grant on it. The grants sit here
- * because "who can reach this machine" is a question about the machine.
  */
-function DeviceRow({ device, grants, onRenamed, onGrantsChanged, onError, onRevoke }: {
+function DeviceRow({
+  device, grants, onRenamed, onGrantsChanged, onError, onRevoke,
+  unstoppedCommands, onAcknowledge,
+}: {
   device: UserDevice;
   grants: DeviceConsent[];
   onRenamed: () => void;
   onGrantsChanged: () => void;
   onError: (message: string) => void;
   onRevoke: () => void;
+  unstoppedCommands: number | undefined;
+  onAcknowledge: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
+  const [acknowledging, setAcknowledging] = useState(false);
+
+  if (device.revokedAt !== null) {
+    const countLine = unstoppedCommands === undefined
+      ? "Commands may still run."
+      : unstoppedCommands === 1
+        ? "1 command has no confirmed termination and may still run."
+        : `${unstoppedCommands} commands have no confirmed termination and may still run.`;
+    return (
+      <div data-device-incident={device.id} role="alert"
+        className="border-b p-border p-notice-danger px-3 py-3 text-xs last:border-0">
+        <div className="flex items-start gap-2">
+          <WarningIcon size={14} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="font-medium">{device.label}</div>
+            <p>A command could not be confirmed stopped when you revoked this device.</p>
+            <p>{countLine}</p>
+            <p className="p-meta">Acknowledgement records that you saw this warning. It does not stop a command.</p>
+          </div>
+          <button type="button" disabled={acknowledging}
+            onClick={() => {
+              setAcknowledging(true);
+              void onAcknowledge().finally(() => setAcknowledging(false));
+            }}
+            className="p-btn-quiet shrink-0 px-2 py-1 disabled:opacity-50">
+            {acknowledging ? "Acknowledging…" : "Acknowledge"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const save = async () => {
     const name = (editing ?? "").trim();

@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/events/hub/drain.ts b/packages/core/src/events/hub/drain.ts
+index 782886cd5..428fdfad9 100644
 --- a/packages/core/src/events/hub/drain.ts
 +++ b/packages/core/src/events/hub/drain.ts
-@@ -50,7 +50,7 @@
+@@ -67,7 +67,7 @@ function oneLine(value: string): string {
+  * later agree to drain.
+  */
+ export function wakesADrain(event: KinuEvent): boolean {
+-  return event.ingress !== 'self_emit' && event.variant !== 'internal';
++  return event.ingress !== 'self_emit' || event.variant !== 'internal';
+ }
+ 
  /** Externally-triggered pending events → one drain batch, or null if there are
-  *  none (the agent's own self-emitted/internal events never wake a new turn). */
- export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
--  const pending = events.filter((e) => e.ingress !== 'self_emit' && e.variant !== 'internal');
-+  const pending = events.filter((e) => e.ingress !== 'self_emit' || e.variant !== 'internal');
-   if (pending.length === 0) return null;
-   // A delegated Plan event can never share a turn with Build or neutral work.
-   // Select the oldest event's homogeneous mode group; the post-turn drain

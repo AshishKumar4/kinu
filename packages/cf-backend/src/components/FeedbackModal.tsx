@@ -11,6 +11,13 @@
  * the reporter gets a Retry button — nothing retries on its own. An automatic
  * retry of a request that may already have written a row is how one report
  * becomes three, and a report is not worth losing a reporter's trust over.
+ *
+ * AND A SEND THAT NEVER ANSWERS IS THE REPORTER'S TO END. The POST carries an
+ * abort signal that Stop and this dialog's teardown both pull, so a request a
+ * proxy left hanging cannot hold the dialog open for as long as it hangs.
+ * Stopping lands where a refusal lands: note kept, capture kept, Retry ready.
+ * There is no elapsed-time limit — a large upload on a slow connection is not a
+ * failure, and only the reporter knows when they have waited long enough.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
@@ -85,6 +92,9 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   const [bitmap, setBitmap] = useState<ImageBitmap | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  /** The POST in flight. Stop and the teardown effect below both end it through
+   *  this one handle, so a stalled request can never outlive the dialog. */
+  const inFlight = useRef<AbortController | null>(null);
 
   const take = useCallback(() => {
     setShot({ phase: "capturing" });
@@ -208,11 +218,24 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 
   const trimmed = note.trim();
   const ready = shot.phase === "ready";
-  const sendable = (trimmed.length > 0 || ready) && send.phase !== "sending" && shot.phase !== "capturing";
+  const sending = send.phase === "sending";
+  const sendable = (trimmed.length > 0 || ready) && !sending && shot.phase !== "capturing";
+
+  // React runs this cleanup once at mount under StrictMode, when there is
+  // nothing in flight to abort. Every later run is a real teardown: the dialog
+  // closed, or the navigation that unmounted the rail it hangs from.
+  useEffect(() => () => { inFlight.current?.abort(); }, []);
 
   const submit = useCallback(() => {
     setSend({ phase: "sending" });
+    // A handle of its own per attempt, so Retry is a NEW request and the one it
+    // replaces can neither answer for it nor report against it.
+    const attempt = new AbortController();
+    inFlight.current = attempt;
     const sendFailed = <Thrown,>(thrown: Thrown): void => {
+      // A stopped request is the reporter's own doing: `stop` has already said
+      // so, and an abort is not a failure this product should record.
+      if (attempt.signal.aborted) return;
       // The capture stays in state, so Retry sends the same bytes.
       diagnostics.failure("feedback.send_failed", toKinuError({
         doing: "send a feedback report", cause: thrown, otherwise: "io",
@@ -235,7 +258,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       : Promise.resolve();
 
     void attach
-      .then(() => fetch(FEEDBACK_ENDPOINT, { method: "POST", body: form }))
+      .then(() => fetch(FEEDBACK_ENDPOINT, { method: "POST", body: form, signal: attempt.signal }))
       .then(async (response) => {
         // The endpoint's own two shapes, parsed at the boundary: `{ id }` on
         // success and `{ error }` on refusal. A body that is neither — a proxy's
@@ -254,11 +277,20 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       .catch(sendFailed);
   }, [location.pathname, marks, shot, trimmed]);
 
+  /** End the request in flight and say so. A stopped send is a send to try
+   *  again, so it lands in the same state a refusal does rather than in one of
+   *  its own: the note and the capture are still here, and Retry is the button
+   *  under the reporter's cursor. */
+  const stop = useCallback(() => {
+    inFlight.current?.abort();
+    setSend({ phase: "failed", reason: "you stopped it" });
+  }, []);
+
   if (send.phase === "sent") {
     return (
       <div {...{ [FEEDBACK_OMIT_ATTR]: "1" }}>
         <Modal title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent" />}
-          footer={<FilledButton onClick={onClose}>Done</FilledButton>}>
+          footer={<FilledButton onClick={onClose} data-feedback-done>Done</FilledButton>}>
           <p className="text-sm p-text-2" data-feedback-sent={send.id}>
             Thank you — the report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
           </p>
@@ -272,16 +304,21 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       <Modal
         title="Send feedback"
         onClose={onClose}
-        busy={send.phase === "sending"}
+        busy={sending}
         maxWidthClass="max-w-2xl"
         icon={<MegaphoneIcon size={16} className="p-accent" />}
         footer={
           <>
-            <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={send.phase === "sending"}>
-              Cancel
+            {/* The one escape, and it is never disabled: while the POST is in
+                flight it ends the POST, and otherwise it closes the dialog. A
+                dead Cancel under a request that never answers is how this
+                dialog became unclosable. */}
+            <Button type="button" variant="ghost" size="sm"
+              onClick={sending ? stop : onClose} data-feedback-cancel={sending ? "stop" : "close"}>
+              {sending ? "Stop" : "Cancel"}
             </Button>
             <FilledButton onClick={submit} disabled={!sendable} data-feedback-send>
-              {send.phase === "sending" ? "Sending…" : send.phase === "failed" ? "Retry" : "Send"}
+              {sending ? "Sending…" : send.phase === "failed" ? "Retry" : "Send"}
             </FilledButton>
           </>
         }

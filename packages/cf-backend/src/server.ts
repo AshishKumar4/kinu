@@ -15,7 +15,11 @@
  *       enforced inside (external MCP clients can't do browser OAuth).
  *   7. AUTH GATE — every other request needs a Kinu session
  *      (or DEV_USER_EMAIL in local/staging dev).
+ *   7b. /api/workspaces/<name>/webhook/<trigger>/v1-<token> — public webhook
+ *       delivery, served before the gate above because the route capability in
+ *       the URL is its gate (events/webhook-route.ts).
  *   8. /api/feedback — in-product feedback; any signed-in user.
+ *   8a. /api/client-errors — browser render-failure reports; any signed-in user.
  *   8b. /api/control/* — admin control plane; an allowlisted operator only, and
  *       a fresh sign-in for anything that mutates.
  *   9. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
@@ -37,11 +41,12 @@ import { servePreviewRequest } from "./preview-proxy";
 import { handleRunEventsRequest } from "./run-events-routes";
 import { handleMcpRequest } from "./mcp-server";
 import { handleHealthRequest } from "./health-route";
+import { handleClientErrorRequest } from "./client-error/route";
 import { handleUserRequest } from "./user/routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
-import { handleHubRequest } from "./events/routes";
+import { handleHubRequest, handleWebhookDeliveryRequest } from "./events/routes";
 import { handleFilesRequest } from "./files-routes";
 import { handleTerminalRequest } from "./terminal-route";
 import { handleInboundEmail } from "./email/handler";
@@ -64,13 +69,6 @@ import { handleFeedbackRequest } from "./feedback/routes";
 import { handleControlRequest } from "./control-plane/routes";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "./analytics/install";
-
-/** Public webhook delivery endpoint match. `/api/workspaces/<name>/webhook/<id>` —
- *  the only `/api/workspaces/<name>/...` route that bypasses browser OAuth (it has
- *  its own per-trigger HMAC / Bearer / mTLS gate). */
-function isWebhookDeliveryPath(pathname: string): boolean {
-  return /^\/api\/workspaces\/[^/]+\/webhook\/[^/]+$/.test(pathname);
-}
 
 export { OrchestratorAgent } from "./orchestrator";
 // ExplorationAgent is the single Facet class for parallel sub-agent work.
@@ -441,15 +439,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     return serveApp(request, env);
   }
 
-  // 7b. Webhook delivery — public-but-per-trigger-authenticated. The
-  //     hub's webhook ingress (HMAC / Bearer / mTLS) is the gate.
-  if (isWebhookDeliveryPath(url.pathname)) {
-    const m = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/webhook\//);
-    if (m) {
-      const hubResp = await handleHubRequest(request, env, decodeURIComponent(m[1]));
-      if (hubResp) return hubResp;
-    }
-  }
+  // 7b. Webhook delivery — public, and reachable only with the route capability
+  //     its URL carries. Verified before the ingress budget, the body and any
+  //     workspace object; the per-trigger HMAC / Bearer / mTLS check then
+  //     authenticates the payload inside the workspace.
+  const webhookResp = await handleWebhookDeliveryRequest(request, env);
+  if (webhookResp) return webhookResp;
 
   // 8. Auth gate. Everything below requires an authenticated identity.
   let identity: AuthIdentity;
@@ -491,6 +486,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //    endpoint.
   const feedbackResp = await handleFeedbackRequest(authenticatedRequest, env, identity);
   if (feedbackResp) return feedbackResp;
+
+  // 8a. /api/client-errors — the browser's own render failures. Behind the auth
+  //     and CSRF gates for the same reason feedback is: the endpoint writes to
+  //     the operator's log sink, and an unauthenticated writer would be a
+  //     log-injection endpoint. The route refuses a null identity itself as
+  //     well, so its guard does not depend on this call site.
+  const clientErrorResp = await handleClientErrorRequest(authenticatedRequest, env, identity);
+  if (clientErrorResp) return clientErrorResp;
 
   // 8b. /api/control/* — the admin control plane. The allowlist, the
   //     dev-identity refusal and the step-up window all live inside that module,
@@ -542,7 +545,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // The interactive terminal's own WebSocket. Same reason files are HTTP: the
     // agents SDK's RPC rail is the chat socket, which carries JSON text under a
     // 1 MiB frame ceiling, and PTY bytes are neither.
-    const terminalResp = await handleTerminalRequest(reqWithId, env, agentName);
+    const terminalResp = await handleTerminalRequest(reqWithId, env, agentName, ctx);
     if (terminalResp) return terminalResp;
     const agentResp = await routeAgentRequest(reqWithId, env);
     if (agentResp) return agentResp;

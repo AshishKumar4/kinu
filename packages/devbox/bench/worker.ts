@@ -14,13 +14,10 @@
  *   number means anything: `wrangler dev --remote` refuses Durable Objects, so
  *   there is no middle ground.
  *
- * WHAT IT ASSERTS BEFORE IT MEASURES. `POST /verify` runs the full lifecycle and
- * checks four facts that a live run once reported as fine while none of them
- * held: the work directory is really attached after a wake, its writable layer
- * really exists, a forced checkpoint really committed a byte count, and the
- * object that byte count refers to is really in the store. A driver runs
- * `/verify` first. An arm that measures a box which never attached is measuring
- * the container's own blank disk.
+ * WHAT THE DRIVER ASSERTS BEFORE IT MEASURES. The driver composes the normal
+ * short lifecycle requests — write, checkpoint, stop, wake, exec, state, and
+ * object head — into one proof. An arm that fails that proof measured the
+ * container's own blank disk and is not ranked.
  *
  * LOCAL /wake NUMBERS MUST NEVER BE QUOTED. After a container stops, workerd
  * reports `container-client.c++:2351: failed: broken.constructorFailed;
@@ -44,16 +41,9 @@ import * as v from 'valibot';
 import type { ExecOptions } from '@cloudflare/sandbox';
 
 import {
-  CAS_TREE_MOUNT,
-  DEVBOX_RUNTIME_DIR,
-  DEVBOX_WORKDIR,
   Devbox,
-  R2FS_CACHE_DIR,
-  baseObjectKey,
-  deltaObjectKey,
   describeThrown,
   parseDevboxStrategyName,
-  type AttachOutcome,
   type CheckpointKind,
   type DevboxPolicy,
   type DevboxStore,
@@ -67,16 +57,21 @@ import {
   type R2OperationName as OpName,
   type R2OperationTally as OpTally,
 } from './r2-operations';
+import { bindingFor, storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
-  SnapshotChainBox: DurableObjectNamespace<SnapshotChainBox>;
-  R2fsBox: DurableObjectNamespace<R2fsBox>;
-  OverlayCasBox: DurableObjectNamespace<OverlayCasBox>;
+  SnapshotChainBox?: DurableObjectNamespace<SnapshotChainBox>;
+  R2fsBox?: DurableObjectNamespace<R2fsBox>;
+  OverlayCasBox?: DurableObjectNamespace<OverlayCasBox>;
+  BoundedLayersBox?: DurableObjectNamespace<BoundedLayersBox>;
+  MerklePackBox?: DurableObjectNamespace<MerklePackBox>;
   BenchOpCounter: DurableObjectNamespace<BenchOpCounter>;
   /** Supplied per run through `wrangler deploy --var`, never committed. An
    *  absent token makes every request 401. */
   BENCH_TOKEN?: string;
+  /** The arms whose bindings the generated fixture config declares. */
+  BENCH_SELECTED_ARMS?: string;
   /** Set to '1' ONLY for a local `wrangler dev` run, where there is no container
    *  outbound interception and therefore no store mount. Absent on every deploy,
    *  which is what stops a deployed arm from measuring extraction and reporting
@@ -422,13 +417,28 @@ export class OverlayCasBox extends BenchBox {
   }
 }
 
+export class BoundedLayersBox extends BenchBox {
+  protected override get strategy(): DevboxStrategyName {
+    return 'bounded-layers';
+  }
+
+  protected override get candidateRunnerPath(): string {
+    return '/opt/kinu/candidate-runner.bundle.mjs';
+  }
+}
+
+export class MerklePackBox extends BenchBox {
+  protected override get strategy(): DevboxStrategyName {
+    return 'merkle-pack';
+  }
+
+  protected override get candidateRunnerPath(): string {
+    return '/opt/kinu/candidate-runner.bundle.mjs';
+  }
+}
+
 // ── the driver API ──────────────────────────────────────────────────────────
 
-interface Check {
-  readonly name: string;
-  readonly pass: boolean;
-  readonly detail: string;
-}
 
 /** Every driver answer is a JSON object. Generic, so each route keeps its own
  *  concrete answer type and this helper only owns the framing. */
@@ -460,17 +470,18 @@ function authorized(request: Request, expected: string | undefined): boolean {
 type BenchStub =
   | DurableObjectStub<SnapshotChainBox>
   | DurableObjectStub<R2fsBox>
-  | DurableObjectStub<OverlayCasBox>;
+  | DurableObjectStub<OverlayCasBox>
+  | DurableObjectStub<BoundedLayersBox>
+  | DurableObjectStub<MerklePackBox>;
 
 function boxOf(
   env: BenchEnv,
   strategy: DevboxStrategyName,
   name: string,
 ): BenchStub {
-  const id = `${strategy}:${name}`;
-  if (strategy === 'r2fs') return env.R2fsBox.get(env.R2fsBox.idFromName(id));
-  if (strategy === 'overlay-cas') return env.OverlayCasBox.get(env.OverlayCasBox.idFromName(id));
-  return env.SnapshotChainBox.get(env.SnapshotChainBox.idFromName(id));
+  const binding = bindingFor(env, strategy);
+  if (binding === undefined) throw new Error(`no durable-object binding for ${strategy}`);
+  return binding.get(binding.idFromName(`${strategy}:${name}`));
 }
 
 /** Every field any route reads, all optional, parsed at the edge. One named
@@ -478,7 +489,13 @@ function boxOf(
  *  declared, and a payload that disagrees is refused with its reason instead of
  *  producing a silent default. */
 const DriverBodySchema = v.object({
-  strategy: v.optional(v.picklist(['snapshot-chain', 'r2fs', 'overlay-cas'])),
+  strategy: v.optional(v.picklist([
+    'snapshot-chain',
+    'r2fs',
+    'overlay-cas',
+    'bounded-layers',
+    'merkle-pack',
+  ])),
   command: v.optional(v.string()),
   cwd: v.optional(v.string()),
   path: v.optional(v.string()),
@@ -489,6 +506,7 @@ const DriverBodySchema = v.object({
   whole: v.optional(v.boolean()),
 });
 type DriverBody = v.InferOutput<typeof DriverBodySchema>;
+
 
 async function body(request: Request): Promise<DriverBody> {
   if (request.method !== 'POST') return {};
@@ -502,268 +520,6 @@ async function body(request: Request): Promise<DriverBody> {
 }
 
 
-/**
- * The four assertions, run as the lifecycle that produces them.
- *
- * Each one was reported as satisfied by a live run in which none of them held,
- * so each is read back from the container or the store rather than inferred
- * from a call that returned.
- *
- * ONE CONTAINER OPERATION PER EXEC. Every step below is its own `exec`, and a
- * future step must be too. There is a hard per-exec ceiling on the deployed
- * path, around six minutes, that no option raises: a combined seven-phase exec
- * died at it twice, and each attempt pays the whole ceiling before failing, so
- * batching turns a failed arm into hours spent waiting to be told no. Batching
- * two operations into one exec here would move that discovery to a deployed
- * run.
- */
-async function verify(
-  env: BenchEnv,
-  strategy: DevboxStrategyName,
-  name: string,
-): Promise<{
-  checks: Check[];
-  passed: boolean;
-  transient?: 'container_replaced' | 'checkpoint_changed';
-}> {
-  const box = boxOf(env, strategy, name);
-  const checks: Check[] = [];
-  const add = (check: Check): void => { checks.push(check); };
-
-  const generationBefore = (await box.exec('cat /tmp/devbox-boot-id 2>/dev/null || true'))
-    .stdout.trim();
-  // A marker written through the box's own default working directory. If the
-  // default is wrong, the marker lands somewhere no checkpoint archives, and
-  // every later check fails for the right reason.
-  const marker = `devbox-verify-${Date.now()}`;
-  const first = await box.exec(`printf %s ${marker} > ./verify-a.txt && cat ./verify-a.txt`);
-  add({
-    name: 'default cwd is the durable work directory',
-    pass: first.exitCode === 0 && first.stdout.includes(marker),
-    detail: `exit ${first.exitCode}, cwd default ${DEVBOX_WORKDIR}`,
-  });
-  if (strategy === 'overlay-cas') {
-    const upper = await box.exec(
-      `find ${DEVBOX_RUNTIME_DIR}/cas-upper -maxdepth 2 -printf '%P\\n' 2>&1`,
-    );
-    add({
-      name: 'the workspace write reached overlay-cas upper',
-      pass: upper.exitCode === 0 && upper.stdout.split('\n').includes('verify-a.txt'),
-      detail: `exit ${upper.exitCode}: ${upper.stdout.trim().slice(0, 200)} `
-        + `${upper.stderr.trim().slice(0, 200)}`.trim(),
-    });
-  }
-
-  // Base layer. `quiesce` rather than `tick` so the interval gate cannot
-  // decline it — the gate is an efficiency rule and this is a proof.
-  const base = await box.checkpointNow('quiesce');
-  add({
-    name: 'the first checkpoint MOVED bytes into the store',
-    // `movedBytes`, not `bytes`. `bytes` is what the box HOLDS after the
-    // commit, so on a box that already held data this row passed whether or
-    // not this checkpoint did anything — and a quiesce that staged, folded and
-    // advanced the cursor once reported `skipped 0B` while the store held
-    // everything. `undefined` is a strategy that cannot attribute bytes to a
-    // commit boundary (r2fs), which is not the same as having moved none.
-    pass: base.kind === 'committed'
-      && (base.movedBytes === undefined || base.movedBytes > 0),
-    detail: `${base.kind} moved=${base.movedBytes ?? 'n/a'} held=${base.bytes ?? 0}B `
-      + `${base.reason ?? ''}`.trim(),
-  });
-  const checkpointChanged = (base.kind === 'failed'
-    && base.reason?.includes('changed while their checkpoint chunks were read') === true)
-    || (base.kind === 'committed' && base.movedBytes === 0);
-  const generationAfter = (await box.exec('cat /tmp/devbox-boot-id 2>/dev/null || true'))
-    .stdout.trim();
-  const generationStable = generationBefore.length > 0 && generationAfter === generationBefore;
-  add({
-    name: 'one container generation spanned the first checkpoint',
-    pass: generationStable,
-    detail: `${generationBefore || '(missing)'} -> ${generationAfter || '(missing)'}`,
-  });
-
-  // A real recycle. `quiesce` now resolves only after the provider reports the
-  // old container stopped; `attachNow` starts and restores the next generation.
-  await box.quiesce();
-  const attach = await box.attachNow();
-  const woken = await box.devboxState();
-  add({
-    name: 'the wake attached durable bytes',
-    pass: attach?.kind === 'attached',
-    detail: `${attach?.kind ?? 'no attach recorded'}: ${attach?.detail ?? ''}`,
-  });
-
-  // Assertions one and two, read from the container, and keyed on the mode the
-  // PERSISTED STATE claims rather than on the strategy name. An extraction-mode
-  // box has a plain directory by design, so demanding an overlay there fails a
-  // path that is working correctly — the same mistake as asserting a mount shape
-  // the mechanism never publishes.
-  const mode = woken.chain?.mode;
-  const mounts = await box.exec(`cat /proc/mounts | grep -F ${DEVBOX_WORKDIR} || true`);
-  const line = mounts.stdout.trim().split('\n')[0] ?? '';
-  if (strategy === 'r2fs' || strategy === 'overlay-cas' || mode === 'chain') {
-    // fuse-overlayfs reports `fuse.fuse-overlayfs` and s3fs reports `fuse.s3fs`,
-    // so each is matched by its own mechanism and never by the `fuse` family.
-    // overlay-cas attaches with fuse-overlayfs, like the chain.
-    const expected = strategy === 'r2fs' ? 's3fs' : 'overlay';
-    add({
-      name: `${DEVBOX_WORKDIR} is really a ${expected} mount`,
-      pass: line.includes(expected),
-      detail: line.length > 0 ? line : '(no mount line)',
-    });
-    const writable = strategy === 'r2fs'
-      ? R2FS_CACHE_DIR
-      : strategy === 'overlay-cas'
-        ? `${DEVBOX_RUNTIME_DIR}/cas-upper`
-        : `${DEVBOX_RUNTIME_DIR}/upper`;
-    const exists = await box.exec(`test -d ${writable} && echo yes || echo no`);
-    add({
-      name: 'the writable layer exists',
-      pass: exists.stdout.trim() === 'yes',
-      detail: `${writable} -> ${exists.stdout.trim()}`,
-    });
-    if (strategy === 'overlay-cas') {
-      // DISK STATE, NOT CALL STATE — its own row, modelled on the chain's base
-      // layer row. The overlay line proves /workspace is mounted; this proves
-      // the tree/ LOWER under it is really there on the disk this exec landed
-      // on, which a container replacement between attach RPCs would erase.
-      const lower = await box.exec(
-        `test -d ${CAS_TREE_MOUNT} && grep -qs ' ${CAS_TREE_MOUNT} ' /proc/mounts `
-        + '&& echo yes || echo no',
-      );
-      add({
-        name: 'the tree/ lower is present and mounted at its lower path',
-        pass: lower.stdout.trim() === 'yes',
-        detail: `${CAS_TREE_MOUNT} -> ${lower.stdout.trim()}`,
-      });
-    } else if (strategy !== 'r2fs') {
-      // DISK STATE, NOT CALL STATE — its own row because a folded check gets
-      // absorbed into a passing parent. The overlay line above proves /workspace
-      // is mounted; this proves the BASE LAYER under it is really there: the
-      // directory exists AND /proc/mounts holds a squashfs line at exactly that
-      // path. Run 9's failure mode was invisible to every call-shaped check:
-      // the container had been replaced between attach RPCs and the lower
-      // directory did not exist on the disk the next exec landed on.
-      const lowerBase = `${DEVBOX_RUNTIME_DIR}/lower-base`;
-      const layer = await box.exec(
-        `test -d ${lowerBase} && grep -qs ' ${lowerBase} ' /proc/mounts && echo yes || echo no`,
-      );
-      add({
-        name: 'the base layer is present and mounted at its lower path',
-        pass: layer.stdout.trim() === 'yes',
-        detail: `${lowerBase} -> ${layer.stdout.trim()}`,
-      });
-    }
-  } else {
-    add({
-      name: `${DEVBOX_WORKDIR} is a plain directory, as extraction mode requires`,
-      pass: line.length === 0,
-      detail: line.length === 0
-        ? `mode ${mode ?? 'none'}: no mount expected, and none present`
-        : `mode ${mode ?? 'none'} but something is mounted: ${line}`,
-    });
-    add({
-      name: 'extraction is permitted on this host',
-      // A deployed host must never reach this branch: ALLOW_EXTRACTION is set
-      // only for a local `wrangler dev` run, so an extract-mode box here means
-      // the fixture was deployed with it set.
-      pass: env.ALLOW_EXTRACTION === '1',
-      detail: `ALLOW_EXTRACTION=${env.ALLOW_EXTRACTION ?? '(unset)'}`,
-    });
-  }
-
-  // The marker has to have survived the recycle, or the durability claim is
-  // about nothing.
-  const survived = await box.exec('cat ./verify-a.txt 2>/dev/null || echo MISSING');
-  add({
-    name: 'the pre-stop write survived the recycle',
-    pass: survived.stdout.includes(marker),
-    detail: `exit ${survived.exitCode}: ${survived.stdout.trim().slice(0, 80)} `
-      + `${survived.stderr.trim().slice(0, 80)}`.trim(),
-  });
-  if (strategy === 'overlay-cas') {
-    const lowerSurvived = await box.exec(
-      `cat ${CAS_TREE_MOUNT}/verify-a.txt 2>/dev/null || echo MISSING`,
-    );
-    add({
-      name: 'the mounted tree lower exposes the pre-stop write',
-      pass: lowerSurvived.stdout.includes(marker),
-      detail: `exit ${lowerSurvived.exitCode}: ${lowerSurvived.stdout.trim().slice(0, 80)} `
-        + `${lowerSurvived.stderr.trim().slice(0, 80)}`.trim(),
-    });
-  }
-
-
-  // Assertion three and four: a second write, a forced checkpoint, and the
-  // object that checkpoint's byte count refers to, read from the store.
-  await box.exec('printf second > ./verify-b.txt');
-  const second = await box.checkpointNow('quiesce');
-  add({
-    name: 'the post-attach checkpoint MOVED the new write into the store',
-    // A 7-byte write after a recycle. Held bytes barely move; moved bytes are
-    // the quantity that proves this checkpoint carried the write.
-    pass: second.kind === 'committed'
-      && (second.movedBytes === undefined || second.movedBytes > 0),
-    detail: `${second.kind} moved=${second.movedBytes ?? 'n/a'} held=${second.bytes ?? 0}B `
-      + `${second.reason ?? ''}`.trim(),
-  });
-
-  const state = await box.devboxState();
-  if (strategy === 'r2fs') {
-    // r2fs has no layer objects: the prefix IS the filesystem, so the store-side
-    // proof is that the prefix holds bytes.
-    const listed = await env.BACKUP_BUCKET.list({ prefix: 'boxes/' });
-    const bytes = listed.objects.reduce((sum, object) => sum + object.size, 0);
-    add({
-      name: 'the store holds the committed bytes',
-      pass: bytes > 0,
-      detail: `${listed.objects.length} objects, ${bytes}B under boxes/`,
-    });
-  } else if (strategy === 'overlay-cas') {
-    // overlay-cas has no single layer object either. A quiesce folds, so the
-    // proof is the two things a fold must leave behind: a materialized tree
-    // and a cursor naming what it folded. Separate rows: a tree with no cursor
-    // is a fold that never finished, and that is the crash window this
-    // strategy's whole ordering exists to make survivable.
-    const listed = await env.BACKUP_BUCKET.list({ prefix: 'boxes/' });
-    const treeObjects = listed.objects.filter(object => object.key.includes('/tree/'));
-    const treeBytes = treeObjects.reduce((sum, object) => sum + object.size, 0);
-    add({
-      name: 'the folded tree holds the committed bytes',
-      pass: treeBytes > 0,
-      detail: `${treeObjects.length} tree objects, ${treeBytes}B under boxes/`,
-    });
-    const cursor = listed.objects.find(object => object.key.endsWith('/cursor.json'));
-    add({
-      name: 'the fold advanced the durable cursor',
-      pass: cursor !== undefined && cursor.size > 0,
-      detail: cursor === undefined ? 'no cursor.json' : `${cursor.key} -> ${cursor.size}B`,
-    });
-  } else {
-    const chainId = state.chain?.base.id;
-    const key = state.chain?.mode === 'extract'
-      ? (chainId === undefined ? undefined : baseObjectKey(chainId))
-      : (chainId === undefined ? undefined : deltaObjectKey(chainId));
-    const head = key === undefined ? null : await env.BACKUP_BUCKET.head(key);
-    add({
-      // Named for what it is in each mode. Extraction has no delta by design,
-      // so demanding one there would fail a path that is working correctly.
-      name: state.chain?.mode === 'extract'
-        ? 'the archive object exists in the store with non-zero size'
-        : 'the delta object exists in the store with non-zero size',
-      pass: head !== null && head.size > 0,
-      detail: `${key ?? '(no chain recorded)'} -> ${head === null ? 'missing' : `${head.size}B`}`,
-    });
-  }
-
-  return {
-    checks,
-    passed: checks.every(check => check.pass),
-    transient: !generationStable
-      ? 'container_replaced'
-      : checkpointChanged ? 'checkpoint_changed' : undefined,
-  };
-}
 
 export default {
   async fetch(request: Request, env: BenchEnv): Promise<Response> {
@@ -784,7 +540,16 @@ export default {
     if (strategy === null) {
       return json({
         ok: false,
-        error: 'strategy is required: snapshot-chain, r2fs, or overlay-cas',
+        error: 'strategy is required: snapshot-chain, r2fs, overlay-cas, bounded-layers, or merkle-pack',
+      }, 400);
+    }
+
+    if (!strategyIsDeployed(env, strategy)) {
+      return json({
+        ok: false,
+        strategy,
+        box: name,
+        error: 'strategy not deployed in this run',
       }, 400);
     }
 
@@ -795,43 +560,21 @@ export default {
     try {
       switch (`${request.method} ${url.pathname}`) {
         case 'POST /create': {
-          // Forces the attach now, so `/create` measures the cold path rather
-          // than deferring it into whatever operation comes first.
-          //
-          // Retried past container-capacity refusals ("there is no container
-          // instance that can be provided to this durable object"). That is the
-          // account having no room at this instant, not a fact about either
-          // strategy, and letting it through would score a strategy on it.
-          let attach: AttachOutcome | undefined;
-          let refusal: unknown;
-          for (let attempt = 0; attempt < 4; attempt += 1) {
-            try {
-              attach = await box.attachNow();
-              break;
-            } catch (error) {
-              refusal = error;
-              if (!/no container instance/i.test(describeThrown({ cause: error }))) throw error;
-              await scheduler.wait(2_000 * (attempt + 1));
-            }
-          }
-          if (attach === undefined) {
-            return json({
-              ok: false,
-              strategy,
-              box: name,
-              error: `container capacity: ${describeThrown({ cause: refusal })}`,
-              ms: Date.now() - started,
-            }, 503);
-          }
-          return json({ ok: true, strategy, box: name, attach, ms: Date.now() - started });
+          await box.kickStartup();
+          return json({ ok: true, strategy, box: name, ms: Date.now() - started });
         }
 
-        case 'POST /verify': {
-          const result = await verify(env, strategy, name);
-          await flushOps(env);
+        case 'GET /head': {
+          const key = url.searchParams.get('key') ?? '';
+          if (key.length === 0) return json({ ok: false, error: 'key is required' }, 400);
+          const object = await env.BACKUP_BUCKET.head(key);
           return json({
-            ok: result.passed, strategy, box: name, ...result, ms: Date.now() - started,
-          }, result.passed ? 200 : 500);
+            ok: object !== null,
+            key,
+            exists: object !== null,
+            size: object?.size ?? 0,
+            ms: Date.now() - started,
+          }, object === null ? 404 : 200);
         }
 
         case 'POST /exec': {
@@ -865,38 +608,33 @@ export default {
         case 'POST /checkpoint': {
           const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
           const outcome = await box.checkpointNow(kind);
-          await box.flushOpTally();
           return json({ ok: outcome.kind !== 'failed', kind, outcome, ms: Date.now() - started });
         }
 
         case 'POST /stop': {
           // The real quiesce path: final checkpoint, keepAlive off, SIGTERM.
           const outcome = await box.quiesce();
-          await box.flushOpTally();
           return json({
             ok: outcome.kind !== 'failed', checkpoint: outcome, ms: Date.now() - started,
           });
         }
 
         case 'POST /wake': {
-          // One operation is enough: `ensureReady` starts the container AND
-          // attaches before the operation runs. The outcome is read back from
-          // durable state, so a wake that restored nothing cannot look like one
-          // that did. Retried past the runtime's own teardown window.
-          const attach = await box.attachNow();
-          const state = await box.devboxState();
-          await box.flushOpTally();
-          return json({
-            ok: true,
-            attach,
-            running: state.running,
-            ms: Date.now() - started,
-          });
+          await box.kickStartup();
+          return json({ ok: true, strategy, box: name, ms: Date.now() - started });
         }
 
         case 'GET /state': {
           const state = await box.devboxState();
-          return json({ ok: true, strategy, box: name, state, ms: Date.now() - started });
+          return json({
+            ok: true,
+            strategy,
+            box: name,
+            extractionAllowed: env.ALLOW_EXTRACTION === '1',
+            storePrefix: storePrefixOf(env, strategy, name),
+            state,
+            ms: Date.now() - started,
+          });
         }
 
         case 'GET /ops': {

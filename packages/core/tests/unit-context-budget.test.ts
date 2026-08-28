@@ -85,7 +85,7 @@ describe('citesSpillAddress', () => {
   test('finds the address anywhere in the arguments, including codemode source', () => {
     const code = `const t = await workspace.readFile('/${SPILL_DIRS.toolOutput}/x9.log');\n` +
       'const parts = t.match(/.{1,20000}/gs) ?? [];\n' +
-      'return Promise.all(parts.map((p) => llm.query(`summarise: ${p}`)));';
+      'return Promise.all(parts.map((p) => agents.ask({ role: "general", message: `summarise: ${p}` })));';
     expect(citesSpillAddress({ code })).toBe(true);
     expect(citesSpillAddress(`read ${SPILL_DIRS.compaction}/sess/abc.md`)).toBe(true);
   });

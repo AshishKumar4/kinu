@@ -12,6 +12,28 @@
  * slimming pass (135,116 → 120,952 bytes over 27 surfaces, −10.5%), which
  * retires that particular claim and leaves the drift gate intact.
  *
+ * Re-cut again on 2026-08-27 for the `llm.query` → `rlm.query` namespace cutover
+ * and the `contextRef` channel it added (120,952 → 121,454 bytes over the same 27
+ * surfaces, +502). Three surfaces moved, and only the two RLM lines inside them.
+ *
+ * Re-cut again on 2026-08-27 for KINU-N028 instruction trust (121,454 → 121,955
+ * over the same 27 surfaces, +501). One surface moved, `cf-full-surface`, which
+ * now carries an unapproved workspace file beside its approved one: it gains the
+ * `## Workspace instruction files` rule that governs the sealed block those
+ * bytes ride in, and the skills index says an authored skill is reference
+ * material until the owner approves it. No instruction content moved tier.
+ *
+ * Re-cut again on 2026-08-28 for the `rlm.query` → `agents.ask({role})` cutover:
+ * the standalone recursive-LM namespace is gone and the delegation ladder gained
+ * a third rung — one temporary full agent per question, with `context_ref` for
+ * material it reads itself (121,955 → 125,938 bytes, +3,983). The surface COUNT
+ * moved too, 27 → 28: `code-execution-with-rlm` / `-without-rlm` became
+ * `code-execution-with-temporary-ask` / `-without-temporary-ask`, and
+ * `delegation-temporary-ask` is new — a surface that carries the rung's own
+ * bullets, which nothing else in the matrix rendered. Every surface that renders
+ * the delegation ladder or the code-execution section moved; `unit-prompt-sections`
+ * raised its matrix ceiling to 127,200 in the same change, with the reason.
+ *
  * Run this ONLY when a prompt change is the intended change, and say so in the
  * commit. Regenerating it to quiet a red test erases the only record of what the
  * model used to read.

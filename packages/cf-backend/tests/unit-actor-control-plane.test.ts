@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { TURN_AUTHOR_METADATA_KEY, type JsonObject } from '@kinu.run/core';
 import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
 import type { Database } from 'bun:sqlite';
 
@@ -44,21 +45,39 @@ describe('the actor control plane answers on both roots', () => {
   });
 
   /**
-   * `'idle'` is the whole point of the return value: it means the turn ended
-   * before the steer arrived and NOTHING was buffered, so the caller has to send
-   * the text as an ordinary message instead. A subordinate chat is a chat, so it
+   * The turn ended before the steer arrived. The old contract answered 'idle'
+   * and left the text with the caller to re-send — the race KINU-N026 closes:
+   * another turn could start first and file the guidance as some later turn.
+   * Now the actor commits the text to its own turn queue in the same slice as
+   * the decision and answers 'queued'. A subordinate chat is a chat, so it
    * answers the same way.
    */
-  test('steering with no turn running reports idle rather than swallowing the text', async () => {
-    expect(await orchestratorHarness().agent.steerTurn('use the other parser')).toEqual({ landed: 'idle' });
-    expect(await subordinateHarness().agent.steerTurn('use the other parser')).toEqual({ landed: 'idle' });
+  test('steering with no turn running queues the text as the next ordinary turn', async () => {
+    for (const { agent } of [orchestratorHarness(), subordinateHarness()]) {
+      const enqueued: Array<{ text: string; metadata?: JsonObject }> = [];
+      Reflect.set(agent, '_host', {
+        broadcast: () => {},
+        enqueueTurn: async (turn: { text: string; metadata?: JsonObject }) => {
+          enqueued.push(turn);
+          return { status: 'queued' as const };
+        },
+        turnInFlight: () => false,
+        setTimer: () => {},
+        headRuntime: undefined,
+      });
+
+      expect(await agent.steerTurn('use the other parser')).toEqual({ landed: 'queued' });
+      expect(enqueued).toEqual([{
+        text: 'use the other parser',
+        metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' },
+      }]);
+    }
   });
 
   test('cancelling with nothing running is a settled no-op, not a failure', async () => {
     const outcome = await orchestratorHarness().agent.cancelCurrentWork();
 
     expect(outcome.ok).toBe(true);
-    expect(outcome.cancelledJobs).toEqual([]);
     expect(outcome.abortedTools).toBe(0);
   });
 
@@ -75,7 +94,7 @@ describe('the actor control plane answers on both roots', () => {
     await orchestrator.agent.cancelCurrentWork();
     await subordinate.agent.cancelCurrentWork();
 
-    expect(cancelActivity(orchestrator.db)).toEqual([{ detail: '0 foreground, 0 background' }]);
+    expect(cancelActivity(orchestrator.db)).toEqual([{ detail: '0 foreground aborted' }]);
     expect(cancelActivity(subordinate.db)).toEqual([]);
   });
 });

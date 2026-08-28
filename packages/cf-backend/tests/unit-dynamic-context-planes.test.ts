@@ -26,6 +26,8 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       currentTask: 'map the failure surface',
       createdAt: Date.now(),
       dismissedAt: null,
+      lifetime: 'durable',
+      taskEventId: null,
     });
 
     const delegates = agent.observeDynamicContext().delegates;

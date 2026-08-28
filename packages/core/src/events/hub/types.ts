@@ -231,6 +231,17 @@ export interface SubordinateReportPayload {
   from_subordinate: string;
   status: SubordinateReportStatus;
   content: string;
+  /** The sending child's terminal sequence — this report's durable identity on
+   *  BOTH sides. The child's ledger replays the report until the parent holds
+   *  it, and the parent keys ingress on it, so a replay is recognised instead
+   *  of published a second time.
+   *
+   *  OPTIONAL on the stored shape, required at ingress. A row written before the
+   *  field existed has no identity to invent, and a required field here would
+   *  make every one of those throw on read — which aborts the whole event drain
+   *  rather than losing one report. An absent value simply has no dedupe key,
+   *  which is exactly the behaviour those rows were admitted under. */
+  sequence_id?: string;
   /** The assignment this report answers, when one is active. */
   task?: string;
   /** Workspace path holding the full `content`, set at admission when the

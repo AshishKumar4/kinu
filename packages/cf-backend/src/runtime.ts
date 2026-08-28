@@ -44,7 +44,13 @@ import {
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
-import type { SandboxHandle } from "@kinu.run/core";
+import type { NodeWorkspaceProvisioner, SandboxHandle } from "@kinu.run/core";
+import {
+  cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner, withHostedNodeExecution,
+} from './node-home';
+import type { HostedNodeHome } from './node-home';
+export { withHostedNodeExecution, type HostedNodeHome } from './node-home';
+import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
@@ -309,6 +315,46 @@ export interface CFRuntimeHooks {
   turnProfile?: () => ResolvedTurnProfile | null;
   /** Resolve a profile for durable work that starts without a chat turn. */
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
+  /**
+   * A node facet's own identity: the ONE shared Nimbus session, addressed as
+   * this node on both planes.
+   *
+   * Present, commands run as the node's uid from its home and its file plane
+   * acts as the same uid; absent, this runtime is the ORIGIN's. Never a second
+   * filesystem either way — the session, the bytes and the mount table are the
+   * same, and only the credential differs.
+   */
+  workspaceExecution?: HostedNodeHome;
+}
+
+export function createHostedNodeHomeProvisioner(
+  env: Env,
+  sql: SqlDatabase,
+  actor: Pick<ActorRuntimeIdentity, 'ownerUserId' | 'workspaceName'>,
+): NodeWorkspaceProvisioner {
+  const box = createAgentNimbusHandle(env, {
+    ownerUserId: () => actor.ownerUserId(),
+    workspaceName: actor.workspaceName,
+    shellId: 'hosted-node-home',
+    scaffoldPath: '.kinu/internal/hosted-node-home',
+    capabilityToken: async () => null,
+  });
+  return createNimbusNodeHomeProvisioner(sql, box);
+}
+
+export async function cleanupHostedNodeHome(
+  env: Env,
+  actor: Pick<ActorRuntimeIdentity, 'ownerUserId' | 'workspaceName'>,
+  nodeId: string,
+): Promise<void> {
+  const box = createAgentNimbusHandle(env, {
+    ownerUserId: () => actor.ownerUserId(),
+    workspaceName: actor.workspaceName,
+    shellId: 'hosted-node-home',
+    scaffoldPath: '.kinu/internal/hosted-node-home',
+    capabilityToken: async () => null,
+  });
+  await cleanupNimbusNodeHome(box, nodeId);
 }
 
 /**
@@ -328,7 +374,14 @@ export function createCFRuntime(
     throw new Error('CF runtime requires the NIMBUS_SESSION binding: the Nimbus session is the hosted workspace');
   }
   const workspaceBox = createAgentNimbusHandle(env, actor);
-  const workspaceVfs = nimbusSessionFiles(workspaceBox);
+  const executionBox = hooks.workspaceExecution
+    ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution)
+    : workspaceBox;
+  // BOTH PLANES OR NEITHER. A node home is uid/gid/mode on real inodes, so a
+  // runtime whose commands were the node's while its file tools stayed the
+  // session user could not write its own home — measured `EACCES` — and could
+  // write a sibling's. One credential, both surfaces.
+  const workspaceVfs = nimbusSessionFiles(workspaceBox, hooks.workspaceExecution?.cred);
   const vfs = hooks.workspaceObserver
     ? observeWrites(workspaceVfs, hooks.workspaceObserver)
     : workspaceVfs;
@@ -435,7 +488,7 @@ export function createCFRuntime(
   // The workspace shell is the authoritative Nimbus session's shell, over the
   // exact same bytes `vfs` addresses.
   // Gated at the Shell object, so what it wraps is transparent to the seam.
-  const shell = withApprovalGatedShell(nimbusSessionShell(workspaceBox), approvalPolicy);
+  const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // The agent's ONE file plane: the workspace tree extended by the mount
   // table — /pc for a connected device, /sandbox for the bound container —
@@ -446,7 +499,7 @@ export function createCFRuntime(
   // bytes must never cross into a user's device or a container.
   const agentVfs = withMountTable(vfs, standardMounts((name) => executionRouter.getProvider(name)));
   executionRouter.register(createNimbusWorkspaceExecutor({
-    box: workspaceBox,
+    box: executionBox,
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE != null,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {

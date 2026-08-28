@@ -23,45 +23,26 @@ import * as v from 'valibot';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO,
 } from './helpers/user-do';
+import {
+  OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
+} from './helpers/device-harness';
 import type { UserCaller } from '../src/user/workspace-capability';
+import { DeviceSocketHub } from '../src/user/device-hub';
+import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
   DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED, DEVICE_PROVISION_METHOD, DEVICE_TOKEN_ROTATION,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
 
-const WORKSPACE = 'workspace-a';
-const OTHER_WORKSPACE = 'workspace-b';
 
-/** A daemon that answers `exec` with an exit-0 result and the toolchain probe
- *  with "nothing found", so a status read costs no wall clock. */
-function daemon(frame: { method: string }): JsonValue {
-  if (frame.method === 'which') return { present: [] };
-  return { stdout: 'ok', stderr: '', exitCode: 0 };
-}
+const DeviceRpcFrameSchema = v.object({
+  id: v.string(),
+  method: v.string(),
+  params: v.array(JsonValueSchema),
+});
 
-interface DeviceHarness extends TestUserDO {
-  deviceId: string;
-  workspace: UserCaller;
-  sibling: UserCaller;
-}
-
-/**
- * A registered device, connected, with two workspaces holding real capability
- * tokens. The id comes from `registerDevice` and is then attached to the live
- * socket, so the row the grant is keyed on is the row the hub sees.
- */
-async function deviceHarness(name = 'ashish@studio'): Promise<DeviceHarness> {
-  const harness = createTestUserDO({ deviceResponder: daemon });
-  const { deviceId } = await harness.userDO.registerDevice(await testOwner(), name);
-  harness.attachDevice(deviceId);
-  const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-  const sibling = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
-  return Object.assign(harness, {
-    deviceId,
-    workspace: { workspaceToken: workspace } satisfies UserCaller,
-    sibling: { workspaceToken: sibling } satisfies UserCaller,
-  });
-}
+const UnstoppedRowSchema = v.object({ unstopped_at: v.nullable(v.number()) });
 
 describe('the per-workspace device grant, enforced at the hub chokepoint', () => {
   test('an ungranted workspace is refused, and nothing reaches the machine', async () => {
@@ -205,6 +186,621 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     expect(harness.deviceFrames.map((frame) => frame.method)).toEqual(['checkpointStatus']);
     harness.close();
   });
+
+  /**
+   * Stopping a command is not the same decision as starting one.
+   *
+   * Consent decides what may RUN on the machine. A cancellation only ends
+   * something the owner already let through, and gating it would put a live
+   * process behind a card nobody is at the keyboard to answer — the exact
+   * failure cancellation exists for.
+   */
+  test('a cancellation reaches the machine while consent is refusing new work', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'deny';
+    const requestId = 'rpc-epoch1-7';
+
+    // The control: this workspace cannot START anything right now.
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    expect(harness.deviceFrames).toEqual([]);
+
+    await harness.userDO.deviceRpc(
+      harness.workspace, DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL],
+      { agentName: WORKSPACE },
+    );
+
+    expect(harness.deviceFrames.map((frame) => ({ method: frame.method, params: frame.params })))
+      .toEqual([{ method: DEVICE_CANCEL_METHOD, params: [requestId, DEVICE_CANCEL_PROTOCOL] }]);
+    // And it asked nobody: only the refused `exec` raised a card.
+    expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
+    harness.close();
+  });
+
+  test('the identity the caller minted is the id the command is issued under', async () => {
+    // The caller has to know the id before the answer, because that id is what
+    // a later cancellation names. The hub forwards it verbatim rather than
+    // minting one the caller could never learn in time.
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+    const requestId = nextDeviceRequestId();
+
+    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 600'], {
+      agentName: WORKSPACE, requestId,
+    });
+
+    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec').map((frame) => frame.id))
+      .toEqual([requestId]);
+    harness.close();
+  });
+});
+
+describe('durable device request ownership', () => {
+  test('only the detaching request changes hands while its parallel sibling stays with the turn', async () => {
+    const harness = await deviceHarness();
+    const detaching = nextDeviceRequestId();
+    const sibling = nextDeviceRequestId();
+    for (const requestId of [detaching, sibling]) {
+      harness.db.prepare(
+        `INSERT INTO device_inflight_requests
+         (request_id, device_id, workspace, turn_id)
+         VALUES (?, ?, ?, ?)`,
+      ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    }
+
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, detaching, 'job-1'))
+      .toEqual({ transferred: true });
+
+    // The turn still owns the sibling, and only the sibling.
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId: sibling, outcome: 'terminated' }]);
+    expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1'))
+      .toEqual([{ requestId: detaching, outcome: 'terminated' }]);
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+      .map((frame) => frame.params[0])).toEqual([sibling, detaching]);
+    expect(harness.db.prepare(
+      `SELECT request_id FROM device_inflight_requests`,
+    ).all()).toEqual([]);
+    harness.close();
+  });
+
+  test('a transfer of an unknown or foreign request reports no ownership change', async () => {
+    const harness = await deviceHarness();
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(
+      harness.workspace, nextDeviceRequestId(), 'job-1',
+    )).toEqual({ transferred: false });
+    harness.close();
+  });
+
+  /**
+   * The provider half of detached device ownership: the seam a background-job
+   * consumer must call. The consumer lives in the durable turn/job subsystem,
+   * so this proves the contract exists and is reachable rather than claiming an
+   * end-to-end detach this package does not own.
+   */
+  test('the ownership seam a background-job consumer needs is reachable and native', async () => {
+    const harness = await deviceHarness();
+    const seam = {
+      transferDeviceRequestToBackgroundJob: harness.userDO.transferDeviceRequestToBackgroundJob,
+      cancelDeviceRequestsForBackgroundJob: harness.userDO.cancelDeviceRequestsForBackgroundJob,
+      acknowledgeDeviceRequest: harness.userDO.acknowledgeDeviceRequest,
+    };
+    for (const [name, member] of Object.entries(seam)) {
+      expect(member).toBeFunction();
+      expect(USER_DO_RPC_SURFACE).toContain(name);
+    }
+    // A per-request transfer takes exactly one request identity plus one job
+    // identity — no turn argument exists to widen it back to the whole turn.
+    expect(seam.transferDeviceRequestToBackgroundJob).toHaveLength(3);
+    harness.close();
+  });
+
+  /**
+   * Controlled interleaving, not a snapshot: the sweep claims eligible rows
+   * before its first device await, so a detach that lands mid-sweep cannot move
+   * a request the sweep is already cancelling, and cannot be cancelled by a
+   * sweep it escaped in time.
+   */
+  test('a detach racing an in-flight turn sweep loses to the sweep claim', async () => {
+    const harness = await deviceHarness();
+    const claimed = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(claimed, harness.deviceId, WORKSPACE, 'turn-1');
+
+    const sweep = harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1');
+    // Interleaved before the sweep resolves: the row is already claimed.
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, claimed, 'job-1'))
+      .toEqual({ transferred: false });
+    expect(await sweep).toEqual([{ requestId: claimed, outcome: 'terminated' }]);
+    expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1')).toEqual([]);
+    harness.close();
+  });
+
+  test('a request that detached before the sweep is not cancelled by the turn', async () => {
+    const harness = await deviceHarness();
+    const detached = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(detached, harness.deviceId, WORKSPACE, 'turn-1');
+
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, detached, 'job-1'))
+      .toEqual({ transferred: true });
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)).toEqual([]);
+    harness.close();
+  });
+
+  test('a failed kill releases its claim so a later sweep can retry the same request', async () => {
+    const harness = await deviceHarness();
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    harness.attachDevice(null);
+
+    // No live tunnel: the kill cannot be confirmed, so the row stays retryable.
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'failed', detail: NO_DEVICE_CONNECTED }]);
+
+    harness.attachDevice(harness.deviceId);
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    harness.close();
+  });
+
+  test('an activation that died holding a claim leaves the request cancellable again', async () => {
+    const harness = await deviceHarness();
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    // Claimed, then the isolate died before the cancel frame went out: exactly
+    // the state a reset between claim and RPC leaves behind.
+    harness.db.prepare(
+      `UPDATE device_inflight_requests SET cancel_claim = ? WHERE request_id = ?`,
+    ).run('claim-of-a-dead-activation', requestId);
+
+    const revived = createTestUserDO({ storage: harness.db, deviceResponder: daemon });
+    revived.attachDevice(harness.deviceId);
+    expect(await revived.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    revived.close();
+    harness.close();
+  });
+
+  test('a killed request whose acknowledgement fails is untransferable and cleaned up in the same activation', async () => {
+    let ackWorks = false;
+    const harness = await deviceHarness('ashish@studio', (frame) => {
+      if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {
+        throw new Error('acknowledgement channel down');
+      }
+      return daemon(frame);
+    });
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+
+    // The kill is confirmed, so the outcome is truthful and the row is
+    // process-terminal with only its replay cleanup outstanding.
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    // A dead command must never be handed to a background job.
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: false });
+
+    // Same activation, same hot socket: the retry cleans up and never kills the
+    // dead process group a second time.
+    ackWorks = true;
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+      .map((frame) => frame.params[0])).toEqual([requestId]);
+    expect(harness.db.prepare(
+      `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([]);
+    harness.close();
+  });
+
+  test('a request killed before a restart is still untransferable and cleaned up after it', async () => {
+    const harness = await deviceHarness('ashish@studio', (frame) => {
+      if (frame.method === DEVICE_EXEC_ACK_METHOD) throw new Error('acknowledgement channel down');
+      return daemon(frame);
+    });
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+
+    // Death is durable, so it outlives the activation that observed it: the new
+    // activation refuses the transfer even before it cleans the row up.
+    const revived = createTestUserDO({ storage: harness.db, deviceResponder: daemon });
+    revived.attachDevice(harness.deviceId);
+    expect(await revived.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: false });
+    expect(await revived.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    expect(revived.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)).toEqual([]);
+    expect(revived.db.prepare(
+      `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([]);
+    revived.close();
+    harness.close();
+  });
+
+  test('an unknown cancellation whose acknowledgement fails is untransferable and keeps its answer', async () => {
+    let ackWorks = false;
+    const harness = await deviceHarness('ashish@studio', (frame) => {
+      if (frame.method === DEVICE_CANCEL_METHOD) {
+        return { requestId: String(frame.params[0]), cancelled: 'unknown' };
+      }
+      if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {
+        throw new Error('acknowledgement channel down');
+      }
+      return daemon(frame);
+    });
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+
+    // `unknown` also proves nothing runs under the request, so the row settles.
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'unknown' }]);
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: false });
+
+    // A cleanup retry reports the STORED answer rather than promoting it to a
+    // termination this sweep never observed.
+    ackWorks = true;
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'unknown' }]);
+    expect(harness.db.prepare(
+      `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([]);
+    harness.close();
+  });
+
+  test('a settled request reports its stored answer rather than a kill failure when the device is gone', async () => {
+    const harness = await deviceHarness();
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests
+       (request_id, device_id, workspace, turn_id, cancel_outcome)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1', 'terminated');
+    harness.attachDevice(null);
+
+    // A confirmed stop must never regress into "the kill failed" just because
+    // the socket needed for local cleanup is gone.
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    // Cleanup is still owed, so the row survives and stays untransferable.
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: false });
+    // And the revoked-device incident does not count a request already answered.
+    expect(await harness.userDO.revokeDevice(await testOwner(), harness.deviceId))
+      .toEqual({ ok: true, unstoppedCommands: 0 });
+    harness.close();
+  });
+
+  test('a sweep that loses its row while the kill fails reports nothing for it', async () => {
+    let dropRow: (() => void) | null = null;
+    const harness = await deviceHarness('ashish@studio', (frame) => {
+      if (frame.method === DEVICE_CANCEL_METHOD) {
+        dropRow?.();
+        throw new Error('tunnel closed under the kill');
+      }
+      return daemon(frame);
+    });
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    // Revocation deletes the row while this kill is in flight, then the kill
+    // rejects. The row is gone, so this sweep no longer answers for it.
+    dropRow = () => {
+      harness.db.prepare(`DELETE FROM device_inflight_requests WHERE request_id = ?`).run(requestId);
+      dropRow = null;
+    };
+
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
+    harness.close();
+  });
+
+  test('an exec issued inside a detached scope is the job\'s from the insert, not the turn\'s', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+    const requestId = nextDeviceRequestId();
+
+    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
+      agentName: WORKSPACE, requestId, backgroundJobId: 'job-1',
+      checkpoint: { agent: WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
+    });
+
+    // No transfer ran, and the turn that opened the scope never owned the row:
+    // there is no window for a Stop to cancel work that already detached.
+    expect(harness.db.prepare(
+      `SELECT turn_id, background_job_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([{ turn_id: null, background_job_id: 'job-1' }]);
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
+    expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    harness.close();
+  });
+
+  test('a revoked device\'s unresolved request cannot be detached into a job', async () => {
+    const harness = await deviceHarness();
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    // Revoked, and a crashed activation left no claim behind to block a detach.
+    harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
+      .run(Date.now(), harness.deviceId);
+
+    // The daemon can never reconnect, so a job that adopted this could never
+    // cancel it: the unresolved command stays revocation's to report.
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: false });
+    harness.close();
+  });
+
+  test('a request already owned by a job stops reporting success once its device is revoked', async () => {
+    const harness = await deviceHarness();
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, background_job_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'job-1');
+
+    // Idempotent while the machine can still be reached...
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: true });
+    harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
+      .run(Date.now(), harness.deviceId);
+    // ...and no longer a success once it cannot, because the job could not
+    // cancel what it would be told it owns.
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: false });
+    harness.close();
+  });
+
+  test('an exec refuses an owner that does not name a job', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+    const requestId = nextDeviceRequestId();
+
+    // A blank owner would insert a row no turn sweep and no job sweep can ever
+    // select - the orphan this table exists to prevent.
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
+      agentName: WORKSPACE, requestId, backgroundJobId: '',
+    })).rejects.toThrow('must name a job');
+    expect(harness.db.prepare(
+      `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([]);
+    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
+    harness.close();
+  });
+
+  test('the owner cannot retire a revocation warning while the sweep still holds rows', async () => {
+    const harness = await deviceHarness();
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    // The state a sweep leaves between writing its provisional warning and
+    // deciding: revoked, warned, rows still unsettled.
+    harness.db.prepare(`UPDATE user_devices SET revoked_at = ?, unstopped_at = ? WHERE id = ?`)
+      .run(Date.now(), Date.now(), harness.deviceId);
+
+    // Nothing to read yet, so nothing to acknowledge: clearing here could retire
+    // a warning about a process no one has confirmed and no one can ask again.
+    expect(await harness.userDO.acknowledgeUnstoppedDevice(await testOwner(), harness.deviceId))
+      .toEqual({ ok: false });
+
+    harness.db.prepare(`DELETE FROM device_inflight_requests WHERE device_id = ?`).run(harness.deviceId);
+    expect(await harness.userDO.acknowledgeUnstoppedDevice(await testOwner(), harness.deviceId))
+      .toEqual({ ok: true });
+    harness.close();
+  });
+
+  test('a tool that cancelled its own exec and the turn sweep agree on one answer', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+
+    // The abort path the laptop exec tool takes: the cancellation frame goes
+    // straight through this same forwarder rather than through a sweep.
+    await harness.userDO.deviceRpc(harness.workspace, DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL], {
+      agentName: WORKSPACE,
+    });
+
+    // The turn sweep then finds the request already answered: it reports THAT
+    // answer and sends no second kill, so the two paths cannot disagree about
+    // whether the process group died.
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId, outcome: 'terminated' }]);
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+      .map((frame) => frame.params[0])).toEqual([requestId]);
+    expect(harness.db.prepare(
+      `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([]);
+    harness.close();
+  });
+
+  test('an exec is refused when revocation lands inside its acknowledgement probe', async () => {
+    let revokeNow: (() => void) | null = null;
+    const harness = await deviceHarness('ashish@studio', (frame) => {
+      if (frame.method === DEVICE_EXEC_ACK_METHOD) revokeNow?.();
+      return daemon(frame);
+    });
+    harness.consentDecision = 'always';
+    // The probe is the one await between admission and the durable row, so this
+    // is where a revocation sweep can slip past an earlier check.
+    revokeNow = () => {
+      harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
+        .run(Date.now(), harness.deviceId);
+    };
+    const requestId = nextDeviceRequestId();
+
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
+      agentName: WORKSPACE, requestId,
+    })).rejects.toThrow(NO_DEVICE_CONNECTED);
+    // Neither a row a revoked device could never answer for, nor a command frame.
+    expect(harness.db.prepare(
+      `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
+    ).all(requestId)).toEqual([]);
+    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
+    harness.close();
+  });
+
+  test('a transfer to the job already cancelling the request reports no ownership change', async () => {
+    const harness = await deviceHarness();
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests
+       (request_id, device_id, workspace, background_job_id, cancel_claim)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'job-1', 'claim-of-the-live-sweep');
+
+    // Same job id, and the row is mid-cancellation: it has not changed hands,
+    // so a detach must not read the pre-existing owner as its own success.
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: false });
+    // Unclaimed, the same transfer is idempotent rather than a false negative.
+    harness.db.prepare(`UPDATE device_inflight_requests SET cancel_claim = NULL WHERE request_id = ?`)
+      .run(requestId);
+    expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
+      .toEqual({ transferred: true });
+    harness.close();
+  });
+
+  test('a sweep whose claim is taken mid-flight sends no further frame for that row', async () => {
+    let stealClaim: (() => void) | null = null;
+    const harness = await deviceHarness('ashish@studio', (frame) => {
+      if (frame.method === DEVICE_CANCEL_METHOD) stealClaim?.();
+      return daemon(frame);
+    });
+    const [first, second] = [nextDeviceRequestId(), nextDeviceRequestId()];
+    for (const requestId of [first, second]) {
+      harness.db.prepare(
+        `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+         VALUES (?, ?, ?, ?)`,
+      ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+    }
+    // Both rows are claimed by the sweep, then the terminal authority takes the
+    // second row's claim while the first row's frame is in flight.
+    stealClaim = () => {
+      harness.db.prepare(`UPDATE device_inflight_requests SET cancel_claim = ? WHERE request_id = ?`)
+        .run('claim-of-the-revocation', second);
+      stealClaim = null;
+    };
+
+    expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
+      .toEqual([{ requestId: first, outcome: 'terminated' }]);
+    // Exactly one authority cancels and reports a request: the displaced row
+    // belongs to whoever took it.
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
+      .map((frame) => frame.params[0])).toEqual([first]);
+    harness.close();
+  });
+
+  test('revocation records its incident before the first kill and clears it only when all are confirmed', async () => {
+    const seenAtFrame: Array<number | null> = [];
+    const harness = await deviceHarness('ashish@studio', (frame) => {
+      if (frame.method === DEVICE_CANCEL_METHOD) {
+        seenAtFrame.push(harness.db.prepare(
+          `SELECT unstopped_at FROM user_devices WHERE id = ?`,
+        ).all(harness.deviceId).map((row) => v.parse(UnstoppedRowSchema, row).unstopped_at)[0]);
+      }
+      return daemon(frame);
+    });
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+
+    expect(await harness.userDO.revokeDevice(await testOwner(), harness.deviceId))
+      .toEqual({ ok: true, unstoppedCommands: 0 });
+    // An activation dying anywhere after the claim leaves the incident standing.
+    expect(seenAtFrame).toHaveLength(1);
+    expect(seenAtFrame[0]).toBeNumber();
+    // Every command was confirmed dead, so nothing is left to warn about.
+    expect(harness.db.prepare(`SELECT unstopped_at FROM user_devices WHERE id = ?`)
+      .all(harness.deviceId)).toEqual([{ unstopped_at: null }]);
+    harness.close();
+  });
+});
+
+describe('device revocation admission', () => {
+  test('rejects new exec while it awaits durable command cancellation', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+    const requestId = nextDeviceRequestId();
+    harness.db.prepare(
+      `INSERT INTO device_inflight_requests
+       (request_id, device_id, workspace, turn_id)
+       VALUES (?, ?, ?, ?)`,
+    ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
+
+    const cancellationSent = Promise.withResolvers<{ id: string; method: string; params: JsonValue[] }>();
+    let attachment: JsonValue = null;
+    let hub: DeviceSocketHub | null = null;
+    const socket = {
+      readyState: 1,
+      close: () => {},
+      serializeAttachment: (value: JsonValue) => { attachment = value; },
+      deserializeAttachment: () => attachment,
+      send: (raw: string) => {
+        const frame = v.parse(DeviceRpcFrameSchema, JSON.parse(raw));
+        if (frame.method === DEVICE_CANCEL_METHOD) cancellationSent.resolve(frame);
+        if (frame.method === DEVICE_EXEC_ACK_METHOD && hub) {
+          hub.handleMessage(harness.deviceId, JSON.stringify({
+            id: frame.id, result: { requestId, acknowledged: true },
+          }));
+        }
+      },
+    };
+    const hubCandidate = Object.getOwnPropertyDescriptor(harness.userDO, '_devices')?.value;
+    if (!(hubCandidate instanceof DeviceSocketHub)) throw new Error('UserDO device hub is unavailable.');
+    hub = hubCandidate;
+    harness.attachDevice(null);
+    hub.accept(harness.deviceId, socket);
+
+    const revocation = harness.userDO.revokeDevice(await testOwner(), harness.deviceId);
+    const cancellation = await cancellationSent.promise;
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['true'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(cancellation.params).toEqual([requestId, DEVICE_CANCEL_PROTOCOL]);
+
+    hub.handleMessage(harness.deviceId, JSON.stringify({
+      id: cancellation.id,
+      result: { requestId, cancelled: 'terminated' },
+    }));
+    expect(await revocation).toEqual({ ok: true, unstoppedCommands: 0 });
+    harness.close();
+  });
 });
 
 describe('a device is visible before it is usable', () => {
@@ -277,15 +873,54 @@ describe('asking for a machine when there is none', () => {
   });
 
   test('a card still waiting is not raised twice by a retrying agent', async () => {
+    // The dedupe is the REGISTRY's, not the caller's. The UserDO used to read
+    // listPendingConsents and skip — a check-then-act across two RPCs that
+    // raced itself, and only ever covered the provisioning method. Now an
+    // identical still-waiting request joins the card already up, so this drives
+    // two identical asks and reads what the authority actually did.
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-    harness.pendingConsents.push({ consentId: 'cons-1', method: DEVICE_PROVISION_METHOD });
+    harness.consentDecision = 'hold';
 
-    await expect(harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+    const first = harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
-    })).rejects.toThrow(NO_DEVICE_CONNECTED);
+    });
+    const retry = harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+      agentName: WORKSPACE,
+    });
+    const settled = Promise.allSettled([first, retry]);
+    // Await the CONDITION, never a duration: yield to the scheduler until the
+    // card is actually up. Both calls are already in flight, so the second
+    // reaches the registry during the same yielding and meets the first's card.
+    for (let turn = 0; turn < 100 && harness.consentPrompts.length === 0; turn += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
 
-    expect(harness.consentPrompts).toEqual([]);
+    // ONE card, one id: the provisioning question is identical both times.
+    expect(harness.consentPrompts).toEqual([{
+      workspace: WORKSPACE,
+      method: DEVICE_PROVISION_METHOD,
+      command: expect.stringContaining('Connect this computer'),
+      scope: 'all_local_actions',
+      workspaceName: WORKSPACE,
+    }]);
+    expect(harness.raisedConsentIds).toEqual(['cons-1']);
+
+    // And BOTH callers are parked on that one card — neither was answered by a
+    // second prompt nobody raised, and neither ran ahead without one.
+    const pending = Symbol('pending');
+    expect(await Promise.race([settled, Promise.resolve(pending)])).toBe(pending);
+
+    // One answer settles every caller waiting on it. Both still refuse, because
+    // approving the card provisions nothing — no daemon is linked yet.
+    harness.answerConsent('once');
+    const outcomes = await settled;
+    expect(outcomes.map((o) => o.status)).toEqual(['rejected', 'rejected']);
+    for (const outcome of outcomes) {
+      expect(String(outcome.status === 'rejected' ? outcome.reason : '')).toContain(NO_DEVICE_CONNECTED);
+    }
+    // And answering did not raise a second card on the way out.
+    expect(harness.raisedConsentIds).toEqual(['cons-1']);
     harness.close();
   });
 

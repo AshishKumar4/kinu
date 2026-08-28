@@ -41,7 +41,7 @@ import type { HarnessResult } from './wire';
 // The harness ships as RAW TEXT inside this Worker's bundle (wrangler Text rule)
 // so onStart can install it. The .bundle.txt twin is byte-identical to
 // container-harness.ts by test — one source of truth, mechanically gated.
-// @ts-expect-error -- bundled as raw text by wrangler rules, not as a module
+// `wrangler-text-modules.d.ts` types this import; see it for why not a suppression.
 import HARNESS_TS from './container-harness.bundle.txt';
 
 export { ContainerProxy };

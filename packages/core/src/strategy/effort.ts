@@ -6,9 +6,9 @@
 // binding's `inputs` field, so we can set it per-call without touching the
 // provider construction.
 //
-// The defaults here encode the policy: cheap on fan-out (MCTS rollouts,
-// RLM sub-calls), medium for user-visible work, high for rare-but-important
-// turns (scaffold mutation). Callers can override.
+// The defaults here encode the policy: cheap on fan-out (MCTS rollouts),
+// medium for user-visible work, high for rare-but-important turns (scaffold
+// mutation). Callers can override.
 
 import type { streamText } from 'ai';
 
@@ -27,7 +27,6 @@ export type InferenceStage =
   | 'reflection'        // Lesson extraction after a turn
   | 'mcts_rollout'      // Inside MCTS — many cheap samples
   | 'mcts_judge'        // MCTS final-rollout scoring
-  | 'rlm_subcall'       // Inside llm.query() — cheap fan-out
   | 'scaffold_mutation' // Rare; agent rewrites its own controller — be careful
   | 'head_merge'        // LLM-driven merge of parallel heads
   | 'memory_compress';  // Background sleep-time compute (compress memory)
@@ -38,7 +37,6 @@ export const REASONING_EFFORT_FOR_STAGE = {
   reflection: 'low',
   mcts_rollout: 'low',
   mcts_judge: 'medium',
-  rlm_subcall: 'low',
   scaffold_mutation: 'high',
   head_merge: 'medium',
   memory_compress: 'low',

@@ -211,12 +211,15 @@ export async function triggersCommand(
     const auth = requireAuthConfig();
     if (normalized === 'list') {
       const { triggers } = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'listTriggers', CloudTriggerListSchema);
-      present(triggers, opts, printTriggers);
+      present(triggers, opts, (rows) => printTriggers(rows, auth.origin));
       return;
     }
     if (normalized === 'cancel') {
       if (!value) throw new Error('trigger id required');
-      const cancelled = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelTrigger', CancelTriggerSchema, [value]);
+      // `'owner'`: a CLI token is the account holder's own credential, so this
+      // surface may close an owner-created ingress. The model's
+      // `agent.cancelSchedule` reaches the same RPC as `'self'` and may not.
+      const cancelled = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelTrigger', CancelTriggerSchema, [value, 'owner']);
       present({ id: value, ...cancelled }, opts, () =>
         console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
       return;
@@ -231,7 +234,7 @@ export async function triggersCommand(
       if (opts.contentType) webhookInput.accepted_content_type = opts.contentType;
       if (opts.rateLimit) webhookInput.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
       const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, webhookInput);
-      present(created, opts, printCreatedWebhook);
+      present(created, opts, (webhook) => printCreatedWebhook(webhook, auth.origin));
       return;
     }
     const input = timerInput(normalized, value);
@@ -346,13 +349,22 @@ function printTools(tools: Array<{ name: string; description?: string; group: st
   }
 }
 
-function printTriggers(triggers: Array<{ id: string; kind: string; state?: string; next_fire_at?: number | null; fire_count?: number }>): void {
+/** `origin` is present for a cloud workspace and absent for a local one, which
+ *  has no inbound transport and so no delivery URL to print. */
+function printTriggers(
+  triggers: Array<{
+    id: string; kind: string; state?: string; next_fire_at?: number | null;
+    fire_count?: number; url?: string;
+  }>,
+  origin?: string,
+): void {
   if (triggers.length === 0) {
     console.log(DIM('No triggers.'));
     return;
   }
   for (const trigger of triggers) {
     console.log(`${ACCENT(trigger.id)} ${trigger.kind} ${DIM(trigger.state ?? '')} ${formatTime(trigger.next_fire_at ?? null)} ${DIM(`fires=${trigger.fire_count ?? 0}`)}`);
+    if (trigger.url) console.log(`  ${DIM('url')} ${ACCENT(`${origin ?? ''}${trigger.url}`)}`);
   }
 }
 
@@ -366,9 +378,9 @@ function printJobs(jobs: Array<{ id: string; kind?: string; status: string; erro
   }
 }
 
-function printCreatedWebhook(created: CloudWebhookTrigger): void {
+function printCreatedWebhook(created: CloudWebhookTrigger, origin: string): void {
   console.log(`${OK('created')} ${created.trigger_id}`);
-  console.log(`${DIM('url')} ${ACCENT(created.url)}`);
+  console.log(`${DIM('url')} ${ACCENT(`${origin}${created.url}`)}`);
   if (created.secret) console.log(`${DIM('secret')} ${created.secret}`);
 }
 

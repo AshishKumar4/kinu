@@ -169,6 +169,10 @@ export async function settlePendingBranch(
   entry: PendingBranch,
   turnId: string | null,
   liveText: string,
+  /** The settlement's durable identity, for a caller that OWES this comparison.
+   *  The live path needs it as much as a replay does: an unkeyed write here and a
+   *  keyed one on recovery are two take sets for one branch. */
+  settlementKey?: string,
 ): Promise<void> {
   const fail = (message: string) => deps.broadcast({
     type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message,
@@ -190,9 +194,13 @@ export async function settlePendingBranch(
     return;
   }
   const report = await handle.result;
-  const outcome = settleBranchIntoTakes(deps.sql, {
+  const settlement = {
     task: entry.task, report, turnId, sessionId: deps.sessionId, liveText,
-  });
+  };
+  const outcome = settleBranchIntoTakes(
+    deps.sql,
+    settlementKey === undefined ? settlement : { ...settlement, settlementKey },
+  );
   if (outcome.ok) {
     deps.broadcast({
       type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
@@ -233,16 +241,31 @@ export function settlePendingBranches(
  * message. Honest failures (errored branch, interrupted live turn, identical
  * answers) yield `{ ok: false, reason }` and write NO takes set.
  */
+/**
+ * The three fields the take comparison actually reads.
+ *
+ * Named because a RECOVERY settles a branch from the head journal's own view —
+ * the only record of a head whose live handle died with its isolate — and a
+ * signature demanding a whole `HeadReport` forced that caller to invent the
+ * fields it does not have. `HeadReport` satisfies this, so the live path is
+ * unchanged.
+ */
+export type BranchOutcome = Pick<HeadReport, 'status' | 'summary' | 'errorMessage'>;
+
 export function settleBranchIntoTakes(
   sql: SqlExecutor,
   input: {
     task: string;
-    report: HeadReport;
+    report: BranchOutcome;
     /** The live turn's assistant message id, or null when it never completed. */
     turnId: string | null;
     sessionId: string;
     /** The live turn's full answer text. */
     liveText: string;
+    /** The settlement's durable identity, for a caller that OWES this comparison
+     *  and may run it again. With it the take set is written once: a replay finds
+     *  the set its first attempt produced instead of minting a second. */
+    settlementKey?: string;
     now?: number;
   },
 ): BranchSettleOutcome {
@@ -259,14 +282,20 @@ export function settleBranchIntoTakes(
   if (!input.turnId || !input.liveText.trim()) {
     return { ok: false, reason: 'the live turn did not complete, so there is nothing to compare against' };
   }
-  const set = recordBranchTakeSet(sql, {
+  const settlement = {
     task: input.task,
     turnId: input.turnId,
     sessionId: input.sessionId,
     liveText: input.liveText,
     branchText: input.report.summary,
     now: input.now,
-  });
+  };
+  const set = recordBranchTakeSet(
+    sql,
+    input.settlementKey === undefined
+      ? settlement
+      : { ...settlement, settlementKey: input.settlementKey },
+  );
   if (!set) {
     return { ok: false, reason: 'the branch reached the same answer as the live turn' };
   }

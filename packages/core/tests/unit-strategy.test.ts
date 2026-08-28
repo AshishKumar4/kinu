@@ -50,7 +50,6 @@ describe('reasoning_effort plumbing', () => {
     expect(REASONING_EFFORT_FOR_STAGE.chat).toBe('medium');
     expect(REASONING_EFFORT_FOR_STAGE.mcts_rollout).toBe('low');
     expect(REASONING_EFFORT_FOR_STAGE.scaffold_mutation).toBe('high');
-    expect(REASONING_EFFORT_FOR_STAGE.rlm_subcall).toBe('low');
   });
 
   test('workersAIEffortOption returns empty when no effort', () => {
@@ -113,8 +112,8 @@ describe('reasoning_effort plumbing', () => {
  * THE RUNG TABLE IS A POLICY, AND A POLICY IS AN ORDERING.
  *
  * `REASONING_EFFORT_FOR_STAGE` was asserted stage by stage — chat, mcts_rollout,
- * scaffold_mutation, rlm_subcall — which is a second copy of four of its nine rows and
- * says nothing about the other five. `judge` was one of the five, and lowering it changes
+ * scaffold_mutation — which is a second copy of some of its rows and says nothing
+ * about the rest. `judge` was one of the five, and lowering it changes
  * no type, throws nothing, and leaves every suite green while every judged comparison in
  * the tree is decided by a model reasoning as cheaply as the branches it is ranking.
  *

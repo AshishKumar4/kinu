@@ -20,7 +20,7 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
   compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
-  renderConformanceFindings,
+  renderConformanceFindings, NO_COUNT_ENDPOINT,
   type ObservedSurface,
 } from '@kinu.run/core';
 import {
@@ -115,6 +115,14 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
     modelInfo: async () => null,
     judgeCandidates: async () => [],
     getAuth: async () => null,
+    // The seam as this provider really answers it: a conformance model is not a
+    // vendor with a count endpoint, so admission runs ungated rather than on a
+    // number nobody measured.
+    countInputTokens: async () => ({
+      kind: 'unsupported' as const,
+      provider: 'conformance',
+      reason: NO_COUNT_ENDPOINT,
+    }),
   };
 }
 

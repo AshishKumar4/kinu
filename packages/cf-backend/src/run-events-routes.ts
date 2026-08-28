@@ -16,7 +16,7 @@
 
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
-import type { RunEventQuery, RunEventType } from "@kinu.run/core";
+import { boundRunEventQuery, type RunEventType } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
@@ -82,7 +82,12 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   const listMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/?$/);
   if (listMatch) {
     const [, agentName] = listMatch;
-    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') ?? '50')));
+    // Forwarded raw: `listRuns` closes it in core, where the MCP tool and the CLI
+    // reach it too. The old `Math.min(200, Math.max(1, Number(...)))` here let
+    // `Number('abc')` through as NaN, because `Math.max(1, NaN)` is NaN.
+    const limit = url.searchParams.has('limit')
+      ? Number(url.searchParams.get('limit'))
+      : undefined;
     // The page's own `next`, echoed back verbatim. A caller that ignores it gets
     // exactly what it got before; a caller that reads it can tell a full page
     // from the end of the history, which `limit` alone never said.
@@ -99,11 +104,15 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
   const eventsMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/([^/]+)\/events\/?$/);
   if (eventsMatch) {
     const [, agentName, runId] = eventsMatch;
-    const opts: RunEventQuery = {
+    // The same closed parser the boundary read-model behind this RPC applies, so
+    // a request that skips the route gets the identical ceiling. `Number('abc')`
+    // is NaN, which the parser reads as "unstated" — the route never has to
+    // decide what a garbage query string meant.
+    const opts = boundRunEventQuery({
       since: url.searchParams.has('since') ? Number(url.searchParams.get('since')) : undefined,
-      limit: url.searchParams.has('limit') ? Math.min(500, Number(url.searchParams.get('limit'))) : undefined,
+      limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined,
       types: parseTypesParam(url.searchParams.get('types')),
-    };
+    });
     try {
       const stub = await resolveAgent(env, agentName);
       const events = decodeRunEventWire(await stub.getRunEventsWire(runId, opts));

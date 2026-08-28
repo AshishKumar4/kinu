@@ -14,9 +14,13 @@
 
 import { callable, type AgentContext, type SubAgentClass } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
-import { writeNimbusWorkspaceSoul } from "./nimbus-route";
+import {
+  createNimbusWorkspaceForkSink, createNimbusWorkspaceForkSource, writeNimbusWorkspaceSoul,
+} from "./nimbus-route";
+import {
+  webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
+} from "./events/webhook-route";
 import { getSandbox } from "@cloudflare/sandbox";
-import { convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
   SubordinateRosterEntry,
@@ -42,9 +46,9 @@ import {
   updateCraftScores,
   feedbackToQuality,
   // Fork feature
-  forkWorkspace, writeForkSnapshot,
-  type ForkTransport, type ForkSnapshot,
-  // Workspace archive — the owner's portable copy of this workspace's storage
+  forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
+  InstructionApprovalStore,
+  type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
   // Canonical memory-note write primitive
@@ -55,9 +59,16 @@ import {
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
   // supplies the surface they run against).
-  applyScaffoldDecision, getShadowStatus, listScaffoldVersions,
+  applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
   previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
+  // Continual refinement — `/refine` opens a request; the lane that runs it
+  // lives on the actor beside the other cadence passes.
+  createRefinementStore, decideRefinementRoute, refinementDebt, refinementRequestView,
+  requestRefinement, showRefinementRoute,
+  type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
+  type StagedSkillResult,
+  type RefinementRequestView, type RefinementScope, type RequestRefinementInput,
   runScaffoldOnce,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
@@ -70,7 +81,7 @@ import {
   listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type CompletedTurn, type ToolCallRecord,
+  type CompletedTurn, type ToolCallRecord, type SettledSignals,
   type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
@@ -89,10 +100,11 @@ import {
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   // Alternate Takes — near-tied convergence candidates + the pick signal
-  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, listAlternateTakeSets, latestAlternateTakeSet,
+  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
+  listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
-  startBranchHead, settlePendingBranches, newBranchId,
+  startBranchHead, settlePendingBranch, settleBranchIntoTakes, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseStatus, type ReleaseToolDeps,
   runExperienceAction,
@@ -105,6 +117,9 @@ import {
   type EnqueueTurnResult,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
   readSoul, readMission, summarizeSoul, writeSoul, workspaceGenesisSignal,
+  // The durable answer an interrupted terminal transition still owes a reply
+  // for — read from the transcript, because a recovery has no live turn.
+  answersForDrainTurns,
   // Which titling SOURCE this root offers the shared policy, and the wake-time
   // heal's own trigger. The policy itself lives on ActorAgent.
   isPlaceholderMission, isPlaceholderWorkspaceTitle,
@@ -116,16 +131,17 @@ import {
   type CheckpointAvailability, type FileCheckpointListing,
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
-  snapshotCompletedTurn, creditedTurnId,
-  // The session tree — `messages` as a projection of the SDK's message DAG
-  reconcileSessionTree,
+  snapshotCompletedTurn, creditedTurnId, 
+  SleepTimeUpdateSchema, type SleepTimeUpdate,
+  effectAlreadyDone, recordEffectDone,
   // Ingress — core owns the gates; this actor owns the transports in front
   // of them (the DO alarm, the Worker's webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
   acceptContainerEvent, type ContainerEventResult,
   initWebhookRateLimitTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
-  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
+  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
+  type TriggerView,
   EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
   type EmailAdmission, type IncomingEmail,
   PeerHub, type PeerMessage, type ReceiveResult,
@@ -139,6 +155,7 @@ import {
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
+  type HeadStreamKind,
   buildPendingActions, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
@@ -164,18 +181,20 @@ import {
   JsonValueSchema, type JsonValue, type KinuEvent,
   // The one declaration of the event-variant set, and the one classifier that
   // names how a run ended. Both were hand-mirrored here.
-  EVENT_VARIANTS, classifyRunEnd,
+  EVENT_VARIANTS, classifyRunEnd, type RunEndReason,
   type WorkMode,
   resolveModelRoute, type ResolvedTurnProfile,
   WORKSPACE_RUN_ID,
+  projectJsonValue,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
   ActorAgent,
+  TERMINAL_RETRY_CALLBACK,
   type ActorDynamicContextExtras,
   type ActorToolDeps,
 } from "./actor-agent";
-import { recordJobSettled, type AgentKind } from "./analytics/record";
+import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "./analytics/record";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import { SubordinateAgent } from "./subordinate-agent";
 import {
@@ -190,22 +209,53 @@ import {
   TURN_AUTHOR_METADATA_KEY,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
-import { classify, diagnostics, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { classify, diagnostics, KinuError, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
 import { deleteExplorationFacet, reconcileExplorationFacets, type ExplorationFacetLedgerStatus } from "./facet-spawn";
 import { agentEmailAddress } from "./email/inbound";
 import {
-  createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
+  createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
+  sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
 import { EmailOutbox } from "./email/outbox";
+import { FIBER_RECOVERY_MAX_AGE_MS } from "./fiber-recovery";
 import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
+import {
+  terminalEffect, keyedScope, declareTerminalRoster,
+  type OwedEffect, type TerminalEffectTable, type TerminalTurnParts, type BranchOutcome,
+} from "@kinu.run/core";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
+
+/** The tombstone scope recording that one turn's sleep-time fact update has been
+ *  applied. The answer itself is kept in `sleep_time_updates`; this is the fact
+ *  that it landed, and it survives that row being pruned. */
+const SLEEP_TIME_APPLIED = 'sleep_time';
+
+/** The tombstone scope recording that one cadence tick has advanced the
+ *  prompt-section lane. It rides the same tick as the scaffold GEPA pass but is
+ *  a separate obligation: replaying the tick for the pass must not rotate the
+ *  section a second time. */
+const PROMPT_SECTION_LANE = 'prompt_section_lane';
+
+/** Where the scaffold GEPA pass records its per-tick attempt and completion. Its
+ *  own scope, not the prompt-section lane's: the two share a cadence tick and
+ *  nothing else, and a cut inside one must not abandon the other. */
+const SCAFFOLD_GEPA_LANE = 'scaffold_gepa_lane';
+
+/** A turn's tool calls as the sleep-time lane replays them. Parsed rather than
+ *  cast: the row was written by an earlier activation, and a shape that no
+ *  longer matches must fail by name here rather than reach the judge. */
+const ToolCallRecordsSchema = v.array(v.object({
+  name: v.string(),
+  args: v.record(v.string(), JsonValueSchema),
+  result: v.optional(JsonValueSchema),
+}));
 
 /** The one agents-SDK schedule row that carries every Kinu-owned wake
  *  (triggers, peer outbox, email outbox). Public because `Agent.schedule()`
@@ -213,10 +263,13 @@ const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 
 /** How overdue a one-shot schedule row must be before it is unrunnable rather
- *  than late. Mirrors the SDK's `fiberRecoveryMaxAgeMs` default: past it the
- *  framework stops recovering the fiber a continuation callback would resume,
- *  so dispatching the row can only replay dead work. */
-const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
+ *  than late: THE recovery budget, not a copy of it. Past it the framework
+ *  stops recovering the fiber a continuation callback would resume, so
+ *  dispatching the row can only replay dead work. The number used to be
+ *  hand-written here beside the words "mirrors the SDK's default"; it is now
+ *  the value `ActorAgent.options` hands the framework (fiber-recovery.ts), so
+ *  the sweep and the framework cannot disagree about when a row is dead. */
+const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
 
 // The Activity surface's retained sample. Bounded because `run_events` and
 // `activity_log` are append-only: 400 steps is deep enough for a p95 that
@@ -273,7 +326,7 @@ const EventVariantSchema = v.picklist(EVENT_VARIANTS);
  *  (`schema_version`, `dedupe_key`, `reply_channel`), which no operator surface
  *  shows. Derived from core's event so a field renamed there fails here rather
  *  than silently dropping out of the projection. */
-type RecentEventRow = Pick<
+export type RecentEventRow = Pick<
   KinuEvent,
   'id' | 'trace_id' | 'caused_by' | 'ingress' | 'variant' | 'trust' | 'priority'
   | 'payload_visibility' | 'payload' | 'received_at'
@@ -290,6 +343,28 @@ const ArchiveCursorSchema = v.variant('phase', [
     files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   }),
 ]);
+
+/**
+ * Every synthetic drain turn one settled turn answered, deduped.
+ *
+ * A drain reaches a turn two ways and the ids come back from two places: the
+ * queued turn carries `drainTurnId` on its own metadata, a mid-turn splice
+ * reports `replyTurnId` on the absorbed signal. A turn can hold both (a queued
+ * drain that absorbed a second batch at a step boundary), and a re-delivered
+ * signal can name an id the queued turn already carries — so the set, not two
+ * loops, is what makes the settle exactly-once per delivery.
+ */
+function drainTurnsAnswered(
+  drainTurnId: string | undefined,
+  injected: SettledSignals,
+): ReadonlySet<string> {
+  const answered = new Set<string>();
+  if (drainTurnId) answered.add(drainTurnId);
+  for (const signal of injected.absorbed) {
+    if (signal.replyTurnId) answered.add(signal.replyTurnId);
+  }
+  return answered;
+}
 
 /** A caller-supplied row limit, clamped to [1, max]. */
 function clampLimit(requested: number | undefined, max: number): number {
@@ -343,6 +418,120 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
+  /**
+   * Finish what one interrupted terminal transition still owes: the reply an
+   * answered event batch never dispatched.
+   *
+   * This is the ONE effect of a settled turn that a later activation can
+   * re-derive, and every input it needs is already durable — which is why no
+   * new state was added to make the resume possible:
+   *
+   *   • WHICH batches are owed — the open recovery lease. `markConsumed` bound
+   *     the rows to a synthetic `evt-*` turn and stamped `consumed_at`; the
+   *     completion clears it. A lease still open is a delivery a turn was
+   *     handed and never closed.
+   *   • WHAT to reply with — the persisted assistant message of the turn that
+   *     absorbed the batch, found through the `drainTurnId` its own user row
+   *     carries.
+   *   • WHETHER a resend is safe — the reply channel's outbox key. Each reply
+   *     is keyed on its channel, so a re-drive puts the SAME Message-ID on the
+   *     wire and the receiver (and Kinu's own inbound dedupe) treats it as the
+   *     message it already has.
+   *
+   * A lease whose turn has no durable answer is left alone: nothing was
+   * answered, so there is nothing to send, and `unbindStale` re-pends it to be
+   * asked again. That ordering is why this runs BEFORE the unbind sweep — a
+   * batch that WAS answered must have its reply finished rather than the
+   * question asked a second time.
+   */
+  private async dispatchOwedDrainReplies(): Promise<void> {
+    for (const [drainTurnId, answer] of this.owedDrainReplies()) {
+      const closed = await this.completeEventBatch(drainTurnId, answer);
+      diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
+    }
+  }
+
+  /**
+   * Every open drain lease paired with the answer its turn already gave.
+   *
+   * Two durable reads and no new state: the leases come from the event log, the
+   * answers from the persisted transcript (core's `answersForDrainTurns`, over
+   * the pane store's own parent edge). Deliberately NOT `this.messages` — a
+   * recovery may run on an activation that has hydrated nothing, and the
+   * transcript is the authority either way.
+   */
+  private owedDrainReplies(): ReadonlyMap<string, string> {
+    const leases = this.eventLog.openDrainLeases();
+    return leases.length === 0
+      ? new Map<string, string>()
+      : answersForDrainTurns(this.boundSql, leases);
+  }
+
+  /**
+   * Reconcile the deliveries a dead activation left leased, in the one order
+   * that cannot lose work: FINISH, then RE-ASK.
+   *
+   * An open recovery lease is one of two different things and the sweep alone
+   * cannot tell them apart. Either the question was never answered — re-pend it,
+   * which is what `unbindStale` is for — or it WAS answered and the reply never
+   * left, in which case re-pending asks the sender its own question again while
+   * the answer it is waiting on already exists.
+   *
+   * So the resume runs first and is AWAITED: every reply an interrupted terminal
+   * transition still owed is dispatched, and each dispatched batch closes its own
+   * lease, before the sweep reads anything. The exclusion handed to `unbindStale`
+   * is the invariant BACKUP rather than the mechanism — it holds if a later
+   * caller reverses these two, and it keeps a resume that failed for its own
+   * reasons (an unconfigured mail binding) from having its lease reclaimed
+   * underneath it while the reply is still owed.
+   *
+   * Detached from `onStart` as a whole, because the resume sends mail and
+   * `onStart` runs inside the init gate where an await stalls every request on
+   * this object.
+   */
+  protected async reconcileEventDeliveries(): Promise<void> {
+    // The owed replies FIRST, and deliberately not gated on a terminal claim
+    // existing. An open lease with a durable answer is a reply this workspace
+    // owes whatever the claim ledger says: the claim may have been released by
+    // an activation that predates it, or by a turn whose detached dispatch died
+    // after the release. The lease and the transcript are the two durable facts,
+    // and they are sufficient on their own.
+    try {
+      await this.dispatchOwedDrainReplies();
+    } catch (err) {
+      diagnostics.failure('event.owed_reply_resume_failed', toKinuError({
+        doing: 'dispatching the event replies a previous activation still owed',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+    }
+    try {
+      await this.terminal.resumeAll();
+    } catch (err) {
+      diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
+        doing: 'finishing what interrupted terminal transitions still owed',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+    }
+    try {
+      const stillOwed = new Set(this.owedDrainReplies().keys());
+      const reconciledEventIds = this.eventLog.unbindStale(
+        STALE_EVENT_DELIVERY_MS, Date.now(), stillOwed,
+      );
+      if (reconciledEventIds.length > 0) {
+        diagnostics.event('event.deliveries_repended', { events: reconciledEventIds.length });
+        this.orch.scheduleDrain();
+      }
+    } catch (err) {
+      diagnostics.failure('event.stale_delivery_unbind_failed', toKinuError({
+        doing: 'unbinding event deliveries a dead activation left leased',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
+    }
+  }
+
   private _engine: EvolutionEngine | null = null;
   private _emailOutbox: EmailOutbox | null = null;
 
@@ -381,7 +570,7 @@ export class OrchestratorAgent extends ActorAgent {
   // Steer-as-Branch redirects launched against the in-flight turn — each runs
   // as one budgeted head (ExplorationAgent Facet) and settles into Alternate
   // Takes when the turn completes (onChatResponse).
-  private _pendingBranches: PendingBranch[] = [];
+  protected _pendingBranches: PendingBranch[] = [];
 
   private _triggerRegistry: import('@kinu.run/core').TriggerRegistry | null = null;
   private _replyChannels: import('@kinu.run/core').ReplyChannelStore | null = null;
@@ -529,12 +718,132 @@ export class OrchestratorAgent extends ActorAgent {
     // before `next_fire_at` leaves the trigger not-yet-due, which would re-arm
     // for the same second and busy-spin the alarm until the millisecond passed.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec);
-    const armed = (await this.listSchedules())
-      .filter((row) => row.callback === KINU_TIMER_CALLBACK && row.time > nowSec);
+    const pendingWakes = async (): Promise<Array<{ id: string; time: number }>> =>
+      (await this.listSchedules())
+        .filter((row) => row.callback === KINU_TIMER_CALLBACK && row.time > nowSec)
+        .map((row) => ({ id: row.id, time: row.time }));
+    const armed = await pendingWakes();
     const desired = Math.min(targetSec, ...armed.map((row) => row.time));
     if (armed.length === 1 && armed[0].time === desired) return;
-    for (const row of armed) await this.cancelSchedule(row.id);
+    // WRITE FIRST, then collapse. Cancelling before scheduling opens a window
+    // with NO wake row in it, and a failure inside that window ends the chain
+    // for good — nothing re-arms a workspace whose only wake was the one just
+    // cancelled, so its triggers, peer retries and email reconciliation all
+    // stop together. An extra row is the harmless failure instead: the tick is
+    // idempotent and re-arms from durable state, so it costs one early wake.
     await this.schedule(new Date(desired * 1000), KINU_TIMER_CALLBACK);
+    // The collapse reads AFTER its own write, and that is what makes two
+    // concurrent arms converge. Each `await` above is a suspension point, so an
+    // activation reconcile and a registration arm both pre-read an empty
+    // registry, both write, and a collapse over either caller's own PRE-read
+    // set cancels nothing — two wake rows, permanently, which is the state this
+    // workspace's whole timer chain is defined not to be in. The POST-write set
+    // contains every racing row, and the survivor is chosen by a rule both
+    // callers compute identically: earliest wake, ties broken by the SDK's own
+    // row id. So they agree on the keeper without coordinating, and the loser's
+    // second cancel of an already-cancelled id is a no-op.
+    const settled = await pendingWakes();
+    if (settled.length <= 1) return;
+    const keeper = settled.reduce((best, row) =>
+      row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best);
+    // The keeper is never cancelled, so a failure here leaves EXTRA wakes and
+    // never zero — one early wake against a chain that stops — and it
+    // propagates, because the caller's own write is what the output gate is
+    // holding and a silent collapse failure would report a converged registry
+    // that is not.
+    for (const row of settled) {
+      if (row.id !== keeper.id) await this.cancelSchedule(row.id);
+    }
+  }
+
+  /**
+   * Restore the wake row when durable work is waiting and no Kinu timer row
+   * exists.
+   *
+   * Every Kinu wake rides ONE schedule row, so losing it strands triggers, peer
+   * retries and email reconciliation together — and the only thing that re-arms
+   * it is a new scheduling write, which a stranded workspace has no reason to
+   * make. Platform redelivery does not cover this either: it is bounded, and a
+   * row that was never written is not a delivery that can be retried.
+   *
+   * No new state records the loss, because none is needed: the row is DERIVED
+   * from the same durable ledgers the tick re-arms from, through the same
+   * reader, so this is that computation run at activation instead of at the end
+   * of a tick. ANY Kinu timer row — due or future — counts as armed: a due row
+   * is a wake the platform still owes, and `armTimer` is what decides whether
+   * it is soon enough.
+   */
+  protected async reconcileTimerRow(): Promise<void> {
+    const next = this.nextWakeAt(Date.now());
+    if (next === null) return;
+    const armed = (await this.listSchedules())
+      .filter((row) => row.callback === KINU_TIMER_CALLBACK)
+      .map((row) => row.time);
+    if (armed.length === 0) {
+      await this.armTimer(next);
+      diagnostics.event('schedule.timer_reconciled', { at: next });
+      return;
+    }
+    // A row already DUE is a wake the platform still owes: it runs at or before
+    // now, so it covers anything due now and re-arming over it would add a
+    // second row on every touch. What is new is the other direction — a row
+    // still in the FUTURE, later than the wake this workspace actually owes. A
+    // cron six hours out used to count as armed, so a reaction pending right now
+    // waited six hours for it. `armTimer` is soonest-wins and collapses, so
+    // pulling it earlier still leaves exactly one row.
+    if (Math.min(...armed) * 1000 <= next) return;
+    await this.armTimer(next);
+    diagnostics.event('schedule.timer_pulled_earlier', { at: next });
+  }
+
+  /** The next wake this workspace owes, over every durable source that can ask
+   *  for one: timer triggers, the peer outbox, the email outbox, and the
+   *  reactions already pending in the event log. ONE reader, because two of them
+   *  existed and a fourth source wired into only one would be a workspace that
+   *  wakes for it on the tick and never at activation.
+   *
+   *  The event log was exactly that missing fourth source. A pending reaction
+   *  had only the in-memory drain debounce behind it, so an event admitted just
+   *  before an eviction — or re-pended by a compensating signal — was durable,
+   *  unreachable, and invisible to the activation reconcile that exists to
+   *  notice a lost wake. `nextPendingDrainAt` is derived from the same rows the
+   *  drain selects, so the two cannot disagree about what counts as work. */
+  private nextWakeAt(now: number): number | null {
+    return nextAlarmTime(
+      now,
+      this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
+      this.peerHub.nextRetryAt(),
+      this.emailOutbox.nextRetryAt(),
+      this.eventLog.nextPendingDrainAt(now),
+    );
+  }
+
+  /**
+   * Re-derive and arm the wake, because the durable work that needs one changed.
+   *
+   * The BackendHost seam core's `scheduleDrain` reaches (`reconcileDurableWake`),
+   * and the one this actor offers it. `armTimer` is soonest-wins and collapses
+   * onto a single row, so calling this on every ingress and every compensation
+   * costs at most one early tick and never a second wake row.
+   *
+   * Distinct from {@link reconcileTimerRow}, which only heals a MISSING row at
+   * activation: this one moves an existing wake earlier when new work is due
+   * before it.
+   */
+  protected override durableWakeOwner(): () => void {
+    return () => this.armDurableWake();
+  }
+
+  private armDurableWake(): void {
+    const next = this.nextWakeAt(Date.now());
+    if (next === null) return;
+    void this.armTimer(next).catch((err) => {
+      diagnostics.failure('schedule.durable_wake_arm_failed', toKinuError({
+        doing: 'arming the wake a pending reaction needs',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
+    });
   }
 
   /** Drop schedule rows that came due so long ago that nothing downstream can
@@ -547,14 +856,30 @@ export class OrchestratorAgent extends ActorAgent {
    *  the next fire after one catch-up run, so they cannot pile up. Running on
    *  every wake (rather than as a one-shot migration) keeps this a standing
    *  invariant: normally it matches nothing, and it stops any future backlog
-   *  from stampeding one alarm cycle. */
+   *  from stampeding one alarm cycle.
+   *
+   *  The Kinu wake is EXEMPT, however overdue. It is not a continuation whose
+   *  moment passed: it is the chain itself, its work is state-driven (whatever
+   *  is due when it finally runs), and it is the workspace's only wake — so
+   *  dropping it stops triggers, peer retries and email reconciliation
+   *  permanently, while running it late costs one immediate tick. This sweep
+   *  runs BEFORE the SDK reads the due rows, which is exactly why the omission
+   *  mattered: the row was deleted on the activation that would have run it. */
   private sweepUnrunnableSchedules(): void {
     const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
+    // The terminal retry is exempt for the same reason the Kinu timer is: it is a
+    // STATE-driven wake, not a dated one. Its obligation is whatever the ledger
+    // still holds, and that does not expire — deleting an overdue row left owed
+    // effects with no carrier, and for a facet's row the root cannot even read
+    // the ledger it stranded.
     const dropped = this.ctx.storage.sql.exec(
       `DELETE FROM cf_agents_schedules
         WHERE type IN ('delayed', 'scheduled') AND time <= ?
+          AND callback NOT IN (?, ?)
         RETURNING id`,
       cutoffSec,
+      KINU_TIMER_CALLBACK,
+      TERMINAL_RETRY_CALLBACK,
     ).toArray().length;
     if (dropped > 0) {
       diagnostics.event('schedule.stale_rows_dropped', {
@@ -568,6 +893,13 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
+        // The grading pass's verdict row, craft scores, tombstone and
+        // announcement as ONE unit. A synchronous run inside a Durable Object is
+        // already atomic, so this is the honest identity — but answering through
+        // the platform's own primitive keeps the group one unit whatever core
+        // comes to put between its statements, exactly as the terminal claim
+        // does.
+        transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's own model calls debit the mission the reviewed turn
         // ran under — the same ledger, through the same seam, as the work it
         // reviews. Unbudgeted turns never reach it.
@@ -860,6 +1192,287 @@ export class OrchestratorAgent extends ActorAgent {
   // the debounced `this.orch.scheduleDrain()`; the post-turn hook drains
   // immediately via `this.orch.drainPendingEvents()`.
 
+  /**
+   * The facts and parts THIS root's settled response owes, handed to core's one
+   * declaration.
+   *
+   * Everything here is a READING — the accumulator's takes, this activation's
+   * pending branches, the scaffold candidate, the mission — and every one of them
+   * is taken NOW, before any effect runs, because the whole list is claimed up
+   * front: an input only the previous effect could produce could not be recorded,
+   * and would not survive an interruption between the two.
+   *
+   * Which readings become rows, in what order, on which lane and behind which
+   * gate is core's {@link declareTerminalRoster}, because the workspace root, the
+   * subordinate facet and the CLI must not answer those questions three ways.
+   */
+  private owedTerminalEffects(input: {
+    readonly result: ChatResponseResult;
+    readonly turnMode: WorkMode;
+    readonly credited: string | null;
+    readonly userText: string;
+    readonly assistantText: string;
+    readonly turn: CompletedTurn;
+    readonly status: RunEndReason;
+    readonly answeredDrains: ReadonlySet<string>;
+  }): OwedEffect[] {
+    const messageId = input.result.message.id;
+    const completed = input.result.status === 'completed';
+    // SCOPED once, here: the mission labels the turn ran under have to travel
+    // with every recording, and a cold replay has no active governor scope.
+    const scopedTurn = projectJsonValue({ value: this.orch.scopedTurn(input.turn) });
+    const mission = readMission(this.boundSql);
+    // Sampled only for a turn the promotion gate can learn from, and keyed on the
+    // turn rather than rolled — `queueTurnShadowTrial` re-reads the pending
+    // version on every call, so a replay would otherwise score this turn against
+    // a candidate that was not under trial when it ran.
+    const sampledVersion = completed && input.turnMode !== 'plan'
+      ? shadowTrialPlan(this.scaffoldControl, messageId)
+      : null;
+    return declareTerminalRoster({
+      messageId,
+      status: input.status,
+      workMode: input.turnMode,
+      continuity: this._turnContinuity,
+      completed,
+      userText: input.userText,
+      assistantText: input.assistantText,
+      scopedTurn,
+      recordedAt: Date.now(),
+      evolutionEnabled: this._turnEvolutionEnabled,
+    }, this.rosterParts(input, sampledVersion, mission));
+  }
+
+  /** The optional halves of this root's terminal roster, each present only when
+   *  this turn earned it — the caller-side decision the roster's own type leaves
+   *  to the backend that knows its lifetime. */
+  private rosterParts(
+    input: {
+      readonly result: ChatResponseResult;
+      readonly credited: string | null;
+      readonly userText: string;
+      readonly assistantText: string;
+      readonly turn: CompletedTurn;
+      readonly answeredDrains: ReadonlySet<string>;
+    }, sampledVersion: number | null, mission: string | null,
+  ): TerminalTurnParts {
+    const parts: TerminalTurnParts = {
+      turnEndExtensions: { message: projectJsonValue({ value: input.result.message }) },
+      takes: {
+        credited: input.credited,
+        startedAt: this.acc.startedAt,
+        takeIds: unclaimedAlternateTakeIds(this.boundSql),
+      },
+      craftedToolsUsed: this.acc.craftedToolsUsed(),
+      eventReplies: { answered: input.answeredDrains, requestId: input.result.requestId },
+      branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
+      advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn)) }),
+      sleepTime: { toolCalls: projectJsonValue({ value: this.acc.toolCalls }) },
+      autoTitle: isPlaceholderMission(mission) || mission === null
+        ? { subject: input.userText }
+        : { subject: mission },
+      autoGepa: true,
+      shadowTrial: sampledVersion === null ? undefined : {
+        pendingVersion: sampledVersion,
+        // BOUNDED at declaration, not at the queue insert three effects later:
+        // a recorded input is a SQLite row too, and one built from a
+        // million-token turn fails its insert partway through a claimed
+        // sequence, leaving a prefix recovery reads as the whole roster.
+        trialContext: projectJsonValue({
+          value: trimTrialContext(this._lastTurnOpts?.messages ?? []),
+        }),
+      },
+    };
+    return parts;
+  }
+
+
+  /**
+   * The bodies of this root's terminal effects.
+   *
+   * EVERY ONE OF THEM IS REPLAYABLE, and that is a property each body has to
+   * earn rather than a policy the ledger can grant. The earlier shape declared
+   * two of them "indeterminate" and had the ledger refuse a pending row, which
+   * meant an interruption BEFORE the effect ran permanently dropped the
+   * extension turn-end, the completed-turn append, the session cadence and the
+   * pending-event drain. So the compound spine is split into four separately
+   * keyed boundaries, each idempotent at its own edge: a stable id on the window
+   * append, a keyed extension emit, a drain that selects only unbound rows, and
+   * a lane scheduler whose queues are durable.
+   */
+  protected override terminalEffectTable(): TerminalEffectTable {
+    return {
+      ...this.sharedTerminalEffects(),
+      takes: terminalEffect({
+        input: v.object({
+          credited: v.nullable(v.string()), startedAt: v.number(),
+          takeIds: v.array(v.string()),
+        }),
+        run: ({ credited, startedAt, takeIds }) => {
+          if (credited === null) {
+            // A turn the captures cannot be attributed to: they competed for an
+            // answer that is not there, so the next turn must not claim them.
+            purgeUnclaimedAlternateTakes(this.boundSql, takeIds);
+          } else {
+            claimAlternateTakesForTurn(this.boundSql, {
+              turnId: credited, sessionId: 'default', startedAt, takeIds,
+            });
+          }
+          return { status: 'completed' };
+        },
+      }),
+
+      craft_usage: terminalEffect({
+        input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
+        run: ({ messageId, toolNames }) => {
+          void this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
+                   VALUES (${messageId}, ${JSON.stringify(toolNames)}, ${Date.now()})
+                   ON CONFLICT(message_id) DO UPDATE SET
+                     tool_names = excluded.tool_names, created_at = excluded.created_at`;
+          return { status: 'completed' };
+        },
+      }),
+
+      event_reply: terminalEffect({
+        input: v.object({
+          drainTurnId: v.string(), answer: v.string(), requestId: v.string(),
+        }),
+        // Replayable because every send is keyed: the outbound-email intent log
+        // stamps a deterministic Message-ID per reply channel, so a re-drive puts
+        // the SAME message on the wire and the receiver treats it as the one it
+        // already has. A batch whose channel is still open reports `owed` and
+        // keeps both its lease and its row, which is what leaves it recoverable.
+        run: async ({ drainTurnId, answer, requestId }) => {
+          this._pendingDrainReplyTurns.set(requestId, drainTurnId);
+          const closed = await this.completeEventBatch(drainTurnId, answer);
+          if (!closed) return { status: 'owed', detail: 'a reply channel is still open' };
+          if (this._pendingDrainReplyTurns.get(requestId) === drainTurnId) {
+            this._pendingDrainReplyTurns.delete(requestId);
+          }
+          return { status: 'completed' };
+        },
+      }),
+
+      branches: terminalEffect({
+        input: v.object({
+          id: v.string(), task: v.string(),
+          turnId: v.nullable(v.string()), liveText: v.string(),
+        }),
+        // ONE branch, AWAITED. The earlier body called core's fire-and-forget
+        // settle for the whole list and returned immediately, so the row could be
+        // pruned while heads were still running.
+        //
+        // With no live handle the HEAD JOURNAL is the only record of the branch,
+        // and what it holds is what the comparison needs. Crucially the check is
+        // not "is the head still running": a head reaches `completed` when its
+        // REPORT lands, which is before any take set exists, so treating
+        // non-running as settled skipped precisely the report this effect still
+        // owed. The row's own disposition is the settlement marker instead.
+        run: async ({ id, task, turnId, liveText }) => {
+          const live = this._pendingBranches.findIndex((entry) => entry.id === id);
+          if (live >= 0) {
+            const [entry] = this._pendingBranches.splice(live, 1);
+            if (entry !== undefined) {
+              await settlePendingBranch(
+                {
+                  sql: this.boundSql,
+                  sessionId: 'default',
+                  broadcast: (event: BranchStatusEvent) => this.broadcastBranchStatus(event),
+                },
+                entry, turnId, liveText,
+                // The branch id, on the LIVE path too. Keyed only on replay, the
+                // live write and the recovery write would be two sets.
+                id,
+              );
+              return { status: 'completed' };
+            }
+          }
+          const head = this.headJournal.readHeadView(id);
+          if (head === null) {
+            return { status: 'completed', detail: 'the journal holds no such branch head' };
+          }
+          if (head.status === 'running' || head.status === 'interrupted') {
+            // Still executing, or waiting for the activation sweep to write its
+            // terminal status. Owed, so the row stays and the wake comes back.
+            return { status: 'owed', detail: `branch head is ${head.status}` };
+          }
+          const report: BranchOutcome = {
+            status: head.status === 'completed' ? 'completed' : 'errored',
+            summary: head.summary ?? '',
+            errorMessage: head.errorMessage ?? undefined,
+          };
+          const outcome = settleBranchIntoTakes(this.boundSql, {
+            task,
+            report,
+            turnId, sessionId: 'default', liveText,
+            // The branch id IS the settlement key. The row keeps a replay from
+            // re-running the comparison; this keeps a crash BETWEEN the take-set
+            // write and the row's disposition from writing a second set.
+            settlementKey: id,
+          });
+          this.broadcastBranchStatus(outcome.ok
+            ? {
+              type: 'branch_status', status: 'settled', branchId: id, task,
+              takeSetId: outcome.set.id, turnId: turnId ?? '',
+            }
+            : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
+          return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
+        },
+      }),
+
+      // ── the settle spine, as four keyed boundaries ──────────────────────
+
+      sleep_time: terminalEffect({
+        input: v.object({
+          task: v.string(), output: v.string(), toolCalls: JsonValueSchema,
+        }),
+        // NOT swallowed. `runSleepTimeCompute` used to catch every import, model
+        // and write failure and resolve normally, so the row recorded `completed`
+        // and was pruned even when no fact update ran. The throw now reaches the
+        // ledger, which keeps the row owed until the compute actually finishes.
+        run: async ({ task, output, toolCalls }, scope) => {
+          // KEYED on the assistant message, and TOMBSTONED: the compute is a
+          // model call whose result mutates the fact store, so the answer is
+          // persisted before it is applied and the tombstone records that it was.
+          const factKey = keyedScope(scope);
+          if (factKey !== undefined && effectAlreadyDone(this.boundSql, SLEEP_TIME_APPLIED, factKey)) {
+            return { status: 'completed', detail: 'the fact update for this turn already landed' };
+          }
+          await this.runSleepTimeCompute(
+            task, output, v.parse(ToolCallRecordsSchema, toolCalls), factKey,
+          );
+          return { status: 'completed' };
+        },
+      }),
+
+      auto_title: terminalEffect({
+        input: v.object({ subject: v.string() }),
+        // Once-only at its own boundary: persisting an auto title stamps
+        // `name_origin`, so a replay of a titled workspace changes nothing.
+        run: async ({ subject }) => {
+          const unreachable = await this.titlingRefusal();
+          if (unreachable !== null) return { status: 'owed', detail: unreachable };
+          await this.applyAutoTitle(subject);
+          return { status: 'completed' };
+        },
+      }),
+
+      auto_gepa: terminalEffect({
+        input: v.object({}),
+        // AWAITED. The earlier body returned before `advancePromptSections` and
+        // `runScaffoldGepaOptimization` finished, so an eviction after that return
+        // cancelled the model work with no pending row left to replay. The cadence
+        // is a durable turn count, so a replay either finds the interval reached —
+        // and is the run that was owed — or does nothing.
+        run: async (_input, scope) => {
+          await this.maybeRunAutoGepa(keyedScope(scope));
+          return { status: 'completed' };
+        },
+      }),
+    };
+  }
+
+
   async onChatResponse(result: ChatResponseResult) {
     const turnMode = this.turnWorkMode();
     // The actor-generic settle spine lives on ActorAgent; everything after it
@@ -867,16 +1480,26 @@ export class OrchestratorAgent extends ActorAgent {
     const { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals } =
       this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
-    // The session tree is the transcript; `messages` is its projection, and it
-    // is refreshed here rather than at the end of a happy path. The block this
-    // replaced wrote two rows per turn — the last user message and the final
-    // assistant message — and only for turns that reached "completed", so an
-    // interrupted turn and every steer spliced into a running one were visible
-    // in the chat pane and absent from the table that fork, memory search, the
-    // status read model and the evolution outcome window all read. Projecting
-    // before the early return is the point: an interrupted turn is exactly the
-    // one whose messages were being lost.
-    reconcileSessionTree(this.boundSql);
+    // The identity of THIS terminal sequence — the durable turn plus the response
+    // being settled. Both, because Think fires this hook once per response and a
+    // continuation keeps the turn's user-message id: keyed on the turn alone, the
+    // first continuation's sequence closed the claim and the final one, carrying
+    // the actual answer, read `done` and skipped everything it owed.
+    //
+    // NOTHING FROM HERE TO `settle` MAY AWAIT. Think has already persisted the
+    // assistant message, so an await before the claim exists is a window where a
+    // durable answer has no incomplete transition and `resumeAll()` finds nothing
+    // to replay — the whole suffix is simply lost. The response-to-model-message
+    // conversion used to sit here and was exactly that window; it is now inside
+    // the `turn_end_extensions` body, where the claim already exists.
+    const durableTurnId = this.durableTurnId();
+    // An EMPTY assistant id is not an identity. Think reports a completed stream
+    // whose assistant row was never written, and every per-effect scope derives
+    // from this value — so two such turns would share one scope and the second
+    // would read the first's tombstones as its own work already done.
+    const transition = durableTurnId === null || result.message.id === ''
+      ? null
+      : { turnId: durableTurnId, messageId: result.message.id };
     // Everything the settle needs, read BEFORE the status branch: an aborted
     // turn carries a message too (partial chunks are persisted, so `parts` is
     // simply empty), and its text and its user turn are what make it evidence.
@@ -903,172 +1526,127 @@ export class OrchestratorAgent extends ActorAgent {
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
     });
-    // The actor-generic settle spine (ActorAgent.settleTurnSpine over core's
-    // AgentOrchestrator.settleTurn) decides what follows from HOW the turn
-    // ended: the outcome review buffers it, the session cadence counts it, the
-    // extension turn-end fires, and pending events drain — on a failed turn as
-    // much as a settled one. This used to early-return on any status but
-    // 'completed', so a failed cloud turn reached none of those while the same
-    // turn on the CLI reached all of them, and failures are the most informative
-    // evidence the evolution loop has. The comment that justified the early
-    // return covered only the takes purge beside it, never the recording.
-    const settle = () => this.settleTurnSpine({
-      status: classifyRunEnd({
-        completed, interrupted: result.status === 'aborted', errorText,
-        // Think reports 'completed' for a turn its own stop condition cut, so
-        // the model's last word is the only thing that can tell the two apart.
-        lastFinishReason: this.acc.lastFinishReason,
-      }).reason,
-      turn,
-      // The same onTurnEnd contract runChat fires on the CLI: final text plus
-      // the turn's response messages in ModelMessage shape.
-      onTurnEnd: async () => {
-        await this.extensions.emitTurnEnd({
-          text: assistantText,
-          responseMessages: await convertToModelMessages(
-            [result.message], { ignoreIncompleteToolCalls: true },
-          ),
-        });
-      },
-    });
-
-    if (result.status !== "completed") {
-      // An aborted/errored live turn leaves nothing to compare a branch
-      // against — and any takes its think-mcts runs captured competed for an
-      // answer that no longer exists, so the next turn must not claim them.
-      purgeUnclaimedAlternateTakes(this.boundSql);
-      this.settlePendingBranches(null, '');
-      await settle();
-      return;
-    }
-
-    const msgId = result.message.id;
+    const status = classifyRunEnd({
+      completed, interrupted: result.status === 'aborted', errorText,
+      // Think reports 'completed' for a turn its own stop condition cut, so
+      // the model's last word is the only thing that can tell the two apart.
+      lastFinishReason: this.acc.lastFinishReason,
+    }).reason;
     // Alternate Takes and steer branches were both captured mid-turn, before
     // this id existed, and both are attributed to it — one decision, made by
     // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
-    // here and again in the CLI's runTurn. Reached only on the completed path
-    // (the early return above owns the rest), so what it still decides here is
-    // an unattributable turn and a PLAN turn: a plan is not an answer the
-    // captures competed against.
-    const credited = creditedTurnId({
-      messageId: msgId ?? null,
-      completed: true,
-      workMode: turnMode,
+    // here and again in the CLI's runTurn.
+    const credited = result.status === 'completed'
+      ? creditedTurnId({ messageId: result.message.id, completed: true, workMode: turnMode })
+      : null;
+    // Core drives it from here: the in-process guard, the durable claim, the
+    // roster, the run and the close are ONE state machine, and this backend
+    // supplies only what it owns — the effect bodies above, and the fiber that
+    // keeps the isolate alive for the detached tail.
+    //
+    // The roster is a THUNK because core calls it only on a first attempt. A
+    // resumed response replays the rows it already claimed: re-declaring reads
+    // live state that has moved on — a scaffold candidate that did not exist
+    // when the turn ran, a config flag since flipped — and would append rows to
+    // a sequence already under way.
+    await this.terminal.settle({
+      transition,
+      declare: () => this.owedTerminalEffects({
+        result, turnMode, credited, userText, assistantText, turn, status,
+        // Mission Inbox: a drain reaches a turn two ways and the ids come back
+        // from two places, so the SET is what makes the settle exactly-once per
+        // delivery.
+        answeredDrains: drainTurnsAnswered(drainTurnId, injectedSignals),
+      }),
+      hold: (claimed, close) => { this.holdTerminalClose(claimed, close, result.requestId); },
     });
-    if (credited !== null) {
-      claimAlternateTakesForTurn(this.boundSql, {
-        turnId: credited, sessionId: 'default', startedAt: this.acc.startedAt,
-      });
-    } else {
-      purgeUnclaimedAlternateTakes(this.boundSql);
-    }
-
-    // Record which crafted tools this turn used, keyed by the assistant
-    // message id, so async thumbs feedback (setTurnFeedback) can re-score
-    // exactly those tools. Feedback is inherently asynchronous — it arrives
-    // after the turn completes — so turn.feedback is null here; the outcome
-    // review (engine.reviewTurn, dispatched when the NEXT user message
-    // arrives) populates it from explicit thumbs or the follow-up classifier.
-    if (msgId) {
-      // The crafted tools this turn called, as the in-episode craft clock saw
-      // them. Not "every tool name that is not built in": a crafted tool is
-      // codemode-only and never appears as a tool-call name, so that filter
-      // only ever matched MCP and extension tools — and the thumbs re-score
-      // below reads this row to update the crafted tool's quality columns.
-      const craftNames = this.acc.craftedToolsUsed();
-      if (craftNames.length > 0) {
-        void this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
-                 VALUES (${msgId}, ${JSON.stringify(craftNames)}, ${Date.now()})
-                 ON CONFLICT(message_id) DO UPDATE SET
-                   tool_names = excluded.tool_names, created_at = excluded.created_at`;
-      }
-    }
-
-    // Steer-as-Branch redirects launched during this turn settle against its
-    // answer — detached, so a slow branch never blocks the TurnQueue.
-    this.settlePendingBranches(credited, assistantText);
-
-    // Mission Inbox: a turn injected by the event drain carries the synthetic
-    // turn id its events were bound to — reply their open email_thread
-    // channels with this turn's answer (threaded outbound email). Detached.
-    if (drainTurnId) {
-      this._pendingDrainReplyTurns.set(result.requestId, drainTurnId);
-      void this.completeEventBatch(drainTurnId, assistantText).then((completed) => {
-        if (completed && this._pendingDrainReplyTurns.get(result.requestId) === drainTurnId) {
-          this._pendingDrainReplyTurns.delete(result.requestId);
-        }
-      });
-    }
-    // Signals absorbed at a step boundary feed the SAME dispatch, keyed by the
-    // reply turn id each one carries.
-    for (const injected of injectedSignals.absorbed) {
-      if (injected.replyTurnId) void this.completeEventBatch(injected.replyTurnId, assistantText);
-    }
-
-    // The settle spine, on the completed path: it fires the extension turn-end,
-    // buffers the turn for the outcome review the NEXT user message grades,
-    // counts the session-reflection cadence, holds the DO open for the detached
-    // evolution work, queues the sampled shadow trial the promotion gate draws
-    // on, dispatches the advisor — and drains the pending events this method
-    // used to drain on its own last line. A PLAN turn reaches it too and records
-    // nothing: core's `turnEvolutionEnabled` gate owns that rule, so plan mode
-    // is no longer a condition spelled here.
-    await settle();
-
-    if (turnMode !== 'plan') {
-      // Sleep-time compute — between-turn background memory compression.
-      // Reads recent turn, asks a judge to upsert/decay the agent_facts world
-      // model. Letta-style; ~50% test-time token reduction reported. Gated by
-      // agent_config.sleep_time_compute (default ON; fact upserts land in the
-      // Evolution Changelog and are revertable).
-      void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
-
-      // Title the workspace from what it is FOR — its mission — not from
-      // whatever it was asked to do first. A workspace with no mission of its
-      // own has only the opening request to go on. Fire-and-forget; once-only
-      // (persisting an auto title marks name_origin).
-      const mission = readMission(this.boundSql);
-      void this.maybeAutoTitle(isPlaceholderMission(mission) ? userText : mission!);
-
-      // Trace-driven continuous self-optimization (when enabled): run GEPA once
-      // enough new turns have accrued. Fire-and-forget; no-op when disabled.
-      this.maybeRunAutoGepa();
-    }
   }
+
 
   /** Background memory compression. Reads recent turn, updates agent_facts.
    *  Fire-and-forget; does not block TurnQueue. */
   private async runSleepTimeCompute(
-    task: string, output: string, toolCalls: ToolCallRecord[],
+    task: string, output: string, toolCalls: ToolCallRecord[], key?: string,
   ): Promise<void> {
     try {
       if (!this.config.getSleepTimeComputeEnabled()) return;
       const { runSleepTimeCompute, applySleepTimeUpdate } = await import('@kinu.run/core');
+      // The RECORDED update, when this call is one a terminal effect owes. The
+      // model call and the fact mutation are two steps, and an eviction between
+      // them used to mean a replay paid for another call and applied each decay
+      // a second time. Persisting the update first makes the replay apply the
+      // SAME answer, and the tombstone below makes it apply it once.
+      const stored = key === undefined ? undefined : this.recordedSleepTimeUpdate(key);
       const currentFacts = this.facts.all()
         .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
         .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
-      // Mechanical work — schema-constrained fact upsert/decay over a turn
-      // summary. Runs on the chat vendor's small tier when it has one.
-      const update = await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
+      const update = stored ?? await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
         task,
         output,
-        toolCalls: toolCalls.map(tc => tc.name),
+        toolCalls: toolCalls.map((call) => call.name),
         currentFacts,
       });
-      if (!update) return;
-      const summary = applySleepTimeUpdate(this.facts, update);
+      // A null answer is a MALFORMED one — extraction or validation failed. A
+      // model that genuinely wants no change returns empty arrays, so this is a
+      // failure, and tombstoning it would report a fact update that never landed.
+      if (update === null) {
+        throw new KinuError('unavailable', 'the sleep-time compute returned no usable update');
+      }
+      if (key !== undefined && stored === undefined) this.persistSleepTimeUpdate(key, update);
+      // ONE TRANSACTION over the fact writes and their tombstone. The update is
+      // several upserts and several CUMULATIVE confidence decays, and none of them
+      // is idempotent: an isolate termination after a prefix left the whole update
+      // retryable, so a replay decayed a fact it had already decayed and took 0.4
+      // of confidence off it instead of 0.2. Committed together, a replay either
+      // reads the tombstone and applies nothing or finds no prefix to repeat.
+      //
+      // The body MUST NOT await — `transactionSync` commits when its synchronous
+      // body returns, so an async one would commit at its first await and take the
+      // atomicity with it. `applySleepTimeUpdate` is synchronous, which is what
+      // makes this possible at all.
+      const summary = this.ctx.storage.transactionSync(() => {
+        const applied = applySleepTimeUpdate(this.facts, update);
+        if (key !== undefined) {
+          recordEffectDone(this.boundSql, SLEEP_TIME_APPLIED, key);
+          void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
+        }
+        return applied;
+      });
       diagnostics.event('memory.facts_compressed', {
         upserted: summary.upserted,
         decayed: summary.decayed,
         skipped: summary.skipped,
       });
     } catch (err) {
-      diagnostics.failure('memory.fact_compression_failed', toKinuError({
+      const failure = toKinuError({
         doing: 'compressing the turn into agent facts',
         cause: err,
         otherwise: 'unavailable',
-      }));
+      });
+      diagnostics.failure('memory.fact_compression_failed', failure);
+      // RETHROWN. This used to resolve normally, so the terminal effect that
+      // drives it recorded `completed` and was pruned even when no fact update
+      // landed — the advertised replay could never see a transient failure. The
+      // named event is the evidence; the throw is what keeps the row owed.
+      throw failure;
     }
+  }
+
+  /** The sleep-time answer a previous attempt already paid for, if it got that
+   *  far. Stored under the effect key so a replay applies the same update rather
+   *  than asking the model again. */
+  private recordedSleepTimeUpdate(key: string): SleepTimeUpdate | undefined {
+    const row = this.sql<{ update_json: string }>`
+      SELECT update_json FROM sleep_time_updates WHERE effect_key = ${key}`[0];
+    return row === undefined
+      ? undefined
+      : v.parse(SleepTimeUpdateSchema, JSON.parse(row.update_json));
+  }
+
+  private persistSleepTimeUpdate(key: string, update: SleepTimeUpdate): void {
+    void this.sql`INSERT INTO sleep_time_updates (effect_key, update_json, created_at)
+      VALUES (${key}, ${JSON.stringify(update)}, ${Date.now()})
+      ON CONFLICT(effect_key) DO NOTHING`;
   }
 
   /** What this workspace is FOR. The titling source for the root itself, and
@@ -1110,6 +1688,43 @@ export class OrchestratorAgent extends ActorAgent {
 
   private titleState(): { displayName: string; nameOrigin: 'user' | 'auto' } {
     return this._titleCache ?? { displayName: this.name, nameOrigin: 'auto' as const };
+  }
+
+  /**
+   * Hydrate the naming state BEFORE the title policy decides anything.
+   *
+   * `titleInputs` is synchronous by contract, so a cold activation answers it
+   * from the placeholder cache — and a durable auto-title replayed on that
+   * activation would plan over a title its first attempt had already persisted,
+   * pay for another suggestion, and overwrite it. The root overrides the hook so
+   * the decision is made against the registry that owns the answer.
+   */
+  protected override async hydrateTitleInputs(): Promise<void> {
+    // THROWING, unlike the opportunistic `hydrateTitle`. A durable title effect
+    // that planned from the cold placeholder cache would pay for another
+    // suggestion and overwrite a title its own first attempt had persisted; the
+    // failure keeps the row owed until the authoritative read works. Reached only
+    // once `titlingRefusal` has established the read can be made at all.
+    const { stub, caller } = await this.userHub();
+    const row = await stub.getWorkspaceTitle(caller, this.name);
+    if (row) this._titleCache = row;
+  }
+
+  /**
+   * UserDO owns this root's title, so a root that cannot reach UserDO cannot
+   * title itself yet.
+   *
+   * Without an owner or a capability there is no registry row to read or write.
+   * A `completed` here would report a title that only the activation cache holds
+   * — lost on the next cold start — so the row stays OWED with the reason on it,
+   * and the activation that finds the workspace claimed is the one that titles it.
+   */
+  protected override async titlingRefusal(): Promise<string | null> {
+    if (!this.getOwnerUserId()) return 'this workspace has no owner to hold its title';
+    if (!(await this.workspaceCapabilityToken())) {
+      return 'this workspace holds no capability token, so its title registry is unreachable';
+    }
+    return null;
   }
 
   /** The root decides against UserDO's naming state, not its own config. */
@@ -1210,9 +1825,9 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** The orchestrator's half of the shared Stop: settle the turn that was
    *  cancelled. The call itself is ActorAgent's. */
-  protected override onWorkCancelled({ cancelledJobs, abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
+  protected override onWorkCancelled({ abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
     this._inFlight = false;
-    this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
+    this.logActivity('work_cancelled', `${abortedTools} foreground aborted`);
   }
 
   // ── Device consent — ask-once-then-remember ──────────────────────────
@@ -1387,6 +2002,14 @@ export class OrchestratorAgent extends ActorAgent {
     // Records which crafted tools each assistant turn used, keyed by the
     // assistant message id, so async thumbs feedback can re-score exactly
     // those tools' EMA. Only crafted tools are stored (built-ins aren't scored).
+    // The sleep-time answer a terminal effect already paid for. The model call
+    // and the fact mutation are two steps; persisting the answer between them is
+    // what makes the replay apply the SAME update instead of buying another.
+    execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
+      effect_key  TEXT PRIMARY KEY,
+      update_json TEXT NOT NULL,
+      created_at  INTEGER NOT NULL
+    )`);
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
       message_id TEXT PRIMARY KEY,
       tool_names TEXT NOT NULL,
@@ -1422,8 +2045,13 @@ export class OrchestratorAgent extends ActorAgent {
    *  widening. */
   onStart(): void {
     this.ensureSchema();
-    // Runs inside `Agent.alarm()`'s initialization, i.e. before the SDK reads
-    // the due rows — so a backlog is pruned rather than dispatched in one go.
+    this.reconcileOrphanedBranches();
+    // Both sweeps run inside `Agent.alarm()`'s initialization, i.e. before the
+    // SDK reads its own tables — so a backlog is pruned rather than paid for in
+    // one go. The fiber sweep is the same rule one table over: it drops the
+    // interrupted-fiber rows the recovery budget has already refused, so the
+    // framework's scan never materializes their stashed snapshots.
+    this.sweepUnrecoverableFiberRows();
     try {
       this.sweepUnrunnableSchedules();
     } catch (err) {
@@ -1433,16 +2061,30 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }));
     }
-    let reconciledEventIds: string[] = [];
-    try {
-      reconciledEventIds = this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS);
-    } catch (err) {
-      diagnostics.failure('event.stale_delivery_unbind_failed', toKinuError({
-        doing: 'unbinding event deliveries a dead activation left leased',
+    // The wake chain, reconciled: an activation is the one moment a workspace
+    // whose only wake row was lost can notice. Detached for the same reason the
+    // fork reconciliation below is — arming a schedule row is I/O, and this
+    // method runs inside the init gate.
+    void this.reconcileTimerRow().catch((err) => {
+      diagnostics.failure('schedule.timer_reconcile_failed', toKinuError({
+        doing: 'restoring the wake row an activation found missing',
         cause: err,
         otherwise: 'io',
-      }));
-    }
+      }), { workspace: this.name });
+    });
+    // Deliveries a dead activation left leased. An open lease is either a
+    // question nobody answered or an ANSWER NOBODY DELIVERED, and only the
+    // transcript tells them apart. The sweep could not: it re-pended every open
+    // lease it found, so a turn that had answered its email batch and died
+    // before the reply left was asked the same question again — while the sender,
+    // still waiting, never got the answer that already existed.
+    //
+    // The answered ones are excluded here and finished by the resume below.
+    // Stated as an exclusion rather than an ordering: the sweep stays
+    // synchronous inside the init gate (it is one indexed UPDATE), the resume
+    // sends mail and therefore cannot be, and the invariant must not depend on
+    // which of the two happens to run first.
+    void this.reconcileEventDeliveries();
 
     try {
       const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
@@ -1507,11 +2149,6 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     });
-    if (reconciledEventIds.length > 0) {
-      diagnostics.event('event.deliveries_repended', { events: reconciledEventIds.length });
-      this.orch.scheduleDrain();
-    }
-
     // Workspaces created before mission-derived titling still show their raw
     // slug. Title them from SOUL.md's mission the first time one is opened —
     // every other workspace is already titled, so it costs a registry read.
@@ -1672,12 +2309,7 @@ export class OrchestratorAgent extends ActorAgent {
       // keeps the timer chain alive.
       await tick.span('alarm.timer_rearm', async (span) => {
         try {
-          const next = nextAlarmTime(
-            now,
-            this.triggerRegistry.list({ state: 'active' }).map((t) => t.next_fire_at),
-            this.peerHub.nextRetryAt(),
-            this.emailOutbox.nextRetryAt(),
-          );
+          const next = this.nextWakeAt(now);
           span.setAttribute('kinu.rearmed', next !== null);
           if (next !== null) await this.armTimer(next);
         } catch (err) {
@@ -1688,6 +2320,14 @@ export class OrchestratorAgent extends ActorAgent {
           });
           span.fail(failure);
           diagnostics.failure('schedule.timer_rearm_failed', failure);
+          // RETHROWN, unlike the three phases above it. Their work is state
+          // driven and the NEXT wake retries it; this failure IS the loss of
+          // the next wake, so nothing is left to retry anything. An uncaught
+          // throw out of the alarm is what makes the runtime redeliver it
+          // (proven under workerd in tests/workerd/do-alarm.test.ts), and a
+          // redelivered tick re-arms from the same durable state. Swallowing it
+          // reported a successful alarm over a chain that had just ended.
+          throw failure;
         }
       });
     });
@@ -1741,9 +2381,6 @@ export class OrchestratorAgent extends ActorAgent {
       config: this.config,
       name: this.name,
       displayName: this.getDisplayName(),
-      // Before the first turn has been mirrored into `messages`, the in-memory
-      // AIChatAgent array is the only count there is.
-      fallbackMessageCount: this.messages.length,
     });
     const profile = this.resolvedTurnProfile();
     return {
@@ -1994,15 +2631,6 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  /** Settle every branch launched during the just-finished turn (detached —
-   *  the shared core settle persists the takes set + broadcasts progress). */
-  private settlePendingBranches(turnId: string | null, liveText: string): void {
-    settlePendingBranches({
-      sql: this.boundSql,
-      sessionId: 'default',
-      broadcast: (event: BranchStatusEvent) => this.broadcastBranchStatus(event),
-    }, this._pendingBranches, turnId, liveText);
-  }
 
   /** Record the user's pick between the explored takes — the explicit
    *  preference signal (turn_outcomes source 'take_pick' + convergence
@@ -2612,6 +3240,30 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
+   * What a head or node is producing RIGHT NOW, forwarded to open clients.
+   *
+   * The transient twin of {@link recordHeadStep}, and deliberately not shaped
+   * like it. `recordHeadStep` WRITES: it is the branch's durable trace, so it is
+   * traced, awaited by the caller, and the announcement rides the write. This
+   * one only BROADCASTS — no SQL, no state, nothing read back — because a frame
+   * is superseded by the step that contains it. That is what makes it safe to
+   * publish at display cadence: a lost frame costs a repaint, not a record.
+   *
+   * Untraced for the same reason: a span per frame would drown the search's own
+   * spans in noise about a channel whose failure mode is a stale pixel.
+   *
+   * ONE CALL PER PROVIDER DELTA. That is the boundary the model's stream already
+   * drew, so a reader gets the bytes in the order they were produced and nothing
+   * has to be tuned. Call volume against this root's input gate is the open
+   * question here, and it is one to MEASURE on a real stream — a guessed batch
+   * size would cost live behaviour and hide the number.
+   */
+  @callable()
+  publishHeadStream(headId: string, kind: HeadStreamKind, delta: string): void {
+    this.publishHeadStreamFrame({ headId, kind, delta });
+  }
+
+  /**
    * The immutable turn profile a facet of this workspace runs under.
    *
    * A facet resolves its own model, its own provider registry and its own
@@ -3131,6 +3783,28 @@ export class OrchestratorAgent extends ActorAgent {
    * surface that is not open does not get to be on the critical path of the one
    * that is.
    */
+  /** A reset owns no live branch fibers. Before a snapshot can say a branch is
+   * running, seal every reportless branch head with one durable error report;
+   * `recordReport` changes its status, so the next activation excludes it and
+   * the sweep is idempotent. */
+  private reconcileOrphanedBranches(): void {
+    for (const run of this.headJournal.listRunningRuns()) {
+      if (!run.rootId.startsWith('branch-') || run.status !== 'running') continue;
+      for (const head of run.heads) {
+        if (head.status !== 'running') continue;
+        this.headJournal.recordReport({
+          id: head.id, status: 'errored',
+          summary: 'Workspace restarted before the branch settled.',
+          errorMessage: 'workspace restarted before the branch settled',
+          evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [],
+          stepCount: 0, usage: {}, wallClockMs: 0,
+        });
+        this.broadcastBranchStatus({ type: 'branch_status', status: 'error', branchId: run.rootId, task: run.task,
+          message: 'workspace restarted before the branch settled' });
+      }
+    }
+  }
+
   @callable()
   async getWorkspaceSnapshot() {
     const [status, tools, memoryContent, executors, activePlan] = await Promise.all([
@@ -3147,7 +3821,12 @@ export class OrchestratorAgent extends ActorAgent {
       })),
     );
     const lastActiveExecutor = this.config.getLastActiveExecutor();
-    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan };
+    // Durable journal, never `_pendingBranches`: RAM is empty after reset while
+    // the journal is the branch lifecycle authority.
+    const branchRuns = this.headJournal.listRunningRuns()
+      .filter((run) => run.rootId.startsWith('branch-') && run.status === 'running')
+      .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
+    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan, pendingSteers: this.pendingSteerRuns(), branchRuns };
   }
 
   @callable() async executeInExecutor(executorId: string, command: string) {
@@ -3233,6 +3912,7 @@ export class OrchestratorAgent extends ActorAgent {
   private executorFileUploads = new Map<string, {
     readonly executorId: string;
     readonly path: string;
+    readonly expectedRevision: number | undefined;
     readonly upload: ExecutorFileUpload;
   }>();
   private executorFileDownloads = new Map<string, ExecutorFileDownload>();
@@ -3294,6 +3974,7 @@ export class OrchestratorAgent extends ActorAgent {
     offset: number,
     chunk: Uint8Array,
     final: boolean,
+    expectedRevision?: number,
   ): Promise<ExecutorWriteResult> {
     const router = this.rt.executionRouter;
     if (!router) return { error: 'no execution router' };
@@ -3304,11 +3985,14 @@ export class OrchestratorAgent extends ActorAgent {
       row = {
         executorId,
         path,
-        upload: new ExecutorFileUpload(router, executorId, path),
+        expectedRevision,
+        upload: new ExecutorFileUpload(router, executorId, path, expectedRevision),
       };
       this.executorFileUploads.set(transferId, row);
     } else if (!row || row.executorId !== executorId || row.path !== path) {
       return { error: 'file transfer out of sync: no matching open upload' };
+    } else if (row.expectedRevision !== expectedRevision) {
+      return { error: 'file transfer out of sync: expected revision does not match the first chunk' };
     }
     const result = await row.upload.chunk(offset, chunk, final);
     if (row.upload.done) this.executorFileUploads.delete(transferId);
@@ -3463,7 +4147,10 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
     const fork = await forkWorkspace({
       sql: this.boundSql,
-      vfs: this.rt.storage.vfs,
+      // The workspace plane's own walk, with each inherited file streamed
+      // through the session's typed ranged read: a fork holds one frame of one
+      // file, never the file.
+      vfs: createNimbusWorkspaceForkSource(this.env, this.requireOwnerForFork(), this.name, this.rt.localVfs),
       sourceName: this.name,
       busy: () => this._inFlight,
       transport: this.forkTransport,
@@ -3474,6 +4161,16 @@ export class OrchestratorAgent extends ActorAgent {
       url: `/workspace/${fork.name}`,
       forkPointMs: fork.forkPointMs,
     };
+  }
+
+  /** The owner a hosted fork needs on BOTH halves: the source session is named
+   *  from it, and so is the target's file plane. The transport refuses an
+   *  unclaimed workspace for the same reason; this refuses it before a roster
+   *  name is reserved. */
+  private requireOwnerForFork(): string {
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('cannot fork an unclaimed workspace');
+    return ownerUserId;
   }
 
   /** Reaching a workspace that does not exist yet: a Durable Object addressed
@@ -3495,7 +4192,7 @@ export class OrchestratorAgent extends ActorAgent {
           caller,
           target: stubFor(name),
           name,
-          snapshot,
+          source: snapshot,
           ownerUserId,
         });
       },
@@ -3503,74 +4200,115 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Receive a fork snapshot from a source agent. INTERNAL — called only by the
-   * source DO's fork transport via cross-DO stub. NOT @callable: cross-DO stub
-   * RPC never needed the decorator, and this is a raw storage write that must
-   * never be reachable over the public agents WS/HTTP transport.
+   * The receiver for this ACTIVATION.
+   *
+   * Not the transfer's state: which frame is next, what has been staged and
+   * whether the fork published are rows in this object's own SQLite
+   * (`ForkStagingState`), so a reset between two frames resumes rather than
+   * refuses. What is cached here is the one thing an activation genuinely owns —
+   * the running hash and the sibling temp of the file whose ranges are still
+   * arriving.
    */
+  private forkReceiver: ForkTransferReceiver | null = null;
+
+  /** Receive one bounded semantic frame from the source DO. Not callable from
+   * public WS/HTTP; only the source cross-DO stub reaches this method. */
   async rawCopyFromFork(
     forkName: string,
-    snapshot: ForkSnapshot,
+    frame: ForkFrame,
     ownerUserId: string,
   ): Promise<
-    | { ok: true; agentId: string; capabilityHash: string | null }
+    | { ok: true; status: 'staged' }
+    | { ok: true; status: 'published'; agentId: string; capabilityHash: string | null; forkPointMs: number }
     | { ok: false; reason: 'owned_by_another_user' }
   > {
     if (!ownerUserId) throw new Error('fork owner is required');
-    // Apply the FULL schema before copying rows. onStart runs on first access,
-    // but this RPC can be invoked before it completes — ensureSchema creates
-    // every table so the copy's events-hub/heads/shadow/etc. rows never hit a
-    // missing table.
     this.ensureSchema();
-
-    // The Nimbus namespace is derived from this row, so ownership must exist
-    // before the first file write. Refuse any pre-existing cross-owner target
-    // instead of copying bytes into a namespace the source does not own.
     const currentOwner = this.getOwnerUserId();
-    if (currentOwner && currentOwner !== ownerUserId) {
-      return { ok: false, reason: 'owned_by_another_user' };
-    }
+    if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
+
+    // The owner is the Nimbus file-plane precondition. It is intentionally the
+    // only identity datum before commit; lineage, name, mission, marker and
+    // display name publish together in the writer transaction.
     const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
     if (identity.length === 0) {
-      void this.sql`
-        INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-        VALUES (${this.ctx.id.toString()}, ${forkName}, ${ownerUserId}, ${Date.now()})
-      `;
+      void this.sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+        VALUES (${this.ctx.id.toString()}, ${forkName}, ${ownerUserId}, ${Date.now()})`;
     } else {
       void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
     }
     this.invalidateModelCaches();
 
-    // The row copy is atomic; the file copy cannot be inside that transaction
-    // (a host transaction is synchronous, the filesystem is not) and does not
-    // need to be — it is a set of idempotent overwrites. `this.boundSql` is a
-    // stable closure over `this.sql` that preserves the `this`-binding the
-    // Agent base class needs.
-    await writeForkSnapshot(this.boundSql, this.rt.storage.vfs, snapshot, {
-      workspaceId: this.ctx.id.toString(),
-      workspaceName: forkName,
-      ownerUserId,
-      writeSoulFile: (content) => writeNimbusWorkspaceSoul(this.env, ownerUserId, forkName, content),
-      transaction: (rows) => this.ctx.storage.transactionSync(rows),
-    });
+    if (!this.forkReceiver) {
+      const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
+        workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
+        targetAuthority: 'pane',
+        writeSoulFile: (content) => writeNimbusWorkspaceSoul(this.env, ownerUserId, forkName, content),
+        transaction: (rows) => this.ctx.storage.transactionSync(rows),
+      });
+      this.forkReceiver = new ForkTransferReceiver(
+        writer,
+        createNimbusWorkspaceForkSink(this.env, ownerUserId, forkName, frame.transferId),
+      );
+    }
+    const outcome = await this.forkReceiver.accept(frame);
+    if (outcome.status === 'staged') return { ok: true, status: 'staged' };
+    this.markForkInstructionScopeMigrated(forkName);
+    if (outcome.status === 'settled') {
+      return {
+        ok: true, status: 'published', agentId: this.ctx.id.toString(),
+        capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
+      };
+    }
     await this.ensureOwnedScaffold();
-    // Inherited files are the fork's starting state, not changes it produced.
     await resetWorkspaceBaseline(this.rt);
-
     return {
-      ok: true,
-      agentId: this.ctx.id.toString(),
-      capabilityHash: await this.workspaceCapabilityHash(),
+      ok: true, status: 'published', agentId: this.ctx.id.toString(),
+      capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
     };
+  }
+
+  /**
+   * Forked bytes are copied, but approval rows are not authority that may be
+   * copied. This marker lands before deliverCloudFork publishes the target in
+   * UserDO, so its first ActorAgent turn sees copied AGENTS.md and skills as
+   * unverified rather than as a legacy migration baseline.
+   */
+  private markForkInstructionScopeMigrated(forkName: string): void {
+    new InstructionApprovalStore(
+      this.rt.storage.sql,
+      `cf:${forkName}`,
+      (body) => this.ctx.storage.transactionSync(body),
+    ).markMigratedEmpty();
   }
 
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
 
   /** List triggers (webhooks, timers, watches, mcp routes). UI uses this
-   *  for the Supervise Automations block. */
+   *  for the Supervise Automations block.
+   *
+   *  Webhook rows carry their signed delivery path, minted here rather than
+   *  assembled by a client: a URL without the route capability is a URL that
+   *  404s, so the only way to hold one is to have been handed it by a surface
+   *  that passed the owner check. `url` is absent when this deployment holds no
+   *  route secret — the same reason a delivery would be refused. */
   @callable()
-  async listTriggers() {
-    return listTriggers(this.triggerRegistry);
+  async listTriggers(): Promise<{ triggers: (TriggerView & { url?: string })[] }> {
+    const listed = listTriggers(this.triggerRegistry);
+    const secret = webhookRouteSecret(this.env);
+    if (secret === null) return listed;
+    return {
+      triggers: await Promise.all(listed.triggers.map(async (trigger) => (
+        trigger.kind === 'webhook_durable' || trigger.kind === 'webhook_ephemeral'
+          ? {
+            ...trigger,
+            url: await webhookRoutePath(secret, {
+              workspaceName: this.name, triggerId: trigger.id,
+            }),
+          }
+          : trigger
+      ))),
+    };
   }
 
   /** Cross-DO wire form for the Worker HTTP adapter. */
@@ -3578,7 +4316,7 @@ export class OrchestratorAgent extends ActorAgent {
     return JSON.stringify(await this.listTriggers());
   }
 
-  /** Create a durable webhook trigger. Returns the public URL.
+  /** Create a durable webhook trigger. Returns the signed public URL.
    *
    *  Deliberately NOT @callable: webhook creation is step-up gated, and the
    *  gate (auth/session isFreshAuthTime) lives in the only two entry points —
@@ -3592,12 +4330,18 @@ export class OrchestratorAgent extends ActorAgent {
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }) {
+    // Read before the row is written: a trigger whose delivery URL cannot be
+    // signed is a row no delivery could ever reach.
+    const routeSecret = webhookRouteSecret(this.env);
+    if (routeSecret === null) throw new Error(WEBHOOK_ROUTE_UNAVAILABLE);
     const now = Date.now();
     const webhook = await registerDurableWebhook(this.triggerRegistry, opts, now);
     if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
     return {
       trigger_id: webhook.trigger_id,
-      url: `/api/workspaces/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(webhook.trigger_id)}`,
+      url: await webhookRoutePath(routeSecret, {
+        workspaceName: this.name, triggerId: webhook.trigger_id,
+      }),
       auth_mode: webhook.auth_mode,
       // For HMAC/bearer modes, the operator needs the secret once to give
       // to the external system; we return it inline now and never again.
@@ -3606,9 +4350,15 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Cancel a trigger (revoke), deleting its plaintext secret in the same
-   *  host call — the revoked webhook leaves no live credential behind. */
-  async cancelTrigger(trigger_id: string) {
-    return cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), this.webhookSecrets);
+   *  host call — the revoked webhook leaves no live credential behind.
+   *
+   *  `caller` is the authority the request carries, and it has no default: this
+   *  one method is reached BOTH by the operator's triggers route and by the
+   *  model's `agent.cancelSchedule`, and only the first of those may close an
+   *  owner-created ingress. A default here would decide that for whichever
+   *  caller forgot to say. */
+  async cancelTrigger(trigger_id: string, caller: TrustLevel) {
+    return cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), caller, this.webhookSecrets);
   }
 
   /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA
@@ -3629,7 +4379,13 @@ export class OrchestratorAgent extends ActorAgent {
    * reaches its cadence. While a pending is in flight the count keeps growing,
    * so a pass fires as soon as the shadow slot frees.
    */
-  protected maybeRunAutoGepa(): void {
+  protected async maybeRunAutoGepa(
+    /** THIS tick's stable identity — the terminal scope that owes it. The
+     *  prompt-section lane keys its disposition on it, so a replay after a cut
+     *  inside the scaffold pass finds the lane already advanced. Absent for a
+     *  caller with no durable obligation behind it, which then keys nothing. */
+    tick?: string,
+  ): Promise<void> {
     const everyN = this.config.getAutoGepaEveryNTurns();
     if (everyN <= 0) return;
     // One-time honesty note: before autonomy defaults flipped ON, a disable
@@ -3646,21 +4402,93 @@ export class OrchestratorAgent extends ActorAgent {
           `superseded by this default — run setAutoGepa(0) to disable again.`
         }, ${Date.now()})`;
     }
-    const lastPass = listGepaRuns(this.boundSql, 1)[0];
-    const sinceTs = lastPass ? new Date(lastPass.startedAt).toISOString() : null;
-    if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
+    // ONE cadence pass at a time in this activation. A `running` row means either
+    // an interrupted activation (owed, and this tick owes it) or THIS activation's
+    // previous turn still inside its detached pass — and the per-tick tombstones
+    // cannot separate them, because the second turn carries a different tick. Two
+    // live passes would drive candidate scaffolds through the raw tool surface
+    // concurrently and race each other's proposals.
+    if (this._gepaTickRunning) return;
+    const recent = listGepaRuns(this.boundSql, 1)[0];
+    // A run left `running` is an INTERRUPTED pass, not a completed one. Taking it
+    // as the cadence watermark counted its own turns against the next interval
+    // and abandoned it until a whole cadence had accrued again — so it is owed
+    // and this tick is the one that owes it.
+    if (recent?.status !== 'running') {
+      const sinceTs = recent ? new Date(recent.startedAt).toISOString() : null;
+      if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
+    }
     if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; the count keeps growing
     // The prompt-section lane rides the same cadence and the same switch. It is
     // judge-only where a scaffold pass is a rollout PLUS a judge call, so the
     // two share a tick rather than competing for one, and neither needs a
     // second config key nobody would find.
-    this.advancePromptSections();
-    void this.runScaffoldGepaOptimization()
-      .catch((err) => diagnostics.failure('gepa.auto_run_failed', toKinuError({
-        doing: 'running the cadence GEPA scaffold optimisation',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name }));
+    // BOTH lanes awaited, and each with its OWN durable disposition. They share
+    // one cadence tick but not one obligation: a cut inside the scaffold pass used
+    // to replay the prompt-section lane too, rotating it to another section and
+    // spending a second model call on a step that had already happened.
+    // Keyed on the TICK, not on GEPA history: the scaffold pass below opens a
+    // new `running` run before its first model await, so a key read off the
+    // latest run changes under a replay and rotates this lane a second time.
+    const lane = tick === undefined ? undefined : `${this.name}:${tick}`;
+    this._gepaTickRunning = true;
+    try {
+      await this.oncePerTick(PROMPT_SECTION_LANE, lane, () => this.advancePromptSections());
+      await this.oncePerTick(SCAFFOLD_GEPA_LANE, lane, async () => { await this.runScaffoldGepaOptimization(); });
+    } finally {
+      this._gepaTickRunning = false;
+    }
+  }
+
+  /** Whether a cadence optimisation pass is live in THIS activation. An eviction
+   *  takes it with the isolate, which is correct: the durable `running` row is
+   *  then what says the pass was interrupted. */
+  private _gepaTickRunning = false;
+
+  /**
+   * Run one NON-REPLAYABLE optimisation pass, at most once per cadence tick.
+   *
+   * Both lanes drive candidate scaffolds and prompt sections through the LIVE
+   * tool surface, and both append evaluation rows between model awaits. A pass
+   * the platform interrupted may therefore already have written files, driven a
+   * device or spent a judge call, and re-running it from the top repeats every
+   * one of those — which is the loss this ledger exists to prevent, arriving from
+   * the other side.
+   *
+   * So ENTRY is recorded, and the completion after it. A replay that finds the
+   * entry without the completion knows the pass was cut and abandons it, with the
+   * reason on the record. The cadence carries the work to the next tick, which is
+   * a delay rather than a loss — unlike a duplicated release.
+   *
+   * The marker says ENTERED, never "about to try", and the difference is the
+   * whole of the trade being honest. Written before `pass()` was called, a cut in
+   * between abandoned a tick whose pass had not run a single statement, and an
+   * idle workspace simply never did the work — no carrier, no record. It is
+   * written in the SAME SYNCHRONOUS SLICE as the call instead: an async function
+   * runs to its first await before returning its promise and a Durable Object
+   * cannot be evicted mid-slice, so the pass's own opening writes and this marker
+   * commit together. Either both are there and abandoning is right, or neither is
+   * and the replay runs the whole pass.
+   */
+  protected async oncePerTick(scope: string, tick: string | undefined, pass: () => Promise<void>): Promise<void> {
+    // No tick means no durable obligation behind this call — a live cadence pass
+    // with nothing to replay it. It runs, and it keys nothing.
+    if (tick === undefined) {
+      await pass();
+      return;
+    }
+    if (effectAlreadyDone(this.boundSql, scope, `${tick}:done`)) return;
+    if (effectAlreadyDone(this.boundSql, scope, `${tick}:entered`)) {
+      diagnostics.event('evolution.interrupted_pass_abandoned', {
+        workspace: this.name, lane: scope, tick,
+      });
+      recordEffectDone(this.boundSql, scope, `${tick}:done`);
+      return;
+    }
+    const running = pass();
+    recordEffectDone(this.boundSql, scope, `${tick}:entered`);
+    await running;
+    recordEffectDone(this.boundSql, scope, `${tick}:done`);
   }
 
   /**
@@ -3678,13 +4506,105 @@ export class OrchestratorAgent extends ActorAgent {
    * which is the same cost as the pass never starting, and the durable ledger is
    * what the next tick reads either way.
    */
-  protected advancePromptSections(): void {
-    void advancePromptSectionLane(this.scaffoldControl)
-      .catch((err) => diagnostics.failure('prompt_section.lane_failed', toKinuError({
+  protected async advancePromptSections(): Promise<void> {
+    // Awaited by its caller and diagnosed here. Detaching it left the model lane
+    // cancellable by the next eviction with nothing owed to replay it, which is
+    // the loss the terminal ledger exists to prevent — so the promise travels
+    // and the cadence effect holds its row open for it. The failure is still
+    // absorbed: the lane is opportunistic and the NEXT cadence tick retries it,
+    // while a throw here would keep the whole terminal sequence owed over work
+    // nobody is waiting on.
+    try {
+      await advancePromptSectionLane(this.scaffoldControl);
+    } catch (err) {
+      diagnostics.failure('prompt_section.lane_failed', toKinuError({
         doing: 'advancing the prompt-section evolution lane',
         cause: err,
         otherwise: 'unavailable',
+      }), { workspace: this.name });
+    }
+  }
+
+  /**
+   * Open one refinement over a trajectory — the `/refine` callable.
+   *
+   * Returns the DURABLE request immediately, at `requested`: no model has run
+   * and no artifact has moved. The refiner runs on the off-turn cadence pass
+   * (`ActorAgent.runRefinementLane`, driven by AgentOrchestrator), where it can
+   * be re-driven for free.
+   *
+   * The nudge below is DETACHED for the reason the section and GEPA passes
+   * beside it are: an owner asking explicitly should not wait for the next
+   * completed turn, and should not wait for a child agent either. A floating
+   * promise in a Durable Object is cancelled on eviction with its rejection
+   * swallowed, which costs a step that did not finish — the same cost as the
+   * step never starting, and the durable row is what the next cadence reads.
+   */
+  @callable()
+  async requestRefinement(opts?: {
+    turnIds?: string[]; scope?: RefinementScope;
+  }): Promise<RefinementRequestView> {
+    let request: RequestRefinementInput = {
+      trigger: 'explicit',
+      scope: opts?.scope ?? 'workspace',
+    };
+    if (opts?.turnIds !== undefined) request = { ...request, turnIds: opts.turnIds };
+    const view = await requestRefinement(this.refinementDeps, request);
+    void this.runRefinementLane()
+      .catch((err) => diagnostics.failure('refinement.lane_failed', toKinuError({
+        doing: 'advancing the continual-refinement lane',
+        cause: err,
+        otherwise: 'unavailable',
       }), { workspace: this.name }));
+    return view;
+  }
+
+  /**
+   * The OWNER decides one staged edit — the only path by which a proposed skill
+   * becomes trusted instructions.
+   *
+   * `interactive` in the RPC gate, like `approveInstruction` and for the same
+   * reason: this is the act that grants bytes system placement, so a scoped
+   * token that could call it would be a way for agent-written bytes to
+   * authorise themselves. It is absent from every model-facing tool surface.
+   */
+  @callable()
+  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
+    const result = await decideRefinementRoute(this.refinementDeps, input);
+    // An approval puts a new trusted skill in the next prompt and its
+    // `allowed_tools` in the next tool surface, so the cached surface is dropped
+    // exactly as a craft retirement drops it.
+    if (result.ok) {
+      this._cachedTools = null;
+      this._cachedToolsKey = '';
+    }
+    return result;
+  }
+
+  /**
+   * The WHOLE staged file for one proposed edit, and the digest a decision must
+   * quote back.
+   *
+   * `interactive` like the decision itself: it carries proposed instruction
+   * bytes, the same sensitivity class as `readInstructionApproval`. Never
+   * truncated — this is what the modal renders, and a truncated approval surface
+   * asks for a decision about bytes the decider could not see.
+   */
+  @callable()
+  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
+    return showRefinementRoute(this.refinementDeps, { requestId, routeIndex });
+  }
+
+  /** Refinements newest first, plus the debt that would open the next one —
+   *  what `/refine` with no argument prints. */
+  @callable()
+  async listRefinements(limit: number = 20): Promise<{
+    requests: RefinementRequestView[]; debt: EvolutionDebt;
+  }> {
+    return {
+      requests: createRefinementStore(this.boundSql).list(limit).map(refinementRequestView),
+      debt: refinementDebt(this.refinementDeps),
+    };
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This
@@ -3764,6 +4684,10 @@ export class OrchestratorAgent extends ActorAgent {
     return acceptSandboxLifecycleFailure({
       sql: this.boundSql,
       signals: this.orch.signals,
+      // The workspace is this object's own name, and it is the only dimension
+      // the lifecycle module cannot know. Everything else on the row is decided
+      // where the incident is understood.
+      recordRecovery: (row) => { recordSandboxRecovery(this.env, { workspace: this.name, ...row }); },
       logActivity: (event, detail) => this.logActivity(event, detail),
     }, body, Date.now());
   }
@@ -3819,9 +4743,25 @@ export class OrchestratorAgent extends ActorAgent {
    *  email counterpart of acceptWebhookDelivery. The Worker `email()` handler
    *  parses MIME + resolves the agent; the trust gate (owner email /
    *  email_route allowlist), publish, and thread reply channel run here
-   *  atomically. Unauthorized senders never produce an event row. */
+   *  atomically. Unauthorized senders never produce an event row.
+   *
+   *  The receipt is AWAITED, and only on a fresh admission. Awaited because
+   *  this runs inside the Durable Object that owns the outbox, where a
+   *  floating promise is cancelled on eviction with the cancellation
+   *  swallowed; fresh-only because a redelivery of a message already admitted
+   *  is the mail edge retrying, not a second message, and the sender has the
+   *  receipt for it already. The outbox's dedupe key holds the same line
+   *  durably, so an eviction between the two never sends twice. */
   async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
-    return this.emailInbox.accept(opts);
+    const admission = await this.emailInbox.accept(opts);
+    if (admission.admitted && !admission.duplicate && admission.thread && admission.event_id) {
+      await sendInboundEmailReceipt({
+        email: this.env.EMAIL,
+        agentDisplayName: this.safeDisplayName(),
+        outbox: this.emailOutbox,
+      }, admission.thread, admission.event_id);
+    }
+    return admission;
   }
 
   /** The agent's email surface for the operator UI / routes. */

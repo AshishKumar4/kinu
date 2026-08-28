@@ -20,6 +20,11 @@ function sameEntry(next: NewJournalEntry, pending: JournalEntry | undefined): bo
         && next.target === pending.target
         && next.mode === pending.mode
         && next.mtimeMs === pending.mtimeMs;
+    case 'hardlink':
+      return pending.kind === 'hardlink'
+        && next.target === pending.target
+        && next.mode === pending.mode
+        && next.mtimeMs === pending.mtimeMs;
     case 'delete':
       return true;
   }
@@ -38,8 +43,9 @@ function kindRank(entry: NewJournalEntry): number {
   switch (entry.kind) {
     case 'dir': return 0;
     case 'file': return 1;
-    case 'symlink': return 2;
-    default: return 3;
+    case 'hardlink': return 2;
+    case 'symlink': return 3;
+    default: return 4;
   }
 }
 
@@ -111,7 +117,9 @@ export class PendingJournalState {
     const hashes = new Set<string>();
     for (const entry of this.entries.values()) {
       if (entry.kind !== 'file') continue;
-      for (const chunk of entry.chunks) hashes.add(chunk.hash);
+      for (const part of entry.parts) {
+        if (part.kind === 'data') hashes.add(part.hash);
+      }
     }
     return hashes;
   }

@@ -406,15 +406,20 @@ describe('forkWorkspaceStorage', () => {
                 ${'1970-01-01 00:00:01'})`;
     }
 
+    // A LOCAL fork lands in `messages`, flattened from the rich rows it
+    // carried — one destination, declared by this call shape.
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     });
 
-    const carried = tgt.sql<{ id: string; role: string; parent_id: string | null }>`
-      SELECT id, role, parent_id FROM assistant_messages WHERE role != 'system' ORDER BY rowid
+    const carried = tgt.sql<{ id: string; role: string; parent_id: string | null; content: string }>`
+      SELECT id, role, parent_id, content FROM messages WHERE role != 'system' ORDER BY rowid
     `;
     expect(carried.map((r) => r.id)).toEqual(['m1', 'm2']);
     expect(carried[1]!.parent_id).toBe('m1');
+    expect(carried[1]!.content).toBe('hi');
+    expect(tgt.sql<{ c: number }>`
+      SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'assistant_messages'`[0]!.c).toBe(0);
   });
 
   test('15. assistant_messages copy is skipped when the source has no such table', async () => {
@@ -447,8 +452,10 @@ describe('forkWorkspaceStorage', () => {
               ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] })},
               ${'1970-01-01 00:00:01'})`;
 
+    // Hosted shape: the pane destination is DECLARED.
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'beta',
+      targetAuthority: 'pane',
     });
 
     // The synthetic marker should land in assistant_messages with role=system,
@@ -488,6 +495,7 @@ describe('forkWorkspaceStorage', () => {
 
     await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
+      targetAuthority: 'pane',
     })).rejects.toThrow(/no such column/);
   });
 
@@ -580,13 +588,51 @@ describe('fork snapshot payload', () => {
     expect(snapshot.messages.map((m) => m.id)).toEqual(rows.map((r) => r.id));
     expect(snapshot.messages.map((m) => m.parent_id)).toEqual(rows.map((r) => r.parent_id));
 
-    // ...and the plain table still lands byte-identical, reconstructed at the
-    // write side by the same projection the turn mirror applies.
-    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+    // ...and the transcript lands ONCE, in the pane store the caller declared
+    // (the hosted shape this rich-carrying snapshot is for).
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
+      workspaceId: 'T', workspaceName: 'forked', targetAuthority: 'pane',
+    });
     const landed = tgt.sql<{ id: string; content: string }>`
-      SELECT id, content FROM messages WHERE role != 'system' ORDER BY rowid`;
+      SELECT id, content FROM assistant_messages WHERE role != 'system' ORDER BY rowid`;
     expect(landed.map((r) => r.id)).toEqual(rows.map((r) => r.id));
-    expect(landed.map((r) => r.content)).toEqual(rows.map((r) => r.content));
+    const plainLanded = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
+    expect(plainLanded).toBe(0);
+  });
+
+  test('a fork inherits preferences but never the shell-approval authority', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' },
+      purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'hello', parent_id: null, created_at: 1000 }],
+    });
+    // What the owner said "always" to in THIS workspace, and how much the gate
+    // asks here. Both are read live by `ShellApprovalPolicy` before it decides
+    // whether to put a command in front of the owner at all.
+    void src.sql`INSERT OR REPLACE INTO agent_config (key, value)
+      VALUES (${'shell_approval_mode'}, ${'allow_all'})`;
+    void src.sql`INSERT OR REPLACE INTO agent_config (key, value)
+      VALUES (${'shell_approval_grants'}, ${'rm -rf *@sandbox,curl *@sandbox'})`;
+
+    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1');
+
+    // Not merely dropped on the way in — never in the value that crosses.
+    expect(snapshot.agentConfig.map((row) => row.key).sort())
+      .toEqual(['display_name', 'model']);
+
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+    const landed = Object.fromEntries(
+      tgt.sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`
+        .map((row) => [row.key, row.value]),
+    );
+    // The child asks the owner from scratch, and the preference it may inherit
+    // still arrives — this withholds authority, not configuration.
+    expect(landed['shell_approval_mode']).toBeUndefined();
+    expect(landed['shell_approval_grants']).toBeUndefined();
+    expect(landed['model']).toBe('@cf/moonshotai/kimi-k2.6');
   });
 
   test('a chain with no pane store carries its own text', async () => {
@@ -633,28 +679,45 @@ describe('fork snapshot payload', () => {
       .rejects.toThrow(/elided the text of message "m1"/);
   });
 
-  test('a transcript over the snapshot budget is refused before a row is materialized', async () => {
+  test('a snapshot over the former ceiling is read and landed instead of refused', async () => {
+    // The former shape refused this workspace outright: 40 MB of transcript is
+    // over the 16 MiB half-ceiling it measured against, and over the 32 MiB
+    // serialized-argument ceiling that half was derived from. Both are gone —
+    // the snapshot is simply more frames.
     const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
     const CHUNK = 'x'.repeat(1_000_000);
     await seedSource(src, {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
-      messages: Array.from({ length: 18 }, (_, i) => ({
-        id: `m${i}`, role: 'user', content: CHUNK, created_at: 1000 + i,
+      messages: Array.from({ length: 40 }, (_, i) => ({
+        id: `m${i}`, role: 'user', content: `${i}:${CHUNK}`, created_at: 1000 + i,
       })),
     });
 
-    // The platform refuses a serialized argument over 32 MiB. Refusing here
-    // instead means the source isolate never builds the ~35 MiB of live objects
-    // it could not have sent, and the message says which component is at fault
-    // and what the owner can do about it.
-    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm17'))
-      .rejects.toThrow(/over the \d+-byte budget/);
-    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm17'))
-      .rejects.toThrow(/Largest component: transcript at \d+ bytes/);
+    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm39');
+
+    // 40 MB of transcript: over the 16 MiB half-ceiling the old shape measured
+    // against, and over the 32 MiB serialized-argument ceiling that half was
+    // derived from. Measured here so the test cannot pass on a workspace the
+    // old ceiling would have allowed.
+    const carried = snapshot.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+    expect(carried).toBeGreaterThan(32 * 1024 * 1024);
+    expect(snapshot.messages.length).toBe(40);
+
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+    const rows = tgt.sql<{ id: string; content: string }>`
+      SELECT id, content FROM messages WHERE role != 'system' ORDER BY created_at`;
+    expect(rows.map((r) => r.id)).toEqual(snapshot.messages.map((m) => m.id));
+    expect(rows[39]!.content).toBe(`39:${CHUNK}`);
   });
 
-  test('memory files over what the transcript left of the budget are refused by path', async () => {
+  test('memory the former budget refused by path is read and landed', async () => {
+    // The exact workspace the file walk used to refuse: 16 MB of transcript,
+    // then a 1.5 MB memory file that put it over what the transcript left.
     const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
     await seedSource(src, {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: Array.from({ length: 16 }, (_, i) => ({
@@ -664,16 +727,10 @@ describe('fork snapshot payload', () => {
     await src.vfs.mkdir('memory', { recursive: true });
     await src.vfs.writeFile('memory/huge.md', 'y'.repeat(1_500_000));
 
-    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm15'))
-      .rejects.toThrow(/files exceed the remaining \d+-byte budget at "memory\/huge\.md"/);
-  });
+    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm15');
+    expect(snapshot.files.some((f) => f.path === 'memory/huge.md')).toBe(true);
 
-  test('a transcript inside the budget is not refused', async () => {
-    const src = fresh();
-    await seedSource(src, {
-      identity: { id: 'S', name: 'src' }, purpose: 'p',
-      messages: [{ id: 'm1', role: 'user', content: 'x'.repeat(1_000_000), created_at: 1000 }],
-    });
-    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm1')).resolves.toBeDefined();
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+    expect(await tgt.vfs.readFile('memory/huge.md', { encoding: 'utf8' })).toBe('y'.repeat(1_500_000));
   });
 });

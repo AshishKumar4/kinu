@@ -9,7 +9,7 @@
  * Sandbox containers and Nimbus sessions both get a capability hostname per
  * exposed port, so each preview is its own origin and may keep it.
  */
-import { describe, expect, mock, test } from 'bun:test';
+import { afterAll, describe, expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -34,20 +34,57 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 // so standing in for it here leaves everything Kinu owns under test.
 let sdkResponse: Response | null = null;
 let sdkRequest: Request | null = null;
+// Successive answers, for the one test shape a repair needs: a BEFORE and an
+// AFTER. Empty means every forward gets `sdkResponse`.
+let sdkQueue: Response[] = [];
+let sdkForwards = 0;
+// What the repair path did. `getSandbox` used to throw here because nothing in
+// this suite reached it; the stale-preview repair does, and WHICH object it
+// reaches is the property that matters most.
+/** The options every Kinu callsite passes for one sandbox id; the repair must
+ *  pass the same ones or the SDK drops in-flight requests for that id. */
+interface SandboxLookupOptions {
+  normalizeId: boolean;
+  transport: string;
+}
+let repairs: Array<{ id: string; options: SandboxLookupOptions }> = [];
+let repairFailure: Error | null = null;
+// The recorder outlives this file (`mock.module` is process-wide), and a
+// LATER file's forward must not read this suite's leftovers: a scripted null
+// means "no exposed port" only while this suite is the caller.
+let suiteDone = false;
+afterAll(() => { suiteDone = true; });
 // `mock.module` replaces the whole module for the rest of the run, so the stub
-// has to carry every export the src graph binds — `Sandbox` and `getSandbox`
-// are load-time named imports in kinu-sandbox/orchestrator/runtime, and a
-// proxyToSandbox-only stub makes any later import of the Worker entry a
-// load-time SyntaxError.
+// keeps the REAL module for every export it does not fake — a hand-maintained
+// export list here is drift: it omitted `streamFile` and turned every later
+// file that binds it into a load-time SyntaxError.
+import * as actualSandboxSdk from '@cloudflare/sandbox';
 mock.module('@cloudflare/sandbox', () => ({
+  ...actualSandboxSdk,
   proxyToSandbox: async (request: Request) => {
     sdkRequest = request;
-    return sdkResponse;
+    sdkForwards += 1;
+    // After this suite, a forward answers a neutral 204: the caller is another
+    // file that never scripted anything here. Within the suite, a Response is
+    // one-shot and the real SDK mints a new one per forward, so the recorder
+    // hands out a CLONE and keeps the scripted original pristine — returning
+    // the same instance twice arrives disturbed, which is what
+    // unit-transport-security inherited under full-suite order. A scripted
+    // null stays null: that is the SDK's own "no exposed port" answer.
+    if (suiteDone) return new Response(null, { status: 204 });
+    const scripted = sdkQueue.shift() ?? sdkResponse;
+    return scripted === null ? null : scripted.clone();
   },
   Sandbox: class {},
-  getSandbox: () => { throw new Error('getSandbox is not exercised by this suite.'); },
+  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options: SandboxLookupOptions) => ({
+    ensureReady: async () => {
+      repairs.push({ id, options });
+      if (repairFailure) throw repairFailure;
+    },
+  }),
 }));
-const { SDK_FORWARD_FAILURE, servePreviewRequest } = await import('../src/preview-proxy');
+const { SDK_FORWARD_FAILURE, SDK_STALE_PREVIEW, servePreviewRequest } =
+  await import('../src/preview-proxy');
 
 const root = join(import.meta.dir, '..');
 const source = (path: string): string => readFileSync(join(root, path), 'utf8');
@@ -77,6 +114,9 @@ interface PreviewTestBindings {
   CLI_PUBLIC_ORIGIN?: string;
   PREVIEW_HOST_SUFFIX?: string;
   CREDENTIAL_ENCRYPTION_KEY?: string;
+  /** Present only where a repair is expected to be possible: without the
+   *  binding there is no container to re-drive, and the stale answer stands. */
+  Sandbox?: object;
   NIMBUS_SESSION?: {
     idFromName(name: string): string;
     get(): PreviewNimbusStub;
@@ -105,7 +145,34 @@ const NIMBUS_URL = configuredNimbusUrl;
 async function serve(url: string, response: Response | null): Promise<Response> {
   sdkResponse = response;
   sdkRequest = null;
+  sdkQueue = [];
+  sdkForwards = 0;
+  repairs = [];
+  repairFailure = null;
   return servePreviewRequest(new Request(url), testEnv(ENV));
+}
+
+/** One request against a deployment that HAS a container, with successive SDK
+ *  answers: the before and the after of a repair. */
+async function serveWithRepair(
+  request: Request,
+  answers: Response[],
+  failure: Error | null = null,
+): Promise<Response> {
+  sdkResponse = null;
+  sdkRequest = null;
+  sdkQueue = [...answers];
+  sdkForwards = 0;
+  repairs = [];
+  repairFailure = failure;
+  return servePreviewRequest(request, testEnv({ ...ENV, Sandbox: {} }));
+}
+
+function stalePreview(): Response {
+  return new Response(SDK_STALE_PREVIEW.body, {
+    status: SDK_STALE_PREVIEW.status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 describe('preview sandbox policy', () => {
@@ -324,6 +391,108 @@ describe('serving the preview host', () => {
     expect(proxy).toContain('sanitizePreviewRequestHeaders(request.headers)');
     expect(proxy).not.toContain('validatePortToken');
     expect(proxy).not.toContain('containerFetch');
+  });
+});
+
+// KINU-035. A container recycle replaces the runtime that owned each port's
+// activation, and the durable token survives it, so a preview URL that is still
+// perfectly valid answers 410 until something re-exposes the port. Nothing did.
+describe('repairing a stale preview', () => {
+  test('a stale GET is repaired once and re-issued, and the visitor sees the app', async () => {
+    const res = await serveWithRepair(new Request(PREVIEW_URL), [
+      stalePreview(),
+      new Response('<h1>hello</h1>', { status: 200, headers: { 'content-type': 'text/html' } }),
+    ]);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('hello');
+    expect(sdkForwards).toBe(2);
+    // The object that ANSWERED the request, addressed the way every other Kinu
+    // call site addresses it.
+    expect(repairs).toEqual([
+      { id: 'kinu-hello', options: { normalizeId: true, transport: 'rpc' } },
+    ]);
+  });
+
+  test('the repaired answer still carries the preview containment headers', async () => {
+    const res = await serveWithRepair(new Request(PREVIEW_URL), [
+      stalePreview(),
+      new Response('<h1>hello</h1>', { status: 200 }),
+    ]);
+
+    expect(res.headers.get('content-security-policy')).toBe(`sandbox ${PREVIEW_SANDBOX}`);
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+  });
+
+  test('a second stale answer is returned as itself — one transition, not a budget', async () => {
+    const res = await serveWithRepair(new Request(PREVIEW_URL), [stalePreview(), stalePreview()]);
+
+    expect(res.status).toBe(410);
+    expect(await res.json()).toMatchObject({ code: 'STALE_PREVIEW_URL' });
+    expect(sdkForwards).toBe(2);
+    expect(repairs).toHaveLength(1);
+  });
+
+  test('a repair that cannot run leaves the stale answer exactly as it was', async () => {
+    const res = await serveWithRepair(
+      new Request(PREVIEW_URL),
+      [stalePreview(), stalePreview()],
+      new Error('this devbox has no attached work directory'),
+    );
+
+    expect(res.status).toBe(410);
+    expect(repairs).toHaveLength(1);
+  });
+
+  test('a non-GET is never repaired: its body cannot be replayed', async () => {
+    const res = await serveWithRepair(
+      new Request(PREVIEW_URL, { method: 'POST', body: 'x' }),
+      [stalePreview()],
+    );
+
+    expect(res.status).toBe(410);
+    expect(sdkForwards).toBe(1);
+    expect(repairs).toEqual([]);
+  });
+
+  test('an invalid token is never repaired — the 404 arm is unauthenticated', async () => {
+    const res = await serveWithRepair(new Request(PREVIEW_URL), [
+      new Response(JSON.stringify({ error: 'Access denied', code: 'INVALID_TOKEN' }), {
+        status: 404, headers: { 'content-type': 'application/json' },
+      }),
+    ]);
+
+    expect(res.status).toBe(404);
+    expect(repairs).toEqual([]);
+  });
+
+  test("an app's own 410 is not a stale preview", async () => {
+    const res = await serveWithRepair(new Request(PREVIEW_URL), [
+      new Response('this resource is gone', { status: 410 }),
+    ]);
+
+    expect(res.status).toBe(410);
+    expect(await res.text()).toBe('this resource is gone');
+    expect(repairs).toEqual([]);
+  });
+
+  test('a deployment with no container binding cannot repair, and says nothing else', async () => {
+    const res = await serve(PREVIEW_URL, stalePreview());
+
+    expect(res.status).toBe(410);
+    expect(repairs).toEqual([]);
+  });
+
+  test("the SDK's stale-preview response is still the shape we match", () => {
+    // The whole classification rests on this body. An upgrade that rewords it
+    // must fail here rather than silently retiring the repair.
+    const sdk = readFileSync(
+      join(root, '../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
+      'utf8',
+    );
+    expect(sdk).toContain('Preview URL is stale because the sandbox runtime is not active');
+    expect(sdk).toContain('STALE_PREVIEW_URL');
+    expect(sdk).toContain('status: 410');
   });
 });
 

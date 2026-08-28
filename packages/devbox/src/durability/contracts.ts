@@ -32,6 +32,16 @@ export const ObjectReceiptSchema = v.strictObject({
 });
 export type ObjectReceipt = v.InferOutput<typeof ObjectReceiptSchema>;
 
+export const CapturedCutSchema = v.strictObject({
+  captureId: IdSchema,
+  epoch: DecimalSchema,
+  baseRevision: DecimalSchema,
+  cut: DecimalSchema,
+  stableStageHandle: IdSchema,
+  manifestSha256: Sha256Schema,
+});
+export type CapturedCut = v.InferOutput<typeof CapturedCutSchema>;
+
 export const RootEnvelopeV1Schema = v.strictObject({
   version: v.literal(1),
   format: v.picklist(DURABLE_ROOT_FORMATS),
@@ -39,8 +49,12 @@ export const RootEnvelopeV1Schema = v.strictObject({
   epoch: DecimalSchema,
   generation: DecimalSchema,
   parentRootId: v.nullable(Sha256Schema),
-  cut: DecimalSchema,
+  cut: CapturedCutSchema,
   rootObject: ImmutableObjectRefSchema,
+  /** Canonical sorted payload closure, duplicated here for metadata-only restore verification. */
+  closure: v.array(ImmutableObjectRefSchema),
+  /** Canonical sorted payload closure, written directly beside candidate objects. */
+  closureObject: ImmutableObjectRefSchema,
 });
 export type RootEnvelopeV1 = v.InferOutput<typeof RootEnvelopeV1Schema>;
 export const HeadPointerV1Schema = v.strictObject({
@@ -97,21 +111,12 @@ export const PayloadGrantSchema = v.strictObject({
 });
 export type PayloadGrant = v.InferOutput<typeof PayloadGrantSchema>;
 
-export const CapturedCutSchema = v.strictObject({
-  captureId: IdSchema,
-  epoch: DecimalSchema,
-  baseRevision: DecimalSchema,
-  cut: DecimalSchema,
-  stableStageHandle: IdSchema,
-  manifestSha256: Sha256Schema,
-});
-export type CapturedCut = v.InferOutput<typeof CapturedCutSchema>;
 
 export const DURABILITY_OPERATION_KINDS = [
   'tick', 'barrier', 'gc', 'cleanup',
 ] as const;
 export const DURABILITY_OPERATION_PHASES = [
-  'intent', 'transferring', 'sealed', 'published', 'failed',
+  'intent', 'transferring', 'sealed', 'completion-pending', 'published', 'failed',
 ] as const;
 const OperationBaseEntries = {
   operationId: IdSchema,
@@ -136,6 +141,12 @@ export const OperationRecordSchema = v.variant('phase', [
   }),
   v.strictObject({
     ...OperationBaseEntries,
+    phase: v.literal('completion-pending'),
+    attemptId: IdSchema,
+    resultRootId: Sha256Schema,
+  }),
+  v.strictObject({
+    ...OperationBaseEntries,
     phase: v.literal('published'),
     resultRootId: Sha256Schema,
   }),
@@ -146,6 +157,33 @@ export const OperationRecordSchema = v.variant('phase', [
   }),
 ]);
 export type OperationRecord = v.InferOutput<typeof OperationRecordSchema>;
+
+/** The sole candidate control authority persisted by a Devbox Durable Object.
+ * Envelope metadata is immutable R2 data addressed by `head.rootEnvelopeId`;
+ * keeping only that pointer here prevents the control record from becoming a
+ * second envelope authority. */
+export const CandidateControlStateV1Schema = v.strictObject({
+  version: v.literal(1),
+  head: v.nullable(HeadPointerV1Schema),
+  operation: v.nullable(OperationRecordSchema),
+});
+export type CandidateControlStateV1 = v.InferOutput<typeof CandidateControlStateV1Schema>;
+
+/** The control snapshot a container run receives. It pairs the durable head
+ * pointer with the immutable envelope that pointer names, so the runner reads
+ * root and closure metadata without ever becoming a head authority. */
+export const CandidateRunHeadV1Schema = v.strictObject({
+  pointer: HeadPointerV1Schema,
+  envelope: RootEnvelopeV1Schema,
+});
+export type CandidateRunHeadV1 = v.InferOutput<typeof CandidateRunHeadV1Schema>;
+
+export const CandidateRunControlV1Schema = v.strictObject({
+  version: v.literal(1),
+  head: v.nullable(CandidateRunHeadV1Schema),
+  operation: v.nullable(OperationRecordSchema),
+});
+export type CandidateRunControlV1 = v.InferOutput<typeof CandidateRunControlV1Schema>;
 
 /** Every external await where reset/re-drive behavior must be fault-injected. */
 export const DURABILITY_AWAIT_POINTS = [

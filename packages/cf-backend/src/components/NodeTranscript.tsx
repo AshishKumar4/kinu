@@ -15,10 +15,11 @@
  * are optional, every step is `role: 'assistant'`, and a branch has no user
  * turns to draw in the first place.
  *
- * What this file owns is therefore only the fold — `HeadStep` → `UIMessage` — and
- * the frame around it: the task pinned and expandable, the answer highlighted
- * away from the steps that reached it, the path back to the root, and four
- * distinguishable ways for there to be nothing to show.
+ * The fold — a step, or the step still arriving, as a `UIMessage` — lives in
+ * `head-chat.ts`, so the durable half and the live half cannot drift apart.
+ * What this file owns is the frame around it: the task pinned and expandable,
+ * the answer highlighted away from the steps that reached it, the path back to
+ * the root, and four distinguishable ways for there to be nothing to show.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -26,11 +27,13 @@ import {
   BrainIcon, CaretDownIcon, CaretRightIcon, CheckCircleIcon, GitForkIcon,
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
-import type { UIMessage } from "ai";
-import type { HeadStep, HeadStepToolCall, NodeTranscriptView } from "@kinu.run/core";
+import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
 import { usageTotal } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { MessageView } from "@/components/MessageView";
+import {
+  deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
+} from "@/components/head-chat";
 import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, timeAgo } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
@@ -40,37 +43,6 @@ import type { SeekCursor } from "@kinu.run/core";
 import { fmtTokens } from "@/lib/format";
 import type { ForkNode, Rpc } from "@/lib/protocol";
 
-/* ── the fold: a branch's trace as chat messages ─────────────────── */
-
-/**
- * One recorded step as one assistant message.
- *
- * A step is exactly what the chat already draws: optional reasoning, optional
- * prose, and the calls it made. The only translation needed is the tool shape —
- * the journal stores `{ name, input, output }` and the chat reads AI-SDK tool
- * parts — so that is all this does.
- *
- * `dynamic-tool` rather than a typed `tool-<name>` part because the head's tool
- * set is not statically known to the browser, and `groupMessageParts` /
- * `ToolCallPart` treat both variants identically by design (tool-call-grouping.ts).
- *
- * A call with no recorded output is `input-available`, which the chat draws as
- * still running — true of the step a live branch is in the middle of, and the
- * honest reading of a call whose result never came back.
- */
-function stepAsMessage(step: HeadStep, index: number, headId: string): UIMessage {
-  const parts: UIMessage["parts"] = [];
-  if (step.reasoning) parts.push({ type: "reasoning", text: step.reasoning, state: "done" });
-  if (step.text) parts.push({ type: "text", text: step.text, state: "done" });
-  step.toolCalls.forEach((call: HeadStepToolCall, callIndex) => {
-    const toolCallId = `${headId}-s${index}-t${callIndex}`;
-    parts.push(call.output === undefined
-      ? { type: "dynamic-tool", toolName: call.name, toolCallId, state: "input-available", input: call.input }
-      : { type: "dynamic-tool", toolName: call.name, toolCallId, state: "output-available", input: call.input, output: call.output });
-  });
-  return { id: `${headId}-s${index}`, role: "assistant", parts };
-}
-
 /* ── the frame ───────────────────────────────────────────────────── */
 /**
  * One dot vocabulary, covering BOTH lifecycles this panel can show: a head's
@@ -78,9 +50,17 @@ function stepAsMessage(step: HeadStep, index: number, headId: string): UIMessage
  * own `statusDot`, so the node the reader clicked does not change colour when
  * its panel opens. A word neither vocabulary declares gets the quiet dot — an
  * unrecognised status is not an error.
+ *
+ * `running` wears the ACCENT, which is what working means everywhere else in
+ * this product (the sidebar's "Working now", the composer's Running, a
+ * subordinate at work). It wore `warning` here, so a healthy branch looked like
+ * a problem and was indistinguishable from `budget_exceeded` beside it — and in
+ * light mode `--c-warning` (#7E5205) and `--c-text-3` (#5E5344) are two browns,
+ * so running and settled-without-an-answer read as the same dot.
  */
 function statusDot(status: string): string {
-  if (status === "running" || status === "budget_exceeded") return "p-dot-warning";
+  if (status === "running") return "p-dot-accent";
+  if (status === "budget_exceeded") return "p-dot-warning";
   if (status === "completed" || status === "terminal") return "p-dot-success";
   if (status === "errored" || status === "failed" || status === "aborted") return "p-dot-danger";
   return "p-dot-neutral";
@@ -140,9 +120,11 @@ function SearchPath({ view, onSelect }: {
       <TreeStructureIcon size={11} className="p-text-3 shrink-0" />
       {view.path.map((crumb, index) => {
         const here = index === view.path.length - 1 || onSelect === undefined;
-        const label = index === 0 && !crumb.label
-          ? "root"
-          : cleanNodeLabel(crumb.label, `depth ${crumb.depth}`);
+        // Every crumb is named by the read model, the first one by the RUN's own
+        // name (`read-models/node-transcript.ts`). This used to print the literal
+        // `root` whenever the first crumb's label was empty, which for an MCTS
+        // search is always.
+        const label = cleanNodeLabel(crumb.label, `depth ${crumb.depth}`);
         return (
           <span key={crumb.id} className="flex items-center gap-1 shrink-0">
             {index > 0 && <span className="p-text-3 text-[10px]">/</span>}
@@ -254,7 +236,7 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
  * through the panel below, and a mid-turn branch chip has its own way of getting
  * the same view for the same RPC.
  */
-export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
+export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: {
   view: NodeTranscriptView;
   /** Selecting an ancestor from the search path; omitted by a caller whose view
    *  is one node deep. */
@@ -269,12 +251,24 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
     readonly error: string | null;
   };
   onLoadOlder?: () => void;
+  /** The step the running head has produced but not journalled yet, from the
+   *  transient `head_stream` frames. Drawn below the last durable step as the
+   *  chat's own live message and replaced by it the moment it lands — never
+   *  merged into the trace, because the journal is what the counts and the
+   *  paging are computed from. */
+  pending?: HeadDelta;
 }) {
   const live = view.status === "running";
   const allSteps = older ? [...older.steps, ...view.steps.items] : view.steps.items;
   const messages = useMemo(
     () => allSteps.map((step, index) => stepAsMessage(step, index, view.nodeId)),
     [allSteps, view.nodeId],
+  );
+  // Only a RUNNING head is writing anything; a settled view's leftover delta is
+  // by definition already in the trace above.
+  const arriving = useMemo(
+    () => (live ? deltaAsMessage(pending, view.nodeId) : null),
+    [live, pending, view.nodeId],
   );
 
   // A live branch is read at its newest step, so the trace follows the work
@@ -283,7 +277,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
   const tail = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (live) tail.current?.scrollIntoView({ block: "end" });
-  }, [live, messages.length]);
+  }, [live, messages.length, arriving]);
 
   // The trace grows UP as the reader walks back: the same hook the chat columns
   // use, so the prepend is compensated and the edge fires the next page without
@@ -316,7 +310,9 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
       {/* The trace, and only the trace, scrolls: the task and the answer stay
           put, which is the whole point of pinning them. */}
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {messages.length === 0 ? <EmptyTrace view={view} /> : (
+        {/* A head that has written nothing durable but IS writing has a trace:
+            the step arriving. Only with neither is there nothing to show. */}
+        {messages.length === 0 && arriving === null ? <EmptyTrace view={view} /> : (
           <div className="space-y-3">
             {older && (older.hasMore || older.loading || older.error) && (
               <HistoryBoundary
@@ -326,10 +322,18 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
                 onRetry={onLoadOlder ?? (() => {})}
               />
             )}
+            {/* The live affordance belongs to exactly one message. With a step
+                arriving, that is the arriving one — the last durable step is
+                finished and must not also claim the caret. */}
             {messages.map((message, index) => (
               <MessageView key={message.id} message={message}
-                isLast={index === messages.length - 1} isStreaming={live} />
+                isLast={arriving === null && index === messages.length - 1} isStreaming={live} />
             ))}
+            {arriving && (
+              <div data-node-pending-step>
+                <MessageView message={arriving} isLast isStreaming />
+              </div>
+            )}
             <div ref={tail} />
           </div>
         )}
@@ -383,12 +387,15 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder }: {
  *  net under it. */
 const TRANSCRIPT_FALLBACK_MS = 4_000;
 
-export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = false }: {
+export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas, running = false }: {
   runId: string | null;
   nodeId: string | null;
   rpc: Rpc;
   /** Per-branch write counter from `useKinu`. */
   headActivity: ReadonlyMap<string, number>;
+  /** The live deltas from `useKinu`. Read here rather than by the caller so the
+   *  reconciliation below has both halves — the journal and the paint. */
+  headDeltas: HeadDeltas;
   /** Whether the node is still working. Arms the fallback clock below; a
    *  finished node has nothing further to poll for. */
   running?: boolean;
@@ -438,6 +445,29 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = 
   useEffect(() => { setWalk({ steps: [], hasMore: false, below: null, loading: false, error: null }); }, [subject]);
 
   const view = lastValue(resource);
+
+  /**
+   * The journal caught up, so the delta stops being painted.
+   *
+   * `head_activity` retires a delta by push, and that is the fast path. But a
+   * frame can be missed — the fallback re-read above exists for exactly that —
+   * and a reader that learns of a landed step from its OWN read has to retire
+   * the delta too, or the step's text paints twice: once as the durable step,
+   * once as the live tail under it. The step count is the journal's own total,
+   * so a rise in it is the journal speaking, whichever read revealed it.
+   *
+   * The first view of a subject only takes a baseline: a delta arriving mid-step
+   * is live, and the count it is measured against is not known until then.
+   */
+  const journalled = useRef({ subject, steps: -1 });
+  useEffect(() => {
+    const steps = view?.stepCount ?? -1;
+    if (steps < 0 || nodeId === null) return;
+    const before = journalled.current;
+    journalled.current = { subject, steps };
+    if (before.subject === subject && steps > before.steps) headDeltas.retire(nodeId);
+  }, [subject, nodeId, view?.stepCount, headDeltas]);
+
   // With nothing walked yet, the boundary is the view's own; after, it is the
   // frozen one.
   const hasMore = walk.steps.length > 0 ? walk.hasMore : view?.steps.status === 'more';
@@ -487,6 +517,8 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = 
     reload,
     older: { steps: walk.steps, hasMore, loading: walk.loading, error: walk.error },
     loadOlder,
+    /** What this node is writing right now, or undefined when nothing is. */
+    pending: nodeId === null ? undefined : headDeltas.get(nodeId),
   };
 }
 
@@ -494,7 +526,7 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, running = 
  * The Exploration surfaces' node panel: fetch the selected node's transcript and
  * render it live.
  */
-export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }: {
+export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas = NO_HEAD_DELTAS, onSelect }: {
   /** The canvas's current selection: which run, and which node inside it.
    *  Structural on purpose — the tree owns `ExplorerSelection`, and a transcript
    *  panel has no business depending on the canvas's module. */
@@ -505,6 +537,10 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }
   rpc: Rpc;
   /** Per-branch write counter from `useKinu`. */
   headActivity: ReadonlyMap<string, number>;
+  /** The live deltas from `useKinu` — the step being written. Omitted by a
+   *  caller with no socket (the gallery's frames), which reads the same as a
+   *  head emitting no deltas at all. */
+  headDeltas?: HeadDeltas;
   onSelect: (nodeId: string) => void;
 }) {
   const runId = selection?.runId ?? null;
@@ -515,8 +551,8 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }
   // the transcript's fallback clock.
   const drawnRoot = runId === null ? undefined : trees.get(runId);
   const drawn = drawnRoot && nodeId !== null ? findForkNode(drawnRoot, nodeId) : null;
-  const { view, resource, reload, older, loadOlder } = useNodeTranscript({
-    runId, nodeId, rpc, headActivity, running: drawn?.status === "running",
+  const { view, resource, reload, older, loadOlder, pending } = useNodeTranscript({
+    runId, nodeId, rpc, headActivity, headDeltas, running: drawn?.status === "running",
   });
   const drawnLabel = cleanNodeLabel(drawn?.action, nodeId ?? "this branch");
 
@@ -537,7 +573,10 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, onSelect }
         <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
           className="shrink-0 border-b p-border px-4 py-2" />
       )}
-      {view ? <TranscriptBody view={view} onSelect={onSelect} older={older} onLoadOlder={loadOlder} />
+      {view ? (
+        <TranscriptBody view={view} onSelect={onSelect} older={older} onLoadOlder={loadOlder}
+          pending={pending} />
+      )
         : resource.status === "loading" ? (
           <div className="flex-1 flex items-center justify-center gap-2 text-[12px] p-text-2">
             <Loader size="sm" />Reading the branch…

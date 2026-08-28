@@ -4,6 +4,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes';
+import { PRIVATE_NO_STORE } from '../src/lib/security-headers';
 import type { JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
@@ -292,7 +293,10 @@ describe('access token management routes (session tokens only)', () => {
       fresh.env,
     );
     expect(minted?.status).toBe(201);
-    expect(handled(minted).headers.get('cache-control')).toBe('no-store');
+    // The minted token is the one time the secret is in a body. It used to say
+    // `no-store` because this route remembered to; the account policy now
+    // reaches every authenticated answer from `json()`.
+    expect(handled(minted).headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
     expect(v.parse(MintedTokenSchema, await handled(minted).json())).toMatchObject({
       token: expect.stringMatching(/^pta_/),
       name: 'ci',

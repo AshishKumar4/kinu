@@ -15,7 +15,6 @@
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import { reconcileColumns } from '../identity/columns';
 import type { MCTSConfig } from '../types/mcts';
 import type { WorkMode } from '../prompting/surface';
 import { validateSwarmProfileSnapshot, type SwarmProfileSnapshot } from '../profiles';
@@ -82,10 +81,11 @@ export interface PersistedSearchKnobs {
   readonly judgeSamples?: number;
   /**
    * The resolved turn profile this run started under, with its precedence
-   * sources — swarm runs only (an MCTS loop has no role). Written by
-   * `runSwarm` at `begin`, so a durable detach and every later re-drive of the
-   * job replay THIS record instead of resolving against today's catalog:
-   * catalog edits are for later turns, never an in-flight tree.
+   * sources — swarm runs only (an MCTS loop has no role), and only where the
+   * caller wired a catalog to resolve one. Written by `runSwarm` at `begin`, so
+   * a durable detach and every later re-drive of the job replay THIS record
+   * instead of resolving against today's catalog: catalog edits are for later
+   * turns, never an in-flight tree.
    */
   readonly profile?: SwarmProfileSnapshot;
   /** The caller conversation frozen when this swarm began. */
@@ -166,18 +166,7 @@ export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
   return rest;
 }
 
-/**
- * Columns `mcts_search_runs` gained after its first release, and the one place they
- * are listed. `CREATE TABLE IF NOT EXISTS` is a no-op on a workspace whose table
- * predates one of them while every reader still selects it by name — the failure
- * `SEARCH_NODES_POST_RELEASE_COLUMNS` exists for.
- */
-const MCTS_SEARCH_RUNS_POST_RELEASE_COLUMNS = {
-  engine: `TEXT NOT NULL DEFAULT 'mcts'`,
-  judge_samples_realised: 'INTEGER',
-} satisfies Readonly<Record<string, string>>;
-
-export function initMctsSearchTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initMctsSearchTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS mcts_search_runs (
     root_id      TEXT PRIMARY KEY,
     task         TEXT NOT NULL,
@@ -192,7 +181,6 @@ export function initMctsSearchTable(execRaw: RawSqlExec, sql: SqlExecutor): void
     created_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL
   )`);
-  reconcileColumns(sql, execRaw, 'mcts_search_runs', MCTS_SEARCH_RUNS_POST_RELEASE_COLUMNS);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_mcts_search_status_task ON mcts_search_runs(status, task, updated_at)`);
 }
 

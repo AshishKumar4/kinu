@@ -25,8 +25,8 @@
  * 2. HTTPS. Closed by `interceptHttps = true`, and NOT by default: the SDK's
  *    documentation says "Sandboxes intercept HTTPS traffic by default —
  *    `interceptHttps` is set to `true` on the Sandbox class", and that is false
- *    for the whole stable line. The gate re-measures the claim against the
- *    installed bundle (see {@link sdkDefaultsHttpsInterceptionOff}) so the day
+ *    for the whole stable line. The gate re-measures the claim against the copy
+ *    the deployed artifact binds (see {@link boundContainers}) so the day
  *    upstream changes it, this gate says so instead of our comments quietly
  *    becoming wrong.
  *
@@ -73,7 +73,9 @@
  * empty scan.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join, relative } from 'node:path';
 
 import * as v from 'valibot';
 
@@ -256,6 +258,84 @@ export function exportsContainerProxy(entry: string): boolean {
   return /export\s*\{[^}]*\bContainerProxy\b[^}]*\}/.test(entry);
 }
 
+/** The SDK whose default this gate re-measures, and the package that resolves
+ *  that SDK for the deployed artifact. Two copies of Containers are installed at
+ *  two versions: the top-level copy carries one type import and no runtime byte,
+ *  while the Worker reaches the nested copy through `@cloudflare/sandbox`. So the
+ *  resolution starts at Sandbox's own module, never at this repository. */
+const CONTAINERS = '@cloudflare/containers';
+const CONTAINERS_HOST = '@cloudflare/sandbox';
+
+/** The module that declares the default, spelled the way Containers' own entry
+ *  spells it: `dist/index.js` re-exports `./lib/container`. A relative specifier,
+ *  because Containers publishes `.` alone in `exports` and Node refuses every
+ *  subpath of it. */
+const CONTAINERS_MODULE = './lib/container';
+
+const CopyVersion = v.object({ version: v.string() });
+
+/** The installed copy of Containers the deployed artifact loads. */
+export interface BoundContainers {
+  /** Absolute path of the module the artifact loads. */
+  readonly module: string;
+  /** Version of the copy that module belongs to, from its own manifest. */
+  readonly version: string;
+}
+
+/** Resolve `specifier` the way the module at `from` resolves it. Throws, and
+ *  answers with no other copy: a gate that falls back to the top-level copy
+ *  measures code the Worker never loads. */
+function resolveFrom(from: string, specifier: string): string {
+  try {
+    return createRequire(from).resolve(specifier);
+  } catch (cause) {
+    throw new Error(finding({
+      invariant: `the ${CONTAINERS} copy this gate reads is the copy the deployed artifact binds, `
+        + `resolved from ${CONTAINERS_HOST} rather than named by a path`,
+      at: `resolving '${specifier}' from ${from}`,
+      found: 'the specifier resolves to nothing there',
+      silently: `the top-level ${CONTAINERS} copy is a different version and contributes no runtime `
+        + 'byte to the artifact, so it is NOT a substitute: reading it asserts a property of code '
+        + 'the Worker never loads',
+      fix: `install ${CONTAINERS_HOST} so it resolves ${CONTAINERS}, or correct the specifier`,
+    }), { cause });
+  }
+}
+
+/** The version of the copy `module` belongs to, read from the nearest manifest
+ *  above it. Read rather than written down, because which version this gate read
+ *  is the fact a future divergence becomes visible in. */
+function copyVersion(module: string): string {
+  for (let dir = dirname(module); dir !== dirname(dir); dir = dirname(dir)) {
+    const manifest = join(dir, 'package.json');
+    if (existsSync(manifest)) {
+      return v.parse(CopyVersion, JSON.parse(readFileSync(manifest, 'utf8'))).version;
+    }
+  }
+  throw new Error(finding({
+    invariant: `the ${CONTAINERS} copy the artifact binds reports its own version`,
+    at: module,
+    found: 'no package.json above the resolved module',
+    silently: 'the gate reads bytes it cannot attribute to a version, so an upstream change moves '
+      + 'the property without moving anything the output names',
+    fix: `reinstall ${CONTAINERS_HOST} so its nested ${CONTAINERS} copy carries its manifest`,
+  }));
+}
+
+/**
+ * The Containers module the deployed Worker binds, resolved along the edge the
+ * artifact itself resolves: this repository loads `@cloudflare/sandbox`, and
+ * Sandbox's own modules load the Containers copy nested beneath it.
+ *
+ * A literal path used to name the top-level copy here. That copy is a different
+ * version and ships nothing, so the property asserted below held by accident.
+ */
+export function boundContainers(): BoundContainers {
+  const host = resolveFrom(`${root}package.json`, CONTAINERS_HOST);
+  const module = resolveFrom(resolveFrom(host, CONTAINERS), CONTAINERS_MODULE);
+  return { module, version: copyVersion(module) };
+}
+
 /** Re-measure the upstream default this whole posture exists to correct. True
  *  while the SDK still leaves HTTPS interception OFF by default. */
 export function sdkDefaultsHttpsInterceptionOff(containerBundle: string): boolean {
@@ -330,10 +410,10 @@ if (import.meta.main) {
     process.exit(1);
   }
 
-  const containerBundle = readFileSync(
-    `${root}node_modules/@cloudflare/containers/dist/lib/container.js`, 'utf8',
+  const containers = boundContainers();
+  const httpsStillOffByDefault = sdkDefaultsHttpsInterceptionOff(
+    readFileSync(containers.module, 'utf8'),
   );
-  const httpsStillOffByDefault = sdkDefaultsHttpsInterceptionOff(containerBundle);
 
   const measured = assertMeasured('egress-interception', [
     ['container classes bound in wrangler.jsonc', fromWrangler.length],
@@ -349,10 +429,13 @@ if (import.meta.main) {
   }
 
   console.log(`egress-interception: ok — ${measured}`);
+  console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
+    + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
+    + 'the only copy the artifact binds');
   if (!httpsStillOffByDefault) {
     // Not a failure: upstream turning it on is good news. But our source
     // comments assert the opposite, so say it loudly rather than let them rot.
-    console.log('egress-interception: NOTE — @cloudflare/containers no longer defaults '
+    console.log(`egress-interception: NOTE — ${CONTAINERS} ${containers.version} no longer defaults `
       + 'interceptHttps to false. Update the comments in kinu-sandbox.ts and this gate.');
   }
   console.log('egress-interception: DNS RESIDUAL — MEASURED CLOSED on the deployed container '

@@ -9,8 +9,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  forkWorkspace, writeSoul, readForkLineage, writeForkSnapshot,
-  type ForkSnapshot, type ForkTransport,
+  forkWorkspace, writeSoul, readForkLineage, writeForkSnapshot, snapshotWorkspaceForFork,
+  type ForkTransport,
 } from '../src/index';
 import { createTestWorkspace } from './helpers';
 
@@ -26,20 +26,23 @@ async function sourceWorkspace() {
 /** A transport that records what it was asked to do. `taken` is the set of
  *  names it reports as already holding data. */
 function recordingTransport(taken: readonly string[] = []) {
-  const delivered: Array<{ name: string; snapshot: ForkSnapshot }> = [];
+  const delivered: Array<{ name: string; untilMessageId: string }> = [];
   const probed: string[] = [];
   const transport: ForkTransport = {
     async occupied(name) { probed.push(name); return taken.includes(name); },
-    async deliver(name, snapshot) {
-      delivered.push({ name, snapshot });
-      return { workspaceId: `DO-${name}` };
+    async deliver(name, source) {
+      delivered.push({ name, untilMessageId: source.untilMessageId });
+      const message = source.sql<{ created_at: number }>`
+        SELECT created_at FROM messages WHERE id = ${source.untilMessageId} LIMIT 1`[0];
+      if (!message) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
+      return { workspaceId: `DO-${name}`, forkPointMs: message.created_at };
     },
   };
   return { transport, delivered, probed };
 }
 
 describe('forkWorkspace', () => {
-  test('ships the snapshot to the requested name and reports where it landed', async () => {
+  test('ships the source cut to the requested name and reports where it landed', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
     const out = await forkWorkspace(
@@ -51,9 +54,9 @@ describe('forkWorkspace', () => {
     expect(out).toEqual({ workspaceId: 'DO-my-fork', name: 'my-fork', forkPointMs: 1000 });
     expect(t.delivered).toHaveLength(1);
     expect(t.delivered[0]!.name).toBe('my-fork');
-    // The snapshot is the source view: cut at m1, so m2 is not in it.
-    expect(t.delivered[0]!.snapshot.messages.map((m) => m.id)).toEqual(['m1']);
-    expect(t.delivered[0]!.snapshot.source).toEqual({ workspaceId: 'SRC', workspaceName: 'atlas' });
+    // The transport receives the cut, not a materialized snapshot. Its source
+    // side can stream rows/files in bounded frames, and m2 is past this cut.
+    expect(t.delivered[0]!.untilMessageId).toBe('m1');
     src.db.close();
   });
 
@@ -98,7 +101,7 @@ describe('forkWorkspace', () => {
     src.db.close();
   });
 
-  test('an unknown cut point is refused before a workspace is addressed', async () => {
+  test('an unknown cut point is refused by the bounded source stream', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
     await expect(forkWorkspace(
@@ -107,6 +110,8 @@ describe('forkWorkspace', () => {
       { name: 'my-fork' },
     )).rejects.toThrow('fork point not found');
     expect(t.probed).toEqual([]);
+    // The primary-key preflight is bounded: it proves the cut exists without
+    // materialising its ancestry, so no pending target is ever addressed.
     expect(t.delivered).toEqual([]);
     src.db.close();
   });
@@ -132,7 +137,12 @@ describe('forkWorkspace', () => {
       busy: () => false,
       transport: {
         async occupied() { return false; },
-        async deliver(name) { delivered.push(name); return { workspaceId: 'DO-1' }; },
+        async deliver(name, source) {
+          delivered.push(name);
+          const row = source.sql<{ created_at: number }>`SELECT created_at FROM messages WHERE id = ${source.untilMessageId}`[0];
+          if (!row) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
+          return { workspaceId: 'DO-1', forkPointMs: row.created_at };
+        },
       },
     }, 'm1', { name: 'my-fork' });
     expect(delivered).toEqual(['my-fork']);
@@ -140,7 +150,7 @@ describe('forkWorkspace', () => {
     src.db.close();
   });
 
-  test('the delivered snapshot lands a complete fork', async () => {
+  test('the delivered source stream lands a complete fork', async () => {
     const src = await sourceWorkspace();
     const { db: tgtDb, sql: tgt, vfs: tgtVfs } = createTestWorkspace();
 
@@ -151,9 +161,10 @@ describe('forkWorkspace', () => {
       busy: () => false,
       transport: {
         async occupied() { return false; },
-        async deliver(name, snapshot) {
+        async deliver(name, source) {
+          const snapshot = await snapshotWorkspaceForFork(source.sql, source.vfs, source.untilMessageId);
           await writeForkSnapshot(tgt, tgtVfs, snapshot, { workspaceId: 'TGT', workspaceName: name, now: 5000 });
-          return { workspaceId: 'TGT' };
+          return { workspaceId: 'TGT', forkPointMs: snapshot.cut.createdAtMs };
         },
       },
     }, 'm2', { name: 'landed' });

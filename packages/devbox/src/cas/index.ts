@@ -27,6 +27,8 @@ export {
 } from './sync';
 export {
   JournalBatchSchema,
+  CAS_FORMAT_VERSION,
+  ManifestSchema,
   KEY_CURSOR,
   KEY_MANIFEST,
   PREFIX_BLOBS,
@@ -42,10 +44,13 @@ export {
   treeKey,
   type CasPutMeta,
   type CasStore,
-  type ChunkRef,
   type DeleteEntry,
   type DirEntry,
+  type FileDataPart,
   type FileEntry,
+  type FileHolePart,
+  type FilePart,
+  type HardlinkEntry,
   type JournalEntry,
   type NewJournalEntry,
   type PresentEntry,

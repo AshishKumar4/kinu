@@ -265,7 +265,9 @@ backends: the attachment sanitizer offloads model-incompatible file parts to
 DynamicContextLedger (`volatile-context.ts`) appends a fresh `<dynamic_context>`
 block only when its render changes, freezing earlier blocks to preserve cache
 breakpoints (`dropSuperseded`, the compaction first rung, is the only
-unfreezer); step-prune (`STEP_CONTEXT_BUDGET_RATIO = 0.7`) shrinks old tool
+unfreezer); step-prune (`stepContextLimit` = the resolved model's window less
+`outputReserveTokens`, the answer allowance the catalog reports, bounded by the
+even split) shrinks old tool
 outputs near the window; cache-breakpoints places Anthropic `cache_control` /
 OpenAI `prompt_cache_key`; stream-usage-repair
 (`cf-backend/src/providers/stream-usage-repair.ts`) fixes Cloudflare AI SSE
@@ -287,7 +289,7 @@ sequenceDiagram
     U->>WS: cf_agent_use_chat_request
     WS->>T: _handleChatRequest → TurnQueue.enqueue
     T->>X: beforeTurn → emitTurnStart + transformContext (compaction)
-    T->>T: assemble context (sanitizer · ledger · cache breakpoints)
+    T->>T: split contextWindow into outputReserveTokens + stepContextLimit
     T->>LLM: streamText(model, system, messages, builtin tools)
     loop Agentic step loop
         LLM-->>T: text delta / tool call
@@ -325,10 +327,19 @@ Five ingress paths publish into the log:
 | Source | Path | Wakes via |
 |---|---|---|
 | Email | `core/src/events/ingress/email.ts` (+ `server.ts` `email()`) | `ingress: 'email_inbound'` |
-| Webhook | `core/src/events/ingress/webhook.ts` (+ `cf` `events/routes.ts`) | per-trigger HMAC / Bearer / mTLS |
+| Webhook | `core/src/events/ingress/webhook.ts` (+ `cf` `events/routes.ts`, `events/webhook-route.ts`) | signed route capability in the URL, then per-trigger HMAC / Bearer / mTLS |
 | Peer | `core/src/events/ingress/peer.ts` (`outbox_peer` → `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
 | Subordinate | `core/src/events/ingress/subordinate.ts` (+ `subordinates/support.ts` admission) | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
 | Timer | `core/src/events/ingress/triggers.ts`, driven by each backend's clock | `ingress: 'timer_alarm'` (cron / one-shot) |
+
+The webhook rail is the only public one, and it is two gates rather than one.
+The delivery URL ends in `v1-<32 hex>`, an HMAC-SHA-256 over the workspace and
+trigger identity under `WEBHOOK_ROUTE_SECRET`, minted server-side and verified
+by the Worker before the ingress budget, the body, or the workspace object.
+That is what decides which workspace a stranger may address; the trigger's own
+HMAC / Bearer / mTLS check then decides whether the payload is authentic. The
+capability is derived, so it needs no table: revoking one URL is revoking its
+trigger, and revoking all of them is rotating the secret.
 
 Core owns the gates: auth, replay window, rate limit, trust, admission; each
 backend supplies only the transport. On cf that is the Worker's HTTP and
@@ -349,6 +360,31 @@ UserDO, where the one credentialed call runs. The caller presents a workspace
 capability token, so there is nothing to spoof: it exists only for a workspace
 this user's registry issued one to, and dies with it. A second in-SQL check
 covers server membership + `allowed_tools`.
+
+Connection establishment and the descriptor read are separate jobs.
+`userMcp_warmConnections` owns establishment and always runs off the turn. Two
+triggers reach that one method: the first `/api/user` hit per isolate, under the
+*Worker's* `ctx.waitUntil`, which covers the first interactive turn; and every
+settled turn, from `ActorAgent.warmUserMcpInBackground` inside the terminal
+effect body that runs after the turn's durable recording
+(`TerminalTransitions.settle` drives it). The second exists because the first is
+keyed per isolate, so an alarm-woken, email-woken or peer-woken workspace never
+trips it and an evicted UserDO has already spent it.
+`userMcp_toolDescriptors` runs on the turn's critical path and therefore starts
+no network work and waits for none: it reads the current connection snapshot and
+returns. A configured server that is not connected yet is reported through
+`unavailable`, and the next turn's read installs it once the connection
+completes. `userMcp_callTool` hydrates on explicit use. One autonomous or
+post-eviction turn may honestly lack MCP tools; its settle warms the next one,
+and a failed warm is named and retried by the following settle.
+
+A server's name addresses its tools (`mcp_<server>_<tool>`), so names are
+unique. `userMcp_add` and `userMcp_update` seal and validate first, then claim
+the canonical `lower(name)` and write inside one `ctx.storage.transactionSync` —
+no await inside the boundary, so two concurrent adds cannot both pass. That
+transaction owns the message the owner reads: a refusal names the taken name.
+`initUserTables` builds a `UNIQUE` index over `lower(name)` unconditionally, so
+no write path can leave a duplicate behind for a reader to report.
 
 ## The UserDO caller boundary
 
@@ -461,7 +497,7 @@ files and execution to Nimbus, and the turn driver to Think; local binds them to
 | Schedule | `agent.runFiber()` (durable) + DO `alarm()` | SQLite-backed fiber |
 | Identity | DO id + `SOUL.md` (VFS) | UUID + `~/.kinu/` + `SOUL.md` (VFS) |
 | Turn driver | `OrchestratorAgent` (Think hooks) | `LocalAgentSession` (`runChat`) |
-| Swarm nodes | `ExplorationAgent` Facets (`spawnNodeFacet`) | the search's own process (no host wired) |
+| Swarm nodes | `ExplorationAgent` Facets (`spawnNodeFacet`) | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
 | MCTS branches | `ExplorationAgent` Facets (`subAgent`) | `child_process.fork` |
 | Subordinates | `SubordinateAgent` Facets (`subAgent`) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
@@ -529,10 +565,10 @@ event logs, Think session tables. Schema and boundaries:
 [STORAGE.md](./STORAGE.md); the vendored filesystem:
 [NIMBUS-INTEGRATION.md](./NIMBUS-INTEGRATION.md).
 
-Selected core algorithms are modeled in Lean 4 (`lean/`): 468 named theorems
+Selected core algorithms are modeled in Lean 4 (`lean/`): 470 named theorems
 over abstract models of agent, evolution, execution, exploration, MCTS,
 safety, and storage properties, enrolled against 49 requirements with no
-`sorry` (counted 2026-08-26 by `lean/check-traceability.mjs`). Axiom reports
+`sorry` (measured 2026-08-27 by `lean/check-traceability.mjs`). Axiom reports
 use only Lean's three kernel axioms; one separate SQLite FTS5 assumption is
 documented and enrolled. CI (`.github/workflows/lean-verify.yml` →
 `scripts/verify-lean.sh`) gates compilation, negative consistency, axiom

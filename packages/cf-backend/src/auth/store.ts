@@ -1,10 +1,16 @@
 // Browser auth state: one-time OAuth handoff state and browser sessions.
 //
-// Both are expiring, edge-read, single-owner records, so both live in KV and
-// nothing else does. A session is verified on EVERY authenticated request from
-// wherever the browser is, which is what KV is for — a cached read at the colo
-// serving the request — and its lifetime is a TTL the store enforces itself, so
-// there is no expiry sweep to run and no revoked-row bookkeeping.
+// OAuth handoff state is one-time and short-lived, so KV is the whole of it.
+//
+// A session is not. Its KV record carries the identity as it stood at sign-in,
+// and that is all it is trusted for: a KV delete reaches other colos only
+// within a minute, so KV cannot say whether a session was REVOKED. A cookie
+// copied off the browser and replayed at a lagging colo outlived logout by
+// exactly that window. One row in the user's own Durable Object says it
+// instead, every cookie verification reads that row, and the token carries the
+// user id that addresses it — so neither verification nor logout depends on a
+// cached read to find the authority. There is no remembered verdict and no
+// KV-only fallback: a request that cannot reach the authority is refused.
 //
 // The durable half of an identity is not here. It lives in the user's own
 // Durable Object, addressed by a userId DERIVED from the verified email
@@ -21,6 +27,7 @@ import type { UserDO } from '../user/user-do';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { readKvJson, writeKvJson, type KvStore } from '../lib/kv';
 import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
+import { classify, diagnostics, toKinuError, type KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -120,35 +127,123 @@ export async function consumeOAuthState(
   return { ...record, returnTo: sanitizeReturnTo(record.returnTo) };
 }
 
+/** The user id a session token routes to, or null when the token is not one.
+ *  The id is IN the token, not read from KV, so logout can always reach the
+ *  authority that revokes the session, including inside the minute a fresh
+ *  sign-in's KV record needs to reach every colo. */
+function parseSessionTokenUserId(token: string): string | null {
+  const match = /^ps_([a-f0-9]{32})_[A-Za-z0-9_-]{64,}$/.exec(token);
+  return match?.[1] ?? null;
+}
+
 export async function createSession(env: AuthStoreEnv, profile: OAuthProfile): Promise<BrowserSession> {
   const now = Date.now();
   const identity = await resolveIdentity(env, profile, now);
-  const token = `ps_${randomToken(48)}`;
+  const token = `ps_${identity.userId}_${randomToken(48)}`;
+  const tokenHash = await sha256Hex(token);
   const expiresAt = now + SESSION_TTL_MS;
+  const caller = await ownerCaller(env);
+  const authority = sessionAuthority(env, identity.userId);
 
-  await writeKvJson(env.AUTH_KV, `session:${await sha256Hex(token)}`, {
-    userId: identity.userId,
-    email: identity.email,
-    displayName: identity.displayName ?? null,
-    provider: identity.provider ?? profile.provider,
-    sub: identity.sub,
-    authTime: now,
-    expiresAt,
-  }, expiresAt);
+  // The authority goes first, so a cookie is never outstanding against a
+  // session nothing can revoke.
+  await authority.registerBrowserSession(caller, tokenHash, expiresAt);
+  try {
+    await writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
+      userId: identity.userId,
+      email: identity.email,
+      displayName: identity.displayName ?? null,
+      provider: identity.provider ?? profile.provider,
+      sub: identity.sub,
+      authTime: now,
+      expiresAt,
+    }, expiresAt);
+  } catch (writeFailed) {
+    // This token is never returned, so the row stands for a session nobody can
+    // present. Withdraw it rather than leave it holding a slot for a month.
+    try {
+      await authority.revokeBrowserSession(caller, tokenHash);
+    } catch (withdrawFailed) {
+      diagnostics.failure('auth.browser_session_row_stranded', toKinuError({
+        doing: 'withdrawing the session row a failed sign-in left behind',
+        cause: withdrawFailed,
+        otherwise: 'unavailable',
+      }));
+    }
+    throw new SessionAuthorityUnavailableError({ cause: writeFailed });
+  }
 
   return { token, expiresAt, identity };
 }
 
-/** The identity a session cookie stands for, or null when the token is not one.
+/** One of the two stores a session depends on would not answer, so this
+ *  request has no answer about the session either.
  *
- *  The record is the identity as it stood at sign-in: email and display name
- *  are snapshotted here rather than read from the user's Durable Object,
- *  because this runs on every authenticated request and a DO round trip per
- *  request is not a thing to pay for a name. A rename lands on next sign-in. */
-export async function verifySession(kv: KvStore, token: string): Promise<AuthIdentity | null> {
-  if (!token.startsWith('ps_') || token.length < 48) return null;
-  const record = await readKvJson(kv, `session:${await sha256Hex(token)}`, SessionSchema);
+ *  Its own class because a session that cannot be CHECKED is not a session
+ *  that is INVALID: reported as the 401 an expired cookie gets, an outage
+ *  would tell every signed-in user their sign-in lapsed and send them into a
+ *  sign-in the same outage also fails. Raised at the store boundaries and
+ *  nowhere else: what the bytes SAY is judged separately, and a record that is
+ *  missing, lapsed or not a session at all is simply not signed in. */
+export class SessionAuthorityUnavailableError extends Error {
+  constructor(options: { cause: unknown }) {
+    super(
+      'Kinu cannot reach the store that holds your sign-in right now. Try again shortly.',
+      { cause: options.cause },
+    );
+    this.name = 'SessionAuthorityUnavailableError';
+  }
+}
+
+/** The identity a session cookie stands for, or null when the token is not one,
+ *  is unknown here, has lapsed, or is no longer live. Throws
+ *  {@link SessionAuthorityUnavailableError} when the answer cannot be obtained,
+ *  which is never the same as "not signed in".
+ *
+ *  The KV record is the identity as it stood at sign-in: email and display name
+ *  are snapshotted there rather than read from the user's Durable Object, so a
+ *  rename lands on next sign-in and no request pays a second round trip for a
+ *  name. Whether the session still EXISTS is the authority's answer, on every
+ *  request, with nothing cached in front of it. */
+export async function verifySession(env: AuthStoreEnv, token: string): Promise<AuthIdentity | null> {
+  const userId = parseSessionTokenUserId(token);
+  if (!userId) return null;
+  const tokenHash = await sha256Hex(token);
+  let record: v.InferOutput<typeof SessionSchema> | null;
+  try {
+    record = await readKvJson(env.AUTH_KV, sessionKey(tokenHash), SessionSchema);
+  } catch (unreadable) {
+    // Two failures share this await, and they are told apart by the decoder's
+    // own error type, never by matching prose. A namespace that will not answer
+    // is an outage. Bytes that no longer decode are a record THIS Worker wrote:
+    // a real fault, reported and cleaned out of both stores, and still answered
+    // as not signed in. A 503 there would trap the browser behind a cookie it
+    // cannot replace, because replacing it means reaching an authenticated
+    // route that would refuse for the same reason.
+    if (!isMalformedRecord({ cause: unreadable })) {
+      throw new SessionAuthorityUnavailableError({ cause: unreadable });
+    }
+    await discardCorruptSession(env, userId, tokenHash, toKinuError({
+      doing: 'decoding the browser session record this cookie names',
+      cause: unreadable,
+      otherwise: 'bad_input',
+    }));
+    return null;
+  }
   if (!record || record.expiresAt <= Date.now()) return null;
+
+  // The caller is resolved outside the try: a deployment holding no owner
+  // secret is a misconfiguration with its own answer, not a Durable Object
+  // that cannot be reached.
+  const caller = await ownerCaller(env);
+  let live: boolean;
+  try {
+    live = await sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash);
+  } catch (unreachable) {
+    throw new SessionAuthorityUnavailableError({ cause: unreachable });
+  }
+  if (!live) return null;
+
   return {
     userId: record.userId,
     email: record.email,
@@ -159,12 +254,92 @@ export async function verifySession(kv: KvStore, token: string): Promise<AuthIde
   };
 }
 
-/** Drop a session. The delete reaches other colos within a minute, so a cookie
- *  copied off this browser can outlive logout by that much; the browser's own
- *  cookie is cleared in the same response. */
-export async function revokeSession(kv: KvStore, token: string): Promise<void> {
-  if (!token.startsWith('ps_')) return;
-  await kv.delete(`session:${await sha256Hex(token)}`);
+/** Whether a failed read is the record refusing to decode rather than KV
+ *  refusing to answer: valibot's own refusal, or bytes that are not JSON.
+ *  Decided by type, never by matching an error's prose. */
+function isMalformedRecord(failure: { cause: unknown }): boolean {
+  return failure.cause instanceof v.ValiError || classify(failure) === 'malformed-input';
+}
+
+/**
+ * Retire a session whose record no longer decodes.
+ *
+ * The record is a fault worth naming AND a credential nothing can honour, so it
+ * is reported once and then cleared from BOTH stores that hold it: the row
+ * first, because that is what makes the cookie dead everywhere, then the record
+ * KV kept. Each store's failure is named on its own, and neither is raised —
+ * the caller's answer is already "not signed in", and turning a cleanup into an
+ * outage would trap this browser behind a cookie it cannot replace.
+ *
+ * The owner capability is resolved INSIDE the row's try for the same reason: a
+ * deployment missing its secret cannot clean up, and must still let the browser
+ * sign in again.
+ */
+async function discardCorruptSession(
+  env: AuthStoreEnv,
+  userId: string,
+  tokenHash: string,
+  fault: KinuError,
+): Promise<void> {
+  diagnostics.failure('auth.browser_session_record_malformed', fault);
+
+  try {
+    await sessionAuthority(env, userId).revokeBrowserSession(await ownerCaller(env), tokenHash);
+  } catch (rowFailed) {
+    diagnostics.failure('auth.browser_session_row_left', toKinuError({
+      doing: 'revoking the session row of a record that no longer decodes',
+      cause: rowFailed,
+      otherwise: 'unavailable',
+    }));
+  }
+
+  try {
+    await env.AUTH_KV.delete(sessionKey(tokenHash));
+  } catch (recordFailed) {
+    diagnostics.failure('auth.browser_session_record_left', toKinuError({
+      doing: 'removing a browser session record that no longer decodes',
+      cause: recordFailed,
+      otherwise: 'unavailable',
+    }));
+  }
+}
+
+/** Revoke ONE session, everywhere, now: the authority's row is deleted first,
+ *  so the next request carrying this cookie is refused at whatever colo it
+ *  reaches. The user's other sessions keep their rows.
+ *
+ *  Throws when the authority refuses or cannot be reached, and logout reports
+ *  that rather than claiming a revocation it did not get. The KV delete after
+ *  it is cleanup: the row is already gone, so the record stands for nothing and
+ *  would expire on its own TTL anyway. A cleanup that fails is recorded, never
+ *  raised — raising it would report a revocation that landed as one that did
+ *  not, and would cost the browser the cookie it could retry with. */
+export async function revokeSession(env: AuthStoreEnv, token: string): Promise<void> {
+  const userId = parseSessionTokenUserId(token);
+  if (!userId) return;
+  const tokenHash = await sha256Hex(token);
+  const caller = await ownerCaller(env);
+  await sessionAuthority(env, userId).revokeBrowserSession(caller, tokenHash);
+  try {
+    await env.AUTH_KV.delete(sessionKey(tokenHash));
+  } catch (cleanupFailed) {
+    diagnostics.failure('auth.browser_session_record_left', toKinuError({
+      doing: 'removing the KV record of a session that is already revoked',
+      cause: cleanupFailed,
+      otherwise: 'unavailable',
+    }));
+  }
+}
+
+function sessionKey(tokenHash: string): string {
+  return `session:${tokenHash}`;
+}
+
+/** The user's own Durable Object, which is the one authority on which of their
+ *  sessions are live and the durable half of their identity. */
+function sessionAuthority(env: AuthStoreEnv, userId: string): DurableObjectStub<UserDO> {
+  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
+  return env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
 }
 
 async function resolveIdentity(env: AuthStoreEnv, profile: OAuthProfile, now: number): Promise<AuthIdentity> {
@@ -176,9 +351,8 @@ async function resolveIdentity(env: AuthStoreEnv, profile: OAuthProfile, now: nu
   }
 
   const userId = await deriveUserId(email);
-  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
-  const userDO = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
-  const stored = await userDO.ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined);
+  const stored = await sessionAuthority(env, userId)
+    .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined);
 
   return {
     userId,

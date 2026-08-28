@@ -14,6 +14,8 @@ export {
   invocationBackgroundPolicy,
   SPAWN_STARTED_OPTION,
   readSpawnStarted,
+  DEVICE_REQUEST_OPTION,
+  readDeviceRequestChannel,
   RESUME_REDRIVE_OPTION,
   readResumeRedrive,
   type BackgroundHandle,
@@ -34,6 +36,7 @@ export {
   type JobResumer,
 } from './runner';
 export { AgentWakeQueue } from './wake-queue';
+export { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
 export {
   wrapToolsForBackground,
   CONFINED_BACKGROUNDABLE_TOOLS,

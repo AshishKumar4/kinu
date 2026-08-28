@@ -21,8 +21,9 @@ import type {
   BranchProposal, BranchRefusalPolicy, BranchVerdict, ResolvedSwarm, SwarmAdvance,
   SwarmPreset,
 } from './swarm';
-import type {
-  Measurement, MeasurementContext,
+import {
+  dominatesPareto, type Measurement, type MeasurementContext, type ParetoAxis,
+  type ParetoEvidence,
 } from './objective';
 
 /**
@@ -49,6 +50,9 @@ export interface TreeNode {
   /** This node's own normalised score in [0,1] — the reward its ancestors received.
    *  Null when it was never scored (unmeasurable, or sealed past a floor). */
   readonly score: number | null;
+  /** Complete evidence over the declared Pareto axes. A Pareto tree selects from
+   * these vectors directly and never turns them into a synthetic scalar reward. */
+  readonly pareto: ParetoEvidence | null;
   /** The branch this node asked for, still unanswered. Cleared when arbitration
    *  answers it, so the post-loop sweep can find exactly the ones selection never
    *  reached. */
@@ -272,21 +276,11 @@ export async function awaitLevel(members: readonly LevelMember[]): Promise<reado
 /**
  * The `advance` axis as the scheduler's policy.
  *
- * `archive` IS `none`'s one expansion step, and that is not a substituted scheduler —
- * which would be the accepted-and-ignored defect in its worst form. `archiveRegionRefusal`
- * pins an archive run to depth 1, so there is exactly ONE expansion, off the root, and
- * every policy in this table agrees about it: there is no second level for a frontier
- * order to disagree over. What makes `archive` a different axis value from `none` is not
- * a selection rule but the two things it does that `none` cannot — it BINS its candidates
- * by a witnessed descriptor and it REFUSES the ones that duplicate a cell's occupants —
- * and both happen at the settle barrier, where `advance:'none'` has neither a key nor a
- * rejection test to apply.
- *
- * `pareto` stays null: `regionRefusal` refuses it for a cause that is about the
- * measurement rather than the schedule, and returning `'none'` for it would run a flat
- * wave and call the winner a front.
+ * Archive has one flat expansion. Pareto selection is distinct from MCTS selection:
+ * its next parent comes from the current nondominated leaf set, not a scalar stored in
+ * `search_nodes`.
  */
-export function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | null {
+export function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | 'pareto' | null {
   switch (advance) {
     case 'uct':
     case 'best-first':
@@ -295,8 +289,32 @@ export function frontierPolicyOf(advance: SwarmAdvance): FrontierPolicy | null {
     case 'archive':
       return 'none';
     case 'pareto':
-      return null;
+      return 'pareto';
   }
+}
+
+/** Select an unexpanded nondominated node in stable node-id order.
+ *
+ * The root is selected before any candidate exists. Thereafter only leaves with a
+ * complete vector participate; missing or non-finite evidence never becomes a policy
+ * value. */
+export function selectParetoFrontierNode(
+  nodes: ReadonlyMap<string, TreeNode>,
+  maxDepth: number,
+  axes: readonly ParetoAxis[],
+): TreeNode | null {
+  const root = [...nodes.values()].find((node) => node.parentId === null);
+  if (root && ![...nodes.values()].some((node) => node.parentId === root.id)) return root;
+  const leaves = [...nodes.values()]
+    .filter((node) => node.depth < maxDepth
+      && node.pareto !== null
+      && ![...nodes.values()].some((child) => child.parentId === node.id))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const candidates = leaves.flatMap((node) =>
+    node.pareto === null ? [] : [{ node, evidence: node.pareto }]);
+  const front = candidates.filter((candidate, index) => !candidates.some((other, otherIndex) =>
+    otherIndex !== index && dominatesPareto(axes, other.evidence, candidate.evidence)));
+  return front[0]?.node ?? null;
 }
 
 /**

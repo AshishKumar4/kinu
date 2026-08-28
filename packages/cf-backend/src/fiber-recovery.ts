@@ -30,11 +30,208 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
+/**
+ * How old an unrecovered `cf_agents_runs` row may be before recovery gives up
+ * on it — Kinu's declared value for the SDK option of the same name, and the
+ * ONE place the number lives.
+ *
+ * It used to live in two: this is the SDK's own 24h default, and
+ * `orchestrator.ts` hand-mirrored it to decide which overdue schedule rows are
+ * unrunnable ("past it the framework stops recovering the fiber a continuation
+ * callback would resume"). A hand-mirror of a vendor default is a value nobody
+ * owns, so it is declared here, read by the schedule sweep, and handed to the
+ * SDK through `ActorAgent.options` — which makes it the number the framework
+ * actually enforces rather than a guess about it.
+ */
+export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Soft deadline for one interrupted-fiber pass. Kinu's declared value for the
+ * SDK option of the same name, so the pre-pass below and the framework's own
+ * scan are bounded by one number.
+ */
+export const FIBER_RECOVERY_SCAN_DEADLINE_MS = 10_000;
+
+/**
+ * One metadata row per read. This is not a policy cap: recovery stays bounded
+ * by the SDK's existing scan deadline, while the read is structurally incapable
+ * of holding more than one snapshot candidate at a time.
+ */
+const ONE_FIBER_ROW = 1;
+
+/** One `cf_agents_runs` row's METADATA. The `snapshot` column is deliberately
+ *  absent — reading it is the allocation this sweep exists to avoid. */
+const FiberMetaRowSchema = v.object({
+  rowid: v.number(),
+  id: v.string(),
+  created_at: v.number(),
+});
+
+export type FiberMetaRow = v.InferOutput<typeof FiberMetaRowSchema>;
+
+/**
+ * The four questions the sweep asks of `cf_agents_runs`, and nothing wider.
+ *
+ * A port rather than a raw `SqlExecutor`, and the narrowness IS the design: no
+ * method here can return a stashed snapshot, so "this pass never materializes a
+ * blob" is a property of the interface instead of a claim about a query string.
+ * The SQL lives in {@link fiberRowStore}, the only thing that has to know the
+ * framework's column names.
+ */
+export interface FiberRowStore {
+  /** The framework creates the table lazily, on the first `runFiber`. */
+  present(): boolean;
+  /** `MAX(rowid)`, read once and then frozen by the caller. */
+  upperBoundary(): number | null;
+  /** Metadata for the rows in `(after, through]`, oldest rowid first. */
+  page(after: number, through: number): readonly FiberMetaRow[];
+  /** Remove one row, re-checking AT ITS OWN ID that it is still expired.
+   *  `false` when a concurrent pass already handled it. */
+  dropIfExpired(id: string, cutoff: number): boolean;
+}
+
+/** {@link FiberRowStore} over a Durable Object's own storage. */
+export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
+  return {
+    present: () => sql<{ name: string }>`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cf_agents_runs'`.length > 0,
+    upperBoundary: () => sql<{ boundary: number | null }>`
+      SELECT MAX(rowid) AS boundary FROM cf_agents_runs`[0]?.boundary ?? null,
+    page: (after, through) => sql<unknown>`
+      SELECT rowid, id, created_at FROM cf_agents_runs
+      WHERE rowid > ${after} AND rowid <= ${through}
+      ORDER BY rowid ASC LIMIT ${ONE_FIBER_ROW}`
+      .map((row) => v.parse(FiberMetaRowSchema, row)),
+    dropIfExpired: (id, cutoff) => sql<{ id: string }>`
+      DELETE FROM cf_agents_runs
+      WHERE id = ${id} AND created_at <= ${cutoff}
+      RETURNING id`.length > 0,
+  };
+}
+
+/**
+ * The envelope Think's chat-turn snapshot rides in.
+ *
+ * Every response — the first and every auto-continuation — runs inside a
+ * `runFiber`, and the snapshot the framework writes before the body runs names
+ * the request and the user message the turn opened on. The key is a literal
+ * `_runChatRecoveryFiber` hands to `wrapChatFiberSnapshot` and the SDK exports
+ * it nowhere, so it is declared once here and the suite that seeds rows uses
+ * this rather than its own spelling.
+ *
+ * The ENVELOPE is what the read below matches on, not the fiber's name: one
+ * coupling to the framework instead of two, and no other lane writes a snapshot
+ * shaped like this.
+ */
+export const CHAT_TURN_SNAPSHOT_KEY = '__cfThinkChatFiberSnapshot';
+const CHAT_TURN_ID_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.latestUserMessageId`;
+const CHAT_TURN_REQUEST_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.requestId`;
+
+/**
+ * The responses of one durable turn that still hold a chat-turn fiber row, by
+ * request id.
+ *
+ * The row exists for exactly as long as its response can still do something:
+ * written before the turn body runs, deleted when that body returns, and
+ * deleted by the framework's own scan once recovery has handled the row or
+ * given up on it. So a row no live response of this activation owns is an
+ * interrupted response — an auto-continuation caught mid tool call, say — that
+ * chat recovery still owes a replay.
+ */
+export function openChatTurnResponses(sql: SqlExecutor, turnId: string): string[] {
+  if (!fiberRowStore(sql).present()) return [];
+  return sql<{ request_id: string }>`
+    SELECT json_extract(snapshot, ${CHAT_TURN_REQUEST_PATH}) AS request_id
+    FROM cf_agents_runs
+    WHERE json_extract(snapshot, ${CHAT_TURN_ID_PATH}) = ${turnId}`
+    .map((row) => row.request_id);
+}
+
+/** How many rows one sweep dropped, how many it looked at, and whether it ran
+ *  out of deadline before reaching the frozen boundary. */
+export interface FiberSweepResult {
+  readonly dropped: number;
+  readonly scanned: number;
+  readonly deadlineExceeded: boolean;
+}
+
+/**
+ * Drop the interrupted-fiber rows the recovery budget has already given up on,
+ * BEFORE the framework allocates their snapshots.
+ *
+ * `Agent._checkRunFibers` opens with `SELECT id, name, snapshot, created_at FROM
+ * cf_agents_runs` — one materialization of every row, snapshot blobs included —
+ * and only then walks them, checking its scan deadline per row and its max-age
+ * budget after each recovery hook. Both bounds are therefore evaluated after the
+ * allocation they exist to bound: a workspace holding many or large stashes pays
+ * for all of them at once, and the deadline it then trips is a deadline on work
+ * already paid for. The vendored SDK owns that read; this is the same budget,
+ * applied first, in the shape the read cannot take:
+ *
+ *   • FREEZE THE UPPER BOUNDARY. `MAX(rowid)`, read once. Every row at or below
+ *     it was written by an earlier activation, so a fiber THIS activation starts
+ *     lands above the boundary and is structurally outside the sweep. That is
+ *     what makes an "is it live?" check unnecessary rather than racy, and it is
+ *     why the boundary is frozen instead of re-read per page.
+ *   • PAGE METADATA ONLY. `rowid, id, created_at`. The snapshot column is never
+ *     selected, so the memory held is one page of timestamps regardless of what
+ *     the lanes stashed.
+ *   • REVALIDATE BEFORE ACTING. The delete is guarded on the row still being
+ *     over the budget at its own id, so a page — a snapshot of a table a
+ *     concurrent framework scan writes to — cannot authorise a stale removal.
+ *   • SPEND THE SAME DEADLINE. What the pass does not reach stays for the next
+ *     wake, exactly as the framework's own scan leaves it.
+ *
+ * Only rows the budget has ALREADY refused are dropped, so no recovery decision
+ * changes: past `fiberRecoveryMaxAgeMs` the framework discards the row anyway
+ * (`fiber:recovery:skipped`, `max_age_exceeded`), and Kinu's schedule sweep
+ * already acts on the same rule — a continuation past that age can only replay
+ * dead work. Rows inside the budget are untouched and remain the framework's to
+ * recover.
+ */
+export function sweepUnrecoverableFibers(
+  store: FiberRowStore,
+  now: number,
+  clock: () => number = Date.now,
+): FiberSweepResult {
+  const startedAt = clock();
+  const cutoff = now - FIBER_RECOVERY_MAX_AGE_MS;
+  const nothing: FiberSweepResult = { dropped: 0, scanned: 0, deadlineExceeded: false };
+  // An actor that has never detached durable work has no table. That is not a
+  // failure, it is zero rows, and saying so keeps a fresh workspace quiet.
+  if (!store.present()) return nothing;
+  const boundary = store.upperBoundary();
+  if (boundary === null) return nothing;
+  let cursor = 0;
+  let dropped = 0;
+  let scanned = 0;
+  for (;;) {
+    if (clock() - startedAt > FIBER_RECOVERY_SCAN_DEADLINE_MS) {
+      return { dropped, scanned, deadlineExceeded: true };
+    }
+    const page = store.page(cursor, boundary);
+    if (page.length === 0) return { dropped, scanned, deadlineExceeded: false };
+    for (const row of page) {
+      scanned++;
+      cursor = row.rowid;
+      if (row.created_at > cutoff) continue;
+      if (store.dropIfExpired(row.id, cutoff)) dropped++;
+    }
+  }
+}
+
 /** The post-turn evolution lane's durable fiber name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
 /** The advisor lane's durable fiber name. */
 export const ADVISOR_LANE_FIBER = 'advisor:review';
+
+/** The post-turn MCP warmup lane's durable fiber name. */
+export const MCP_WARM_LANE_FIBER = 'mcp:warm';
+
+/** The terminal-sequence lane's durable fiber name — the effects a settled turn
+ *  owes, held open while they report. */
+export const TERMINAL_LANE_FIBER = 'terminal:effects';
 
 /** The transports one actor supplies to its lanes' recovery. Every member is
  *  something an activation re-resolves for itself — a stub call, a fresh model
@@ -57,6 +254,8 @@ export interface FiberLaneTransports {
   readonly sql: SqlExecutor;
   /** The agent's own memory surface — what tells it about the lost turn. */
   readonly appendMemory: (path: string, text: string) => Promise<void>;
+  /** Finish every terminal sequence that still owes an effect, from storage. */
+  readonly replayOwedTerminalSequences: () => Promise<void>;
 }
 
 /**
@@ -87,6 +286,8 @@ export async function recoverLaneFiber(
     if (ctx.name === EVOLUTION_LANE_FIBER) return await recoverEvolutionLane(transports);
     if (ctx.name === ADVISOR_LANE_FIBER) return await recoverAdvisorLane(transports, ctx);
     if (ctx.name === SEARCH_FIBER_NAME) return await recordInterruptedSearch(transports, ctx);
+    if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
+    if (ctx.name === TERMINAL_LANE_FIBER) return await recoverTerminalLane(transports);
     return unrecognisedLane(ctx);
   } catch (err) {
     const failure = toKinuError({
@@ -100,6 +301,21 @@ export async function recoverLaneFiber(
     // one broken lane holds a Durable Object open for a day.
     return { status: 'error', error: failure.message, snapshot: { lane: ctx.name, recovered: false } };
   }
+}
+
+/**
+ * A settled turn whose owed effects were still reporting when the isolate died.
+ *
+ * Every input is already on the ledger's rows, so the recovery is the same
+ * replay a cold activation runs — which is why this arm re-enters it rather than
+ * reconstructing anything. The ledger's own retry wake covers the case this arm
+ * cannot: a fiber row that died with the activation that owned it.
+ */
+async function recoverTerminalLane(
+  transports: FiberLaneTransports,
+): Promise<FiberRecoveryResult> {
+  await transports.replayOwedTerminalSequences();
+  return { status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, reentered: true } };
 }
 
 /**
@@ -197,6 +413,23 @@ async function recoverAdvisorLane(
       disposition: disposition ?? null,
     },
   };
+}
+
+/**
+ * The MCP warmup lane, which has NOTHING to re-enter.
+ *
+ * Establishing a connection is not a durable unit of work: the live connection
+ * IS the state, and the next settled turn warms again unconditionally. So an
+ * interrupted warm needs no re-drive and must not get one — a re-entry would
+ * open sockets to third parties on an activation no turn asked anything of, for
+ * a turn whose successor is about to warm anyway.
+ *
+ * It exists because `recoverLaneFiber` is a CLOSED set: a lane nobody names
+ * there is reported as unrecognised, which files a classified error for a fiber
+ * whose interruption is not a fault.
+ */
+function recoverMcpWarmLane(): FiberRecoveryResult {
+  return { status: 'completed', snapshot: { lane: MCP_WARM_LANE_FIBER, reentered: false } };
 }
 
 /**

@@ -5,8 +5,7 @@
   "main": "src/server.ts",
   "scripts": {
     "start": "vite dev --host 0.0.0.0",
-    "//deploy": "Production deploys go through scripts/deploy.sh (`bun run deploy` at the repo root) — it is the only path with the pre-deploy asset check and the post-deploy smoke gate. A bare `wrangler deploy` here once shipped production without the CLI download assets.",
-    "deploy:staging": "CLOUDFLARE_ENV=staging vite build && bash ../../scripts/build-cli-source-archive.sh && wrangler deploy && vite build",
+    "//deploy": "This package publishes nothing. Both environments deploy from the repository root — `bun run deploy` and `bun run deploy:staging` run scripts/deploy.sh — which is the only path carrying the required gates, the CLI download asset check and the post-deploy smoke gate. Publishing from here once shipped production with none of the three CLI download assets, and every fresh install died on a checksum mismatch while the site looked fine.",
     "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
   },

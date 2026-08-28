@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
+  CandidateControlStateV1Schema,
+  CandidateRunControlV1Schema,
   DURABILITY_AWAIT_POINTS,
   DURABILITY_OPERATION_PHASES,
   CapturedCutSchema,
@@ -14,36 +16,75 @@ import {
   RootEnvelopeV1Schema,
   UploadIntentSchema,
 } from '../src/durability/contracts';
+import type {
+  CandidateControlStateV1,
+  CandidateRunControlV1,
+  HeadPointerV1,
+  RootEnvelopeV1,
+} from '../src/durability/contracts';
 
 const SHA = 'a'.repeat(64);
 const object = { key: 'v1/boxes/box/attempts/op/try/data-a', byteLength: '12', sha256: SHA };
+const closureObject = { key: 'v1/boxes/box/attempts/op/try/closure-a', byteLength: '12', sha256: SHA };
+const capturedCut = {
+  captureId: 'capture-1',
+  epoch: '7',
+  baseRevision: '8',
+  cut: '42',
+  stableStageHandle: 'stage-1',
+  manifestSha256: SHA,
+};
+const envelope: RootEnvelopeV1 = {
+  version: 1,
+  format: 'merkle-pack/v1',
+  boxId: 'box-1',
+  epoch: '7',
+  generation: '9',
+  parentRootId: null,
+  cut: capturedCut,
+  rootObject: object,
+  closure: [object],
+  closureObject,
+};
 
 describe('durability v1 wire contracts', () => {
-  test('a closed root envelope has one canonical immutable reference vocabulary', () => {
-    expect(v.parse(RootEnvelopeV1Schema, {
+  test('a closed root envelope binds the full captured cut, not a bare cut number', () => {
+    expect(v.parse(RootEnvelopeV1Schema, envelope)).toEqual(envelope);
+  });
+
+  test('a head pointer names one exact envelope and the operation that published it', () => {
+    const pointer: HeadPointerV1 = {
       version: 1,
-      format: 'merkle-pack/v1',
-      boxId: 'box-1',
-      epoch: '7',
-      generation: '9',
-      parentRootId: null,
-      cut: '42',
-      rootObject: object,
-    })).toEqual({
-      version: 1,
-      format: 'merkle-pack/v1',
-      boxId: 'box-1',
-      epoch: '7',
-      generation: '9',
-      parentRootId: null,
-      cut: '42',
-      rootObject: object,
-    });
+      rootEnvelopeId: SHA,
+      lastOperationId: 'op-1',
+    };
+    expect(v.parse(HeadPointerV1Schema, pointer)).toEqual(pointer);
+    expect(() => v.parse(HeadPointerV1Schema, {
+      ...pointer,
+      lastOperationId: '',
+    })).toThrow();
+    expect(() => v.parse(HeadPointerV1Schema, {
+      ...pointer,
+      reachable: [object],
+    })).toThrow();
   });
 
   test('wire counters and digests refuse unsafe representations', () => {
     expect(() => v.parse(ImmutableObjectRefSchema, { ...object, byteLength: '-1' })).toThrow();
     expect(() => v.parse(ImmutableObjectRefSchema, { ...object, sha256: 'short' })).toThrow();
+    // A bare decimal is no longer a legal envelope cut.
+    expect(() => v.parse(RootEnvelopeV1Schema, {
+      version: 1,
+      format: 'merkle-pack/v1',
+      boxId: 'box-1',
+      epoch: '7',
+      generation: '9',
+      parentRootId: null,
+      cut: '42',
+      rootObject: object,
+      closure: [object],
+      closureObject,
+    })).toThrow();
     expect(() => v.parse(RootEnvelopeV1Schema, {
       version: 1,
       format: 'merkle-pack/v1',
@@ -51,8 +92,10 @@ describe('durability v1 wire contracts', () => {
       epoch: '01',
       generation: '9',
       parentRootId: null,
-      cut: '42',
+      cut: { ...capturedCut, captureId: '' },
       rootObject: object,
+      closure: [object],
+      closureObject,
     })).toThrow();
   });
 
@@ -168,6 +211,18 @@ describe('durability v1 wire contracts', () => {
       resultRootId: SHA,
     });
     expect(published.phase).toBe('published');
+    const completionPending = v.parse(OperationRecordSchema, {
+      operationId: 'op-1',
+      kind: 'tick',
+      epoch: '7',
+      bootId: 'boot-1',
+      baseRevision: '8',
+      expectedParent: SHA,
+      phase: 'completion-pending',
+      attemptId: 'attempt-1',
+      resultRootId: SHA,
+    });
+    expect(completionPending.phase).toBe('completion-pending');
     expect(v.parse(HeadPointerV1Schema, {
       version: 1,
       rootEnvelopeId: SHA,
@@ -210,8 +265,37 @@ describe('durability v1 wire contracts', () => {
 
   test('durable operation phases contain no response-only acknowledgement state', () => {
     expect(DURABILITY_OPERATION_PHASES).toEqual([
-      'intent', 'transferring', 'sealed', 'published', 'failed',
+      'intent', 'transferring', 'sealed', 'completion-pending', 'published', 'failed',
     ]);
+  });
+
+  test('the durable control record holds a pointer and an operation, never an envelope', () => {
+    const record: CandidateControlStateV1 = {
+      version: 1,
+      head: { version: 1, rootEnvelopeId: SHA, lastOperationId: 'op-1' },
+      operation: null,
+    };
+    expect(v.parse(CandidateControlStateV1Schema, record)).toEqual(record);
+    expect(v.parse(CandidateControlStateV1Schema, { version: 1, head: null, operation: null }).head).toBeNull();
+    expect(() => v.parse(CandidateControlStateV1Schema, { ...record, envelope })).toThrow();
+    expect(() => v.parse(CandidateControlStateV1Schema, {
+      ...record,
+      head: { ...record.head, envelope },
+    })).toThrow();
+  });
+
+  test('the container run control pairs one pointer with the exact envelope it names', () => {
+    const pointer: HeadPointerV1 = { version: 1, rootEnvelopeId: SHA, lastOperationId: 'op-1' };
+    const control: CandidateRunControlV1 = {
+      version: 1,
+      head: { pointer, envelope },
+      operation: null,
+    };
+    expect(v.parse(CandidateRunControlV1Schema, control)).toEqual(control);
+    // A pointer without its envelope, or an envelope without its pointer, is unrepresentable.
+    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: { pointer } })).toThrow();
+    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: { envelope } })).toThrow();
+    expect(() => v.parse(CandidateRunControlV1Schema, { ...control, head: pointer })).toThrow();
   });
 
   test('the reset fault register exactly names every external await', () => {

@@ -169,7 +169,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         displayName: 'S',
         subordinate: {
           name: 's', displayName: 'S', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null,
+          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
         },
       }),
       rename: async () => ({
@@ -178,12 +178,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         displayName: 'S',
         subordinate: {
           name: 's', displayName: 'S', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null,
+          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
         },
       }),
       recordTitle: async () => ({ ok: true as const, name: 's', displayName: 'S', applied: true }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
+      knows: async () => true,
       status: async () => ({}),
       message: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       dismiss: async () => ({ ok: true as const, name: 's', historyKept: false }),
@@ -209,6 +210,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       webSearch: stubWebSearch,
       agents: { mode: 'build', team: stubTeam, peers: stubPeers },
       report: stubReport,
+      // The claim table is created by `initWorkspaceSchema`, which this runtime
+      // already ran, so the once-only boundary is wired over the SAME SQL the
+      // backends give it rather than a stand-in that records nothing.
+      effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
@@ -669,12 +674,12 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     // A role's list is intersected with the surface a backend declares, so a
     // capability absent from that surface can never be named — and one present
     // but unwired would let a role allow a lane that cannot run.
-    expect(codemodeCapabilitiesFor([{ name: 'release' }, { name: 'llm' }])).toEqual(['release', 'llm']);
+    expect(codemodeCapabilitiesFor([{ name: 'release' }, { name: 'agent' }])).toEqual(['release', 'agent']);
     expect(codemodeCapabilitiesFor([{ name: 'agents' }, { name: 'workspace' }])).toEqual([]);
     expect(codemodeCapabilitiesFor([])).toEqual([]);
     // Plan mode filters `release` out of its provider list, so a Plan turn's
     // role list cannot name a lane that is physically absent — for free.
-    expect(codemodeCapabilitiesFor([{ name: 'agent' }, { name: 'llm' }])).toEqual(['agent', 'llm']);
+    expect(codemodeCapabilitiesFor([{ name: 'agent' }, { name: 'web' }])).toEqual(['agent']);
   });
 
   test('the codemode-only set is derived from the reach table, not restated', () => {

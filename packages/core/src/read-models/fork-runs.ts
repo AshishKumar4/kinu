@@ -266,6 +266,18 @@ interface TreeHalf {
   /** The root row's own label — the run's given name, empty when none was. */
   readonly name: string | null;
   readonly ledgerStatus: string | null;
+  /**
+   * The FRONTIER: open nodes with no children, which is exactly what
+   * `mcts/frontier.ts` selects from (`status='open' AND NOT EXISTS (children)`).
+   * Non-zero is the tree's own answer to "can this search still be entered",
+   * and it is the answer a stale ledger row cannot give — `mcts/convergence.ts`:
+   * *a search is settled exactly when its tree has no open nodes left*.
+   *
+   * Open nodes that HAVE children are not counted, and must not be: an expanded
+   * parent is not selectable, and a legacy tree whose settle left its root open
+   * would otherwise read as running for as long as the row survives.
+   */
+  readonly frontier: number;
   readonly terminal: number;
   readonly bestTerminal: number | null;
 }
@@ -284,13 +296,16 @@ function queryTreeHalves(
 ): Map<string, TreeHalf> {
   const rows = sql<{
     root_id: string; branches: number; task: string | null; name: string | null;
-    status: string | null; terminal: number; best_terminal: number | null;
+    status: string | null; frontier: number; terminal: number; best_terminal: number | null;
   }>`
     SELECT n.root_id                                                AS root_id,
            SUM(CASE WHEN n.parent_id IS NOT NULL THEN 1 ELSE 0 END) AS branches,
            MAX(CASE WHEN n.parent_id IS NULL THEN n.task END)       AS task,
            MAX(CASE WHEN n.parent_id IS NULL THEN n.action END)     AS name,
            MAX(r.status)                                            AS status,
+           SUM(CASE WHEN n.status = 'open'
+                      AND NOT EXISTS (SELECT 1 FROM search_nodes c WHERE c.parent_id = n.id)
+                    THEN 1 ELSE 0 END)                              AS frontier,
            SUM(CASE WHEN n.status = 'terminal' THEN 1 ELSE 0 END)   AS terminal,
            MAX(CASE WHEN n.status = 'terminal' THEN n.value END)    AS best_terminal
     FROM search_nodes n
@@ -306,6 +321,7 @@ function queryTreeHalves(
       task: row.task,
       name: row.name,
       ledgerStatus: row.status,
+      frontier: row.frontier,
       terminal: row.terminal,
       bestTerminal: row.best_terminal,
     });
@@ -318,8 +334,13 @@ function queryTreeHalves(
  * derivation from the task when it wrote none — legacy trees, journal-only
  * runs, and callers who named nothing. Total: a surface never falls back to
  * showing a truncated paragraph where a title belongs.
+ *
+ * Exported because the same name has to reach the branch transcript's own
+ * breadcrumb: the first crumb IS the run, and labelling it off the raw column
+ * printed the literal `root` for every search whose engine wrote no label
+ * (`mcts/engine.ts` records the root with `action: ''`).
  */
-function runName(rootLabel: string | null, task: string): string {
+export function runName(rootLabel: string | null, task: string): string {
   const given = rootLabel?.trim();
   return given || shortName(task);
 }
@@ -340,16 +361,41 @@ function shortName(task: string): string {
     .replace(/[\s—–:;,|.]+$/, '');
 }
 
+/**
+ * What became of the search, over the tree half.
+ *
+ * THE LEDGER'S SETTLEMENTS DECIDE, AND `running` IS NOT ONE OF THEM. A row still
+ * reading `running` is a LEASE rather than an observation: `mcts/engine.ts`
+ * closes the tree BEFORE it records the outcome, precisely so that a crash
+ * between the two leaves *"a closed tree with a still-'running' row [which] is
+ * inert (nothing is selectable)"*. Read as running, that inert row is the report
+ * *"this run had 2 reported and rest stopped … still it says 'running'?"* — a run
+ * nothing is working on, claiming to be at work for as long as the row lives.
+ *
+ * So the TREE answers that question, through the predicate selection itself
+ * descends: `mcts/frontier.ts` can only return an open node with no children, so
+ * a tree with none of those cannot advance whatever its lease says. No clock and
+ * no staleness window — a search between waves still holds a frontier, and a
+ * settled one holds nothing (`mcts/convergence.ts` prunes every open node but the
+ * winner it marks terminal; `abandonSearchTree` fails them all).
+ *
+ * A TERMINAL NODE OUTRANKS THE FRONTIER, because only a settle writes one
+ * (`convergence.ts`, `takes.ts`). That is what keeps a legacy tree — settled by
+ * an engine that left some node open, its ledger row long since pruned — reading
+ * as the completed search it is.
+ */
 function searchStatus(tree: TreeHalf): ForkRunStatus {
-  if (tree.ledgerStatus === 'running') return 'running';
   if (tree.ledgerStatus === 'failed') return 'failed';
   if (tree.ledgerStatus === 'converged') return 'completed';
   // This list's `failed` bucket is "settled without a usable answer". The
   // exact `no_acceptable_candidate` cause remains on the run ledger.
   if (tree.ledgerStatus === 'no_acceptable_candidate') return 'failed';
-  // The ledger row was pruned (settled over a day ago) or never written: the tree
-  // itself still says whether the search ever picked a winner.
-  return tree.terminal > 0 ? 'completed' : 'partial';
+  if (tree.terminal > 0) return 'completed';
+  if (tree.frontier > 0) return 'running';
+  // Nothing left to select and nothing ever won: the lease is stale, the row was
+  // pruned (settled over a day ago), or it was never written. Either way the
+  // search stopped without an answer.
+  return 'partial';
 }
 
 /* ── the transcript half (head_journal + head_runs) ────────────────── */

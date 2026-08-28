@@ -42,9 +42,9 @@ import type { WebSearchProvider } from '../web/index';
 import { renderThrownChain } from '../obs/index';
 
 export interface HeadSplitRequest {
-  rationale: string;
-  heads: Array<{ task: string; rationale: string }>;
-  mergeStrategy: MergeStrategy;
+  readonly rationale: string;
+  readonly heads: readonly { readonly task: string; readonly rationale: string }[];
+  readonly mergeStrategy: MergeStrategy;
 }
 
 export interface HeadSplitResult {

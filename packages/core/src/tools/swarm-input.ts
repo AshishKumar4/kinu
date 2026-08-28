@@ -37,7 +37,7 @@ import * as v from 'valibot';
 import { JsonValueSchema } from '../utils/json';
 import { SWARM_CONTEXTS, SWARM_EXPANDS } from '../strategy/swarm';
 import type { Objective } from '../strategy/objective';
-import type { SwarmConfig } from '../strategy/swarm';
+import type { SwarmConfig, SwarmNodeAssignment } from '../strategy/swarm';
 
 const DirectionSchema = v.picklist(['minimise', 'maximise'] as const);
 const ScaleSchema = v.picklist(['linear', 'log'] as const);
@@ -251,3 +251,51 @@ export const SwarmConfigSchema: v.GenericSchema<unknown, Partial<SwarmConfig>> =
   SwarmConfigWireSchema,
   v.transform(configOf),
 );
+
+/**
+ * THE CALLER'S OWN PER-NODE ASSIGNMENTS: what each node of the first level is asked,
+ * and the brief it is asked it under.
+ *
+ * WHY THE SURFACE NEEDED A FIELD AT ALL. Every other per-node assignment in this
+ * engine arrives as a parent's PROPOSAL — `BranchProposal.branches[i]` carries a
+ * `task`, a `rationale` and a `context`, and `swarm-run.ts` expands from exactly
+ * that. At level 1 the parent is the ROOT, which is the workspace as found and which
+ * no model ever wrote, so it has no proposal to make: every sibling of the first
+ * level received `resolved.task` verbatim, and the only thing that differed between
+ * them was a canned diversity angle. There was no axis that could say otherwise —
+ * `unit`, `context`, `expand`, `advance`, `carry` and `score` are all run-scoped
+ * single values, and `branches` is a count.
+ *
+ * SO THIS IS THE ROOT'S PROPOSAL, WRITTEN BY THE CALLER, and it converts into the
+ * branch shape the engine already expands from (`strategy/swarm-level.ts`'s
+ * `assignedRootGrant`). Nothing downstream is new: `task` lands in the node's own
+ * `head_journal.task` and `prompt` in its `rationale`, which are the two columns a
+ * node's assignment has always been recorded in — and both are therefore replayed by
+ * a re-drive and re-asked verbatim by a re-entry, with no snapshot column and no
+ * durable field of their own.
+ *
+ * TWO FIELDS AND NOT THREE. `context` stays run-level: a node may not decide whether
+ * it inherits, because the run's `context` axis is what makes its siblings
+ * comparable. `rationale` is not exposed separately either — `prompt` IS the brief,
+ * and two names for one string is how the two come to disagree.
+ *
+ * BOTH REQUIRED AND BOTH NON-EMPTY. A node with an empty task is a node asked
+ * nothing, and the surface that accepts it is the one that silently substitutes the
+ * run's own task — which is the behaviour this field exists to replace.
+ *
+ * ANNOTATED WITH THE DOMAIN TYPE rather than inferred, exactly as `objective` and
+ * `config` are two declarations above and for the same reason: `strategy/swarm.ts`
+ * owns the shape the search is written over and this file owns the wire, so the
+ * compiler holds the two together and an arm that drifts stops compiling here. There
+ * is one declaration of the shape and one schema that admits it.
+ */
+export const SwarmNodeAssignmentsSchema: v.GenericSchema<unknown, readonly SwarmNodeAssignment[]> =
+  v.pipe(
+    v.array(v.strictObject({
+      task: v.pipe(v.string(), v.minLength(1)),
+      prompt: v.pipe(v.string(), v.minLength(1)),
+    })),
+    // At least one: an empty list is a search with no nodes, which is a shape
+    // `branches` already expresses as a refusal.
+    v.minLength(1),
+  );

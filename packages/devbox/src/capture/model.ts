@@ -33,6 +33,8 @@
  */
 
 import * as v from 'valibot';
+import { createHash } from 'node:crypto';
+
 
 import { sha256Hex } from '../cas/hash';
 import { CapturedCutSchema } from '../durability/contracts';
@@ -48,20 +50,37 @@ export interface SparseRun {
   readonly bytes: Uint8Array;
 }
 
+/** One immutable byte range in the generation-local journal stage. */
+export interface SealedExtent {
+  readonly offset: number;
+  readonly length: number;
+  readonly sha256: string;
+}
+
 /**
- * File content either as stored bytes or as sparse extents. Sparse is part of
- * the model because a stager that materializes holes changes allocation but
- * must never change logical bytes; the audit compares logical bytes only.
+ * A sealed file has no payload in the capture manifest. Its extents are stable
+ * local handles, so the codecs can stream verified ranges without copying a
+ * workspace through the Durable Object or allocating its full size.
  */
+export interface SealedContent {
+  readonly kind: 'sealed';
+  readonly size: number;
+  readonly sourceId: string;
+  readonly extents: readonly SealedExtent[];
+}
+
 export type FileContent =
   | { readonly kind: 'dense'; readonly bytes: Uint8Array }
-  | { readonly kind: 'sparse'; readonly size: number; readonly runs: readonly SparseRun[] };
+  | { readonly kind: 'sparse'; readonly size: number; readonly runs: readonly SparseRun[] }
+  | SealedContent;
+
+/** Matches the bounded-layer fixed chunk size; a range never rehashes a whole file. */
+export const MAX_SEALED_EXTENT_BYTES = 512 * 1024;
 
 /** Logical bytes: sparse holes read back as zeros, like a real read(2). */
 export function expandContent(content: FileContent): Uint8Array {
-  // Never expose an inode's backing bytes. A mmap write must produce a NEW
-  // content version; otherwise it rewrites already-captured entries by alias.
   if (content.kind === 'dense') return content.bytes.slice();
+  if (content.kind === 'sealed') throw new Error('sealed capture content must be read through readCaptureRange');
   const out = new Uint8Array(content.size);
   for (const run of content.runs) out.set(run.bytes, run.offset);
   return out;
@@ -71,17 +90,58 @@ export function contentSize(content: FileContent): number {
   return content.kind === 'dense' ? content.bytes.byteLength : content.size;
 }
 
+export function contentExtents(content: FileContent): readonly SealedExtent[] {
+  if (content.kind !== 'sealed') return [];
+  return content.extents.map((extent) => Object.freeze({ ...extent }));
+}
+
 export function contentEquals(a: FileContent, b: FileContent): boolean {
-  const ea = expandContent(a);
-  const eb = expandContent(b);
-  if (ea.byteLength !== eb.byteLength) return false;
-  for (let i = 0; i < ea.byteLength; i++) if (ea[i] !== eb[i]) return false;
-  return true;
+  if (a.kind === 'sealed' || b.kind === 'sealed') {
+    return a.kind === 'sealed' && b.kind === 'sealed'
+      && a.size === b.size
+      && a.sourceId === b.sourceId
+      && a.extents.length === b.extents.length
+      && a.extents.every((extent, index) => {
+        const other = b.extents[index];
+        return other !== undefined && extent.offset === other.offset && extent.length === other.length && extent.sha256 === other.sha256;
+      });
+  }
+  return contentSize(a) === contentSize(b) && logicalContentSha256(a) === logicalContentSha256(b);
 }
 
 // ── nodes and state ──────────────────────────────────────────────────────────
 
 export type NodeKind = 'file' | 'dir' | 'symlink';
+/** POSIX metadata that affects restore semantics independently of file bytes. */
+export interface PosixMetadata {
+  readonly uid: number;
+  readonly gid: number;
+  readonly atimeNs: string;
+  readonly mtimeNs: string;
+  readonly ctimeNs: string;
+  /** Canonical base64 values, keyed by xattr name. */
+  readonly xattrs: Readonly<Record<string, string>>;
+}
+
+const canonicalNanoseconds = /^(?:0|[1-9]\d*)$/;
+const canonicalBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/** Reject metadata that cannot be serialized and restored without loss. */
+export function requirePosixMetadata(metadata: PosixMetadata | undefined, path: UpperPath): asserts metadata is PosixMetadata {
+  if (!metadata) throw new Error(`entry '${path}' carries no POSIX metadata`);
+  if (!Number.isSafeInteger(metadata.uid) || metadata.uid < 0 || !Number.isSafeInteger(metadata.gid) || metadata.gid < 0) {
+    throw new Error(`entry '${path}' carries invalid POSIX ownership`);
+  }
+  if (!canonicalNanoseconds.test(metadata.atimeNs) || !canonicalNanoseconds.test(metadata.mtimeNs) || !canonicalNanoseconds.test(metadata.ctimeNs)) {
+    throw new Error(`entry '${path}' carries invalid POSIX timestamps`);
+  }
+  for (const [name, value] of Object.entries(metadata.xattrs)) {
+    if (name.length === 0) throw new Error(`entry '${path}' carries an invalid xattr name`);
+    if (!canonicalBase64.test(value)) throw new Error(`entry '${path}' carries an invalid xattr value`);
+  }
+}
+
+
 
 export interface NodeEntry {
   readonly path: UpperPath;
@@ -89,6 +149,8 @@ export interface NodeEntry {
   readonly mode: number;
   /** Underlying inode id. Two file entries sharing an id are hardlinks. */
   readonly ino: number;
+  /** POSIX identity, timestamps and xattrs restored with the node. */
+  readonly metadata?: PosixMetadata;
   /** Symlinks only. */
   readonly target?: string;
   /** Files only. */
@@ -109,9 +171,12 @@ interface ManifestRow {
   kind: NodeKind;
   mode: number;
   ino: number;
+  metadata?: PosixMetadata;
   target?: string;
   sha256?: string;
   size?: number;
+  sourceId?: string;
+  extents?: readonly SealedExtent[];
 }
 
 export type StateSnapshot = ReadonlyMap<UpperPath, NodeEntry>;
@@ -529,10 +594,138 @@ export interface CapturedCutIdentity {
   readonly stableStageHandle: string;
 }
 
+interface LogicalSegment {
+  readonly start: number;
+  readonly end: number;
+  readonly parts: readonly Uint8Array[];
+}
+
+interface SparseSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly order: number;
+  readonly bytes: Uint8Array;
+}
+
+function requireSparseGeometry(content: Extract<FileContent, { readonly kind: 'sparse' }>): void {
+  if (!Number.isSafeInteger(content.size) || content.size < 0) {
+    throw new Error('sparse content has an invalid logical size');
+  }
+  for (const run of content.runs) {
+    const end = run.offset + run.bytes.byteLength;
+    if (!Number.isSafeInteger(run.offset) || run.offset < 0 || !Number.isSafeInteger(end) || end > content.size) {
+      throw new Error('sparse content run lies outside its logical size');
+    }
+  }
+}
+
+function appendNonZero(
+  segments: LogicalSegment[],
+  start: number,
+  bytes: Uint8Array,
+): void {
+  let runStart = -1;
+  for (let i = 0; i <= bytes.byteLength; i++) {
+    if (i < bytes.byteLength && bytes[i] !== 0) {
+      if (runStart === -1) runStart = i;
+      continue;
+    }
+    if (runStart === -1) continue;
+    const part = bytes.subarray(runStart, i);
+    const absoluteStart = start + runStart;
+    const previous = segments.at(-1);
+    if (previous && previous.end === absoluteStart) {
+      segments[segments.length - 1] = {
+        start: previous.start,
+        end: absoluteStart + part.byteLength,
+        parts: [...previous.parts, part],
+      };
+    } else {
+      segments.push({ start: absoluteStart, end: absoluteStart + part.byteLength, parts: [part] });
+    }
+    runStart = -1;
+  }
+}
+
+function logicalSegments(content: FileContent): readonly LogicalSegment[] {
+  if (content.kind === 'dense') {
+    const segments: LogicalSegment[] = [];
+    appendNonZero(segments, 0, content.bytes);
+    return segments;
+  }
+  if (content.kind === 'sealed') return [];
+  requireSparseGeometry(content);
+  const spans: SparseSpan[] = content.runs.map((run, order) => ({
+    start: run.offset,
+    end: run.offset + run.bytes.byteLength,
+    order,
+    bytes: run.bytes,
+  }));
+  const boundaries = [...new Set([0, content.size, ...spans.flatMap((span) => [span.start, span.end])])].sort(
+    (a, b) => a - b,
+  );
+  const starts = [...spans].sort((a, b) => a.start - b.start || a.order - b.order);
+  const heap: SparseSpan[] = [];
+  const push = (span: SparseSpan): void => {
+    heap.push(span);
+    for (let child = heap.length - 1; child > 0; ) {
+      const parent = Math.floor((child - 1) / 2);
+      if (heap[parent]!.order >= heap[child]!.order) return;
+      [heap[parent], heap[child]] = [heap[child]!, heap[parent]!];
+      child = parent;
+    }
+  };
+  const pop = (): void => {
+    const last = heap.pop();
+    if (!last || heap.length === 0) return;
+    heap[0] = last;
+    for (let parent = 0; ;) {
+      const left = parent * 2 + 1;
+      const right = left + 1;
+      let largest = parent;
+      if (left < heap.length && heap[left]!.order > heap[largest]!.order) largest = left;
+      if (right < heap.length && heap[right]!.order > heap[largest]!.order) largest = right;
+      if (largest === parent) return;
+      [heap[parent], heap[largest]] = [heap[largest]!, heap[parent]!];
+      parent = largest;
+    }
+  };
+  const segments: LogicalSegment[] = [];
+  let nextStart = 0;
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const start = boundaries[i]!;
+    const end = boundaries[i + 1]!;
+    while (nextStart < starts.length && starts[nextStart]!.start <= start) push(starts[nextStart++]!);
+    while (heap[0] && heap[0]!.end <= start) pop();
+    const latest = heap[0];
+    if (latest) appendNonZero(segments, start, latest.bytes.subarray(start - latest.start, end - latest.start));
+  }
+  return segments;
+}
+
 /**
- * Canonical manifest bytes: entries sorted by path, content expanded, encoded
- * as stable JSON. Two captures of one state hash equally regardless of which
- * mechanism staged them.
+ * Hash the logical byte sequence without materializing sparse holes. The
+ * canonical encoding records only maximal non-zero intervals, so dense and
+ * sparse inputs with equal `expandContent()` bytes hash identically.
+ */
+function logicalContentSha256(content: FileContent): string {
+  const hash = createHash('sha256');
+  hash.update(`logical-content/v1\n${contentSize(content)}\n`);
+  if (content.kind === 'sealed') {
+    for (const extent of content.extents) hash.update(`${extent.offset}:${extent.length}:${extent.sha256}\n`);
+    return hash.digest('hex');
+  }
+  for (const segment of logicalSegments(content)) {
+    hash.update(`${segment.start}:${segment.end}\n`);
+    for (const part of segment.parts) hash.update(part);
+    hash.update('\n');
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * Canonical manifest bytes: entries sorted by path, encoded as stable JSON.
+ * File digests describe logical bytes without allocating sparse holes.
  */
 export function canonicalManifestBytes(capture: Capture): Uint8Array {
   const rows = [...capture.entries]
@@ -544,10 +737,20 @@ export function canonicalManifestBytes(capture: Capture): Uint8Array {
         mode: e.mode,
         ino: e.ino,
       };
+      if (e.metadata !== undefined) {
+        row.metadata = {
+          ...e.metadata,
+          xattrs: Object.fromEntries(Object.entries(e.metadata.xattrs).sort(([a], [b]) => a.localeCompare(b))),
+        };
+      }
       if (e.target !== undefined) row.target = e.target;
       if (e.content !== undefined) {
-        row.sha256 = sha256Hex(expandContent(e.content));
+        row.sha256 = logicalContentSha256(e.content);
         row.size = contentSize(e.content);
+        if (e.content.kind === 'sealed') {
+          row.sourceId = e.content.sourceId;
+          row.extents = e.content.extents;
+        }
       }
       return row;
     });
@@ -559,18 +762,360 @@ export function manifestSha256(capture: Capture): string {
 }
 
 /**
- * Materialize a capture as the durability contracts' CapturedCut. Requires the
- * mechanism to NAME its cut: an unclaimed capture (-1) is unpublishable by
- * construction, which is the formal reason a bare scan never ships.
+ * The one value a capture mechanism may hand a publisher. It carries the full
+ * CapturedCut identity bound to the manifest digest, plus the snapshot input
+ * as defensively-copied, frozen entries: mutating the mechanism's staging
+ * buffers after this point cannot change what gets published.
  */
-export function toCapturedCut(capture: Capture, identity: CapturedCutIdentity): CapturedCut {
-  if (capture.cut < 0) throw new Error('a capture without a claimed cut is not publishable');
-  return v.parse(CapturedCutSchema, {
-    captureId: identity.captureId,
-    epoch: identity.epoch,
-    baseRevision: identity.baseRevision,
-    cut: String(capture.cut),
-    stableStageHandle: identity.stableStageHandle,
-    manifestSha256: manifestSha256(capture),
+class CaptureFactoryAuthority {}
+
+const captureFactoryAuthority = new CaptureFactoryAuthority();
+const captureFactoryAuthorities = new WeakSet<object>([captureFactoryAuthority]);
+const auditedCaptures = new WeakSet<AuditedCapture>();
+
+export interface SealedContentReader {
+  read(sourceId: string, offset: number, length: number): Promise<Uint8Array>;
+}
+
+/** The one value a capture mechanism may hand a publisher. */
+export class AuditedCapture {
+  readonly #cut: number;
+  readonly #capturedCut: CapturedCut;
+  readonly #generation: number;
+  readonly #entries: readonly NodeEntry[];
+  readonly #sealedReader: SealedContentReader | undefined;
+
+  private constructor(
+    cut: number,
+    capturedCut: CapturedCut,
+    generation: number,
+    entries: readonly NodeEntry[],
+    sealedReader: SealedContentReader | undefined,
+  ) {
+    this.#cut = cut;
+    this.#capturedCut = capturedCut;
+    this.#generation = generation;
+    this.#entries = entries;
+    this.#sealedReader = sealedReader;
+    auditedCaptures.add(this);
+    Object.freeze(this);
+  }
+
+  get cut(): number {
+    return this.#cut;
+  }
+
+  get capturedCut(): CapturedCut {
+    return Object.freeze({ ...this.#capturedCut });
+  }
+
+  get generation(): number {
+    return this.#generation;
+  }
+
+  get entries(): readonly NodeEntry[] {
+    return snapshotEntries(this.#entries);
+  }
+
+  static issue(
+    authority: CaptureFactoryAuthority,
+    cut: number,
+    capturedCut: CapturedCut,
+    generation: number,
+    entries: readonly NodeEntry[],
+    sealedReader?: SealedContentReader,
+  ): AuditedCapture {
+    if (!captureFactoryAuthorities.has(authority)) throw new Error('AuditedCapture issuance is factory-only');
+    return new AuditedCapture(cut, capturedCut, generation, entries, sealedReader);
+  }
+
+  readSealed(sourceId: string, offset: number, length: number): Promise<Uint8Array> {
+    if (!this.#sealedReader) throw new Error('capture has no sealed content reader');
+    return this.#sealedReader.read(sourceId, offset, length);
+  }
+}
+
+/** Reject lookalikes and recheck the immutable cut-to-manifest binding. */
+export function requireAuditedCapture(value: AuditedCapture): AuditedCapture {
+  if (!auditedCaptures.has(value)) throw new Error('candidate input is not an AuditedCapture issued by the capture factory');
+  if (value.capturedCut.cut !== String(value.cut)) throw new Error('AuditedCapture cut is not bound to its captured cut');
+  const manifest = manifestSha256({
+    mechanism: 'mutation-journal',
+    cut: value.cut,
+    generation: value.generation,
+    entries: value.entries,
   });
+  if (manifest !== value.capturedCut.manifestSha256) {
+    throw new Error('AuditedCapture manifest is not bound to its captured cut');
+  }
+  return value;
+}
+
+/** Streams an immutable capture range without materializing the full file. */
+export async function readCaptureRange(
+  capture: AuditedCapture,
+  entry: NodeEntry,
+  offset: number,
+  length: number,
+): Promise<Uint8Array> {
+  requireAuditedCapture(capture);
+  if (entry.kind !== 'file' || !entry.content) throw new Error('capture range requires a file entry');
+  if (!capture.entries.some((issued) => issued.path === entry.path && issued.ino === entry.ino)) {
+    throw new Error('capture range entry was not issued with this capture');
+  }
+  if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset + length > contentSize(entry.content)) {
+    throw new Error('capture range is outside file bounds');
+  }
+  if (entry.content.kind === 'dense') return entry.content.bytes.slice(offset, offset + length);
+  const bytes = new Uint8Array(length);
+  if (entry.content.kind === 'sparse') {
+    for (const run of entry.content.runs) {
+      const start = Math.max(offset, run.offset);
+      const end = Math.min(offset + length, run.offset + run.bytes.byteLength);
+      if (start < end) bytes.set(run.bytes.subarray(start - run.offset, end - run.offset), start - offset);
+    }
+    return bytes;
+  }
+  const extents = entry.content.extents;
+  let low = 0;
+  let high = extents.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const extent = extents[middle]!;
+    if (extent.offset + extent.length <= offset) low = middle + 1;
+    else high = middle;
+  }
+  for (let index = low; index < extents.length; index++) {
+    const extent = extents[index]!;
+    if (extent.offset >= offset + length) break;
+    const start = Math.max(offset, extent.offset);
+    const end = Math.min(offset + length, extent.offset + extent.length);
+    if (start >= end) continue;
+    const whole = await capture.readSealed(entry.content.sourceId, extent.offset, extent.length);
+    if (whole.byteLength !== extent.length || sha256Hex(whole) !== extent.sha256) {
+      throw new Error(`sealed extent ${entry.content.sourceId}:${extent.offset} failed integrity verification`);
+    }
+    bytes.set(whole.subarray(start - extent.offset, end - extent.offset), start - offset);
+  }
+  return bytes;
+}
+
+/**
+ * The FUSE daemon proves a cut with an append-only WAL, a durable fence record,
+ * and the digest of the materialized manifest.  It cannot be replayed through
+ * `MutationLog`: that model deliberately represents only its reduced mutation
+ * alphabet.  Keep the exceptional bridge narrow and recheck every value that
+ * crosses it before issuing the same sealed capture publishers consume.
+ */
+export interface VerifiedJournalCut {
+  readonly cut: number;
+  readonly generation: number;
+  readonly entries: readonly NodeEntry[];
+  readonly identity: CapturedCutIdentity;
+  readonly manifestSha256: string;
+  readonly sealedReader?: SealedContentReader;
+}
+
+/** Issues a sealed capture only after a local journal has verified its fence. */
+export function issueVerifiedJournalCapture(proof: VerifiedJournalCut): AuditedCapture {
+  if (!Number.isSafeInteger(proof.cut) || proof.cut < 0) throw new Error('journal fence has an invalid cut');
+  if (!Number.isSafeInteger(proof.generation) || proof.generation < 0) {
+    throw new Error('journal fence has an invalid generation');
+  }
+  for (const entry of proof.entries) requirePosixMetadata(entry.metadata, entry.path);
+  requireCompleteCaptureTree(proof.entries);
+  if (proof.entries.some((entry) => entry.content?.kind === 'sealed') && !proof.sealedReader) {
+    throw new Error('sealed journal capture has no range reader');
+  }
+  const snapshot = snapshotEntries(proof.entries);
+  const manifest = manifestSha256({
+    mechanism: 'mutation-journal',
+    cut: proof.cut,
+    generation: proof.generation,
+    entries: snapshot,
+  });
+  if (manifest !== proof.manifestSha256) throw new Error('journal fence manifest digest mismatch');
+  const capturedCut = Object.freeze(
+    v.parse(CapturedCutSchema, {
+      captureId: proof.identity.captureId,
+      epoch: proof.identity.epoch,
+      baseRevision: proof.identity.baseRevision,
+      cut: String(proof.cut),
+      stableStageHandle: proof.identity.stableStageHandle,
+      manifestSha256: manifest,
+    }),
+  );
+  return AuditedCapture.issue(captureFactoryAuthority, proof.cut, capturedCut, proof.generation, snapshot, proof.sealedReader);
+}
+
+
+function snapshotMetadata(metadata: PosixMetadata | undefined): PosixMetadata | undefined {
+  if (!metadata) return undefined;
+  return Object.freeze({
+    uid: metadata.uid,
+    gid: metadata.gid,
+    atimeNs: metadata.atimeNs,
+    mtimeNs: metadata.mtimeNs,
+    ctimeNs: metadata.ctimeNs,
+    xattrs: Object.freeze({ ...metadata.xattrs }),
+  });
+}
+
+function snapshotEntry(entry: NodeEntry): NodeEntry {
+  const metadata = snapshotMetadata(entry.metadata);
+  const base = metadata ? { ...entry, metadata } : { ...entry };
+  if (entry.kind !== 'file' || !entry.content) return Object.freeze(base);
+  const content: FileContent =
+    entry.content.kind === 'dense'
+      ? Object.freeze({ kind: 'dense' as const, bytes: entry.content.bytes.slice() })
+      : entry.content.kind === 'sealed'
+        ? Object.freeze({
+            kind: 'sealed' as const,
+            size: entry.content.size,
+            sourceId: entry.content.sourceId,
+            extents: Object.freeze(entry.content.extents.map((extent) => Object.freeze({ ...extent }))),
+          })
+        : Object.freeze({
+            kind: 'sparse' as const,
+            size: entry.content.size,
+            runs: Object.freeze(
+              entry.content.runs.map((run) => Object.freeze({ offset: run.offset, bytes: run.bytes.slice() })),
+            ),
+          });
+  return Object.freeze({ ...base, content });
+}
+
+function snapshotEntries(entries: readonly NodeEntry[]): readonly NodeEntry[] {
+  return Object.freeze(entries.map(snapshotEntry));
+}
+
+/**
+ * The complete-tree rule every publishable capture must satisfy, shared by
+ * both codecs through toCapturedCut. A capture's entry set must BE a tree:
+ * canonical relative paths, no duplicates, every non-root ancestor present as
+ * a directory (a symlink or file may never parent), and entries carrying only
+ * the metadata their kind defines. Missing ancestors are REJECTED, never
+ * synthesized with invented metadata.
+ */
+export function requireCompleteCaptureTree(entries: readonly NodeEntry[]): void {
+  const byPath = new Map<UpperPath, NodeEntry>();
+  for (const entry of entries) {
+    const path = entry.path;
+    if (path === '' || path.startsWith('/') || path.endsWith('/')) {
+      throw new Error(`non-canonical capture path '${path}'`);
+    }
+    for (const segment of path.split('/')) {
+      if (segment === '' || segment === '.' || segment === '..') {
+        throw new Error(`non-canonical capture path '${path}'`);
+      }
+    }
+    if (byPath.has(path)) throw new Error(`duplicate capture path '${path}'`);
+    if (!Number.isSafeInteger(entry.mode) || entry.mode < 0) {
+      throw new Error(`entry '${path}' carries no real mode`);
+    }
+    if (!Number.isSafeInteger(entry.ino) || entry.ino <= 0) {
+      throw new Error(`entry '${path}' carries no real inode identity`);
+    }
+    if (entry.metadata !== undefined) requirePosixMetadata(entry.metadata, path);
+    if (entry.kind === 'file' && !entry.content) {
+      throw new Error(`file entry '${path}' carries no content`);
+    }
+    if (entry.kind === 'symlink' && entry.target === undefined) {
+      throw new Error(`symlink entry '${path}' carries no target`);
+    }
+    if (entry.kind !== 'file' && entry.content !== undefined) {
+      throw new Error(`${entry.kind} entry '${path}' carries invented content metadata`);
+    }
+    if (entry.kind !== 'symlink' && entry.target !== undefined) {
+      throw new Error(`${entry.kind} entry '${path}' carries an invented symlink target`);
+    }
+    if (entry.content?.kind === 'sealed') {
+      if (!Number.isSafeInteger(entry.content.size) || entry.content.size < 0 || entry.content.sourceId.length === 0) {
+        throw new Error(`sealed content for '${path}' is invalid`);
+      }
+      let end = 0;
+      for (const extent of entry.content.extents) {
+        if (!Number.isSafeInteger(extent.offset) || !Number.isSafeInteger(extent.length)
+          || extent.offset < end || extent.length <= 0 || extent.length > MAX_SEALED_EXTENT_BYTES
+          || extent.offset + extent.length > entry.content.size || !/^[a-f0-9]{64}$/.test(extent.sha256)) {
+          throw new Error(`sealed extent for '${path}' is invalid`);
+        }
+        end = extent.offset + extent.length;
+      }
+    }
+    byPath.set(path, entry);
+  }
+  for (const [path] of byPath) {
+    let ancestor = parentOf(path);
+    while (ancestor !== '') {
+      const parent = byPath.get(ancestor);
+      if (!parent) {
+        throw new Error(`incomplete capture: ancestor '${ancestor}' of '${path}' is absent`);
+      }
+      if (parent.kind !== 'dir') {
+        throw new Error(`ancestor '${ancestor}' of '${path}' is a ${parent.kind}, not a directory`);
+      }
+      ancestor = parentOf(ancestor);
+    }
+  }
+}
+
+function parentOf(path: UpperPath): UpperPath {
+  const cut = path.lastIndexOf('/');
+  return cut === -1 ? '' : path.slice(0, cut);
+}
+
+/**
+ * Materialize an audited capture for publication. Requires LOG evidence — the
+ * entries are replayed, not trusted — and rejects every unsound shape:
+ *
+ *   torn       the capture equals no prefix of the log at all;
+ *   unclaimed  the mechanism names no cut (-1), so nothing downstream can rely
+ *              on it even when one prefix happens to match; a bare scan never
+ *              ships. A uniquely-anchored scan must CLAIM its anchor first;
+ *   ambiguous  more than one prefix matches, so no single cut identifies it;
+ *   leaked     the claimed cut is not among the prefixes the audit proves.
+ */
+export function toCapturedCut(
+  entries: readonly LogEntry[],
+  capture: Capture,
+  identity: CapturedCutIdentity,
+): AuditedCapture {
+  if (capture.entries.some((entry) => entry.metadata !== undefined)) {
+    throw new Error(`log-audited capture (${capture.mechanism}) carries unmodeled POSIX metadata`);
+  }
+  requireCompleteCaptureTree(capture.entries);
+  const audit = auditCapture(entries, capture);
+  if (audit.matchingCuts.length === 0) {
+    throw new Error(`torn capture (${capture.mechanism}): its entries equal no prefix of the log`);
+  }
+  if (capture.cut < 0) {
+    const hint = audit.uniquelyAnchored ? '; claim the unique anchor first' : '';
+    throw new Error(`unclaimed capture (${capture.mechanism}): only an audit-proven claimed cut publishes${hint}`);
+  }
+  if (audit.matchingCuts.length > 1) {
+    throw new Error(`ambiguous capture (${capture.mechanism}): cuts ${audit.matchingCuts.join(', ')} all match`);
+  }
+  if (!audit.claimedCutMatches) {
+    throw new Error(
+      `leaked capture (${capture.mechanism}): claimed cut ${capture.cut} is not proven (proven: ${audit.matchingCuts[0]})`,
+    );
+  }
+  const snapshot = snapshotEntries(capture.entries);
+  const capturedCut = Object.freeze(
+    v.parse(CapturedCutSchema, {
+      captureId: identity.captureId,
+      epoch: identity.epoch,
+      baseRevision: identity.baseRevision,
+      cut: String(capture.cut),
+      stableStageHandle: identity.stableStageHandle,
+      manifestSha256: manifestSha256({
+        mechanism: capture.mechanism,
+        cut: capture.cut,
+        generation: capture.generation,
+        entries: snapshot,
+      }),
+    }),
+  );
+  return AuditedCapture.issue(captureFactoryAuthority, capture.cut, capturedCut, capture.generation, snapshot);
 }

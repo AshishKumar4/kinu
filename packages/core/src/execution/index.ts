@@ -46,6 +46,10 @@ export {
   DeviceTunnel, type TunnelSocket,
   TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError, DEVICE_TOKEN_ROTATION,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
+  DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,
+  DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
+  type DeviceCancelResult,
 } from './device-tunnel';
 
 // Reusable Nimbus adapter. Cloudflare composes the session as its authoritative
@@ -69,5 +73,6 @@ export {
 } from './parent';
 export { sandboxFiles } from './sandbox';
 export { nimbusSessionFiles } from './nimbus';
+export { AGENT_FS_CHUNK_BYTES } from './nimbus-agent-files';
 export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor';
 export { parseStatLine } from './exec-result';

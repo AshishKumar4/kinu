@@ -30,6 +30,7 @@ const reportPayload: SubordinateReportPayload = {
   from_subordinate: 'researcher',
   status: 'completed',
   content: 'Survey done — three seams found; note written.',
+  sequence_id: 'settle:msg-77',
   task: 'Survey the auth module',
   kinu_mode: 'build',
 };
@@ -61,7 +62,7 @@ describe('subordinate event derivation', () => {
     });
   });
 
-  test('no dedupe key — one-shot same-machine facet RPC', () => {
+  test('a report is keyed by the sending sequence; an assignment down is not keyed', () => {
     const base = {
       id: 'e', trace_id: 'e', caused_by: null, ingress: 'subordinate',
       trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
@@ -71,8 +72,52 @@ describe('subordinate event derivation', () => {
       | 'payload_visibility' | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
     const taskEvent: KinuEvent = { ...base, variant: 'subordinate_task', payload: taskPayload };
     const reportEvent: KinuEvent = { ...base, variant: 'subordinate_report', payload: reportPayload };
+    // An assignment DOWN is a one-shot facet RPC with no redelivery loop.
     expect(dedupeKeyFor(taskEvent)).toBeNull();
-    expect(dedupeKeyFor(reportEvent)).toBeNull();
+    // A report UP is replayable durable work on the sending side, so its
+    // sequence is the key that recognises the replay.
+    expect(dedupeKeyFor(reportEvent)).toBe('subordinate_report:settle:msg-77');
+    expect(dedupeKeyFor({
+      ...reportEvent,
+      payload: { ...reportPayload, content: 'a later retry re-worded it' },
+    })).toBe(dedupeKeyFor(reportEvent));
+    expect(dedupeKeyFor({
+      ...reportEvent,
+      payload: { ...reportPayload, sequence_id: 'settle:msg-78' },
+    })).not.toBe(dedupeKeyFor(reportEvent));
+  });
+});
+
+describe('one report per sequence on the parent rail', () => {
+  test('a replayed report lands on the row the first delivery wrote', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+
+    const first = log.publish({ descriptor: reportDescriptor, now: 1000 });
+    const replay = log.publish({ descriptor: reportDescriptor, now: 5000 });
+
+    expect(first.admitted).toBe(true);
+    expect(replay).toEqual({ id: first.id, admitted: false });
+    expect(log.pending({ variant: 'subordinate_report' })).toHaveLength(1);
+    expect(log.idForDedupeKey('subordinate_report:settle:msg-77')).toBe(first.id);
+  });
+
+  test('two sequences are two reports', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+
+    log.publish({ descriptor: reportDescriptor, now: 1000 });
+    log.publish({
+      descriptor: {
+        ingress: 'subordinate', variant: 'subordinate_report',
+        payload: { ...reportPayload, sequence_id: 'settle:msg-78' },
+      },
+      now: 1001,
+    });
+
+    expect(log.pending({ variant: 'subordinate_report' })).toHaveLength(2);
   });
 });
 

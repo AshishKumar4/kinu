@@ -20,7 +20,7 @@ import { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS, DEFAULT_HEAD_BUDGET } from '../sr
  * OR-ing fails there rather than silently making this helper a lie.
  */
 async function composedFires(
-  conditions: readonly StopCondition<any>[], steps: number,
+  conditions: readonly StopCondition<ToolSet>[], steps: number,
 ): Promise<boolean> {
   // Enough of a step for a stop condition. `StepResult`'s fields are never
   // read here. SAFETY: verified against the installed SDK bundle — a stop

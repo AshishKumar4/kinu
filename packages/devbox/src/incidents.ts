@@ -97,7 +97,7 @@ export async function recordIncident(
  */
 export async function deliverIncidents(
   store: IncidentStore,
-  deliver: (incident: DevboxIncident) => Promise<IncidentDisposition>,
+  deliver: (incident: DevboxIncident, attempt: number) => Promise<IncidentDisposition>,
 ): Promise<number | null> {
   const rows = await store.list({ prefix: INCIDENT_PREFIX });
   let nextDelayMs: number | undefined;
@@ -112,13 +112,27 @@ export async function deliverIncidents(
         processId: row.processId,
         port: row.port,
         at: row.at,
-      });
+      // WHICH ATTEMPT THIS DELIVERY IS, which the row cannot answer on its own:
+      // it still holds the count from before this pass, and the increment
+      // happens after the handler returns. A host that announces an incident
+      // needs the ordinal of the announcement it is making, not of the last one
+      // that failed.
+      }, row.attempts + 1);
     } catch (error) {
-      // The reason is recorded here because nothing downstream will see it.
+      // A THROWN HANDLER IS `undelivered`, which is what the disposition's own
+      // contract says, so it takes the same path rather than a copy of it. The
+      // reason is recorded here because nothing downstream will see it.
       console.error(
         `[devbox] incident ${row.incidentId} was not delivered, retrying: `
         + describe({ cause: error }),
       );
+      disposition = 'undelivered';
+    }
+    if (disposition === 'undelivered') {
+      // TOOK IT, DID NOT ANNOUNCE IT. Stamping `deliveredAt` here is how a box
+      // stopped retrying an incident nobody had seen: the host's own ledger
+      // still held it as re-deliverable while this side had written it off. The
+      // row stays pending, the attempt is counted, and the schedule retries.
       nextDelayMs = incidentRetryDelayMs(row.attempts + 1);
       await store.put(key, { ...row, attempts: row.attempts + 1 });
       continue;

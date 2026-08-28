@@ -285,6 +285,43 @@ describe('AgentConfigStore — GEPA eval budget', () => {
 });
 
 /**
+ * The lifetime counters, on a store nobody has written to yet.
+ *
+ * `countClosedTurnWindow` used to open its read with a one-time copy out of a
+ * retired key, which nothing has written for long enough that only a pre-public
+ * workspace could still hold one. That copy is gone: the counter now touches
+ * exactly the one key it names, and this pins that.
+ */
+describe('AgentConfigStore — lifetime counters', () => {
+  test('a fresh store counts from one and writes only its own key', () => {
+    const c = setup();
+    expect(c.countClosedTurnWindow()).toBe(1);
+    expect(Object.keys(c.all())).toEqual([AGENT_CONFIG_KEYS.closedTurnWindows]);
+    expect(c.countClosedTurnWindow()).toBe(2);
+    expect(c.countClosedTurnWindow()).toBe(3);
+    expect(c.get(AGENT_CONFIG_KEYS.closedTurnWindows)).toBe('3');
+  });
+
+  test('an unreadable counter row resumes from one rather than throwing', () => {
+    // The caller uses the RETURN value, so a poisoned row must still answer a
+    // number — and 1 is the only honest reading of a count nobody can parse.
+    const c = setup();
+    c.set(AGENT_CONFIG_KEYS.closedTurnWindows, 'lots');
+    expect(c.countClosedTurnWindow()).toBe(1);
+    c.set(AGENT_CONFIG_KEYS.isolateGen, '');
+    expect(c.countIsolateGeneration()).toBe(1);
+  });
+
+  test('the two counters are independent', () => {
+    const c = setup();
+    expect(c.countClosedTurnWindow()).toBe(1);
+    expect(c.countIsolateGeneration()).toBe(1);
+    expect(c.countIsolateGeneration()).toBe(2);
+    expect(c.countClosedTurnWindow()).toBe(2);
+  });
+});
+
+/**
  * Every config key must be writable by something.
  *
  * Three keys have shipped read-only so far — a getter consulted at runtime with
@@ -398,23 +435,26 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     expect(c.getAssignedTier()).toBeNull();
   });
 
-  test('a malformed role_selection row reads as general, never as a crash', () => {
-    // The row is schema-parsed on every read: garbage reads as the default.
+  test('a malformed role_selection row reads as general and is left alone', () => {
+    // The row is schema-parsed on every read: garbage reads as the default, and
+    // the read does NOT overwrite it — a reader is not a repair pass.
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.roleSelection, 'not json');
     expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
+    expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('not json');
   });
 
-  test('exactly one role row persists after selection changes; legacy keys die on read', () => {
+  test('a read never mints a role row; only an explicit selection persists one', () => {
     const c = setup();
-    c.set('active_role_id', 'auditor'); // a pre-union row
-    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'auditor' }); // backfilled
+    // Absent IS the catalog default, and reading it writes nothing: an agent
+    // nobody has assigned stays distinguishable from one put on `general`.
+    expect(c.getRoleSelection()).toEqual({ kind: 'catalog', roleId: 'general' });
+    expect(c.all()).toEqual({});
+
     c.setRoleSelection({ kind: 'legacy', text: 'market researcher' });
     c.setRoleSelection({ kind: 'catalog', roleId: 'researcher' });
-    const roleKeys = Object.keys(c.all()).filter((k) =>
-      k === AGENT_CONFIG_KEYS.roleSelection || k === 'active_role_id'
-      || k === 'role_legacy_text' || k === 'agent_stance');
-    expect(roleKeys).toEqual([AGENT_CONFIG_KEYS.roleSelection]);
+    // One row for the whole authority — a catalog pick REPLACES the freeform line.
+    expect(Object.keys(c.all())).toEqual([AGENT_CONFIG_KEYS.roleSelection]);
     expect(JSON.parse(c.get(AGENT_CONFIG_KEYS.roleSelection)!))
       .toEqual({ kind: 'catalog', roleId: 'researcher' });
   });

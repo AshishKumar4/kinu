@@ -16,9 +16,8 @@
  * WHAT IS REUSED, which is everything that matters: the same Durable Object,
  * the same `createCredentialCipher` (AES-256-GCM, HKDF-derived, `pce1.`
  * envelope), the same AAD discipline, the same `CREDENTIAL_ENCRYPTION_KEY` and
- * its rotation list, the same `reconcileColumns` path, and the same
- * `requireTier` caller gate. There is no second cipher, no second key and no
- * second store.
+ * its rotation list, and the same `requireTier` caller gate. There is no second
+ * cipher, no second key and no second store.
  *
  * WHAT THE CONTAINER CAN OBSERVE. A placeholder, and nothing else. The
  * placeholder is 32 bytes of CSPRNG output, generated here at bind time and

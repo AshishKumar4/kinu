@@ -12,10 +12,10 @@ import { evaluateWithMultiModelJudging, type BranchEvaluation } from '../mcts/ev
 import { renderThrownChain } from '../obs/index';
 import { isTreeAdvance, judgeCallPool, JUDGE_MARGINALISATION_MIN } from './swarm';
 import type { ChildOutcome } from './swarm-resume';
-import { breaches, } from './swarm-setup';
-import { floorMargin, isBetter, normalisedScore } from './objective';
-import type {
-  Measurement, MeasurementContext, MeasuredObjective,
+import { breaches, type PreparedParetoMeasurement } from './swarm-setup';
+import {
+  floorMargin, isBetter, normalisedScore, validateParetoEvidence,
+  type Measurement, type MeasurementContext, type MeasuredObjective,
 } from './objective';
 import type { ResolvedVerifier } from './verifier-registry';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -180,6 +180,47 @@ export async function measureChild(input: {
     witnessFound,
   };
 }
+/** Measure each declared Pareto coordinate without synthesising an aggregate. */
+export async function measureParetoChild(input: {
+  readonly pareto: PreparedParetoMeasurement;
+  readonly artifact: string;
+}): Promise<ChildOutcome> {
+  const evidence: Record<string, number> = {};
+  const details: string[] = [];
+  for (const instrument of input.pareto.instruments) {
+    try {
+      await input.pareto.ctx.vfs.writeFile(instrument.verifier.artifact, input.artifact);
+      const measurement = await instrument.verifier.verify(input.pareto.ctx);
+      if (measurement.kind === 'unmeasurable') {
+        return { kind: 'unmeasurable', detail: measurement.detail };
+      }
+      for (const axisId of instrument.axisIds) {
+        const value = instrument.perInstance
+          ? measurement.perInstance?.[axisId]
+          : measurement.measured?.[axisId] ?? measurement.value;
+        if (value === undefined) {
+          return {
+            kind: 'unmeasurable',
+            detail: `Pareto instrument omitted declared axis "${axisId}".`,
+          };
+        }
+        evidence[axisId] = value;
+      }
+      details.push(measurement.detail);
+    } catch (error) {
+      return { kind: 'instrument-faulted', error: renderThrownChain({ cause: error }) };
+    }
+  }
+  const checked = validateParetoEvidence(input.pareto.axes, evidence);
+  if ('reason' in checked) return { kind: 'unmeasurable', detail: checked.reason };
+  return {
+    kind: 'pareto',
+    axes: input.pareto.axes,
+    evidence: checked.evidence,
+    detail: details.join(' | '),
+  };
+}
+
 
 /**
  * Score one child by the MARGINALISED JUDGE ENSEMBLE the shipped tree already owns.
@@ -324,6 +365,7 @@ export async function scoreExpansion(input: {
   readonly measures: boolean;
   readonly verifier: ResolvedVerifier | null;
   readonly witnessVerifier: ResolvedVerifier | null;
+  readonly pareto: PreparedParetoMeasurement | null;
   readonly ctx: MeasurementContext | null;
   readonly measured: MeasuredObjective | null;
   readonly baseline: number | null;
@@ -349,54 +391,40 @@ export async function scoreExpansion(input: {
   };
 }): Promise<Refusal | null> {
   const {
-    expansion, siblings, measures, verifier, witnessVerifier, ctx, measured, baseline,
+    expansion, siblings, measures, verifier, witnessVerifier, pareto, ctx, measured, baseline,
     judgeSamples, resolved, rt, mode, languages, sql, rootId, candidates, spentBy,
     nodes, log, searchLedger, ledgerEpoch, rankDirection, state,
   } = input;
   let { publication, best, bestValue } = state;
   const outcome = expansion.incomplete !== null
     ? { kind: 'incomplete' as const, detail: expansion.incomplete.detail }
-    : measures && verifier && ctx && measured && baseline !== null
-      ? await measureChild({
-          ctx,
-          verifier,
-          witnessVerifier,
-          measured,
-          baseline,
-          artifact: expansion.artifact,
-        })
-      : judgeSamples !== null
-        ? await judgeChild({
-          rt, mode, samples: judgeSamples, task: resolved.task,
-          minEnsemble: isTreeAdvance(resolved.config.advance.kind)
-            ? JUDGE_MARGINALISATION_MIN
-            : 1,
-          answer: expansion.answer,
-          siblings: siblings.map((other) => other.answer),
-          siblingsProducedCode: siblings.some(
-            (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
-          ),
-        })
-        : null;
+    : pareto !== null
+      ? await measureParetoChild({ pareto, artifact: expansion.artifact })
+      : measures && verifier && ctx && measured && baseline !== null
+        ? await measureChild({
+            ctx, verifier, witnessVerifier, measured, baseline, artifact: expansion.artifact,
+          })
+        : judgeSamples !== null
+          ? await judgeChild({
+            rt, mode, samples: judgeSamples, task: resolved.task,
+            minEnsemble: isTreeAdvance(resolved.config.advance.kind)
+              ? JUDGE_MARGINALISATION_MIN
+              : 1,
+            answer: expansion.answer,
+            siblings: siblings.map((other) => other.answer),
+            siblingsProducedCode: siblings.some(
+              (other) => readProposalCode(other.answer, languages)?.kind === 'runnable',
+            ),
+          })
+          : null;
   if (outcome?.kind === 'instrument-faulted') {
-    // *The closed verifier registry*: a throw is the INSTRUMENT breaking and is never
-    // converted into an unmeasurable candidate. It fails the run: no node is scored,
-    // nothing is published, and the reason reaches the caller intact.
-    // NAMED, because there are two scorers now and "the verifier faulted" on a judged
-    // run sends a reader to an instrument the run never ran.
     searchLedger.fail(rootId, ledgerEpoch, Date.now());
-    return unavailable(`the ${measures ? 'verifier' : 'judge'} faulted while scoring `
+    return unavailable(`the ${pareto !== null || measures ? 'verifier' : 'judge'} faulted while scoring `
       + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
   }
-  // A MEASUREMENT exists only where an instrument produced one. A judged candidate
-  // has none: the ensemble's median is a score and not a value in any objective's
-  // unit, and putting it here would place a judge's opinion in the field the records
-  // store keeps raw measurements in.
   const measurement = outcome?.kind === 'sealed' || outcome?.kind === 'scored'
     ? outcome.measurement
     : null;
-  // The [0,1] the tree climbs, from whichever scorer this run has. Null where the
-  // objective's own range admits none, and null for an unmeasurable candidate.
   const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
     ? outcome.score
     : null;
@@ -404,6 +432,7 @@ export async function scoreExpansion(input: {
     id: expansion.id,
     artifact: expansion.artifact,
     measured: measurement,
+    pareto: outcome?.kind === 'pareto' ? outcome.evidence : null,
     unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
     incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
     score,
@@ -414,12 +443,6 @@ export async function scoreExpansion(input: {
       : null,
   };
   candidates.push(candidate);
-  // THE NODE'S OWN RECORD, and it is written BEFORE the tree row on purpose: a
-  // record with no row is invisible to the re-entry reader, which joins from the
-  // tree, while a row with no record would be a node with an answer and no
-  // measurement — selectable, unrankable, and indistinguishable from one the
-  // `outcome` is null only for a run whose `score` axis measures nothing, which is
-  // an outcome that was never asked for rather than one that produced no number.
   recordSwarmNode(sql, {
     rootId,
     nodeId: expansion.id,
@@ -431,8 +454,6 @@ export async function scoreExpansion(input: {
     },
     now: Date.now(),
   });
-  // DEPTH IS DERIVED: the parent's row plus one, computed here and written by the
-  // engine. A node supplies no depth, so there is no number for it to lie about.
   insertSearchNode(sql, {
     nodeId: expansion.id, parentNodeId: expansion.parentId, parentMsgId: null, rootId,
     task: resolved.task, action: '', observation: expansion.artifact,
@@ -443,29 +464,22 @@ export async function scoreExpansion(input: {
     artifact: expansion.artifact,
     measurement,
     score,
+    pareto: candidate.pareto,
     proposal: expansion.proposal,
     proposalError: expansion.proposalError,
     granted: expansion.granted,
     conclusion: expansion.conclusion,
     transcript: expansion.transcript,
-    // Not yet crossed the threshold: compaction is decided when this node becomes a
-    // branch point, not when it is created.
     compacted: null,
     aggregated: expansion.aggregated,
   });
   if (expansion.proposalError) {
-    // The node asked for a branch and the engine could not read the request. Not
-    // one of arbitration's five policies — it never reached the arbiter — and
-    // never silent, because a node told nothing simply asks again.
     log.event('swarm.proposal_unreadable', {
       preset: resolved.preset, node: expansion.id, depth: expansion.depth,
       error: expansion.proposalError,
     });
   }
   if (outcome?.kind === 'sealed') {
-    // *The publication seal*: NOT scored zero, NOT written, and the run CONTINUES
-    // under a seal. The measurement is retained in full because a discarded one cannot
-    // adjudicate "the floor is wrong" against "the verifier is gameable".
     publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
     log.event('exploration.floor_breach', {
       preset: resolved.preset,
@@ -477,44 +491,15 @@ export async function scoreExpansion(input: {
     });
   }
   if (outcome?.kind === 'judged' && outcome.ensemble > 0) {
-    // The ensemble this candidate ACTUALLY sampled. Collected rather than
-    // recomputed from the knobs, because the realisation is the fact and the knobs
-    // are the request. Zero attempts is excluded: an evaluation that
-    // short-circuited before the ensemble never asked, which is not a realisation
-    // of zero.
     state.ensembles.push(outcome.ensemble);
-    // And onto the run's ledger row, which is where a surface can read it: a
-    // measurement disclosed once and persisted nowhere is a measurement taken and
-    // dropped. The store keeps the smallest any candidate reached.
-    //
-    // A `swarm.judge_ensemble_clamped` event used to sit here, emitted once per
-    // distinct realised size when a candidate came back below the request. It is
-    // GONE rather than quietened: the per-evaluation pool is now sized from the
-    // request (`judgeCallPool`), so a shortfall is no longer a disclosed downgrade
-    // but a broken instrument, and `judgeChild` fails the run on it. The two
-    // engines that still borrow the shipped dial keep their own events —
-    // `mcts.judge_ensemble_clamped` and `head.judge_ensemble_clamped` — because
-    // there the clamp is still reachable and still honest.
     searchLedger.observeJudgeEnsemble(rootId, outcome.ensemble);
   }
   if (score !== null) {
     backpropagate(sql, expansion.id, score);
-  } else if (outcome) {
-    // TAKEN OUT OF SELECTION WITHOUT PRETENDING IT SCORED: `terminal` for a node
-    // sealed past its floor, `failed` for one the instrument could not measure.
-    // Neither is backpropagated, so neither contributes a reward and both keep the
-    // DDL's `visits = 0, value = 0` — absent rather than zero, which is the
-    // distinction this whole surface is built on. A 0 reward would claim the node
-    // was measured and bad; an unmeasurable node was not measured at all, and a
-    // sealed one measured too well.
+  } else if (outcome && outcome.kind !== 'pareto') {
     const status = outcome.kind === 'sealed' ? 'terminal' : 'failed';
     void sql`UPDATE search_nodes SET status = ${status} WHERE id = ${expansion.id}`;
   }
-  // THE WINNER, in the quantity this run's own scorer produced. A verified run ranks
-  // on the RAW measurement in the objective's direction — `normalisedScore` clamps
-  // at 1, so two candidates that both reached the target would tie on the score and
-  // not on the value — and a judged run ranks on the ensemble's median, where higher
-  // is better by construction.
   const rank = outcome?.kind === 'scored'
     ? outcome.measurement.value
     : outcome?.kind === 'judged' ? outcome.score : null;

@@ -160,10 +160,22 @@ export function refusalOf(error: KinuError): Refusal {
 export function renderCauseChain(error: Error): string {
   const parts: string[] = [];
   const seen = new Set<Error>();
+  // A wrapper is allowed to EMBED its cause's words — `toProviderError` puts
+  // the refined provider text in its own message and keeps the raw cause for
+  // sinks — so a link whose message the chain already ends with adds nothing:
+  // rendering it again is `…: Your account is not active.: Your account is
+  // not active.` on a product surface. Containment is checked at the join
+  // boundary only; a link that says anything new still renders whole.
+  const push = (text: string): void => {
+    if (text.length === 0) return;
+    const tail = parts.at(-1);
+    if (tail !== undefined && tail.endsWith(text)) return;
+    parts.push(text);
+  };
   let link: Error | null = error;
   while (link !== null && !seen.has(link)) {
     seen.add(link);
-    parts.push(link.message);
+    push(link.message);
     // Annotated because `link` is reassigned from it: without it the two
     // types are mutually recursive and both resolve to `any` (TS7022).
     // `Error.cause` is declared `unknown`, so this narrows nothing away.
@@ -172,7 +184,7 @@ export function renderCauseChain(error: Error): string {
       link = cause;
       continue;
     }
-    if (cause !== undefined && cause !== null) parts.push(String(cause));
+    if (cause !== undefined && cause !== null) push(String(cause));
     link = null;
   }
   return parts.join(': ');

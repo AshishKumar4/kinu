@@ -213,6 +213,7 @@ function ExplorerBody({
           <NodeTranscript
             selection={selection}
             trees={state.mctsTrees} rpc={state.rpc} headActivity={state.headActivity}
+            headDeltas={state.headDeltas}
             onSelect={setSelectedId} />
         </div>
       </div>
@@ -227,8 +228,10 @@ function ExplorerBody({
           {winner?.value != null && (
             <span className="p-text-2">Winner: <span className="p-success font-medium">{formatScore(winner.value)}</span></span>
           )}
+          {/* Accent, not warning: the same tone the run's dot and every other
+              working state in the product wears. */}
           {run.status === "running" && (
-            <span className="flex items-center gap-1 p-warning">
+            <span className="flex items-center gap-1 p-accent">
               <span className="size-1.5 rounded-full bg-current p-dot-pulse" />still running
             </span>
           )}

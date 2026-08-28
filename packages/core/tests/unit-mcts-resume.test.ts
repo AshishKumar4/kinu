@@ -21,7 +21,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 function initTables(rt: AgentRuntime): void {
   initSearchTables(rt.storage.execRaw, rt.storage.sql);
   initScaffoldTables(rt.storage.execRaw, rt.storage.sql);
-  initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
+  initMctsSearchTable(rt.storage.execRaw);
 }
 
 const TASK = 'pick the best database architecture';
@@ -294,5 +294,71 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
     // but the fence alone proves they are distinct writes.
     s.converge('r1', 0, 3_000);
     expect(s.get('r1')?.status).toBe('no_acceptable_candidate');
+  });
+});
+
+/**
+ * The table ships WHOLE. `initMctsSearchTable` used to follow its CREATE with a
+ * `reconcileColumns` pass re-adding `engine` and `judge_samples_realised` for a
+ * workspace whose table predated them; both sit in the CREATE and `begin` names
+ * both, so the pass had nothing left to repair and is gone. These tests are what
+ * keeps that true: a column that reaches the writer but not the DDL now fails
+ * here instead of being silently re-added on the next boot.
+ */
+describe('the search ledger is created whole', () => {
+  function fresh() {
+    const { rt, db } = createTestRuntime();
+    initMctsSearchTable(rt.storage.execRaw);
+    return { db, sql: makeSql(db) };
+  }
+
+  test('the CREATE alone carries every column the writer names', () => {
+    const { sql } = fresh();
+    const columns = sql<{ name: string }>`SELECT name FROM pragma_table_info('mcts_search_runs')`
+      .map((row) => row.name);
+    expect(columns).toEqual([
+      'root_id', 'task', 'engine', 'root_msg_id', 'config_json', 'iteration',
+      'budget', 'status', 'epoch', 'judge_samples_realised', 'created_at', 'updated_at',
+    ]);
+  });
+
+  test('begin writes the engine discriminator and the unobserved ensemble', () => {
+    const { db, sql } = fresh();
+    new MctsSearchStore(makeSql(db)).begin({
+      rootId: 'r1', task: TASK, engine: 'swarm', rootMsgId: null,
+      config: { budget: 3, branches: 3 }, budget: 3, now: 1_000,
+    });
+    // The discriminator is load-bearing: it is what stops the MCTS resume loop
+    // re-entering a swarm's tree. An unobserved ensemble is NULL, not 0.
+    expect(sql<{ engine: string; judge_samples_realised: number | null }>`
+      SELECT engine, judge_samples_realised FROM mcts_search_runs WHERE root_id = 'r1'`[0])
+      .toEqual({ engine: 'swarm', judge_samples_realised: null });
+  });
+
+  test('a ledger row whose config will not parse refuses instead of resuming', () => {
+    const { db, sql } = fresh();
+    const store = new MctsSearchStore(makeSql(db));
+    void sql`INSERT INTO mcts_search_runs
+      (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
+       judge_samples_realised, created_at, updated_at)
+      VALUES ('r1', ${TASK}, 'mcts', 'm1', '{', 0, 2, 'running', 0, NULL, 1000, 1000)`;
+    // `begin` wrote this column with JSON.stringify, so an unparseable row is
+    // corruption. Resuming on a fabricated default would re-enter the search
+    // with one branch and no budget and call that a resume.
+    expect(() => store.findResumable(TASK)).toThrow();
+
+    // The swarm reader refuses by name rather than reporting a budget nobody set.
+    void sql`UPDATE mcts_search_runs SET engine = 'swarm' WHERE root_id = 'r1'`;
+    expect(() => store.findRunningSwarms(TASK)).toThrow('its ledger config_json will not parse');
+  });
+
+  test('a config that parses but carries no budget refuses by name', () => {
+    const { db, sql } = fresh();
+    const store = new MctsSearchStore(makeSql(db));
+    void sql`INSERT INTO mcts_search_runs
+      (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
+       judge_samples_realised, created_at, updated_at)
+      VALUES ('r1', ${TASK}, 'swarm', '', '{"branches":3}', 0, 3, 'running', 0, NULL, 1000, 1000)`;
+    expect(() => store.findRunningSwarms(TASK)).toThrow('carries no budget');
   });
 });

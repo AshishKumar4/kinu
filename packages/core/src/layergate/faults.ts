@@ -92,8 +92,8 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'context-assembly/prefix-renderers-regress',
     layer: 'context-assembly',
-    patches: ['compilePromptSurface', 'buildSystemPromptSync', 'renderAgentsMdSection'],
-    models: 'the surface compiler stops filtering unavailable executors, a prefix section renderer drops a line, and the AGENTS.md budget stops being applied',
+    patches: ['compilePromptSurface', 'buildSystemPromptSync', 'admitAgentsMd'],
+    models: 'the surface compiler stops filtering unavailable executors, a prefix section renderer drops a line, and AGENTS.md admission stops bounding what it reads — every file is materialized whatever its size',
     inject: (s) => ({
       ...s,
       compilePromptSurface: (opts) => {
@@ -102,7 +102,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       },
       buildSystemPromptSync: (opts) =>
         s.buildSystemPromptSync(opts).split('\n').filter((line) => !line.startsWith('- Model: ')).join('\n'),
-      renderAgentsMdSection: (files) => s.renderAgentsMdSection(files, Number.MAX_SAFE_INTEGER),
+      admitAgentsMd: (candidates) => ({ admit: candidates, referenced: [] }),
     }),
   },
   {

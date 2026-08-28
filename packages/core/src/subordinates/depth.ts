@@ -87,6 +87,11 @@ export function delegationExhausted(budget: DelegationBudget): boolean {
  * caller at the cap has to reach for something that is not a subordinate, and it
  * cannot tell that from "denied" alone.
  *
+ * BOTH SPAWNING RUNGS reach this, which is why the wording no longer says
+ * "hire": a role-targeted `ask` births a child through the identical substrate
+ * and adds a level exactly as a hire does. A refusal that named only one of them
+ * described a cap the other walked past.
+ *
  * ONE REMEDY, not two. This offered "do it yourself, or fork (action=fork)" —
  * two imperatives, and the second named an action the tool no longer has, so the
  * only actionable half was the one a caller reads second. A search is what runs
@@ -103,9 +108,12 @@ export function delegationDepthRefusal(budget: DelegationBudget): DelegationDept
   return {
     reason: 'denied',
     error:
-      `Cannot hire: this agent is at delegation depth ${budget.depth} of the global maximum `
-      + `${DELEGATION_MAX_DEPTH}, so a subordinate below it would be depth ${budget.depth + 1}. `
-      + 'Run the work as a search instead: agents({action:"swarm", context:"fork", task}) '
-      + 'inherits your conversation and adds no depth to the subordinate tree.',
+      `Cannot create an agent below this one: it is at delegation depth ${budget.depth} of the `
+      + `global maximum ${DELEGATION_MAX_DEPTH}, so a child of it would be depth ${budget.depth + 1}. `
+      + 'This covers BOTH rungs that birth a child — hire, and ask by `role` for a temporary '
+      + 'agent — because they add a level through the same substrate. Ask an agent that already '
+      + 'exists by NAME instead (that adds no depth), or run the work as a search: '
+      + 'agents({action:"swarm", context:"fork", task}) inherits your conversation and adds no '
+      + 'depth to the subordinate tree.',
   };
 }

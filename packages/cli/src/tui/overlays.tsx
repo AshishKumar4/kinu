@@ -1,6 +1,6 @@
 import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
+import { formatContextWindow, CHANGE_KIND_GLYPH, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
 import { takeEvidence } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import { filterModels, type AgentModelEntry } from '../model-catalog';
@@ -8,7 +8,6 @@ import type { ProviderFailure } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import { clipText } from './format';
-import { CHANGE_KIND_GLYPH } from './glyphs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import { useTuiTheme } from './theme';
 

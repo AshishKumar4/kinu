@@ -155,10 +155,12 @@ async function runOneShot(
   // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
   // what eventually runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  // Text mode streams a transcript a person reads; its diagnostics belong in
-  // the turn log, not between the reader and the run. --json keeps stderr as
-  // the log stream CI already collects.
-  if (!surface.json) installTurnDiagnostics();
+  // Diagnostics belong in the turn log on BOTH surfaces. Text mode: they would
+  // land between the reader and the run. --json: stderr is part of the machine
+  // contract — empty on success, the rendered error alone on failure — and a
+  // routine event (`admission.uncounted` fires on every openai-compat request)
+  // would break every consumer that treats stderr output as the failure text.
+  installTurnDiagnostics();
   const client = await createAgentClient(
     target,
     { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...transcriptOptions(opts) },
@@ -204,8 +206,8 @@ async function runOneShot(
     const alreadyReported = failed;
     failed = true;
     if (!alreadyReported) {
-      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', ...guideFailure(err) })}\n`);
-      else printFailure(err);
+      if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', ...guideFailure({ cause: err }) })}\n`);
+      else printFailure({ cause: err });
     }
   } finally {
     consentWatch?.stop();
@@ -515,7 +517,7 @@ function renderRunEvent(event: AgentClientEvent): void {
       printToolResult(event.result);
       break;
     case 'error':
-      console.log(`\n${formatFailure(event.message)}`);
+      console.log(`\n${formatFailure({ cause: event.message })}`);
       break;
     case 'turn-end':
       console.log('');
@@ -523,6 +525,7 @@ function renderRunEvent(event: AgentClientEvent): void {
     case 'turn-start':
     case 'step-finish':
     case 'evolution':
+    case 'background':
     case 'broadcast':
     case 'run-event':
       break;
@@ -581,9 +584,11 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
     case 'step-finish':
       return [];
     case 'error':
-      return [{ type: 'error', ...guideFailure(event.message) }];
+      return [{ type: 'error', ...guideFailure({ cause: event.message }) }];
     case 'evolution':
       return [{ type: 'evolution', event: event.event, message: event.message }];
+    case 'background':
+      return [{ type: 'background', event: event.event, message: event.message }];
     case 'broadcast':
       return [{ type: 'broadcast', event: decodeJsonValue({ value: event.event }) }];
     // The durable ledger, verbatim and whole: every RunEvent kind travels

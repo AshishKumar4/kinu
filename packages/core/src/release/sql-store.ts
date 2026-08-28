@@ -13,8 +13,13 @@ import {
 } from './types';
 import { assertReleaseTransition } from './lifecycle';
 import { deployApprovalDigest, deployTargetAsCommand } from './approval-digest';
-import { redactReleaseDiff } from './path-safety';
+import { assertGithubRepoUrl, redactReleaseDiff } from './path-safety';
 import type { SqlExec, SqlValue } from '../types/primitives';
+
+/** The largest diff this ledger stores. A refusal rather than a truncation:
+ *  the stored bytes are the ones `git apply` runs, and half a hunk is not a
+ *  smaller change, it is a broken one. */
+const MAX_PATCH_CHARS = 250_000;
 
 export interface ReleaseSqlStore {
   all<Output>(schema: v.GenericSchema<Output>, query: string, ...bindings: SqlValue[]): Output[];
@@ -337,6 +342,13 @@ export class ReleaseStore {
     const localRoot = cleanOptional(input.localRoot);
     const deployTarget = cleanOptional(input.deployTarget);
     if (kind === 'github' && !repoUrl) throw new Error('github source binding requires repoUrl');
+    // The credential this binding's kind names is a GITHUB credential, and
+    // `apply` installs it as an HTTP authorization header before cloning
+    // whatever this URL says. So the URL decides where a GitHub token is sent,
+    // and a nonempty-string check decided nothing: `kind: 'github'` with a
+    // repoUrl pointing anywhere meant the token went there. Refused at the
+    // ledger, which is the last point before the value is durable.
+    if (kind === 'github' && repoUrl) assertGithubRepoUrl(repoUrl);
     if (kind === 'local' && !localRoot) throw new Error('local source binding requires localRoot');
     const now = this.now();
     this.sql.run(
@@ -399,7 +411,13 @@ export class ReleaseStore {
            FROM release_changes ORDER BY updated_at DESC LIMIT ?`,
           n,
         );
-    return rows.map(mapReleaseChange);
+    // Redacted HERE, on the DISPLAY read. `getChange` (and so `detail`, and so
+    // everything the engine applies) returns the stored bytes untouched: a diff
+    // that is redacted in storage is a diff `git apply` writes the redaction
+    // marker into. See `updateChange`.
+    return rows.map(mapReleaseChange).map((change) => (
+      change.patch === null ? change : { ...change, patch: redactReleaseDiff(change.patch) }
+    ));
   }
 
   getChange(changeId: string): ReleaseChange | null {
@@ -420,7 +438,20 @@ export class ReleaseStore {
     if (!existing) throw new Error(`unknown release change: ${changeId}`);
     const nextPlan = patch.plan === undefined ? existing.plan : cleanOptional(patch.plan, 12000);
     const nextSummary = patch.summary === undefined ? existing.summary : cleanOptional(patch.summary, 4000);
-    const nextPatch = patch.patch === undefined ? existing.patch : (patch.patch == null ? null : redactReleaseDiff(String(patch.patch)).slice(0, 250_000));
+    // VERBATIM. This column is the one the engine writes to a file and hands to
+    // `git apply`, so anything done to it here is done to the bytes that land in
+    // the repository: a redacted ADDED line applies the literal marker into the
+    // target file, a redacted REMOVED line no longer matches the working tree
+    // and breaks its hunk, and a truncation cuts a valid patch mid-hunk.
+    // Redaction belongs to the display read (`listChanges`), and an oversized
+    // patch is refused rather than silently shortened into a broken one.
+    if (patch.patch != null && String(patch.patch).length > MAX_PATCH_CHARS) {
+      throw new Error(
+        `patch is ${String(String(patch.patch).length)} characters, over the ${String(MAX_PATCH_CHARS)} `
+        + 'limit — split the change rather than truncating the diff',
+      );
+    }
+    const nextPatch = patch.patch === undefined ? existing.patch : (patch.patch == null ? null : String(patch.patch));
     const nextPreviewUrl = patch.previewUrl === undefined ? existing.previewUrl : cleanOptional(patch.previewUrl, 2048);
     this.sql.run(
       `UPDATE release_changes
@@ -489,7 +520,11 @@ export class ReleaseStore {
     return deployTargetAsCommand(row?.deploy_target ?? null);
   }
 
-  requestApproval(changeId: string, approvalType: ReleaseApproval['approvalType']): ReleaseApproval {
+  requestApproval(
+    changeId: string,
+    approvalType: ReleaseApproval['approvalType'],
+    opts?: { command?: string | null },
+  ): ReleaseApproval {
     const existing = this.getChange(changeId);
     if (!existing) throw new Error(`unknown release change: ${changeId}`);
     if (!['apply', 'deploy_staging', 'deploy_production', 'rollback'].includes(approvalType)) throw new Error('invalid approval type');
@@ -499,13 +534,24 @@ export class ReleaseStore {
     }
     const id = this.makeId('pca', 10);
     const now = this.now();
-    // Bind the reviewable deploy identity (patch + declared command). deploy
-    // recomputes this and rejects a mismatch, so the approval can't be
-    // redirected to a mutated patch or an injected command.
+    // Bind the reviewable identity (patch + the command that will run). deploy
+    // and rollback both recompute this and reject a mismatch, so an approval
+    // can't be redirected to a mutated patch or an injected command.
+    //
+    // A ROLLBACK binds its OWN command. Both used to hash
+    // `deployCommandForChange`, which is the command a DEPLOY runs — so the
+    // digest a rollback approval carried described something the rollback would
+    // never execute, and `rollback()` (unlike `deploy()`) never checked it
+    // anyway. An approved rollback could then be spent on any command the caller
+    // passed, and the model's release tool is a caller. `null` here means "the
+    // git restore this target implies", which is what a commit-target rollback
+    // runs and what `rollback()` recomputes for one.
     const digest = deployApprovalDigest({
       approvalType,
       patch: existing.patch,
-      command: this.deployCommandForChange(existing),
+      command: opts?.command !== undefined
+        ? opts.command
+        : (approvalType === 'rollback' ? null : this.deployCommandForChange(existing)),
     });
     this.sql.run(
       `INSERT INTO release_approvals

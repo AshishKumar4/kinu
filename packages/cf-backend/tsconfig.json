@@ -11,5 +11,7 @@
     }
   },
   "include": ["src", "tests", "env.d.ts"],
-  "exclude": ["tests/workerd"]
+  "exclude": ["tests/workerd"],
+  "//files": "`tests/workerd` is excluded because `tests/workerd/env.d.ts` augments `Cloudflare.Env` with the TEST worker's twelve probe bindings, and the agents SDK constrains its env generic to `Cloudflare.Env`, so compiling both surfaces together makes the production `Env` fail that constraint in every Agent class. `decorated-agent.test.ts` is the one workerd test that imports production Agent classes, so it needs the production `Env` and must not see the probe bindings. A `files` entry is not filtered by `exclude`, which is exactly the escape hatch this needs: one file, named, compiled against the surface it actually uses. It imports only `vitest`, `agents` and `./src`, so it needs nothing from the workerd project's types.",
+  "files": ["tests/workerd/decorated-agent.test.ts"]
 }

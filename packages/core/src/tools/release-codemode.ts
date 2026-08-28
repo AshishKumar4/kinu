@@ -28,7 +28,7 @@
  */
 
 import * as v from 'valibot';
-import type { CodemodeProvider } from '../rlm';
+import type { CodemodeProvider } from './sandbox-contract';
 import { RELEASE_STATUSES } from '../release/index';
 import { releaseToolActions, TOOL_REACH, type ReleaseToolAction } from './registry';
 import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool';

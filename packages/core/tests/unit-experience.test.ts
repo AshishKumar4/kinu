@@ -680,6 +680,11 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     const pending = getPendingScaffold(beta.rt.storage.sql);
     expect(pending?.version).toBe(1);
     expect(pending?.rationale).toContain('Imported scaffold, imported from workspace "alpha"');
+    // The import's own marker, written in the same insert as the version. It is
+    // what lets a re-promotion after an interrupted settlement recognise its own
+    // pending candidate instead of being refused by the single-pending gate and
+    // discarding an import whose scaffold is live.
+    expect(pending?.rationale).toMatch(/\[import:imp-[a-z0-9]+\]/);
     expect(pending?.rationale).toContain(SCAFFOLD_RATIONALE);
     // The candidate's source is in the version store; the loop that RUNS is not it.
     expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('v1'));

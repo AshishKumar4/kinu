@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@kinu.run/core';
+import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/core/identity';
-import { applyWorkspaceTitle, canonicalConversationId, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, canonicalConversationId, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, invalidateConversationSearchIndex, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
@@ -51,6 +51,7 @@ import {
 } from './agent-client';
 import type {
   AgentChangelogView,
+  AgentRefinementView,
   AgentClient,
   AgentClientEvent,
   AgentClientSendOptions,
@@ -320,6 +321,10 @@ export class LocalAgentClient implements AgentClient {
       getShellApprovalMode: () => this.session.getShellApprovalMode().mode,
       setShellApprovalMode: (mode: ShellApprovalMode) => this.session.setShellApprovalMode(mode).mode,
       setShellApprovalHandler: (handler) => this.session.setShellApprovalHandler(handler),
+      listInstructionApprovals: (request) => this.session.listInstructionApprovals(request),
+      readInstructionApproval: (path) => this.session.readInstructionApproval(path),
+      approveInstruction: (path, digest) => this.session.approveInstruction(path, digest),
+      revokeInstruction: (path) => this.session.revokeInstruction(path),
       listModelProviders: async () => (await this.session.listModelProviders()).map((provider) => ({
         id: provider.id,
         available: provider.available,
@@ -449,6 +454,9 @@ export class LocalAgentClient implements AgentClient {
       void this.deps.rt.storage.sql`
         UPDATE messages SET session_id = ${archivedConversation} WHERE id = ${row.id}`;
     }
+    // Session reassignment is invisible to the search index's rowid watermark;
+    // its entries now name conversations the rows left.
+    invalidateConversationSearchIndex(this.deps.rt.storage.sql);
     await this.session.end();
     this.activeCliSession = createCliSession(this.agentName, {
       ...this.deps.transcript,
@@ -541,6 +549,22 @@ export class LocalAgentClient implements AgentClient {
 
   async revertChangelogEntry(id: string) {
     return this.session.revertChangelogEntry(id);
+  }
+
+  async refinements(limit?: number): Promise<AgentRefinementView> {
+    return this.session.listRefinements(limit);
+  }
+
+  async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
+    return this.session.requestRefinement(opts);
+  }
+
+  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
+    return this.session.decideRefinement(input);
+  }
+
+  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
+    return this.session.showRefinement(requestId, routeIndex);
   }
 
   async latestTakes() {
@@ -679,6 +703,8 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
       };
     case 'evolution':
       return { type: 'evolution', event: event.event, message: event.message };
+    case 'background':
+      return { type: 'background', event: event.event, message: event.message };
     case 'broadcast':
       return { type: 'broadcast', event: event.event };
     case 'run-event':

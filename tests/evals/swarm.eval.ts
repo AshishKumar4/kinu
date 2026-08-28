@@ -66,7 +66,7 @@ import * as v from 'valibot';
 import type { LanguageModel, ToolSet } from 'ai';
 
 import {
-  buildActorTools, execRatioImplementation,
+  buildActorTools, execRatioImplementation, WORKSPACE_RUN_ID,
   type AgentRuntime, type Floor, type JsonValue, type LLMProviderConfig,
   type ObjectiveIdentity,
 } from '../../packages/core/src/index';
@@ -517,6 +517,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
         // The exploration substrate, which is what puts `swarm` in the action enum.
         fork: { rt, model },
       },
+      effectClaims: { sql: rt.storage.sql, turnId: () => WORKSPACE_RUN_ID },
     });
     const entry = tools.agents;
     if (!entry) throw new Error('the agents tool was not built, so there is no swarm rung to drive');

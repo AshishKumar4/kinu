@@ -350,7 +350,15 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             The self-evolving agent platform
           </div>
           <h1 className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
-            Agents that <span className="block h-[2.02em] overflow-hidden p-gold">{phrase}<span aria-hidden className="ml-[.06em] inline-block h-[.8em] w-[.075em] translate-y-[.1em] bg-[var(--c-accent)] motion-safe:animate-pulse" /></span>
+            Agents that{' '}
+            {/* Every phrase renders invisibly in the same grid cell, so the cell
+                is always exactly as tall as the tallest phrase at the current
+                width and font — no reserved-height guess, no overflow mask, and
+                nothing to shave a descender or cut a line at the right edge. */}
+            <span className="grid p-gold">
+              {PHRASES.map((sizer) => <span key={sizer} aria-hidden="true" className="invisible col-start-1 row-start-1">{sizer}</span>)}
+              <span className="col-start-1 row-start-1">{phrase}<span aria-hidden className="ml-[.06em] inline-block h-[.8em] w-[.075em] translate-y-[.1em] bg-[var(--c-accent)] motion-safe:animate-pulse" /></span>
+            </span>
           </h1>
           <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
             Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.

@@ -34,20 +34,19 @@ import type { InlineSteer } from "@kinu.run/core";
 const NOTICE_ID = "steer";
 
 export interface SteerActionsDeps {
-  /** `useKinu().steerChat` — resolves with where the text landed. */
-  steerChat: (text: string) => Promise<"mid-turn" | "idle">;
+  /** `useKinu().steerChat` — resolves with where the text landed: spliced into
+   *  the running turn, or — the turn had already ended — queued by the actor as
+   *  the next ordinary turn. The actor decides atomically in its own turn
+   *  queue, so nothing is ever left with this hook to re-send. */
+  steerChat: (text: string) => Promise<"mid-turn" | "queued">;
   /** `useKinu().abortChat` — resolves with the steers the abort dropped. */
   abortChat: () => Promise<string[]>;
-  /** `useKinu().sendChat`, for the `idle` race where nothing was buffered. */
-  sendChat: (text: string) => void;
   draft: string;
   setDraft: (update: (current: string) => string) => void;
   /** Whether the draft carries attachments a steer cannot take. */
   hasAttachments?: boolean;
   /** `useKinu().steerRuns` — the steers the server has taken. */
   steerRuns: readonly InlineSteer[];
-  /** Ids of the messages the chat is already rendering durably. */
-  messageIds: readonly string[];
 }
 
 export interface SteerActions {
@@ -58,12 +57,6 @@ export interface SteerActions {
   steer: () => void;
   /** Abandon the turn and take back whatever the agent never saw. */
   stop: () => void;
-  /**
-   * Steers the thread must draw itself: the ones whose durable user row has not
-   * arrived yet. The row carries the SAME id, so once it lands the live copy
-   * drops out and the thread shows the steer once — never both.
-   */
-  liveSteers: readonly InlineSteer[];
 }
 
 /**
@@ -88,12 +81,7 @@ function queuedSteerNotice(
 export function useSteerActions(deps: SteerActionsDeps): SteerActions {
   // Only the one-shot lines. The queued line is read from `steerRuns` below.
   const [settled, setSettled] = useState<ComposerNotice | null>(null);
-  const { steerChat, abortChat, sendChat, draft, setDraft, hasAttachments, steerRuns, messageIds } = deps;
-
-  const liveSteers = useMemo(() => {
-    const durable = new Set(messageIds);
-    return steerRuns.filter((steer) => !durable.has(steer.id));
-  }, [steerRuns, messageIds]);
+  const { steerChat, abortChat, draft, setDraft, hasAttachments, steerRuns } = deps;
 
   const notice = useMemo(
     () => settled ?? queuedSteerNotice(steerRuns, hasAttachments === true),
@@ -108,11 +96,10 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     setSettled(null);
     steerChat(text).then(
       (landed) => {
-        if (landed === "idle") {
-          // The turn ended between the keystroke and the RPC and NOTHING was
-          // buffered server-side, so this text is still ours to send. Exactly
-          // one of the two paths ever runs it.
-          sendChat(text);
+        if (landed === "queued") {
+          // The turn ended before this arrived, so the ACTOR queued it as the
+          // next ordinary turn — atomically, in its own turn queue, so another
+          // turn starting first cannot push these words to a later slot.
           setSettled({
             id: NOTICE_ID, tone: "info",
             text: "That turn had already finished, so this went as a new message.",
@@ -131,7 +118,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
         });
       },
     );
-  }, [draft, sendChat, setDraft, steerChat]);
+  }, [draft, setDraft, steerChat]);
 
   const stop = useCallback(() => {
     setSettled(null);
@@ -145,5 +132,5 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     });
   }, [abortChat, setDraft]);
 
-  return { notice, steer, stop, liveSteers };
+  return { notice, steer, stop };
 }

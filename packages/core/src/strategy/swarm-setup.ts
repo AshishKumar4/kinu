@@ -18,7 +18,8 @@ import {
 } from './swarm';
 import type { ResolvedSwarm } from './swarm';
 import type {
-  Floor, Measurement, MeasurementContext, ObjectiveDirection,
+  Floor, InstancedObjective, Measurement, MeasurementContext, ObjectiveDirection,
+  ParetoAxis, VectorObjective,
 } from './objective';
 
 import { renderThrownChain, type Logger } from '../obs/index';
@@ -36,13 +37,14 @@ import {
   preflightVerifier, registeredVerifierKind, resolveVerifier,
   unregisteredKindRefusalFor, type ResolvedVerifier,
 } from './verifier-registry';
-import { measuredHalf, normalisedScore } from './objective';
+import { measuredHalf, normalisedScore, paretoObjectiveAxes } from './objective';
 import { argumentDigest } from '../safety/argument-digest';
 
 import type { ModelCallSink } from '../events/model-call';
 import type { WebSearchProvider } from '../web/index';
 import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
-import type { NodeWorkspaceProvisioner } from './node-workspace';
+import type { PublishHeadStream } from '../heads/head-stream';
+import type { NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
 import type { MissionScope } from '../mission-budget';
 import type { SwarmCandidate } from './swarm';
 import type { PublicationState } from './objective';
@@ -134,29 +136,16 @@ export function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('advance:"archive" bins its elites by a descriptor and this call named none. '
       + 'Supply `key`, naming a quantity the objective\'s own instrument reports.');
   }
-  if (config.advance.kind === 'pareto') {
-    // AND THIS IS THE OTHER CAUSE, now stated as itself. `pareto` is not waiting on a
-    // store: `swarmValidity` already requires its objective to be `instanced` or
-    // `vector`, and this runner measures NEITHER — `measuredHalf` refuses both above,
-    // one `MeasuredObjective` carries a single metric and direction, the tree's reward is
-    // `normalisedScore` over that one value, and `MeasuredValue.perInstance` is read
-    // nowhere. A front here would be an argmax over an aggregate reported as a frontier,
-    // which is the shape *Settle is derived* forbids.
-    return unsupported('advance:"pareto" selects the NON-DOMINATED set, and being non-dominated is a '
-      + 'statement about several axes: `objective` must be kind:"instanced" or kind:"vector" for the '
-      + 'front to exist at all. This runner measures one number per candidate — one metric, one '
-      + 'direction, one normalised reward — and reads neither a per-instance vector nor a per-metric '
-      + 'one, so it would report an argmax over an aggregate as a frontier. What is missing is a '
-      + 'per-instance measurement path and a dominance comparison, not a store. Use advance:'
-      + `"${SWARM_TREE_ADVANCES.join('"/"')}" over kind:"scalar", which is the aggregate that argmax `
-      + 'was over.');
-  }
   // `expand:'aggregate'` RUNS — see `fanInAtLevel`. What refuses here is a composition
   // in which a fan-in could never HAPPEN, and each arm names the one thing that makes it
   // impossible. A composition that resolved and then quietly aggregated nothing would
   // be the accepted-and-ignored axis *Accepted and ignored* refuses, which is the
   // defect the refusal it replaces was written against — the refusal was true about
   // the engine and is not any more.
+  if (config.expand === 'aggregate' && config.advance.kind === 'pareto') {
+    return badInput('expand:"aggregate" needs a scalar verifier verdict to re-grade a merge node, '
+      + 'while advance:"pareto" preserves a vector without collapsing it. Use expand:"sample".');
+  }
   if (config.expand === 'aggregate') {
     if (depth.value < 2) {
       return badInput('expand:"aggregate" is fan-in — k parents consumed by one child — and a '
@@ -208,6 +197,70 @@ export function baselineOf(measurement: Measurement, key: string | null): number
 export function breaches(floor: Floor, direction: ObjectiveDirection, value: number): boolean {
   return direction === 'minimise' ? value < floor.value : value > floor.value;
 }
+/** The instruments and declared axes that produce one Pareto vector. */
+export interface PreparedParetoMeasurement {
+  readonly axes: readonly ParetoAxis[];
+  readonly ctx: MeasurementContext;
+  readonly instruments: readonly {
+    readonly axisIds: readonly string[];
+    readonly perInstance: boolean;
+    readonly verifier: ResolvedVerifier;
+  }[];
+}
+
+/** Resolve every instrument of a multi-axis objective before any node is expanded.
+ *
+ * An instanced objective has one instrument that must report every declared instance.
+ * A vector objective has one instrument per component. Neither arm derives an axis
+ * from a returned label: the objective declares the comparable coordinates. */
+export async function prepareParetoMeasurement(input: {
+  readonly rt: AgentRuntime;
+  readonly resolved: ResolvedSwarm;
+}): Promise<PreparedParetoMeasurement | Refusal> {
+  const objective = input.resolved.objective;
+  if (!objective || (objective.kind !== 'instanced' && objective.kind !== 'vector')) {
+    return badInput('advance:"pareto" requires an instanced or vector objective.');
+  }
+  const axes = paretoObjectiveAxes(objective);
+  if ('reason' in axes) return badInput(axes.reason);
+  const ctx = measurementContext(input.rt);
+  if (!ctx) {
+    return unavailable('this workspace has no shell, so its Pareto instruments cannot run.');
+  }
+  const components: readonly {
+    readonly axisIds: readonly string[];
+    readonly perInstance: boolean;
+    readonly objective: InstancedObjective | VectorObjective['components'][number];
+  }[] = objective.kind === 'instanced'
+    ? [{ axisIds: objective.instances, perInstance: true, objective }]
+    : objective.components.map((component) => ({
+      axisIds: [component.metric],
+      perInstance: false,
+      objective: component,
+    }));
+  const instruments: PreparedParetoMeasurement['instruments'][number][] = [];
+  for (const component of components) {
+    if (!('kind' in component.objective.verify)) {
+      return unsupported('a Pareto objective supplies a closure verifier, which names no durable '
+        + 'artifact path. Register a verifier kind for every Pareto axis.');
+    }
+    const kind = registeredVerifierKind(component.objective.verify.kind);
+    if (kind === null) return unregisteredKindRefusalFor(component.objective.verify.kind);
+    const fault = await preflightVerifier(kind, ctx);
+    if (fault !== null) {
+      return unavailable(`the "${kind}" Pareto instrument cannot run in this workspace: ${fault}`);
+    }
+    const resolvedVerifier = resolveVerifier(component.objective.verify);
+    if ('reason' in resolvedVerifier) return resolvedVerifier;
+    instruments.push({
+      axisIds: component.axisIds,
+      perInstance: component.perInstance,
+      verifier: resolvedVerifier,
+    });
+  }
+  return { axes: axes.axes, ctx, instruments };
+}
+
 
 /** What {@link prepareMeasurement} resolves for a run that measures an objective. */
 export interface PreparedMeasurement {
@@ -421,7 +474,7 @@ export function initRunLedgers(rt: AgentRuntime): RunLedgers {
   // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
   // its structure and not one knob it ran under, and the judge clamp it computes and
   // discloses was persisted nowhere at all.
-  initMctsSearchTable(rt.storage.execRaw, sql);
+  initMctsSearchTable(rt.storage.execRaw);
   const searchLedger = new MctsSearchStore(sql);
   // The leaderboard *The records store* governs, initialised for the same reason the two
   // above are: a workspace that has never run a search has no `exploration_records`, and
@@ -495,18 +548,22 @@ log.event('swarm.records_carried_in', {
 }
 
 /**
- * What a node's row in the head journal records when a re-entry takes over the attempt
- * that spawned it.
+ * NOTHING IS WRITTEN ON A NODE THIS RUN TAKES OVER, and the absence is the fix.
  *
- * Written into `head_journal.error_message`, which the Exploration surface shows
- * verbatim, so it is worded for the person reading the node - the same reason
- * `heads/controller.ts` words `RECLAIMED_RUN_REASON` that way. Two observations and no
- * cause: the row said "spawned, never reported", and this run found nothing left that
- * could report it.
+ * There used to be a `RESUMED_SWARM_NODE_REASON` here — "Interrupted before it
+ * reported. This search was re-entered from its durable rows, and the nodes after it
+ * are the continuation." — passed into `HeadJournal.abandonRunning` by
+ * {@link resolveReentry} and rendered verbatim on the exploration surface. Every
+ * clause of it was false about the row it was written on: the node was not finished
+ * with, the nodes "after it" were fresh ids the same re-entry then paid for a second
+ * time, and a five-node search accumulated five such failures per eviction.
+ *
+ * A node that was spawned and never reported is UNFINISHED WORK, so the re-entry
+ * re-runs it under its own id (`swarm-resume.ts`, `PendingSwarmNode`) and the
+ * row is re-opened rather than retired. The only caller that may still retire one is
+ * the start-of-life reconciliation, for a root nothing can re-drive — which is the
+ * one place where "no report will arrive" is a true statement.
  */
-const RESUMED_SWARM_NODE_REASON =
-  'Interrupted before it reported. This search was re-entered from its durable rows, '
-  + 'and the nodes after it are the continuation.';
 
 /**
  * THE SEARCH THIS CALL IS: the interrupted one it re-enters, or a new one - plus THE
@@ -543,7 +600,7 @@ export function resolveReentry(input: {
   const { sql, searchLedger, journal, redrive, task, preset, profile, log } = input;
   const reentry = redrive === true
     ? reenterSwarm({ sql, ledger: searchLedger, journal }, {
-      task: task, reason: RESUMED_SWARM_NODE_REASON, now: Date.now(),
+      task: task, now: Date.now(),
     })
     : null;
   const runProfile = profile ?? reentry?.profile ?? null;
@@ -648,7 +705,7 @@ export function refuseContendedRun(input: {
   const contended = live[0];
   if (!contended) return null;
   log.event('swarm.duplicate_root_refused', {
-    preset: preset, root: contended.rootId,
+    preset, root: contended.rootId,
     redrive: redrive === true, running: live.length,
   });
   return unavailable(`this workspace is already running a swarm for this task (${contended.rootId}, `
@@ -679,7 +736,13 @@ export async function createRoot(input: {
   readonly measures: boolean;
   readonly journal: HeadJournal;
   readonly agentNodes: boolean;
-}): Promise<{ readonly rootId: string; readonly nodes: Map<string, TreeNode> }> {
+}): Promise<{
+  readonly rootId: string;
+  readonly nodes: Map<string, TreeNode>;
+  /** The node this call just built, so a caller needing it does not re-read the map
+   *  it was handed and deal with an absence that cannot happen. */
+  readonly root: TreeNode;
+}> {
   const { sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
   // The ROOT is the workspace as found at depth 0 — the one node no model wrote.
   // Recorded so that selection has something to select and so that every child's
@@ -708,11 +771,11 @@ export async function createRoot(input: {
       codeUsed: null, depth: 0, msgId: null,
     });
   }
-  const nodes = new Map<string, TreeNode>([[rootId, {
+  const root: TreeNode = {
     id: rootId, parentId: null, depth: 0, artifact: rootArtifact,
     // The baseline IS the root's measurement, and its normalised score is 0 by
     // construction — the point the search climbs away from.
-    measurement: null, score: measures ? 0 : null,
+    measurement: null, score: measures ? 0 : null, pareto: null,
     proposal: null, proposalError: null, granted: null,
     // The root reported nothing because no model wrote it. Its children's prefix is
     // the ORIGIN's conversation when the caller supplied one (*Inherited context*: a
@@ -724,7 +787,8 @@ export async function createRoot(input: {
     // The root aggregates nothing: it IS the workspace as found, and a fan-in consumes
     // a level the search produced.
     aggregated: [],
-  }]]);
+  };
+  const nodes = new Map<string, TreeNode>([[rootId, root]]);
   // One run header, so every node of this search groups under one root in the journal
   // instead of each appearing as its own empty run — the defect `recordSplit` exists
   // to close, reached here for the same reason. Idempotent under a re-entry: the row is
@@ -732,11 +796,9 @@ export async function createRoot(input: {
   if (agentNodes) {
     journal.recordSplit(rootId, resolved.label ?? resolved.preset, Date.now());
   }
-  return { rootId, nodes };
+  return { rootId, nodes, root };
 }
-
-  /**
- * WHAT AN EARLIER ATTEMPT OF THIS SEARCH ALREADY SETTLED, put back.
+/**
  *
  * Every accumulator above is seeded from the durable rows so a re-entry continues
  * one search instead of reporting the half of it that happens to be in memory: the
@@ -766,6 +828,23 @@ export interface ResumedSearchSeed {
   readonly publication: PublicationState;
   readonly best: SwarmCandidate | null;
   readonly bestValue: number | null;
+  /**
+   * HOW MANY EXPANSIONS THIS SEARCH HAS ALREADY MADE, and therefore what the budget
+   * this attempt may still spend is.
+   *
+   * THE UNION of the two durable records of a node's existence, and it has to be the
+   * union or the count is wrong in one direction or the other. A node's spawn is
+   * written to `head_journal` before its model runs; its answer is written to
+   * `search_nodes` only after its whole LEVEL settled. Counting tree rows alone —
+   * which is what this did — made a search cut inside its only level count ZERO
+   * expansions, recreate the entire budget and expand a second full wave under fresh
+   * ids, so a five-node request produced ten nodes and then fifteen. Counting journal
+   * rows alone would miss a `unit:'thought'` run, which journals nothing at all.
+   *
+   * The two sets partition cleanly, so the union is a sum with no de-duplication: a
+   * node with a tree row is finished as far as the search is concerned, and a node
+   * with a journal row and no tree row is exactly what `SwarmReentry.pending` is.
+   */
   readonly inheritedExpansions: number;
   readonly inheritedTokens: number | null;
 }
@@ -783,7 +862,10 @@ export function seedResumedSearch(input: {
   let bestValue: number | null = null;
   const ensembles: number[] = [];
   let publication: PublicationState = { kind: 'open' };
-  let inheritedExpansions = 0;
+  // The paid-for expansions this re-entry re-runs rather than re-buys. Counted
+  // BEFORE the loop, because they are not in `reentry.nodes` — that is the whole
+  // point of them.
+  let inheritedExpansions = reentry?.pending.length ?? 0;
   let inheritedTokens: number | null = null;
   for (const node of reentry?.nodes ?? []) {
     // The root was seeded above, measured against the workspace as it is NOW.
@@ -797,11 +879,11 @@ export function seedResumedSearch(input: {
     const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
       ? outcome.score
       : null;
+    const pareto = outcome?.kind === 'pareto' ? outcome.evidence : null;
     nodes.set(node.id, {
       id: node.id, parentId: node.parentId, depth: node.depth,
       artifact: node.artifact,
-      measurement, score,
-      // A proposal and a grant were in-memory state of the dead attempt. Both are
+      measurement, score, pareto,
       // named losses in `swarm-resume.ts`: the node is selectable again and expands
       // under the run's own `context`, and the grant's debit is refunded because
       // nothing was created.
@@ -825,6 +907,7 @@ export function seedResumedSearch(input: {
         : null,
       incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
       score,
+      pareto,
     };
     candidates.push(candidate);
     spentBy.set(node.id, record.tokens);
@@ -869,9 +952,11 @@ export function buildNodeDeps(input: {
   readonly logger: Logger;
   readonly signal?: AbortSignal;
   readonly reportModelCall?: ModelCallSink;
+  readonly publishHeadStream?: PublishHeadStream;
   readonly maxWallClockMs?: number;
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
+  readonly runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
   readonly host?: NodeLoopHost;
   readonly executeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
@@ -885,9 +970,11 @@ export function buildNodeDeps(input: {
   };
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
+  if (deps.publishHeadStream !== undefined) nodeDeps.publishHeadStream = deps.publishHeadStream;
   if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
+  if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
   // Only reached by an agent node: the toolless `thought` branch below never
   // builds `nodeDeps` at all, which is what makes the split structural rather
   // than a condition someone has to remember.

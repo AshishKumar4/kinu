@@ -15,15 +15,21 @@ const CONFIG_PATH = path.join(os.homedir(), '.kinu', 'device.json');
  *  one dependency-free file and cannot import the constant. */
 const TOKEN_ROTATION = 'ROTATE';
 
-/** Drain window after an exec'd command's own exit, before we stop reading the
- *  pipes an orphaned grandchild may still hold. Mirrors EXITED_COMMAND_DRAIN_MS
- *  in cli-backend/src/runtime.ts — this daemon ships as one dependency-free
- *  file, so it carries its own copy rather than importing one. */
-const EXITED_COMMAND_DRAIN_MS = 250;
+const { KINU_INFLIGHT_ROOT, ...SUPERVISOR_ENV } = process.env;
+/** The method that terminates one in-flight command's process group, and the
+ *  cancellation protocol this daemon speaks. Both mirror core's
+ *  DEVICE_CANCEL_METHOD / DEVICE_CANCEL_PROTOCOL (execution/device-tunnel.ts);
+ *  cf-backend's pc-agent test pins the pair, since this file cannot import
+ *  them. A frame carrying any other version is REFUSED, never guessed at: a
+ *  cancellation the daemon misread would report a stopped command that is
+ *  still running. */
+const CANCEL_METHOD = 'execCancel';
+const CANCEL_PROTOCOL = 1;
 /** Each exec stream stays far below the Worker WebSocket's documented 32 MiB
  * receive ceiling even after worst-case JSON escaping. The daemon drains bytes
  * past the cap without retaining them, so a noisy process cannot grow its heap. */
 const EXEC_STREAM_MAX_BYTES = 512 * 1024;
+
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
@@ -604,6 +610,555 @@ function confinedDeviceEntry(requested, root) {
 }
 
 
+// ── In-flight commands ─────────────────────────────────────────────────
+//
+// A request survives daemon restart in one direct child of this root. This is
+// a same-principal coordination protocol, not an OS isolation boundary: the
+// command runs as this user's uid and can interfere with any same-user process
+// or file it can discover. State validation prevents malformed or stale records
+// from being selected accidentally; it cannot defend against a malicious
+// same-user command that already has equivalent local authority.
+const INFLIGHT_ROOT = path.resolve(KINU_INFLIGHT_ROOT || path.join(os.homedir(), '.kinu', 'inflight'));
+const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
+const EXEC_ACK_METHOD = 'execAck';
+const EXEC_STREAM_TRUNCATION_MARKER = `[output truncated at ${EXEC_STREAM_MAX_BYTES} bytes]\n`;
+const EXEC_CAPTURE_MAX_BYTES = EXEC_STREAM_MAX_BYTES + Buffer.byteLength(EXEC_STREAM_TRUNCATION_MARKER);
+
+function supervisionSupported(platform = process.platform) {
+  return platform === 'linux' || platform === 'darwin';
+}
+
+function assertSupervisionSupported() {
+  if (!supervisionSupported()) throw new Error('pc-agent command supervision requires POSIX Linux or macOS');
+}
+
+function parseString(value, expectation) {
+  try {
+    const string = String.prototype.valueOf.call(value);
+    if (string !== value) throw new Error(expectation);
+    return string;
+  } catch (err) {
+    if (err instanceof TypeError) throw new Error(expectation, { cause: err });
+    throw err;
+  }
+}
+
+function requestDirectory(root, requestId) {
+  const parsedRequestId = parseString(requestId, 'exec request id must match rpc-<epoch>-<sequence>');
+  if (!REQUEST_ID.test(parsedRequestId)) {
+    throw new Error('exec request id must match rpc-<epoch>-<sequence>');
+  }
+  const resolvedRoot = path.resolve(root);
+  const dir = path.resolve(resolvedRoot, parsedRequestId);
+  if (path.dirname(dir) !== resolvedRoot) throw new Error('exec request directory must be a direct child of the in-flight root');
+  return dir;
+}
+
+function processStartIdentity(pid) {
+  if (process.platform === 'linux') {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    const start = tail[19];
+    if (!start) throw new Error(`cannot read start identity for supervisor ${pid}`);
+    return start;
+  }
+  if (process.platform === 'darwin') {
+    const start = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
+    if (!start) throw new Error(`cannot read start identity for supervisor ${pid}`);
+    return start;
+  }
+  throw new Error('pc-agent command supervision requires POSIX Linux or macOS');
+}
+
+function readSupervisorState(dir) {
+  const state = fs.readFileSync(path.join(dir, 'state'), 'utf8');
+  const fields = new Map(state.trimEnd().split('\n').map((line) => {
+    const separator = line.indexOf('=');
+    return [line.slice(0, separator), line.slice(separator + 1)];
+  }));
+  const pid = Number(fields.get('pid'));
+  const start = fields.get('start');
+  const group = Number(fields.get('group'));
+  const groupStart = fields.get('groupStart');
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !start ||
+      !Number.isSafeInteger(group) || group <= 0 || !groupStart) {
+    throw new Error(`invalid supervisor state in ${dir}`);
+  }
+  return { pid, start, group, groupStart };
+}
+
+function supervisorStartMatches(entry) {
+  try {
+    return processStartIdentity(entry.pid) === entry.start &&
+      processStartIdentity(entry.group) === entry.groupStart;
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || (process.platform === 'darwin' && err.status === 1))) {
+      return false;
+    }
+    throw err;
+  }
+}
+
+function processGroupHasLiveProcess(group) {
+  if (process.platform === 'linux') {
+    for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+      try {
+        const stat = fs.readFileSync(`/proc/${entry.name}/stat`, 'utf8');
+        const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+        if (Number(fields[2]) === group && fields[0] !== 'Z') return true;
+      } catch (err) {
+        if (err && err.code === 'ENOENT') continue;
+        throw err;
+      }
+    }
+    return false;
+  }
+  const rows = execFileSync('ps', ['-ax', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' }).trim().split('\n');
+  return rows.some((row) => {
+    const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
+    return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
+  });
+}
+
+function readTerminalResult(dir) {
+  const result = fs.readFileSync(path.join(dir, 'result'), 'utf8');
+  const fields = new Map(result.trimEnd().split('\n').map((line) => {
+    const separator = line.indexOf('=');
+    return [line.slice(0, separator), line.slice(separator + 1)];
+  }));
+  const kind = fields.get('kind');
+  const exitCode = Number(fields.get('exitCode'));
+  if ((kind !== 'exited' && kind !== 'cancelled') || !Number.isSafeInteger(exitCode)) {
+    throw new Error(`invalid terminal result in ${dir}`);
+  }
+  return { kind, exitCode };
+}
+
+function readCapturedOutput(file) {
+  const descriptor = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(descriptor).size;
+    const retained = Math.min(size, size > EXEC_CAPTURE_MAX_BYTES ? EXEC_STREAM_MAX_BYTES : EXEC_CAPTURE_MAX_BYTES);
+    const bytes = Buffer.allocUnsafe(retained);
+    const read = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
+    const output = bytes.subarray(0, read).toString();
+    if (size > EXEC_CAPTURE_MAX_BYTES) return output + EXEC_STREAM_TRUNCATION_MARKER;
+    return fs.existsSync(file + '.after-exit') ? output + '\n[background output after command exit is not captured]\n' : output;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function readExecResult(dir) {
+  const terminal = readTerminalResult(dir);
+  return {
+    terminal,
+    result: {
+      stdout: readCapturedOutput(path.join(dir, 'stdout')),
+      stderr: readCapturedOutput(path.join(dir, 'stderr')),
+      exitCode: terminal.exitCode,
+    },
+  };
+}
+
+const SUPERVISOR_SCRIPT = `
+'use strict';
+const fs = require('node:fs');
+const { execFileSync, spawn } = require('node:child_process');
+
+const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText] = process.argv.slice(1);
+const maxOutput = Number(maxText);
+const marker = '[output truncated at ' + maxOutput + ' bytes]\\n';
+
+function startIdentity(pid) {
+  if (process.platform === 'linux') {
+    const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
+    const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/);
+    if (!tail[19]) throw new Error('cannot read process start identity');
+    return tail[19];
+  }
+  const start = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
+  if (!start) throw new Error('cannot read process start identity');
+  return start;
+}
+
+function writeTerminalResult(kind, exitCode) {
+  const temporary = resultFile + '.tmp.' + process.pid;
+  fs.writeFileSync(temporary, 'kind=' + kind + '\\nexitCode=' + exitCode + '\\n', { mode: 0o600 });
+  fs.renameSync(temporary, resultFile);
+}
+
+function processGroupHasLiveProcess(group) {
+  if (process.platform === 'linux') {
+    for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^\\d+$/.test(entry.name)) continue;
+      try {
+        const stat = fs.readFileSync('/proc/' + entry.name + '/stat', 'utf8');
+        const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/);
+        if (Number(fields[2]) === group && fields[0] !== 'Z') return true;
+      } catch {}
+    }
+    return false;
+  }
+  const rows = execFileSync('ps', ['-ax', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' }).trim().split('\\n');
+  return rows.some((row) => {
+    const [pid, pgid, stat] = row.trim().split(/\\s+/, 3);
+    return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
+  });
+}
+
+class Capture {
+  constructor(file) {
+    this.fd = fs.openSync(file, 'w', 0o600);
+    this.remaining = maxOutput;
+    this.truncated = false;
+  }
+
+  write(chunk) {
+    if (this.remaining === 0) {
+      this.truncated = true;
+      return;
+    }
+    const retained = chunk.subarray(0, this.remaining);
+    fs.writeSync(this.fd, retained);
+    this.remaining -= retained.length;
+    if (retained.length !== chunk.length) this.truncated = true;
+  }
+
+  close() {
+    if (this.truncated) fs.writeSync(this.fd, marker);
+    fs.closeSync(this.fd);
+  }
+}
+
+let child;
+let stdout;
+let stderr;
+let cancellationRequested = false;
+let cancellationSignalDelivered = false;
+let completed = false;
+
+function finish(kind, exitCode) {
+  if (completed) return;
+  completed = true;
+  stdout.close();
+  stderr.close();
+  if (kind === 'cancelled') {
+    writeTerminalResult(kind, exitCode);
+    process.exit(0);
+    return;
+  }
+  // The cloud may ACK as soon as result appears. Publish an open FIFO before
+  // that result, otherwise its writer can create a regular file in the race.
+  execFileSync('mkfifo', [ackFile]);
+  writeTerminalResult(kind, exitCode);
+  const acknowledgement = fs.createReadStream(ackFile);
+  acknowledgement.once('data', () => {
+    acknowledgement.destroy();
+    fs.rmSync(require('node:path').dirname(stateFile), { recursive: true, force: true });
+    process.exit(0);
+  });
+  acknowledgement.once('error', () => process.exit(125));
+}
+
+try {
+  const command = fs.readFileSync(commandFile, 'utf8');
+  fs.unlinkSync(commandFile);
+  stdout = new Capture(stdoutFile);
+  stderr = new Capture(stderrFile);
+  child = spawn('/bin/sh', ['-c', command], {
+    detached: true,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  process.on('SIGUSR1', () => {
+    if (!child || completed || cancellationRequested) return;
+    cancellationRequested = true;
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+      cancellationSignalDelivered = true;
+    } catch (err) {
+      if (!err || err.code !== 'ESRCH') finish('exited', 125);
+    }
+  });
+  child.stdout.on('data', (chunk) => { if (!completed) stdout.write(chunk); });
+  child.stderr.on('data', (chunk) => { if (!completed) stderr.write(chunk); });
+  const stateTemporary = stateFile + '.tmp.' + process.pid;
+  fs.writeFileSync(
+    stateTemporary,
+    'pid=' + process.pid + '\\nstart=' + startIdentity(process.pid) +
+      '\\ngroup=' + child.pid + '\\ngroupStart=' + startIdentity(child.pid) + '\\n',
+    { mode: 0o600 },
+  );
+  fs.renameSync(stateTemporary, stateFile);
+} catch (err) {
+  // Startup either publishes an authoritative group or leaves no group at all.
+  // A detached child exists only after spawn, so every post-spawn failure kills
+  // and reaps that exact group rather than abandoning an unnameable command.
+  if (child && child.pid) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch (killError) {
+      if (!killError || killError.code !== 'ESRCH') throw new Error('supervisor startup group cleanup', { cause: killError });
+    }
+  }
+  process.exit(125);
+}
+
+
+
+child.once('exit', (code, signal) => {
+  const finishAfterDrain = () => {
+    if (cancellationRequested && cancellationSignalDelivered) {
+      try {
+        // This confirms only the owned process group. A command can use setsid
+        // to escape that group; same-uid supervision cannot honestly claim it
+        // terminated such a detached descendant.
+        const groupAlive = processGroupHasLiveProcess(child.pid);
+        finish(groupAlive ? 'exited' : 'cancelled', groupAlive ? 125 : 137);
+      } catch {
+        finish('exited', 125);
+      }
+      return;
+    }
+    finish('exited', typeof code === 'number' ? code : (signal ? 128 + 9 : 125));
+  };
+  setTimeout(() => {
+    // A background descendant can retain the inherited pipes forever. At this
+    // established drain boundary, closing them makes the command terminal; mark
+    if (child.stdout.readable) { fs.writeFileSync(stdoutFile + '.after-exit', '1'); child.stdout.destroy(); }
+    if (child.stderr.readable) { fs.writeFileSync(stderrFile + '.after-exit', '1'); child.stderr.destroy(); }
+    finishAfterDrain();
+  }, 250);
+});
+`;
+
+function waitForPath(file, exists, signal) {
+  if (fs.existsSync(file) === exists) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const directory = path.dirname(file);
+    const name = path.basename(file);
+    let watcher;
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (watcher) watcher.close();
+      signal?.removeEventListener('abort', onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    const check = (_event, changed) => {
+      if (changed !== null && String(changed) !== name) return;
+      if (fs.existsSync(file) === exists) finish();
+    };
+    const onAbort = () => finish(signal.reason instanceof Error ? signal.reason : new Error('file watch aborted'));
+    try {
+      watcher = fs.watch(directory, check);
+      watcher.once('error', finish);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    } catch (err) {
+      finish(err);
+      return;
+    }
+    if (fs.existsSync(file) === exists) finish();
+  });
+}
+
+function waitForFile(file, signal) {
+  return waitForPath(file, true, signal);
+}
+
+function waitForDirectoryRemoval(dir) {
+  return waitForPath(dir, false);
+}
+
+function writeAcknowledgement(dir) {
+  const ack = path.join(dir, 'ack');
+  return new Promise((resolve, reject) => {
+    const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore' });
+    writer.once('error', reject);
+    writer.once('exit', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`supervisor acknowledgement writer exited with ${signal || code}`));
+    });
+  });
+}
+
+function removeRequestDirectory(dir) {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function createInFlight(root = INFLIGHT_ROOT) {
+  const entries = new Map();
+
+  function entryFor(requestId) {
+    const existing = entries.get(requestId);
+    if (existing) return existing;
+    const dir = requestDirectory(root, requestId);
+    if (!fs.existsSync(dir)) return undefined;
+    const state = readSupervisorState(dir);
+    const entry = { dir, ...state };
+    entries.set(requestId, entry);
+    return entry;
+  }
+
+  async function loadEntry(requestId) {
+    const known = entries.get(requestId);
+    if (known) return known;
+    const dir = requestDirectory(root, requestId);
+    if (!fs.existsSync(dir)) return undefined;
+    await waitForFile(path.join(dir, 'state'));
+    return entryFor(requestId);
+  }
+
+  function reconcile() {
+    if (!fs.existsSync(root)) return [];
+    const recovered = [];
+    for (const directory of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!directory.isDirectory()) continue;
+      const dir = path.join(root, directory.name);
+      try {
+        requestDirectory(root, directory.name);
+        const state = readSupervisorState(dir);
+        const terminal = fs.existsSync(path.join(dir, 'result'));
+        if (!terminal && !supervisorStartMatches(state)) {
+          removeRequestDirectory(dir);
+          continue;
+        }
+        entries.set(directory.name, { dir, ...state });
+        recovered.push({ requestId: directory.name, terminal });
+      } catch (err) {
+        log('Removing unusable in-flight command record', dir, err.message || err);
+        removeRequestDirectory(dir);
+      }
+    }
+    return recovered;
+  }
+
+  function register(requestId, dir) {
+    entries.set(requestId, { dir, ...readSupervisorState(dir) });
+  }
+
+  async function cancel(requestId) {
+    let entry;
+    try {
+      entry = await loadEntry(requestId);
+    } catch (err) {
+      throw new Error(`cannot validate supervisor for ${requestId}: ${err.message || err}`, { cause: err });
+    }
+    if (!entry || fs.existsSync(path.join(entry.dir, 'result'))) {
+      return { requestId, cancelled: 'unknown' };
+    }
+    if (!supervisorStartMatches(entry)) {
+      throw new Error(`cannot terminate ${requestId}: supervisor identity no longer matches`);
+    }
+    process.kill(entry.pid, 'SIGUSR1');
+    await waitForFile(path.join(entry.dir, 'result'));
+    const terminal = readTerminalResult(entry.dir);
+    if (terminal.kind !== 'cancelled') {
+      throw new Error(`cannot terminate ${requestId}: supervisor exited without a confirmed group termination`);
+    }
+    if (processGroupHasLiveProcess(entry.group)) {
+      throw new Error(`cannot terminate ${requestId}: owned process group death is unconfirmed`);
+    }
+    // This scope is the process group created for the command. A command that
+    // calls setsid can leave it; the cancellation protocol does not claim that
+    // such a descendant was terminated.
+    return { requestId, cancelled: 'terminated' };
+  }
+
+  async function result(requestId) {
+    const entry = await loadEntry(requestId);
+    if (!entry) return undefined;
+    await waitForFile(path.join(entry.dir, 'result'));
+    return { entry, ...readExecResult(entry.dir) };
+  }
+
+  async function acknowledge(requestId) {
+    const entry = await loadEntry(requestId);
+    // The ACK reply itself can be lost after this daemon already removed the
+    // normal-result directory. Retrying must converge to accepted rather than
+    // stranding UserDO's durable row on a now-unknown local request.
+    if (!entry) return { requestId, acknowledged: true };
+    const terminal = readTerminalResult(entry.dir);
+    if (terminal.kind === 'exited') {
+      await writeAcknowledgement(entry.dir);
+      await waitForDirectoryRemoval(entry.dir);
+    } else {
+      removeRequestDirectory(entry.dir);
+    }
+    entries.delete(requestId);
+    return { requestId, acknowledged: true };
+  }
+
+  function terminateUnanswered() {
+    for (const [requestId, entry] of entries) {
+      if (fs.existsSync(path.join(entry.dir, 'result'))) continue;
+      cancel(requestId).catch((err) => log('Could not terminate abandoned command', requestId, err));
+    }
+  }
+
+  reconcile();
+  return {
+    register,
+    cancel,
+    result,
+    acknowledge,
+    reconcile,
+    terminateUnanswered,
+    size() { return entries.size; },
+  };
+}
+
+/** One daemon, one registry. Reconciliation makes a restarted daemon the
+ * durable request owner without creating another supervisor. */
+const inFlight = createInFlight();
+
+function startSupervisor(requestId, command) {
+  assertSupervisionSupported();
+  const dir = requestDirectory(INFLIGHT_ROOT, requestId);
+  fs.mkdirSync(INFLIGHT_ROOT, { recursive: true, mode: 0o700 });
+  fs.chmodSync(INFLIGHT_ROOT, 0o700);
+  fs.mkdirSync(dir, { mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  const commandFile = path.join(dir, 'command');
+  fs.writeFileSync(commandFile, command, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  const child = spawn(process.execPath, [
+    '-e', SUPERVISOR_SCRIPT,
+    commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
+    path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
+    String(EXEC_STREAM_MAX_BYTES),
+  ], { detached: true, env: SUPERVISOR_ENV, stdio: 'ignore' });
+  child.unref();
+  return { child, dir };
+}
+
+function waitForSupervisorState(dir, child) {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      child.off('error', onError);
+      child.off('exit', onExit);
+      controller.abort(error);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onError = (err) => finish(err);
+    const onExit = (code, signal) => {
+      finish(new Error(`supervisor exited before publishing state (${signal || code || 0})`));
+    };
+    child.once('error', onError);
+    child.once('exit', onExit);
+    waitForFile(path.join(dir, 'state'), controller.signal).then(
+      () => finish(),
+      (err) => { if (!settled) finish(err); },
+    );
+  });
+}
+
 // ── RPC dispatch ───────────────────────────────────────────────────────
 
 function handle(msg, ws, ctx) {
@@ -611,68 +1166,55 @@ function handle(msg, ws, ctx) {
   const checkpoints = ctx && ctx.checkpoints;
   try {
     if (method === 'exec') {
-      const cmd = params[0];
-      // Pre-mutation snapshot (invisible; deduped per agent turn).
+      const cmd = parseString(params[0], 'exec expects a command string');
+      assertSupervisionSupported();
       if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
-      const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['ignore', 'pipe', 'pipe'] });
-      const stdoutChunks = [], stderrChunks = [];
-      let stdoutBytes = 0, stderrBytes = 0, stdoutTruncated = false, stderrTruncated = false;
-      let answered = false;
-      const collect = (chunks, byteCount, data) => {
-        const chunk = Buffer.from(data);
-        const remaining = Math.max(0, EXEC_STREAM_MAX_BYTES - byteCount);
-        if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
-        return {
-          bytes: byteCount + Math.min(chunk.length, remaining),
-          truncated: chunk.length > remaining,
-        };
-      };
-      const render = (chunks, truncated) => Buffer.concat(chunks).toString()
-        + (truncated ? `\n[output truncated at ${EXEC_STREAM_MAX_BYTES} bytes]\n` : '');
-      const answer = (code) => {
-        if (answered) return;
-        answered = true;
-        rpc(ws, id, {
-          stdout: render(stdoutChunks, stdoutTruncated),
-          stderr: render(stderrChunks, stderrTruncated),
-          exitCode: code ?? 0,
-        });
-      };
-      child.stdout.on('data', (data) => {
-        const next = collect(stdoutChunks, stdoutBytes, data);
-        stdoutBytes = next.bytes;
-        stdoutTruncated ||= next.truncated;
-      });
-      child.stderr.on('data', (data) => {
-        const next = collect(stderrChunks, stderrBytes, data);
-        stderrBytes = next.bytes;
-        stderrTruncated ||= next.truncated;
-      });
-      // `close` waits for every inherited pipe to shut, so a command that
-      // backgrounds a server (`./server &`) would not answer until the SERVER
-      // exited. `exit` means the command itself is done; drain briefly for the
-      // output still in the pipe, then answer and let the orphan keep running.
-      child.on('close', answer);
-      child.on('exit', (code) => {
-        setTimeout(() => {
-          if (answered) return;
-          child.stdout.destroy();
-          child.stderr.destroy();
-          child.unref();
-          answer(code);
-        }, EXITED_COMMAND_DRAIN_MS).unref();
-      });
-      child.on('error', (e) => { if (!answered) { answered = true; rpc(ws, id, null, e.message); } });
+      const dir = requestDirectory(INFLIGHT_ROOT, id);
+      (async () => {
+        try {
+          if (fs.existsSync(dir)) {
+            await waitForFile(path.join(dir, 'state'));
+          } else {
+            const supervisor = startSupervisor(id, cmd);
+            await waitForSupervisorState(supervisor.dir, supervisor.child);
+            inFlight.register(id, supervisor.dir);
+          }
+          const completed = await inFlight.result(id);
+          if (!completed) throw new Error(`missing in-flight command ${id}`);
+          rpc(ws, id, completed.result);
+        } catch (err) {
+          rpc(ws, id, null, err instanceof Error ? err.message : String(err));
+        }
+      })();
+    } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
+      const requested = params[0];
+      const target = String(requested);
+      const protocol = params[1];
+      if (protocol !== CANCEL_PROTOCOL) return rpc(ws, id, null,
+        `unsupported cancellation protocol ${JSON.stringify(protocol)}: this daemon speaks ${CANCEL_PROTOCOL}`);
+      if (target !== requested) return rpc(ws, id, null, `${method} expects the request id to target`);
+      requestDirectory(INFLIGHT_ROOT, target);
+      const operation = method === CANCEL_METHOD ? inFlight.cancel(target) : inFlight.acknowledge(target);
+      operation.then(
+        (result) => rpc(ws, id, result),
+        (err) => rpc(ws, id, null, err instanceof Error ? err.message : String(err)),
+      );
     } else if (method === 'readFile') {
       const options = params[1] || {};
       const confined = confinedDevicePath(params[0], options.root);
-      // { encoding: 'base64' } → binary-safe read, answered in a shape the
-      // caller can distinguish from the plain-text default.
-      if (options.encoding === 'base64') {
-        rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
-      } else {
-        rpc(ws, id, fs.readFileSync(confined, 'utf8'));
+      if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
+      else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
+    } else if (method === 'readRange') {
+      const offset = params[1], length = params[2], options = params[3] || {};
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
+        return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
       }
+      const file = fs.openSync(confinedDevicePath(params[0], options.root), 'r');
+      try {
+        const bytes = Buffer.allocUnsafe(length);
+        const read = fs.readSync(file, bytes, 0, length, offset);
+        rpc(ws, id, { encoding: 'base64', content: bytes.subarray(0, read).toString('base64') });
+      } finally { fs.closeSync(file); }
     } else if (method === 'writeFile') {
       const options = params[2] || {};
       const confined = confinedDevicePath(params[0], options.root, true);
@@ -681,10 +1223,7 @@ function handle(msg, ws, ctx) {
         checkpoints.ensure(hint, hint.dir || checkpoints.workdirForPath(confined));
       }
       fs.mkdirSync(path.dirname(confined), { recursive: true });
-      const body = options.encoding === 'base64'
-        ? Buffer.from(String(params[1]), 'base64')
-        : params[1];
-      fs.writeFileSync(confined, body);
+      fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
       rpc(ws, id, { success: true });
     } else if (method === 'listFiles') {
       const options = params[1] || {};
@@ -849,6 +1388,11 @@ function main() {
       }
     });
     ws.addEventListener('close', () => {
+      // The commands still waiting to answer can no longer report to anyone,
+      // and their ids died with the caller that minted them. Terminating them
+      // here is what keeps a dropped socket from leaving work running that
+      // nothing can name, stop or observe.
+      inFlight.terminateUnanswered();
       log('Disconnected, reconnecting in', backoff, 'ms');
       setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, 60_000);
@@ -862,6 +1406,16 @@ if (require.main === module) main();
 
 module.exports = {
   handle,
+  inFlight,
+  CANCEL_METHOD,
+  CANCEL_PROTOCOL,
+  EXEC_ACK_METHOD,
+  createInFlight,
+  INFLIGHT_ROOT,
+  requestDirectory,
+  supervisionSupported,
+  waitForFile,
+  waitForSupervisorState,
   createCheckpoints,
   listListeningPorts,
   getConnectTicket,

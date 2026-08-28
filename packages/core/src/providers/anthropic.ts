@@ -9,9 +9,11 @@
 // inside customFetch via the AuthResolver each call.
 import { createAnthropic } from '@ai-sdk/anthropic';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from './types';
+import type { CountableRequest, InputTokenCount } from './input-tokens';
+import type { ModelProvider, ModelInfo, ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { listModelsDevProviderModels } from './models-dev';
+import { countAnthropicInputTokens } from './anthropic-count';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
@@ -52,6 +54,17 @@ export function createAnthropicProvider(): ModelProvider {
       });
       const provider = createAnthropic({ apiKey: 'placeholder', fetch: customFetch });
       return provider.languageModel(modelId);
+    },
+    countInputTokens(modelId, deps: ProviderDeps, request: CountableRequest): Promise<InputTokenCount> {
+      return countAnthropicInputTokens({
+        modelId,
+        deps,
+        request,
+        providerId: 'anthropic',
+        baseURL: ANTHROPIC_BASE_URL,
+        credKey: ANTHROPIC_CRED_KEY,
+        missingCredentialError: 'Anthropic API key not configured',
+      });
     },
   };
 }

@@ -49,6 +49,9 @@ const RunSummarySchema = v.object({
 const TriggerRowSchema = v.object({
   id: v.string(),
   kind: v.string(),
+  /** Signed delivery path, minted by the server for webhook rows. Absent when
+   *  the row is not a webhook, or when the deployment cannot sign one. */
+  url: v.optional(v.string()),
   spec: v.optional(v.object({ label: v.optional(v.string()), cron: v.optional(v.string()) })),
   state: v.string(),
   created_at: v.number(),
@@ -380,7 +383,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {triggers.map((t) => (
-              <TriggerLine key={t.id} trigger={t} agentName={agentId ?? ""} onRevoke={() => revoke(t.id)} />
+              <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} />
             ))}
           </div>
         )}
@@ -395,13 +398,13 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   );
 }
 
-function TriggerLine({ trigger, agentName, onRevoke }: {
-  trigger: TriggerRow; agentName: string; onRevoke: () => void;
+/** One trigger row. The delivery URL is the server's, never assembled here: it
+ *  carries a signed route capability, so a URL this page built would 404. */
+function TriggerLine({ trigger, onRevoke }: {
+  trigger: TriggerRow; onRevoke: () => void;
 }) {
   const isWebhook = trigger.kind === "webhook_durable" || trigger.kind === "webhook_ephemeral";
-  const url = isWebhook && agentName
-    ? `${window.location.origin}/api/workspaces/${encodeURIComponent(agentName)}/webhook/${encodeURIComponent(trigger.id)}`
-    : null;
+  const url = trigger.url ? `${window.location.origin}${trigger.url}` : null;
   const spec = trigger.spec ?? {};
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
@@ -412,10 +415,15 @@ function TriggerLine({ trigger, agentName, onRevoke }: {
       <span className="flex-1" />
       {trigger.fire_count !== undefined && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
-      {url && (
+      {url ? (
         <CopyButton value={url} what="the webhook URL" size={11}
           className="p-1 rounded-sm p-card-hover p-text-3 shrink-0" />
-      )}
+      ) : isWebhook ? (
+        <span className="p-text-3 shrink-0"
+          title="This deployment cannot sign webhook URLs, so deliveries are refused. WEBHOOK_ROUTE_SECRET is not set.">
+          no URL
+        </span>
+      ) : null}
       <button
         onClick={onRevoke}
         disabled={trigger.state === "revoked"}

@@ -69,18 +69,8 @@ export function parseSkillFile(
   if (!name) {
     return { ok: false, error: 'front-matter `name` is required when no fallback name (filename) is supplied' };
   }
-  if (name.length > NAME_MAX_LEN) {
-    return { ok: false, error: `front-matter \`name\` exceeds ${NAME_MAX_LEN} characters (${name.length})` };
-  }
-  if (!NAME_RE.test(name)) {
-    return { ok: false, error: `front-matter \`name\` must be kebab-case (${NAME_RE.source}); got ${JSON.stringify(name)}` };
-  }
-  const lcName = name.toLowerCase();
-  for (const reserved of RESERVED_WORDS) {
-    if (lcName.includes(reserved)) {
-      return { ok: false, error: `front-matter \`name\` contains reserved word "${reserved}" (Anthropic SKILL.md spec)` };
-    }
-  }
+  const nameProblem = skillNameProblem(name);
+  if (nameProblem) return { ok: false, error: `front-matter \`name\` ${nameProblem}` };
 
   // description — required, ≤1024 chars, no XML tags.
   const description = asString(fm.description).trim();
@@ -149,26 +139,32 @@ export function stringifySkillFile(skill: ParsedSkill): string {
   return stringifyMarkdownFrontmatter({ frontmatter: fm, body: skill.body });
 }
 
-/** Validation used by `skills({action: 'create'|'edit'})` before write.
- *  Enforces the same Anthropic-spec constraints the parser does. */
-export function validateSkillName(name: string): void {
-  if (name.length === 0) {
-    throw new SkillError('invalid_name', 'name must be a non-empty string');
-  }
-  if (name.length > NAME_MAX_LEN) {
-    throw new SkillError('invalid_name', `name exceeds ${NAME_MAX_LEN} characters`);
-  }
+/** Why `name` is not a legal skill name, or null when it is.
+ *
+ *  The one authority for the Anthropic-spec name rules: the parser, the
+ *  pre-write validation, and discovery — which reads a name off a filename stem
+ *  before it will spend anything on that file — all ask this, so a name cannot
+ *  be legal to one of the three and illegal to another. */
+export function skillNameProblem(name: string): string | null {
+  if (name.length === 0) return 'must be a non-empty string';
+  if (name.length > NAME_MAX_LEN) return `exceeds ${NAME_MAX_LEN} characters (${name.length})`;
   if (!NAME_RE.test(name)) {
-    throw new SkillError('invalid_name',
-      `name must be kebab-case (${NAME_RE.source}); got ${JSON.stringify(name)}`);
+    return `must be kebab-case (${NAME_RE.source}); got ${JSON.stringify(name)}`;
   }
   const lc = name.toLowerCase();
   for (const reserved of RESERVED_WORDS) {
     if (lc.includes(reserved)) {
-      throw new SkillError('invalid_name',
-        `name contains reserved word "${reserved}" (Anthropic SKILL.md spec)`);
+      return `contains reserved word "${reserved}" (Anthropic SKILL.md spec)`;
     }
   }
+  return null;
+}
+
+/** Validation used before a skill file is written (`workspace.writeFile` under
+ *  /workspace/skills/). Throws whatever `skillNameProblem` found. */
+export function validateSkillName(name: string): void {
+  const problem = skillNameProblem(name);
+  if (problem) throw new SkillError('invalid_name', `name ${problem}`);
 }
 
 // ── helpers ──────────────────────────────────────────────────────

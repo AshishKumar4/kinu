@@ -146,4 +146,18 @@ export const EVIDENCE_BUDGETS = {
   /** Per-message window of the conversation a spawned head inherits — its
    *  whole view of why it was spawned. */
   inheritedMessage: 1_600,
+
+  /**
+   * The trajectory a continual refinement hands its refiner
+   * (`evolution/refinement-lane.ts`).
+   *
+   * Half the stored ceiling, per turn, because a refiner reads MANY turns where
+   * every other reader of this ledger reads one: a batch of twelve at the stored
+   * budget would be a third of a megabyte of prose before the artifact
+   * inventory. Half keeps a full batch inside one child's window while still
+   * showing more of each turn than the outcome classifier that graded it saw.
+   */
+  refinerUserMessage: 4_000,
+  refinerAssistantResponse: 8_000,
+  refinerFollowup: 4_000,
 } as const;

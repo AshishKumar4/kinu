@@ -27,7 +27,10 @@ import {
   createLocalPeerEndpoint,
   samePeerGroup,
   createTeamToolDeps,
+  createTemporaryAgentPort,
+  renderSubordinateInheritedContext,
   delegationBudgetAtDepth,
+  delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromHistory,
   initWorkspaceSchema,
@@ -38,10 +41,15 @@ import {
   slugifyName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
+  TEMPORARY_LIFETIME,
+  temporaryRunSettles,
+  terminalTaskReport,
   writeSoul,
+  InstructionApprovalStore,
   type AdmittedSubordinateReport,
   type ReportToolDeps,
   type SubordinateReportOrigin,
+  type SubordinateEventResult,
   type SubordinateReportStatus,
   type AgentConfigStore,
   type JsonObject,
@@ -52,13 +60,16 @@ import {
   type RoleSelection,
   type SqlExec,
   type SubordinateHandoff,
+  type SubordinateLifetime,
+  type SubordinateRuntime,
   type TeamToolDeps,
+  type TemporaryAgentPort,
   type TierId,
   type SerializedMessage,
   type WorkMode,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import {
   makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
@@ -71,6 +82,7 @@ import {
 import {
   LocalAgentSession,
   type LocalAgentSessionOpts,
+  type LocalParentRelay,
   type LocalPublishEventInput,
   type LocalPublishEventResult,
   type SessionEvent,
@@ -81,6 +93,10 @@ import type { McpServerConfig } from '../mcp';
 
 /** The one key a subordinate's own depth is read from. */
 const CHILD_DEPTH_KEY = 'subordinate.depth';
+/** The child's own copy of how long it is meant to live. On its OWN config, like
+ *  its depth, so it survives a daemon restart — which is what lets a recovered
+ *  actor still owe its caller the one report a task lifetime requires. */
+const CHILD_LIFETIME_KEY = 'subordinate.lifetime';
 
 /** Runtime inputs fixed for one bound agent while this host process is alive. */
 export interface LocalHostedAgent {
@@ -192,15 +208,47 @@ interface HostEntry {
   config: AgentConfigStore;
   eventLog: EventLog;
   roster: SubordinateRosterStore;
+  /** The ONE temporary-agent port for this actor. It holds the live waiters, so
+   *  it is built with the entry and never per call: `run` parks on it and the
+   *  report ingress resolves it. */
+  temporary: TemporaryAgentPort;
   team: TeamToolDeps | null;
   /** Peer mail. Roots only: a subordinate holding this could message the root
    *  of another tree and leave its own depth cap behind in one call. */
   peers: LocalPeerEndpoint | null;
   children: Map<string, HostEntry>;
-  relay: { ownerDriven: boolean; reportedThisTurn: boolean; mode: WorkMode } | null;
+  relay: {
+    ownerDriven: boolean;
+    reportedThisTurn: boolean;
+    /**
+     * Has a report that SETTLES a temporary run already gone out this turn?
+     *
+     * Distinct from `reportedThisTurn` because the two questions differ, and
+     * conflating them hung an ask: a task child may file a mid-task `progress`
+     * note, that note sets `reportedThisTurn`, and `temporaryRunSettles`
+     * correctly does not treat it as the answer — so a child that filed one and
+     * then answered had its terminal report suppressed while its caller waited
+     * forever. `reportedThisTurn` means "spoke this turn", which the DURABLE
+     * relay policy asks; this means "already answered", which the temporary rung
+     * asks.
+     */
+    settledRun: boolean;
+    mode: WorkMode;
+  } | null;
+  /** How long this actor is MEANT to live. Only the child sees its own turn end,
+   *  and a `task` child owes its blocked caller one terminal report for every way
+   *  that turn can end — including the endings the durable policy withholds. */
+  lifetime: SubordinateLifetime;
 }
 
 export type AgentEventListener = (agent: string, event: SessionEvent) => void;
+
+/** One name-minting rule for every locally created subordinate: the slugified
+ *  role, bounded, with a short random suffix nothing else shares. */
+function mintSubordinateName(role: string): string {
+  const base = slugifyName(role).slice(0, 48) || 'subordinate';
+  return `${base}-${crypto.randomUUID().slice(0, 6)}`;
+}
 
 export class LocalAgentHost {
   private readonly entries = new Map<string, HostEntry>();
@@ -435,10 +483,11 @@ export class LocalAgentHost {
     dbPath: string;
     db: Database;
     ws: LocalHostedAgent;
+    instructionApprovals?: InstructionApprovalStore;
   }): Promise<HostEntry> {
     const config = createAgentConfigStore(input.ws.rt.storage.sql);
     const hubSql = makeSqlExec(input.db);
-    const roster = new SubordinateRosterStore(hubSql);
+    const roster = new SubordinateRosterStore(hubSql, makeSql(input.db));
     roster.ensureSchema();
     const sessionId = canonicalConversationId(config);
     const sessionOpts: LocalAgentSessionOpts = {
@@ -449,6 +498,7 @@ export class LocalAgentHost {
       // them binds the same bytes.
       cwd: input.ref.cwd,
       onEvent: (event) => this.onSessionEvent(input.key, event),
+      instructionApprovals: input.instructionApprovals,
     };
     if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
     if (input.ws.staticModel) sessionOpts.model = input.ws.staticModel;
@@ -461,13 +511,28 @@ export class LocalAgentHost {
       session,
       config,
       eventLog: new EventLog(hubSql),
+      lifetime: lifetimeOf(config),
       roster,
+      temporary: createTemporaryAgentPort({
+        roster,
+        // The SAME child substrate the roster drives, so a temporary agent is a
+        // real local actor with its own database, session and tool loop.
+        runtime: this.childRuntime(input.key),
+        now: () => Date.now(),
+        renderInheritedContext: () => renderSubordinateInheritedContext(
+          inheritedContextFromHistory(readConversationTail(this.requireEntry(input.key))),
+        ),
+        createName: mintSubordinateName,
+        // Existence only — the bytes are the child's to read, never this
+        // actor's, which is the saving the channel exists for.
+        statRef: async (path) => (await input.ws.rt.storage.vfs.stat(path)) !== null,
+      }),
       team: null,
       peers: null,
       children: new Map(),
       relay: input.parentKey === null
         ? null
-        : { ownerDriven: false, reportedThisTurn: false, mode: 'build' },
+        : { ownerDriven: false, reportedThisTurn: false, settledRun: false, mode: 'build' },
     };
     this.entries.set(input.key, entry);
     // THE REAL TEAM TRANSPORT. The roster needs the session's broadcast, which
@@ -477,7 +542,12 @@ export class LocalAgentHost {
     // THE DRIVER LEASE. Same reason it lands here: it closes over the entry.
     // The pump consults it before every turn, so an interactive process takes
     // the lease from a daemon at that boundary rather than interleaving with it.
-    entry.session.setDriverGate(() => this.driverHold(entry).acquire()?.refused ?? null);
+    // A closed host refuses instead of reaching the lease: the gate can fire
+    // from a turn continuation that outlives close(), and close() has already
+    // released the holds and closed this entry's database handle.
+    entry.session.setDriverGate(() => this.closed
+      ? refusalOf(new KinuError('unavailable', 'this host is closed; no driver conversion may start'))
+      : this.driverHold(entry).acquire()?.refused ?? null);
     // The two transports that split on the same fact, installed here for the
     // same reason as the team deps: both close over this entry's session.
     //
@@ -491,6 +561,11 @@ export class LocalAgentHost {
       entry.session.setPeers(entry.peers.deps);
     } else {
       entry.session.setReport(this.buildReport(entry));
+      // The AUTOMATIC turn-end report, as an effect the child's own settled turn
+      // owes. Beside the report spine because they are the two halves of the same
+      // channel: the model's own word, and the answer a parent-driven turn owes
+      // whether or not the model said one.
+      entry.session.setParentRelay(this.parentRelayFor(entry));
     }
 
     try {
@@ -499,14 +574,31 @@ export class LocalAgentHost {
       }
       await session.recoverBackgroundJobs();
       // A previous process could die after publishing but before its debounce
-      // timer fired. EventLog rows are the queue; drain them on every recovery.
+      // timer fired, or AFTER a drain bound its rows to a turn it never ran.
+      // EventLog rows are the queue: reclaim what the dead process left leased,
+      // then drain everything pending — in that order, so the reclaimed rows
+      // land in this same drain's selection.
       //
-      // Under the lease bracket, because a recovery drain converts rows exactly
-      // as a pass does: it binds pending events to a synthetic turn. Opening an
+      // Under the lease bracket, because both halves convert rows exactly as a
+      // pass does: the drain binds pending events to a synthetic turn, and the
+      // reclaim's whole authority for calling an open lease dead is that no
+      // other process may be driving while this one holds the lease. Opening an
       // agent is not a licence to drive one somebody else is driving, and gating
       // HERE means the rows are never bound in the first place rather than bound
       // and compensated back a moment later.
-      await this.drive(entry, () => session.flushPendingDrains());
+      //
+      // This is also why a local task child needs no `recovered` report: the
+      // reclaim hands its assignment back to the pending pool and the drain
+      // below RE-RUNS it, so the child answers normally. Its caller's waiter
+      // died with the previous process, so that answer takes the waiter-absent
+      // path — a correlated report event, and the row released by the roster's
+      // own report policy. The cloud child recovers differently (its terminal
+      // sequence is claimed per turn, not re-run), which is why the `recovered`
+      // ending is emitted there and not here.
+      await this.drive(entry, async () => {
+        session.reclaimStrandedEventDeliveries();
+        await session.flushPendingDrains();
+      });
       return entry;
     } catch (error) {
       this.entries.delete(input.key);
@@ -586,6 +678,7 @@ export class LocalAgentHost {
         dbPath,
         db,
         ws,
+        instructionApprovals: parent.session.instructionApprovalAuthority(),
       });
       parent.children.set(childName, entry);
       return entry;
@@ -721,33 +814,82 @@ export class LocalAgentHost {
 
   // ── subordinate reports ─────────────────────────────────────────────
 
+  /**
+   * Track what a child's turn IS, for the relay decision its own roster makes.
+   *
+   * No `turn-end` branch any more. The automatic report used to be started from
+   * here as an untracked promise, so a process that died before the parent's
+   * ingress admitted it left nothing recording that a retry was owed. The child's
+   * terminal roster owns it now, through {@link parentRelayFor} — which reads the
+   * same two facts this keeps, while the turn's answer is still being committed.
+   *
+   * No `tool-call` branch either. The reported flag is set by the report dep
+   * itself (see buildEntry), which is the only place that sees BOTH the native
+   * `report` tool and its `report.*` codemode twin — and which sees them when
+   * they actually publish rather than when a call starts.
+   */
   private observeChildTurn(child: HostEntry, event: SessionEvent): void {
     const state = child.relay;
-    if (!state) return;
-    if (event.type === 'turn-start') {
-      state.ownerDriven = event.kind === 'user';
-      state.reportedThisTurn = false;
-      state.mode = event.workMode;
-      return;
-    }
-    // No `tool-call` branch here any more. The flag is set by the report dep
-    // itself (see buildEntry), which is the only place that sees BOTH the
-    // native `report` tool and its `report.*` codemode twin — and which sees
-    // them when they actually publish rather than when a call starts.
-    if (event.type !== 'turn-end') return;
-    if (!subordinateRelaysTurnEnd({
-      reportedThisTurn: state.reportedThisTurn,
-      ownerDriven: state.ownerDriven,
-      assistantText: event.turn.assistantResponse,
-    })) return;
-    void this.relayToParent(child, event.turn.assistantResponse, state.mode, 'progress', 'turn_end')
-      .catch((error) => {
-        diagnostics.failure(
-          'host.subordinate_relay_failed',
-          toKinuError({ doing: 'relaying a subordinate report', cause: error, otherwise: 'io' }),
-          { subordinate: child.key },
+    if (!state || event.type !== 'turn-start') return;
+    state.ownerDriven = event.kind === 'user';
+    state.reportedThisTurn = false;
+    state.settledRun = false;
+    state.mode = event.workMode;
+  }
+
+  /**
+   * The automatic turn-end report, as an effect the child's settled turn OWES.
+   *
+   * Every decision stays where it already lived: whether a DURABLE turn relays is
+   * core's `subordinateRelaysTurnEnd` over the state {@link observeChildTurn}
+   * keeps, and which words a TASK child's ending earns is core's closed
+   * `terminalTaskReport` map. What changes is that the child's ledger now holds
+   * the obligation, so an interruption before the parent admitted it leaves a row
+   * a later start replays.
+   *
+   * There is no `error` branch and no `turn-end` branch here any more. Both used
+   * to start their own detached relay, which is how one failing turn — an `error`
+   * event AND a `turn-end` event — could reach the parent twice. The session
+   * declares one report per ending now, and this port only answers which.
+   */
+  private parentRelayFor(child: HostEntry): LocalParentRelay {
+    return {
+      owed: (ending, assistantText) => {
+        const state = child.relay;
+        // Suppressed by a report that already SETTLED the run — never by a mere
+        // progress note, which leaves the caller waiting and therefore leaves the
+        // answer owed.
+        if (state === null || state.settledRun) return null;
+        // A task child ALWAYS reports its ending, including one with nothing to
+        // say: the durable policy withholds an empty answer because an answer
+        // nobody asked for is not progress, and this child's caller DID ask.
+        const task = terminalTaskReport({ lifetime: child.lifetime, ending, assistantText });
+        if (task) return task;
+        // A hire reaches the SAME selective policy it always had, and only for a
+        // turn that finished.
+        if (ending !== 'answered') return null;
+        return subordinateRelaysTurnEnd({
+          reportedThisTurn: state.reportedThisTurn,
+          ownerDriven: state.ownerDriven,
+          assistantText,
+        })
+          ? { status: 'progress', content: assistantText }
+          : null;
+      },
+      sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
+      send: async ({ text, status, mode, sequenceId }) => {
+        // RECORDED before the send, so a second terminal path on the same turn is
+        // suppressed even while this one is in flight. One question, one result.
+        if (child.relay) {
+          child.relay.reportedThisTurn = true;
+          child.relay.settledRun = true;
+        }
+        const relayed = await this.relayToParent(
+          child, text, mode, status, 'turn_end', sequenceId,
         );
-      });
+        return relayed.disposition;
+      },
+    };
   }
 
   /**
@@ -766,15 +908,23 @@ export class LocalAgentHost {
     mode: WorkMode,
     status: SubordinateReportStatus,
     origin: SubordinateReportOrigin,
-  ): Promise<{ id: string; admitted: boolean }> {
-    if (!child.parentKey) return { id: '', admitted: false };
+    /** This report's identity on the parent's rail: the key the parent's
+     *  ingress deduplicates on, so one report cannot wake it twice. */
+    sequenceId: string,
+  ): Promise<SubordinateEventResult> {
+    if (!child.parentKey) return { id: '', disposition: 'not_awaited' };
     const parent = this.entries.get(child.parentKey);
     if (!parent) throw new Error(`parent "${child.parentKey}" is not hosted`);
     return receiveSubordinateEvent({
       log: parent.eventLog,
       roster: parent.roster,
       vfs: parent.ws.rt.storage.vfs,
-      transaction: (body) => body(),
+      // REAL, over the PARENT's connection — both writes land in its database.
+      // Core's replay fast path reads the dedupe key and answers `already_held`
+      // without re-applying the report, so an interruption between the event
+      // insert and the roster update used to leave a completed child `working`
+      // in its parent's eyes forever, with no retry able to correct it.
+      transaction: (body) => parent.db.transaction(body)(),
       announce: (report: AdmittedSubordinateReport) => {
         const metadata: JsonObject = {
           kind: 'report',
@@ -790,11 +940,16 @@ export class LocalAgentHost {
         });
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
+      // A temporary child's answer belongs to the `agents.ask` call waiting on
+      // it — through the very port that parked the waiter, so it never doubles
+      // as an event that wakes this parent.
+      temporary: parent.temporary,
     }, {
       fromSubordinate: child.name,
       status,
       content,
       origin,
+      sequenceId,
       mode,
     }, Date.now());
   }
@@ -813,12 +968,20 @@ export class LocalAgentHost {
       report: async ({ status, content }) => {
         const relayed = await this.relayToParent(
           child, content, child.relay?.mode ?? 'build', status, 'report_tool',
+          // One in-process tool call is one report — a second call with the
+          // same words is a second thing the model chose to say.
+          `${child.key}:report:${crypto.randomUUID()}`,
         );
         // Set HERE rather than off a `tool-call` event: this is the one seam
         // both the native tool and the `report.*` codemode namespace publish
         // through, and it fires when the report actually landed.
-        if (child.relay) child.relay.reportedThisTurn = true;
-        return { admitted: relayed.admitted, id: relayed.id };
+        if (child.relay) {
+          child.relay.reportedThisTurn = true;
+          // Only a run-SETTLING report counts as the answer. Same predicate the
+          // parent's ingress settles the waiter on.
+          child.relay.settledRun ||= temporaryRunSettles({ status, origin: 'report_tool' });
+        }
+        return { disposition: relayed.disposition, id: relayed.id };
       },
     };
   }
@@ -826,19 +989,18 @@ export class LocalAgentHost {
   // ── local SubordinateRuntime ────────────────────────────────────────
 
   private buildTeam(parent: HostEntry): TeamToolDeps {
-    return createTeamToolDeps({
-      delegation: delegationBudgetAtDepth(treeDepthOf(parent.config)),
+    const delegation = delegationBudgetAtDepth(treeDepthOf(parent.config));
+    const input: Parameters<typeof createTeamToolDeps>[0] = {
+      delegation,
       roster: parent.roster,
+      runtime: this.childRuntime(parent.key),
       now: () => Date.now(),
       inheritedContext: (): SerializedMessage[] =>
         inheritedContextFromHistory(readConversationTail(parent)),
       // What this agent is FOR, as its own workspace records it — inherited by
       // an additional agent the owner adds beneath it without saying anything.
       ownMission: () => readMission(parent.ws.rt.storage.sql) ?? '',
-      createName: (role) => {
-        const base = slugifyName(role).slice(0, 48) || 'subordinate';
-        return `${base}-${crypto.randomUUID().slice(0, 6)}`;
-      },
+      createName: mintSubordinateName,
       broadcast: (event) => parent.session.broadcast(event),
       broadcastTask: (event) => parent.session.broadcast({
         type: 'subordinate_event',
@@ -849,37 +1011,70 @@ export class LocalAgentHost {
           timestamp: event.timestamp,
         },
       }),
-      runtime: {
-        spawn: async (input) => { await this.birthChild(parent, input); },
-        assign: async (name, input) => {
-          const child = await this.openChildEntry(parent, name);
-          return this.admitChildWork(parent, child, {
-            kind: 'task',
-            ...input,
-          });
-        },
-        status: async (name) => {
-          const child = await this.openChildEntry(parent, name);
-          return readSubordinateLiveStatus(makeSqlExec(child.db));
-        },
-        message: async (name, content, mode) => {
-          const child = await this.openChildEntry(parent, name);
-          return this.admitChildWork(parent, child, {
-            kind: 'message',
-            body: content,
-            mode,
-          });
-        },
-        rename: async (name, displayName, nameOrigin) => {
-          const child = await this.openChildEntry(parent, name);
-          child.config.setDisplayNameOrigin(displayName, nameOrigin);
-          child.session.broadcast({ type: 'workspace_renamed', displayName });
-        },
-        dismiss: async (name, keepHistory) => {
-          await this.removeChild(parent, name, keepHistory);
-        },
+    };
+    // STRUCTURAL CONTAINMENT AT THE CAP FOR THIS RUNG — the same MECHANISM the
+    // cloud backend applies to its whole team surface (`teamProfile()` wires no
+    // team deps at all there), at a narrower scope: this drops only the temporary
+    // port, so `hire` is still advertised here and is caught by core's dispatch
+    // refusal rather than by absence.
+    //
+    // A role-targeted `ask` births a child through this very runtime, so it adds
+    // a level exactly as a hire does. Wiring the port unconditionally left a
+    // depth-4 local actor advertising and running it, seeding a depth-5 child
+    // that got a port of its own — one call per level, without bound, which is
+    // the failure `DELEGATION_MAX_DEPTH` exists to prevent. Absent, the rung is
+    // gone from the schema, the sandbox declaration and the prompt; core's
+    // dispatch refusal covers the window a cached toolset leaves open.
+    if (!delegationExhausted(delegation)) {
+      Object.assign(input, { temporary: parent.temporary });
+    }
+    return createTeamToolDeps(input);
+  }
+
+  /**
+   * THE child substrate of one hosted agent: birth, assign, status, rename,
+   * retire. One object for both rungs — the durable roster and the temporary
+   * register — so a temporary agent is the same kind of local actor a hire is,
+   * with its own database, its own session and its own tool loop.
+   *
+   * Keyed by ADDRESS rather than closing over the entry, because the temporary
+   * port is built with the entry and therefore before it is registered. Every
+   * method resolves the parent at call time, which is also what keeps it correct
+   * across a re-open.
+   */
+  private childRuntime(parentKey: string): SubordinateRuntime {
+    const parentOf = () => this.requireEntry(parentKey);
+    return {
+      spawn: async (input) => { await this.birthChild(parentOf(), input); },
+      assign: async (name, input) => {
+        const parent = parentOf();
+        const child = await this.openChildEntry(parent, name);
+        return this.admitChildWork(parent, child, { kind: 'task', ...input });
       },
-    });
+      status: async (name) => {
+        const child = await this.openChildEntry(parentOf(), name);
+        return readSubordinateLiveStatus(makeSqlExec(child.db));
+      },
+      message: async (name, content, mode) => {
+        const parent = parentOf();
+        const child = await this.openChildEntry(parent, name);
+        return this.admitChildWork(parent, child, { kind: 'message', body: content, mode });
+      },
+      rename: async (name, displayName, nameOrigin) => {
+        const child = await this.openChildEntry(parentOf(), name);
+        child.config.setDisplayNameOrigin(displayName, nameOrigin);
+        child.session.broadcast({ type: 'workspace_renamed', displayName });
+      },
+      dismiss: async (name, keepHistory) => {
+        await this.removeChild(parentOf(), name, keepHistory);
+      },
+    };
+  }
+
+  private requireEntry(key: string): HostEntry {
+    const entry = this.entries.get(key);
+    if (!entry) throw new Error(`local agent "${key}" is not hosted`);
+    return entry;
   }
 
   /** Birth + seed the child before its LocalAgentSession becomes reachable.
@@ -913,6 +1108,7 @@ export class LocalAgentHost {
       role: RoleSelection;
       tier?: TierId;
       mission: string;
+      lifetime: SubordinateLifetime;
     },
     key: string,
   ): Promise<HostEntry> {
@@ -951,6 +1147,7 @@ export class LocalAgentHost {
       const inheritedModel = parent.config.getModel();
       if (inheritedModel) config.setModel(inheritedModel);
       config.set(CHILD_DEPTH_KEY, String(treeDepthOf(parent.config) + 1));
+      config.set(CHILD_LIFETIME_KEY, input.lifetime);
       // SOUL belongs to the AGENT, never to the shared directory. With a bound
       // cwd, `storage.vfs` IS the user's project, so writing there would drop a
       // SOUL.md into their repo and every peer's hire would overwrite the last
@@ -986,6 +1183,7 @@ export class LocalAgentHost {
         dbPath,
         db,
         ws,
+        instructionApprovals: parent.session.instructionApprovalAuthority(),
       });
       parent.children.set(input.name, entry);
       return entry;
@@ -1045,6 +1243,9 @@ export class LocalAgentHost {
    *  every other converting operation here: a wake that meets another driver is
    *  simply that driver's work, and its rows are still pending for them. */
   private wake(entry: HostEntry, source: string): void {
+    // Wakes arrive from listeners and timers that can outlive close(), and a
+    // drive after close() would recreate a lease hold on a closed database.
+    if (this.closed) return;
     void this.drive(entry, () => entry.session.flushPendingDrains()).catch((error) => {
       diagnostics.failure(
         'host.event_drain_failed',
@@ -1053,6 +1254,13 @@ export class LocalAgentHost {
       );
     });
   }
+}
+
+/** This actor's own lifetime, off its own config. Anything unrecognised — an
+ *  actor created before the rung existed, or a root — is DURABLE, which is what
+ *  it truly is: nothing is blocked on it. */
+function lifetimeOf(config: AgentConfigStore): SubordinateLifetime {
+  return config.get(CHILD_LIFETIME_KEY) === TEMPORARY_LIFETIME ? TEMPORARY_LIFETIME : 'durable';
 }
 
 function treeDepthOf(config: AgentConfigStore): number {

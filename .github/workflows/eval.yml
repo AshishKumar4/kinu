@@ -22,6 +22,31 @@ name: Quality Eval
 # cadence. It is the measurement instrument's own integrity check: every bench
 # task's defect must break this repo's checks and reversing it must restore
 # them.
+#
+# WHOSE CODE RUNS BESIDE THE SECRETS. `benchmark` can be started by labelling a
+# pull request, and the default checkout for a `pull_request` event is that PR's
+# code merged into main. So `bun install` ran the PR branch's lockfile and
+# lifecycle scripts, and `bun scripts/eval-credentials.ts` and `bun
+# scripts/eval.ts` were the PR branch's scripts — with the eval-service token and
+# two vendor keys in the environment. Labelling a PR was therefore a way to run
+# arbitrary code against those three secrets, and the label is the only thing that
+# needed a maintainer.
+#
+# So the secret-bearing job checks out the BASE revision: `main`'s scripts,
+# `main`'s lockfile, `main`'s corpus. It measures the staging DEPLOYMENT, which is
+# what the eval is about — the branch was never the subject, and a branch that
+# changes the harness or the corpus has to land (or be dispatched from a trusted
+# ref) before that change is measured. `validate-corpus` is where a PR's own
+# corpus change IS exercised, and it holds no credential of any kind. The split is
+# the whole boundary: the job with the secrets runs no branch code, and the job
+# with branch code has no secrets.
+
+# Read the checkout, and nothing else. Explicit because the alternative is
+# whatever the repository default happens to be, in a job that holds three
+# credentials.
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -48,8 +73,25 @@ jobs:
       || (github.event_name == 'pull_request' && github.event.label.name == 'run-eval')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The three secrets belong to this environment, not to the repository, so
+    # nothing outside it can read them and its own reviewers and branch rule
+    # decide when a run may. OPERATOR SETUP REQUIRED: create the `eval` environment
+    # and move `EVAL_SERVICE_TOKEN`, `EVAL_ANTHROPIC_API_KEY` and
+    # `EVAL_OPENAI_API_KEY` into it. Until that is done, repository-level secrets
+    # of the same names still resolve and this line changes nothing.
+    environment: eval
     steps:
+      # THE TRUSTED REVISION, never the pull request's. `github.sha` is the
+      # dispatched ref for a manual run; for a labelled PR it would be the merge
+      # commit, so the base sha is named explicitly. Every script this job runs
+      # comes from here.
       - uses: actions/checkout@v4
+        with:
+          ref: >-
+            ${{ github.event_name == 'pull_request'
+            && github.event.pull_request.base.sha
+            || github.sha }}
+          persist-credentials: false
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -87,15 +129,20 @@ jobs:
       # only when somebody dispatched it or labelled a PR, so a green run that
       # called no model would answer a question nobody asked. It also refuses to
       # run when the baseline is not a different model.
+      #
+      # Every dispatch input arrives through `env`, including the baseline. It
+      # used to be spliced into this command line, where a value is shell syntax
+      # rather than an argument: a dispatcher already needs write access, so this
+      # is not the boundary that keeps a stranger out, but a run input is DATA and
+      # a credential-bearing step is the last place to let data decide what runs.
       - name: Run model A/B
         env:
           ANTHROPIC_API_KEY: ${{ secrets.EVAL_ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
           KINU_MODEL: ${{ github.event.inputs.model || vars.EVAL_MODEL }}
           EVAL_MIN_SCORE: ${{ github.event.inputs.min_score || vars.EVAL_MIN_SCORE }}
-        run: >-
-          bun scripts/eval.ts --out eval-report.json
-          --baseline-model "${{ github.event.inputs.baseline_model || vars.EVAL_BASELINE_MODEL }}"
+          EVAL_BASELINE_MODEL: ${{ github.event.inputs.baseline_model || vars.EVAL_BASELINE_MODEL }}
+        run: bun scripts/eval.ts --out eval-report.json --baseline-model "$EVAL_BASELINE_MODEL"
 
       - name: Upload benchmark report
         if: always()
@@ -113,7 +160,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # The pull request's own code, deliberately: this job is what exercises a
+      # branch's corpus change, and it has no credential to spend.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2

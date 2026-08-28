@@ -69,6 +69,23 @@ export type RunEndReason = (typeof RUN_END_REASONS)[number];
 export const TOOL_CALLS_PENDING = 'tool-calls';
 
 /**
+ * The finish reason a step reports when the PROVIDER cut the answer at its
+ * output limit — the model had more to say and was not allowed to say it.
+ *
+ * The AI SDK's own word again (`FinishReason`'s `'length'`), normalized by the
+ * provider adapter from whatever the endpoint called it (`max_tokens`,
+ * `MAX_TOKENS`, `length`), which is why this is read from the mapped reason and
+ * never pattern-matched on a provider payload.
+ *
+ * A turn whose last step says this did NOT reach an end of its own either, and
+ * unlike {@link TOOL_CALLS_PENDING} it is entirely ordinary — the answer was
+ * simply longer than one response. `runChat` answers it with exactly one
+ * continuation request (chat.ts), and a SECOND one is honest partial
+ * completion: the turn keeps what it produced and says how it ended.
+ */
+export const OUTPUT_LIMIT_REACHED = 'length';
+
+/**
  * THE INVARIANT: a turn that reached its own end never has tool calls pending.
  *
  * Reported as a DEFECT rather than named in the ledger, and that is a decision

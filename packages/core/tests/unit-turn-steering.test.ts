@@ -74,7 +74,9 @@ function newTurn(): AgentOrchestrator {
 function step(orch: AgentOrchestrator, stepNumber: number, messages: ModelMessage[]): ModelMessage[] {
   const prepareStep = orch.turnExtension.prepareStep;
   if (!prepareStep) throw new Error('Expected turn steering prepareStep extension');
-  return prepareStep({ stepNumber, messages }) ?? messages;
+  const prepared = prepareStep({ stepNumber, messages });
+  if (prepared instanceof Promise) throw new Error('Turn steering prepareStep must remain synchronous');
+  return prepared ?? messages;
 }
 
 function injected(messages: readonly ModelMessage[]): string[] {

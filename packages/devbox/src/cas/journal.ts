@@ -15,6 +15,7 @@
  */
 
 import {
+  CAS_FORMAT_VERSION,
   CursorSchema,
   JournalBatchSchema,
   KEY_CURSOR,
@@ -75,7 +76,7 @@ export async function readFoldedSeq(store: CasStore): Promise<number> {
  * claims.
  */
 export async function advanceCursor(store: CasStore, foldedSeq: number): Promise<void> {
-  await store.put(KEY_CURSOR, encodeJson({ foldedSeq }));
+  await store.put(KEY_CURSOR, encodeJson({ version: CAS_FORMAT_VERSION, foldedSeq }));
 }
 
 /**
@@ -104,7 +105,7 @@ export async function listJournalAfter(
         + `cursor (${after}), so it cannot have been reaped. The journal has a hole.`,
       );
     }
-    entries.push(...decodeJson(JournalBatchSchema, row.key, bytes));
+    entries.push(...decodeJson(JournalBatchSchema, row.key, bytes).entries);
   }
   return entries;
 }
@@ -139,5 +140,5 @@ export async function appendJournalBatch(
 ): Promise<void> {
   if (entries.length === 0) return;
   const last = entries[entries.length - 1]!.seq;
-  await store.put(journalKey(last), encodeJson([...entries]));
+  await store.put(journalKey(last), encodeJson({ version: CAS_FORMAT_VERSION, entries: [...entries] }));
 }

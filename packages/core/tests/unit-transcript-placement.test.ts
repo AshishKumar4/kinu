@@ -14,7 +14,7 @@ import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
 import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/user-steer';
 import {
-  buildTranscript, segmentBySteers,
+  EMPTY_TRANSCRIPT_FOLD, buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
   type InlineSteer, type PlacedSteer, type TranscriptPart,
 } from '../src/read-models/transcript';
 
@@ -213,3 +213,54 @@ function partLabel(part: TranscriptPart): string {
   if (part.type === 'step-start') return 'start';
   return part.type === 'text' ? part.text : part.type;
 }
+
+describe('the resumable fold', () => {
+  // The pane's shape: everything settled is folded once, and each stream tick
+  // re-folds only the live window on top of it. The property that makes that
+  // legal is that the split point does not exist in the result.
+  const conversation: UIMessage[] = [
+    user('u1', 'go'),
+    steerRow('steer-a', 'use the swarm', 3),
+    turn('a1', 6),
+    steerRow('steer-b', 'and the logs', 2),
+    // No assistant row after steer-b: it must orphan identically wherever
+    // the fold was cut, including exactly at it.
+    user('u2', 'thanks'),
+  ];
+  const liveSteers: InlineSteer[] = [queued('steer-live', 'wait'), live('steer-a', 'use the swarm', 3)];
+
+  test('sealing a fold extended in any two runs equals the one-shot build', () => {
+    const whole = buildTranscript(conversation, liveSteers);
+    for (let cut = 0; cut <= conversation.length; cut++) {
+      const stable = extendTranscript(EMPTY_TRANSCRIPT_FOLD, conversation.slice(0, cut));
+      const resumed = sealTranscript(extendTranscript(stable, conversation.slice(cut)), liveSteers);
+      expect(resumed).toEqual(whole);
+    }
+  });
+
+  test('extending a fold reuses the settled half\'s entry objects', () => {
+    // The render contract: memo(MessageView) holds across stream ticks exactly
+    // when the settled entries keep referential identity through the re-fold.
+    const stable = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), turn('a1', 2)]);
+    const ticked = extendTranscript(stable, [turn('a2', 1)]);
+    expect(ticked.entries[0]).toBe(stable.entries[0]);
+    expect(ticked.entries[1]).toBe(stable.entries[1]);
+  });
+
+  test('extending never reworks the fold it was given', () => {
+    const stable = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('u1', 'go'), steerRow('steer-a', 'wait', 1)]);
+    extendTranscript(stable, [turn('a1', 3)]);
+    // The pending steer still awaits a turn in the ORIGINAL fold: sealing it
+    // orphans the steer, exactly as if the extension had never happened.
+    expect(stable.pending.map((steer) => steer.id)).toEqual(['steer-a']);
+    expect(sealTranscript(stable).entries.map((entry) => entry.message.id)).toEqual(['u1', 'steer-a']);
+  });
+
+  test('a live steer is deduplicated against steer rows, and only steer rows', () => {
+    // Negative control for the dedup narrowing: an ordinary message that
+    // happens to share an id with a live steer must not swallow the steer.
+    const fold = extendTranscript(EMPTY_TRANSCRIPT_FOLD, [user('steer-x', 'unrelated'), turn('a1', 2)]);
+    const { trailing } = sealTranscript(fold, [queued('steer-x', 'wait')]);
+    expect(trailing.map((steer) => steer.id)).toEqual(['steer-x']);
+  });
+});

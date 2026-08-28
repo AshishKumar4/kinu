@@ -7,7 +7,8 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
-  acceptInboundEmail, inboundEmailDropNotice, normalizeEmailAddress,
+  acceptInboundEmail, boundedMessageId, boundedReferences,
+  inboundEmailDropNotice, normalizeEmailAddress,
   type EmailIngressDeps, type IncomingEmail, type KinuEvent, type SqlExec,
 } from '@kinu.run/core';
 import {
@@ -257,6 +258,80 @@ describe('acceptInboundEmail — the trust gate', () => {
     const batch = buildDrainBatch(log.pending());
     if (!batch) throw new Error('expected pending email drain batch');
     expect(batch.text).toContain('Is staging green?');
+  });
+});
+
+// KINU-054, the header half. Every id in a References chain arrives from
+// outside, the chain only ever grows, and nothing in the protocol shortens it.
+// Left alone it becomes a header no receiver is obliged to accept — RFC 5322
+// §2.1.1 puts the whole field, name included, inside 998 octets.
+describe('threading identity is bounded at admission', () => {
+  /** The field body budget for `References`, from the protocol: the 998-octet
+   *  line minus the field name and its `: `. */
+  const REFERENCES_BUDGET = 998 - 'References'.length - 2;
+
+  test('a msg-id is admitted, repaired never, and refused when it cannot fit a line', () => {
+    expect(boundedMessageId('<abc@mail.example.com>')).toBe('<abc@mail.example.com>');
+    expect(boundedMessageId('  <abc@mail.example.com>  ')).toBe('<abc@mail.example.com>');
+    // Not a msg-id: no brackets, or whitespace inside them.
+    expect(boundedMessageId('abc@mail.example.com')).toBeNull();
+    expect(boundedMessageId('<a b@x>')).toBeNull();
+    expect(boundedMessageId(null)).toBeNull();
+    // Longer than a line can carry. Null, not a truncation: a cut msg-id is a
+    // DIFFERENT identity, and threading on it would silently thread on nothing.
+    expect(boundedMessageId(`<${'x'.repeat(1_200)}@x>`)).toBeNull();
+  });
+
+  test('a chain past the line budget keeps the first id and the most recent', () => {
+    const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
+    const bounded = boundedReferences(chain.join(' '), '<answered@x>')!;
+
+    expect(bounded.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
+    const kept = bounded.split(' ');
+    // The first id is what a reader threads the whole conversation under.
+    expect(kept[0]).toBe('<r000@x>');
+    // The tail is what it threads THIS message under, so the newest survive.
+    expect(kept[kept.length - 1]).toBe('<answered@x>');
+    expect(kept[kept.length - 2]).toBe('<r199@x>');
+    // Trimming came from the middle, so entries were genuinely dropped.
+    expect(kept.length).toBeLessThan(201);
+    expect(kept).not.toContain('<r001@x>');
+  });
+
+  test('an id already at the tail is not appended twice', () => {
+    expect(boundedReferences('<a@x> <b@x>', '<b@x>')).toBe('<a@x> <b@x>');
+    expect(boundedReferences(null, '<b@x>')).toBe('<b@x>');
+    expect(boundedReferences(null, null)).toBeNull();
+  });
+
+  test('the stored event and the thread channel both carry the bounded chain', async () => {
+    const { deps, log, replies } = makeDeps();
+    const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
+    const result = await acceptInboundEmail(deps, incoming({ references: chain.join(' ') }));
+    if (!result.admitted) throw new Error('unreachable');
+
+    const payload = requireEmailEvent(log, result.event_id).payload;
+    expect(payload.references!.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
+    // One authority: the payload the model reads and the address the reply is
+    // sent from cannot disagree about which thread this is.
+    const channel = replies.findOpenByEvent(result.event_id)!;
+    const addr = v.parse(
+      v.object({ references: v.nullable(v.string()), message_id: v.nullable(v.string()) }),
+      JSON.parse(channel.holder_addr),
+    );
+    expect(addr.references).toBe(payload.references);
+    expect(result.thread.references).toBe(payload.references);
+  });
+
+  test('an unusable Message-ID is stored as absent rather than as itself', async () => {
+    const { deps, log } = makeDeps();
+    const result = await acceptInboundEmail(deps, incoming({
+      message_id: 'not-a-message-id', in_reply_to: '<ok@x>',
+    }));
+    if (!result.admitted) throw new Error('unreachable');
+    const payload = requireEmailEvent(log, result.event_id).payload;
+    expect(payload.message_id).toBeNull();
+    expect(payload.in_reply_to).toBe('<ok@x>');
   });
 });
 

@@ -92,7 +92,6 @@ function jobPlane() {
   let created = 0;
   const runner: BackgroundJobControl = {
     cancel: () => Promise.resolve(true),
-    cancelRunning: () => [],
     createRetry: (sourceId, kind, input, mode) => {
       const id = `retry-${++created}`;
       return jobs.createRetry({
@@ -242,7 +241,7 @@ describe('agent status', () => {
 
     expect(await getAgentStatus({
       sql, vfs, config, name: 'fallback-name',
-      displayName: 'Jarvis', fallbackMessageCount: 99,
+      displayName: 'Jarvis',
     })).toMatchObject({
       name: 'jarvis', displayName: 'Jarvis', createdAt: 42,
       messageCount: 1, scaffoldVersion: 0, reasoningEffort: 'high', forkLineage: null,
@@ -256,7 +255,7 @@ describe('agent status', () => {
     await expect(getAgentStatus({
       sql, vfs: createWorkspaceBundle(db).vfs,
       config: createAgentConfigStore(sql), name: 'agent-7',
-      displayName: 'ignored', fallbackMessageCount: 3,
+      displayName: 'ignored',
     })).rejects.toThrow(/no such table/);
   });
 
@@ -531,7 +530,31 @@ describe('executor file plane', () => {
 
     expect(await readExecutorFile(r, 'workspace', 'dir')).toEqual({ error: 'path is a directory' });
     expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file — not previewable' });
-    const big = await readExecutorFile(r, 'workspace', 'big');
+    // A plane with NO ranged read refuses an over-budget preview rather than
+    // fetching the file to slice it, and names the download instead. This
+    // workspace double has exactly the seven base VFS methods.
+    const refused = await readExecutorFile(r, 'workspace', 'big');
+    expect(refused.content).toBeUndefined();
+    expect(refused.error).toContain('no ranged read');
+    expect(refused.error).toContain('download');
+
+    // The SAME file on a plane that CAN serve a prefix is previewed and
+    // truncated. Both halves are asserted because the viewer's behaviour splits
+    // on this capability, and the truncated-preview path is the common one.
+    const ranged = {
+      getProvider: (name: string) => (name === 'workspace' ? {
+        homeDir: async () => '/home/user',
+        files: {
+          ...rt.storage.vfs,
+          readRange: async (path: string, offset: number, length: number) => {
+            const whole = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+            const bytes = whole instanceof Uint8Array ? whole : new TextEncoder().encode(whole);
+            return bytes.subarray(offset, offset + length);
+          },
+        },
+      } : undefined),
+    };
+    const big = await readExecutorFile(ranged, 'workspace', 'big');
     expect(big.truncated).toBe(true);
     expect(big.content).toHaveLength(512 * 1024);
     db.close();
@@ -542,7 +565,14 @@ describe('executor file plane', () => {
     const r = router(rt.storage.vfs);
     expect(await writeExecutorFileOp(r, 'workspace', 'up.txt', new TextEncoder().encode('hi')))
       .toEqual({ ok: true });
-    expect(await readExecutorFile(r, 'workspace', 'up.txt')).toEqual({ content: 'hi' });
+    // The test plane declares no compare-and-write, so the read carries the
+    // reason the viewer shows instead of an edit token. A plane that HAS one is
+    // covered in unit-executor-file-transfer.test.ts.
+    expect(await readExecutorFile(r, 'workspace', 'up.txt')).toEqual({
+      content: 'hi',
+      readOnlyReason:
+        'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.',
+    });
     expect(await writeExecutorFileOp(r, 'workspace', 'dir/', new Uint8Array()))
       .toEqual({ error: 'file path required' });
     db.close();
@@ -594,22 +624,21 @@ describe('background-job control plane', () => {
     db.close();
   });
 
-  test('cancelling current work aborts foreground tools and announces the outcome', () => {
-    const { db, runner } = jobPlane();
+  test('cancelling current work aborts foreground tools and announces the outcome', async () => {
+    const { db } = jobPlane();
     const live = new AbortController();
     const already = new AbortController();
     already.abort();
     const broadcasts: string[] = [];
     const order: string[] = [];
 
-    const outcome = cancelCurrentWork({
-      jobRunner: runner,
+    const outcome = await cancelCurrentWork({
       activeToolControllers: new Set([live, already]),
       broadcast: (payload) => { order.push('broadcast'); broadcasts.push(payload); },
       onCancelled: () => order.push('settled'),
     });
 
-    expect(outcome).toEqual({ ok: true, cancelledJobs: [], abortedTools: 1, returnedSteers: [] });
+    expect(outcome).toEqual({ ok: true, abortedTools: 1, deviceCommands: [], returnedSteers: [] });
     expect(live.signal.aborted).toBe(true);
     // The backend settles its own turn state BEFORE clients hear about it.
     expect(order).toEqual(['settled', 'broadcast']);
@@ -617,16 +646,15 @@ describe('background-job control plane', () => {
     db.close();
   });
 
-  test('an interrupt hands the pending mid-turn steers back instead of eating them', () => {
-    const { db, runner } = jobPlane();
+  test('an interrupt hands the pending mid-turn steers back instead of eating them', async () => {
+    const { db } = jobPlane();
     const order: string[] = [];
 
-    const outcome = cancelCurrentWork({
-      jobRunner: runner,
+    const outcome = await cancelCurrentWork({
       activeToolControllers: new Set(),
       broadcast: () => order.push('broadcast'),
       // What UserSteerDrain.interrupt() returns: what the model never saw.
-      interruptSteers: () => { order.push('interrupt'); return ['also check staging', 'and the logs']; },
+      interruptSteers: async () => { order.push('interrupt'); return ['also check staging', 'and the logs']; },
       onCancelled: (settled) => order.push(`settled:${settled.returnedSteers.length}`),
     });
 

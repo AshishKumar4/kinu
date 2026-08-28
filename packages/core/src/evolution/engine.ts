@@ -31,6 +31,7 @@
  *   re-executes, for a curve no decision reads. It runs on demand instead.
  */
 
+import type { ShadowTrialQueueOutcome } from './types';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 
@@ -53,7 +54,9 @@ import { periodicCraftConsolidation } from '../craft/consolidation';
 import { updateCraftScores } from '../craft/ema';
 import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
+import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import { readSoul, summarizeSoul } from '../identity/soul';
+import { conversationTurnPair } from '../identity/conversation-store';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
@@ -65,7 +68,7 @@ import {
   outcomeToFeedback, outcomeQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
-  recordLesson, corroborateLessonsForTurn, renderRecentLessons,
+  recordLesson, recordedTurnVerdict, corroborateLessonsForTurn, renderRecentLessons,
   realOutcomeScaffoldRates, blendRealOutcomeRates,
 } from './outcomes';
 import {
@@ -77,6 +80,7 @@ import {
   MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
 } from './session-window';
+import { createRefinementStore, initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
@@ -252,6 +256,19 @@ function buildTurnReflectionPrompt(input: {
   );
 }
 
+/** The tombstone scope recording that ONE turn's review has committed its two
+ *  durable writes — the `turn_outcomes` row and the craft EMA move. Distinct from
+ *  `turn_review`, which records that the whole review ran: the writes land in the
+ *  middle of a chain of governed model calls, and a budget refusal after them is
+ *  a decision to retry the REST, not the writes. */
+const TURN_GRADED_SCOPE = 'turn_graded';
+
+/** Where the review's LATER append-only writes record themselves — the
+ * reflection lesson and the extracted pattern, each behind its own model call.
+ * Separate from the grading pair because they land later and a refusal between
+ * them must resume rather than repeat. */
+const TURN_REVIEW_STEP_SCOPE = 'turn_review_step';
+
 export class EvolutionEngine {
   private rt: AgentRuntime;
   private config: EvolutionConfig;
@@ -277,18 +294,23 @@ export class EvolutionEngine {
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
 
-    // The engine owns the outcome + lessons + replay + completed-turn ledgers,
-    // and the config table it paces the lifetime timescale in — created here so
-    // both backends (and tests) get them without per-backend schema wiring.
+    // The engine owns the outcome + lessons + replay + completed-turn +
+    // refinement ledgers, and the config table it paces the lifetime timescale
+    // in — created here so both backends (and tests) get them without
+    // per-backend schema wiring.
     initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
     initReplayTables(rt.storage.execRaw, rt.storage.sql);
     initAgentConfigTable(rt.storage.execRaw);
     this.agentConfig = createAgentConfigStore(rt.storage.sql);
     initCompletedTurnTable(rt.storage.execRaw, rt.storage.sql);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql);
+    initRefinementTables(rt.storage.execRaw, rt.storage.sql);
     // A review some earlier host claimed and died inside is owed again, not
-    // lost — the claim was never the work, only its lease.
+    // lost — the claim was never the work, only its lease. A refinement claim
+    // is the same fact about a different ledger: the refiner is read-only, so
+    // re-driving one can cost a child agent and can never double-apply.
     this.sessionWindow.resetStaleClaims();
+    createRefinementStore(rt.storage.sql).resetStalePlanning();
   }
 
   /**
@@ -470,9 +492,40 @@ export class EvolutionEngine {
     // the classifier overwrite the explicit preference.
     let preRecorded = false;
 
-    const explicit = this.readExplicitFeedback(turn.turnId);
-    const pickedOutcome = explicit ? null : takePickOutcome(this.rt.storage.sql, turn.turnId);
-    if (explicit) {
+    // The review's DURABLE half, keyed on the turn it grades.
+    //
+    // A review is a chain of governed model calls with two append-only writes in
+    // the middle of it, so an eviction — or a mission budget declining a LATER
+    // call — leaves the writes committed and the review owed. The lease alone
+    // could not tell those apart, and a retry appended the outcome and moved the
+    // craft EMAs a second time. The key names the writes rather than the attempt.
+    //
+    // An EMPTY id is not an identity: every such turn would share one key, and
+    // the second would read the first's grading as its own.
+    const gradedKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
+    // Asked BEFORE the classifier, not after it. The verdict is already on
+    // record, so re-deriving it spends another governed model call that can
+    // itself be refused — leaving the still-owed suffix no closer to running.
+    //
+    // The TOMBSTONE is the resumption signal, not the row it usually accompanies:
+    // an errored turn nobody graded writes the tombstone and no `turn_outcomes`
+    // row at all, and reading the absent row as "not resumed" made every retry
+    // announce that turn's completion again.
+    const graded = gradedKey !== null
+      && effectAlreadyDone(this.rt.storage.sql, TURN_GRADED_SCOPE, gradedKey);
+    const recorded = graded ? recordedTurnVerdict(this.rt.storage.sql, gradedKey) : null;
+    if (recorded) {
+      outcome = recorded.outcome;
+      source = recorded.source;
+      confidence = recorded.confidence;
+    }
+
+    const explicit = graded ? null : this.readExplicitFeedback(turn.turnId);
+    const pickedOutcome = graded || explicit ? null : takePickOutcome(this.rt.storage.sql, turn.turnId);
+    if (graded) {
+      // Resumed. The verdict above is the one the ledger holds, and the suffix
+      // below is what is still owed.
+    } else if (explicit) {
       outcome = explicit === 'positive' ? 'accepted' : 'corrected';
       source = 'explicit';
     } else if (pickedOutcome) {
@@ -520,8 +573,53 @@ export class EvolutionEngine {
       // what it is not is counted as a success.
     }
 
-    if (outcome) {
-      if (!preRecorded) {
+    // Quality: the outcome IS the signal, priced by where the verdict came
+    // from. An abandoned turn (only ever an existing ledger row now) that
+    // errored is the one case the error decides; a clean abandonment stays
+    // neutral. Pure, and computed BEFORE the writes so all of them fit in one
+    // commit.
+    const quality: number | null = outcome
+      ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome, source))
+      : (turn.hadError ? 0.1 : null);
+    // Craft EMA — real-outcome observations on the crafted tools this turn used,
+    // as the in-episode craft clock observed them. It used to be every tool name
+    // that was not built in, which is a set crafted tools are never IN — they
+    // are codemode-only — so the EMA was written against MCP and extension
+    // tools and nothing else.
+    const craftedToolNames = turn.craftedToolsUsed ?? [];
+
+    // `source`/`confidence` describe a verdict, so they are null on an
+    // ungraded turn rather than reporting the classifier default as if a
+    // classification had happened.
+    // Announced ONCE, on the pass that graded it, and LAST inside the commit
+    // below: the announcement is an append-only row like the writes it follows,
+    // and putting it between them made a death there replay both.
+    const announce = (): void => { if (!graded) this.emit({
+      type: 'turn_complete',
+      message: `Turn outcome: ${outcome ?? 'ungraded (no follow-up)'}` +
+        (quality !== null ? ` | quality ${quality.toFixed(2)}` : '') +
+        ` | ${turn.toolCalls.length} tool calls | ${turn.steps} steps | ${turn.hadError ? 'had errors' : 'clean'}`,
+      data: {
+        outcome, graded: outcome !== null,
+        source: outcome ? source : null,
+        confidence: outcome ? confidence : null,
+        evidence, quality,
+        toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs,
+      },
+    }); };
+
+    // ONE COMMIT for everything this grading pass makes durable: the verdict
+    // row, the cumulative craft scores, the tombstone that records both, and the
+    // announcement.
+    //
+    // A synchronous run is atomic inside a Durable Object and is NOT atomic
+    // against a process kill, which is the whole difference between the two
+    // backends. Split across statements, a CLI death after the verdict but
+    // before the marker made the retry append a second verdict and move the EMA
+    // twice; a death after the marker but before the announcement lost the
+    // `turn_complete` event for good.
+    (this.config.transaction ?? ((body: () => void) => { body(); }))(() => {
+      if (outcome && !graded && !preRecorded) {
         recordTurnOutcome(this.rt.storage.sql, {
           turnId: turn.turnId ?? null,
           sessionId: turn.sessionId ?? 'default',
@@ -535,47 +633,28 @@ export class EvolutionEngine {
           evidence,
         });
       }
-      turn.feedback = outcomeToFeedback(outcome);
-    }
-
-    // Quality: the outcome IS the signal, priced by where the verdict came
-    // from. An abandoned turn (only ever an existing ledger row now) that
-    // errored is the one case the error decides; a clean abandonment stays
-    // neutral.
-    const quality: number | null = outcome
-      ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome, source))
-      : (turn.hadError ? 0.1 : null);
-
-    // `source`/`confidence` describe a verdict, so they are null on an
-    // ungraded turn rather than reporting the classifier default as if a
-    // classification had happened.
-    this.emit({
-      type: 'turn_complete',
-      message: `Turn outcome: ${outcome ?? 'ungraded (no follow-up)'}` +
-        (quality !== null ? ` | quality ${quality.toFixed(2)}` : '') +
-        ` | ${turn.toolCalls.length} tool calls | ${turn.steps} steps | ${turn.hadError ? 'had errors' : 'clean'}`,
-      data: {
-        outcome, graded: outcome !== null,
-        source: outcome ? source : null,
-        confidence: outcome ? confidence : null,
-        evidence, quality,
-        toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs,
-      },
+      // A failed EMA write is not "non-fatal": it is the crafted-tool score
+      // silently not moving, which is the retirement signal going quiet.
+      if (quality !== null && craftedToolNames.length > 0 && !graded) {
+        updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
+      }
+      if (gradedKey !== null && !graded) {
+        recordEffectDone(this.rt.storage.sql, TURN_GRADED_SCOPE, gradedKey);
+      }
+      announce();
     });
+    if (outcome && !graded) turn.feedback = outcomeToFeedback(outcome);
 
-    if (quality === null) return; // programmatic + clean: nothing to learn from
 
-    // Craft EMA — real-outcome observations on the crafted tools this turn used,
-    // as the in-episode craft clock observed them. It used to be every tool name
-    // that was not built in, which is a set crafted tools are never IN — they
-    // are codemode-only — so the EMA was written against MCP and extension
-    // tools and nothing else.
-    const craftedToolNames = turn.craftedToolsUsed ?? [];
-    // A failed EMA write is not "non-fatal": it is the crafted-tool score
-    // silently not moving, which is the retirement signal going quiet.
-    if (craftedToolNames.length > 0) {
-      updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
+    if (quality === null) {
+      // Nothing to learn from — programmatic and clean — so the announcement
+      // above is this review's whole output, and the marker records it here.
+      // Everything the marker normally covers is BELOW this return, which is why
+      // it is written now rather than shared with the path that has writes to
+      // stay adjacent to.
+      return;
     }
+
 
     const negative = isNegativeOutcome(outcome);
     // A negative verdict from a PERSON corroborates the provisional lessons
@@ -601,18 +680,41 @@ export class EvolutionEngine {
     // error on a turn nobody graded at all, which stays provisional until a
     // user outcome corroborates it.
     if (negative || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
-      const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
-      recordLesson(this.rt.storage.sql, {
-        turnIds: turn.turnId ? [turn.turnId] : [],
-        text: reflection,
-        source: 'turn_reflection',
-        status: corroborated ? 'corroborated' : 'provisional',
-      });
-      this.emit({ type: 'reflection', message: corroborated ? reflection : `[provisional] ${reflection}` });
+      // The lesson is an append-only INSERT behind a model call, so its own
+      // tombstone is what stops a retry from writing a second copy of one
+      // reflection. Recorded adjacent to the write, as the grading pair is.
+      const reflectionKey = gradedKey === null ? null : `${gradedKey}:reflection`;
+      if (reflectionKey === null
+        || !effectAlreadyDone(this.rt.storage.sql, TURN_REVIEW_STEP_SCOPE, reflectionKey)) {
+        const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
+        const lesson = {
+          turnIds: turn.turnId ? [turn.turnId] : [],
+          text: reflection,
+          source: 'turn_reflection',
+          status: corroborated ? 'corroborated' : 'provisional',
+        } satisfies Parameters<typeof recordLesson>[1];
+        // KEYED, so the insert and its tombstone need not be atomic: a death
+        // between them replays into the same row rather than a second lesson.
+        recordLesson(
+          this.rt.storage.sql,
+          reflectionKey === null ? lesson : { ...lesson, key: reflectionKey },
+        );
+        if (reflectionKey !== null) {
+          recordEffectDone(this.rt.storage.sql, TURN_REVIEW_STEP_SCOPE, reflectionKey);
+        }
+        this.emit({ type: 'reflection', message: corroborated ? reflection : `[provisional] ${reflection}` });
+      }
     }
 
     if (outcome === 'accepted' && turn.toolCalls.length > 0) {
-      await this.extractPattern(turn, quality);
+      // Same shape, same reason: extraction upserts a crafted tool and appends a
+      // discovery event. The key travels INTO the body so the marker lands beside
+      // those writes rather than after the await that returns from them.
+      const patternKey = gradedKey === null ? null : `${gradedKey}:pattern`;
+      if (patternKey === null
+        || !effectAlreadyDone(this.rt.storage.sql, TURN_REVIEW_STEP_SCOPE, patternKey)) {
+        await this.extractPattern(turn, quality, patternKey);
+      }
     }
   }
 
@@ -663,6 +765,10 @@ export class EvolutionEngine {
    */
   async runStoredTurnReview(rowId: string, turn: CompletedTurn, followup: string | null): Promise<void> {
     await this.reviewTurn(turn, followup);
+    // Adjacent to the side effects it records, and BEFORE the lease is
+    // settled: a crash between these two statements is the only remaining
+    // window, and it is one synchronous step wide.
+    this.sessionWindow.recordReviewRan(rowId);
     this.sessionWindow.settleReview(rowId);
   }
 
@@ -697,7 +803,7 @@ export class EvolutionEngine {
         // goes back to the queue exactly as it was: the turn is sound, the
         // mission is simply spent, and a raised cap makes this review runnable
         // again. Any other throw releases it too — the review did not run, so
-        // the obligation is not settled.
+        // the obligation is not settled and nothing is tombstoned.
         if (err instanceof MissionBudgetExhausted) {
           refused.push({ id: row.id, reason: 'budget' });
         } else {
@@ -710,6 +816,11 @@ export class EvolutionEngine {
         this.sessionWindow.releaseQueuedReview(row.id);
         continue;
       }
+      // Immediately after the review resolves and BEFORE the lease settles, so
+      // the append/EMA side effects and the record that they happened are
+      // adjacent. A crash between them is the only remaining window, and it is
+      // one synchronous step wide.
+      this.sessionWindow.recordReviewRan(row.id);
       this.sessionWindow.settleReview(row.id);
       reviewed++;
     }
@@ -723,22 +834,20 @@ export class EvolutionEngine {
    * verdict corroborate provisional lessons tied to that turn.
    */
   async applyExplicitFeedback(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
-    // `messages` belongs to the shared workspace schema, so a failed read is a
-    // fault. The old catch recorded the verdict anyway with empty texts — a
-    // ledger row that reads as a graded turn whose request and response were
-    // blank, which is what every downstream eval then trained against.
-    const row = this.rt.storage.sql<{ response: string; request: string | null; session_id: string }>`
-      SELECT m.content AS response, u.content AS request, m.session_id
-      FROM messages m LEFT JOIN messages u ON u.id = m.parent_id
-      WHERE m.id = ${messageId} LIMIT 1`[0];
+    // The conversation store belongs to the shared workspace schema, so a
+    // failed read is a fault. The old catch recorded the verdict anyway with
+    // empty texts — a ledger row that reads as a graded turn whose request and
+    // response were blank, which is what every downstream eval then trained
+    // against.
+    const pair = conversationTurnPair(this.rt.storage.sql, messageId);
     recordTurnOutcome(this.rt.storage.sql, {
       turnId: messageId,
-      sessionId: row?.session_id ?? 'default',
+      sessionId: pair?.sessionId ?? 'default',
       outcome: feedback === 'positive' ? 'accepted' : 'corrected',
       confidence: 1,
       source: 'explicit',
-      userMessage: row?.request ?? '',
-      assistantResponse: row?.response ?? '',
+      userMessage: pair?.request ?? '',
+      assistantResponse: pair?.response ?? '',
       followup: null,
       scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
     });
@@ -847,13 +956,15 @@ export class EvolutionEngine {
    * gate may draw on. ONE row and no inference — the candidate rollout it pays
    * for runs on the cadence lane below.
    */
-  queueShadowTrial(turn: CompletedTurn, context: readonly ModelMessage[]): void {
-    if (!this.config.enabled) return;
-    this.config.shadowTrialQueue?.({
+  queueShadowTrial(
+    turn: CompletedTurn, context: readonly ModelMessage[], opts?: { readonly id?: string; readonly pendingVersion?: number },
+  ): ShadowTrialQueueOutcome {
+    if (!this.config.enabled) return 'not_sampled';
+    return this.config.shadowTrialQueue?.({
       task: turn.userMessage,
       currentOutput: turn.assistantResponse,
       context,
-    });
+    }, opts) ?? 'not_sampled';
   }
 
   /**
@@ -1165,7 +1276,14 @@ export class EvolutionEngine {
    *  Pure-lookup calls (memory.search, fact.recall) are skipped — they read
    *  state but encode no reusable pattern.
    */
-  private async extractPattern(turn: CompletedTurn, quality: number): Promise<void> {
+  private async extractPattern(
+    turn: CompletedTurn,
+    quality: number,
+    /** Where this extraction records that it happened, or null for a turn with no
+     *  durable identity. Written next to the upsert below rather than by the
+     *  caller, so no await separates the crafted tool from the record of it. */
+    patternKey: string | null,
+  ): Promise<void> {
     const meaningfulCalls = turn.toolCalls.filter(tc => !isPureLookupCall(tc));
     if (meaningfulCalls.length === 0) return;
 
@@ -1174,7 +1292,18 @@ export class EvolutionEngine {
       .join('\n');
 
     // Ask the LLM to generalize into a reusable function
-    const generalized = await this.reviewLlm(turn).complete(
+    // The ANSWER, recorded before it is applied.
+    //
+    // The upsert below is keyed by tool name, so applying twice adopts one tool —
+    // but only if the answer is the same both times, and a model asked again can
+    // name the pattern differently. Persisting the generation first makes the
+    // replay apply what the first attempt decided instead of deciding again, and
+    // makes the second model call unnecessary rather than merely harmless.
+    const recorded = patternKey === null
+      ? undefined
+      : this.rt.storage.sql<{ answer: string }>`
+          SELECT answer FROM pattern_extractions WHERE effect_key = ${patternKey}`[0]?.answer;
+    const generalized = recorded ?? await this.reviewLlm(turn).complete(
       `A successful interaction used these tool calls:\n${callSummary}\n\n` +
       `The user asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n\n` +
       `Extract a reusable pattern as a JavaScript async arrow function.\n` +
@@ -1186,24 +1315,41 @@ export class EvolutionEngine {
     // Unusable model output is the one thing skipped here. The old catch also
     // absorbed every upsertCraftedTool failure — a compile or storage fault on
     // an accepted pattern read exactly like the model having produced nothing.
-    const json = tolerate(() => extractJsonObject(generalized), 'malformed-input');
+    const json = tolerate(() => extractJsonObject(recorded ?? generalized), 'malformed-input');
     if (json === undefined) return;
     const parsed = v.safeParse(GeneralizedToolSchema, json);
     // Shape only — whether the code is usable is decided by upsertCraftedTool,
     // which compiles it the way the runtime will before storing anything.
     if (!parsed.success || !parsed.output.name || !parsed.output.code) return;
+    if (patternKey !== null && recorded === undefined) {
+      void this.rt.storage.sql`INSERT INTO pattern_extractions (effect_key, answer, created_at)
+        VALUES (${patternKey}, ${generalized}, ${Date.now()}) ON CONFLICT(effect_key) DO NOTHING`;
+    }
 
+    const discovered = (parsed.output.description ?? parsed.output.name).slice(0, 60);
     const acceptance = await upsertCraftedTool(this.rt, {
       name: parsed.output.name,
       description: parsed.output.description ?? '',
       code: parsed.output.code,
       score: quality,
     });
-    if (!acceptance.accepted) return; // misevolution veto — reason already recorded
-
-    this.emit({
-      type: 'craft_discovered',
-      message: `Discovered pattern: ${(parsed.output.description ?? parsed.output.name).slice(0, 60)}`,
+    // ONE COMMIT for the discovery event, the marker and the retirement of the
+    // stored answer. Separately, a kill between the event and the marker
+    // appended the same discovery twice, and a kill between the marker and the
+    // delete orphaned the answer row for good — every later review reads the
+    // marker and skips extraction, so nothing ever reaches the delete again.
+    (this.config.transaction ?? ((body: () => void) => { body(); }))(() => {
+      if (acceptance.accepted) {
+        this.emit({
+          type: 'craft_discovered',
+          message: `Discovered pattern: ${discovered}`,
+        });
+      }
+      if (patternKey !== null) {
+        recordEffectDone(this.rt.storage.sql, TURN_REVIEW_STEP_SCOPE, patternKey);
+        // Only needed while the marker is absent.
+        void this.rt.storage.sql`DELETE FROM pattern_extractions WHERE effect_key = ${patternKey}`;
+      }
     });
   }
 }

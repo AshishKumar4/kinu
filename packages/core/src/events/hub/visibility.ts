@@ -50,8 +50,17 @@ function looksLikeSecretField(name: string): boolean {
   return false;
 }
 
-/** Recursively redact field values whose names look secret-shaped. */
-function redactPayload(value: JsonValue): JsonValue {
+/**
+ * Recursively redact field values whose names look secret-shaped.
+ *
+ * Exported because a SECOND boundary needs this exact policy: the transcript's
+ * generic tool preview renders tool input, output and errors as raw values, and
+ * a tool payload carrying a bearer token is the same shape of accident as an
+ * event payload carrying one. One list, two consumers — a near-duplicate
+ * heuristic in the UI would drift from this one the first time either is
+ * extended.
+ */
+export function redactPayload(value: JsonValue): JsonValue {
   if (!isJsonObject(value) && !Array.isArray(value)) return value;
   if (Array.isArray(value)) return value.map(redactPayload);
   const redacted: JsonObject = {};

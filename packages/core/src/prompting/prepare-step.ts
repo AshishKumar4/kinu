@@ -31,6 +31,7 @@ import type { ExtensionHost } from '../extension';
 import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget';
 import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
+import { normalizeReplayForDestination } from './replay-normalization';
 import type { DynamicContext, DynamicContextLedger } from './volatile-context';
 
 /** The in-flight turn's cache plan for marker strategies. `system` is the
@@ -72,6 +73,10 @@ export interface StepPipeline {
   readonly budget?: MissionGovernor | undefined;
   /** The live-state plane. Absent leaves the array without dynamic blocks. */
   readonly dynamic?: StepDynamicContext | undefined;
+  /** The provider that will receive this request. A destination boundary,
+   *  not durable history: replayed tool ids/reasoning are normalized here
+   *  immediately before wire-facing cache markers and measurement. */
+  readonly destinationProviderId?: string | undefined;
   /** Per-step context measurement. This is the only place that holds the FINAL
    *  composed array, so it is the only place the breakdown can be measured
    *  against what the request actually was rather than what it was going to be
@@ -79,8 +84,14 @@ export interface StepPipeline {
   readonly meter?: TurnContextMeter | undefined;
 }
 
+export type StepPrepareResult =
+  | { system?: string | SystemModelMessage; messages: ModelMessage[] }
+  | undefined;
+
 /** Run the step pipeline. Returns the step overrides (AI SDK
- *  `PrepareStepResult` shape), or `undefined` when nothing changed.
+ *  `PrepareStepResult` shape), or `undefined` when nothing changed. The
+ *  synchronous path remains synchronous; an extension that must finish I/O
+ *  before the model sees its rewrite promotes this invocation to a Promise.
  *
  *  Throws {@link MissionBudgetExhausted} when the turn runs under a mission
  *  label whose cap is spent: the host declines the request instead of issuing
@@ -90,10 +101,21 @@ export interface StepPipeline {
 export function composePrepareStep(
   pipeline: StepPipeline,
   ctx: { stepNumber: number; messages: ModelMessage[] },
-): { system?: string | SystemModelMessage; messages: ModelMessage[] } | undefined {
+): StepPrepareResult | Promise<StepPrepareResult> {
   const refusal = pipeline.budget?.guard('model_call');
   if (refusal) throw new MissionBudgetExhausted(refusal);
   const steered = pipeline.extensions?.runPrepareStep(ctx);
+  if (steered instanceof Promise) {
+    return steered.then((messages) => finishPrepareStep(pipeline, ctx, messages));
+  }
+  return finishPrepareStep(pipeline, ctx, steered);
+}
+
+function finishPrepareStep(
+  pipeline: StepPipeline,
+  ctx: { stepNumber: number; messages: ModelMessage[] },
+  steered: ModelMessage[] | undefined,
+): StepPrepareResult {
   const base = steered ?? ctx.messages;
   // The weave runs AFTER the prune (step 3 — frozen block positions have to be
   // coordinates in the array the model actually receives), so the pruner has
@@ -109,12 +131,14 @@ export function composePrepareStep(
   // a prepareStep override never feeds the next step's input).
   const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot());
   const working = woven ?? shrunk;
+  const replayed = normalizeReplayForDestination(working, pipeline.destinationProviderId);
+  const destinationReady = replayed ?? working;
   const plan = pipeline.cache;
-  const messages = plan ? markCacheTail(working, plan.strategy) : working;
+  const messages = plan ? markCacheTail(destinationReady, plan.strategy) : destinationReady;
   // Measured on the FINAL array, and on every step — including the step that
   // changed nothing and returns undefined below, which is still a priced
   // request and still occupies the window.
   pipeline.meter?.measure(messages);
-  if (!plan) return steered || pruned || woven ? { messages } : undefined;
+  if (!plan) return steered || pruned || woven || replayed ? { messages } : undefined;
   return plan.system !== undefined ? { system: plan.system, messages } : { messages };
 }

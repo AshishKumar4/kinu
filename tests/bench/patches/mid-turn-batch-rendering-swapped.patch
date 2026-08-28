@@ -1,7 +1,8 @@
 diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
+index 18ff15512..fe87ce469 100644
 --- a/packages/core/src/orchestrator/agent-orchestrator.ts
 +++ b/packages/core/src/orchestrator/agent-orchestrator.ts
-@@ -514,8 +514,8 @@
+@@ -766,8 +766,8 @@ export class AgentOrchestrator {
      }
      const signal: AgentSignal = {
        kind: 'event_drain',
@@ -10,5 +11,5 @@ diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/cor
 +      text: batch.midTurnText,
 +      stepText: batch.text,
        replyTurnId: turnId,
-       compensate: () => this.returnEventsToPending(ids),
-       metadata,
+       // The drain's own durable identity, offered as the admission key.
+       //

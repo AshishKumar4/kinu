@@ -14,14 +14,18 @@
  *      survive, errors are caught.
  */
 import { describe, test, expect } from 'bun:test';
-import * as v from 'valibot';
 import {
-  validateMcpServerInput,
+  validateMcpServerInput, canonicalMcpUrl,
   parseAllowedTools, mapConnectionStatus,
-  parseMcpHeaders, buildMcpHeaderTransportOpts,
+  parseMcpHeaders, mcpCredentialTransport,
+  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
+  type SerializableToolDescriptor,
 } from '../src/user/mcp';
-import { isMcpToolKey, mcpToolKey, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { tool, jsonSchema } from 'ai';
+import {
+  isMcpToolKey, mcpToolKey, stepContextLimit, type JsonObject, type JsonValue,
+} from '@kinu.run/core';
+import { tool, jsonSchema, type ToolSet } from 'ai';
+import type { RecordedMcpTransport } from './helpers/agents-sdk';
 
 // ── 1. validateMcpServerInput ──────────────────────────────────────────────
 
@@ -114,6 +118,223 @@ describe('validateMcpServerInput', () => {
   });
 });
 
+describe('canonical MCP endpoint identity', () => {
+  test('one endpoint has one spelling', () => {
+    expect(canonicalMcpUrl('HTTPS://MCP.Example.COM:443/v1')).toBe('https://mcp.example.com/v1');
+    expect(canonicalMcpUrl('https://mcp.example.com/v1#frag')).toBe('https://mcp.example.com/v1');
+  });
+
+  test('the path and query are left exactly as written', () => {
+    // `/mcp` and `/mcp/` are different resources to a server, and a query can
+    // select the endpoint. Canonicalising those would silently retarget it.
+    expect(canonicalMcpUrl('https://a.example/mcp/')).toBe('https://a.example/mcp/');
+    expect(canonicalMcpUrl('https://a.example/mcp')).toBe('https://a.example/mcp');
+    expect(canonicalMcpUrl('https://a.example/mcp?tenant=b')).toBe('https://a.example/mcp?tenant=b');
+  });
+
+  test('an accepted input is stored canonical', () => {
+    const out = validateMcpServerInput({ name: 'n', serverUrl: 'HTTPS://Mcp.Example.com:443/v1#x' });
+    expect(out.serverUrl).toBe('https://mcp.example.com/v1');
+  });
+
+  test('an empty headers object is omitted, not stored as a credential', () => {
+    // A row whose `headers` column is non-null is a row the hydration path
+    // treats as holding a secret. `{}` is not one.
+    expect(validateMcpServerInput({ name: 'n', serverUrl: 'https://a.example', headers: {} }).headers)
+      .toBeUndefined();
+  });
+
+  test('an empty allowedTools array is NOT omitted — it means expose nothing', () => {
+    expect(validateMcpServerInput({ name: 'n', serverUrl: 'https://a.example', allowedTools: [] }).allowedTools)
+      .toEqual([]);
+  });
+});
+
+// ── 1b. describeMcpTool — the boundary remote prose crosses ────────────────
+
+describe('describeMcpTool', () => {
+  const server = { id: 'srv1', name: 'github' };
+
+  test('a blank description is OMITTED, so the synthesized fallback applies', () => {
+    const descriptor = describeMcpTool(server, { name: 'create_issue', description: '   ', inputSchema: {} });
+    expect('description' in descriptor).toBe(false);
+    // The orchestrator's fallback is nullish-guarded, so an empty string would
+    // have reached the model as a tool with no description at all.
+    expect(descriptor.description ?? `${descriptor.serverName}/${descriptor.name}`)
+      .toBe('github/create_issue');
+  });
+
+  test('a real description is forwarded verbatim', () => {
+    const descriptor = describeMcpTool(server, { name: 't', description: 'Opens an issue.', inputSchema: {} });
+    expect(descriptor.description).toBe('Opens an issue.');
+  });
+
+  test('a blank title does not shadow the annotation title', () => {
+    const descriptor = describeMcpTool(server, {
+      name: 't', title: '', annotations: { title: 'Create issue' }, inputSchema: {},
+    });
+    expect(descriptor.title).toBe('Create issue');
+  });
+
+  test('the tool key is the shared rule, keyed on the server NAME', () => {
+    expect(describeMcpTool(server, { name: 'create_issue', inputSchema: {} }).toolKey)
+      .toBe(mcpToolKey('github', 'create_issue'));
+  });
+});
+
+// ── 1c. admitMcpDescriptors — the budget that already existed ──────────────
+//
+// The contract: a remote catalog is admitted against what one step's request is
+// allowed to occupy (core's `stepContextLimit`: window less the model's output
+// allowance) MINUS what the actor's own tools
+// already spend of it. No MCP percentage exists to assert against, so the tests
+// assert the derivation itself: the admitted surface fits the remainder, a
+// bigger window admits more, a bigger native surface admits less.
+
+describe('admitMcpDescriptors', () => {
+  function descriptor(serverName: string, name: string, description?: string): SerializableToolDescriptor {
+    const built: SerializableToolDescriptor = {
+      serverId: `${serverName}-id`, serverName, name,
+      toolKey: mcpToolKey(serverName, name), inputSchema: { type: 'object' },
+    };
+    if (description !== undefined) built.description = description;
+    return built;
+  }
+
+  /** The actor's own surface, built the way every production builtin is built
+   *  (`jsonSchema`, never zod) — so what the budget subtracts is measured off a
+   *  real ToolSet rather than a number chosen for the test. */
+  function nativeTools(count: number): ToolSet {
+    return Object.fromEntries(Array.from({ length: count }, (_, i) => [
+      `builtin_${String(i)}`,
+      tool({
+        description: `Builtin number ${String(i)}. ${'Explains itself at length. '.repeat(20)}`,
+        inputSchema: jsonSchema<{ action: string }>({
+          type: 'object',
+          properties: { action: { type: 'string', description: 'What to do.' } },
+          required: ['action'],
+        }),
+        execute: async () => 'done',
+      }),
+    ]));
+  }
+
+  /** The output allowance every budget below leaves room for — one value, so no
+   *  two tests disagree about what the model reserves. Small enough that the
+   *  8k-window arm still has a budget at all, which is the point of sweeping it. */
+  const MAX_OUTPUT = 4_000;
+  const NO_NATIVE_TOOLS = { contextWindow: 200_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: 0 };
+
+  test('a small catalog is admitted whole and never reordered by the SDK map', () => {
+    const admission = admitMcpDescriptors([
+      descriptor('zulu', 'b'), descriptor('alpha', 'b'), descriptor('alpha', 'a'),
+    ], NO_NATIVE_TOOLS);
+    expect(admission.admitted.map((d) => d.toolKey)).toEqual([
+      mcpToolKey('alpha', 'a'), mcpToolKey('alpha', 'b'), mcpToolKey('zulu', 'b'),
+    ]);
+    expect(admission.deferred).toEqual([]);
+  });
+
+  test('a catalog past the budget is cut off, and the cut is REPORTED', () => {
+    const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
+    const native = toolSurfaceTokens(nativeTools(12));
+    const admission = admitMcpDescriptors(many, { contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native });
+    expect(admission.admitted.length).toBeGreaterThan(0);
+    expect(admission.admitted.length).toBeLessThan(many.length);
+    expect(admission.deferred).toHaveLength(1);
+    expect(admission.deferred[0]?.server).toBe('flood');
+    expect(admission.deferred[0]?.reason).toContain('did not fit');
+    // The whole point: the admitted surface fits what the step context limit
+    // had left after the actor's own tools — measured on the one shared scale.
+    expect(toolSurfaceTokens(admission.admitted))
+      .toBeLessThanOrEqual(stepContextLimit({ contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT }) - native);
+  });
+
+  test.each([8_000, 32_000, 128_000, 200_000, 1_000_000])(
+    'the admitted surface fits the remainder on a %i-token window',
+    (contextWindow) => {
+      const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
+      const native = toolSurfaceTokens(nativeTools(12));
+      const admission = admitMcpDescriptors(many, { contextWindow, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native });
+      const remainder = Math.max(0, stepContextLimit({ contextWindow, modelOutputLimit: MAX_OUTPUT }) - native);
+      expect(toolSurfaceTokens(admission.admitted)).toBeLessThanOrEqual(remainder);
+      // Nothing is lost silently: every tool is either admitted or reported.
+      const lost = many.length - admission.admitted.length;
+      expect(lost > 0).toBe(admission.deferred.length > 0);
+    },
+  );
+
+  test('a bigger window admits more of the same catalog', () => {
+    const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
+    const native = toolSurfaceTokens(nativeTools(12));
+    expect(admitMcpDescriptors(many, { contextWindow: 200_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native }).admitted.length)
+      .toBeGreaterThan(admitMcpDescriptors(many, { contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native }).admitted.length);
+  });
+
+  test("the actor's own tools are priced FIRST — a bigger native surface admits less MCP", () => {
+    const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
+    const lean = admitMcpDescriptors(many, {
+      contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: toolSurfaceTokens(nativeTools(4)),
+    });
+    const heavy = admitMcpDescriptors(many, {
+      contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: toolSurfaceTokens(nativeTools(40)),
+    });
+    expect(heavy.admitted.length).toBeLessThan(lean.admitted.length);
+  });
+
+  test('a native surface that fills the step limit leaves the catalog nothing, and says so', () => {
+    const admission = admitMcpDescriptors([descriptor('aaa', 'tool')], {
+      contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: stepContextLimit({ contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT }),
+    });
+    expect(admission.admitted).toEqual([]);
+    expect(admission.deferred[0]?.server).toBe('aaa');
+  });
+
+  test('one essay cannot crowd out the other servers', () => {
+    const essay = 'x'.repeat(400_000);
+    const admission = admitMcpDescriptors([
+      descriptor('aaa', 'loud', essay), descriptor('bbb', 'quiet', 'Short.'),
+    ], NO_NATIVE_TOOLS);
+    expect(admission.admitted.map((d) => d.name)).toEqual(['loud', 'quiet']);
+    expect(admission.admitted[0]?.description?.length).toBeLessThan(essay.length);
+    expect(admission.admitted[0]?.description?.endsWith('…')).toBe(true);
+    expect(admission.admitted[1]?.description).toBe('Short.');
+  });
+
+  test('an unspent share returns to the rest — a quiet catalog is untouched', () => {
+    const quiet = Array.from({ length: 30 }, (_, i) => descriptor('calm', `tool_${String(i)}`, 'Does one thing.'));
+    const admission = admitMcpDescriptors(quiet, NO_NATIVE_TOOLS);
+    expect(admission.admitted).toHaveLength(30);
+    expect(admission.admitted.every((d) => d.description === 'Does one thing.')).toBe(true);
+    expect(admission.deferred).toEqual([]);
+  });
+
+  test('a schema is never truncated — an oversized one is deferred whole', () => {
+    const fat = descriptor('fat', 'tool');
+    fat.inputSchema = { type: 'object', properties: { blob: { type: 'string', description: 'y'.repeat(200_000) } } };
+    const admission = admitMcpDescriptors([fat], { contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: 0 });
+    expect(admission.admitted).toEqual([]);
+    expect(admission.deferred[0]?.server).toBe('fat');
+  });
+
+  test('a schema that fills its share keeps the schema and drops the prose', () => {
+    // Two descriptors, so the first one's share is half the budget — and its
+    // schema alone is more than that. The contract it advertises survives whole;
+    // the prose is what goes, and the orchestrator falls back to
+    // `<server>/<tool>` rather than showing a lone ellipsis.
+    const fat = descriptor('aaa', 'tool', 'A description that will not survive.');
+    fat.inputSchema = { type: 'object', properties: { blob: { type: 'string', description: 'y'.repeat(12_000) } } };
+    const admission = admitMcpDescriptors(
+      [fat, descriptor('bbb', 'small', 'Short.')],
+      { contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: 0 },
+    );
+    expect(admission.admitted.map((d) => d.name)).toEqual(['tool', 'small']);
+    expect(admission.admitted[0]?.inputSchema).toEqual(fat.inputSchema);
+    expect(admission.admitted[0]?.description).toBeUndefined();
+    expect(admission.admitted[1]?.description).toBe('Short.');
+  });
+});
+
 // ── 2. mcpToolKey ──────────────────────────────────────────────────────────
 
 describe('mcpToolKey', () => {
@@ -188,40 +409,114 @@ describe('parseMcpHeaders', () => {
   });
 });
 
-// ── 3c. buildMcpHeaderTransportOpts + hibernation survival ─────────────────
+// ── 3c. The credential seam: mcpCredentialTransport ────────────────────────
+//
+// This replaces a test that asserted the OPPOSITE and was the reproduction:
+// it pinned `requestInit.headers` as "the DURABLE carrier" and proved a bearer
+// survives `JSON.stringify`. Surviving `JSON.stringify` is exactly the defect —
+// that is the SDK writing the user's token into `cf_agents_mcp_servers` in the
+// clear (`persistTransportOptions`, agents/dist/client-zqKcsyFa.js:1022-1035).
 
-describe('buildMcpHeaderTransportOpts', () => {
-  test('no headers → undefined (nothing to inject)', () => {
-    expect(buildMcpHeaderTransportOpts(null)).toBeUndefined();
-    expect(buildMcpHeaderTransportOpts({})).toBeUndefined();
+/** The SDK's own persistence, applied to whatever we hand `registerServer`.
+ *  Copied from `persistTransportOptions`'s whitelist, so a change in the
+ *  vendored SDK shows up here as a failing assertion rather than as a silent
+ *  leak. */
+const SDK_PERSISTED_TRANSPORT_KEYS = [
+  'type', 'headers', 'requestInit', 'reconnectionOptions',
+  'skipIssuerMetadataValidation', 'onInsufficientScope', 'maxStepUpRetries',
+  'sessionId', 'protocolVersion',
+] as const;
+
+function asTheSdkWouldPersist(transport: RecordedMcpTransport): string {
+  // Built by picking, not by filling a dictionary: the whitelist's order is the
+  // order the SDK serialises in, and `Object.fromEntries` keeps it.
+  return JSON.stringify({
+    transport: Object.fromEntries(
+      SDK_PERSISTED_TRANSPORT_KEYS
+        .filter((key) => transport[key] !== undefined)
+        .map((key) => [key, transport[key]]),
+    ),
+  });
+}
+
+describe('mcpCredentialTransport', () => {
+  const CREDENTIAL = { Authorization: 'Bearer live-secret' };
+
+  test('nothing the SDK can persist carries the credential', () => {
+    const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
+    expect(Object.keys(opts)).toEqual(['fetch']);
+    const persisted = asTheSdkWouldPersist({ ...opts, type: 'sse' });
+    expect(persisted).not.toContain('live-secret');
+    expect(persisted).not.toContain('Authorization');
+    expect(persisted).toBe(JSON.stringify({ transport: { type: 'sse' } }));
   });
 
-  test('headers → requestInit.headers + an SSE eventSourceInit fetch', () => {
-    const opts = buildMcpHeaderTransportOpts({ Authorization: 'Bearer live' });
-    expect(opts?.requestInit.headers).toEqual({ Authorization: 'Bearer live' });
-    expect(opts?.eventSourceInit.fetch).toBeInstanceOf(Function);
-  });
-
-  // The SDK snapshots a server's transport via JSON.stringify (functions are
-  // silently dropped). This proves the DURABLE carrier is requestInit.headers,
-  // not the eventSourceInit.fetch closure — so custom bearer headers still
-  // authenticate the SSE GET stream + POST after DO hibernation, because MCP
-  // SDK 1.29.0's SSEClientTransport._commonHeaders re-derives them from
-  // requestInit on every reconnect. (Audit finding "c": already covered by
-  // the SDK; no restore-time re-injection needed.)
-  test('requestInit.headers survives a storage round-trip; the fetch closure does not', () => {
-    const opts = buildMcpHeaderTransportOpts({ Authorization: 'Bearer live' });
-    const PersistedTransportSchema = v.object({
-      requestInit: v.object({ headers: v.record(v.string(), v.string()) }),
-      eventSourceInit: v.object({}),
-      type: v.literal('sse'),
+  test('a request to the server carries the credential', async () => {
+    const seen: Headers[] = [];
+    await withFetch((_url, init) => { seen.push(new Headers(init?.headers)); }, async () => {
+      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
+      await opts.fetch('https://mcp.example/sse', { headers: { accept: 'text/event-stream' } });
     });
-    const persisted = v.parse(PersistedTransportSchema, JSON.parse(JSON.stringify({ ...opts, type: 'sse' })));
-    expect(persisted.requestInit).toEqual({ headers: { Authorization: 'Bearer live' } });
-    expect(persisted.eventSourceInit).toEqual({}); // fetch closure gone
-    expect(persisted.type).toBe('sse');
+    expect(seen[0]?.get('authorization')).toBe('Bearer live-secret');
+    // The SDK's own headers for the call are merged, not replaced.
+    expect(seen[0]?.get('accept')).toBe('text/event-stream');
+  });
+
+  test('a request to ANY other origin does not — that is the OAuth metadata path', async () => {
+    const seen: Headers[] = [];
+    await withFetch((_url, init) => { seen.push(new Headers(init?.headers)); }, async () => {
+      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
+      await opts.fetch('https://idp.elsewhere/.well-known/oauth-authorization-server');
+      await opts.fetch('https://mcp.example.evil/sse');
+    });
+    expect(seen).toHaveLength(2);
+    for (const headers of seen) expect(headers.get('authorization')).toBeNull();
+  });
+
+  test('a credentialed request never follows a redirect', async () => {
+    const inits: (RequestInit | undefined)[] = [];
+    await withFetch((_url, init) => { inits.push(init); }, async () => {
+      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => CREDENTIAL);
+      await opts.fetch('https://mcp.example/sse');
+    });
+    expect(inits[0]?.redirect).toBe('manual');
+  });
+
+  test('the CURRENT sealed value is spent, so a rotation needs no reconnect', async () => {
+    let stored: Record<string, string> | null = { Authorization: 'Bearer first' };
+    const seen: string[] = [];
+    await withFetch((_url, init) => {
+      seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
+    }, async () => {
+      const opts = mcpCredentialTransport('https://mcp.example/sse', async () => stored);
+      await opts.fetch('https://mcp.example/sse');
+      stored = { Authorization: 'Bearer rotated' };
+      await opts.fetch('https://mcp.example/sse');
+      stored = null;
+      await opts.fetch('https://mcp.example/sse');
+    });
+    expect(seen).toEqual(['Bearer first', 'Bearer rotated', 'none']);
   });
 });
+
+/** Run `body` with `fetch` observed rather than performed. */
+async function withFetch(
+  observe: (url: Request | URL | RequestInfo, init?: RequestInit) => void,
+  body: () => Promise<void>,
+): Promise<void> {
+  const real = globalThis.fetch;
+  // `typeof globalThis.fetch` carries `preconnect` beside the call signature, so
+  // the stub is COMPLETED with the real one's rather than asserted into shape.
+  const record = async (
+    url: Request | URL | RequestInfo,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    observe(url, init);
+    return new Response('{}', { status: 200 });
+  };
+  globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
+  try { await body(); } finally { globalThis.fetch = real; }
+}
 
 // ── 4. mcp_ prefix collision guard in buildBuiltinTools ────────────────────
 

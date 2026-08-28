@@ -19,10 +19,11 @@
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { VFS } from '../types/primitives';
+import type { VfsNativeReads } from '../vfs/mounts';
 import { makeVfsError } from '../vfs/errno';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { formatExecResult, refusalText } from './exec-result';
-import { KinuError, toKinuError } from '../obs/index';
+import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
   freshDeviceToolchain,
@@ -31,8 +32,11 @@ import {
 import {
   TOOLCHAIN_PROBED_CAPABILITIES, TOOLCHAIN_UNPROBEABLE,
 } from './toolchain';
-import { isDeviceNotConnectedError } from './device-tunnel';
-import { readExecSignal } from './signal';
+import {
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, parseDeviceCancelAnswer,
+  isDeviceNotConnectedError, isDeviceUnknownMethodError, nextDeviceRequestId,
+} from './device-tunnel';
+import { readDeviceOwnershipContext, readExecSignal } from './signal';
 import {
   isJsonObject,
   JsonValueSchema,
@@ -86,6 +90,96 @@ function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
 }
 
 /**
+ * What an abort that reached this tool before the frame went out reads as.
+ * Nothing was sent, so nothing is running — the one cancellation with no
+ * process to account for.
+ */
+const EXEC_NOT_STARTED =
+  'laptop exec stopped before the command was sent — nothing ran on the device';
+
+/** The kernel confirmed the daemon's owned process group is gone. A command
+ *  can deliberately create a separate session (`setsid`); the daemon cannot
+ *  claim authority over that independently escaped process. */
+const EXEC_TERMINATED =
+  'laptop exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run';
+
+/** The daemon holds no active command control entry. A terminal shell can have
+ * left backgrounded work in its group, and a command can escape into another
+ * session, so this is availability rather than a claim every process is gone. */
+const EXEC_NOTHING_RUNNING =
+  'laptop exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
+
+/** The machine answers device calls but has no cancellation method at all, so
+ *  the command outlives the turn. The user has to update the daemon on that
+ *  machine before a stop can reach it. */
+const EXEC_CANCEL_UNSUPPORTED =
+  'laptop exec aborted — this machine runs an older Kinu daemon that cannot stop a command, '
+  + 'so the command may still be running. Ask the user to update the daemon on that machine.';
+
+/** The device left while the cancellation was in flight, so nothing confirmed
+ *  the kill. The daemon terminates commands it can no longer answer to when its
+ *  own socket closes, but this side did not see that happen and will not say it
+ *  did. */
+const EXEC_CANCEL_UNCONFIRMED =
+  'laptop exec aborted — the device disconnected before it confirmed the command stopped';
+
+/** Nothing about the command's fate came back: the kernel refused the kill, the
+ *  device never answered inside the transport's deadline, or the answer that
+ *  did come back was about some other command. Whatever the reason, this side
+ *  cannot say the work ended, and it names why. */
+const execCancelFailed = (reason: string): string =>
+  `laptop exec aborted — the device could not stop the command, which may still be running: ${reason}`;
+
+/**
+ * Stop a command that is already running on the machine, and say what stopping
+ * it achieved.
+ *
+ * This runs on the abort path, where the caller's wait is ending either way and
+ * the only open question is whether the process is gone. So it answers instead
+ * of throwing, and every branch is a claim the daemon actually supports: a kill
+ * the kernel accepted, a request the daemon no longer holds, a daemon too old
+ * to be asked, a device that left mid-cancellation, or no confirmed stop at
+ * all. Only an answer that NAMES this request confirms anything about it.
+ */
+async function terminateDeviceExec(
+  rpc: DeviceTransport['rpc'],
+  requestId: string,
+): Promise<string> {
+  try {
+    const answer = parseDeviceCancelAnswer(requestId, await rpc(
+      DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL],
+    ));
+    return answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING;
+  } catch (err) {
+    if (isDeviceUnknownMethodError(err)) return EXEC_CANCEL_UNSUPPORTED;
+    if (isDeviceNotConnectedError(err)) return EXEC_CANCEL_UNCONFIRMED;
+    return execCancelFailed(renderThrownChain({ cause: err }));
+  }
+}
+
+/**
+ * Per-call options for one device RPC.
+ *
+ * `timeoutMs: 0` means the call carries no work deadline — it ends when the
+ * device answers, the caller aborts, or the device goes away.
+ *
+ * `requestId` is the identity to issue the call under, from
+ * `nextDeviceRequestId`. A caller that may have to CANCEL the call passes one,
+ * because that id is what the daemon registers the command's process group under
+ * and the only handle a cancellation carries.
+ *
+ * `backgroundJobId` names the durable background job that owns the call at the
+ * moment it is issued. It exists so a call made AFTER a detach is recorded as
+ * that job's from the start, instead of being handed over afterwards by a
+ * transfer that races the insert. It never crosses to the device.
+ */
+export interface DeviceExecOptions {
+  timeoutMs?: number;
+  requestId?: string;
+  backgroundJobId?: string;
+}
+
+/**
  * Transport the laptop executor speaks through. The actual device socket lives
  * on the user-level hub (UserDO); the agent forwards each JSON-RPC call there,
  * so one connected device serves all of a user's agents. `status()` is a cheap
@@ -97,9 +191,7 @@ function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
  * connected after this runtime was built works immediately.
  */
 export interface DeviceTransport {
-  /** `timeoutMs: 0` means the call carries no work deadline — it ends when the
-   *  device answers, the caller aborts, or the device goes away. */
-  rpc(method: string, params: JsonValue[], opts?: { timeoutMs?: number }): Promise<JsonValue | undefined>;
+  rpc(method: string, params: JsonValue[], opts?: DeviceExecOptions): Promise<JsonValue | undefined>;
   /** Cached snapshot — sync and cheap; may lag the hub by the cache TTL. */
   status(): DeviceStatus;
   /** Authoritative hub check; resolves with the fresh snapshot. */
@@ -138,8 +230,9 @@ export function createDeviceTunnelExecutor(
    *  correct only where the caller has already scoped the transport. */
   consent: DeviceFileConsent = ALWAYS_CONSENTED,
 ): ExecutorProvider {
-  const rpc = (method: string, params: JsonValue[], opts?: { timeoutMs?: number }): Promise<JsonValue | undefined> =>
-    transport.rpc(method, params, opts);
+  // One name every tool below reaches the machine through, typed by the
+  // transport itself so an option the seam gains cannot be dropped here.
+  const rpc: DeviceTransport['rpc'] = (method, params, opts) => transport.rpc(method, params, opts);
 
   // Three-state lifecycle from the hub snapshot: connected, registered-but-
   // offline (the user can reconnect), or no registered device at all. The row
@@ -200,18 +293,31 @@ export function createDeviceTunnelExecutor(
           return refusalText(new KinuError('bad_input', 'laptop exec: command must be a string'));
         }
         const signal = readExecSignal({ context: args[1] });
+        // The identity is minted HERE, before the frame goes out, because it is
+        // what a cancellation names: the daemon registers this command's
+        // process group under it, so an abort can reach the command AND
+        // everything it started rather than just ending the wait. The caller
+        // learns THIS call's identity, so a detach can hand over exactly this
+        // request rather than every device call the turn happens to hold.
+        const requestId = nextDeviceRequestId();
+        const ownership = readDeviceOwnershipContext({ context: args[1] });
+        ownership.report?.(requestId);
+        // Read per call, never cached: a scope that has already detached owns
+        // this command from the insert, so no handover has to race it.
+        const backgroundJobId = ownership.owner?.() ?? null;
+        const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
+        if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
         try {
-          // The device protocol has no kill RPC — abort stops the wait; the
-          // command may still finish on the user's machine.
           const result = await raceAbort(
             // No transport deadline: this is arbitrary user work — a build, a
             // test suite, an install — and the transport is not the thing that
             // knows how long it should take. The bounds that DO apply stay:
             // the caller's abort signal below, the turn's own cancellation,
             // and the tunnel's liveness probe if the device disappears.
-            () => rpc('exec', [command], { timeoutMs: 0 }),
+            () => rpc('exec', [command], execOpts),
             signal,
-            'laptop exec aborted — the command may still finish on the device',
+            EXEC_NOT_STARTED,
+            () => terminateDeviceExec(rpc, requestId),
           );
           const parsed = v.parse(DeviceExecResultSchema, result);
           return formatExecResult(parsed);
@@ -328,7 +434,6 @@ export function createDeviceTunnelExecutor(
     // snapshot (./device-status). Three states, and the third is load-bearing:
     // an answer that names a capability is evidence FOR it, an answer whose
     // scope covers it and does not name it is evidence AGAINST it, and no
-    // answer at all is neither — an old daemon that cannot be asked is not a
     // machine without python.
     get capabilities() {
       return derived().capabilities;
@@ -409,7 +514,7 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
 };
 
 /** The device file view, plus the one thing only the device can answer. */
-export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'>;
+export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
 /**
  * The user's machine, in the machine's own absolute paths.
@@ -488,6 +593,18 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       }
       const text = v.parse(v.string(), raw);
       return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
+    },
+
+    async readRange(path, offset, length) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
+        throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
+      }
+      const root = await guard(path, 'open');
+      const raw = await transport.rpc('readRange', [path, offset, length, { root }]);
+      if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
+        throw makeVfsError('EIO', 'device returned an unreadable file range', path);
+      }
+      return base64ToBytes(v.parse(v.string(), raw.content));
     },
 
     async writeFile(path, data) {

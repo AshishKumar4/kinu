@@ -5,10 +5,10 @@
 // it, drives the workers.dev URL, and deletes the Worker and its container in
 // a finally.
 //
-// No R2 binding: this probe mounts no bucket. Its whole subject is what a
-// Linux container inside this platform does with a custom read-only FUSE
-// filesystem, so the fixture carries exactly one container and one Durable
-// Object and nothing else.
+  // No R2 binding: this probe mounts no bucket. The uploaded Bun stage keeps
+  // the existing read-only control; the generated per-run config replaces this
+  // image with the immutable custom C/libfuse writable probe image. Both stages
+  // measure one Linux container with one Durable Object and nothing else.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "kinu-fuse-probe",

@@ -205,22 +205,21 @@ export function parseDrainedEvents(text: string): DrainedEvent[] {
   const events: DrainedEvent[] = [];
   for (const line of text.split("\n")) {
     const match = EVENT_LINE.exec(line);
-    if (match) {
-      const [, variant, source, brief] = match;
-      if (variant === undefined || source === undefined || brief === undefined) continue;
-      events.push({ variant, source: source.trim(), brief, replyExpected: false });
-      continue;
-    }
-    // A brief can run to several lines (an inherited-context assignment does);
-    // anything before the first event is the instruction line.
-    const previous = events[events.length - 1];
-    if (previous) previous.brief += `\n${line}`;
+    if (!match) continue;
+    const [, variant, source, brief] = match;
+    if (variant === undefined || source === undefined || brief === undefined) continue;
+    events.push({ variant, source: source.trim(), brief, replyExpected: false });
   }
-  // The hint sits at the end of the whole brief, so it is stripped only once
-  // the continuation lines are in.
   for (const event of events) {
     event.replyExpected = REPLY_HINT.test(event.brief);
-    event.brief = event.brief.replace(REPLY_HINT, "").trim();
+    // The drain flattens every untrusted CR/LF into a visible `\n` escape so a
+    // sender cannot fabricate a second entry (events/hub/drain.ts `oneLine`).
+    // Framing is settled by the time a brief exists, so the card restores the
+    // breaks the sender actually wrote.
+    event.brief = event.brief
+      .replace(REPLY_HINT, "")
+      .replace(/\\n/g, "\n")
+      .trim();
   }
   return events;
 }

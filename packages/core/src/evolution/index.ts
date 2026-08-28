@@ -101,3 +101,31 @@ export {
   type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
 } from './changelog';
+// CONTINUAL REFINEMENT — the request ledger, its stage machine, and the lane
+// that routes a refiner's typed edits into the authorities that already own
+// each artifact. Nothing here is a second store for a prompt, a fact, a skill
+// or an agent spec; the routes are pointers into the owners.
+export {
+  REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES,
+  REFINEMENT_STAGES, REFINEMENT_TRIGGERS, RefinementProposalSchema,
+  createRefinementStore, evolutionDebt, initRefinementTables, refinementRequestView,
+  refinementStagingPath,
+  type EvolutionDebt, type OpenRefinementInput, type RefinementDisposition,
+  type RefinementEdit, type RefinementEditKind, type RefinementProposal,
+  type RefinementDeps, type RefinementRequest, type RefinementRequestView, type RefinementRoute,
+  type RefinementScope, type RefinementStage, type RefinementStore, type RefinementTrigger,
+  type SettleRefinementPatch,
+} from './refinement';
+export {
+  advanceRefinementLane, refinementDebt, refinementDebtRequest, requestRefinement,
+  type RefinementLaneStep, type RequestRefinementInput,
+} from './refinement-lane';
+// Proposed skills: staged where nothing reads them, shown whole, and promoted
+// only by the owner. Its own module because the decision path is the longest
+// single thing in this lane and the only one an owner drives.
+export {
+  REFINEMENT_DECISIONS,
+  decideRefinementRoute, showRefinementRoute,
+  type RefinementDecision, type RefinementDecisionInput, type RefinementDecisionResult,
+  type StagedSkillResult, type StagedSkillView,
+} from './refinement-skill';

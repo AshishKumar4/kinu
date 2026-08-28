@@ -29,6 +29,18 @@ const { default: worker } = await import('../src/server');
 const APP_HOST = 'app.example.com';
 const OWNER_EMAIL = 'owner@example.com';
 const SECRET = 'index-feed-test-secret-0123456789';
+/** What a caller presents to act as `DEV_USER_EMAIL` on a host that is not
+ *  localhost. The fixture drives a published host, so it holds the secret the
+ *  way the staging eval harness does. */
+const DEV_IDENTITY_SECRET = 'index-feed-dev-identity-secret';
+
+/** A signed-in request to the app host, authenticated the one way this
+ *  deployment shape allows. */
+function appRequest(path: string): Request {
+  return new Request(`https://${APP_HOST}${path}`, {
+    headers: { 'x-kinu-dev-identity': DEV_IDENTITY_SECRET },
+  });
+}
 
 /** What the control-plane index was told, in order. */
 interface IndexWrites {
@@ -40,10 +52,10 @@ interface IndexWrites {
  * The Worker, with a control plane that records what it is told and a UserDO
  * whose roster decides who owns what.
  *
- * `DEV_USER_EMAIL` is how a request is authenticated without a session store:
- * `authenticateRequest` synthesizes an identity from it. Every gate after that —
- * CSRF, the index feed, the ownership check — runs exactly as it does in
- * production.
+ * `DEV_USER_EMAIL` names the identity a request authenticates as without a
+ * session store, and `DEV_IDENTITY_SECRET` is what a caller on a published host
+ * presents to hold it. Every gate after that — CSRF, the index feed, the
+ * ownership check — runs exactly as it does in production.
  */
 function harness(owned: readonly string[]) {
   const index: IndexWrites = { users: [], workspaces: [] };
@@ -84,6 +96,7 @@ function harness(owned: readonly string[]) {
     CLI_PUBLIC_ORIGIN: `https://${APP_HOST}`,
     PREVIEW_HOST_SUFFIX: APP_HOST,
     DEV_USER_EMAIL: OWNER_EMAIL,
+    DEV_IDENTITY_SECRET,
     CREDENTIAL_ENCRYPTION_KEY: SECRET,
     ControlPlaneDO: controlPlane,
     UserDO: userDO,
@@ -119,9 +132,7 @@ function harness(owned: readonly string[]) {
 describe('the workspace index feed sits behind the ownership gate', () => {
   test('a request for a workspace the caller does not own writes no workspace row', async () => {
     const h = harness([]);
-    const response = await worker.fetch(
-      new Request(`https://${APP_HOST}/api/workspaces/not-mine/state`), h.env, h.ctx,
-    );
+    const response = await worker.fetch(appRequest('/api/workspaces/not-mine/state'), h.env, h.ctx);
     await h.settle();
 
     // Refused, and the refusal is the point: the name was never the caller's.
@@ -134,7 +145,7 @@ describe('the workspace index feed sits behind the ownership gate', () => {
 
   test('a request for a workspace the caller owns writes it', async () => {
     const h = harness(['mine']);
-    await worker.fetch(new Request(`https://${APP_HOST}/api/workspaces/mine/state`), h.env, h.ctx);
+    await worker.fetch(appRequest('/api/workspaces/mine/state'), h.env, h.ctx);
     await h.settle();
 
     expect(h.index.workspaces).toEqual([
@@ -147,9 +158,7 @@ describe('the workspace index feed sits behind the ownership gate', () => {
     // Each one is a distinct memo key, so each one used to be a separate row.
     const h = harness(['mine']);
     for (const name of ['made-up-1', 'made-up-2', 'made-up-3']) {
-      const response = await worker.fetch(
-        new Request(`https://${APP_HOST}/api/workspaces/${name}/state`), h.env, h.ctx,
-      );
+      const response = await worker.fetch(appRequest(`/api/workspaces/${name}/state`), h.env, h.ctx);
       expect(response.status).toBe(404);
     }
     await h.settle();

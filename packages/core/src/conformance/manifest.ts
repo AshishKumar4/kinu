@@ -185,6 +185,13 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     executor_output: EVERYWHERE,
     activity_log: EVERYWHERE,
     fork_lineage: EVERYWHERE,
+    // The unpublished transfer a fork target is receiving, and the files it has
+    // already published into the plane. On every root because `initAllTables`
+    // creates them and the receiver hydrates from them on its FIRST frame — a
+    // target whose table were missing would refuse the fork rather than resume
+    // it (identity/fork.ts, ForkStagingState).
+    fork_transfer: EVERYWHERE,
+    fork_staged_files: EVERYWHERE,
     scaffold_versions: EVERYWHERE,
     scaffold_regression_fixtures: EVERYWHERE,
     task_history: EVERYWHERE,
@@ -236,6 +243,31 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // per actor is what makes the list mean anything.
     agent_tasks: EVERYWHERE,
     background_jobs: EVERYWHERE,
+    // The once-only boundary in front of a tool whose effects leave the process:
+    // one row per claimed call, `PRIMARY KEY (turn_id, normalized_call_id,
+    // call_digest)` with a nullable `result_json`, written before the effect and
+    // settled after it (tools/effect-claim.ts). Owned by core on every root and
+    // by neither backend: `initToolEffectClaimTable` runs inside
+    // `initWorkspaceSchema`, and the wrapper that writes the rows is applied
+    // inside `buildActorTools`, which is the ONE surface both backends build
+    // their actor from. So there is no root where a claimed tool runs without
+    // this table — a root that had the wrapper and not the table would fail its
+    // first claimed call, and one with the table and not the wrapper would
+    // replay an effect it recorded nothing about.
+    tool_effect_claims: EVERYWHERE,
+    // The other half of once-only: `PRIMARY KEY (scope, key)` and nothing else,
+    // written AFTER a keyed effect ran and never swept
+    // (identity/effect-tombstones.ts). EVERYWHERE for the same reason as the
+    // claims above — the completed-turn window, the review lane, the shadow
+    // trial queue and branch settlement all read it on every root, and each of
+    // them retires its own rows, so a root without this table would repeat the
+    // work of any replayed effect whose row had already gone.
+    effect_tombstones: EVERYWHERE,
+    // The generated pattern, held between the model call that produced it and
+    // the crafted tool it becomes — so a replay applies what was DECIDED rather
+    // than asking a model that may answer differently. Wherever a turn review
+    // runs, which is every root.
+    pattern_extractions: EVERYWHERE,
     // The single-driver lease over ONE local conversation. Local-only, and the
     // asymmetry is the platform's rather than an omission: a Durable Object IS
     // the single writer, so on either cf root one activation owns the storage
@@ -258,12 +290,45 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       },
       cli: WIRED,
     },
+    // The Agents SDK's OWN schedule registry, and the only vendor table in this
+    // census. Not ours to create: `Agent._ensureSchema` runs it from the SDK's
+    // constructor on every wake, so both cf roots have it from activation
+    // whether or not that actor ever schedules anything. Declared because the
+    // orchestrator READS it directly at activation — the unrunnable-row sweep in
+    // `orchestrator.ts` deletes overdue `type IN ('delayed','scheduled')` rows
+    // that no alarm will ever carry — and a table a root's own SQL depends on
+    // belongs in the census whoever wrote the DDL. A subordinate holds the same
+    // table and never sweeps it: its wakes come from its parent, not from an
+    // alarm of its own.
+    //
+    // The CLI has no vendor base at all, which is why this is the honest place
+    // for the asymmetry rather than a lazy-creation caveat.
+    cf_agents_schedules: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: {
+        absent: 'the Agents SDK\'s Durable Object base is what creates this registry, and a local '
+          + 'session has no Durable Object: it is an OS process over its own SQLite file with no DO '
+          + 'alarm to register against. Its durable timers are `triggers` rows driven by the local '
+          + 'AlarmScheduler (core/src/events/hub/triggers.ts), so there is no vendor schedule '
+          + 'registry to wire and nothing to sweep',
+      },
+    },
     // Gated commands parked on the owner. The TABLE is part of the shared
     // workspace schema everywhere; what differs is who can decide the rows —
     // the deferral channel is wired into the approval policy on cf, where the
     // needs-you queue that decides them lives. A local session keeps its
     // interactive channel (the human is at the terminal), so nothing parks.
     deferred_approvals: EVERYWHERE,
+    // Which workspace instruction bytes the owner approved for system placement
+    // (KINU-N028). EVERYWHERE for the same reason prompt_section_versions is:
+    // the prompt builder classifies AGENTS.md and skills on every turn on every
+    // root, and a missing table there would fail the read that decides trust.
+    instruction_approvals: EVERYWHERE,
+    // The one-time pre-trust baseline marker. It is read beside
+    // instruction_approvals before every source can resolve trust, so a missing
+    // table is a fault rather than an empty migration.
+    instruction_approval_migrations: EVERYWHERE,
     plan_reviews: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,
@@ -279,6 +344,15 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // is: a reader that finds no table is a fault, not an empty result.
     prompt_section_versions: EVERYWHERE,
     prompt_section_evaluations: EVERYWHERE,
+
+    // ── continual refinement ──
+    // One request row per refinement, EVERYWHERE for the same reason
+    // prompt_section_versions is: the Evolution Changelog reads it on every
+    // digest view on every root, and a reader that finds no table is a fault
+    // rather than an empty listing. Every actor accrues evolution debt, so a
+    // root that could not open a request would accumulate corrections nothing
+    // reviews.
+    refinement_requests: EVERYWHERE,
 
     // ── agent-authored views ──
     // One table per workspace, wherever a workspace lives: `initViewTables` is
@@ -372,6 +446,13 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('operator feedback capture') },
       cli: { absent: 'operator feedback arrives through the web surface only' },
     },
+    // The sleep-time answer a terminal effect already paid for, kept between the
+    // model call and the fact mutation so a replay applies the same update.
+    sleep_time_updates: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the sleep-time compute lane') },
+      cli: { absent: "a local turn's sleep-time compute cannot be interrupted between its call and its write" },
+    },
     turn_craft_usage: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('craft-usage telemetry') },
@@ -393,6 +474,49 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
       cli: { absent: NO_USER_PLANE('the workspace capability token') },
+    },
+
+    // ── the cf turn-lifecycle plane (created in the ActorAgent constructor) ──
+    // Created before any read on BOTH cf roots, because the SDK does not
+    // guarantee `onStart` precedes an RPC.
+    pending_steers: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
+    },
+    active_durable_turn: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'the turn identity lives in the driving process; a local session does not outlive its own turn' },
+    },
+    // The terminal ledger is EVERYWHERE now. It was cf-only while the CLI
+    // released its claims at transcript persist and had no recovery at all —
+    // KINU-021 hoisted the lifecycle into core and the CLI drives the same
+    // class, so an interrupted laptop turn replays its suffix exactly as an
+    // evicted isolate does.
+    terminal_effects: EVERYWHERE,
+    // The CLI's alone, and the asymmetry is the platform's. A Durable Object is
+    // told about its own answer by the runtime that persisted it, so a claim
+    // written after that hook still covers the whole suffix. A local process can
+    // die between persisting the answer and claiming it, so the roster is frozen
+    // into this row in the SAME transaction as the messages and swept at the
+    // next start.
+    terminal_intents: {
+      'cf-orchestrator': { absent: 'the response hook runs inside the activation that persisted the answer, so the claim cannot be separated from it' },
+      'cf-subordinate': { absent: 'the response hook runs inside the activation that persisted the answer, so the claim cannot be separated from it' },
+      cli: WIRED,
+    },
+
+    // ── the cf outbound intent logs (write-ahead + idempotency) ──
+    outbox_email: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the mission-inbox outbox') },
+      cli: { absent: NO_USER_PLANE('outbound email') },
+    },
+    outbox_peer: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the peer outbox') },
+      cli: { absent: NO_USER_PLANE('cross-workspace peer delivery') },
     },
   },
 

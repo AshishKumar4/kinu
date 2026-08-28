@@ -112,7 +112,7 @@ describe('fork revalidation policy', () => {
   // frame at 13.2 seconds from the ledger gaining the row to the row appearing.
   describe('a search whose movement the list cannot explain', () => {
     const canvasRow = (over: Partial<ForkRunSummary>): ExplorationCanvasRun => ({
-      run: summary(over), params: null, tree: [], head: null,
+      run: summary(over), params: null, tree: [], head: null, frontier: null,
     });
 
     test('a root the list has never heard of is a new search', () => {

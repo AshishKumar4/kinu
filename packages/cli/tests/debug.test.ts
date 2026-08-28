@@ -66,7 +66,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   initRunEventTables(execRaw);
   initHeadsTables(execRaw, makeSql(db));
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
+  initMctsSearchTable(execRaw);
   initBackgroundJobsTable(execRaw, makeSql(db));
   const sql = makeSql(db);
 

@@ -5,11 +5,14 @@
  *
  * Specified by docs/EXPLORATION.md — "Isolation" and "Node identity".
  *
- * IT EXISTS NOW. A node's home is a real directory in the ONE global view,
- * owned by the node's own uid and moded `0o755`, and its commands run as that
- * uid — so the boundary is uid/gid/mode on real inodes rather than convention.
- * {@link agentHomeNodeProvisioner} is the implementation and `vfs/agent-home.ts`
- * is the layout it provisions against.
+ * IT EXISTS ON BOTH BACKENDS NOW. A node's home is a real directory in the ONE
+ * global view, owned by the node's own uid and moded `0o755`, its scratch is
+ * `/tmp/node-<id>` at `0o700`, and BOTH the way a node runs commands and the
+ * way its file tools read and write are credentialed as that uid — so the
+ * boundary is uid/gid/mode on real inodes rather than convention, and it holds
+ * whichever way a node reaches the tree. {@link agentHomeNodeProvisioner} is
+ * the implementation and `vfs/agent-home.ts` is the layout it provisions
+ * against.
  *
  * Why permissions inside one filesystem and not a filesystem each: the
  * regression at `cf-backend/tests/unit-head-fork.test.ts:4-8` was a subagent
@@ -19,21 +22,30 @@
  * it, because there is no second filesystem to be empty — the read window is
  * not a feature added back, it is the absence of a second tree.
  *
- * `shared-origin-plane` SURVIVES, and it is no longer a confession that the
- * substrate is missing. It is what a host without a credentialled filesystem
- * honestly is, and the hosted backend is one: its workspace is a REMOTE Nimbus
- * session, where every pid-less filesystem RPC is pinned to the session user and
- * `confinePrincipal` has no RPC at all, so there is no uid-0 view in that isolate
- * to provision with. The local CLI's workspace is in-isolate and does provision.
- * The value is still REPORTED rather than hidden, because the grading
- * consequence is real — you cannot grade a node on what it changed when every
- * node changed the same tree, so a shared-plane run is graded on the candidate
- * the node REPORTS, never on a diff of the workspace.
+ * WHY BOTH PLANES, and what it cost. A file plane pinned to the session user
+ * refuses a node's writes INSIDE ITS OWN HOME — measured `EACCES` on
+ * `/home/node-aX9` — because the home belongs to the node and the plane did
+ * not. One tree reached by two identities was the bug. In this isolate the
+ * credentialed plane is `SqliteVFS.as(cred)` and the credentialed shell is a
+ * second `Shell` over the SAME filesystem (`vfs/nimbus-workspace.ts`
+ * `asAgent`). On a remote Nimbus session the file RPCs are pid-less and carry
+ * no credential at all, so there the plane is the session's own coreutils run
+ * as the node (`execution/nimbus-agent-files.ts`) — same session, same bytes,
+ * one identity.
+ *
+ * `shared-origin-plane` SURVIVES, and it is neither a confession nor the hosted
+ * backend's state any more. It is what a runtime with no provisioner honestly
+ * is: a harness runtime, or a head runtime built without a workspace host. The
+ * value is REPORTED rather than hidden, because the grading consequence is real
+ * — you cannot grade a node on what it changed when every node changed the same
+ * tree, so a shared-plane run is graded on the candidate the node REPORTS,
+ * never on a diff of the workspace.
  *
  * A malformed credential is INVISIBLE at the substrate — Nimbus's `isVfsCred`
  * guard falls through to the session user rather than refusing — which is
- * precisely why this seam returns the type rather than a structural copy of it,
- * and why `undefined` is spelled as a value here instead of an empty object.
+ * precisely why this seam returns the substrate's own type rather than a
+ * structural copy of it, and why the shared plane spells its absence as a
+ * VARIANT rather than as three optional fields a caller could half-read.
  */
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -55,23 +67,40 @@ import {
  */
 export type NodeIsolation = 'shared-origin-plane' | 'private-home';
 
-/** A node's own place to work, as the search hands it to the node's runtime. */
-export interface NodeWorkspace {
-  /** Where this node's own writes belong. The origin's own working directory
-   *  under `shared-origin-plane` — i.e. no boundary, said out loud. */
-  readonly home: string;
-  /**
-   * The identity this node's commands run as, or `undefined` for the session
-   * user.
-   *
-   * `undefined` is the pre-substrate value and it is exactly today's behaviour:
-   * the substrate's own `options.cred ?? inheritedCred` resolves it to the
-   * session user, so an unprovisioned node runs precisely as the origin does
-   * rather than as something new and untested.
-   */
-  readonly cred: VfsCred | undefined;
-  readonly isolation: NodeIsolation;
-}
+/**
+ * A node's own place to work, as the search hands it to the node's runtime.
+ *
+ * A UNION rather than one shape with optional members, because the two states
+ * are not the same object with holes in it: a provisioned node has a home, a
+ * scratch directory AND an identity, and an unprovisioned one has none of the
+ * three. Spelling that as three optionals let a caller read `home` while
+ * ignoring `cred` — which is how a node ends up addressed as private and
+ * running as the origin.
+ */
+export type NodeWorkspace =
+  | {
+    readonly isolation: 'private-home';
+    /** Where this node's own writes belong, owned by {@link cred}'s uid. */
+    readonly home: string;
+    /** This node's scratch, `0o700` and its own — where `TMPDIR` points. */
+    readonly tmp: string;
+    /** The identity this node's commands AND its file tools act as. Both, or
+     *  the boundary holds on one plane and not the other. */
+    readonly cred: VfsCred;
+  }
+  | {
+    readonly isolation: 'shared-origin-plane';
+    /** The origin's own working directory — i.e. no boundary, said out loud. */
+    readonly home: string;
+    readonly tmp: undefined;
+    /**
+     * The session user, as the substrate already resolves it: its own
+     * `options.cred ?? inheritedCred` falls through to the session identity, so
+     * an unprovisioned node runs precisely as the origin does rather than as
+     * something new and untested.
+     */
+    readonly cred: undefined;
+  };
 
 /** Which node is asking. Identity comes from the engine's own row — a node
  *  states neither its id nor its depth, per *Node identity*, so neither is an
@@ -116,7 +145,8 @@ export interface NodeHomeHost {
 }
 
 /**
- * The real provisioner: a private home and a private `/tmp` per node.
+ * The real provisioner: a private home and a private `/tmp` per node, in this
+ * isolate.
  *
  * Synchronous underneath and `async` only to satisfy the seam — every substrate
  * call here returns `void`. The workspace plane's mount table (`vfs/mounts.ts`)
@@ -138,8 +168,10 @@ export function agentHomeNodeProvisioner(
     const name = nodeAgentName(node.nodeId);
     const identity = agentIdentity(sql, name);
     const home = provisionAgentHome(root, name, identity);
-    confineAgentTmp(root, confiner, name, identity);
-    return { home, cred: agentCred(identity), isolation: 'private-home' };
+    // The bare `/tmp` rewrite as well as the directory, because a command that
+    // hardcodes `/tmp/x` is a command this isolate can still keep private.
+    const tmp = confineAgentTmp(confiner, name, identity);
+    return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };
   };
 }
 
@@ -158,7 +190,7 @@ export async function nodeWorkspace(
   provision?: NodeWorkspaceProvisioner,
 ): Promise<NodeWorkspace> {
   if (provision) return await provision(node);
-  return { home: '.', cred: undefined, isolation: 'shared-origin-plane' };
+  return { home: '.', tmp: undefined, cred: undefined, isolation: 'shared-origin-plane' };
 }
 
 /** What a node is TOLD about its own boundary, in the words its prompt uses.

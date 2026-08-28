@@ -51,6 +51,33 @@ therefore makes the clamp turn-cumulative:
 `clampToolResult` writes a tightened-cap reason into the marker, where the
 model can act on it, instead of the system prompt.
 
+## The tool-definition budget
+
+A tool result is bulk that arrives once. A tool *definition* is different: the
+description and the JSON Schema ride every request of every step. For MCP a
+third party writes them, so an unbounded catalog is a stranger spending the
+user's window.
+
+There is no MCP number. `stepContextLimit` (`core/src/prompting/step-prune.ts`)
+is the one request-level allocation: the resolved model's context window less
+the output allowance the answer needs (`outputReserveTokens`). The step-prune
+pass shrinks tool outputs toward it. A remote catalog is admitted against what
+that limit has left after the actor's own tool surface, measured on one shared
+scale (`toolSurfaceTokens`, `cf-backend/src/user/mcp.ts`). The actor's builtins
+are not negotiable, so they are priced first.
+
+`admitMcpDescriptors` then admits in `(server, tool)` name order, so two turns
+that read the same rows admit the same set:
+
+- A schema is never truncated. A clipped schema lies about what the tool
+  accepts, so a descriptor whose schema will not fit is deferred whole.
+- Prose gets equal shares of what remains, re-divided at every descriptor. One
+  server's essay cannot crowd out the rest, and no per-description percentage
+  exists to tune.
+- Every deferral is reported through the same missing-capability channel a
+  disconnected server uses. A capability that is silently absent is one the
+  model plans without.
+
 ## The counters
 
 The settle spine (`core/src/orchestrator/turn-lifecycle.ts`) writes one durable
@@ -67,9 +94,9 @@ that neither admit nor spill bulk write none.
 | `followUps` | tool calls this turn that cited a spill address (the recipe being *used* rather than emitted) |
 
 `RunEventRecorder.read(runId, { types: ['context_budget'] })` reads the event.
-`followUps` counts calls naming a spill directory, including read-back,
-`slice + llm.query`, and a swarm node given a spill path. Fewer than one trip
-per 50 real turns means the mechanism is not worth tuning.
+`followUps` counts calls naming a spill directory, including read-back, a
+temporary agent given `context_ref`, and a swarm node given a spill path. Fewer than
+one trip per 50 real turns means the mechanism is not worth tuning.
 
 ## Pre-registered decision thresholds
 

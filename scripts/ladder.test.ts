@@ -133,6 +133,7 @@ describe('the ladder measures something', () => {
       'scripts/bench-corpus-gate.test.ts',
       'scripts/bench-devbox-decision.test.ts',
       'scripts/bench-external.test.ts',
+      'scripts/bench-fuse-probe.test.ts',
       'scripts/bench-inference-proxy.test.ts',
       'scripts/bench-pi-worker.test.ts',
       'scripts/bench-r2-workspace.test.ts',
@@ -141,8 +142,16 @@ describe('the ladder measures something', () => {
     const durabilityProbeGate = LADDER.find(gate =>
       gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
     expect(durabilityProbeGate?.tier).toBe('ci');
+    // Spelled out, like the glob above and for the same reason: the eight rig
+    // suites after the probe are named files, so a ninth is a deliberate edit here
+    // rather than a suite that silently joined a measured row.
     expect(durabilityProbeGate?.run).toBe(
-      'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts',
+      'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts'
+      + ' scripts/sandbox-durability-probe.test.ts'
+      + ' scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts'
+      + ' scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts'
+      + ' scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts'
+      + ' scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts',
     );
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);

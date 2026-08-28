@@ -28,9 +28,10 @@ that on every call.
 1. `onStart` takes the activity lease and arms two schedule rows. It does no
    slow work because it runs inside `blockConcurrencyWhile`.
 2. A schedule attaches the filesystem, restarts processes, and re-exposes ports
-   outside that gate under a real budget.
-3. Operations wait on readiness. A failed attach refuses with its reason and
-   re-arms its retry instead of resetting the object.
+   outside that gate under a real budget. A port is re-exposed only after its own
+   listener answers.
+3. Operations wait on attachment. A failed attach refuses with its reason and
+   walks one bounded recovery ladder instead of resetting the object.
 4. A heartbeat holds the lease. Three gates must agree before a stop.
 5. A graceful stop checkpoints, disables keep-alive, then sends `SIGTERM`.
 6. A lifecycle failure is stored before delivery retries until the host accepts
@@ -75,6 +76,52 @@ validates the object.
 
 Keys are `backups/<uuid>/data.sqsh` and `backups/<uuid>/delta.sqsh`. Key
 builders require a UUID, so no key can use `..` or another box's guess.
+
+A record names two generations: the one it serves, and one fallback. A rebase
+writes a new generation and keeps the outgoing one. The attach that mounts the
+new generation proves it, and only then does the old one become garbage. So a
+restore always has a second candidate, and garbage collection cannot remove the
+last proven copy before its replacement is proven.
+
+Attach reads the two candidates newest first. It compares the size the record
+declares against the size the store holds, compares the layer's identity the
+same way, then mounts. If the newest generation is missing, or its archive is
+not the one the record describes, attach records the refusal on the state row,
+promotes the fallback in one write, and serves it. The event line says which
+generation recovered. If both candidates fail, the start fails with both reasons
+and deletes neither.
+
+Each layer carries two identities. The first is the SHA-256 of the bytes that
+landed: Devbox takes it while the upload streams, so it costs one CPU pass and
+no buffer, and it cannot be recovered later without reading the whole object
+back. The second is the version R2 mints for that upload and reports from every
+later `head`. A byte count cannot tell one archive from another archive of the
+same length. These can, so a same-length replacement is refused rather than
+mounted.
+
+A single-request upload also hands the digest to R2, so R2 verifies the bytes it
+received and reports that checksum afterwards. The Workers multipart API takes
+no checksum, so a large archive has no store-side digest — and that is what the
+version is for.
+
+The digest decides when both sides have one: equal content is sound whatever the
+versions say. The version decides only when no digest can. That order matters,
+because a version belongs to an upload rather than to content: this chain can
+re-put identical bytes, so refusing on a new version alone would reject a
+healthy archive. An absent identity means UNKNOWN, never sound. A record written
+before these fields existed still attaches, and it learns them as layers are
+rewritten.
+
+The archive keeps `.git`. Git metadata is the only copy of a commit that was
+never pushed, and for a linked worktree the top-level `.git` file is what makes
+the tree a repository. The exclude list drops only trees a lockfile or a build
+can rebuild.
+
+A pattern in that list matches at any depth, in both storage modes. Devbox
+writes the patterns to an exclude file, in anchored and non-anchored form, and
+runs `mksquashfs -wildcards -ef`. The patterns travel as data, never as shell
+arguments. The staging-space estimate prunes the same paths, so it cannot report
+less than the archive needs.
 
 Extraction is only for local development. A store mount needs outbound
 interception that plain local `wrangler dev` lacks, and extraction reads every
@@ -143,9 +190,61 @@ The call was canceled and the Durable Object was reset.` A timer inside that
 block cannot fire until the block releases, so `withContainerStartDeadline`
 could not help. Attach runs in the `devboxStartup` schedule row instead.
 
-Every operation awaits `ensureReady()`. A failed attach records an incident,
-refuses with its reason, and re-arms a heartbeat-cadence schedule. Per-operation
-retry would record an incident for every operation on one broken box.
+Every operation awaits `ensureReady()`, which resolves once the work directory is
+attached. A failed attach records an incident, refuses with its reason, and
+recovers by one bounded ladder: ask the same container identity again at the
+heartbeat cadence, then destroy and replace that identity, then refuse.
+Per-operation retry would record an incident for every operation on one broken
+box. The class is read from the SDK's own error codes, never from its prose:
+storage exhaustion and permanent configuration refuse at once, because asking
+again spends the same resource or reads the same input. Work the attach budget
+abandoned is still running inside the container, where no token here can fence
+it, so replacing the identity is its only cancellation.
+
+The ladder is one durable row, `devbox:attach-recovery`, holding an owner token
+and a stage. Each attempt claims the row, preserving the stage it finds; every
+later write is conditional on the token still being there, and the compare and
+the write sit inside one critical section. An attempt that raced a newer
+attempt's success therefore changes zero rows. An unreadable row refuses the
+attempt before it attaches anything, and normalises itself to the terminal stage
+so the refusal stays finite.
+
+A terminal refusal keeps its stage. Clearing it would let the next eviction
+restart a destructive ladder, and a box could then destroy one identity after
+another. `attachNow()` is the explicit repair: it re-attempts the attach,
+destroys nothing, and refuses again if the attach fails again. Any attach that
+lands deletes the row.
+
+ONE BUDGET covers the whole restoration: the attach, the workload restart, each
+listener proof, each exposure, and the boot stamp. Only `attach()` used to be
+wrapped, and the listener proof carried a window per port, so three silent ports
+added about ninety seconds while every caller waited in the readiness gate and
+nothing bounded the total. Each step now draws an allowance — what is left divided
+by the steps still declared, every probe and exposure and the boot stamp included
+— so no one step can spend what the rest still need, and nothing is reserved.
+
+WHAT EXHAUSTION MEANS DEPENDS ON WHAT IS ABANDONED. The attach is mid-mount, so
+work abandoned there is work a retry would collide with and no token here can
+reach: it throws, and the recovery is to replace the container identity. Every
+step after the attach mutates no mount, so exhaustion there is REPORTED instead.
+The box stays attached, its specs stay, no failed port is exposed, `unready` names
+what did not come back, and an agent or an explicit `attachNow()` retries. A slow
+`npm run dev` therefore costs the box its readiness and nothing else — replacing a
+healthy container over it would be the cure that destroys the patient. The retry
+is safe to repeat: the walk asks the container before starting anything, so a
+process it already holds is left alone rather than started twice.
+
+A restored service that failed does not refuse operations, because the agent
+whose server failed is the one that can repair it. It fails readiness instead.
+`ready` means the attach landed and every supervised process, listener and port
+came back; `unready` says which did not.
+
+Every startup attempt owns a lifecycle generation and re-checks it after each
+await, before any state write, exposure, cleanup, or release of the single-flight
+entry. A container start, a replacement the heartbeat spotted, a graceful stop
+and a replaced identity all turn the generation over, so an attempt the platform
+abandoned publishes no readiness, files no failure, releases no successor's entry
+and destroys no identity.
 
 `fuse-overlayfs` does not expose `lowerdir`, `upperdir`, or `workdir` in
 `/proc/mounts`; kernel overlay does. An earlier chain parsed `upperdir`, passed
@@ -194,20 +293,30 @@ a baseline, content counts as change.
 
 ## Tests
 
-`bun test packages/devbox` runs six suites. `bunx tsc --noEmit -p
-packages/devbox` exits 0. Each suite passes standalone and their standalone
+`bun test packages/devbox` runs the suites below and `bunx tsc --noEmit -p
+packages/devbox` exits 0. Each suite passes standalone, and their standalone
 counts equal the directory total.
 
-The count is 170, at 2026-08-25T07:28Z. It is not tied to a commit: this
-uncommitted worktree produced 163 and 170 for the same hash one minute apart
-while this file was written. The count changes as siblings land.
+NO TEST COUNT IS RECORDED HERE, deliberately. This file used to carry one, and it
+was wrong within the hour every time: two runs of the same commit minutes apart
+gave different totals while suites landed around it, so the number measured the
+moment it was written rather than the package. Run the command; it answers with
+today's total. What is worth writing down is which suite pins WHAT, which is what
+follows.
 
 - `decisions.test.ts` pins quiesce timing, restart order, port tokens, listener
-  probes, incident backoff, start budget, mount parsing, UUID refusals, and the
-  interval gate.
+  probes, incident backoff, start budget, the recovery taxonomy and its ladder,
+  mount parsing, UUID refusals, and the interval gate.
+- `supervised-lifecycle.test.ts` and `lifecycle-generation.test.ts` drive the
+  real class over `support/devbox-harness.ts`, which holds the one SDK
+  substitution. The first pins reservation order and the evidence a kill needs;
+  the second pins generation ownership, that a failed service is neither exposed
+  nor reported ready, and that repeated failure of one identity ends by replacing
+  it.
 - `snapshot-chain.test.ts` covers crash order, delta adoption, attach
-  postconditions, and unattached checkpoint refusal. Its denominator tests make
-  an unexercised outcome kind fail.
+  postconditions, unattached checkpoint refusal, archive scope, generation
+  retention, and fallback recovery. Its denominator tests make an unexercised
+  outcome kind fail.
 - `overlay-cas.test.ts` covers journal folding, replay cursor, chunk staging,
   and blob-before-journal order. `r2fs.test.ts` covers the mount strategy.
 - `independence.test.ts` rejects product-core imports and workspace dependencies;
@@ -225,11 +334,12 @@ It is not part of a product deploy. Local `wrangler dev` lacks outbound
 interception, so it is only smoke. `wrangler dev --remote` refuses Durable
 Objects. A real deployment is the only route to a number.
 
-Run `POST /verify` before any workload. It checks the four facts above; a
-never-attached box only measures its blank disk.
+The driver verifies each arm with short `/exec`, `/checkpoint`, `/stop`,
+`/wake`, `/state`, and exact-object metadata requests. A never-attached box
+measures its blank disk and is not ranked.
 
-Routes are `/create`, `/verify`, `/exec`, `/write`, `/checkpoint`, `/stop`,
-`/wake`, `/state`, `/ops`, `/ops/reset`, `/teardown`. Each requires
+Routes are `/create`, `/exec`, `/write`, `/checkpoint`, `/stop`, `/wake`,
+`/state`, `/ops`, `/ops/reset`, `/teardown`. Each requires
 `Authorization: Bearer $BENCH_TOKEN`. An absent token refuses everything, so an
 old fixture is inert.
 

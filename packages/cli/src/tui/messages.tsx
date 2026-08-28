@@ -1,5 +1,5 @@
 import { useTerminalDimensions } from '@opentui/react';
-import { parseRefusal } from '@kinu.run/core';
+import { parseRefusal, TUI_MARKS } from '@kinu.run/core';
 
 import type { AgentClientStatus } from '../agent-client';
 import { clipText } from './format';
@@ -26,7 +26,7 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
   return (
     <box flexDirection="row" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <box style={{ width: 8 }}>
-        <text><strong fg={colors.intent.accent}>YOU</strong></text>
+        <text><strong fg={colors.intent.accent}>{TUI_MARKS.userGutter}</strong></text>
       </box>
       <box flexDirection="column" style={{ flexGrow: 1 }}>
         {(steered || branched) && (
@@ -66,7 +66,7 @@ function ToolCallMessage({ toolName, args, previewWidth }: { toolName: string; a
   return (
     <box style={{ paddingLeft: 4 }}>
       <text>
-        <span fg={colors.intent.warningMuted}>› </span>
+        <span fg={colors.intent.warningMuted}>{TUI_MARKS.toolCall} </span>
         <span fg={colors.intent.warning}>{toolName}</span>
         {preview ? <span fg={colors.text.muted}> {preview}</span> : null}
       </text>
@@ -82,7 +82,7 @@ function ToolResultMessage({ content, success, previewWidth, expanded }: { conte
     return (
       <box flexDirection="column" style={{ paddingLeft: 6, marginBottom: 1 }}>
         <text>
-          <span fg={colors.intent.danger}>✗ refused</span>
+          <span fg={colors.intent.danger}>{TUI_MARKS.failure} refused</span>
           {head ? <span fg={colors.text.primary}> {clipText(head, previewWidth)}</span> : null}
           <span fg={colors.text.muted}> ({refusal.reason})</span>
         </text>
@@ -98,7 +98,7 @@ function ToolResultMessage({ content, success, previewWidth, expanded }: { conte
       {lines.map((line, index) => (
         <text key={`${String(index)}-${line}`}>
           <span fg={success === false ? colors.intent.danger : colors.text.muted}>
-            {index === 0 ? (success === false ? '✗ ' : '↳ ') : '  '}{line}
+            {index === 0 ? (success === false ? `${TUI_MARKS.failure} ` : `${TUI_MARKS.toolResult} `) : '  '}{line}
           </span>
         </text>
       ))}
@@ -110,7 +110,7 @@ function EvolutionMessage({ content }: { content: string }) {
   const { colors } = useTuiTheme();
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text><span fg={colors.intent.accent}>✦ </span><span fg={colors.intent.accentStrong}>{content}</span></text>
+      <text><span fg={colors.intent.accent}>{TUI_MARKS.evolution} </span><span fg={colors.intent.accentStrong}>{content}</span></text>
     </box>
   );
 }
@@ -120,7 +120,7 @@ function SystemMessage({ content }: { content: string }) {
   const failed = content.startsWith('Error:');
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text><span fg={failed ? colors.intent.danger : colors.text.muted}>{failed ? `✗ ${content}` : content}</span></text>
+      <text><span fg={failed ? colors.intent.danger : colors.text.muted}>{failed ? `${TUI_MARKS.failure} ${content}` : content}</span></text>
     </box>
   );
 }

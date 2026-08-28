@@ -4,7 +4,7 @@
  * action shape; calls the SAME ReportToolDeps.report the native tool does.
  */
 import * as v from 'valibot';
-import type { CodemodeProvider } from '../rlm';
+import type { CodemodeProvider } from './sandbox-contract';
 import type { ReportToolDeps } from './builtins';
 import { dispatchReport } from './report-tool';
 import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';

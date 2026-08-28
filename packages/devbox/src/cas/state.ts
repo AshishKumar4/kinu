@@ -2,86 +2,65 @@ import * as v from 'valibot';
 
 import type { StoredValue } from '../storage';
 
-/** Half the SQLite Durable Object per-value ceiling, leaving envelope margin. */
-export const OVERLAY_CAS_STATE_MAX_BYTES = 1_000_000;
-
-/** Signature rows are a scan cache, not correctness state. Pending journal
- * entries are authoritative for upper-only ownership. Keeping the newest rows
- * bounds one DO value; an evicted row is compared with that journal before any
- * duplicate entry is emitted. */
-export const SIGNATURE_ROWS_MAX = 4_096;
-
-export interface UpperSignature {
+/**
+ * One scanned upper path, as the container-side scan recorded it.
+ *
+ * NOT durable Durable Object state. It is the runner's scan cache, kept beside
+ * the bytes it describes, and it is what keeps a tick proportional to the
+ * CHANGED set: a file whose mode, size, mtime and inode still match is never
+ * re-read. The pending journal, never this, is authority for what a path holds.
+ *
+ * A type alias rather than an interface: the runner serializes these rows, and
+ * only an alias carries the implicit index signature that says so.
+ */
+export type UpperSignature = {
   readonly kind: 'file' | 'dir' | 'symlink';
   readonly mode: number;
   readonly mtimeMs: number;
-  readonly mtimeNs?: string;
   readonly size: number;
   readonly hash?: string;
   readonly target?: string;
-  readonly folded?: boolean;
-}
+  readonly device?: string;
+  readonly inode?: string;
+};
 
+/**
+ * Everything the Durable Object keeps for this strategy.
+ *
+ * Two fields, because two fields are read. `lastCheckpointAt` is what the tick
+ * interval gate compares against, and `lastFailure` is how a refusal survives
+ * the isolate: a scheduled callback reduces a throw to a console line, so
+ * durable state is the only place a repeatedly failing checkpoint stays
+ * visible. The signature rows this row used to carry moved into the store with
+ * the scan that produces them — the Durable Object never reads them, and a
+ * copy nothing reads is a copy that drifts.
+ */
 export interface OverlayCasState {
   readonly lastCheckpointAt: number;
-  readonly signatures: { readonly [path: string]: UpperSignature };
   readonly lastFailure: { readonly at: number; readonly reason: string } | undefined;
 }
 
-export function capSignatures(
-  rows: ReadonlyMap<string, UpperSignature>,
-): ReadonlyMap<string, UpperSignature> {
-  return rows.size <= SIGNATURE_ROWS_MAX
-    ? rows
-    : new Map([...rows].slice(rows.size - SIGNATURE_ROWS_MAX));
-}
-
-export function overlayCasStateBytes(
-  signatures: ReadonlyMap<string, UpperSignature>,
-): number {
-  return new TextEncoder().encode(JSON.stringify({
-    lastCheckpointAt: 0,
-    signatures: Object.fromEntries(signatures),
-  })).byteLength;
-}
-
-const UpperSignatureSchema = v.object({
+export const UpperSignatureSchema = v.object({
   kind: v.picklist(['file', 'dir', 'symlink']),
   mode: v.number(),
   mtimeMs: v.number(),
-  mtimeNs: v.optional(v.string()),
   size: v.number(),
   hash: v.optional(v.pipe(v.string(), v.length(64))),
   target: v.optional(v.string()),
-  folded: v.optional(v.boolean()),
+  device: v.optional(v.string()),
+  inode: v.optional(v.string()),
 });
 
 const OverlayCasStateSchema = v.object({
   lastCheckpointAt: v.number(),
-  signatures: v.record(v.string(), UpperSignatureSchema),
   lastFailure: v.optional(v.object({ at: v.number(), reason: v.string() })),
 });
 
 export function normalizeOverlayCasState(raw: StoredValue): OverlayCasState | null {
   const parsed = v.safeParse(OverlayCasStateSchema, raw);
   if (!parsed.success) return null;
-  const row = parsed.output;
-  const signatures: Record<string, UpperSignature> = {};
-  for (const [path, signature] of Object.entries(row.signatures)) {
-    signatures[path] = {
-      kind: signature.kind,
-      mode: signature.mode,
-      mtimeMs: signature.mtimeMs,
-      mtimeNs: signature.mtimeNs,
-      size: signature.size,
-      hash: signature.hash,
-      target: signature.target,
-      folded: signature.folded,
-    };
-  }
   return {
-    lastCheckpointAt: row.lastCheckpointAt,
-    signatures,
-    lastFailure: row.lastFailure,
+    lastCheckpointAt: parsed.output.lastCheckpointAt,
+    lastFailure: parsed.output.lastFailure,
   };
 }

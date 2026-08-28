@@ -25,6 +25,7 @@ import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initAllTables, migrateWorkspaceStorage, tableExists } from './schema';
 import { reconcileColumns } from './columns';
+import { initEffectTombstoneTable } from './effect-tombstones';
 import { initAgentConfigTable } from '../config/store';
 import { initCraftQualityColumns } from '../craft/schemas';
 import { initCurriculumTable } from '../curriculum/proposer';
@@ -33,10 +34,13 @@ import { initRunEventTables } from '../events/recorder';
 import { initGepaTables } from '../evolution/gepa/persistence';
 import { initTurnOutcomeTables } from '../evolution/outcomes';
 import { initReplayTables } from '../evolution/replay';
+import { initRefinementTables } from '../evolution/refinement';
 import { initImportedExperienceTable } from '../experience/imports';
 import { initHeadsTables } from '../heads/schema';
 import { initBackgroundJobsTable } from '../jobs/store';
+import { initToolEffectClaimTable } from '../tools/effect-claim';
 import { initDeferredApprovalsTable } from '../safety/deferred-approval';
+import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
 import { initSearchTables, SEARCH_NODES_POST_RELEASE_COLUMNS } from '../mcts/schemas';
 import { initAlternateTakesTable } from '../mcts/takes';
@@ -214,6 +218,10 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // outcome ledger above: the read path runs before anything constructs the
   // engine, and a read that cannot reach the table has to say so, not shrug.
   initReplayTables(execRaw, sql);
+  // refinement_requests, read by buildChangelog on every changelog view and by
+  // the `/refine` status line. Same reason as the two ledgers above: the read
+  // path runs before anything constructs the engine.
+  initRefinementTables(execRaw, sql);
   // agent_log + reply_channels + triggers, their partial indexes and views.
   // Spec: docs/ARCHITECTURE.md — "Events and ingress".
   initEventsHubTables(exec);
@@ -232,18 +240,34 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initGepaTables(execRaw);
   // Background-job registry — work auto-detached past the 30s threshold.
   initBackgroundJobsTable(execRaw, sql);
+  // The once-only boundary in front of a tool whose effects leave the process:
+  // one row per claimed call, written before the effect and completed after it.
+  // Created on every root because the wrapper runs on every root — a workspace
+  // whose table were missing would fail the first claimed tool call it makes.
+  initToolEffectClaimTable(execRaw);
+  // The other half of once-only: the record that a keyed effect already ran,
+  // kept after the row that ran it was retired. Created here rather than by any
+  // one consumer because four unrelated subsystems read it and each one's own
+  // rows are swept on a different schedule.
+  initEffectTombstoneTable(execRaw);
   // Gated actions parked on the owner while nobody was there to decide, and
   // their standing decisions. Durable because the wait is a night, not a
   // prompt window.
-  initDeferredApprovalsTable(execRaw, sql);
+  initDeferredApprovalsTable(execRaw);
   // Plan revisions and reviewer state outlive both the submitting turn and DO
   // eviction; the Outputs surface always reads this one authoritative stream.
   initPlanReviewTable(execRaw);
+  // Owner decisions about which workspace instruction bytes may hold system
+  // placement (KINU-N028). Created on every root because the prompt builder
+  // classifies AGENTS.md and skills on every turn everywhere — a reader that
+  // found no table would be a fault, not an empty result, and failing that read
+  // open is exactly the bug.
+  initInstructionApprovalsTable(execRaw);
   // The agent's own task list, written by the `tasks` tool.
   initTaskListTable(execRaw);
   // Durable tree-search checkpoints: an evicted search resumes here, and both search
   // engines record what they ran with here.
-  initMctsSearchTable(execRaw, sql);
+  initMctsSearchTable(execRaw);
   // Experience-import staging ledger, settled by the shared EvolutionEngine on
   // every root — not only where the `experience` tool happens to be wired.
   initImportedExperienceTable(execRaw, sql);

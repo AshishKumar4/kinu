@@ -1,28 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { createPlanAnnotationSaveQueue } from "../src/components/surfaces/plan-annotation-save";
 
-interface Deferred {
-  readonly promise: Promise<boolean>;
-  resolve(value: boolean): void;
-}
-
-function deferred(): Deferred {
-  let settle: (value: boolean) => void = () => {};
-  const promise = new Promise<boolean>((resolve) => { settle = resolve; });
-  return { promise, resolve: settle };
-}
-
 describe("plan annotation save queue", () => {
   test("serializes replacement writes so an older snapshot cannot land last", async () => {
     const writes: string[][] = [];
-    const completions: Deferred[] = [];
+    const completions: ReturnType<typeof Promise.withResolvers<boolean>>[] = [];
     let concurrent = 0;
     let maxConcurrent = 0;
     const queue = createPlanAnnotationSaveQueue<{ id: string }>(async (values) => {
       writes.push(values.map((value) => value.id));
       concurrent++;
       maxConcurrent = Math.max(maxConcurrent, concurrent);
-      const completion = deferred();
+      const completion = Promise.withResolvers<boolean>();
       completions.push(completion);
       const result = await completion.promise;
       concurrent--;

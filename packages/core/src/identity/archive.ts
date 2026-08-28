@@ -39,6 +39,7 @@ import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { AgentDatabase } from './inline-primitives';
 import type { SqlExec } from '../types/primitives';
 import type { JsonPrimitive } from '../utils/json';
+import { uiMessageText } from '../utils/ui-message';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 type NativeArchiveDatabaseValue = ArchiveDatabaseValue | Uint8Array;
@@ -99,7 +100,14 @@ export const WORKSPACE_ARCHIVE_EXTENSION = '.kinu.jsonl';
  * (secrets live in their own table for exactly this reason); an archive
  * follows the same rule.
  */
-const EXCLUDED_TABLES = new Set(['workspace_capability', 'webhook_secrets']);
+const EXCLUDED_TABLES = {
+  workspace_capability: true,
+  webhook_secrets: true,
+  // The derived transcript-search index: disposable state, rebuilt lazily by
+  // ConversationSearchStore.ensure() from the canonical store — never carried.
+  conversation_fts: true,
+  conversation_fts_state: true,
+} satisfies Record<string, true>;
 
 /** Durable-Object-internal tables (the KV shim and its metadata) and SQLite's
  *  own bookkeeping — neither is ours to restore. */
@@ -317,10 +325,13 @@ function readSchema(sql: SqlExec): SchemaObject[] {
 
   const objects: SchemaObject[] = [];
   for (const row of rows) {
-    if (isInternalTable(row.name) || EXCLUDED_TABLES.has(row.name)) continue;
+    if (
+      isInternalTable(row.name)
+      || Object.hasOwn(EXCLUDED_TABLES, row.name)
+      || row.name.startsWith('conversation_rev_')
+    ) continue;
     if (row.type === 'table' && isShadow(row.name)) continue;
     const virtual = row.type === 'table' && virtualNames.includes(row.name);
-    // `content=<table>` means every indexed value already lives in that table:
     // dumping the index too would duplicate the content and fight the triggers
     // that maintain it. Re-derive it after the rows land instead.
     const derived = virtual && /\bcontent\s*=\s*[^'"\s)]/i.test(row.sql);
@@ -646,6 +657,7 @@ export async function restoreWorkspaceArchive(
       sql.exec(`INSERT INTO ${quoteIdent(record.name)} (${quoteIdent(record.name)}) VALUES ('rebuild')`);
     }
   }
+  normalizeImportedPaneRows(sql);
 
   return {
     workspace: header.workspace,
@@ -655,4 +667,37 @@ export async function restoreWorkspaceArchive(
     rows,
     files,
   };
+}
+
+/**
+ * A cloud export carries the SDK's pane store (`assistant_messages`); the
+ * workspace this archive was restored into may be LOCAL, where `messages` is
+ * the only default-chat store. Normalize once, here — project every pane row
+ * into the plain store and drop the pane schema — so "does assistant_messages
+ * exist" keeps meaning exactly one thing to every reader downstream
+ * (`identity/conversation-store.ts` states the invariant).
+ */
+function normalizeImportedPaneRows(sql: SqlExec): void {
+  const pane = sql.exec(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
+  ).toArray();
+  if (pane.length === 0) return;
+  const rows = sql.exec(
+    `SELECT id, parent_id, role, content, created_at FROM assistant_messages ORDER BY rowid ASC`,
+  ).toArray();
+  for (const raw of rows) {
+    const row = v.parse(v.object({
+      id: v.string(), parent_id: v.nullable(v.string()), role: v.string(),
+      content: v.string(), created_at: v.string(),
+    }), raw);
+    const text = uiMessageText(row.content);
+    const ms = Date.parse(`${row.created_at.replace(' ', 'T')}Z`);
+    if (!Number.isFinite(ms)) throw new Error(`imported pane row ${row.id} has an unreadable stamp`);
+    sql.exec(
+      `INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      row.id, 'default', row.parent_id, row.role, text, ms,
+    );
+  }
+  sql.exec(`DROP TABLE assistant_messages`);
 }

@@ -200,11 +200,12 @@ export interface ExecutorProvider {
    * directly as a ToolProvider to createExecuteTool({ providers: [...] }).
    *
    * Cancellation contract: in-process callers (the `run` tool) pass a
-   * trailing `{ signal }` options argument to `exec`. Implementations honor
-   * it at the strongest level their transport supports — the workspace shell
-   * stops between commands; remote executors stop waiting and throw an
-   * AbortError that says the remote command may still finish (their
-   * protocols expose no kill for an in-flight exec). See execution/signal.ts.
+   * trailing `{ signal }` options argument to `exec`. Implementations honor it
+   * at the strongest level their transport supports, and those levels are not
+   * interchangeable — one kills the work, another can only stop waiting for it.
+   * execution/signal.ts holds which is which, and is the only place that says
+   * so: a second copy of that list is a claim about somebody's machine that
+   * drifts the moment a transport gains a kill.
    */
   readonly tools: Record<string, ExecutorTool>;
 

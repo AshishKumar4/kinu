@@ -12,6 +12,7 @@
  */
 
 import * as v from 'valibot';
+import { CHANGE_KIND_GLYPH } from '../tui-presentation';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
@@ -29,6 +30,10 @@ import {
   listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES,
   type TurnOutcomeSource, type TurnOutcomeRow,
 } from './outcomes';
+import {
+  createRefinementStore,
+  type RefinementDisposition, type RefinementStage,
+} from './refinement';
 import { describePathology } from './pathology';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
@@ -40,7 +45,8 @@ const ScaffoldRunEventSchema = v.object({
 });
 
 export type ChangelogEntryKind =
-  'scaffold' | 'tool' | 'view' | 'fact' | 'gepa' | 'replay' | 'outcomes' | 'prompt_section';
+  'scaffold' | 'tool' | 'view' | 'fact' | 'gepa' | 'replay' | 'outcomes' | 'prompt_section'
+  | 'refinement';
 
 export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
@@ -68,6 +74,16 @@ export interface ChangelogEntry {
   revert?: ChangelogRevertAction;
   /** Scaffold entries: the version, so UIs can fetch its diff. */
   scaffoldVersion?: number;
+  /**
+   * Present only on a refinement route the OWNER still has to decide.
+   *
+   * A first-class field rather than something a surface infers from the prose,
+   * so a decided row cannot keep offering the action: this is absent the moment
+   * the disposition moves off `pending_owner_approval`. The surface fetches the
+   * bytes with `showRefinement(requestId, routeIndex)` and passes back the
+   * digest that call printed.
+   */
+  decision?: { requestId: string; routeIndex: number };
   /** Aggregate cards reuse the same entry model for expandable child rows. */
   items?: ChangelogEntry[];
 }
@@ -318,6 +334,100 @@ function promptSectionEntries(sql: SqlExecutor, limit: number): ChangelogEntry[]
   });
 }
 
+/** How much of a proposal's bytes a card carries. Enough to read the change and
+ *  decide on it; the whole file is on the request, one fetch away. */
+const SOURCE_PREVIEW_CHARS = 1_200;
+
+/** How a refinement stage reads to the owner. Each is what the request IS, not
+ *  what it hopes: `evaluating` promises no promotion, `gated` claims no trial. */
+const REFINEMENT_STAGE_PROSE = {
+  requested: 'I have a review of my own recent failures queued',
+  planning: 'I am reviewing my own recent failures',
+  gated: 'I recorded what you told me from my own recent failures',
+  evaluating: 'I am testing a change I proposed to myself',
+  applied: 'I changed how I work, and the trials backed it',
+  rolled_back: 'I proposed a change to how I work and the trials refused it',
+  refused: 'I reviewed my own recent failures and changed nothing',
+} satisfies Record<RefinementStage, string>;
+
+/** How a route's disposition reads. The three non-refusals are three different
+ *  kinds of "not live yet", and the operator has to be able to tell them apart. */
+const REFINEMENT_DISPOSITION_PROSE = {
+  applied: 'in effect now',
+  pending_trials: 'pending held-out trials',
+  pending_owner_approval: 'staged, waiting for your approval',
+  refused: 'refused by a gate',
+  rejected: 'rejected by you',
+} satisfies Record<RefinementDisposition, string>;
+
+/**
+ * Continual refinements — a review of the agent's own failures, and where each
+ * typed edit it proposed actually went.
+ *
+ * An aggregate card whose CHILDREN carry the reverts, because the artifacts are
+ * not this row's: a fact reverts through `fact_forget` and a section through
+ * `prompt_section_rollback`, exactly as they do when nothing proposed them.
+ * A refinement-shaped revert would be a fourth way to undo three things.
+ *
+ * The parent is informational for the same reason. Taking back "I reviewed my
+ * failures" is not an action; taking back what the review changed is, and that
+ * is one child per change.
+ */
+function refinementEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
+  return createRefinementStore(sql).list(limit).map((request) => {
+    const trigger = request.trigger === 'explicit'
+      ? 'you asked for it'
+      : 'unresolved corrections accumulated';
+    const turns = `${String(request.turnIds.length)} graded turn${request.turnIds.length === 1 ? '' : 's'}`;
+    const items: ChangelogEntry[] = request.routes.map((route, index) => {
+      // An EXCERPT of the bytes, read straight off the stored proposal. Enough
+      // to recognise the change while scanning; the whole file is behind
+      // `showRefinement`, which is the one endpoint that hands one out and the
+      // one an owner decides from.
+      const edit = request.proposal?.edits[index];
+      const source = edit?.kind === 'prompt_section' || edit?.kind === 'skill'
+        ? edit.source
+        : undefined;
+      const item: ChangelogEntry = {
+        id: `refinement:${request.id}:${String(index)}`,
+        kind: 'refinement',
+        at: request.updatedAt,
+        summary: `${route.kind} → ${route.target || '(no target)'} — `
+          + REFINEMENT_DISPOSITION_PROSE[route.disposition],
+        evidence: `${route.owner === '' ? 'no owning authority' : `owner ${route.owner}`}`
+          + (route.reason === undefined ? '' : ` · ${route.reason}`)
+          + (source === undefined
+            ? ''
+            : `\n${source.length > SOURCE_PREVIEW_CHARS
+              ? `${source.slice(0, SOURCE_PREVIEW_CHARS)}\n… +${String(source.length - SOURCE_PREVIEW_CHARS)} chars`
+              : source}`),
+      };
+      // Offered only while the decision is still owed. A decided row that kept
+      // advertising the action would invite a click the backend refuses.
+      if (route.disposition === 'pending_owner_approval' && route.kind === 'skill') {
+        item.decision = { requestId: request.id, routeIndex: index };
+      }
+      // The owner's own revert, reached by the identity the route recorded.
+      if (route.disposition === 'applied' && route.kind === 'fact') {
+        item.revert = { type: 'fact_forget', target: route.target };
+      }
+      if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
+        item.revert = { type: 'prompt_section_rollback', target: route.target };
+      }
+      return item;
+    });
+    return {
+      id: `refinement:${request.id}:${request.stage}`,
+      kind: 'refinement' as const,
+      at: request.updatedAt,
+      summary: REFINEMENT_STAGE_PROSE[request.stage],
+      evidence: `${request.stage} · ${request.scope} scope · ${trigger} · reviewed ${turns}`
+        + (request.detail === '' ? '' : ` — ${request.detail}`),
+      items,
+    };
+  });
+}
+
 function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   const rows = listReplayEvals(sql, limit + 1);
   return rows.slice(0, limit).map((r, index) => {
@@ -431,6 +541,7 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
     ...gepaEntries(sql, limit),
     ...replayEntries(sql, limit),
     ...promptSectionEntries(sql, limit),
+    ...refinementEntries(sql, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
   const facts = factAggregate(sql, limit, opts.since);
   if (facts) entries.push(facts);
@@ -462,11 +573,10 @@ export function countUnseenChangelog(sql: SqlExecutor, seenAt: number): number {
 }
 
 // ── The one text renderer (TUI overlay + classic print + tests) ──
-
-const KIND_GLYPH = {
-  scaffold: '⟳', tool: '⚒', view: '▦', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
-  prompt_section: '✎',
-} satisfies Record<ChangelogEntryKind, string>;
+// The marks come from the one canonical map in tui-presentation.ts — this
+// renderer carried its own drifted copy ('⚒'/'⏱'/'☑') for months. The import
+// is safe against the reverse edge: tui-presentation's import of
+// ChangelogEntryKind is type-only and erased at runtime.
 
 export function renderChangelogText(
   entries: ReadonlyArray<ChangelogEntry>,
@@ -480,7 +590,7 @@ export function renderChangelogText(
   const lines = [header];
   entries.forEach((e, i) => {
     const when = new Date(e.at).toISOString().slice(0, 16).replace('T', ' ');
-    lines.push(`${String(i + 1).padStart(3)}. ${KIND_GLYPH[e.kind]} ${e.summary}`);
+    lines.push(`${String(i + 1).padStart(3)}. ${CHANGE_KIND_GLYPH[e.kind]} ${e.summary}`);
     lines.push(`      ${when}${e.evidence ? ` · ${e.evidence}` : ''}${e.revert ? ' · revertable' : ''}`);
     for (const item of e.items ?? []) {
       lines.push(`      - ${item.summary}`);

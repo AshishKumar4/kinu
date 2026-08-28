@@ -26,8 +26,12 @@ export {
   RunEventSchema,
   recordModelOperations,
   RunEventRecorder,
+  boundRunEventQuery,
+  RUN_EVENT_LIMIT_DEFAULT,
+  RUN_EVENT_LIMIT_MAX,
   type RunEventListener,
   type RunEventQuery,
+  type BoundedRunEventQuery,
 } from './recorder';
 
 export {

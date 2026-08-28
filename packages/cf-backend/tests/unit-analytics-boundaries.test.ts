@@ -408,6 +408,15 @@ describe('a writer boundary emits the event and boundary it declares', () => {
     expect(captured.agent[0].blobs?.[boundarySlot]).toBe('job.settled');
   });
 
+  test('sandbox.recovery_settled', () => {
+    const captured = captureEnv();
+    record.recordSandboxRecovery(captured.env, {
+      workspace: 'w', stage: 'attach', outcome: 'ok', code: '', attempts: 3, durationMs: 12_000,
+    });
+    expect(captured.agent[0].blobs?.[eventSlot]).toBe('sandbox.recovery_settled');
+    expect(captured.agent[0].blobs?.[boundarySlot]).toBe('sandbox.recovery');
+  });
+
   test('release.transitioned', () => {
     const captured = captureEnv();
     record.recordReleaseTransition(captured.env, {

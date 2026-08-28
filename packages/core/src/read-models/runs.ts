@@ -18,8 +18,10 @@
  * APPENDS each page.
  */
 
+import { boundRunEventQuery } from '../events/recorder';
 import type { RunEventQuery, RunEventRecorder, RunListEntry } from '../events/recorder';
 import type { RunEvent } from '../events/types';
+import { boundedInt } from '../utils/bounds';
 import { addUsage, usageReported, type Usage } from '../usage';
 import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 
@@ -32,6 +34,21 @@ const DEFAULT_RUN_PAGE = 50;
 /** A page of run summaries. Smaller than the list's, because each row costs a
  *  full read of that run's events to fold its provenance and usage. */
 const DEFAULT_SUMMARY_PAGE = 30;
+
+/**
+ * The ceiling on one run-list page — the bound the HTTP route already enforced
+ * (`Math.min(200, ...)`), applied here so the RPC behind it, the MCP tool and
+ * the CLI get it too.
+ *
+ * This is NOT a reinstatement of the cap `OrchestratorAgent.getRunSummaries`
+ * records as "load-bearing in the wrong direction". That cap truncated an
+ * UNCURSORED window, so Supervise summed the rows it happened to receive and
+ * printed the total as the workspace's spend — a truncated denominator with no
+ * way to reach the rest. These pages carry a cursor and report `next`, so a
+ * bounded page is a page, not a truncation: the remaining history stays
+ * reachable and the caller can tell a full page from the end of the log.
+ */
+const MAX_RUN_PAGE = 200;
 
 /** A run with PROVENANCE (what kicked it off) and COST (tokens spent). */
 export interface RunSummary extends Pick<RunListEntry, 'runId' | 'eventCount'> {
@@ -49,10 +66,17 @@ export interface RunSummary extends Pick<RunListEntry, 'runId' | 'eventCount'> {
   turnsWithoutUsage: number;
 }
 
-/** One run's durable events — what an SSE resume replays from (`since` = last
- *  seen index). */
+/**
+ * One run's durable events as an UNTRUSTED caller may ask for them — the read
+ * every RPC and HTTP path into this log goes through, and what an SSE resume
+ * replays from (`since` = last seen index).
+ *
+ * The bounds are closed HERE and not only at the route, because the route is not
+ * the only way in: `getRunEvents` is reachable by direct RPC on both backends.
+ * An in-object fold that needs a wider window calls `events.read` and states it.
+ */
 export function getRunEvents(events: RunEventRecorder, runId: string, opts: RunEventQuery = {}): RunEvent[] {
-  return events.read(runId, opts);
+  return events.read(runId, boundRunEventQuery(opts));
 }
 
 /**
@@ -65,7 +89,12 @@ export function listRuns(
   cursor: SeekCursor | null = null,
   limit = DEFAULT_RUN_PAGE,
 ): Page<RunListEntry> {
-  return seekPage(events.listRunsBefore(anchorSeq(events, cursor), limit + 1), limit, (run) => run.runId);
+  // A negative limit is worse here than an unbounded read: `limit + 1` reaches
+  // SQL as `LIMIT 0`, and an empty page is how this read-model says the history
+  // behind the cursor is EXHAUSTED. A caller's typo would report a workspace as
+  // having no runs.
+  const page = boundedInt(limit, DEFAULT_RUN_PAGE, 1, MAX_RUN_PAGE);
+  return seekPage(events.listRunsBefore(anchorSeq(events, cursor), page + 1), page, (run) => run.runId);
 }
 
 /**
@@ -79,7 +108,13 @@ export function getRunSummaries(
   cursor: SeekCursor | null = null,
   limit = DEFAULT_SUMMARY_PAGE,
 ): Page<RunSummary> {
-  return mapPage(listRuns(events, cursor, limit), (runs) => runs.map((run) => summarize(events, run)));
+  // Closed HERE with the summary default, not left to `listRuns` to close with
+  // the list's. A default parameter only fires on `undefined`, so an RPC caller
+  // forwarding `Number('abc')` states NaN, and falling back downstream would
+  // hand this read the wider list page — 50 rows, each costing a full read of
+  // that run's events, where this surface is deliberately sized at 30.
+  const page = boundedInt(limit, DEFAULT_SUMMARY_PAGE, 1, MAX_RUN_PAGE);
+  return mapPage(listRuns(events, cursor, page), (runs) => runs.map((run) => summarize(events, run)));
 }
 
 function summarize(events: RunEventRecorder, run: RunListEntry): RunSummary {
@@ -87,7 +122,9 @@ function summarize(events: RunEventRecorder, run: RunListEntry): RunSummary {
   let turnsWithoutUsage = 0;
   let causedBy: string | null = null, userMessage: string | null = null, status: string | null = null;
   let startedAt = Date.parse(run.lastTs) || Date.now();
-  for (const e of getRunEvents(events, run.runId, { limit: 1000 })) {
+  // Straight to the log, not through the boundary read: this window is the one
+  // the sums below are correct over, and it is wider than a stranger's ceiling.
+  for (const e of events.read(run.runId, { limit: 1000 })) {
     if (e.type === 'run_start') {
       causedBy = e.caused_by ?? 'chat';
       userMessage = e.userMessage ?? null;

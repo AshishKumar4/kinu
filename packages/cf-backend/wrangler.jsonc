@@ -12,6 +12,24 @@
   // (code 10021). If a specific experimental feature is needed, enable it
   // by its real flag name (e.g. `streaming_subrequests`).
   "compatibility_flags": ["nodejs_compat"],
+  // Wrangler uploads the Worker's source maps with the version, and Cloudflare
+  // remaps every uncaught exception's stack against them before it reaches
+  // Workers Logs or a tail. Without this, a production stack trace names the one
+  // minified bundle with line numbers that belong to nothing a person can open —
+  // which is what the 2026-07-13 abrupt-stop incident's root error looked like
+  // once it was persisted.
+  //
+  // It costs nothing against the 10 MB script budget: source maps travel as
+  // separate `application/source-map` parts and are NOT in the module list
+  // wrangler measures (`printBundleSize` receives `modules` and the entry, never
+  // `sourceMaps`; their own limit is 15 MB gzipped). The maps that get uploaded
+  // are the ones Vite emits — the deploy goes through the plugin's generated
+  // config, which sets `no_bundle`, so wrangler bundles nothing of its own and
+  // scans each module's `sourceMappingURL` instead. vite.config.ts turns
+  // `build.sourcemap` on for every worker environment and leaves the CLIENT
+  // build without maps, because a client map in `dist/client` would be published
+  // on the public origin.
+  "upload_source_maps": true,
   // Persisted Workers Logs — without this, provider/turn errors are gone the
   // moment they scroll out of a live `wrangler tail` (made the 2026-07-13
   // abrupt-stop incident's root error unrecoverable). head_sampling_rate is
@@ -118,13 +136,31 @@
       //   available when a tunnel WebSocket attaches at runtime.
     ]
   },
-  // The image tag MUST equal the @cloudflare/sandbox version in package.json:
+  // PINNED BY DIGEST, not by tag. A tag is a mutable pointer, and this is the one
+  // file where a mutable pointer decides which bytes run inside a container
+  // holding somebody's workspace: `docker.io/cloudflare/sandbox:0.12.8` can be
+  // re-pushed by anyone who can push that repository, and the next container
+  // start would pick the new image up with nothing here changed and nothing to
+  // read afterwards that says which image ran.
+  //
+  // The digest is `cloudflare/sandbox:0.12.8` as the registry resolved it on
+  // 2026-08-27, from the manifest endpoint itself:
+  //   curl -sI -H "Authorization: Bearer <docker.io pull token>" \
+  //     -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+  //     https://registry-1.docker.io/v2/cloudflare/sandbox/manifests/0.12.8
+  //   docker-content-digest: sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f
+  //
+  // 0.12.8 must stay equal to the `@cloudflare/sandbox` version in package.json:
   // the SDK asks the container for its own SANDBOX_VERSION on every start and
-  // logs a version mismatch (Sandbox.checkVersionCompatibility). Bump both.
+  // logs a mismatch (Sandbox.checkVersionCompatibility). The intended
+  // version→digest pair is declared once, in `scripts/release-config.test.ts`,
+  // which holds it against package.json, holds BOTH environments to the same
+  // reference and refuses a tagged one. A version bump edits that pair, this
+  // block and env.staging's — and nothing else.
   "containers": [
     {
       "class_name": "KinuSandbox",
-      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "image": "docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
@@ -163,6 +199,16 @@
   // deployment without it cannot serve a signed-in user at all. Set via:
   //   openssl rand -base64 32 | npx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
   // Rotation uses CREDENTIAL_ENCRYPTION_KEY_PREVIOUS — see docs/DEPLOYMENT.md.
+  //
+  // WEBHOOK_ROUTE_SECRET is a REQUIRED Wrangler secret wherever webhook ingress
+  // is offered. It signs the route capability every public delivery URL carries
+  // (events/webhook-route.ts), which is what decides that a stranger's POST may
+  // address one workspace and no other. Without it, creating a webhook answers
+  // 503 and every delivery URL answers 404 without waking a workspace. Set via:
+  //   openssl rand -base64 32 | npx wrangler secret put WEBHOOK_ROUTE_SECRET
+  // It is separate from the root secret because the two rotate on different
+  // clocks: these URLs live in other people's systems, and rotating this one
+  // revokes all of them at once — see docs/DEPLOYMENT.md.
   //
   // PREVIEW_HOST_SUFFIX is the zone Workspace and Sandbox previews are served
   // under. Each exposed port gets its own capability hostname: the Sandbox SDK
@@ -348,10 +394,16 @@
   //   * ITS OWN STORES. Every stateful binding below differs from production's.
   //     A shared one is a test writing into real data by another route — see
   //     the R2 and Vectorize notes.
-  //   * `DEV_USER_EMAIL` set to the eval service account, so
-  //     `authenticateRequest()` (auth/session.ts) synthesizes ONE fixed
-  //     identity for every request. Evals act as `eval-service` and never as a
-  //     person. Production must leave this unset.
+  //   * `DEV_USER_EMAIL` set to the eval service account, naming the ONE
+  //     identity a caller may act as here without signing in. It names WHICH
+  //     identity, never that anyone may have it: off localhost,
+  //     `authenticateRequest()` (auth/session.ts) grants it only to a request
+  //     presenting the `DEV_IDENTITY_SECRET` secret in `x-kinu-dev-identity`.
+  //     Evals act as `eval-service` and never as a person, and a caller who
+  //     merely reaches staging.kinu.run acts as nobody. Set the secret with
+  //     `wrangler secret put DEV_IDENTITY_SECRET --env staging`; without it
+  //     this deployment grants no synthetic identity at all. Production must
+  //     leave both unset.
   //
   // Fully specified because wrangler inherits no bindings or vars into a named
   // environment. Deploy: `wrangler deploy --env staging`.
@@ -376,6 +428,12 @@
       "main": "src/server.ts",
       "compatibility_date": "2025-12-01",
       "compatibility_flags": ["nodejs_compat"],
+      // Spelled out here as well. `upload_source_maps` IS inheritable, unlike
+      // `observability` below, but this environment states every deployable key
+      // it depends on rather than reading the top of the file — and an
+      // environment whose stack traces cannot be read is where an eval failure
+      // becomes unexplainable.
+      "upload_source_maps": true,
       // `traces` is a SEPARATE switch from `logs`, and wrangler does not inherit
       // `observability` into a named environment — see the header. A bare
       // `enabled: true` here governed logs only, so every span this Worker opened
@@ -401,10 +459,13 @@
           { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" }
         ]
       },
+      // The same digest production runs, for the same reason and under the same
+      // gate — see the production `containers` block. An environment measuring
+      // the product on a different image measures a different product.
       "containers": [
         {
           "class_name": "KinuSandbox",
-          "image": "docker.io/cloudflare/sandbox:0.12.8",
+          "image": "docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f",
           "max_instances": 5,
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
         }
@@ -482,22 +543,20 @@
         "PREVIEW_HOST_SUFFIX": "",
         "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
         "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
-        // The eval service account. Every request to this deployment resolves
-        // to this one identity, so the workspaces a test run creates land on an
-        // account that holds nothing else — and `eval-service` in a workspace
-        // list is self-explaining. Pinned as EVAL_SERVICE_EMAIL in
-        // packages/test-utils/src/eval-identity.ts.
+        // The eval service account: the one identity `DEV_IDENTITY_SECRET`
+        // buys. Runs land on an account that holds nothing else, and
+        // `eval-service` in a workspace list is self-explaining. Pinned as
+        // EVAL_SERVICE_EMAIL in packages/test-utils/src/eval-identity.ts.
         "DEV_USER_EMAIL": "eval-service@kinu.run",
         // Same single choice as production — see the note on the production var.
         "SANDBOX_TRANSPORT": "rpc",
         // EMPTY, AND THIS IS THE LOAD-BEARING LINE IN THIS ENVIRONMENT.
-        // `DEV_USER_EMAIL` above makes every request to this deployment resolve
-        // to one synthesized identity with a fresh auth time, so a non-empty
-        // allowlist here would hand full admin authority to any unauthenticated
-        // caller who can reach staging.kinu.run. The admin gate independently
-        // refuses a `provider: 'dev'` identity, so this is the second of two
-        // locks rather than the only one — but it is the one a reader of this
-        // file can check.
+        // `DEV_USER_EMAIL` above resolves a secret-bearing request to one
+        // synthesized identity with a fresh auth time, so a non-empty allowlist
+        // here would hand full admin authority to whoever holds that secret.
+        // The admin gate independently refuses a `provider: 'dev'` identity, so
+        // this is the second of two locks rather than the only one — but it is
+        // the one a reader of this file can check.
         "CONTROL_PLANE_ADMINS": "",
         "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
         // Staging binds its own `*_staging` datasets and shares production's

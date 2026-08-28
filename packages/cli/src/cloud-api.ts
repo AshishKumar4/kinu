@@ -102,6 +102,9 @@ export interface CloudTriggerList {
     next_fire_at?: number | null;
     last_fire_at?: number | null;
     fire_count?: number;
+    /** Signed delivery path, server-minted for webhook rows. Relative: the
+     *  origin belongs to whoever renders it. */
+    url?: string;
   }>;
 }
 
@@ -186,7 +189,7 @@ export const CloudToolDescriptionsSchema: v.GenericSchema<CloudToolDescriptions>
 const CloudTriggerSchema = v.object({
   id: v.string(), kind: v.string(), spec: JsonValueSchema, state: v.string(), created_at: v.number(),
   next_fire_at: v.optional(v.nullable(v.number())), last_fire_at: v.optional(v.nullable(v.number())),
-  fire_count: v.optional(v.number()),
+  fire_count: v.optional(v.number()), url: v.optional(v.string()),
 });
 export const CloudTriggerListSchema: v.GenericSchema<CloudTriggerList> = v.object({ triggers: v.array(CloudTriggerSchema) });
 export const CloudBackgroundJobSchema: v.GenericSchema<CloudBackgroundJob> = v.object({

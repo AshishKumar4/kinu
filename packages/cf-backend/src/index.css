@@ -12,7 +12,13 @@
 @import "katex/dist/katex.min.css";
 
 @theme inline {
+  /* Tailwind's `font-sans`/`font-mono`/`font-serif` utilities resolve here.
+     Unmapped they emit Tailwind's own stacks (`ui-sans-serif`, `ui-monospace`),
+     so every `font-sans`/`font-mono` call site — the whole landing page — was
+     rendering the system fallback while the self-hosted faces sat unloaded. */
+  --font-sans: var(--font-ui);
   --font-serif: var(--font-serif);
+  --font-mono: var(--font-mono);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -934,7 +940,11 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 .landing-shell {
   width: 100%;
-  max-width: 82.5rem;
+  /* 82.5rem up to ~1940px viewports, then 68vw so a 2K/4K screen is used
+     rather than framed, capped at 120rem. Copy never stretches with it:
+     every text block carries its own max-width, so the extra room goes to
+     the demos, grids, and the hero tree. */
+  max-width: clamp(82.5rem, 68vw, 120rem);
   margin-inline: auto;
   padding-inline: 2.5rem;
 }

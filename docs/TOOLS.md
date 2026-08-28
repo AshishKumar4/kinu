@@ -116,7 +116,9 @@ the doctrine converted 0% of eligible turns where
 `turn_start_no_delegation`; its steer fires 25 steps in at
 `LONG_TURN_STEPS_BEFORE_STEER`.
 
-1. Tool-free bulk text uses `llm.query` inside `execute_tools` when RLM exists.
+1. One bounded question uses `agents({action:'ask', role, message})` — a full
+   agent created for it, released when it answers. Oversize material goes by
+   `context_ref`, so the bytes reach that agent and never the caller.
 2. `swarm` fixes search through `preset`, `objective`, and `depth`. Registered
    verifiers score verify-scored candidates; nodes are full agents. See
    [EXPLORATION.md](./EXPLORATION.md).

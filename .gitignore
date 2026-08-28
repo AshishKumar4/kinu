@@ -135,3 +135,7 @@ CC-CORPUS-*.md
 
 # wrangler dev build output and local state (containers, local R2/DO)
 .wrangler/
+
+# Per-run durability probe config contains a one-run Worker/bucket identity and
+# bearer token. The probe tears it down; this prevents a failed run escaping it.
+/scripts/fixtures/kinu-durability/wrangler.*.jsonc

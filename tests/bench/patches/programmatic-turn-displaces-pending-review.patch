@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/session-window.ts b/packages/core/src/evolution/session-window.ts
-index dcaaa4d5..25b6400b 100644
+index 8ca493252..5a9458898 100644
 --- a/packages/core/src/evolution/session-window.ts
 +++ b/packages/core/src/evolution/session-window.ts
-@@ -128,7 +128,7 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
-         );
-         return;
-       }
--      const awaitingReview = opts.awaitsFollowup ? 1 : 0;
-+      const awaitingReview = 1;
-       // At most one turn waits at a time — the newest user message grades the
-       // most recent turn, exactly as the in-memory field did.
-       if (awaitingReview === 1) {
+@@ -349,7 +349,7 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
+       // left the row at `none` with its review lost, while a replay of the
+       // recording dispatched it a second time. The obligation is now part of the
+       // row, and the durable queued-review lane claims it exactly once.
+-      const review = opts.awaitsFollowup ? 'awaiting_followup' : 'queued';
++      const review = 'awaiting_followup';
+       const id = opts.id ?? `turn-${nanoid()}`;
+       const now = opts.now ?? nowMs();
+       // DO NOTHING, not a replace: the row the first append wrote is the

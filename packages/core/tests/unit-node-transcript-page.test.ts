@@ -105,3 +105,34 @@ describe('node transcript paging', () => {
     expect(view!.toolCount).toBe(0);
   });
 });
+
+/**
+ * THE FIRST CRUMB IS THE RUN.
+ *
+ * `mcts/engine.ts` records a search's root with `action: ''` — a root is the
+ * workspace as found and proposed nothing — so a breadcrumb built from the raw
+ * column had nothing to print, and the panel printed the literal `root`. The
+ * crumb now carries the run's name, derived exactly as the run list derives it.
+ */
+describe('the search path names the run it belongs to', () => {
+  /** A two-level search: an unlabelled root, one branch under it. */
+  function seedSearch(rootAction: string) {
+    const ws = createTestWorkspace();
+    void ws.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+      VALUES ('r', 'r', null, ${'Audit every reader of coupon.kind — the checkout package'}, ${rootAction}, '', 0, 0, 0, 'open')`;
+    void ws.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+      VALUES ('r', 'n1', 'r', ${'Audit every reader of coupon.kind'}, ${'Walk the cart serializer'}, 'a proposal', 0.7, 2, 1, 'open')`;
+    return ws.sql;
+  }
+
+  test('an unlabelled root wears the name the run list shows', () => {
+    const view = readNodeTranscript(seedSearch(''), 'r', 'n1');
+    expect(view!.path.map((crumb) => crumb.label))
+      .toEqual(['Audit every reader of coupon.kind', 'Walk the cart serializer']);
+  });
+
+  test('a root the caller named keeps that name', () => {
+    const view = readNodeTranscript(seedSearch('coupon.kind readers'), 'r', 'n1');
+    expect(view!.path[0]!.label).toBe('coupon.kind readers');
+  });
+});

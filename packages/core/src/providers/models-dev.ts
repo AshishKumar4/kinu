@@ -233,6 +233,7 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
     label: nonEmptyString(model.name) ?? id,
     capabilities,
     contextWindow: positiveInteger(model.limit?.context),
+    modelOutputLimit: positiveInteger(model.limit?.output),
     cost,
     inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
   };

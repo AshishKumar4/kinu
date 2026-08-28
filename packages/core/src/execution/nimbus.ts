@@ -9,18 +9,43 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
-import type { VFS } from '../types/primitives';
-import type { Shell } from '../types/primitives';
+import type { Shell, VFS } from '../types/primitives';
+import type { VfsNativeReads } from '../vfs/mounts';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
+import { agentSessionFiles } from './nimbus-agent-files';
 import { makeVfsError } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
 import { shellQuote } from '../utils/shell';
+import { base64ToBytes } from '../utils/base64';
 import type { ExecutorCapability, ExecutorProvider } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
 import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+
+/** One fixed origin-session prefix reader. Path and offsets travel as JSON in
+ *  one environment value, never through shell text. Nimbus's SDK `files.read`
+ *  / `readBytes` surfaces take only a path and materialize the whole file; the
+ *  session's own Node can instead open and read exactly the window the viewer
+ *  admitted. */
+const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
+const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(process.env.${NIMBUS_RANGE_ENV});if(!Number.isSafeInteger(r.offset)||r.offset<0||!Number.isSafeInteger(r.length)||r.length<=0)throw new Error('invalid range');const fd=fs.openSync(r.path,'r');try{const b=Buffer.allocUnsafe(r.length);const n=fs.readSync(fd,b,0,r.length,r.offset);process.stdout.write(b.subarray(0,n).toString('base64'));}finally{fs.closeSync(fd);}`;
+
+async function readNimbusOriginRange(
+  box: NimbusSandboxHandle, path: string, offset: number, length: number,
+): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
+    throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
+  }
+  const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
+    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: workspacePath(path), offset, length }) },
+  });
+  if (!result.success || result.exitCode !== 0) {
+    throw makeVfsError('EIO', result.stderr.trim() || `could not read range of '${path}'`, path);
+  }
+  return base64ToBytes(result.stdout.trim());
+}
 
 export interface NimbusExecOptions {
   cwd?: string;
@@ -93,9 +118,12 @@ export interface NimbusSandboxHandle {
     read(path: string): Promise<string | null>;
     /** Raw-byte read (SDK ≥0.1.4) — the binary-safe counterpart of `read`. */
     readBytes?(path: string): Promise<Uint8Array | null>;
+    /** Whole-file write. The SDK takes no precondition and answers nothing, so
+     *  a caller that needs compare-and-write cannot get it here. */
     write(path: string, content: string | Uint8Array): Promise<void>;
     list(path?: string): Promise<Array<{ name: string; type?: string; isDir?: boolean; size?: number }>>;
-    /** Native stat (SDK ≥0.2.0). `mtime` is in milliseconds; null when absent. */
+    /** Native stat (SDK ≥0.2.0). `mtime` is in milliseconds; null when absent.
+     *  No revision: `NimbusFileStat` carries type, size, ctime, mtime and mode. */
     stat?(path: string): Promise<{ type: string; size: number; mtime: number } | null>;
     lstat?(path: string): Promise<{ type: string; size: number; mtime: number; mode?: number } | null>;
     rename?(from: string, to: string): Promise<void>;
@@ -770,11 +798,20 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
  * The cleanest of the raw handles — read/readBytes/write/list/stat/exists/
  * mkdir/delete, with `write` taking Uint8Array natively, so binary round-trips
  * exactly.
+ *
+ * `cred` names WHO the operations act as, and it changes the transport because
+ * the substrate leaves no choice: `box.files.*` is pid-less, and the worker
+ * resolves a pid-less caller to the session user, so a credential cannot ride
+ * that surface at all. Supplied, every operation goes through the one surface
+ * that does accept a credential — see {@link agentSessionFiles}, which reaches
+ * the SAME session and the same bytes as this. Absent is the ORIGIN, which is
+ * every caller that is not one agent acting for itself.
  */
-export function nimbusSessionFiles(box: NimbusSandboxHandle): VFS & {
+export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & {
   removeRecursive(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
-} {
+} & Pick<VfsNativeReads, 'readRange'> {
+  if (cred) return agentSessionFiles(box, cred);
   return {
     async readFile(path, opts) {
       const absolute = workspacePath(path);
@@ -787,13 +824,28 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle): VFS & {
       if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
       return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
     },
+    /** The origin session's fixed Node reader reads exactly this prefix — the
+     *  SDK file methods cannot express a range and would materialize the file. */
+    async readRange(path, offset, length) {
+      return readNimbusOriginRange(box, path, offset, length);
+    },
     async writeFile(path, data) { await box.files.write(workspacePath(path), data); },
+    // NO `writeFileIfRevision`. The SDK's `files.write` takes no precondition
+    // and returns nothing, and its `stat` reports no revision, so this plane
+    // has neither half of a compare-and-write. Declaring the method would mean
+    // emulating it with read/compare/write, which cannot close the window it
+    // claims to close; `writeExecutorFileOp` answers `unsupported` instead and
+    // the editor stays read-only with that reason.
     async readdir(path) { return (await box.files.list(workspacePath(path))).map((e) => e.name); },
     async stat(path) {
       if (box.files.stat) {
         const st = await box.files.stat(workspacePath(path));
         if (!st) return null;
-        return { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory' };
+        return {
+          size: st.size,
+          mtimeMs: st.mtime,
+          isDir: st.type === 'directory',
+        };
       }
       const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(workspacePath(path))}`);
       if (!r.success || r.exitCode !== 0) return null;

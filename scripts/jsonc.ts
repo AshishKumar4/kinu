@@ -1,11 +1,14 @@
 /**
  * Reading `wrangler.jsonc`, which is JSONC and which `JSON.parse` cannot read.
  *
- * This lived inside `tracing-gate.ts` while it had one caller. It now has two —
- * the tracing gate and the infrastructure manifest — and a second copy of a
- * hand-written comment stripper is the exact shape this repository's gates keep
- * catching: two parsers, two answers to "what does the config say", and nothing
- * comparing them.
+ * This lived inside `tracing-gate.ts` while it had one caller. Four gates read
+ * that config now — the tracing gate, the infrastructure manifest, the dataset
+ * parity test and the release config test — and a second copy of a hand-written
+ * comment stripper is the exact shape this repository's gates keep catching: two
+ * parsers, two answers to "what does the config say", and nothing comparing
+ * them. `tracing-gate.ts` kept its own byte-identical copy of this function and
+ * its doc comment for a while after this module existed, which is how the
+ * sentence above came to describe a caller it did not have.
  */
 
 import * as v from 'valibot';

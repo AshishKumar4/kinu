@@ -27,7 +27,7 @@ import * as v from 'valibot';
 import {
   type PendingScaffold, type ShadowConfig, type JudgeFn, type ShadowTrialVerdict,
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
-  recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
+  recordShadowEvaluation, scoredShadowTrial, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow';
 import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
@@ -86,6 +86,10 @@ export const DEFAULT_AUTO_JUDGE_CONFIG: AutoJudgeConfig = {
 
 export interface RunAutoShadowEvalOpts {
   rt: AgentRuntime;
+  /** The queued trial being scored, when this eval drains one. It keys the
+   * evaluation row, which is what makes a re-run after an interruption write the
+   * same score instead of a second one. */
+  trialId?: string;
   /** The user's task for this turn. */
   task: string;
   /** What the LIVE scaffold (or streamText fallback) actually returned to the user. */
@@ -154,6 +158,20 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const pending = getPendingScaffold(opts.rt.storage.sql);
   if (!pending) return { skipped: true, reason: 'no_pending' };
 
+  // ALREADY SCORED. The rollout below drives the pending scaffold through the
+  // LIVE tool surface, so a re-drive after an interruption between the evaluation
+  // insert and the queue delete would repeat whatever those tool calls did. Only
+  // that half is skipped: the promotion decision behind it is still owed, and
+  // returning here left an auto-promotable candidate pending forever, blocking
+  // every later proposal.
+  const scored = opts.trialId === undefined
+    ? null
+    : scoredShadowTrial(opts.rt.storage.sql, opts.trialId);
+  if (scored) {
+    const settled = await settlePromotion(opts, config, pending);
+    return { skipped: false, evaluation: { ...scored }, ...settled };
+  }
+
   const pendingCode = await readScaffoldVersion(opts.rt, pending.version);
   if (!pendingCode) return { skipped: true, reason: 'pending_unreadable' };
 
@@ -213,44 +231,20 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
     return { skipped: true };
   }
 
-  recordShadowEvaluation(opts.rt.storage.sql, {
+  const evaluation = {
     // Derived from status — after rollback cycles the live version is NOT
     // pending - 1 (the numbering is non-contiguous).
     currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql) ?? pending.version - 1,
     pendingVersion: pending.version,
     ...evidence,
     judgeResult,
-  });
+  };
+  recordShadowEvaluation(
+    opts.rt.storage.sql,
+    opts.trialId === undefined ? evaluation : { ...evaluation, trialId: opts.trialId },
+  );
 
-  // Reread pending to get updated counts; decide whether to apply.
-  const fresh = getPendingScaffold(opts.rt.storage.sql);
-  const decision = fresh
-    ? decidePromotion(fresh, config.shadowConfig).decision
-    : 'continue' as const;
-
-  let applied: 'promote' | 'rollback' | null = null;
-  if (config.autoApply && decision !== 'continue' && fresh) {
-    try {
-      // Report the action ACTUALLY applied — the promotion-time misevolution
-      // recheck can convert a 'promote' into a 'rollback'.
-      const outcome = await applyPromotionDecision(opts.rt, fresh, decision);
-      applied = outcome.action;
-      if (outcome.vetoReason) {
-        diagnostics.failure(
-          'scaffold.promotion_vetoed',
-          new KinuError('denied', outcome.vetoReason),
-          { scaffoldVersion: fresh.version, action: outcome.action },
-        );
-      }
-    } catch (err) {
-      diagnostics.failure(
-        'scaffold.promotion_apply_failed',
-        toKinuError({ doing: 'apply a scaffold promotion decision', cause: err, otherwise: 'io' }),
-        { scaffoldVersion: fresh.version, decision },
-      );
-    }
-  }
-
+  const settled = await settlePromotion(opts, config, pending);
   return {
     skipped: false,
     evaluation: {
@@ -259,9 +253,48 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       winner: judgeResult.winner,
       rationale: judgeResult.rationale,
     },
-    decision,
-    applied,
+    ...settled,
   };
+}
+
+/**
+ * The half of an evaluation that runs AFTER the score is durable: read the gate,
+ * and apply what it decided.
+ *
+ * Its own function because a re-drive of an already-scored trial owes exactly
+ * this and nothing before it. The counts are re-read rather than carried — the
+ * insert above changed them, and so did any trial that landed in between.
+ */
+async function settlePromotion(
+  opts: RunAutoShadowEvalOpts,
+  config: AutoJudgeConfig,
+  pending: { version: number },
+): Promise<{ decision: 'promote' | 'rollback' | 'continue'; applied: 'promote' | 'rollback' | null }> {
+  const fresh = getPendingScaffold(opts.rt.storage.sql);
+  // A candidate that moved on is one this trial can no longer decide about.
+  if (!fresh || fresh.version !== pending.version) return { decision: 'continue', applied: null };
+  const decision = decidePromotion(fresh, config.shadowConfig).decision;
+  if (!config.autoApply || decision === 'continue') return { decision, applied: null };
+  try {
+    // Report the action ACTUALLY applied — the promotion-time misevolution
+    // recheck can convert a 'promote' into a 'rollback'.
+    const outcome = await applyPromotionDecision(opts.rt, fresh, decision);
+    if (outcome.vetoReason) {
+      diagnostics.failure(
+        'scaffold.promotion_vetoed',
+        new KinuError('denied', outcome.vetoReason),
+        { scaffoldVersion: fresh.version, action: outcome.action },
+      );
+    }
+    return { decision, applied: outcome.action };
+  } catch (err) {
+    diagnostics.failure(
+      'scaffold.promotion_apply_failed',
+      toKinuError({ doing: 'apply a scaffold promotion decision', cause: err, otherwise: 'io' }),
+      { scaffoldVersion: fresh.version, decision },
+    );
+    return { decision, applied: null };
+  }
 }
 
 interface JudgeTrialOpts {

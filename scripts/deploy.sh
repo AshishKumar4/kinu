@@ -98,6 +98,16 @@ KINU_ASSETS_DIR="$KINU_ROOT/packages/cf-backend/dist/client"
 # version.json, and therefore /api/health's build stamp.
 KINU_SHA="$(git -C "$KINU_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 
+# The deployed Worker VERSION carries that sha, as the version annotations
+# wrangler sends with the upload (`workers/tag` and `workers/message`; it turns
+# these two flags into them for this deploy path — wrangler-dist/cli.js:150445).
+# Workers Logs tags every invocation with a version id and nothing else, so
+# without this the only route from a persisted stack trace to the bytes that
+# produced it is somebody's terminal scrollback. Afterwards the pair is readable
+# from `npx wrangler versions list`, and /api/health reports the same sha back out
+# of the asset bundle — which is the other half of the same join.
+KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")
+
 # Temp log file — trap cleans up on any exit.
 KINU_DEPLOY_LOG=""
 cleanup() {
@@ -112,6 +122,15 @@ trap cleanup EXIT INT TERM
 json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
+
+# `wait -n -p`, which the gate runner takes every verdict from, is bash 5.1
+# (December 2020). Refused here rather than at the first flush: an unsupported
+# shell is a fact about the machine, not a gate result. The associative arrays
+# below already ruled out bash 3.
+if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
+  echo -e "${RED}bash $BASH_VERSION cannot run the gate wave: 'wait -n -p' needs bash 5.1 or newer.${NC}"
+  exit 1
+fi
 
 # ── The gate queue ───────────────────────────────────────────────
 #
@@ -170,6 +189,22 @@ GATE_DEADLINE_SECONDS=480
 # into one terminal is not a log anybody can read, and the output a reader wants
 # is the failing gate's.
 #
+# WHERE A GATE'S VERDICT COMES FROM: `wait -n -p`, which hands back the pid that
+# terminated and its exit status together. That is the whole reaping story, and
+# it is deliberately not a status file. The earlier version published each gate's
+# status into `$dir/$i.status` and counted `jobs -rp | wc -l` between waits, so a
+# gate whose process died before it could write one — an OOM kill, a `kill -9`
+# from outside the gate's own tree — was detected only by probing `kill -0` on a
+# pid the shell had already reaped. A recycled pid answers that probe as somebody
+# else's process, and the loop then has nothing left to wait on: it spins at 100%
+# CPU and the deploy never ends. The kernel already knows every child's fate, so
+# asking it removes the status files, the atomic-rename dance, the liveness probe
+# and the poll in one move.
+#
+# A gate killed by a signal therefore settles as 128+signal, a gate past the
+# deadline as `timeout`'s 124, and a gate whose command does not exist as 127.
+# None of those can be read as a pass, and none depends on the gate cooperating.
+#
 # On the first failure it stops LAUNCHING and lets the running gates finish. That
 # is deliberate rather than tidy — a wave usually holds more than one real
 # failure, and reporting "these three failed" beats reporting the first one and
@@ -179,13 +214,22 @@ flush_gates() {
   if [ "$total" -eq 0 ]; then return 0; fi
 
   local jobs; jobs="$(gate_jobs)"
-  local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/kinu-gates.XXXXXX")"
-  local settled=0 failures=0 index status
-  local -a reported=()
-  local -a pids=()
-  echo "Running $total gate(s), up to $jobs at once"
+  # Every gate writes its output here and every failure is reported out of it, so
+  # a directory that could not be created is a wave that cannot be reported on.
+  # Refused rather than worked around: with `$dir` empty the redirections below
+  # would write to `/0.log`, and a box out of space or inodes would present as a
+  # clean pass.
+  local dir=""
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/kinu-gates.XXXXXX" 2>/dev/null)" || dir=""
+  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+    echo -e "${RED}❌ cannot create a gate log directory under ${TMPDIR:-/tmp}.${NC}"
+    echo "   Nothing can be reported without it, so nothing is built or published."
+    echo "   Free space or inodes, or set TMPDIR."
+    exit 1
+  fi
+
+  local index
   for ((index = 0; index < total; index++)); do
-    reported[index]=0
     # `$cmd` is split on whitespace on purpose: every gate is a plain argv of
     # words, which is the same assumption scripts/ladder.ts's parse makes and
     # deploy.test.ts pins by exact string. A quoted argument would mis-split
@@ -201,16 +245,18 @@ flush_gates() {
     esac
   done
 
-  local -a launched=()
-  local -A busy=()
-  local pick group
-  for ((index = 0; index < total; index++)); do launched[index]=0; done
+  local -a launched=() statuses=()
+  local -A busy=() gate_of_pid=()
+  local pick group finished status
+  local running=0 settled=0 failures=0
+  for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
+  echo "Running $total gate(s), up to $jobs at once"
   while [ "$settled" -lt "$total" ]; do
     # Take the FIRST gate that is neither launched nor blocked by a peer in its
     # own group. A plain queue pointer would stall the whole wave behind a
     # gallery gate waiting for its turn.
-    while [ "$failures" -eq 0 ] && [ "$(jobs -rp | wc -l)" -lt "$jobs" ]; do
+    while [ "$failures" -eq 0 ] && [ "$running" -lt "$jobs" ]; do
       pick=-1
       for ((index = 0; index < total; index++)); do
         if [ "${launched[index]}" -eq 1 ]; then continue; fi
@@ -231,59 +277,64 @@ flush_gates() {
       # box ran out of memory on 2026-08-25. The box carries swap now; if
       # orphan accumulation returns, the fix is cgroup scopes at the suite
       # layer, not a longer deadline.
+      #
+      # `exec` so the tracked pid IS `timeout`: one process fewer per gate, and
+      # the status `wait` reports below is the gate's own, not a wrapper's.
       (
-        set +e
         # shellcheck disable=SC2086
-        timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
-        gate_status=$?
-        printf '%s\n' "$gate_status" > "$dir/$pick.status.$BASHPID.tmp"
-        mv "$dir/$pick.status.$BASHPID.tmp" "$dir/$pick.status"
+        exec timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
       ) &
-      pids[pick]=$!
+      gate_of_pid[$!]=$pick
+      running=$((running + 1))
     done
 
-    # WAIT ONLY IF SOMETHING IS RUNNING, and never break before settling. An
-    # earlier version broke here the moment `jobs -rp` was empty, and with stub
-    # gates that finish instantly the whole wave could be launched, finish, and be
-    # abandoned unreported — so a failing gate left `failures` at 0 and the build
-    # ran. Nothing is running also means no group is busy, which is exactly when a
-    # gate held back by its group becomes launchable, so an empty job table is a
-    # reason to loop rather than to stop.
-    if [ "$(jobs -rp | wc -l)" -gt 0 ]; then wait -n 2>/dev/null || true; fi
+    if [ "$running" -eq 0 ]; then
+      # Nothing running and nothing launchable. After a failure that is the
+      # planned end of the wave. Without one, every unlaunched gate is held by a
+      # group no running gate owns, which is a defect in the exclusion table
+      # rather than a gate result — so it fails here instead of looping forever
+      # over a queue that cannot move.
+      if [ "$failures" -ne 0 ]; then break; fi
+      echo -e "${RED}❌ $((total - settled)) gate(s) can never launch: the exclusion table holds them with nothing running.${NC}"
+      rm -rf "$dir"
+      exit 1
+    fi
 
-    for ((index = 0; index < total; index++)); do
-      if [ "${launched[index]}" -eq 0 ] || [ "${reported[index]}" -eq 1 ]; then continue; fi
-      if [ ! -f "$dir/$index.status" ] && ! kill -0 "${pids[index]}" 2>/dev/null; then
-        printf '%s\n' '125' > "$dir/$index.status.unreported.tmp"
-        mv "$dir/$index.status.unreported.tmp" "$dir/$index.status"
-        printf '%s\n' 'gate process exited without reporting a status' >> "$dir/$index.log"
-      fi
-      if [ ! -f "$dir/$index.status" ]; then continue; fi
-      reported[index]=1
-      settled=$((settled + 1))
-      group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
-      if [ -n "$group" ]; then unset "busy[$group]"; fi
-      status="$(cat "$dir/$index.status")"
-      if [ "$status" = "0" ]; then
-        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC}"
-      else
-        failures=$((failures + 1))
-        echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC}"
-      fi
-    done
-
-    # The one reason to stop early: a gate failed, so nothing more is launched,
-    # and the gates already running have now all been reported.
-    if [ "$failures" -ne 0 ] && [ "$(jobs -rp | wc -l)" -eq 0 ]; then break; fi
+    finished=""
+    wait -n -p finished; status=$?
+    if [ -z "$finished" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
+      # `wait` came back without naming a child of this wave, so the status
+      # cannot be attributed to a gate. Stop rather than credit it to one.
+      echo -e "${RED}❌ a gate wait returned no child of this wave (status $status).${NC}"
+      rm -rf "$dir"
+      exit 1
+    fi
+    index="${gate_of_pid[$finished]}"
+    unset "gate_of_pid[$finished]"
+    running=$((running - 1))
+    settled=$((settled + 1))
+    statuses[index]=$status
+    group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
+    if [ -n "$group" ]; then unset "busy[$group]"; fi
+    if [ "$status" -eq 0 ]; then
+      echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC}"
+    else
+      failures=$((failures + 1))
+      echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC}"
+    fi
   done
 
   if [ "$failures" -ne 0 ]; then
     for ((index = 0; index < total; index++)); do
-      if [ ! -f "$dir/$index.status" ] || [ "$(cat "$dir/$index.status")" = "0" ]; then continue; fi
+      if [ "${statuses[index]}" -le 0 ]; then continue; fi
       echo ""
       echo -e "${BOLD}── ${GATE_LABELS[index]} ──${NC}"
       echo "Reproduce: ${GATE_CMDS[index]}"
-      cat "$dir/$index.log"
+      if [ -f "$dir/$index.log" ]; then
+        cat "$dir/$index.log"
+      else
+        echo "(the gate left no log file: its output went with the process)"
+      fi
     done
     echo ""
     echo -e "${RED}❌ $failures gate(s) failed. The build and publish steps did not start.${NC}"
@@ -366,7 +417,7 @@ run_required_gate "Durable Object semantics under workerd" bun run test:workerd
 run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
 run_required_gate "Full production CLI suite" bun run test:cli
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts
-run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts
+run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts scripts/sources.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
@@ -382,12 +433,15 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
 run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts
 run_required_gate "Public pages render" bun test scripts/public-pages.test.ts
+run_required_gate "Client failure recovery" bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts
+run_required_gate "React runtime identity" bun test scripts/react-runtime-identity.test.ts
+run_required_gate "Nested container resolution" bun test scripts/nested-container-resolution.test.ts
 run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts
 run_required_gate "Chat infinite scroll" bun test scripts/chat-scroll.test.ts
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts

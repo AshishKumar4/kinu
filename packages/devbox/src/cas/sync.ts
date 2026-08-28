@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { sha256Hex } from './hash';
+import { CHUNK_SIZE, sha256Hex } from './hash';
 import {
   DEFAULT_BATCH_SIZE,
   advanceCursor,
@@ -20,12 +20,14 @@ import {
   readFoldedSeq,
 } from './journal';
 import {
+  CAS_FORMAT_VERSION,
   JournalBatchSchema,
   KEY_MANIFEST,
+  ManifestSchema,
   PREFIX_BLOBS,
-  PresentEntrySchema,
   blobKey,
   decodeJson,
+  encodeJson,
   treeKey,
   type CasStore,
   type FileEntry,
@@ -97,7 +99,7 @@ export async function stageBlobs(options: StageBlobsOptions): Promise<StageBlobs
         }
         uploaded += result.uploaded;
         skipped += result.skipped;
-        if (result.uploaded === 0 && entry.chunks.length > 0) dedupHits += 1;
+        if (result.uploaded === 0 && entry.parts.some(part => part.kind === 'data')) dedupHits += 1;
       }
       committed.push(entry);
     }
@@ -118,8 +120,10 @@ async function uploadChunks(
 ): Promise<{ uploaded: number; skipped: number } | null> {
   let uploaded = 0;
   let skipped = 0;
-  for (let index = 0; index < entry.chunks.length; index += 1) {
-    const chunk = entry.chunks[index]!;
+  const chunks = entry.parts.filter((part): part is { kind: 'data'; hash: string; size: number } =>
+    part.kind === 'data');
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index]!;
     if (known.has(chunk.hash) || (await store.head(blobKey(chunk.hash))) !== null) {
       known.add(chunk.hash);
       skipped += 1;
@@ -188,7 +192,7 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
         + `cursor (${cursorBefore}), so it cannot have been reaped. The journal has a hole.`,
       );
     }
-    entries.push(...decodeJson(JournalBatchSchema, row.key, bytes));
+    entries.push(...decodeJson(JournalBatchSchema, row.key, bytes).entries);
   }
 
   // The winning entry per path, which is what the fold actually consumes and
@@ -216,6 +220,19 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
           new TextEncoder().encode(entry.target),
           { mode: S_IFLNK | 0o777, symlink: true, mtimeMs: entry.mtimeMs },
         );
+        manifest.set(entry.path, entry);
+        treeWrites += 1;
+        break;
+      }
+      case 'hardlink': {
+        const target = manifest.get(entry.target);
+        if (target?.kind !== 'file') {
+          throw new Error(`hardlink ${entry.path} targets missing or non-file ${entry.target}`);
+        }
+        await store.putStream(treeKey(entry.path), fileChunkStream(store, target), target.size, {
+          mode: S_IFREG | (entry.mode & 0o7777),
+          mtimeMs: entry.mtimeMs,
+        });
         manifest.set(entry.path, entry);
         treeWrites += 1;
         break;
@@ -313,11 +330,12 @@ export function fileChunkStream(
   entry: FileEntry,
 ): ReadableStream<Uint8Array> {
   let index = 0;
+  let holeOffset = 0;
   let total = 0;
   const whole = createHash('sha256');
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (index >= entry.chunks.length) {
+      if (index >= entry.parts.length) {
         if (total !== entry.size) {
           controller.error(new Error(`streamed ${total} bytes, expected ${entry.size} for ${entry.path}`));
           return;
@@ -330,14 +348,27 @@ export function fileChunkStream(
         controller.close();
         return;
       }
-      const chunk = entry.chunks[index]!;
-      const bytes = await store.get(blobKey(chunk.hash));
-      if (bytes === null) {
-        controller.error(new Error(`blob missing for ${entry.path}: ${chunk.hash}`));
+      const part = entry.parts[index]!;
+      if (part.kind === 'hole') {
+        const size = Math.min(CHUNK_SIZE, part.size - holeOffset);
+        const bytes = new Uint8Array(size);
+        holeOffset += size;
+        if (holeOffset === part.size) {
+          index += 1;
+          holeOffset = 0;
+        }
+        total += size;
+        whole.update(bytes);
+        controller.enqueue(bytes);
         return;
       }
-      if (bytes.byteLength !== chunk.size || sha256Hex(bytes) !== chunk.hash) {
-        controller.error(new Error(`blob fails size or digest for ${entry.path}: ${chunk.hash}`));
+      const bytes = await store.get(blobKey(part.hash));
+      if (bytes === null) {
+        controller.error(new Error(`blob missing for ${entry.path}: ${part.hash}`));
+        return;
+      }
+      if (bytes.byteLength !== part.size || sha256Hex(bytes) !== part.hash) {
+        controller.error(new Error(`blob fails size or digest for ${entry.path}: ${part.hash}`));
         return;
       }
       index += 1;
@@ -373,11 +404,15 @@ export async function sweepOrphanBlobs(store: CasStore): Promise<{
   const reachable = new Set<string>();
   for (const entry of (await readManifest(store)).values()) {
     if (entry.kind !== 'file') continue;
-    for (const chunk of entry.chunks) reachable.add(blobKey(chunk.hash));
+    for (const part of entry.parts) {
+      if (part.kind === 'data') reachable.add(blobKey(part.hash));
+    }
   }
   for (const entry of await listJournalAfter(store, await readFoldedSeq(store))) {
     if (entry.kind !== 'file') continue;
-    for (const chunk of entry.chunks) reachable.add(blobKey(chunk.hash));
+    for (const part of entry.parts) {
+      if (part.kind === 'data') reachable.add(blobKey(part.hash));
+    }
   }
   const listed = await store.list(PREFIX_BLOBS);
   const orphans = listed.filter(key => !reachable.has(key));
@@ -398,25 +433,12 @@ function deepestFirst(
 
 export async function readManifest(store: CasStore): Promise<Map<string, PresentEntry>> {
   const bytes = await store.get(KEY_MANIFEST);
-  const manifest = new Map<string, PresentEntry>();
-  if (bytes === null) return manifest;
-  // One entry per line, each parsed on its own so a refusal names the line it
-  // came from rather than the whole manifest.
-  const lines = new TextDecoder().decode(bytes).split('\n');
-  for (let at = 0; at < lines.length; at += 1) {
-    const line = lines[at] ?? '';
-    if (line === '') continue;
-    const entry = decodeJson(
-      PresentEntrySchema, `${KEY_MANIFEST}:${at + 1}`, new TextEncoder().encode(line),
-    );
-    manifest.set(entry.path, entry);
-  }
-  return manifest;
+  if (bytes === null) return new Map();
+  return new Map(decodeJson(ManifestSchema, KEY_MANIFEST, bytes).entries.map(entry => [entry.path, entry]));
 }
 
 async function writeManifest(store: CasStore, manifest: Map<string, PresentEntry>): Promise<void> {
-  const lines = [...manifest.values()]
-    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-    .map(entry => JSON.stringify(entry));
-  await store.put(KEY_MANIFEST, new TextEncoder().encode(`${lines.join('\n')}\n`));
+  const entries = [...manifest.values()]
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  await store.put(KEY_MANIFEST, encodeJson({ version: CAS_FORMAT_VERSION, entries }));
 }

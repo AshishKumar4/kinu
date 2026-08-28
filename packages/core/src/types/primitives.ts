@@ -52,7 +52,14 @@ export type SqlExecRow = Record<string, SqlValue>;
 /** What {@link VFS.stat} answers for a path that exists. Named because a
  *  consumer holding one needs the type, and `ReturnType<typeof vfs.stat>`
  *  couples it to the method rather than to the contract. */
-export interface VfsEntryStat { size: number; mtimeMs: number; isDir: boolean }
+export interface VfsEntryStat {
+  size: number;
+  mtimeMs: number;
+  isDir: boolean;
+  /** Authoritative backend path revision when the plane has one. Never derived
+   * from size/mtime: a same-size/same-mtime peer write is still a new value. */
+  revision?: number;
+}
 
 /**
  * VFS interface — the workspace filesystem implements it, and so does each
@@ -65,6 +72,14 @@ export interface VfsEntryStat { size: number; mtimeMs: number; isDir: boolean }
  * one set of names.
  */
 export interface VFS {
+  /** Native authoritative compare-and-write. Undefined means this plane cannot
+   * safely offer in-place editor saves; callers must not emulate it with a
+   * read/compare/write sequence. */
+  writeFileIfRevision?(
+    path: string,
+    data: Uint8Array,
+    expectedRevision: number,
+  ): Promise<{ ok: true; revision: number } | { ok: false; revision: number }>;
   readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;

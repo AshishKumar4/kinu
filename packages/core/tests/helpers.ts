@@ -25,7 +25,7 @@ import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
-import { createWorkspace, nextWorkspaceGeneration } from '../src/vfs/nimbus-workspace';
+import { createWorkspace, nextWorkspaceGeneration, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
@@ -35,7 +35,9 @@ export interface TestWorkspace {
   readonly db: Database;
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
-  readonly vfs: VFS;
+  /** The embedded Nimbus plane itself, so a test can drive the ranged read the
+   *  fork wire requires rather than a narrowed view of it. */
+  readonly vfs: WorkspaceVFS;
 }
 
 /**

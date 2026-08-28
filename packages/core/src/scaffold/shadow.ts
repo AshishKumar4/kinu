@@ -38,10 +38,19 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import {
+  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+} from '../identity/effect-tombstones';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
+
+/** One turn's contribution of trial evidence. Kept after the queue row is
+ *  consumed: `dropQueuedShadowTrial` deletes that row the moment the trial is
+ *  scored, so `ON CONFLICT(id) DO NOTHING` stops protecting anything and a
+ *  replayed queueing would have the same turn scored twice. */
+const TRIAL_SCOPE = 'shadow_trial';
 
 export type ScaffoldStatus = 'current' | 'pending' | 'rolled_back' | 'historical';
 
@@ -219,6 +228,9 @@ export function initShadowTables(execRaw: RawSqlExec): void {
     queued_at INTEGER NOT NULL
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_trial_queue_pending ON scaffold_trial_queue(pending_version)`);
+  // The queue row is deleted the moment its trial is scored, so the tombstone
+  // that outlives it is part of this queue's contract.
+  initEffectTombstoneTable(execRaw);
   // scaffold_versions.status is now created natively by initScaffoldTables
   // (in scaffold/schemas.ts); no ALTER fallback needed here.
 }
@@ -271,13 +283,24 @@ export const SHADOW_TRIAL_CONTEXT_CHARS = 64_000;
  * message. Trimming mid-exchange would leave a tool result whose call is gone,
  * which providers reject outright — a replay that 400s is worth less than a
  * shorter one.
+ *
+ * Exported because a caller that RECORDS this context owes the same bound at the
+ * moment it records: a durable effect input is a SQLite row too, and one built
+ * from a million-token turn fails its insert partway through a claimed sequence,
+ * leaving a prefix that recovery reads as the whole roster.
  */
-function trimTrialContext(messages: readonly ModelMessage[]): ModelMessage[] {
+export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessage[] {
   const kept: ModelMessage[] = [];
   let spent = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const size = JSON.stringify(messages[i]).length;
-    if (spent + size > SHADOW_TRIAL_CONTEXT_CHARS && kept.length > 0) break;
+    // A single message over the whole budget is DROPPED, not kept as the one
+    // exception. Keeping it was the reason this bound could still be exceeded:
+    // one pasted file in the last user turn made the row that carries this
+    // context fail its insert, part-way through a claimed sequence.
+    if (spent + size > SHADOW_TRIAL_CONTEXT_CHARS) {
+      if (kept.length > 0 || size > SHADOW_TRIAL_CONTEXT_CHARS) break;
+    }
     spent += size;
     kept.unshift(messages[i]);
   }
@@ -288,6 +311,10 @@ function trimTrialContext(messages: readonly ModelMessage[]): ModelMessage[] {
 /**
  * Record one trial for later execution. Returns what happened, so the caller
  * can report an honest reason rather than a silent no-op.
+ *
+ * A keyed trial that has already been consumed reports `queued`: the caller's
+ * obligation is discharged, because the trial it owes not only exists but has
+ * been scored.
  */
 export function queueShadowTrial(
   sql: SqlExecutor,
@@ -296,13 +323,28 @@ export function queueShadowTrial(
     task: string;
     currentOutput: string;
     context: readonly ModelMessage[];
+    /** The row identity, when the caller OWES this queueing and may run it
+     *  again. With it the queueing is idempotent for good: while the row lives
+     *  the insert conflicts on it, and once the runner has deleted it the
+     *  `shadow_trial` tombstone refuses the replay. Without the tombstone the
+     *  replay found no conflict and the same turn was scored a second time, in
+     *  a table the promotion gate counts. A caller whose queueing nothing can
+     *  replay passes none. */
+    id?: string;
     now?: number;
   },
 ): 'queued' | 'queue_full' {
+  // Ahead of the depth check: a trial that has already run is not competing for
+  // a queue slot, and `queue_full` would be a false refusal.
+  if (args.id !== undefined && effectAlreadyDone(sql, TRIAL_SCOPE, args.id)) return 'queued';
   if (countQueuedShadowTrials(sql, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
+  // DO NOTHING, not a replace: the row the first queueing wrote is the one the
+  // runner may already have taken, and overwriting it would re-open work that
+  // has moved on.
   void sql`INSERT INTO scaffold_trial_queue (id, pending_version, task, current_output, context, queued_at)
-      VALUES (${`trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
-              ${JSON.stringify(trimTrialContext(args.context))}, ${args.now ?? nowMs()})`;
+      VALUES (${args.id ?? `trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
+              ${JSON.stringify(trimTrialContext(args.context))}, ${args.now ?? nowMs()})
+      ON CONFLICT(id) DO NOTHING`;
   return 'queued';
 }
 
@@ -345,10 +387,16 @@ export function countQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number
   return rows[0]?.n ?? 0;
 }
 
-/** Trial executed (or thrown away) — the queue row's job is done. */
+/** Trial executed (or thrown away) — the queue row's job is done, and the
+ *  tombstone written in the same pass is what stops a replayed queueing from
+ *  putting it back. Recorded for every id, not only keyed ones: this function
+ *  cannot tell which caller owed the queueing, and the wrong guess is a trial
+ *  scored twice. */
 export function dropQueuedShadowTrial(sql: SqlExecutor, id: string): void {
+  recordEffectDone(sql, TRIAL_SCOPE, id);
   void sql`DELETE FROM scaffold_trial_queue WHERE id = ${id}`;
 }
+
 
 /** Discard every queued trial that is not for `keepVersion`. A trial is
  *  evidence about ONE candidate: once that candidate is promoted or rolled
@@ -498,6 +546,31 @@ export async function readScaffoldVersion(
  * Record one shadow-mode trial. Called by the orchestrator after running
  * both the current and pending scaffold for a given turn.
  */
+/**
+ * The score this queued trial ALREADY produced, or null.
+ *
+ * The guard in front of a re-run's rollout, and the input its remaining half
+ * resumes from. The evaluation row carries the trial's own id, so its presence
+ * is the record that the expensive, tool-touching part already ran — and its
+ * contents are the verdict the promotion decision was owed.
+ */
+export function scoredShadowTrial(sql: SqlExecutor, trialId: string): ShadowTrialVerdict | null {
+  const rows = sql<{
+    current_score: number; pending_score: number;
+    winner: ShadowTrialVerdict['winner']; judge_rationale: string;
+  }>`
+    SELECT current_score, pending_score, winner, judge_rationale
+    FROM scaffold_evaluations WHERE id = ${`eval-${trialId}`} LIMIT 1`;
+  const row = rows[0];
+  if (row === undefined) return null;
+  return {
+    currentScore: row.current_score,
+    pendingScore: row.pending_score,
+    winner: row.winner,
+    rationale: row.judge_rationale,
+  };
+}
+
 export function recordShadowEvaluation(
   sql: SqlExecutor,
   args: {
@@ -507,9 +580,14 @@ export function recordShadowEvaluation(
     currentOutput: string;
     pendingOutput: string;
     judgeResult: ShadowTrialVerdict;
+    /** The queued trial this scores. Its identity, so a replay after an
+     * interruption between this insert and the queue delete writes the SAME row
+     * rather than a second score for one trial. A bare eval (no queue row behind
+     * it) has nothing to replay and keeps a fresh id. */
+    trialId?: string;
   },
 ): ShadowEvaluationRow {
-  const id = `eval-${nanoid()}`;
+  const id = args.trialId === undefined ? `eval-${nanoid()}` : `eval-${args.trialId}`;
   const row: ShadowEvaluationRow = {
     id,
     current_version: args.currentVersion,
@@ -527,7 +605,8 @@ export function recordShadowEvaluation(
     VALUES (${row.id}, ${row.current_version}, ${row.pending_version},
             ${row.task}, ${args.currentOutput}, ${args.pendingOutput},
             ${row.current_score}, ${row.pending_score},
-            ${row.winner}, ${row.judge_rationale}, ${row.evaluated_at})`;
+            ${row.winner}, ${row.judge_rationale}, ${row.evaluated_at})
+    ON CONFLICT(id) DO NOTHING`;
   return row;
 }
 

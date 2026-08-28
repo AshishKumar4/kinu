@@ -23,7 +23,11 @@ describe('use-kinu chat-error wiring', () => {
   });
 
   test('catches the on-connect terminal-error replay frame in the raw onMessage handler', () => {
-    const handler = hook.slice(hook.indexOf('onMessage: useCallback'), hook.indexOf('const {'));
+    // `between` searches the closing anchor AFTER the opening one and throws
+    // when it is absent. A bare pair of `indexOf` calls did not: the first
+    // `const {` in the file moved above the handler and the slice silently
+    // became empty, which asserts nothing.
+    const handler = between(hook, 'onMessage: useCallback', 'const {', 'use-kinu.ts');
     expect(handler).toContain('data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true');
     expect(handler).toContain('setChatError(');
     // And it must be able to SAY it is a replay. The server keeps its last
@@ -53,7 +57,11 @@ describe('use-kinu chat-error wiring', () => {
     // or keeps a trailing user message when the turn produced none, and sends
     // `trigger: 'regenerate-message'`. `sendMessage` here appended a duplicate
     // user turn on every press.
-    expect(retry).toContain('void regenerate()');
+    // The INVARIANT, not the call spelling: retry must go through `regenerate`
+    // and must never reach `sendMessage`. Asserting the exact statement broke on
+    // a refactor that put the same call under the send-admission latch, which is
+    // a ratchet failing on a change that preserved the property it defends.
+    expect(retry).toContain('regenerate()');
     expect(retry).not.toContain('sendMessage(');
     expect(hook).toContain('    regenerate,');
   });

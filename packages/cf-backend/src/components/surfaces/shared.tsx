@@ -4,7 +4,7 @@
  * markdown rendering, code blocks, and empty states.
  */
 import { memo, useState, type ReactNode } from "react";
-import { CaretRightIcon, CopyIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -72,6 +72,40 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
   );
 }
 
+/**
+ * A Markdown image, with failure told rather than shown as a broken glyph.
+ *
+ * A resource that fails to load throws nothing, so the chat's error boundary
+ * never hears about it — the reader got a browser-drawn broken-image mark with
+ * no name and no way to the source. On failure (or an image with no source at
+ * all) this renders a quiet diagnostic instead: what failed, named by the
+ * author's alt text when there is one, and the raw link — a browser tab says
+ * WHY it failed (403, 404, mixed content) better than an img box ever can.
+ */
+function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed || !src) {
+    return (
+      <span data-markdown-image-error role="note" className="my-1.5 inline-flex max-w-full items-baseline gap-1.5 rounded-lg border p-border px-2.5 py-1.5 text-xs p-text-3">
+        <ImageBrokenIcon size={13} aria-hidden className="self-center shrink-0" />
+        <span className="min-w-0">
+          {alt ? `Image failed to load: ${alt}` : "Image failed to load"}
+          {src && (
+            <>
+              {" — "}
+              <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline break-all">{src}</a>
+            </>
+          )}
+        </span>
+      </span>
+    );
+  }
+  return (
+    <img data-markdown-image src={src} alt={alt ?? ""} title={title} loading="lazy"
+      className="max-w-full rounded-lg" onError={() => setFailed(true)} />
+  );
+}
+
 // Memoized on the content string — the react-markdown re-parse is the
 // dominant render cost, so unchanged messages must skip it entirely.
 export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
@@ -91,6 +125,9 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
         return <CodeBlock className={className}>{children}</CodeBlock>;
       },
       a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>; },
+      // Keyed on the source so a re-render that swaps the image also resets
+      // the failure state — the new source deserves its own attempt.
+      img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
       table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="w-full text-xs border-collapse">{children}</table></div>; },
       th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
       td({ children }) { return <td className="border-b p-border px-2.5 py-1.5 align-top">{children}</td>; },
@@ -270,4 +307,30 @@ export function HistoryBoundary({ loading, error, exhausted, onRetry }: {
       ) : null}
     </div>
   );
+}
+
+/**
+ * The authority gate before a thread has any renderable entries.
+ *
+ * A delivered `status: "end"` page is the only fact that permits an empty
+ * claim. A failed first page keeps its Retry, and every unresolved state keeps
+ * the loading surface. Both chat columns and the gallery use this component so
+ * the product state and its browser proof cannot drift apart.
+ */
+export function ConversationStartBoundary({
+  hasEntries, streaming, error, exhausted, onRetry, pending, empty,
+}: {
+  hasEntries: boolean;
+  streaming: boolean;
+  error: string | null;
+  exhausted: boolean;
+  onRetry: () => void;
+  pending: ReactNode;
+  empty: ReactNode;
+}) {
+  if (hasEntries) return null;
+  if (error !== null) {
+    return <HistoryBoundary loading={false} error={error} exhausted={false} onRetry={onRetry} />;
+  }
+  return exhausted && !streaming ? empty : pending;
 }

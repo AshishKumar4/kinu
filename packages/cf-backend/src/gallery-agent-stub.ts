@@ -2,32 +2,34 @@
  * The Agents SDK client, stood in for by the design gallery.
  *
  * `gallery.vite.config.ts` aliases `agents/react` and `@cloudflare/ai-chat/react`
- * here, the same way it aliases `node:crypto` to `gallery-node-stubs.ts`. It sits
- * inside `src` rather than beside that file because the gallery IMPORTS
- * `serveGalleryRpc` from it by path, and `gate:capability-parity` reads a local
- * import that resolves outside the tracked source set as a module with no
- * dependencies at all — which would report the gallery as movable when it is not. Frames that mount a SURFACE are
- * handed an `Rpc` as a prop and need none of this; frames that mount a PAGE are
- * not — a page owns its own connection through `useKinu`, so without a stand-in
- * for the socket there is no seam a fixture can reach at all.
- *
- * That is not hypothetical. `?frame=forkfull`, `?frame=forkbig` and
- * `?frame=forkswarmfull` all mount `MCTSExplorer`, all opened a real WebSocket to
- * a vite dev server that is not a Worker, and all rendered a blank body — while
- * `scripts/computed-style.ts` listed `forkfull` among the frames it audits and
- * reported clean over the empty document.
- *
- * A stand-in for the transport, and nothing more. It answers RPC out of the same
- * fixture stores the surface frames read, reports one open connection, and holds
- * no chat: what the pages under test draw is trees and panels, and a socket that
- * pushed fabricated broadcasts would photograph a product nobody shipped.
+ * here. Page fixtures own their connection through `useKinu`, so this is the
+ * one transport seam gallery controls; surface fixtures receive RPC props and
+ * need none of it.
  */
 
 import { useEffect, useMemo, useRef } from "react";
 
+interface GalleryConnectionError {
+	readonly code: number;
+	readonly reason: string;
+	readonly message: string;
+}
+
+/** A terminal close fixture is SDK-shaped input, not a copied WorkspacePage
+ * policy. `useKinu` consumes this same connectionError state in production. */
+const terminalClose: GalleryConnectionError | null =
+	new URLSearchParams(location.search).get("terminal") === "denied"
+		? {
+			code: 1008,
+			reason: "workspace access denied by fixture",
+			message: "workspace access denied by fixture",
+		}
+		: null;
+
 /** The one method surface `useKinu` uses off the agent connection. */
 export interface GalleryAgent {
 	readonly readyState: number;
+	readonly connectionError: GalleryConnectionError | null;
 	call<T>(method: string, args?: unknown[]): Promise<T>;
 	send(data: string): void;
 	addEventListener(type: string, listener: EventListener): void;
@@ -44,15 +46,8 @@ interface AgentHandlers {
 
 type GalleryRpc = <T>(method: string, args?: unknown[]) => Promise<T>;
 
-/**
- * The fixture the stub answers from, installed by `src/gallery.tsx` before it
- * mounts anything.
- *
- * Registered rather than imported: the stub stands in for a module the app
- * imports, so importing the gallery back would close the cycle
- * `gallery -> page -> use-kinu -> agents/react -> gallery`, and
- * `import/no-cycle` is an error at zero across this repo.
- */
+/** Installed by `gallery.tsx` before a page frame mounts. Registered rather than
+ * imported to avoid the gallery -> page -> hook -> gallery module cycle. */
 let served: GalleryRpc | null = null;
 
 export function serveGalleryRpc(rpc: GalleryRpc): void {
@@ -60,12 +55,11 @@ export function serveGalleryRpc(rpc: GalleryRpc): void {
 }
 
 /**
- * An open connection whose calls resolve out of the fixture.
+ * An open connection whose calls resolve out of the frame fixture.
  *
- * A call made before a fixture is installed REJECTS with the reason. Answering
- * it with `[]` or leaving it pending are the two shapes that made the blank
- * frames unreadable — one renders a lie, the other an eternal spinner — and this
- * file exists because both of them survived in a green gate.
+ * Terminal mode deliberately never opens. The SDK error plus the CloseEvent are
+ * the real `useKinu` inputs; WorkspacePage remains the terminal-state renderer
+ * oracle rather than a gallery copy.
  */
 export function useAgent(options: AgentHandlers): GalleryAgent {
 	const handlers = useRef(options);
@@ -74,6 +68,7 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 		const listeners = new Map<string, Set<EventListener>>();
 		return {
 			readyState: 1,
+			connectionError: terminalClose,
 			call: <T,>(method: string, args: unknown[] = []): Promise<T> => (
 				served === null
 					? Promise.reject(new Error(`gallery: no fixture serves ${method}`))
@@ -89,15 +84,23 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			close: () => { listeners.clear(); },
 		};
 	}, []);
-	// One open, on mount. `useKinu` gates its whole snapshot fetch on the
-	// connected status, so a stub that never opens is a stub that never loads.
-	useEffect(() => { handlers.current.onOpen?.(new Event("open")); }, []);
+	useEffect(() => {
+		if (terminalClose !== null) {
+			handlers.current.onClose?.(new CloseEvent("close", {
+				code: terminalClose.code,
+				reason: terminalClose.reason,
+			}));
+			return;
+		}
+		handlers.current.onOpen?.(new Event("open"));
+	}, []);
 	return agent;
 }
 
-/** `useAgentChat`'s surface, with no conversation behind it. The pages this
- *  file exists for draw trees and panels; the chat frames use the real
- *  component with fixture messages passed in. */
+/**
+ * `useAgentChat`'s gallery surface. The held-send DOM values are transport
+ * controls only: real `useKinu` decides whether same-task presses enter it.
+ */
 export function useAgentChat(_options: { agent: GalleryAgent }): {
 	messages: never[];
 	sendMessage: () => Promise<void>;
@@ -105,15 +108,24 @@ export function useAgentChat(_options: { agent: GalleryAgent }): {
 	clearHistory: () => void;
 	stop: () => void;
 	isStreaming: false;
+	status: "ready";
 	error: undefined;
+	connectionError: GalleryConnectionError | null;
 } {
 	return useMemo(() => ({
 		messages: [],
-		sendMessage: () => Promise.resolve(),
+		sendMessage: () => {
+			const root = document.documentElement;
+			root.dataset.galleryChatSends = String(Number(root.dataset.galleryChatSends ?? "0") + 1);
+			if (root.dataset.galleryChatHold !== "1") return Promise.resolve();
+			return new Promise<void>(() => {});
+		},
 		regenerate: () => Promise.resolve(),
 		clearHistory: () => {},
 		stop: () => {},
 		isStreaming: false,
+		status: "ready" as const,
 		error: undefined,
+		connectionError: terminalClose,
 	}), []);
 }

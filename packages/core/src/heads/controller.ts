@@ -98,19 +98,22 @@ export interface HeadJournalPort {
  * The ROOT's journal: the port plus the two reads only a run's root can serve.
  *
  * Run reclamation resolves a top-level split's identity against every unfinished
- * run in the store, and retires the heads of the attempt it reclaims. Both are
- * whole-store operations, so a facet holding an RPC port aimed at its root
- * cannot answer them and must not pretend to — it never needs to, because a
- * recursive split always carries a `parentHeadId` and so never resolves a
+ * run in the store. That is a whole-store operation, so a facet holding an RPC port
+ * aimed at its root cannot answer it and must not pretend to — it never needs to,
+ * because a recursive split always carries a `parentHeadId` and so never resolves a
  * top-level run. `HeadJournal` satisfies this structurally.
+ *
+ * ONE CAPABILITY, not two. `abandonRunning` used to be here as well, because
+ * reclaiming a run also retired its heads. A re-drive now RE-OPENS them instead, and
+ * the transition that does it is `insertSpawn`, which this port already carries — so
+ * the terminal writer is no longer any of this controller's business.
  */
 export interface HeadRootJournal extends HeadJournalPort {
   findResumableRun(task: string): HeadId | null;
-  abandonRunning(reason: string, scope: { readonly rootId: HeadId }): void;
 }
 
 function isRootJournal(journal: HeadJournalPort): journal is HeadRootJournal {
-  return 'findResumableRun' in journal && 'abandonRunning' in journal;
+  return 'findResumableRun' in journal;
 }
 
 /** What the controller asks the runtime to do per child head. */
@@ -150,11 +153,27 @@ export type SplitPhaseEvent =
        *  is a query over the ledger rather than a re-read of merges by hand. */
       blindSpots: MergeResult['blindSpots'] };
 
-/** What a reclaimed run's interrupted branches are marked with. Written into
- *  `head_journal.error_message`, which the Exploration surface shows verbatim,
- *  so it is worded for the person reading the branch. */
-export const RECLAIMED_RUN_REASON =
-  'Interrupted before it reported. This fork was restarted, and the branches below it are the retry.';
+/**
+ * NOTHING IS WRITTEN ON A BRANCH A RE-DRIVE TAKES OVER, and the absence is the fix.
+ *
+ * There used to be a `RECLAIMED_RUN_REASON` here — "Interrupted before it reported.
+ * This fork was restarted, and the branches below it are the retry." — stamped onto
+ * every unreported row of the reclaimed run by {@link HeadController.resolveTopLevelRun}
+ * and rendered verbatim on the Exploration surface. It was the fork twin of the swarm's
+ * own defect and it multiplied the same way: the run id was reclaimed, its rows were
+ * retired, and then the split minted a FRESH id per head, so one request accumulated
+ * `heads.length` aborted rows per re-drive up to the runner's attempt cap. The owner
+ * read that as `Systemfork interrupted` over a pile of failed branches.
+ *
+ * A head that was spawned and never reported is UNFINISHED WORK. A re-drive re-runs
+ * it under its OWN id, so the row is RE-OPENED rather than retired — the shared
+ * transition is `HeadJournal.insertSpawn`, which both this controller and the swarm's
+ * re-entry reach, and it is the only place either of them resets a head row.
+ *
+ * The one caller that may still retire a head is the start-of-life reconciliation, for
+ * a root whose durable job the resume gate could not re-drive (`heads/reconcile.ts`) —
+ * the one place where "no report will arrive" is a true statement.
+ */
 
 /** The score a head carries when nothing grounded can be said about it — no
  *  judge is wired, or the one that is could not be reached. Mid-range on
@@ -180,10 +199,11 @@ export class HeadController {
    * owner saw four near-identical `merged · 5 branches` rows for a single ask,
    * each of which had really spawned and paid for its own five heads.
    *
-   * The interrupted attempt's heads are retired under the reclaimed root rather
-   * than deleted — their partial step traces are the only record of what those
-   * branches did before the interruption, and the surface shows them as the
-   * branches that died with it.
+   * THE RECLAIMED ATTEMPT'S HEADS ARE RE-RUN, not retired. Their ids are derived
+   * rather than minted (see {@link run}), so re-spawning them re-opens the rows they
+   * already have and one request holds `heads.length` rows however many times it is
+   * re-driven. Retiring them and minting fresh ids is what put `heads.length` aborted
+   * branches per re-drive on the surface.
    */
   private resolveTopLevelRun(task: string): HeadId {
     const journal = this.journal;
@@ -195,10 +215,7 @@ export class HeadController {
         + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
       );
     }
-    const resumed = journal.findResumableRun(task);
-    if (!resumed) return nanoid();
-    journal.abandonRunning(RECLAIMED_RUN_REASON, { rootId: resumed });
-    return resumed;
+    return journal.findResumableRun(task) ?? nanoid();
   }
 
   /**
@@ -256,7 +273,23 @@ export class HeadController {
 
     // Spawn all children concurrently.
     const spawnPromises = opts.request.heads.map(async (h, idx) => {
-      const id = `${rootId}-d${childBudget.maxDepth + 1}-${idx}-${nanoid(6)}`;
+      /**
+       * THE HEAD'S ID IS DERIVED, NEVER MINTED, and that one change is what makes a
+       * re-drive reuse this branch instead of adding one.
+       *
+       * A head has no durable checkpoint — it is an ephemeral facet — so a re-drive
+       * can only re-run it. What it must NOT do is re-run it as a NEW branch: the
+       * previous attempt's row was then retired and a fresh `nanoid` row took its
+       * place, so one request grew `heads.length` rows per attempt. Derived from the
+       * BRANCH POINT and the slot, the id is the same on every attempt, and
+       * `HeadJournal.insertSpawn` re-opens the row it already has.
+       *
+       * KEYED ON THE PARENT and not on the root, which is also a correctness fix: two
+       * different parents splitting at the same depth under one root produced the same
+       * `${rootId}-d${depth}-${idx}` prefix, and only the random suffix kept them
+       * apart. A parent id is unique, so parent-plus-slot is unique without it.
+       */
+      const id = `${opts.parentHeadId ?? rootId}-d${childBudget.maxDepth + 1}-${idx}`;
       const input: HeadInput = {
         id,
         rootId,

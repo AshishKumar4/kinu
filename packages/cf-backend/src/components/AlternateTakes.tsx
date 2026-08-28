@@ -21,6 +21,7 @@ import { ScoreBar } from "@/components/ui/score-bar";
 import { MarkdownContent } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
+import { NO_HEAD_DELTAS, type HeadDeltas } from "@/components/head-chat";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "./alternate-takes-logic";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
@@ -179,24 +180,33 @@ function TakesComparison({ set, onPick, onClose }: {
  * TranscriptBody} the Exploration panel does; a chip that could only say
  * "Branching…" left the reader with no way to see what they had spent a turn on.
  */
-export function BranchRunChip({ run, takes, rpc, headActivity, onPick, onDismiss }: {
+export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_HEAD_DELTAS, onPick, onDismiss }: {
   run: BranchRun;
   /** The settled set (hydrated from listAlternateTakes by the run's turnId). */
   takes?: AlternateTakeSet;
   rpc: Rpc;
   /** Per-branch write counter — what makes an open branch transcript live. */
   headActivity: ReadonlyMap<string, number>;
+  /** The live deltas — the step this branch is writing. */
+  headDeltas?: HeadDeltas;
   onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
   onDismiss: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const task = run.task.length > 80 ? `${run.task.slice(0, 80)}…` : run.task;
   const headId = branchHeadId(run.branchId);
-  const { view, resource, reload } = useNodeTranscript({
+  const { view, resource, reload, pending } = useNodeTranscript({
     runId: open ? run.branchId : null,
     nodeId: open ? headId : null,
     rpc,
     headActivity,
+    headDeltas,
+    // A working branch arms the clock under the push. Without it this chip was
+    // the one reader that could never recover a missed socket frame: the panel
+    // reader can click another node and re-key the fetch, and a chip has one
+    // node and no elsewhere to click — an open transcript stayed frozen on
+    // whatever step had landed when the frame went missing.
+    running: run.status === "running",
   });
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
@@ -241,7 +251,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, onPick, onDismiss
           )}
           {/* No `onSelect`: a branch run is one head deep, so its search path has
               no ancestor to leave for. */}
-          {view ? <TranscriptBody view={view} />
+          {view ? <TranscriptBody view={view} pending={pending} />
             : resource.status === "loading" ? (
               <div className="flex items-center justify-center gap-2 py-6 text-[12px] p-text-2">
                 <Loader size="sm" />Reading the branch…

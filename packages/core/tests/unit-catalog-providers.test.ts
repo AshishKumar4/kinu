@@ -24,7 +24,7 @@ const CATALOG = {
     models: {
       'llama-3.3-70b-versatile': {
         id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', tool_call: true,
-        limit: { context: 131072 }, modalities: { input: ['text'] },
+        limit: { context: 131072, output: 32768 }, modalities: { input: ['text'] },
       },
       'no-tools-model': { id: 'no-tools-model', name: 'No Tools', tool_call: false },
     },
@@ -203,6 +203,9 @@ describe('registry with dynamic catalog source', () => {
     const groq = models.filter((m) => m.provider === 'groq');
     expect(groq.map((m) => m.id)).toEqual(['llama-3.3-70b-versatile']); // no-tools-model filtered
     expect(groq[0].contextWindow).toBe(131072);
+    // The answer allowance context admission reserves against — dropped here
+    // before KINU-045, which left the allocator nothing to reserve.
+    expect(groq[0].modelOutputLimit).toBe(32768);
     expect(groq[0].capabilities).toContain('tools');
   });
 
@@ -258,7 +261,7 @@ describe('registry with dynamic catalog source', () => {
     try {
       await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
     } catch (err) {
-      detail = describeProviderError(err);
+      detail = describeProviderError({ cause: err });
     }
     expect(detail).toContain('models.dev');
   });

@@ -35,12 +35,35 @@
 // backend wires; the per-root record of which roots wire what, with a stated
 // reason for every deliberate absence, is conformance/manifest.ts.
 
+/**
+ * How a capability behaves when the SAME call is reached twice.
+ *
+ * Named for recovery, because that is the only question it answers. A turn can
+ * be interrupted between a tool's effect and the durable record of its
+ * completion — an eviction, a code update, a crash — and recovery replays the
+ * provider response that asked for it.
+ *
+ *   safe     rerunning the call cannot do anything twice: it reads, or it
+ *            converges on the same state. Recovery just runs it again.
+ *   claimed  rerunning it might. The call goes through the effect claim
+ *            (tools/effect-claim.ts): the attempt is durable BEFORE the
+ *            effect, a completed call replays its stored output, and a call
+ *            whose outcome is unknown is refused rather than repeated.
+ *
+ * Mandatory on every row, so a new capability cannot arrive without an answer,
+ * and there is no list anywhere that can opt one out. A name this table does
+ * not declare — an MCP tool, any dynamically adapted surface — resolves to
+ * `claimed`, because nothing has proven its replay safety.
+ */
+export type ReplayPolicy = 'safe' | 'claimed';
+
 export type ToolReach =
-  | { readonly native: true; readonly codemode: string | null }
-  | { readonly native: false; readonly codemode: string };
+  | { readonly native: true; readonly codemode: string | null; readonly replay: ReplayPolicy }
+  | { readonly native: false; readonly codemode: string; readonly replay: ReplayPolicy };
 
 /**
- * Every capability the model can call by name, and where it can call it.
+ * Every capability the model can call by name, where it can call it, and what
+ * happens if the same call is reached twice.
  *
  * The native rows come first, in registration order. Adding one GROWS the
  * standing tool surface, which is 8 by deliberate design (10 → 8, 2026-08-13:
@@ -48,25 +71,54 @@ export type ToolReach =
  * not the answer to, and selection accuracy degrades with choice count).
  * unit-tools.test.ts pins both the count and the names against this table, so
  * growth is a decision and never a side effect of editing it.
+ *
+ * The claim is enforced at the PROVIDER tool-call boundary, which is where a
+ * replay re-enters. A codemode-only capability is reached from inside
+ * `execute_tools`, so its own row states the policy of the calls it makes and
+ * the claim that actually covers it is the enclosing `execute_tools` one.
  */
 export const TOOL_REACH = {
-  execute_tools: { native: true, codemode: null },
-  run: { native: true, codemode: 'workspace' },
-  file: { native: true, codemode: 'workspace' },
-  agents: { native: true, codemode: 'agents' },
-  memory: { native: true, codemode: 'memory' },
-  tasks: { native: true, codemode: 'tasks' },
-  web: { native: true, codemode: 'web' },
-  report: { native: true, codemode: 'report' },
+  // Arbitrary code with the whole executor surface behind it: nothing about a
+  // second run of it is safe.
+  execute_tools: { native: true, codemode: null, replay: 'claimed' },
+  run: { native: true, codemode: 'workspace', replay: 'claimed' },
+  // `file` reads AND writes, and one policy covers the capability, so the
+  // answer is the one that is never wrong for a write.
+  file: { native: true, codemode: 'workspace', replay: 'claimed' },
+  agents: { native: true, codemode: 'agents', replay: 'claimed' },
+  // A remembered fact converges, but a saved note does not: two runs leave two
+  // notes.
+  memory: { native: true, codemode: 'memory', replay: 'claimed' },
+  tasks: { native: true, codemode: 'tasks', replay: 'claimed' },
+  // Search and fetch are reads. A repeat costs a request and answers the same
+  // question.
+  web: { native: true, codemode: 'web', replay: 'safe' },
+  // A report is a message to the orchestrator; a second one is a second
+  // message.
+  report: { native: true, codemode: 'report', replay: 'claimed' },
   // Codemode-only by decision, not by omission: a governed high-blast-radius
-  // lane, the agent's own self-steering, and the sandbox's recursive-LM
-  // primitive. None of the three is the answer to enough turns to earn a
-  // standing top-level choice, and `llm.query` is only meaningful as code
-  // feeding code in the first place.
-  release: { native: false, codemode: 'release' },
-  agent: { native: false, codemode: 'agent' },
-  llm: { native: false, codemode: 'llm' },
+  // lane, and the agent's own self-steering. Neither is the answer to enough
+  // turns to earn a standing top-level choice.
+  release: { native: false, codemode: 'release', replay: 'claimed' },
+  agent: { native: false, codemode: 'agent', replay: 'claimed' },
 } as const satisfies Record<string, ToolReach>;
+
+/**
+ * The replay policy of a tool the model just called, by the name the provider
+ * used.
+ *
+ * `claimed` for anything this table does not declare. That is the whole
+ * fallback: an MCP server's tool, or any adapter added later, is an external
+ * effect whose replay safety nothing here has established — so it goes through
+ * the claim until its own declaration says otherwise.
+ */
+export function replayPolicyFor(toolName: string): ReplayPolicy {
+  return isToolReachName(toolName) ? TOOL_REACH[toolName].replay : 'claimed';
+}
+
+function isToolReachName(value: string): value is keyof typeof TOOL_REACH {
+  return Object.hasOwn(TOOL_REACH, value);
+}
 
 type CapabilityName = keyof typeof TOOL_REACH;
 
@@ -328,7 +380,7 @@ export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder, two rungs, and they differ on lifetime and on who decides: a search is ephemeral and its candidates are SCORED against each other and ranked — by your own verifier running in this workspace when you declare an `objective`, and by a judge ensemble when you do not — settling into this turn; a subordinate is persistent, starts from a blank context, and answers in its own words.';
+  'One delegation ladder, three rungs, and they differ on lifetime and on who decides: a search is ephemeral and its candidates are SCORED against each other and ranked — by your own verifier running in this workspace when you declare an `objective`, and by a judge ensemble when you do not — settling into this turn; a temporary agent lives for one question and hands you back one answer nobody grades; a subordinate is persistent, starts from a blank context, and answers in its own words.';
 
 /**
  * The CONTEXT axis, one entry per rung — the half of the ladder that decides
@@ -424,6 +476,17 @@ export const DELEGATION_RUNGS = {
     // The delivery contract, stated because it changes how a caller plans the turn.
     + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you; never poll a backgrounded job or spawn it twice. '
     + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',
+  // The rung between the two, and it is defined by what it COSTS the caller
+  // rather than by what it is: the work happens in somebody else's window and
+  // only the answer comes back into this one. Stated before the persistent rung
+  // because it is the cheaper mistake to make — a temporary agent that should
+  // have been a hire wastes one question, while a hire that should have been a
+  // temporary agent leaves a roster row nobody retires.
+  temporary:
+    'Ask a ROLE (action=ask with `role` instead of `agent`) when you want an answer, not a colleague: it creates a full agent for that one question — its own context window, its own tool loop, this same workspace — waits for it to finish, and returns its answer here. '
+    + 'It is the rung for work that is bounded and self-contained: reading a large file or a spill path to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. '
+    + 'Name material by `context_ref` (workspace paths) rather than pasting it: the agent reads those bytes itself and they never enter your window, which is the whole saving. '
+    + 'It is not in your roster, you cannot send it a follow-up, and it is released the moment it answers — its transcript is kept. So state the whole question once; a second exchange is a hire.',
   hire:
     'Hire a subordinate (action=hire) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
     // The other half of the CONTEXT axis, from the same per-action source the
@@ -641,12 +704,6 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
 export const BUILTIN_TOOL_SPECS = {
   execute_tools: {
     name: 'execute_tools',
-    // llm.query is deliberately NOT in this summary: it needs a model resolver
-    // to spawn sub-calls, which cf always has and a static-model CLI session
-    // does not (cli-backend/local-session.ts wires createRLMProvider only when
-    // one exists). So the prompt advertises it through the `rlmAvailable`-gated
-    // line instead of here, where it would be claimed unconditionally. It is
-    // NOT cf-only — both backends build it (core/src/rlm.ts).
     summary:
       'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, and agent helpers.',
     whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, crafted tool calls, and anything that has to hold state between calls.',
@@ -722,7 +779,7 @@ export const BUILTIN_TOOL_SPECS = {
     summary:
       "Spawn and talk to helper agents — a measured search over ephemeral nodes of your own, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
-      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.temporary} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
     // The same three facts as positives. This field's LABEL still frames them
     // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
     // place for the framing; the sentences inside it do not have to be
@@ -782,7 +839,7 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse: 'Do not use for things you already know. Do not fetch private or internal addresses; they are blocked.',
     result:
       'search returns up to ~5 ranked results, each with title, url, snippet, and a freshness date when available (plus a synthesized answer when a Tavily key is connected). '
-      + 'fetch returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file, or slice it and llm.query each slice inside execute_tools.',
+      + 'fetch returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file in ranges, or hand its path to a temporary agent as `context_ref` on agents ask.',
     example: "web({action:'search', query:'durable objects sqlite storage limits'})",
   },
   report: {
@@ -832,7 +889,7 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
  * and with a worked example calling `codemode.searchWeb(...)`, a shape
  * cf-backend/execute-tools.ts is coded to throw on. The CLI passed the
  * doctrine and discarded every provider's `types`, so its model was never told
- * that `agents.swarm`, `memory.save`, `tasks.add` or `llm.query` are callable.
+ * that `agents.swarm`, `agents.ask`, `memory.save` or `tasks.add` are callable.
  *
  * `typeBlock` is the namespace declarations, assembled per backend: CF hands
  * codemode its own `{{types}}` placeholder and lets it substitute (it can

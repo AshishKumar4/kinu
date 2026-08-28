@@ -435,6 +435,7 @@ describe('a facet reaches its root only through the sealed surface', () => {
     expect(parentCalls).toContain('recordHeadStep');
     expect(parentCalls).toContain('headJournalRecordSplit');
     expect(parentCalls).toContain('nodeArbitrate');
+    expect(parentCalls).toContain('resolveHostedNodeHome');
   });
 
   test('every one of them is reachable on an OrchestratorAgent stub', () => {

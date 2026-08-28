@@ -39,6 +39,7 @@ export async function handleHealthRequest(request: Request, env: Env): Promise<R
       'POST /api/user/codex/start | /codex/poll': 'ChatGPT device-flow',
       'GET/DELETE /api/user/codex': 'Codex status / disconnect',
       'GET /api/user/models': 'available models (union of connected providers)',
+      'POST /api/client-errors': 'browser render-failure reports',
       // Per-agent (auth + ownership required)
       'GET /api/workspaces/<name>/runs': 'list recent runs',
       'GET /api/workspaces/<name>/runs/<id>/events': 'paginated event query',

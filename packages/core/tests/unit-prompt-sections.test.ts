@@ -12,7 +12,7 @@
  *
  *   1. Byte-identity across a branch matrix. `fixtures/prompt-golden.json` is
  *      generated over `fixtures/prompt-surface-matrix.ts`, which takes every
- *      conditional in the nine sections in both directions.
+ *      conditional in the eleven sections in both directions.
  *
  *      RE-CUT 2026-08-25. The fixture was originally the PRE-SECTIONISATION
  *      builder's output, and part 1 read "the move changed representation and
@@ -94,12 +94,20 @@ describe('the sectionised builder renders the pre-change bytes', () => {
 
   test('the matrix total stays under its recorded ceiling', () => {
     // The per-section budgets in `unit-prompt.test.ts` gate ONE surface. This
-    // gates all 27, so growth that hides by spreading thinly across branches —
+    // gates the whole matrix, so growth that hides by spreading thinly across branches —
     // a family overlay, a plan-mode arm, an executor row — still has to be a
     // reviewed decision. Measured 120,952 on 2026-08-25 after the slimming pass
     // (from 135,116); the ceiling is ~1% over, like the section budgets.
     // Raise it only alongside an intentional content change, and say so.
-    const MATRIX_CEILING_BYTES = 122_200;
+    //
+    // Raised 2026-08-28 to 127,200, measured 125,938: the delegation ladder
+    // gained a THIRD rung (`ask` by `role` — one temporary agent per question),
+    // which is one paragraph of selection doctrine in the `agents` schema
+    // description plus one bullet each in the Delegation and Code-execution
+    // sections. The rung it replaces — `rlm.query`'s decomposition recipe — was
+    // removed in the same change, so the net is the ~3.7k a rung costs across
+    // every surface that renders the ladder, not a duplicate of what went.
+    const MATRIX_CEILING_BYTES = 127_200;
     const total = PROMPT_MATRIX
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
     expect({ total, over: total > MATRIX_CEILING_BYTES })
@@ -115,7 +123,7 @@ describe('the byte-identity comparison is sensitive to one character', () => {
   const roleCase = PROMPT_MATRIX.find((c) => c.name === 'role-general');
   if (!full || !roleCase) throw new Error('matrix lost a required proof surface');
 
-  test('all ten sections reach a surface that enables them', () => {
+  test('all eleven sections reach a surface that enables them', () => {
     for (const section of PROMPT_SECTIONS) {
       const target = section.id === 'role/profile' ? roleCase : full;
       const prompt = buildSystemPromptSync(rt, target.opts);
@@ -181,7 +189,7 @@ describe('the prose left the builder', () => {
   test('the builder still renders every section through its template', () => {
     // The other half: prose absent because the section was DELETED would pass
     // the checks above and fail the model. Each section renders through one
-    // `render(CONSTANT, …)` call, so the builder must carry at least ten.
+    // `render(CONSTANT, …)` call, so the builder must carry at least eleven.
     const rendered = source.match(/\brender\([A-Z][A-Z_]*,/gu) ?? [];
     expect(rendered.length).toBeGreaterThanOrEqual(PROMPT_SECTIONS.length);
     // …and the one seam they all go through is built from the turn's overrides,
@@ -191,9 +199,9 @@ describe('the prose left the builder', () => {
 });
 
 describe('PROMPT_SECTIONS — the addressing scheme', () => {
-  test('ten sections, unique ids, every one a real template', () => {
-    expect(PROMPT_SECTIONS).toHaveLength(10);
-    expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(10);
+  test('eleven sections, unique ids, every one a real template', () => {
+    expect(PROMPT_SECTIONS).toHaveLength(11);
+    expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(11);
     for (const section of PROMPT_SECTIONS) {
       expect(section.source.startsWith('## ')).toBe(true);
       // Compiles, and its contract is readable — what the promotion gate compares

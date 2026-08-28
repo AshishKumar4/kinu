@@ -47,10 +47,33 @@ function delegatedEventMode(event: KinuEvent): WorkMode | null {
   return mode.success ? mode.output : null;
 }
 
+/** One untrusted field, flattened so it cannot end the drain entry it sits in.
+ *  Every CR/LF becomes a visible `\n` escape rather than a real break: the
+ *  content is still readable, and a reader of the list can tell that the
+ *  sender wrote a newline instead of seeing the effect of one. */
+function oneLine(value: string): string {
+  return value.replace(/\r\n|\r|\n/g, '\\n');
+}
+
+/**
+ * Would this pending event wake a turn?
+ *
+ * The agent's own `self_emit` / `internal` rows never do — that is the
+ * anti-self-wake-loop rule, and it is stated ONCE here because two readers now
+ * need it: the batch below, and the wake fold that decides whether a workspace
+ * still owes itself an alarm (`EventLog.nextPendingDrainAt`). Spelled twice,
+ * they drift the moment a third ingress is added, and the failure is silent in
+ * the direction that matters: a workspace that arms no wake for work it will
+ * later agree to drain.
+ */
+export function wakesADrain(event: KinuEvent): boolean {
+  return event.ingress !== 'self_emit' && event.variant !== 'internal';
+}
+
 /** Externally-triggered pending events → one drain batch, or null if there are
  *  none (the agent's own self-emitted/internal events never wake a new turn). */
 export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
-  const pending = events.filter((e) => e.ingress !== 'self_emit' && e.variant !== 'internal');
+  const pending = events.filter(wakesADrain);
   if (pending.length === 0) return null;
   // A delegated Plan event can never share a turn with Build or neutral work.
   // Select the oldest event's homogeneous mode group; the post-turn drain
@@ -68,7 +91,15 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
     )
       ? ` [the sender awaits your answer — reply with agents({action:'reply', event_id:'${e.id}', message:...})]`
       : '';
-    return `- [${r.variant}] from ${r.triggered_by}: ${r.brief}${replyHint}`;
+    // ONE LINE PER EVENT, and the boundary is ours rather than the sender's.
+    // These entries are joined with '\n' below, and several briefs embed
+    // plain-text sender-controlled bodies: an email body, a subordinate's
+    // report, a process's stderr. A body containing a newline followed by
+    // "- [timer] from owner: ..." used to render as an additional, visually
+    // identical drain entry, so external content could add events the agent
+    // believes arrived. Folding the line breaks out of the untrusted fields is
+    // what makes the count above and the list below agree.
+    return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${replyHint}`;
   });
   const count = `${drainable.length} event${drainable.length === 1 ? '' : 's'}`;
   const listing = lines.join('\n');

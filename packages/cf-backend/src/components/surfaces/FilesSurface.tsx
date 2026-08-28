@@ -28,31 +28,28 @@ import {
   MagnifyingGlassIcon, PencilSimpleIcon, PlugIcon, TrashIcon, UploadSimpleIcon,
   WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import * as v from "valibot";
 import {
-  inlineFileType, joinDir, parentDir, EXECUTOR_MOUNTS, type DirEntry, type MountInfo,
+  joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
 } from "@kinu.run/core";
-import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
+import { renderThrownChain } from "@kinu.run/core/obs";
 import type { Rpc } from "@/lib/protocol";
 import { executorLabel, type ExecutorInfo } from "@/lib/executors";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useToggledSet } from "@/hooks/use-toggled-set";
-
-/** The executor whose file view is the composite plane — the workspace tree
- *  extended by the mount table. The drive browses THROUGH it, always. */
-const PLANE = "workspace";
+import { FileViewer } from "./FileViewer";
+import {
+  PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir,
+} from "./files-plane";
 
 interface DirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
-interface FileText { content?: string; truncated?: boolean; error?: string }
 type WriteResult = { ok: true } | { error: string };
-const UploadErrorSchema = v.object({ error: v.optional(v.string()) });
 
 interface UploadState { name: string; status: "uploading" | "error"; error?: string }
 
-/** Mount-point name (root entry) → the executor that serves it. */
+/** Root entry name → the executor serving it, off the one mount table. */
 const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
-  Object.entries(EXECUTOR_MOUNTS).map(([executor, prefix]) => [prefix.slice(1), executor]),
+  Object.entries(MOUNT_EXECUTORS).map(([mount, executor]) => [mount.slice(1), executor]),
 );
 
 
@@ -95,8 +92,9 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  /** Lazy directory cache for the tree; the listing always refetches. */
-  const [treeCache, setTreeCache] = useState<ReadonlyMap<string, DirEntry[]>>(new Map());
+  /** Lazy directory cache for the tree, revalidated against each fresh listing
+   *  (see `nextTreeCache`); the listing itself always refetches. */
+  const [treeCache, setTreeCache] = useState<ReadonlyMap<string, CachedDir>>(new Map());
   const { set: expanded, toggle: toggleExpanded } = useToggledSet(() => new Set(["/"]));
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -107,16 +105,16 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
   const { resource: mountsResource, reload: reloadMounts } = useAsyncResource(loadMounts);
   const mounts = lastValue(mountsResource) ?? [];
 
-  const listDir = useCallback(async (dir: string): Promise<DirEntry[]> => {
+  const listDir = useCallback(async (dir: string): Promise<{ path: string; entries: DirEntry[] }> => {
     const r = await rpc<DirectoryResponse>("getExecutorFiles", [PLANE, dir]);
     if (r.error) throw new Error(r.error);
     const listed = r.entries ?? [];
-    setTreeCache((prev) => {
-      const next = new Map(prev);
-      next.set(r.path ?? dir, listed);
-      return next;
-    });
-    return listed;
+    const at = r.path ?? dir;
+    // A fresh listing is the authority over everything cached beneath it: an
+    // entry it names at a new revision, or no longer names at all, invalidates
+    // that subtree instead of leaving it on screen.
+    setTreeCache((prev) => nextTreeCache(prev, at, listed));
+    return { path: at, entries: listed };
   }, [rpc]);
 
   // Keyed on `path`: a listing for the OLD directory must never render under
@@ -127,7 +125,13 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
   // arriving. A slow scheduler widens that window; it cannot reopen this one.
   const loadListing = useCallback(async (): Promise<DirEntry[]> => {
     try {
-      return await listDir(path);
+      const listed = await listDir(path);
+      // Asked for a bare mount point, the plane lists the machine's CONSENTED
+      // directory rather than its `/`, and says which one it listed. Adopt it:
+      // the crumb bar and every child path are built from `path`, so naming
+      // `/pc` while showing `/pc/home/kinu` sends the next click nowhere.
+      if (listed.path !== path) setPath(listed.path);
+      return listed.entries;
     } catch (e) {
       throw new Error(renderThrownChain({ cause: e }), { cause: e });
     }
@@ -176,16 +180,7 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
     for (const f of list) {
       try {
         // Raw bytes over HTTP: no base64 inflation, no frame ceiling.
-        const res = await fetch(rawUrl(joinDir(path, f.name), false), { method: "PUT", body: f });
-        if (!res.ok) {
-          const body = await res.text();
-          const parsed = v.safeParse(
-            UploadErrorSchema,
-            tolerate<unknown>(() => JSON.parse(body), "malformed-input"),
-          );
-          const detail = parsed.success ? parsed.output.error : body.trim() || undefined;
-          throw new Error(detail ?? `upload failed (${res.status})`);
-        }
+        await putFileBytes(rawUrl(joinDir(path, f.name), false), f);
         setUploads((prev) => prev.filter((u) => u.name !== f.name));
       } catch (e) {
         setUploads((prev) => prev.map((u) => u.name === f.name
@@ -263,6 +258,24 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
     }
   }, [path]);
 
+  /**
+   * The revision the CURRENT listing reports for the open preview.
+   *
+   * Read off `entries` rather than remembered at open time, so a listing that
+   * refetched — a refresh, a save, an upload, a rename — hands the viewer a new
+   * revision and it re-reads. `""` while the file is not in this directory's
+   * listing (a tree click into a folder the reader has since left), which is
+   * stable and therefore causes no re-read of its own.
+   */
+  const previewRevision = useMemo(() => {
+    if (!preview) return "";
+    const name = preview.slice(preview.lastIndexOf("/") + 1);
+    const entry = preview === joinDir(path, name)
+      ? entries.find((candidate) => candidate.name === name)
+      : undefined;
+    return entry ? entryRevision(entry) : "";
+  }, [entries, path, preview]);
+
   // Keyboard: the list is a roving-focus widget. Arrows move, Enter opens,
   // Backspace goes up, F2 renames, Delete asks, Escape backs out.
   const onKeyDown = useCallback((e: ReactKeyboardEvent) => {
@@ -290,13 +303,14 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
 
   return (
     <div className="@container flex h-full -m-5 min-h-0" data-files-surface>
-      {/* ── Folder tree (hidden on narrow widths; the breadcrumb still navigates) ── */}
+      {/* ── File tree (hidden on narrow widths; the breadcrumb still navigates) ── */}
       <div className="hidden @[44rem]:block w-52 shrink-0 border-r p-border overflow-y-auto py-2">
         <TreeNode
           dir="/" label="Workspace" depth={0}
-          path={path} expanded={expanded} cache={treeCache}
+          path={path} previewPath={preview} expanded={expanded} cache={treeCache}
           badgeFor={badgeFor}
           onNavigate={(dir) => { setFilter(""); setPath(dir); }}
+          onOpenFile={setPreview}
           onToggle={(dir) => run(async () => {
             toggleExpanded(dir);
             if (!treeCache.has(dir)) await listDir(dir);
@@ -332,7 +346,16 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
             <button onClick={() => uploadInputRef.current?.click()}
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
-            <button onClick={() => run(async () => { await reloadListing(); reloadMounts(); })}
+            {/* Refresh is the reader saying "show me what is there now", so it
+                drops every cached listing rather than only the current one. A
+                plane that reports no mtime (the container synthesizes stat from
+                a listing) gives `nextTreeCache` nothing to compare, and this is
+                then the only way its tree can be revalidated at all. */}
+            <button onClick={() => run(async () => {
+              setTreeCache(new Map());
+              await reloadListing();
+              reloadMounts();
+            })}
               className="p-text-3 hover:p-text p-1"
               title="Refresh" aria-label="Refresh"><ArrowsClockwiseIcon size={11} /></button>
           </div>
@@ -392,29 +415,38 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
               className="flex items-center gap-2 w-full text-left font-mono px-3 py-1 p-text-3 hover:p-text p-row-hover"
             ><ArrowUpIcon size={12} className="shrink-0" /><span>..</span></button>
           )}
-          {!loading && filtered.map((entry, i) => {
-            const full = joinDir(path, entry.name);
-            const badge = badgeFor(entry.name);
-            return (
-              <EntryRow
-                key={entry.name}
-                entry={entry} badge={badge}
-                selected={i === selected}
-                previewing={preview === full}
-                renaming={renaming?.path === full ? renaming.draft : null}
-                confirming={confirmDelete === full}
-                downloadHref={entry.type === "file" ? rawUrl(full, true) : null}
-                onSelect={() => setSelected(i)}
-                onOpen={() => open(entry)}
-                onRenameDraft={(draft) => setRenaming({ path: full, draft })}
-                onRenameCommit={(draft) => commitRename(full, draft)}
-                onRenameCancel={() => setRenaming(null)}
-                onAskDelete={() => setConfirmDelete(full)}
-                onDelete={() => deletePath(full)}
-                onCancelDelete={() => setConfirmDelete(null)}
-              />
-            );
-          })}
+          {/* Tiles, in the SAME order and with the SAME selection index the
+              keyboard already moves through: a grid is a presentation of the
+              one listing, not a second model of it. */}
+          {!loading && filtered.length > 0 && (
+            <div
+              data-files-grid
+              className="grid gap-1 px-2 py-1 grid-cols-2 @[30rem]:grid-cols-3 @[44rem]:grid-cols-4 @[64rem]:grid-cols-6"
+            >
+              {filtered.map((entry, i) => {
+                const full = joinDir(path, entry.name);
+                return (
+                  <EntryTile
+                    key={entry.name}
+                    entry={entry} badge={badgeFor(entry.name)}
+                    selected={i === selected}
+                    previewing={preview === full}
+                    renaming={renaming?.path === full ? renaming.draft : null}
+                    confirming={confirmDelete === full}
+                    downloadHref={entry.type === "file" ? rawUrl(full, true) : null}
+                    onSelect={() => setSelected(i)}
+                    onOpen={() => open(entry)}
+                    onRenameDraft={(draft) => setRenaming({ path: full, draft })}
+                    onRenameCommit={(draft) => commitRename(full, draft)}
+                    onRenameCancel={() => setRenaming(null)}
+                    onAskDelete={() => setConfirmDelete(full)}
+                    onDelete={() => deletePath(full)}
+                    onCancelDelete={() => setConfirmDelete(null)}
+                  />
+                );
+              })}
+            </div>
+          )}
           {offlineMounts.map((m) => {
             const mountName = Object.entries(MOUNT_EXECUTOR).find(([, executor]) => executor === m.name)?.[0] ?? m.name;
             return (
@@ -449,12 +481,18 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
           )}
         </div>
 
-        {/* Preview: a side panel where there is room, an overlay where not. */}
+        {/* Viewer: a side panel where there is room, an overlay where not. */}
         {preview && (
-          <FilePreview
+          <FileViewer
             path={preview} rpc={rpc}
-            inlineHref={rawUrl(preview, false)}
+            // What the CURRENT listing says this file's bytes are. The viewer
+            // re-reads whenever it changes, so a refresh, a save, an upload or
+            // a rename revalidates the open preview instead of leaving text
+            // that the file no longer holds on screen.
+            revision={previewRevision}
+            rawHref={rawUrl(preview, false)}
             downloadHref={rawUrl(preview, true)}
+            onSaved={() => { void reloadListing(); }}
             onClose={() => setPreview(null)}
           />
         )}
@@ -463,21 +501,30 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
   );
 }
 
-/* ── Folder tree ─────────────────────────────────────────────────── */
+/* ── File tree ───────────────────────────────────────────────────── */
 
-function TreeNode({ dir, label, depth, path, expanded, cache, badgeFor, onNavigate, onToggle }: {
+/**
+ * The tree carries FILES as well as folders. It used to drop every file entry
+ * when it recursed, so the one persistent navigation pane in the surface could
+ * never reach a file — the drive looked like a folder-only view of a plane that
+ * had always answered with both kinds. A folder navigates; a file opens in the
+ * preview pane, the same thing a listing row does.
+ */
+function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badgeFor, onNavigate, onOpenFile, onToggle }: {
   dir: string;
   label: string;
   depth: number;
   path: string;
+  previewPath: string | null;
   expanded: ReadonlySet<string>;
-  cache: ReadonlyMap<string, DirEntry[]>;
+  cache: ReadonlyMap<string, CachedDir>;
   badgeFor: (name: string) => string | null;
   onNavigate: (dir: string) => void;
+  onOpenFile: (path: string) => void;
   onToggle: (dir: string) => void;
 }) {
   const isOpen = expanded.has(dir);
-  const children = cache.get(dir);
+  const children = cache.get(dir)?.entries;
   const active = path === dir;
   return (
     <div>
@@ -506,21 +553,45 @@ function TreeNode({ dir, label, depth, path, expanded, cache, badgeFor, onNaviga
       {isOpen && children === undefined && (
         <div className="p-text-4 text-[10px]" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
       )}
-      {isOpen && children?.filter((c) => c.type === "dir").map((child) => (
-        <TreeNode
-          key={child.name}
-          dir={joinDir(dir, child.name)} label={child.name} depth={depth + 1}
-          path={path} expanded={expanded} cache={cache} badgeFor={badgeFor}
-          onNavigate={onNavigate} onToggle={onToggle}
-        />
-      ))}
+      {isOpen && children?.map((child) => {
+        const full = joinDir(dir, child.name);
+        return child.type === "dir" ? (
+          <TreeNode
+            key={child.name}
+            dir={full} label={child.name} depth={depth + 1}
+            path={path} previewPath={previewPath} expanded={expanded} cache={cache} badgeFor={badgeFor}
+            onNavigate={onNavigate} onOpenFile={onOpenFile} onToggle={onToggle}
+          />
+        ) : (
+          <div
+            key={child.name}
+            data-files-tree-file={full}
+            title={child.name}
+            className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${
+              previewPath === full ? "p-fill p-text font-medium" : "p-text-2"}`}
+            // Aligned with a folder's own label rather than its caret: the
+            // caret's width is what separates "can open" from "can expand".
+            style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
+            onClick={() => onOpenFile(full)}
+          >
+            <FileIcon size={12} className="p-text-3 shrink-0" />
+            <span className="truncate">{child.name}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-/* ── One listing row ─────────────────────────────────────────────── */
+/* ── One listing tile ────────────────────────────────────────────── */
 
-function EntryRow({ entry, badge, selected, previewing, renaming, confirming, downloadHref, onSelect, onOpen, onRenameDraft, onRenameCommit, onRenameCancel, onAskDelete, onDelete, onCancelDelete }: {
+/**
+ * One entry, as a tile: kind, name, and the one line of metadata that made the
+ * old row's four columns worth their width. Rename, delete and download keep
+ * the same hooks and the same hover-reveal, so the drive's keyboard and the
+ * browser gate both address the tile exactly as they addressed the row.
+ */
+function EntryTile({ entry, badge, selected, previewing, renaming, confirming, downloadHref, onSelect, onOpen, onRenameDraft, onRenameCommit, onRenameCancel, onAskDelete, onDelete, onCancelDelete }: {
   entry: DirEntry;
   badge: string | null;
   selected: boolean;
@@ -537,18 +608,24 @@ function EntryRow({ entry, badge, selected, previewing, renaming, confirming, do
   onDelete: () => void;
   onCancelDelete: () => void;
 }) {
+  const meta = [
+    entry.type === "file" && entry.size != null ? fmtSize(entry.size) : null,
+    fmtWhen(entry.mtimeMs) || null,
+  ].filter(Boolean).join(" · ");
   return (
     <div
       data-files-entry
       aria-selected={selected || undefined}
       title={entry.name}
-      className={`group flex items-center gap-2 w-full text-left font-mono px-3 py-1 p-row-hover cursor-pointer ${
-        selected || previewing ? "p-fill p-text" : "p-text-2 hover:p-text"}`}
+      className={`group relative flex flex-col items-center gap-1.5 rounded-md border px-2 py-2.5 cursor-pointer ${
+        selected || previewing
+          ? "p-fill p-text border-[var(--c-accent)]"
+          : "p-text-2 border-transparent hover:p-text p-row-hover"}`}
       onClick={() => { onSelect(); onOpen(); }}
     >
       {entry.type === "dir"
-        ? <FolderIcon size={12} className="p-info shrink-0" weight="fill" />
-        : <FileIcon size={12} className="p-text-3 shrink-0" />}
+        ? <FolderIcon size={26} className="p-info shrink-0" weight="fill" />
+        : <FileIcon size={26} className="p-text-3 shrink-0" />}
       {renaming !== null ? (
         <input
           data-files-rename-input
@@ -562,10 +639,12 @@ function EntryRow({ entry, badge, selected, previewing, renaming, confirming, do
             if (e.key === "Escape") onRenameCancel();
           }}
           onBlur={onRenameCancel}
-          className="flex-1 min-w-0 bg-transparent border p-border rounded-xs px-1 py-0 text-xs p-text outline-hidden focus:border-[var(--c-accent)]"
+          className="w-full min-w-0 bg-transparent border p-border rounded-xs px-1 py-0 text-center text-[11px] font-mono p-text outline-hidden focus:border-[var(--c-accent)]"
         />
       ) : (
-        <span className="truncate flex-1">{entry.name}</span>
+        <span className="w-full text-center text-[11px] font-mono leading-tight line-clamp-2 break-all">
+          {entry.name}
+        </span>
       )}
       {badge && (
         <span data-mount-badge className="text-[10px] px-1.5 py-px rounded-full p-fill p-text-3 shrink-0">{badge}</span>
@@ -581,106 +660,27 @@ function EntryRow({ entry, badge, selected, previewing, renaming, confirming, do
           </button>
         </span>
       ) : (
-        <span
-          className="items-center gap-0.5 shrink-0 hidden group-hover:flex"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {downloadHref && (
-            <a data-files-download href={downloadHref} className="p-text-3 hover:p-text p-0.5"
-              title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`}>
-              <DownloadSimpleIcon size={12} />
-            </a>
-          )}
-          <button data-files-rename onClick={() => onRenameDraft(entry.name)} className="p-text-3 hover:p-text p-0.5"
-            title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}>
-            <PencilSimpleIcon size={12} />
-          </button>
-          <button data-files-delete onClick={onAskDelete} className="p-text-3 hover:p-danger p-0.5"
-            title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}>
-            <TrashIcon size={12} />
-          </button>
-        </span>
+        <span className="text-[10px] p-text-4 tabular-nums truncate max-w-full">{meta}</span>
       )}
-      <span className="p-text-3 shrink-0 tabular-nums w-12 text-right">
-        {entry.type === "file" && entry.size != null ? fmtSize(entry.size) : ""}
-      </span>
-      <span className="p-text-4 shrink-0 tabular-nums w-16 text-right hidden @[56rem]:inline">
-        {fmtWhen(entry.mtimeMs)}
-      </span>
-    </div>
-  );
-}
-
-/* ── Preview ─────────────────────────────────────────────────────── */
-
-/** Text rides the viewer RPC; images and PDFs ride the same raw-bytes route
- *  the download uses — one pipeline, two dispositions. */
-function FilePreview({ path, rpc, inlineHref, downloadHref, onClose }: {
-  path: string;
-  rpc: Rpc;
-  inlineHref: string;
-  downloadHref: string;
-  onClose: () => void;
-}) {
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  const inlineType = inlineFileType(path);
-  const kind = inlineType?.startsWith("image/")
-    ? "image"
-    : inlineType === "application/pdf" ? "pdf" : "text";
-  // `null` IS the loading state: the pre must never paint before the answer,
-  // or a reader (and the browser gate) sees an empty file that is not empty.
-  const [file, setFile] = useState<FileText | null>(null);
-
-  useEffect(() => {
-    if (kind !== "text") return;
-    setFile(null);
-    void rpc<FileText>("readExecutorFile", [PLANE, path])
-      .then(setFile, (error: Error) => setFile({ error: renderThrownChain({ cause: error }) }));
-  }, [kind, path, rpc]);
-
-  return (
-    <div
-      data-files-preview
-      className="absolute inset-0 z-10 p-bg flex flex-col border-l p-border @[64rem]:static @[64rem]:w-[42%] @[64rem]:shrink-0"
-    >
-      <div className="px-3 py-2 border-b p-border flex items-center gap-2 shrink-0">
-        <FileIcon size={13} className="p-text-3 shrink-0" />
-        <span className="text-xs font-mono p-text truncate" title={path}>{name}</span>
-        <div className="ml-auto flex items-center gap-1 shrink-0">
-          <a data-files-download href={downloadHref} className="flex items-center gap-1 text-[11px] p-text-2 hover:p-text p-1" title={`Download ${name}`}>
-            <DownloadSimpleIcon size={12} />Download
+      <span
+        className="absolute top-1 right-1 items-center gap-0.5 hidden group-hover:flex p-bg rounded-xs"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {downloadHref && (
+          <a data-files-download href={downloadHref} className="p-text-3 hover:p-text p-0.5"
+            title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`}>
+            <DownloadSimpleIcon size={12} />
           </a>
-          <button onClick={onClose} className="p-text-3 hover:p-text p-1" title="Close preview" aria-label="Close preview">
-            <XIcon size={13} />
-          </button>
-        </div>
-      </div>
-      <div className="flex-1 min-h-0 overflow-auto">
-        {kind === "image" && (
-          <div className="h-full flex items-center justify-center p-4">
-            <img src={inlineHref} alt={name} className="max-w-full max-h-full object-contain rounded-sm border p-border" />
-          </div>
         )}
-        {kind === "pdf" && (
-          <embed src={inlineHref} type="application/pdf" className="w-full h-full" title={name} />
-        )}
-        {kind === "text" && (
-          file === null ? <div className="h-full flex items-center justify-center"><Loader size="base" /></div>
-          : file.error ? (
-            <div className="p-4 text-xs space-y-2">
-              <div className="p-danger break-words">{file.error}</div>
-              <a href={downloadHref} className="inline-flex items-center gap-1 p-accent hover:underline">
-                <DownloadSimpleIcon size={12} />Download instead
-              </a>
-            </div>
-          ) : (
-            <pre className="p-3 text-[11px] leading-relaxed font-mono p-text-2 whitespace-pre-wrap break-words">
-              {file.content ?? ""}
-              {file.truncated && <span className="p-text-4">{"\n… truncated for preview — download for the whole file"}</span>}
-            </pre>
-          )
-        )}
-      </div>
+        <button data-files-rename onClick={() => onRenameDraft(entry.name)} className="p-text-3 hover:p-text p-0.5"
+          title={`Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}>
+          <PencilSimpleIcon size={12} />
+        </button>
+        <button data-files-delete onClick={onAskDelete} className="p-text-3 hover:p-danger p-0.5"
+          title={`Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}>
+          <TrashIcon size={12} />
+        </button>
+      </span>
     </div>
   );
 }

@@ -95,6 +95,80 @@ function steerRowStep<Metadata>(metadata: Metadata): number | null {
 }
 
 /**
+ * The thread so far, resumable. A streaming pane re-derives its thread on
+ * every token, and the settled half of the conversation never changes inside
+ * one of those ticks — so the walk is exposed as a fold: extend it with the
+ * frozen half once, then per tick extend that with the live window only. The
+ * result of a fold is immutable; extending one never reworks what it holds.
+ */
+export interface TranscriptFold {
+  /** Entries for every message folded so far. */
+  readonly entries: readonly TranscriptEntry[];
+  /** Steer rows still waiting for their turn's assistant message. */
+  readonly pending: readonly PlacedSteer[];
+  /**
+   * Ids of every durable steer row folded — the live-steer dedup set. A live
+   * steer's id can only ever collide with its own durable row (the row keeps
+   * the steer's id), so this set, not one of every message id, is what "the
+   * durable copy has arrived" is decided against.
+   */
+  readonly steerRowIds: ReadonlySet<string>;
+}
+
+const NO_STEERS: readonly PlacedSteer[] = [];
+
+export const EMPTY_TRANSCRIPT_FOLD: TranscriptFold = {
+  entries: [], pending: [], steerRowIds: new Set(),
+};
+
+/** Extend a fold with the next run of messages. Pure: `fold` is not mutated. */
+export function extendTranscript(
+  fold: TranscriptFold, messages: readonly UIMessage[],
+): TranscriptFold {
+  if (messages.length === 0) return fold;
+  const entries = [...fold.entries];
+  const steerRowIds = new Set(fold.steerRowIds);
+  let pending = [...fold.pending];
+
+  for (const message of messages) {
+    const step = message.role === 'user' ? steerRowStep(message.metadata) : null;
+    if (step !== null) {
+      steerRowIds.add(message.id);
+      pending.push({ id: message.id, text: messageText(message), atStep: step, state: 'landed' });
+      continue;
+    }
+    if (message.role === 'assistant' && pending.length > 0) {
+      entries.push({ message, steers: pending });
+      pending = [];
+      continue;
+    }
+    // A steer with no turn after it — the turn failed before its assistant
+    // message was persisted. Show it where it is rather than losing it.
+    for (const orphan of pending) entries.push({ message: steerMessage(orphan), steers: NO_STEERS });
+    pending = [];
+    entries.push({ message, steers: NO_STEERS });
+  }
+  return { entries, pending, steerRowIds };
+}
+
+/**
+ * Close a fold into the thread the chat draws: still-pending steer rows become
+ * trailing bubbles (their turn never persisted an answer), and `live` steers
+ * whose durable row has not been folded attach to the message being streamed.
+ */
+export function sealTranscript(
+  fold: TranscriptFold, live: readonly InlineSteer[] = [],
+): Transcript {
+  const entries = fold.pending.length === 0
+    ? fold.entries
+    : [...fold.entries, ...fold.pending.map((orphan) => ({ message: steerMessage(orphan), steers: NO_STEERS }))];
+  const unseen = live.filter((steer) => !fold.steerRowIds.has(steer.id));
+  const placeable = unseen.filter(isPlaced);
+  const trailing = unseen.filter((steer) => !isPlaced(steer));
+  return { entries: attachLive(entries, placeable), trailing };
+}
+
+/**
  * The thread, with every steer moved inside the turn it landed in.
  *
  * A durable steer row is followed in the message list by the assistant message
@@ -113,33 +187,7 @@ function steerRowStep<Metadata>(metadata: Metadata): number | null {
 export function buildTranscript(
   messages: readonly UIMessage[], live: readonly InlineSteer[] = [],
 ): Transcript {
-  const entries: TranscriptEntry[] = [];
-  let pending: PlacedSteer[] = [];
-
-  for (const message of messages) {
-    const step = message.role === 'user' ? steerRowStep(message.metadata) : null;
-    if (step !== null) {
-      pending.push({ id: message.id, text: messageText(message), atStep: step, state: 'landed' });
-      continue;
-    }
-    if (message.role === 'assistant' && pending.length > 0) {
-      entries.push({ message, steers: pending });
-      pending = [];
-      continue;
-    }
-    // A steer with no turn after it — the turn failed before its assistant
-    // message was persisted. Show it where it is rather than losing it.
-    for (const orphan of pending) entries.push({ message: steerMessage(orphan), steers: [] });
-    pending = [];
-    entries.push({ message, steers: [] });
-  }
-  for (const orphan of pending) entries.push({ message: steerMessage(orphan), steers: [] });
-
-  const durable = new Set(messages.map((message) => message.id));
-  const unseen = live.filter((steer) => !durable.has(steer.id));
-  const placeable = unseen.filter(isPlaced);
-  const trailing = unseen.filter((steer) => !isPlaced(steer));
-  return { entries: attachLive(entries, placeable), trailing };
+  return sealTranscript(extendTranscript(EMPTY_TRANSCRIPT_FOLD, messages), live);
 }
 
 /** Live steers onto the turn being streamed — the last message, when there is

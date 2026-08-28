@@ -12,9 +12,17 @@ The step clock fires on every settled `execute_tools` call, read off the tool-re
 
 The fitness signal is execution, observed at the host. A crafted tool that raised is stamped with its own name leaving the sandbox, so the failure lands on the artifact whether or not the model caught it; a call that broke on its own account blames nobody. A completed call credits only tools that already existed when it started, so a tool cannot certify itself on the call that created it. A call moved to the background is not a result and credits nothing.
 
-Two gates stand between observation and effect. The misevolution veto already runs before every crafted-tool write. And the injection floor is reachable because `workspace.createTool` seeds a `craft_scores` row (`seedCraftScore`, `core/src/craft/in-episode.ts:284`); an unscored tool would sit exempt from the filter forever. The update is one synchronous SQL statement as the block settles: no model call, no await. A tool that keeps raising drops out of the callable set for the rest of the same episode, because both backends re-read the store per execute.
-
-Observations land in `craft_scores` through the same `updateCraftScores` EMA the turn clock uses (`core/src/craft/ema.ts:70`). One score per tool. Invocations price on their own band, `CRAFT_INVOCATION_QUALITY` (`core/src/craft/in-episode.ts:93`): 0.7 for ran, 0.1 for raised. The positive pole sits strictly inside what a person's verdict reaches, 0.9 for a thumbs up, so no volume of self-dealing lets a crafted tool outrank one a human approved. The raised pole, 0.1, sits below the 0.2 injection floor, which is what makes dropping out reachable at all. From the seeded prior of 0.5 at α = 0.3, four consecutive raises take a tool to 0.196, under the floor; one success pulls it back to 0.347.
+Two gates stand between observation and effect. The misevolution veto runs before
+each crafted-tool write. The injection floor is reachable because
+`workspace.createTool` calls `craftStore.create`
+(`core/src/execution/inline.ts:300-373`). The `crafted_tools` quality columns
+default to `0.5`, the `CRAFT_NEUTRAL_PRIOR` value
+(`core/src/craft/schemas.ts:13-18`; `craft/in-episode.ts:100`), so an unscored
+tool cannot bypass the filter. Extracted candidates use the same store
+(`core/src/craft/conflict.ts:119`). Each settled block updates that row in one
+synchronous SQL statement.
+A tool that keeps raising drops out of the callable set for the rest of the
+episode because both backends re-read the store per execute.
 
 Each turn writes at most one `craft_cycle` run event carrying `crafted`, `invoked`, `reused`, `returned`, `raised` and `dropped`, with `turn_end` as the denominator. `reused` is the numerator that matters: a tool crafted this turn and called by a later block is the loop actually closing.
 
@@ -205,7 +213,7 @@ The archive keeps every version: a read model over `scaffold_versions` joined to
 
 ## Evolution Changelog
 
-Every self-modification surfaces as a human-readable card (`core/src/evolution/changelog.ts`), a pure read model over the durable ledgers whose only owned state is a `changelog_seen_at` marker. `ChangelogEntryKind` (`core/src/evolution/changelog.ts:42`) has eight kinds:
+Every self-modification surfaces as a human-readable card (`core/src/evolution/changelog.ts`), a pure read model over the durable ledgers whose only owned state is a `changelog_seen_at` marker. `ChangelogEntryKind` has nine kinds:
 
 | Kind | Source | Revertable via |
 |---|---|---|
@@ -217,8 +225,108 @@ Every self-modification surfaces as a human-readable card (`core/src/evolution/c
 | `replay` | replay-eval scores with their intervals, plus the direction against the previous run when the intervals separate | not revertable |
 | `outcomes` | aggregated `turn_outcomes` counts | not revertable |
 | `prompt_section` | `prompt_section_versions`, keyed `<sectionId>:<version>` because versions are numbered per section | `prompt_section_rollback` |
+| `refinement` | `refinement_requests`, one card per request with one child per routed edit | the children carry the owner's own revert |
 
 Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts:589`): `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores` row, `revertView`, `facts.forget`, and the prompt-section rollback.
+
+## Continual refinement
+
+A refinement reviews the agent's own recent failures and proposes the smallest typed edits. It is the only evolution lane whose proposer is a full agent: the read-only temporary rung (`agents.ask`) reads the trajectory and answers with one strict object.
+
+`/refine` opens one on request. The automatic trigger opens one when three or more corrected or frustrated turns are unresolved — negatives no earlier request has taken. Three is a pattern rather than a coincidence, and it is also the point where `buildOutcomeEvalSplit` can both give reflection something to fix and keep a failure back to score against: at three it holds one out and leaves two to train on.
+
+Debt EXCLUDES covered turns before it caps the batch, not after. A batch is at most twelve, oldest first, and the remainder is reported ("8 more waiting behind this batch") rather than dropped. Filtering a fixed window would let twelve refined failures hide every older unresolved one permanently.
+
+The refiner sees the TRAIN half only. The held-out turns are the ones `proposeMeasuredPromptSection` and `runPromptSectionTrials` score candidates on, so showing them to the proposer would let a proposal memorise its own exam — the same split discipline `runSectionGepa` already obeys. The brief names how many turns it withheld.
+
+### The request is durable and behaviourally inert
+
+`requestRefinement` (`core/src/evolution/refinement-lane.ts`) captures the trajectory by turn id and returns a row at `requested`. No model has run and no artifact has moved. Two conditions are refused here, before a model is worth spending: an `account`-scoped request, which no authority reachable from a workspace database can serve, and a trajectory with nothing graded in it.
+
+The refiner runs later, on the off-turn cadence pass (`AgentOrchestrator.runCadencePass` → `refinementLane`). Crash recovery is `resetStalePlanning`, by activation and never by clock; there is no elapsed cap, on the same ruling that bounds no other delegation. Two writes make a resumed pass safe:
+
+- The **proposal is persisted before the first owner write.** Routing makes real changes, so a resumed pass must re-route the SAME plan; re-asking would give it a plan the writes already on disk do not belong to.
+- The **routes are persisted after each one.** A crash between two owner writes leaves the completed ones recorded, so the changelog cannot omit an edit the workspace is carrying.
+
+Every route then ADOPTS the owner record it finds — a keyed fact reports `unchanged`, a pending section version with these exact bytes is adopted rather than re-proposed, identical skill bytes on disk are adopted rather than rewritten — so re-driving is idempotent at every owner.
+
+```
+requested → planning → gated       (every routed edit already decided)
+                    ↘  evaluating  (something is pending in an owner's store)
+                         ↘ applied | rolled_back
+                    ↘  refused
+```
+
+Every transition is `WHERE stage = <from>`, so a duplicate delivery writes nothing. The automatic trigger is idempotent twice over: a taken batch stops counting as debt, and `debt_key` is unique.
+
+### Typed edits go to the authority that already owns the artifact
+
+`refinement_requests` holds the request, the proposal, and one **route** per edit — the owner's table plus the identity inside it. It stores no prompt, no fact, no skill and no agent spec, because two authorities for one artifact is drift with a schema.
+
+| Edit | Authority | What happens |
+|---|---|---|
+| `fact` | `agent_facts` (`FactsStore.upsert`) | Applied immediately, and only when the refiner quotes the user substantively. A trial cannot decide a preference, so the user's own words are the evidence that stands in for one. The quote must be at least 20 characters and 4 words — a token like "one line" matches almost any conversation and is evidence of nothing — and must appear in a USER message or follow-up, never in the agent's own response. The accepted quote rides the route into the changelog. |
+| `prompt_section` | `prompt_section_versions` (`proposeMeasuredPromptSection`) | Scored against the incumbent on held-out labelled turns first, then handed to `proposePromptSection`, where it lands **pending**. `advancePromptSectionLane` promotes it on trial evidence or not at all. A degenerate split refuses the proposal rather than scoring a counterfactual against a ledger holding no failures. |
+| `skill` | staged under `.kinu/`, promoted into the workspace VFS by `instruction_approvals` | **Stages** the bytes at `.kinu/refinement/<requestId>/<name>.md`, which nothing that builds a prompt reads. The owner's approval is what promotes them. Refuses a non-canonical path, a built-in's name, an unparsable file, a final path that already exists, and any standing approval or revocation for that path. |
+| `subagent_spec` | none | **Refused by name.** A subordinate's role and spec belong to that agent's own config, which a workspace reads and never writes. The finding is recorded; no mirror store is created. |
+
+A proposal at `account` scope is refused: no authority reachable from a workspace database can write account-wide state, and quietly narrowing it to one workspace would apply a preference somewhere the owner did not ask for.
+
+### A staged skill influences nothing until the owner promotes it
+
+Writing the file to `/workspace/skills/<name>.md` and relying on content-addressed trust to hold it `unverified` LEAKS, and this was the second review's finding. Trust decides placement and tool policy, not visibility: `discoverSkills` walks that directory every turn, so the file's front matter enters the skills index and its body renders in the unverified reference tier. The model reads it. A proposal that changes what the next turn reads has already been applied.
+
+So the bytes go to `refinementStagingPath(requestId, name)` under `.kinu/` — the same internal root as `SPILL_DIRS` and `EVENT_CONTENT_DIR` — which neither `discoverSkills` nor `gatherApprovableInstructions` walks. Zero influence, not bounded influence. The request row stays the only record of the proposal; no second store exists.
+
+The whole path lives in `core/src/evolution/refinement-skill.ts` — staging, showing, deciding, promoting.
+
+### Read it, then decide
+
+`showRefinement(requestId, routeIndex)` returns the **whole file** and the digest of the bytes as they are right now. Never an excerpt: everything else in this flow is bounded because it is for scanning, and this one is the approval surface. A truncated approval surface asks for a decision about bytes the decider could not see, which is the same failure as approving blind. A skill file needs no ceiling of this module's own — it is bounded by exactly what bounds every skill file, the turn's admission allocation, which defers an oversize body rather than rejecting it.
+
+The digest is a **token**. `decideRefinementRoute` takes `{ requestId, routeIndex, expectedDigest, decision }` and refuses any other digest. Between reading and deciding, the request can be re-driven, the routes can be re-ordered, and the staging can be rewritten; every one of those changes the digest and none of them changes the index. So a decision is always about bytes, never about a list position.
+
+Surfaces: `/refine show <n> <edit>` prints the file and the two commands to paste back; `/refine approve|reject <n> <edit> <digest>` decides. The CF `showRefinement` and `decideRefinement` callables are both gated `interactive`. All of it is absent from every model-facing tool surface, because this is the act that turns proposed bytes into system instructions.
+
+A decision is only offered while it is owed. `ChangelogEntry.decision` is present exactly while the route is `pending_owner_approval`, so a decided row stops advertising an action the backend would refuse. `showRefinement` and `decideRefinementRoute` also refuse unless the request is `gated` or `evaluating`.
+
+### The approval order, and why nothing half-lands
+
+1. the route must be decidable and the digest must be the one shown;
+2. the staged bytes must still hash to that digest;
+3. the final path must be absent, or already hold these exact bytes;
+4. write the `InstructionApproval` for the FINAL path and digest;
+5. copy the staged bytes onto the final path, **read them back**, verify the digest, and only then delete the staging.
+
+Step 5's read-back is not paranoia. A partial or transformed write would leave a file discovery admits and the trust row vouches for, whose content is not what the owner approved — a trusted skill nobody wrote. Verifying before the unlink means the staging outlives every failure, so the promotion is always retryable and never half-done.
+
+A crash between 3 and 4 leaves an approval for a file that does not exist. Nothing discovers a path with no file, so the window is inert, and the next settle completes the promotion — the file appears **already trusted** and is never briefly live-but-unverified. The reverse order would have exactly that window.
+
+Every reachable state is correct or recoverable, and `promoteStagedSkill` is idempotent so whoever looks next repairs it:
+
+| state | what happens |
+|---|---|
+| trust row, no file, staging present | copied and verified now |
+| trust row, right file, staging present | staging deleted now |
+| trust row, right file, no staging | done |
+| trust row, **wrong** file | refused, staging kept, collision surfaced on the request detail — never overwritten |
+| trust row, no file, no staging | refused; the bytes are gone and cannot be invented |
+
+Copy-then-verify-then-unlink rather than a rename, because core's `VFS` (`types/primitives.ts`) offers no rename and every backend implements that narrow interface. The guarantee is not move atomicity — it is the order, plus the read-back.
+
+A resumed plan never re-routes a decided edit. Re-routing a skill the owner already approved or rejected would replace their answer with a fresh `pending_owner_approval`, asking them again about bytes they had settled and, in the approve case, silently un-applying a promotion that really happened.
+
+Staging is discarded on every path that ends it: approval (after the read-back), rejection, revocation, and a trust row that moved to different bytes.
+
+Rejecting deletes the staging and settles the request `rolled_back`. `rejected` is its own disposition, distinct from `refused`: a refusal is a gate working as designed, a rejection is the owner declining bytes they were shown, and a rate that mixed them would measure the gates and the person as one signal.
+
+Settlement is derived, never notified. The lane reads `listPromptSectionVersions` for a section verdict and `InstructionApprovalStore.get` for a skill's, comparing the stored decision's digest against the route's: approved or grandfathered for THIS digest is applied, revoked or a moved digest is rolled back, and no row at all stays pending with no clock on the owner.
+
+The settle scan covers `gated` AND `evaluating`. `gated` is where a hard kill lands — `plan` routes the edits, advances to `gated`, and settles in the same pass, so a process killed between those two steps leaves a row with every owner write done and nothing watching it.
+
+A request is `applied` when at least one artifact IS in effect — a promoted proposal or a fact the user's own words earned. A preference that landed beside a section that lost its trials settles `applied`, with both counted in the detail: calling it rolled back would be a lie about the fact that is live. A fact-only proposal therefore reaches `applied` rather than parking in `gated` with nothing to wait for.
+
+The proposal schema is `strictObject` at every level. An unknown field refuses the whole proposal rather than being dropped, because a dropped field is a claim the agent made that the harness then silently overrode — a proposal obeyed in a way nobody wrote.
 
 ## CraftStore lifecycle
 

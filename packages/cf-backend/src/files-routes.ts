@@ -35,8 +35,8 @@ import { getAgentByName } from "agents";
 import type { ExecutorWriteResult } from "@kinu.run/core";
 import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
-import { err, fileResponseHeaders, json } from "./lib/http";
+import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
+import { err, fileResponseHeaders, json, readBoundedStream } from "./lib/http";
 
 /** The stub surface this route drives — narrowed so tests can stand in for
  *  the agent without impersonating the whole actor. */
@@ -50,7 +50,7 @@ export interface FilesRouteAgent {
   abortExecutorFileDownload(transferId: string): Promise<void>;
   writeExecutorFileChunk(
     executorId: string, path: string, transferId: string, offset: number,
-    chunk: Uint8Array, final: boolean,
+    chunk: Uint8Array, final: boolean, expectedRevision?: number,
   ): Promise<ExecutorWriteResult>;
   abortExecutorFileWrite(transferId: string): Promise<void>;
 }
@@ -80,14 +80,30 @@ export async function handleFilesRequest(
   const agent = await resolveAgent(env, agentName);
   if (!agent) return err(503, 'workspace agent unavailable');
 
-  return request.method === 'PUT'
-    ? upload(request, agent, executorId, path)
-    : download(agent, executorId, path, url);
+  if (request.method === 'PUT') {
+    const expectedRevision = expectedRevisionFrom(request);
+    return expectedRevision === null
+      ? err(400, 'If-Match must be a non-negative integer revision')
+      : upload(request, agent, executorId, path, expectedRevision);
+  }
+  return download(agent, executorId, path, url);
+}
+
+function expectedRevisionFrom(request: Request): number | undefined | null {
+  const value = request.headers.get('if-match');
+  if (value === null) return undefined;
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) return null;
+  const revision = Number(value);
+  return Number.isSafeInteger(revision) ? revision : null;
 }
 
 /**
  * The uploaded bytes, streamed to the actor one bounded chunk at a time.
- * Bytes are counted off the stream itself; the actor independently re-checks
+ *
+ * The bound is the shared one (`readBoundedStream`): a declared-length
+ * pre-filter, then a count of bytes actually pulled, refused at the first byte
+ * past the limit with the stream cancelled rather than drained. Nothing
+ * materialises the whole file at the edge. The actor independently re-checks
  * both offset continuity and the total, so neither a lying client nor a lying
  * length header reaches the file plane.
  */
@@ -96,18 +112,16 @@ async function upload(
   agent: FilesRouteAgent,
   executorId: string,
   path: string,
+  expectedRevision: number | undefined,
 ): Promise<Response> {
-  const declared = Number(request.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > FILE_TRANSFER_MAX_BYTES) {
-    return err(413, `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
-  }
-  const body = request.body;
-  if (body === null) return err(400, 'request body required');
+  if (request.body === null) return err(400, 'request body required');
+  const overLimit = () => err(
+    413,
+    `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`,
+  );
   const transferId = crypto.randomUUID();
-  const reader = body.getReader();
   const pending: Uint8Array[] = [];
   let pendingBytes = 0;
-  let total = 0;
   let offset = 0;
 
   const take = (want: number): Uint8Array => {
@@ -125,42 +139,8 @@ async function upload(
     return out;
   };
 
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > FILE_TRANSFER_MAX_BYTES) {
-        await reader.cancel('file exceeds the transfer limit');
-        await agent.abortExecutorFileWrite(transferId);
-        return err(413, `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
-      }
-      pending.push(value);
-      pendingBytes += value.byteLength;
-      while (pendingBytes >= FILE_CHUNK_BYTES) {
-        const result = await agent.writeExecutorFileChunk(
-          executorId,
-          path,
-          transferId,
-          offset,
-          take(FILE_CHUNK_BYTES),
-          false,
-        );
-        if ('error' in result) throw new Error(result.error);
-        offset += FILE_CHUNK_BYTES;
-      }
-    }
-    const tail = pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0);
-    const result = await agent.writeExecutorFileChunk(
-      executorId,
-      path,
-      transferId,
-      offset,
-      tail,
-      true,
-    );
-    return 'error' in result ? err(400, result.error) : json(result);
-  } catch (cause) {
+  /** Abort the half-written transfer, naming an abort that itself failed. */
+  const abandon = async (): Promise<void> => {
     try {
       await agent.abortExecutorFileWrite(transferId);
     } catch (abortCause) {
@@ -170,11 +150,48 @@ async function upload(
         otherwise: 'unavailable',
       }), { executorId, path });
     }
+  };
+
+  try {
+    const outcome = await readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, async (value) => {
+      pending.push(value);
+      pendingBytes += value.byteLength;
+      while (pendingBytes >= FILE_CHUNK_BYTES) {
+        const written = await agent.writeExecutorFileChunk(
+          executorId, path, transferId, offset, take(FILE_CHUNK_BYTES), false, expectedRevision,
+        );
+        if ('error' in written) throw new Error(written.error);
+        offset += FILE_CHUNK_BYTES;
+      }
+    });
+    if (outcome === 'too_large') {
+      await abandon();
+      return overLimit();
+    }
+    if (outcome instanceof KinuError) {
+      await abandon();
+      diagnostics.failure('files.upload_body_unreadable', outcome, { executorId, path });
+      return err(400, 'the upload stopped before the whole file arrived');
+    }
+    const tail = pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0);
+    const result = await agent.writeExecutorFileChunk(
+      executorId, path, transferId, offset, tail, true, expectedRevision,
+    );
+    if ('conflict' in result) {
+      return json(
+        { error: 'This file changed after you opened it.', revision: result.revision },
+        { status: 412 },
+      );
+    }
+    if ('unsupported' in result) return json({ error: result.error }, { status: 409 });
+    return 'error' in result ? err(400, result.error) : json(result);
+  } catch (cause) {
+    await abandon();
     diagnostics.failure('files.upload_failed', toKinuError({
       doing: 'streaming an uploaded file to the workspace actor',
       cause,
       otherwise: 'unavailable',
-    }), { executorId, path, bytes: total });
+    }), { executorId, path, bytes: offset + pendingBytes });
     return err(400, cause instanceof Error ? cause.message : 'upload failed');
   }
 }

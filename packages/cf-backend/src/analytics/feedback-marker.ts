@@ -72,6 +72,16 @@ export type FeedbackRouteFamily =
  *                         folded into `malformed`.
  *   `row_write_failed`    the durable row could not be written and the orphaned
  *                         object was deleted. OUR defect, same consequence.
+ *   `unowned_workspace`   the report named a workspace that is not in the
+ *                         reporter's registry — somebody else's, or nobody's.
+ *                         THEIRS to fix, and worth its own rate: a client bug
+ *                         that mis-derives the field and someone probing for
+ *                         other people's workspace names look identical here,
+ *                         and both are things we would want to see.
+ *   `workspace_unverified` the ownership authority could not answer. OUR outage,
+ *                         and separate from `storage_unavailable` because the
+ *                         report is REFUSED rather than lost — the reporter
+ *                         still holds it and can send it again.
  *
  * The empty string is reserved for an accepted submission, so `rejectReason != ''`
  * is exactly the rejection set and no query needs to know the arms to count them.
@@ -84,7 +94,9 @@ export type FeedbackRejectReason =
   | 'malformed'
   | 'no_content'
   | 'storage_unavailable'
-  | 'row_write_failed';
+  | 'row_write_failed'
+  | 'unowned_workspace'
+  | 'workspace_unverified';
 
 /**
  * One submission's marker. Deliberately not derived from the feedback route's own

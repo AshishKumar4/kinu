@@ -82,11 +82,13 @@ export interface SwarmTreeRegion {
 	root: ForkNode;
 	/** What the search was asked to do, written above its tree inside the boundary. */
 	title: string;
-	/** What the search is CALLED — the short handle its root node carries when
-	 *  the engine wrote none of its own. A root is the workspace as found, so it
-	 *  has no action to label it with, and `(root)` is what a reader used to get
-	 *  where the run's own name belongs. */
-	name?: string;
+	/** What the search is CALLED — the run's own name, which `ForkRunSummary.name`
+	 *  always carries (given, or derived from the task). The root node wears it,
+	 *  because a root is the workspace as found and has no action of its own to
+	 *  label it with. REQUIRED: while it was optional the fallback printed the
+	 *  literal `(root)` where the run's name belongs, and both call sites always
+	 *  had a name to give. */
+	name: string;
 	/** The shape it resolved to and what it was dispatched with. */
 	note: string;
 	/**
@@ -290,7 +292,7 @@ function nodeLabel(
 	const room = node.data.children.length === 0 || folded ? LABEL_ROOM_LEAF : LABEL_ROOM_INNER;
 	const spend = font.badge(score) + font.badge(badge);
 	const name = clipToWidth(
-		`${score === "" ? "" : " "}${cleanNodeLabel(node.data.action, region.name ?? "(root)")}`,
+		`${score === "" ? "" : " "}${cleanNodeLabel(node.data.action, region.name)}`,
 		room - spend, font.name,
 	);
 	return { score, name, badge, end: LABEL_X + spend + font.name(name) };
@@ -315,7 +317,7 @@ interface RegionLayout {
 	why: ReadonlyMap<string, string>;
 	/** {@link SwarmTreeRegion.name} — what the root node and its tooltip say
 	 *  where a node would say what it did. */
-	name: string | null;
+	name: string;
 	/** Each node's label, already clipped to the room its column leaves it. */
 	labels: Map<string, NodeLabel>;
 	/** Rows of this tree, in the tree's own coordinates. */
@@ -376,7 +378,7 @@ function layoutRegions(
 		}
 		placed.push({
 			runId: region.runId, root: region.root, nodes, links: data.links(),
-			name: region.name ?? null,
+			name: region.name,
 			byId: new Map(nodes.map((d) => [d.data.id, d])),
 			pv: principalVariation(region.root),
 			competed: isCompeted(region.root),
@@ -997,7 +999,7 @@ export function SwarmTree({
 						x, y, node: d.data, competed: region.competed,
 						fanIn: region.fanIn.get(d.data.id) ?? null,
 						why: region.why.get(d.data.id) ?? null,
-						runName: region.name ?? null,
+						runName: region.name,
 					});
 					applyEmphasis(rg, region, selectedNodeIn(selectionRef.current, region.runId), d.data.id);
 				})
@@ -1360,7 +1362,7 @@ interface TooltipState {
 	/** The node's own reason for existing, verbatim from the journal, or null. */
 	readonly why: string | null;
 	/** The run's name, which the ROOT wears when it carries no action of its own. */
-	readonly runName: string | null;
+	readonly runName: string;
 }
 
 function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
@@ -1378,7 +1380,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 			}}
 		>
 			<div className="font-medium p-text mb-1.5 leading-snug line-clamp-2">
-				{cleanNodeLabel(node.action, runName ?? "(root)")}
+				{cleanNodeLabel(node.action, runName)}
 			</div>
 			<div className="flex items-center gap-2 tabular-nums">
 				{(node.status === "failed" || node.value !== null) && (

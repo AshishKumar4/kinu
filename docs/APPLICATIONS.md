@@ -42,13 +42,13 @@ graph TB
 The web UI exposes the agent's internal state across six surfaces: Output,
 Work, Releases, Exploration, Agent, and Environment.
 
-### Personal assistant that learns
+### Personal assistant with durable memory
 
-Each workspace is a Durable Object with its own SQLite database, hosting its
-default agent. Conversations persist across sessions. The agent builds up
-long-term memory (`MEMORY.md`: reflections, notes, learned facts), crafted
-tools extracted from successful problem-solving, and improvements to its own
-scaffold.
+Each workspace is a Durable Object with its own SQLite database and default
+agent. Conversations persist across sessions. The agent can write long-term
+memory (`MEMORY.md`), extract crafted tools from problem-solving, and propose
+changes to its scaffold. These are stored capabilities; this document does not
+claim a benchmark result for them.
 
 ### Multi-model comparison
 
@@ -62,10 +62,9 @@ provider. On Workers AI the usual spread:
 | Nemotron 3 Super 120B / GPT OSS 120B | Reasoning models, 256k / 128k context | Alternate reasoning trajectories |
 | Llama 4 Scout | General-purpose instruction model | Quick tasks, simple questions, iteration |
 
-Different models produce different evolution trajectories; a reasoning model
-tends to extract more complex tool patterns than an instruction model.
-Reasoning effort is a separate dial: `/effort low|medium|high` maps onto each
-provider family's native knob.
+`kinu` keeps evolution state per workspace. Compare models in separate
+workspaces, then compare their records. Reasoning effort is a separate dial:
+`/effort low|medium|high` maps onto each provider family's native knob.
 
 ### Hosted development environment
 

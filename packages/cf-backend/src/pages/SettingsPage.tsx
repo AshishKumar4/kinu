@@ -16,7 +16,8 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION, formatScoreInterval,
   type ApprovalGrant, type ArchiveCursor, type ArchivePage, type EvolutionConfigView,
-  type JsonValue,
+  type JsonValue, type InstructionSourceRow, type InstructionSourceView,
+  type Page, type SeekCursor,
 } from "@kinu.run/core";
 import { executorLabel } from "@/lib/executors";
 import { useKinu } from "@/hooks/use-kinu";
@@ -362,6 +363,7 @@ export default function SettingsPage() {
           </FieldState>
         </Card>
         <StandingApprovalsCard rpc={rpc} />
+        <InstructionApprovalsCard rpc={rpc} />
 
         {/* MCTS knobs */}
         <Card title="MCTS tunables" icon={TreeStructureIcon}>
@@ -467,6 +469,164 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
               >{busy === `${grant.rule}@${grant.executor}` ? "…" : "Revoke"}</button>
             </div>
           ))}
+        </div>
+      )}
+      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+    </Card>
+  );
+}
+
+// ── Workspace instruction files ──────────────────────────────────
+
+/**
+ * Which instruction files in this workspace may speak as system instructions
+ * (KINU-N028).
+ *
+ * AGENTS.md and the files under /workspace/skills are read on every turn, and
+ * the agent can write all of them with its own file tool and shell. So an
+ * approval binds the exact BYTES: the digest below is what was approved, and any
+ * later edit stops matching it and drops the file back to reference material
+ * without anyone having to notice.
+ *
+ * "Carried over" rows are the files that were already in the workspace when
+ * trust arrived. They were kept at full force so nobody's project rules went
+ * quiet on upgrade, but they were never read by you — which is why they say so,
+ * and why revoking one is a click.
+ */
+export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState<InstructionSourceView | null>(null);
+  const [cursor, setCursor] = useState<SeekCursor | undefined>(undefined);
+
+  const load = useCallback(
+    async () => await rpc<Page<InstructionSourceRow>>(
+      "listInstructionApprovals", [cursor ? { cursor } : {}],
+    ),
+    [rpc, cursor],
+  );
+  const { resource, reload } = useAsyncResource(load);
+  const page = lastValue(resource);
+
+  // Opening a row reads THAT file and nothing else; the listing itself carries
+  // no bytes, so a workspace full of agent-written skills costs one page.
+  const read = async (row: InstructionSourceRow) => {
+    if (open?.path === row.path) { setOpen(null); return; }
+    setBusy(row.path);
+    setErr(null);
+    try {
+      setOpen(await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]));
+    } catch (e) {
+      setErr(renderThrownChain({ cause: e }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const decide = async (row: InstructionSourceRow, action: "approve" | "revoke") => {
+    setBusy(row.path);
+    setErr(null);
+    try {
+      if (action === "approve") {
+        // Approval binds the digest the owner was just shown. If the file has
+        // moved on, nothing is granted and the row stays reference material.
+        const opened = open?.path === row.path
+          ? open
+          : await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]);
+        if (!opened) { setErr("That file could not be read, so nothing was approved."); return; }
+        await rpc("approveInstruction", [row.path, opened.digest]);
+      } else {
+        await rpc("revokeInstruction", [row.path]);
+      }
+      setOpen(null);
+      reload();
+    } catch (e) {
+      setErr(renderThrownChain({ cause: e }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rows = page?.items ?? null;
+  if (resource.status !== "error" && rows !== null && rows.length === 0 && !cursor) return null;
+  return (
+    <Card title="Workspace instruction files" icon={ShieldIcon}>
+      <p className="p-meta p-text-3">
+        The agent can write these files itself, so only the exact contents you approve are
+        followed as instructions. Everything else is passed to it as reference material.
+        Editing an approved file drops it back to reference until you approve it again.
+      </p>
+      {resource.status === "error" && rows === null ? (
+        <LoadFailure what="this workspace's instruction files" message={resource.message} onRetry={reload} />
+      ) : rows === null ? (
+        <p className="text-xs p-text-3">Loading…</p>
+      ) : (
+        <div className="space-y-1">
+          {rows.map((row) => {
+            const opened = open?.path === row.path ? open : null;
+            const state = row.reason !== undefined
+              ? `not readable: ${row.reason}`
+              : row.decision === "grandfathered"
+                ? "carried over"
+                : row.decision === "approved"
+                  ? "approved"
+                  : row.decision === "revoked" ? "refused" : "not decided";
+            return (
+              <div key={row.path} className="rounded-md px-2 py-1.5 p-card space-y-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <code className="font-mono p-text truncate" title={row.path}>{row.path}</code>
+                  <span className="p-text-3 shrink-0">
+                    {row.kind === "skill" ? "skill" : "AGENTS.md"} · {row.bytes} bytes
+                  </span>
+                  <span className="p-text-3 shrink-0">{state}</span>
+                  {row.reason === undefined && (
+                    <button
+                      type="button"
+                      onClick={() => void read(row)}
+                      disabled={busy !== null}
+                      className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
+                    >{busy === row.path ? "…" : opened ? "Hide" : "Read"}</button>
+                  )}
+                  {row.decision === "approved" || row.decision === "grandfathered" ? (
+                    <button
+                      type="button"
+                      onClick={() => void decide(row, "revoke")}
+                      disabled={busy !== null}
+                      className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
+                      title="Stop following this file as instructions"
+                    >Revoke</button>
+                  ) : row.reason === undefined ? (
+                    <button
+                      type="button"
+                      onClick={() => void decide(row, "approve")}
+                      disabled={busy !== null}
+                      className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
+                      title="Follow these exact contents as instructions"
+                    >Approve</button>
+                  ) : null}
+                </div>
+                {opened && (
+                  <>
+                    <pre className="text-[11px] leading-[16px] p-text-2 whitespace-pre-wrap break-words
+                      max-h-64 overflow-auto rounded-sm px-2 py-1.5 p-card-hover">{opened.preview}</pre>
+                    <div className="p-meta p-text-3 font-mono break-all">{opened.digest}</div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {(page?.status === "more" || cursor) && (
+        <div className="flex gap-2 pt-1">
+          {cursor && (
+            <button type="button" onClick={() => { setCursor(undefined); setOpen(null); }}
+              className="p-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">First page</button>
+          )}
+          {page?.status === "more" && (
+            <button type="button" onClick={() => { setCursor(page.next); setOpen(null); }}
+              className="p-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">More</button>
+          )}
         </div>
       )}
       {err && <div className="p-meta p-danger mt-1">{err}</div>}

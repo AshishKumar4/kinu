@@ -142,6 +142,46 @@ function ModeSegment({ value, onChange, locked, disabled }: {
   );
 }
 
+/** The clipboard's files, deduplicated only by repeated item/File identity.
+ *
+ * A clipboard source can expose the SAME File through repeated item flavors, and
+ * attaching it twice claims the user pasted two. File metadata is NOT identity:
+ * two receipts can share a name, byte length, MIME type and timestamp while
+ * holding different bytes, so the old metadata key silently dropped one.
+ */
+export function pastedFiles(data: DataTransfer): FileList {
+  const { files, items } = data;
+  if (files.length < 2) return files;
+  const seenItems = new Set<DataTransferItem>();
+  const seenFiles = new Set<File>();
+  const unique = new DataTransfer();
+  for (const item of items) {
+    if (item.kind !== "file" || seenItems.has(item)) continue;
+    seenItems.add(item);
+    const file = item.getAsFile();
+    if (file === null || seenFiles.has(file)) continue;
+    seenFiles.add(file);
+    unique.items.add(file);
+  }
+  // DataTransfer.files is authoritative when a browser supplies no matching
+  // items. Keep it intact rather than guessing file identity from metadata.
+  return unique.files.length === 0 || unique.files.length === files.length ? files : unique.files;
+}
+
+/** Clipboard text alongside files, if any. Presence is decided by the
+ * clipboard's string flavors, never by inspecting their content: a path or
+ * filename can be exactly what the user meant to paste. A textarea cannot keep
+ * HTML formatting, so an HTML-only flavor contributes its rendered text and
+ * falls back to the raw string when the markup has no text node. */
+function pastedText(data: DataTransfer): string {
+  const plain = data.getData("text/plain");
+  if (plain !== "") return plain;
+  const html = data.getData("text/html");
+  if (html === "") return "";
+  const rendered = new DOMParser().parseFromString(html, "text/html").body.textContent;
+  return rendered === null || rendered === "" ? html : rendered;
+}
+
 export interface ComposerProps {
   value: string;
   onValueChange: (value: string) => void;
@@ -197,10 +237,22 @@ export function Composer({
     // surface mounted it.
     <div data-composer-root className="@container mx-auto w-full max-w-[820px] px-4 py-3.5 sm:px-5"
       onPaste={(e) => {
-        if (attachments && e.clipboardData.files.length > 0) {
-          e.preventDefault();
-          attachments.onAdd(e.clipboardData.files);
-        }
+        if (!attachments) return;
+        const files = pastedFiles(e.clipboardData);
+        if (files.length === 0) return; // a plain text paste — the browser's own insertion is right
+        attachments.onAdd(files);
+        const text = pastedText(e.clipboardData);
+        // File-only means the clipboard carries no string flavor. Never infer
+        // that from the string's content: a filename can be the intended text.
+        if (text === "") { e.preventDefault(); return; }
+        // Mixed content. When a plain flavor exists, the browser's insertion
+        // preserves it at the caret and in the undo stack, so only the files
+        // need our handling. An HTML-only flavor needs plain-text insertion
+        // because a textarea cannot accept rich content.
+        if (e.clipboardData.getData("text/plain") !== "") return;
+        e.preventDefault();
+        if (e.target instanceof HTMLTextAreaElement && document.execCommand("insertText", false, text)) return;
+        onValueChange(value === "" ? text : `${value}\n${text}`);
       }}>
       {notices && notices.length > 0 && (
         <div className="mb-2 space-y-1.5">
@@ -219,7 +271,28 @@ export function Composer({
         )}
 
         <InputArea ref={textareaRef} value={value} onValueChange={onValueChange}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit?.(); } }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            // An Enter that commits IME composition belongs to the IME, not the
+            // composer: submitting on it sends a half-composed draft. keyCode
+            // 229 is the same fact on engines that fire a trailing keydown
+            // after compositionend.
+            if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+            if (e.shiftKey) {
+              // Kumo's controlled InputArea does not supply the textarea's
+              // native line break. Insert at the selection and restore its
+              // caret after React commits the controlled value.
+              e.preventDefault();
+              const input = e.currentTarget;
+              const start = input.selectionStart;
+              const end = input.selectionEnd;
+              onValueChange(`${value.slice(0, start)}\n${value.slice(end)}`);
+              requestAnimationFrame(() => input.setSelectionRange(start + 1, start + 1));
+              return;
+            }
+            e.preventDefault();
+            submit?.();
+          }}
           placeholder={placeholder} disabled={disabled} rows={1}
           className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-4 pt-3 pb-1 !bg-transparent !shadow-none !outline-none !ring-0 focus:!ring-0" />
 

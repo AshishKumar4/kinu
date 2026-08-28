@@ -14,10 +14,10 @@
  * Five rules it inherits from the layout benchmark, each one bought with a
  * failed run:
  *
- *   /verify FIRST, per arm. A strategy whose verify fails measured the
- *   container's own blank disk, and its numbers are refused rather than ranked.
- *   Two sibling agents each shipped a probe that silently passed on a blank
- *   /workspace; this is the guard against being the third.
+ *   LIFECYCLE PROOF FIRST, per arm. The normal short requests prove an attached
+ *   durable workspace before timing workloads. An arm whose proof fails measured
+ *   the container's own blank disk, and its numbers are refused rather than
+ *   ranked.
  *
  *   ONE BOX PER ARM. `mountBucket` refuses a second mount of one binding at a
  *   different prefix or readOnly value, so arms cannot share an instance.
@@ -36,9 +36,11 @@
  *   and polled for a sentinel.
  */
 
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { request as httpsRequest } from 'node:https';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -62,6 +64,7 @@ import {
   checkCleanup, createManifest, replayTeardown, writeManifest,
   type CleanupReport, type DeleteOutcome,
 } from './fixtures/storage-matrix/cleanup';
+import { parseJsonc } from './jsonc';
 /**
  * instrument now follows: a payload that disagreed with its contract used to
  * become a silent `undefined` and take a later segment down with it.
@@ -85,15 +88,62 @@ interface ChainGeneration {
   readonly rev: number | null;
 }
 
-const StateReplySchema = v.looseObject({
+interface AttachOutcome { kind: string; detail: string }
+
+interface StartupState {
+  restoration?: 'unstarted' | 'attached' | 'unattached';
+  unready?: string;
+  lastAttach?: AttachOutcome;
+  chain?: {
+    base?: { id?: string };
+    delta?: unknown;
+    mode?: string;
+    rev?: number;
+  } | null;
+}
+
+interface StateReply {
+  error?: string;
+  extractionAllowed?: boolean;
+  storePrefix?: string;
+  state?: StartupState;
+}
+
+const StateReplySchema: v.GenericSchema<StateReply> = v.looseObject({
+  error: v.optional(v.string()),
+  extractionAllowed: v.optional(v.boolean()),
+  storePrefix: v.optional(v.string()),
   state: v.optional(v.looseObject({
+    restoration: v.optional(v.picklist(['unstarted', 'attached', 'unattached'])),
+    unready: v.optional(v.string()),
+    lastAttach: v.optional(v.looseObject({ kind: v.string(), detail: v.string() })),
     chain: v.optional(v.nullable(v.looseObject({
       base: v.optional(v.looseObject({ id: v.optional(v.string()) })),
       delta: v.optional(v.unknown()),
+      mode: v.optional(v.string()),
       rev: v.optional(v.number()),
     }))),
   })),
 });
+
+export type StartupPollVerdict =
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'attached'; readonly attach: AttachOutcome }
+  | { readonly kind: 'failed'; readonly reason: string };
+
+/** The durable attach record belongs to a restoration only after that
+ * restoration declares itself attached. This rejects the previous generation's
+ * record while a fresh generation is still waiting for its scheduled callback. */
+export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
+  const state = reply.state;
+  if (state?.restoration === 'unattached') {
+    return { kind: 'failed', reason: state.unready ?? 'the startup refused without a reason' };
+  }
+  if (state?.restoration === 'attached' && state.lastAttach !== undefined) {
+    return { kind: 'attached', attach: state.lastAttach };
+  }
+  return { kind: 'pending' };
+}
 
 async function chainGeneration(fixture: Fixture, box: string): Promise<ChainGeneration> {
   const reply = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
@@ -140,60 +190,184 @@ const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 const BENCH_DIR = join(REPO_ROOT, 'packages/devbox/bench');
 const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
 const FIXTURE_BASE = 'kinu-devbox-bench';
-const FIXTURE_CLASSES = ['SnapshotChainBox', 'R2fsBox', 'OverlayCasBox'] as const;
+const FIXTURE_CLASS_BY_STRATEGY = {
+  'snapshot-chain': 'SnapshotChainBox',
+  r2fs: 'R2fsBox',
+  'overlay-cas': 'OverlayCasBox',
+  'bounded-layers': 'BoundedLayersBox',
+  'merkle-pack': 'MerklePackBox',
+} as const satisfies Record<Strategy, string>;
+const FIXTURE_COUNTER_CLASS = 'BenchOpCounter';
+/** The container classes whose image is the candidate Dockerfile build. */
+const CANDIDATE_CONTAINER_CLASSES: ReadonlySet<string> = new Set([
+  'BoundedLayersBox',
+  'MerklePackBox',
+]);
 
-interface FixtureResources {
+interface FixtureNames {
   readonly worker: string;
   readonly bucket: string;
   readonly containerApps: readonly string[];
+}
+
+interface FixtureResources extends FixtureNames {
   readonly configPath: string;
+  /** The exact per-run Wrangler config, retained while teardown owns its directory. */
+  readonly config: string;
   disposeConfig(): void;
 }
 
-export function resourceNames(
-  runId: string,
-): Omit<FixtureResources, 'configPath' | 'disposeConfig'> {
+const FixtureConfigSchema = v.looseObject({
+  durable_objects: v.looseObject({
+    bindings: v.array(v.looseObject({ class_name: v.string() })),
+  }),
+  migrations: v.array(v.looseObject({
+    new_sqlite_classes: v.array(v.string()),
+  })),
+  containers: v.array(v.looseObject({
+    class_name: v.string(),
+    image: v.string(),
+  })),
+  r2_buckets: v.array(v.looseObject({
+    bucket_name: v.string(),
+  })),
+  vars: v.optional(v.record(v.string(), v.string())),
+});
+
+function fixtureClasses(arms: readonly Strategy[]): readonly string[] {
+  return arms.map((arm) => FIXTURE_CLASS_BY_STRATEGY[arm]);
+}
+
+export function resourceNames(runId: string, arms: readonly Strategy[]): FixtureNames {
   const worker = `${FIXTURE_BASE}-${runId}`;
   return {
     worker,
     bucket: worker,
-    containerApps: FIXTURE_CLASSES.map((className) => `${worker}-${className.toLowerCase()}`),
+    containerApps: fixtureClasses(arms).map((className) => `${worker}-${className.toLowerCase()}`),
   };
 }
 
-/** One Worker, DO namespace, container-app set and bucket per run. Nothing is
- * shared with an earlier run, and teardown can delete the complete set. */
-function createFixtureResources(runId: string): FixtureResources {
-  const names = resourceNames(runId);
+/**
+ * The candidate image: the stock sandbox plus the two runner bundles and the
+ * mutation-journal daemon the candidate arms capture through.
+ *
+ * The daemon's build recipe is not restated here. It is the daemon's own
+ * Dockerfile, re-used verbatim as a builder stage, so a change to libfuse or to
+ * the compile flags cannot leave the benchmark image building a different
+ * binary from the one its tests prove. Only the runtime libraries the compiled
+ * daemon links against travel to the final stage; the toolchain does not.
+ */
+function candidateImageDockerfile(): string {
+  const recipe = readFileSync(JOURNAL_DAEMON_DOCKERFILE, 'utf8');
+  const base = `FROM ${SANDBOX_IMAGE}\n`;
+  if (!recipe.startsWith(base)) {
+    throw new Error(`journal daemon Dockerfile must start with ${base.trim()} to be re-used as a builder stage`);
+  }
+  return `${base.trimEnd()} AS journal-daemon\n${recipe.slice(base.length)}\n`
+    + `FROM ${SANDBOX_IMAGE}\n`
+    + 'COPY --from=journal-daemon /usr/local/bin/kinu-journal-daemon /usr/local/bin/kinu-journal-daemon\n'
+    + 'COPY --from=journal-daemon /usr/local/lib /usr/local/lib\n'
+    + 'RUN ldconfig\n'
+    + 'COPY candidate-runner.bundle.mjs /opt/kinu/candidate-runner.bundle.mjs\n'
+    + 'COPY overlay-cas-runner.bundle.mjs /opt/kinu/overlay-cas-runner.bundle.mjs\n';
+}
+
+/** One Worker, only the selected Durable Object classes, their container-app
+ * set and one bucket per run. Nothing is shared with an earlier run, and
+ * teardown can delete the complete deployed set. */
+export function fixtureConfigForArms(
+  template: string,
+  names: FixtureNames,
+  arms: readonly Strategy[],
+  dockerfilePath: string,
+): string {
+  const config = parseJsonc(template, FixtureConfigSchema, 'benchmark config');
+  const deployedClasses = [...fixtureClasses(arms), FIXTURE_COUNTER_CLASS];
+  const matchingBuckets = config.r2_buckets.filter((bucket) => bucket.bucket_name === 'kinu-devbox-bench');
+  if (matchingBuckets.length !== 1) {
+    throw new Error('benchmark config must bind exactly one kinu-devbox-bench bucket');
+  }
+  return `${JSON.stringify({
+    ...config,
+    $schema: join(REPO_ROOT, 'node_modules/wrangler/config-schema.json'),
+    name: names.worker,
+    vars: { ...config.vars, BENCH_SELECTED_ARMS: arms.join(',') },
+    main: join(BENCH_DIR, 'worker.ts'),
+    durable_objects: {
+      ...config.durable_objects,
+      bindings: config.durable_objects.bindings.filter((binding) => deployedClasses.includes(binding.class_name)),
+    },
+    migrations: config.migrations
+      .map((migration) => ({
+        ...migration,
+        new_sqlite_classes: migration.new_sqlite_classes.filter((className) => deployedClasses.includes(className)),
+      }))
+      .filter((migration) => migration.new_sqlite_classes.length > 0),
+    containers: config.containers
+      .filter((container) => deployedClasses.includes(container.class_name))
+      .map((container) => CANDIDATE_CONTAINER_CLASSES.has(container.class_name)
+        ? { ...container, image: dockerfilePath }
+        : container),
+    r2_buckets: config.r2_buckets.map((bucket) => bucket.bucket_name === 'kinu-devbox-bench'
+      ? { ...bucket, bucket_name: names.bucket }
+      : bucket),
+  }, null, 2)}\n`;
+}
+
+export async function createFixtureResources(
+  runId: string,
+  arms: readonly Strategy[],
+): Promise<FixtureResources> {
+  const names = resourceNames(runId, arms);
   const dir = mkdtempSync(join(tmpdir(), 'kinu-devbox-bench-'));
   const configPath = join(dir, 'wrangler.jsonc');
-  const basePath = join(BENCH_DIR, 'wrangler.jsonc');
-  let config = readFileSync(basePath, 'utf8');
-  const replaceOne = (before: string, after: string): void => {
-    if (config.split(before).length !== 2) {
-      throw new Error(`benchmark config expected exactly one ${before}`);
-    }
-    config = config.replace(before, after);
-  };
-  replaceOne('"name": "kinu-devbox-bench"', `"name": ${JSON.stringify(names.worker)}`);
-  replaceOne('"main": "worker.ts"', `"main": ${JSON.stringify(join(BENCH_DIR, 'worker.ts'))}`);
-  replaceOne(
-    '"$schema": "../../../node_modules/wrangler/config-schema.json"',
-    `"$schema": ${JSON.stringify(join(REPO_ROOT, 'node_modules/wrangler/config-schema.json'))}`,
-  );
-  replaceOne(
-    '"bucket_name": "kinu-devbox-bench"',
-    `"bucket_name": ${JSON.stringify(names.bucket)}`,
+  const bundlePath = join(dir, 'candidate-runner.bundle.mjs');
+  const overlayBundlePath = join(dir, 'overlay-cas-runner.bundle.mjs');
+  const dockerfilePath = join(dir, 'candidate-runner.Dockerfile');
+  const [candidateBuilt, overlayBuilt] = await Promise.all([
+    Bun.build({ entrypoints: [CANDIDATE_RUNNER_SOURCE], format: 'esm', target: 'bun' }),
+    Bun.build({ entrypoints: [OVERLAY_RUNNER_SOURCE], format: 'esm', target: 'bun' }),
+  ]);
+  if (!candidateBuilt.success || !overlayBuilt.success) {
+    rmSync(dir, { recursive: true, force: true });
+    const logs = [...candidateBuilt.logs, ...overlayBuilt.logs].map((entry) => entry.message).join('; ');
+    throw new Error(`candidate image bundle failed: ${logs}`);
+  }
+  const candidateBundle = candidateBuilt.outputs[0];
+  const overlayBundle = overlayBuilt.outputs[0];
+  if (candidateBundle === undefined || overlayBundle === undefined) {
+    rmSync(dir, { recursive: true, force: true });
+    throw new Error('candidate image bundle produced no output');
+  }
+  await Promise.all([
+    Bun.write(bundlePath, candidateBundle),
+    Bun.write(overlayBundlePath, overlayBundle),
+  ]);
+  copyFileSync(JOURNAL_DAEMON_SOURCE, join(dir, 'journal-daemon.c'));
+  writeFileSync(dockerfilePath, candidateImageDockerfile());
+  const config = fixtureConfigForArms(
+    readFileSync(join(BENCH_DIR, 'wrangler.jsonc'), 'utf8'),
+    names,
+    arms,
+    dockerfilePath,
   );
   writeFileSync(configPath, config);
   return {
     ...names,
     configPath,
+    config,
     disposeConfig: () => { rmSync(dir, { recursive: true, force: true }); },
   };
 }
 const HARNESS = '/workspace/.devbox-bench';
+const CANDIDATE_RUNNER_SOURCE = join(REPO_ROOT, 'packages/devbox/bench/candidate-runner.ts');
+const OVERLAY_RUNNER_SOURCE = join(REPO_ROOT, 'packages/devbox/src/cas/overlay-runner.ts');
 const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
+const JOURNAL_DAEMON_DIR = join(REPO_ROOT, 'packages/devbox/bench/journal-daemon');
+const JOURNAL_DAEMON_SOURCE = join(JOURNAL_DAEMON_DIR, 'journal-daemon.c');
+const JOURNAL_DAEMON_DOCKERFILE = join(JOURNAL_DAEMON_DIR, 'Dockerfile');
+/** Pinned to the @cloudflare/sandbox version, exactly as the bench config is. */
+const SANDBOX_IMAGE = 'docker.io/cloudflare/sandbox:0.12.8';
 /**
  * The decisive experiment's arms, from the adopted research spec.
  *
@@ -244,10 +418,117 @@ const PROCESS_DEADLINE_MS = 1_500_000;
  * same routes. Nothing below this line knows which arm it is running, which is
  * what makes a three-way comparison the same experiment as a two-way one.
  */
-type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas';
-const STRATEGIES: readonly Strategy[] = ['snapshot-chain', 'r2fs', 'overlay-cas'];
+type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas' | 'bounded-layers' | 'merkle-pack';
+const STRATEGIES: readonly Strategy[] = [
+  'snapshot-chain',
+  'r2fs',
+  'overlay-cas',
+  'bounded-layers',
+  'merkle-pack',
+];
 
-interface Options {
+const CANDIDATE_STRATEGIES = ['bounded-layers', 'merkle-pack'] as const satisfies readonly Strategy[];
+const CONTROL_STRATEGIES = ['snapshot-chain', 'r2fs', 'overlay-cas'] as const satisfies readonly Strategy[];
+type ControlStrategy = (typeof CONTROL_STRATEGIES)[number];
+const NonEmptyString = v.pipe(v.string(), v.minLength(1));
+
+interface FrozenControlArtifact {
+  readonly meta: {
+    readonly date: string;
+    readonly worker?: string;
+    readonly bucket?: string;
+    readonly image: string;
+    readonly seed: string;
+    readonly 'loop budget ms': string;
+  };
+  readonly arms: readonly {
+    readonly strategy: string;
+    readonly verifyPassed: boolean;
+  }[];
+}
+
+const FrozenControlArtifactSchema: v.GenericSchema<FrozenControlArtifact> = v.looseObject({
+  meta: v.looseObject({
+    date: v.pipe(NonEmptyString, v.regex(/^\d{4}-\d{2}-\d{2}$/)),
+    worker: v.optional(NonEmptyString),
+    bucket: v.optional(NonEmptyString),
+    image: NonEmptyString,
+    seed: NonEmptyString,
+    'loop budget ms': NonEmptyString,
+  }),
+  arms: v.array(v.looseObject({
+    strategy: NonEmptyString,
+    verifyPassed: v.boolean(),
+  })),
+});
+
+export interface FrozenControl {
+  readonly strategy: ControlStrategy;
+  readonly artifact: string;
+  readonly sha256: string;
+  readonly date: string;
+  readonly worker?: string;
+  readonly bucket?: string;
+  readonly image: string;
+  readonly seed: string;
+  readonly budgetMs: string;
+  readonly verifyPassed: boolean;
+}
+
+/** Decode one supplied historical artifact as context. The source artifact
+ * establishes the provenance and digest recorded in the new report. */
+export function parseFrozenControlArtifact(
+  strategy: ControlStrategy,
+  path: string,
+  text: string,
+): FrozenControl {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `control artifact ${path} is not JSON: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  const parsed = v.safeParse(FrozenControlArtifactSchema, decoded);
+  if (!parsed.success) {
+    throw new Error(
+      `control artifact ${path} does not match the control contract: ${issueText(parsed.issues)}`,
+    );
+  }
+  const arms = parsed.output.arms.filter((arm) => arm.strategy === strategy);
+  if (arms.length !== 1) {
+    throw new Error(
+      `control artifact ${path} must contain exactly one requested ${strategy} arm; found ${arms.length}`,
+    );
+  }
+  const arm = arms[0]!;
+  return {
+    strategy,
+    artifact: path,
+    sha256: createHash('sha256').update(text).digest('hex'),
+    date: parsed.output.meta.date,
+    worker: parsed.output.meta.worker,
+    bucket: parsed.output.meta.bucket,
+    image: parsed.output.meta.image,
+    seed: parsed.output.meta.seed,
+    budgetMs: parsed.output.meta['loop budget ms'],
+    verifyPassed: arm.verifyPassed,
+  };
+}
+
+export interface ControlOption {
+  readonly strategy: ControlStrategy;
+  readonly path: string;
+}
+
+function frozenControlArtifacts(controls: readonly ControlOption[]): readonly FrozenControl[] {
+  return controls.map(({ strategy, path }) =>
+    parseFrozenControlArtifact(strategy, path, readFileSync(path, 'utf8')));
+}
+
+export interface Options {
   seed: number;
   budgetMs: number;
   /** Run the decisive experiment's three workloads and apply its decision rule.
@@ -256,14 +537,18 @@ interface Options {
   /** Run durability verification and cleanup, without performance workloads. */
   verifyOnly: boolean;
   plan: boolean;
-  /** Arms to run, from `--arms a,b`. Defaults to all three; an unknown name
+  /** Schema-validated historical context. These paths never affect current-arm ranking. */
+  controls: readonly ControlOption[];
+  /** Run only the candidates. Supplied controls remain report context only. */
+  candidatesOnly: boolean;
+  /** Arms to run, from `--arms a,b`. Defaults to all five; an unknown name
    *  refuses rather than measuring an empty run. */
   arms: readonly Strategy[];
   /** Leave every external resource in place for inspection. Deliberate, but
    *  it means cleanup did not complete, so the run cannot recommend. */
   keep: boolean;
-   /** Unique Durable Object suffix. A Worker redeploy does not delete DO
-    * storage, so fixed box names contaminate a later run with prior state. */
+  /** Unique Durable Object suffix. A Worker redeploy does not delete DO
+   * storage, so fixed box names contaminate a later run with prior state. */
   runId: string;
   out: string;
 }
@@ -338,35 +623,87 @@ export function addressArmRequest(
  * valibot's field-level message, plus a prefix of the text — because a benchmark
  * that defaults a missing number goes on to publish it.
  */
+const STATE_POLL_REQUEST_TIMEOUT_MS = 15_000;
+
+/** What a thrown value carries once parsed at this boundary. A fetch deadline
+ *  arrives as a DOMException named TimeoutError — no Error subclass, often an
+ *  empty stack — which is how four runs died unattributed. */
+const ThrownFailureSchema = v.object({
+  name: v.optional(v.string()),
+  message: v.optional(v.string()),
+  stack: v.optional(v.string()),
+  cause: v.optional(v.unknown()),
+});
+
+function parseThrown({ cause }: { readonly cause: unknown }): v.InferOutput<typeof ThrownFailureSchema> {
+  const parsed = v.safeParse(ThrownFailureSchema, cause);
+  return parsed.success ? parsed.output : {};
+}
+
+/** Transport loss: the request itself never completed. Takes the PARSED shape;
+ *  the catch that owns the raw thrown value parses it first. */
+function isTransportLoss(thrown: v.InferOutput<typeof ThrownFailureSchema>): boolean {
+  return /TimeoutError|AbortError/.test(thrown.name ?? '')
+    || /timed out|ETIMEDOUT|ECONNRESET|fetch failed|network/i.test(thrown.message ?? '');
+}
+
+/** Every fixture request is finite and, on transport loss, asked again.
+ *
+ *  THE ONE TRANSPORT SEAM. Every endpoint is an idempotent probe against a
+ *  durable schedule, and every measured number is the SERVER's own `ms`, so a
+ *  re-asked request never blends a measurement. Without an explicit deadline a
+ *  bare fetch inherits the runtime's idle timeout and dies mid-run as a
+ *  stackless DOMException — so the deadline is always explicit here, and no
+ *  call site carries its own transport policy. Reply-LEVEL churn (`error`
+ *  strings from a replaced container) stays where it was: `retryTransient`.
+ */
+const CALL_DEADLINE_MS = 180_000;
+const CALL_ATTEMPTS = 3;
+
 async function call<TSchema extends v.GenericSchema>(
-  fixture: Fixture, method: 'GET' | 'POST', path: string, schema: TSchema, body?: DriverRequest,
+  fixture: Fixture,
+  method: 'GET' | 'POST',
+  path: string,
+  schema: TSchema,
+  body?: DriverRequest,
+  timeoutMs?: number,
 ): Promise<v.InferOutput<TSchema>> {
   const addressed = addressArmRequest(method, path, body);
   const headers = new Headers({ authorization: `Bearer ${fixture.token}` });
   if (addressed.body !== undefined) headers.set('content-type', 'application/json');
-  const init: RequestInit = { method, signal: AbortSignal.timeout(3_600_000), headers };
-  if (addressed.body !== undefined) init.body = JSON.stringify(addressed.body);
-  const response = await fetch(`${fixture.origin}${addressed.path}`, init);
-  const text = await response.text();
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(text);
-  } catch (error) {
-    throw new Error(
-      `${method} ${path} returned non-JSON (${response.status}): ${text.slice(0, 300)}`,
-      { cause: error },
-    );
+  for (let attempt = 1; ; attempt += 1) {
+    const init: RequestInit = { method, headers };
+    if (addressed.body !== undefined) init.body = JSON.stringify(addressed.body);
+    init.signal = AbortSignal.timeout(timeoutMs ?? CALL_DEADLINE_MS);
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetch(`${fixture.origin}${addressed.path}`, init);
+      text = await response.text();
+    } catch (error) {
+      if (attempt >= CALL_ATTEMPTS || !isTransportLoss(parseThrown({ cause: error }))) throw error;
+      log(`${method} ${path}: transport loss on attempt ${attempt}; asking again`);
+      continue;
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(text);
+    } catch (error) {
+      throw new Error(
+        `${method} ${path} returned non-JSON (${response.status}): ${text.slice(0, 300)}`,
+        { cause: error },
+      );
+    }
+    const parsed = v.safeParse(schema, decoded);
+    if (!parsed.success) {
+      throw new Error(
+        `${method} ${path} (${response.status}) does not match its reply contract: `
+        + `${issueText(parsed.issues)}\n${text.slice(0, 300)}`,
+      );
+    }
+    return parsed.output;
   }
-  const parsed = v.safeParse(schema, decoded);
-  if (!parsed.success) {
-    throw new Error(
-      `${method} ${path} (${response.status}) does not match its reply contract: `
-      + `${issueText(parsed.issues)}\n${text.slice(0, 300)}`,
-    );
-  }
-  return parsed.output;
 }
-
 /**
  * Every reply below is a LOOSE object: the declared fields are validated, and a
  * field nobody declared is preserved rather than deleted.
@@ -401,6 +738,28 @@ const ExecReplySchema: v.GenericSchema<ExecReply> = v.looseObject({
 
 async function sh(fixture: Fixture, box: string, command: string): Promise<ExecReply> {
   return await call(fixture, 'POST', `/exec?box=${box}`, ExecReplySchema, { command });
+}
+
+const TRANSIENT_REPLACEMENT = /OperationInterrupted|runtime connection was closing|broken\.constructorFailed|container.*(?:replac|restart)/i;
+
+/** Retry only the interrupted edge operation. There is no elapsed deadline and
+ * no retry of a completed lifecycle. */
+async function retryTransient<T extends { error?: string }>(
+  operation: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const reply = await run();
+      if (!TRANSIENT_REPLACEMENT.test(reply.error ?? '') || attempt === 3) return reply;
+      log(`${operation}: transient replacement on attempt ${attempt}; retrying that request`);
+    } catch (error) {
+      const detail = describeThrown({ cause: error });
+      if (!TRANSIENT_REPLACEMENT.test(detail) || attempt === 3) throw error;
+      log(`${operation}: transient replacement on attempt ${attempt}; retrying that request`);
+    }
+  }
+  throw new Error(`${operation}: retry loop ended without a reply`);
 }
 
 
@@ -483,44 +842,190 @@ const OpTallySchema: v.GenericSchema<OpTally> = v.looseObject({
   total: v.optional(v.number()),
 });
 
-/** One `/verify` assertion. `detail` is read: a failing check is quoted in the
- *  arm's notes and again in the report. */
+/** One lifecycle assertion. The driver retains every failed row in the
+ * artifact, then excludes its arm from ranking. */
 interface VerifyCheck { name: string; pass: boolean; detail: string }
 
-interface VerifyReply {
+interface HeadReply {
   ok?: boolean;
-  checks?: VerifyCheck[];
-  passed?: boolean;
+  key?: string;
+  exists?: boolean;
+  size?: number;
   error?: string;
-  transient?: 'container_replaced' | 'checkpoint_changed';
 }
 
-const VerifyReplySchema: v.GenericSchema<VerifyReply> = v.looseObject({
+const HeadReplySchema: v.GenericSchema<HeadReply> = v.looseObject({
   ok: v.optional(v.boolean()),
-  checks: v.optional(v.array(v.looseObject({
-    name: v.string(),
-    pass: v.boolean(),
-    detail: v.string(),
-  }))),
-  passed: v.optional(v.boolean()),
+  key: v.optional(v.string()),
+  exists: v.optional(v.boolean()),
+  size: v.optional(v.number()),
   error: v.optional(v.string()),
-  transient: v.optional(v.picklist(['container_replaced', 'checkpoint_changed'])),
 });
 
-/** What an attach did. `kind` stays a free string rather than the fixture's
- *  three-value union, because an unrecognised kind is the finding: a wake this
- *  driver refuses to parse is a wake it cannot report. */
-interface AttachOutcome { kind: string; detail: string }
+const MAX_HTTPS_RESPONSE_BYTES = 1_048_576;
 
-/** `/create` and `/wake` answer the same way: an attach outcome and a duration. */
-interface AttachReply { ok?: boolean; attach?: AttachOutcome; ms?: number; error?: string }
+interface HttpsResponse {
+  readonly statusCode?: number;
+  on(event: 'data', listener: (chunk: string | Uint8Array) => void): HttpsResponse;
+  once(event: 'end' | 'close', listener: () => void): HttpsResponse;
+  once(event: 'error', listener: (error: Error) => void): HttpsResponse;
+  destroy(error?: Error): void;
+}
 
-const AttachReplySchema: v.GenericSchema<AttachReply> = v.looseObject({
+interface HttpsRequest {
+  once(event: 'error', listener: (error: Error) => void): HttpsRequest;
+  end(body: string): void;
+  destroy(error?: Error): void;
+}
+
+export type HttpsRequester = (
+  url: URL,
+  options: {
+    readonly method: 'POST';
+    readonly headers: Readonly<Record<string, string>>;
+  },
+  respond: (response: HttpsResponse) => void,
+) => HttpsRequest;
+
+export type VerifyHttpsRequester = HttpsRequester;
+export type LiveTeardownHttpsRequester = HttpsRequester;
+
+const requestOverHttps: HttpsRequester = (url, options, respond) =>
+  httpsRequest(url, options, respond);
+
+/**
+ * Live teardown can outlast a cold-container window. Node's HTTPS client has
+ * no elapsed request timeout unless one is set explicitly. Retain only a
+ * bounded reply, and reject a connection that closes before it finishes.
+ */
+async function postBoundedHttps(
+  fixture: Fixture,
+  path: string,
+  body: DriverRequest,
+  requester: HttpsRequester,
+): Promise<string> {
+  const addressed = addressArmRequest('POST', path, body);
+  const endpoint = new URL(path, 'https://bench.invalid').pathname;
+  const payload = JSON.stringify(addressed.body);
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const request = requester(
+      new URL(`${fixture.origin}${addressed.path}`),
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${fixture.token}`,
+          'content-type': 'application/json',
+          'content-length': String(Buffer.byteLength(payload)),
+        },
+      },
+      (response) => {
+        let bytes = 0;
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => {
+          const responseChunk = Buffer.from(chunk);
+          if (bytes + responseChunk.byteLength > MAX_HTTPS_RESPONSE_BYTES) {
+            const error = new Error(`${endpoint} response exceeds ${MAX_HTTPS_RESPONSE_BYTES} bytes`);
+            response.destroy(error);
+            fail(error);
+            return;
+          }
+          bytes += responseChunk.byteLength;
+          chunks.push(responseChunk);
+        });
+        response.once('error', fail);
+        response.once('close', () => fail(new Error(`${endpoint} response closed before end`)));
+        response.once('end', () => {
+          if (settled) return;
+          settled = true;
+          resolve(Buffer.concat(chunks, bytes).toString('utf8'));
+        });
+      },
+    );
+    request.once('error', fail);
+    request.end(payload);
+  });
+}
+
+
+/** A startup kick arms durable work and returns before the attach finishes. */
+interface KickReply { ok?: boolean; ms?: number; error?: string }
+
+const KickReplySchema: v.GenericSchema<KickReply> = v.looseObject({
   ok: v.optional(v.boolean()),
-  attach: v.optional(v.looseObject({ kind: v.string(), detail: v.string() })),
   ms: v.optional(v.number()),
   error: v.optional(v.string()),
 });
+
+const STARTUP_POLL_INTERVAL_MS = 250;
+
+interface StartupPoll {
+  readonly attach: AttachOutcome;
+  readonly state: StateReply;
+}
+
+interface StartupCompletion extends StartupPoll {
+  readonly ms: number;
+}
+
+async function pollForAttach(
+  fixture: Fixture,
+  box: string,
+  operation: string,
+  allowedKinds: readonly string[],
+): Promise<StartupPoll> {
+  for (;;) {
+    let reply: StateReply;
+    try {
+      reply = await call(
+        fixture, 'GET', `/state?box=${box}`, StateReplySchema, undefined, STATE_POLL_REQUEST_TIMEOUT_MS,
+      );
+    } catch (error) {
+      log(`${operation}: state poll retrying: ${describeThrown({ cause: error })}`);
+      await delay(STARTUP_POLL_INTERVAL_MS);
+      continue;
+    }
+    const verdict = startupPollVerdict(reply);
+    if (verdict.kind === 'attached') {
+      if (allowedKinds.includes(verdict.attach.kind)) return { attach: verdict.attach, state: reply };
+      throw new Error(`${operation} restored ${verdict.attach.kind}, expected ${allowedKinds.join(' or ')}`);
+    }
+    if (verdict.kind === 'failed') throw new Error(`${operation} refused: ${verdict.reason}`);
+    if (reply.error !== undefined) log(`${operation}: state poll retrying: ${reply.error}`);
+    await delay(STARTUP_POLL_INTERVAL_MS);
+  }
+}
+
+async function kickAndPoll(
+  fixture: Fixture,
+  box: string,
+  path: '/create' | '/wake',
+  operation: string,
+  allowedKinds: readonly string[],
+): Promise<StartupCompletion> {
+  const started = Date.now();
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const kicked = await call(fixture, 'POST', `${path}?box=${box}`, KickReplySchema, {});
+      if (kicked.ok === true) break;
+      const detail = kicked.error ?? 'the startup kick did not confirm';
+      if (!isTransientContainerCreateError(detail)) throw new Error(`${operation} failed: ${detail}`);
+      log(`${operation}: transient container capacity on attempt ${attempt}; retrying the same box`);
+    } catch (error) {
+      const detail = describeThrown({ cause: error });
+      if (!isTransientContainerCreateError(detail)) throw error;
+      log(`${operation}: transient container capacity on attempt ${attempt}; retrying the same box`);
+    }
+    await delay(15_000);
+  }
+  const attached = await pollForAttach(fixture, box, operation, allowedKinds);
+  return { ...attached, ms: Date.now() - started };
+}
 
 interface CheckpointReply {
   ok?: boolean;
@@ -581,6 +1086,70 @@ const TeardownReplySchema: v.GenericSchema<TeardownReply> = v.looseObject({
   error: v.optional(v.string()),
 });
 
+export type TeardownPurgePayload = Readonly<Pick<DriverRequest, 'purge' | 'prefix' | 'whole'>>;
+
+const TEARDOWN_PURGE_PAYLOAD: TeardownPurgePayload = { purge: true, prefix: '', whole: true };
+
+type LiveTeardownSender = (
+  fixture: Fixture,
+  box: string,
+  payload: TeardownPurgePayload,
+) => Promise<void>;
+
+export async function postLiveTeardown(
+  fixture: Fixture,
+  box: string,
+  requester: LiveTeardownHttpsRequester = requestOverHttps,
+): Promise<void> {
+  const responseText = await postBoundedHttps(
+    fixture,
+    `/teardown?box=${box}`,
+    TEARDOWN_PURGE_PAYLOAD,
+    requester,
+  );
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(responseText);
+  } catch (error) {
+    throw new Error(`/teardown returned non-JSON: ${responseText.slice(0, 300)}`, { cause: error });
+  }
+  const parsed = v.safeParse(TeardownReplySchema, decoded);
+  if (!parsed.success) {
+    throw new Error(
+      `/teardown does not match its reply contract: ${issueText(parsed.issues)}\n${responseText.slice(0, 300)}`,
+    );
+  }
+  if (parsed.output.ok !== true) {
+    throw new Error(parsed.output.error ?? 'teardown did not confirm');
+  }
+}
+
+const sendLiveTeardown: LiveTeardownSender = async (fixture, box): Promise<void> => {
+  await postLiveTeardown(fixture, box);
+};
+
+/** Purge each possible arm twice before deleting shared fixture resources. A
+ * failed first pass is recorded, never allowed to skip a sibling or the
+ * idempotence pass. */
+export async function teardownLiveArms(
+  fixture: Fixture,
+  boxes: Iterable<string>,
+  send: LiveTeardownSender = sendLiveTeardown,
+): Promise<readonly string[]> {
+  const errors: string[] = [];
+  const uniqueBoxes = [...new Set(boxes)];
+  for (const pass of [1, 2]) {
+    for (const box of uniqueBoxes) {
+      try {
+        await send(fixture, box, TEARDOWN_PURGE_PAYLOAD);
+      } catch (error) {
+        errors.push(`live teardown pass ${pass} ${box}: ${describeThrown({ cause: error })}`);
+      }
+    }
+  }
+  return errors;
+}
+
 interface CheckpointRow {
   changeKiB: number;
   kind: 'tick' | 'quiesce';
@@ -619,15 +1188,21 @@ interface ArmResult {
    */
   quiescesBeforeDecisive: number;
   decisiveQuiesces: number;
-  /** The chain generation before and after the ladder, so a ladder rebase is
-   *  observed rather than disclosed as a possibility. */
   generationBeforeLadder: ChainGeneration | null;
   generationAfterLadder: ChainGeneration | null;
-  /** Measured tree size per decisive workload, for the sqlite re-ship ratio. */
   treeBytes: Record<string, number>;
   ops: OpTally | null;
   teardown: TeardownReply | null;
   notes: string[];
+}
+
+/** Keep failed lifecycle arms out of a decision even if they produced ticks. */
+export function rankableTicks<T extends TickRecord>(
+  arms: readonly { readonly strategy: string; readonly verifyPassed: boolean }[],
+  ticks: readonly T[],
+): T[] {
+  const ranked = new Set(arms.filter((arm) => arm.verifyPassed).map((arm) => arm.strategy));
+  return ticks.filter((tick) => ranked.has(tick.arm));
 }
 
 async function installHarness(fixture: Fixture, box: string): Promise<void> {
@@ -808,7 +1383,10 @@ export function isTransientContainerCreateError(error: string | undefined): bool
 }
 
 async function measureArm(
-  fixture: Fixture, strategy: Strategy, options: Options,
+  fixture: Fixture,
+  strategy: Strategy,
+  options: Options,
+  noteLiveBox: (box: string) => void,
 ): Promise<ArmResult> {
   // ONE BOX PER ARM: mountBucket refuses a second mount of one binding at a
   // different prefix or readOnly value, so the arms cannot share an instance.
@@ -823,6 +1401,7 @@ async function measureArm(
     generationBeforeLadder: null, generationAfterLadder: null,
     treeBytes: {}, ops: null, teardown: null, notes,
   };
+  noteLiveBox(box);
   const teardown = async (): Promise<ArmResult> => {
     if (result.teardown === null) {
       result.teardown = await call(
@@ -835,162 +1414,50 @@ async function measureArm(
     }
     return result;
   };
-  const replaceVerifyBox = async (attempt: number): Promise<boolean> => {
-    try {
-      await call(
-        fixture,
-        'POST',
-        `/teardown?box=${box}`,
-        TeardownReplySchema,
-        { purge: true, prefix: '', whole: true },
-      );
-    } catch (error) {
-      notes.push(`verify attempt cleanup failed: ${describeThrown({ cause: error }).slice(0, 160)}`);
-    }
-    box = `${boxBase}-verify-${String(attempt)}`;
-    result.box = box;
-    try {
-      const replacement = await call(
-        fixture,
-        'POST',
-        `/create?box=${box}`,
-        AttachReplySchema,
-        { strategy },
-      );
-      if (replacement.ok === true && replacement.error === undefined) return true;
-      notes.push(`verify replacement create failed: ${replacement.error ?? 'no ok'}`);
-    } catch (error) {
-      notes.push(`verify replacement create failed: ${describeThrown({ cause: error }).slice(0, 160)}`);
-    }
-    return false;
-  };
 
   log(`${strategy}: create (cold attach)`);
-  let created: AttachReply = {};
-  // Container capacity is a platform event, not a measurement: "there is no
-  // container instance that can be provided to this durable object" killed the
-  // first A/B outright, and the layout benchmark already retries the same
-  // signature. Nothing has been measured when this fires, so retrying it is
-  // recovery rather than re-rolling a result. The attempt count is recorded so a
-  // cold-attach number that needed four tries cannot read like one that needed
-  // one.
-  const attempts = 4;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    created = await call(fixture, 'POST', `/create?box=${box}`, AttachReplySchema, { strategy });
-    if (created.error === undefined && created.ok === true) {
-      if (attempt > 1) notes.push(`cold attach needed ${attempt} attempts (container capacity)`);
-      break;
-    }
-    const transient = isTransientContainerCreateError(created.error);
-    if (!transient || attempt === attempts) break;
-    log(`${strategy}: create attempt ${attempt}/${attempts} hit a transient container error; retrying`);
-    await delay(attempt * 15_000);
-  }
-  if (created.error !== undefined || created.ok !== true) {
-    notes.push(`create failed: ${created.error ?? 'no ok'}`);
+  let cold: StartupCompletion;
+  try {
+    cold = await kickAndPoll(fixture, box, '/create', 'cold attach', ['empty', 'attached']);
+  } catch (error) {
+    notes.push(`create failed: ${describeThrown({ cause: error })}`);
     return result;
   }
-  result.attachColdMs = created.ms ?? null;
-  result.attachColdKind = created.attach?.kind ?? '';
-
-  // VERIFY FIRST. A strategy whose verify fails measured the container's own
-  // blank disk; its numbers are recorded but refused for ranking.
-  //
-  // Retried through the cold window, same shape as the create retries above:
-  // the driver deletes the container applications at start, so the first
-  // verify can ride a container boot plus an image pull, and Bun's fetch
-  // carries its own socket timeout near 300s that no AbortSignal raises (run
-  // 20260825163259 died exactly there, arms empty). Verify is read-only, so a
-  // retry is recovery, not a re-roll; the attempt count is recorded.
-  log(`${strategy}: verify`);
-  let verified: v.InferOutput<typeof VerifyReplySchema> | undefined;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    verified = undefined;
-    try {
-      verified = await call(
-        fixture,
-        'POST',
-        `/verify?box=${box}`,
-        VerifyReplySchema,
-        { strategy },
-      );
-      if (verified.transient !== undefined && attempt < attempts) {
-        const failed = verified.checks
-          ?.filter((check) => !check.pass)
-          .map((check) => `${check.name}: ${check.detail}`)
-          .slice(0, 2)
-          .join('; ');
-        if (failed !== undefined && failed.length > 0) {
-          notes.push(`verify attempt ${attempt} transient: ${failed}`);
-        }
-        log(`${strategy}: verify attempt ${attempt}/${attempts} hit ${verified.transient}; retrying`);
-        await delay(attempt * 15_000);
-        if (!(await replaceVerifyBox(attempt + 1))) {
-          verified = undefined;
-          break;
-        }
-        continue;
-      }
-      if (verified.ok !== true || verified.checks === undefined) {
-        const error = verified.error
-          ?? `verify returned no checks (fields: ${Object.keys(verified).sort().join(', ')})`;
-        const transient = /OperationInterrupted|container service is unreachable|no container instance|timed out|TimeoutError|squashfuse mount failed.*No such file|lower .*does not exist/i
-          .test(error);
-        if (transient && attempt < attempts) {
-          notes.push(`verify attempt ${attempt} transient: ${error.slice(0, 200)}`);
-          log(`${strategy}: verify attempt ${attempt}/${attempts} returned a transient error; retrying`);
-          await delay(attempt * 15_000);
-          if (!(await replaceVerifyBox(attempt + 1))) {
-            verified = undefined;
-            break;
-          }
-          continue;
-        }
-        notes.push(`verify did not complete: ${error.slice(0, 240)}`);
-        verified = undefined;
-        break;
-      }
-      if (attempt > 1) notes.push(`verify needed ${attempt} attempts (cold container window)`);
-      break;
-    } catch (error) {
-      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      const timeout = /timed out|TimeoutError/i.test(detail);
-      if (timeout && attempt < attempts) {
-        notes.push(`verify attempt ${attempt} transient: ${detail.slice(0, 200)}`);
-        log(`${strategy}: verify attempt ${attempt}/${attempts} timed out; retrying`);
-        await delay(attempt * 15_000);
-        if (!(await replaceVerifyBox(attempt + 1))) {
-          verified = undefined;
-          break;
-        }
-        continue;
-      }
-      notes.push(`verify did not complete: ${detail.slice(0, 240)}`);
-      break;
-    }
-  }
-  if (verified === undefined) return await teardown();
-  result.verifyChecks = verified.checks ?? [];
-  result.verifyPassed = verified.passed === true;
-  if (!result.verifyPassed) {
-    notes.push('VERIFY FAILED: this arm measured a blank disk and is not ranked');
-    const failed = result.verifyChecks.filter((c) => !c.pass).map((c) => `${c.name}: ${c.detail}`);
-    notes.push(...failed.slice(0, 6));
-  }
-  if (options.verifyOnly) return await teardown();
-
+  result.attachColdMs = cold.ms;
+  result.attachColdKind = cold.attach.kind;
+  log(`${strategy}: install harness`);
   await installHarness(fixture, box);
+
+  const verify = (name: string, pass: boolean, detail: string): void => {
+    result.verifyChecks.push({ name, pass, detail });
+  };
+  const markerFile = '.devbox-verify-marker.txt';
+  const marker = `devbox-verify-${crypto.randomUUID()}`;
+  const markerWrite = await retryTransient('marker write', async () =>
+    await sh(fixture, box, `printf %s ${marker} > ./${markerFile} && cat ./${markerFile}`),
+  );
+  verify(
+    'default cwd is the durable work directory',
+    markerWrite.exitCode === 0 && (markerWrite.stdout ?? '').includes(marker),
+    `exit ${markerWrite.exitCode ?? 'unknown'}, cwd default /workspace${markerWrite.error === undefined ? '' : `: ${markerWrite.error}`}`,
+  );
+
+  // The checkpoint ladder is the verification commit. Its first forced quiesce
+  // carries the marker and its normal rows remain the measurement rows.
+  log(`${strategy}: ops reset and ladder`);
   await call(fixture, 'POST', `/ops/reset?box=${box}`, AckReplySchema);
 
-  // The checkpoint ladder: write a known number of bytes, then checkpoint, and
-  // read back what it actually committed. A checkpoint that reports success with
-  // no byte count is the failure two siblings already hit.
+  // The checkpoint ladder writes known bytes, then records each commit.
   result.generationBeforeLadder = await chainGeneration(fixture, box);
   for (const kib of CHANGE_SIZES_KIB) {
-    await sh(fixture, box, `mkdir -p /workspace/ladder && dd if=/dev/urandom of=/workspace/ladder/c${kib}.bin bs=1024 count=${kib} 2>/dev/null && sync`);
-    for (const kind of ['tick', 'quiesce'] as const) {
+    await retryTransient(`ladder ${kib}KiB write`, async () =>
+      await sh(fixture, box, `mkdir -p /workspace/ladder && dd if=/dev/urandom of=/workspace/ladder/c${kib}.bin bs=1024 count=${kib} 2>/dev/null && sync`),
+    );
+    for (const kind of ['quiesce', 'tick'] as const) {
       if (kind === 'quiesce') result.quiescesBeforeDecisive++;
-      const cp = await call(fixture, 'POST', `/checkpoint?box=${box}`, CheckpointReplySchema, { kind });
+      const cp = await retryTransient(`ladder ${kib}KiB ${kind}`, async () =>
+        await call(fixture, 'POST', `/checkpoint?box=${box}`, CheckpointReplySchema, { kind }),
+      );
       result.checkpoints.push({
         changeKiB: kib,
         kind,
@@ -998,14 +1465,141 @@ async function measureArm(
         bytes: cp.outcome?.bytes ?? -1,
         outcome: cp.error !== undefined ? `error: ${cp.error}` : `${cp.outcome?.kind ?? 'unknown'}${cp.outcome?.reason !== undefined ? ` (${cp.outcome.reason})` : ''}`,
       });
+      if (kib === CHANGE_SIZES_KIB[0] && kind === 'quiesce') {
+        verify(
+          'the first checkpoint MOVED bytes into the store',
+          cp.outcome?.kind === 'committed'
+            && (cp.outcome.movedBytes === undefined || cp.outcome.movedBytes > 0),
+          `${cp.outcome?.kind ?? 'unknown'} moved=${cp.outcome?.movedBytes ?? 'n/a'} held=${cp.outcome?.bytes ?? 0}B ${cp.error ?? cp.outcome?.reason ?? ''}`.trim(),
+        );
+      }
     }
   }
+  // The normal recycle follows the normal ladder. Each request is independently
+  // retryable if a replacement interrupts it; nothing reruns the whole proof.
+  log(`${strategy}: stop then wake`);
+  const stopped = await retryTransient('stop', async () =>
+    await call(fixture, 'POST', `/stop?box=${box}`, StopReplySchema, {}),
+  );
+  result.stopMs = stopped.ms ?? null;
+  const woke = await kickAndPoll(fixture, box, '/wake', 'wake', ['attached']);
+  result.wakeMs = woke.ms;
+  result.wakeKind = woke.attach.kind;
+  verify(
+    'the wake attached durable bytes',
+    result.wakeKind === 'attached',
+    result.wakeKind || 'no attach recorded',
+  );
 
+  const afterWake = woke.state;
+  const mode = afterWake.state?.chain?.mode;
+  const mounts = await retryTransient('work-directory mount read', async () =>
+    await sh(fixture, box, 'cat /proc/mounts | grep -F /workspace || true'),
+  );
+  const mountLine = (mounts.stdout ?? '').trim().split('\n')[0] ?? '';
+  if (strategy === 'r2fs' || strategy === 'overlay-cas' || mode === 'chain') {
+    const expected = strategy === 'r2fs' ? 's3fs' : 'overlay';
+    verify(
+      `/workspace is really a ${expected} mount`,
+      mountLine.includes(expected),
+      mountLine.length > 0 ? mountLine : '(no mount line)',
+    );
+    const writable = strategy === 'r2fs'
+      ? '/var/tmp/devbox/r2fs-cache'
+      : strategy === 'overlay-cas'
+        ? '/var/tmp/devbox/cas-upper'
+        : '/var/tmp/devbox/upper';
+    const exists = await retryTransient('writable-layer read', async () =>
+      await sh(fixture, box, `test -d ${writable} && echo yes || echo no`),
+    );
+    verify('the writable layer exists', (exists.stdout ?? '').trim() === 'yes', `${writable} -> ${(exists.stdout ?? '').trim()}`);
+    if (strategy === 'overlay-cas') {
+      const lower = await retryTransient('tree lower read', async () =>
+        await sh(fixture, box, 'test -d /var/tmp/devbox/cas-lower && grep -qs " /var/tmp/devbox/cas-lower " /proc/mounts && echo yes || echo no'),
+      );
+      verify(
+        'the tree lower is present and mounted at its lower path',
+        (lower.stdout ?? '').trim() === 'yes',
+        `/var/tmp/devbox/cas-lower -> ${(lower.stdout ?? '').trim()}`,
+      );
+    } else if (strategy !== 'r2fs') {
+      const lower = await retryTransient('base lower read', async () =>
+        await sh(fixture, box, 'test -d /var/tmp/devbox/lower-base && grep -qs " /var/tmp/devbox/lower-base " /proc/mounts && echo yes || echo no'),
+      );
+      verify(
+        'the base layer is present and mounted at its lower path',
+        (lower.stdout ?? '').trim() === 'yes',
+        `/var/tmp/devbox/lower-base -> ${(lower.stdout ?? '').trim()}`,
+      );
+    }
+  } else {
+    verify(
+      '/workspace is a plain directory, as extraction mode requires',
+      mountLine.length === 0,
+      mountLine.length === 0 ? `mode ${mode ?? 'none'}: no mount expected` : `mode ${mode ?? 'none'} but mounted: ${mountLine}`,
+    );
+    verify(
+      'extraction is permitted on this host',
+      afterWake.extractionAllowed === true,
+      `ALLOW_EXTRACTION=${afterWake.extractionAllowed === true ? '1' : '(unset)'}`,
+    );
+  }
+
+  const survived = await retryTransient('marker read after wake', async () =>
+    await sh(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
+  );
+  verify(
+    'the pre-stop write survived the recycle',
+    (survived.stdout ?? '').includes(marker),
+    (survived.stdout ?? survived.error ?? '').trim().slice(0, 80),
+  );
+
+  const head = async (name: string, key: string | undefined): Promise<void> => {
+    if (key === undefined) {
+      verify(name, false, '(no durable object key recorded)');
+      return;
+    }
+    const found = await retryTransient(`${name} head`, async () =>
+      await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema),
+    );
+    verify(
+      name,
+      found.exists === true && (found.size ?? 0) > 0,
+      found.error ?? `${key} -> ${found.exists === true ? `${found.size ?? 0}B` : 'missing'}`,
+    );
+  };
+  if (strategy === 'r2fs') {
+    await head('the store holds the committed marker', afterWake.storePrefix === undefined
+      ? undefined
+      : `${afterWake.storePrefix}${markerFile}`);
+  } else if (strategy === 'overlay-cas') {
+    await head('the folded tree holds the committed marker', afterWake.storePrefix === undefined
+      ? undefined
+      : `${afterWake.storePrefix}tree/${markerFile}`);
+    await head('the fold advanced the durable cursor', afterWake.storePrefix === undefined
+      ? undefined
+      : `${afterWake.storePrefix}cursor.json`);
+  } else {
+    const chainId = afterWake.state?.chain?.base?.id;
+    await head(
+      mode === 'extract'
+        ? 'the archive object exists in the store with non-zero size'
+        : 'the delta object exists in the store with non-zero size',
+      chainId === undefined ? undefined : `backups/${chainId}/${mode === 'extract' ? 'data.sqsh' : 'delta.sqsh'}`,
+    );
+  }
+  result.verifyPassed = result.verifyChecks.every((check) => check.pass);
+  if (!result.verifyPassed) {
+    notes.push('LIFECYCLE VERIFY FAILED: this arm measured a blank disk and is not ranked');
+    notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
+  }
+
+  log(`${strategy}: workload phases`);
   for (const phase of PHASES) {
     try {
       result.phases.push(await runPhase(fixture, box, `/workspace/ab-${strategy}`, phase, options.seed, options.budgetMs));
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = describeThrown({ cause: error });
       log(`${strategy}: phase ${phase} failed: ${reason.slice(0, 160)}`);
       notes.push(`phase ${phase} did not complete: ${reason.slice(0, 240)}`);
     }
@@ -1018,7 +1612,6 @@ async function measureArm(
   // THE DECISIVE EXPERIMENT. Placed after the workload phases and BEFORE
   // stop/wake, deliberately: these workloads leave hundreds of megabytes behind,
   // and a wake measured across that tree would be measuring the tree rather than
-  // the wake. Each workload is isolated so one that cannot run costs its own
   // rows and nothing else.
   if (options.decisive) {
     for (const spec of DECISIVE_WORKLOADS) {
@@ -1040,25 +1633,13 @@ async function measureArm(
     }
   }
 
-  // stop -> wake. Only meaningful on a deployed Worker.
-  log(`${strategy}: stop then wake`);
-  const stopped = await call(fixture, 'POST', `/stop?box=${box}`, StopReplySchema, {});
-  result.stopMs = stopped.ms ?? null;
-  const woke = await call(fixture, 'POST', `/wake?box=${box}`, AttachReplySchema, {});
-  result.wakeMs = woke.ms ?? null;
-  result.wakeKind = woke.attach?.kind ?? (woke.error ?? '');
-  if (result.wakeKind !== 'attached') {
-    notes.push(
-      `WAKE NOT VERIFIED: attach.kind was '${result.wakeKind}', so the container may never have gone `
-      + 'down and no durability conclusion may be drawn from this cycle',
-    );
-  }
 
-  // Warm attach: a second create against a live box.
-  const warm = await call(fixture, 'POST', `/create?box=${box}`, AttachReplySchema, { strategy });
-  result.attachWarmMs = warm.ms ?? null;
-  result.attachWarmKind = warm.attach?.kind ?? '';
+  // Warm attach: a second kick observes the already attached generation.
+  const warm = await kickAndPoll(fixture, box, '/create', 'warm attach', ['attached']);
+  result.attachWarmMs = warm.ms;
+  result.attachWarmKind = warm.attach.kind;
 
+  log(`${strategy}: ops accounting and teardown`);
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
   await teardown();
@@ -1066,7 +1647,6 @@ async function measureArm(
   // RELEASE THE CONTAINER before the next arm starts.
   //
   // MEASURED: run 7's second arm failed EVERY phase with `Maximum number of
-  // running container instances exceeded`. `max_instances` is 1 per class, and
   // the first arm's box was still up — its own stop→wake measurement had
   // deliberately woken it and the warm-attach check kept it there — so the
   // second arm could never get an instance. One box per arm is required for
@@ -1092,13 +1672,6 @@ function metricSummary(arm: ArmResult, name: string): Summary | null {
   }
   return medians.length === 0 ? null : summarize(medians);
 }
-export function rankableTicks(
-  arms: readonly { readonly strategy: string; readonly verifyPassed: boolean }[],
-  ticks: readonly TickRecord[],
-): TickRecord[] {
-  const ranked = new Set(arms.filter((arm) => arm.verifyPassed).map((arm) => arm.strategy));
-  return ticks.filter((tick) => ranked.has(tick.arm));
-}
 
 const num = (value: number | null, digits = 2): string => {
   if (value === null || !Number.isFinite(value) || value < 0) return '—';
@@ -1122,19 +1695,54 @@ interface RunMeta {
   image: string;
   seed: string;
   'loop budget ms': string;
+  'frozen controls provenance'?: string;
   INCOMPLETE?: string;
 }
 
-function render(arms: readonly ArmResult[], meta: RunMeta, admission: AdmissionVerdict): string {
+export function renderFrozenControls(controls: readonly FrozenControl[]): string {
+  const out = [
+    '#### Frozen controls (not ranked)',
+    '',
+    'These schema-validated external rows provide context only. Candidate ranking uses only measurements from this run.',
+  ];
+  if (controls.length === 0) {
+    out.push('', 'Historical context is unavailable: no `--control <strategy>=<path>` was supplied.');
+    return out.join('\n');
+  }
+  out.push('', '| control | status | provenance | date | worker | bucket | image | seed | loop budget ms |');
+  out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  for (const control of controls) {
+    out.push(
+      `| \`${control.strategy}\` | ${control.verifyPassed ? 'VERIFIED' : '**REFUSED**'} `
+      + `| \`${control.artifact}#sha256:${control.sha256}\` | ${control.date} `
+      + `| ${control.worker ?? '—'} | ${control.bucket ?? '—'} | \`${control.image}\` `
+      + `| ${control.seed} | ${control.budgetMs} |`,
+    );
+  }
+  return out.join('\n');
+}
+
+function render(
+  arms: readonly ArmResult[],
+  meta: RunMeta,
+  admission: AdmissionVerdict,
+  frozenControls: readonly FrozenControl[] = [],
+  renderControlContext = false,
+): string {
   const out: string[] = [];
-  out.push(`### Devbox storage strategies: ${STRATEGIES.map((id) => `\`${id}\``).join(' vs ')}`);
+  const compared = arms.map((arm) => `\`${arm.strategy}\``).join(' vs ');
+  out.push(`### Devbox storage strategies: ${compared}`);
   out.push('');
   for (const [key, value] of Object.entries(meta)) out.push(`- ${key}: \`${value}\``);
   out.push('');
 
-  out.push('#### Verify, first, per arm');
+  out.push('#### Lifecycle proof, first, per arm');
+  if (renderControlContext || frozenControls.length > 0) {
+    out.push(renderFrozenControls(frozenControls));
+    out.push('');
+  }
   out.push('');
-  out.push('| arm | verify | failing checks |');
+  out.push('| arm | lifecycle proof | failing checks |');
   out.push('| --- | --- | --- |');
   for (const arm of arms) {
     const failing = arm.verifyChecks.filter((c) => !c.pass).map((c) => `\`${c.name}\``).join(', ');
@@ -1142,7 +1750,7 @@ function render(arms: readonly ArmResult[], meta: RunMeta, admission: AdmissionV
   }
   out.push('');
   out.push(
-    'An arm whose verify fails measured the container\'s own blank disk. Its rows below are '
+    'An arm whose lifecycle proof fails measured the container\'s own blank disk. Its rows below are '
     + 'recorded for diagnosis and are NOT ranked.',
   );
   out.push('');
@@ -1234,26 +1842,19 @@ function render(arms: readonly ArmResult[], meta: RunMeta, admission: AdmissionV
     // thresholds so a reader can check the arithmetic rather than trust it.
     const candidate = STRATEGIES.find((id) => id === 'overlay-cas');
     if (candidate !== undefined) {
-      // ONLY VERIFY-PASSING ARMS REACH THE RULE.
-      //
-      // MEASURED HOLE IN THIS INSTRUMENT: `decide` takes ticks and knows nothing
-      // about verify, so a run where overlay-cas failed /verify still produced
-      // twenty priced ticks and a computed ratio. That is the blank-disk ranking
-      // the verify gate exists to prevent, arriving through a different door —
-      // and it would have published a confident `chain stays default` from an
-      // arm that never attached. The gate is enforced here, at the rule, rather
-      // than trusted to have been enforced earlier.
-      const rankable = rankableTicks(arms, ticks);
+      // ONLY LIFECYCLE-PROVEN ARMS REACH THE RULE. `decide` only sees ticks, so
+      // this gate prevents a blank-disk arm from supplying a plausible ratio.
+      const eligibleTicks = rankableTicks(arms, ticks);
       const refused = arms.filter((arm) => !arm.verifyPassed).map((arm) => arm.strategy);
       if (refused.length > 0) {
         out.push(
-          `REFUSED FROM RANKING: ${refused.map((id) => `\`${id}\``).join(', ')} failed /verify, so `
+          `REFUSED FROM RANKING: ${refused.map((id) => `\`${id}\``).join(', ')} failed the lifecycle proof, so `
           + 'their ticks measured a container\'s own blank disk and are excluded from the ratio '
           + 'below. Their rows remain in the table above for diagnosis.',
         );
         out.push('');
       }
-      const verdict: DecisionVerdict = decide(rankable, 'snapshot-chain', candidate);
+      const verdict: DecisionVerdict = decide(eligibleTicks, 'snapshot-chain', candidate);
       out.push('#### Decision rule');
       out.push('');
       out.push(
@@ -1270,6 +1871,14 @@ function render(arms: readonly ArmResult[], meta: RunMeta, admission: AdmissionV
       out.push(
         'The 10x and 3x bars are CHOSEN thresholds from the research that set them, not measured '
         + 'constants. This experiment measures the ratio; it does not confirm the bar.',
+      );
+      out.push('');
+    } else if (frozenControls.length > 0) {
+      out.push('#### Candidate comparison');
+      out.push('');
+      out.push(
+        'Only the current candidate rows may be compared. The frozen controls above remain visible '
+        + 'as verified or refused historical evidence and never enter a ratio, rank, or recommendation.',
       );
       out.push('');
     }
@@ -1379,16 +1988,16 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
   requireAdmitted(admission);
   const ranked = arms.filter((arm) => arm.verifyPassed);
   if (ranked.length === 0) {
-    return 'NO DEFAULT IS DERIVABLE FROM THIS RUN. No arm passed /verify, which means every arm '
+    return 'NO DEFAULT IS DERIVABLE FROM THIS RUN. No arm completed the lifecycle proof, which means every arm '
       + 'measured the container\'s own blank disk rather than its strategy. The lifecycle rows above '
       + 'say which checks failed; fix those before reading any latency from this table.';
   }
   if (ranked.length === 1) {
     const only = ranked[0]!;
-    return `ONLY \`${only.strategy}\` PASSED /verify, so it is the default by default rather than by `
+    return `ONLY \`${only.strategy}\` completed the lifecycle proof, so it is the default by default rather than by `
       + `measurement. That is a weaker statement than this benchmark exists to make: the other arm's `
-      + `verify failure is the thing to fix, and the comparison should be re-run before the choice is `
-      + `treated as settled.`;
+      + 'lifecycle failure is the thing to fix, and the comparison should be re-run before the choice is '
+      + 'treated as settled.';
   }
 
   const key = 'small-stat-1k';
@@ -1396,7 +2005,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
     .map((arm) => ({ arm, stat: metricSummary(arm, key)?.p50 ?? null }))
     .filter((row): row is { arm: ArmResult; stat: number } => row.stat !== null);
   if (scored.length < 2) {
-    return 'Both arms passed /verify but the deciding metric did not complete on both, so the arms '
+    return 'Both arms completed the lifecycle proof but the deciding metric did not complete on both, so the arms '
       + 'are not separable on this run. The workload table says which cells are missing.';
   }
   scored.sort((a, b) => a.stat - b.stat);
@@ -1411,7 +2020,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
   return `DEFAULT TO \`${best.arm.strategy}\`. On the metric that decides a workspace — metadata `
     + `latency over many small files — it is ${ratio.toFixed(1)}x faster than \`${worst.arm.strategy}\` `
     + `(${best.stat.toFixed(2)} ms against ${worst.stat.toFixed(2)} ms per \`stat\`), and both arms `
-    + `passed /verify so both numbers describe a real attached workspace rather than a blank disk.`
+    + 'completed the lifecycle proof, so both numbers describe a real attached workspace rather than a blank disk.'
     + wakeNote;
 }
 
@@ -1426,6 +2035,8 @@ const CONTROL_WITNESSES = {
   'snapshot-chain': ['cumulative-delta-seed', 'mutable-delta'],
   'overlay-cas': ['unbounded-pending-replay', 'O(u)-scan'],
   r2fs: ['open-write-loss', 'non-atomic-rename', 'POSIX-gap'],
+  'bounded-layers': [],
+  'merkle-pack': [],
 } as const satisfies Record<Strategy, readonly string[]>;
 
 /** The admission evidence one devbox arm contributes. Exported so the gate's
@@ -1433,10 +2044,11 @@ const CONTROL_WITNESSES = {
 export function devboxArmEvidence(
   arm: Pick<ArmResult, 'strategy' | 'verifyPassed' | 'verifyChecks' | 'phases' | 'checkpoints' | 'decisiveTicks'>,
 ): ArmEvidence {
+  const candidate = arm.strategy === 'bounded-layers' || arm.strategy === 'merkle-pack';
   return {
     arm: arm.strategy,
-    kind: 'control',
-    rankEligible: false,
+    kind: candidate ? 'candidate' : 'control',
+    rankEligible: candidate,
     expectedRedChecks: [...CONTROL_WITNESSES[arm.strategy]],
     observedRedChecks: [],
     attachedVerified: arm.verifyPassed,
@@ -1445,7 +2057,7 @@ export function devboxArmEvidence(
     producedMeasurements: arm.phases.length > 0 || arm.checkpoints.length > 0 || arm.decisiveTicks.length > 0,
   };
 }
-function devboxAdmission(
+export function devboxAdmission(
   arms: readonly ArmResult[],
   meta: RunMeta,
   token: string,
@@ -1512,15 +2124,73 @@ function devboxAdmission(
   };
   return evaluateRun(record);
 }
+export function benchmarkExitCode(failure: string | null, admission: AdmissionVerdict): number {
+  return failure === null && admission.admitted ? 0 : 1;
+}
+
 
 // ── main ────────────────────────────────────────────────────────────────────
 
-function parseOptions(argv: readonly string[]): Options {
+const HELP = `Usage: bun scripts/bench-devbox-strategies.ts [options]
+
+Options:
+  --candidates-only                 Measure bounded-layers and merkle-pack only.
+  --control <strategy>=<path>       Add optional historical context for one control:
+                                    snapshot-chain, r2fs, overlay-cas.
+  --arms <strategy,...>             Measure named strategies.
+  --plan                            Print the execution plan without deploying.
+  --decisive                        Run decisive workloads.
+  --keep                            Retain external resources for inspection.
+  --out <path>                      Write the result artifact.
+  --help                            Show this help.
+`;
+
+export function parseOptions(argv: readonly string[]): Options {
   const value = (name: string, fallback: string): string => {
     const index = argv.indexOf(`--${name}`);
     return index !== -1 && index + 1 < argv.length ? argv[index + 1]! : fallback;
   };
+  const controls: ControlOption[] = [];
+  const controlStrategies = CONTROL_STRATEGIES.join(', ');
+  const seenControls = new Set<ControlStrategy>();
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== '--control') continue;
+    const rawControl = argv[index + 1];
+    if (rawControl === undefined || rawControl.startsWith('--')) {
+      throw new Error('--control requires <strategy>=<path>');
+    }
+    const separator = rawControl.indexOf('=');
+    if (separator === -1) {
+      throw new Error(`--control requires <strategy>=<path>; got "${rawControl}"`);
+    }
+    const rawStrategy = rawControl.slice(0, separator);
+    const path = rawControl.slice(separator + 1);
+    const strategy = CONTROL_STRATEGIES.find((known) => known === rawStrategy);
+    if (separator < 1 || strategy === undefined) {
+      throw new Error(
+        `--control strategy "${rawStrategy}" is not a historical control; known controls: ${controlStrategies}`,
+      );
+    }
+    if (path === '') throw new Error('--control requires <strategy>=<path>');
+    if (seenControls.has(strategy)) {
+      throw new Error(`--control must not repeat strategy "${strategy}"`);
+    }
+    seenControls.add(strategy);
+    controls.push({ strategy, path });
+    index += 1;
+  }
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+  const candidatesOnly = argv.includes('--candidates-only');
+  const requestedArms = value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
+    const arm = STRATEGIES.find((strategy) => strategy === raw.trim());
+    if (arm === undefined) {
+      throw new Error(`--arms names "${raw.trim()}"; known arms: ${STRATEGIES.join(', ')}`);
+    }
+    return arm;
+  });
+  if (candidatesOnly && argv.includes('--arms')) {
+    throw new Error('--candidates-only selects bounded-layers and merkle-pack; do not also pass --arms');
+  }
   return {
     runId,
     seed: Number.parseInt(value('seed', '20260824'), 10),
@@ -1529,23 +2199,29 @@ function parseOptions(argv: readonly string[]): Options {
     verifyOnly: argv.includes('--verify-only'),
     plan: argv.includes('--plan'),
     keep: argv.includes('--keep'),
-    arms: value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
-      const arm = STRATEGIES.find((s) => s === raw.trim());
-      if (arm === undefined) {
-        throw new Error(`--arms names "${raw.trim()}"; known arms: ${STRATEGIES.join(', ')}`);
-      }
-      return arm;
-    }),
+    candidatesOnly,
+    controls,
+    arms: candidatesOnly ? [...CANDIDATE_STRATEGIES] : requestedArms,
     out: value('out', join('bench-artifacts', `devbox-strategies-${runId}.json`)),
   };
 }
 
 async function main(): Promise<number> {
-  const options = parseOptions(process.argv.slice(2));
-  const planned = resourceNames(options.runId);
+  const argv = process.argv.slice(2);
+  if (argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return 0;
+  }
+  const options = parseOptions(argv);
+  const frozenControls = frozenControlArtifacts(options.controls);
+  const planned = resourceNames(options.runId, options.arms);
   if (options.plan) {
+    const controls = options.controls.length === 0
+      ? 'none (optional)'
+      : options.controls.map((control) => `${control.strategy}=${control.path}`).join(', ');
     process.stdout.write(
       `Devbox strategy A/B plan\n\narms          ${options.arms.join(', ')}\n`
+      + `controls      ${controls}\n`
       + `phases        ${PHASES.join(',')}\n`
       + `process-driven ${[...PROCESS_PHASES].join(',')}\n`
       + `change sizes  ${CHANGE_SIZES_KIB.map((k) => (k >= 1024 ? `${k / 1024}MiB` : `${k}KiB`)).join(', ')}\n`
@@ -1563,7 +2239,8 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const resources = createFixtureResources(options.runId);
+
+  const resources = await createFixtureResources(options.runId, options.arms);
   const teardownManifest = createManifest(options.runId, [
     { kind: 'worker', name: resources.worker, detail: 'per-run fixture Worker' },
     ...resources.containerApps.map((name) => ({ kind: 'container-app' as const, name, detail: 'fixture container application' })),
@@ -1582,6 +2259,8 @@ async function main(): Promise<number> {
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
   let stop: (() => readonly string[]) | null = null;
+  const liveArmBoxes = new Set(options.arms.map((strategy) => `ab-${strategy}-${options.runId}`));
+  let liveFixture: Fixture | null = null;
   let cleanupReport: CleanupReport | null = null;
   const cleanupErrors: string[] = [];
   let failure: string | null = null;
@@ -1591,6 +2270,13 @@ async function main(): Promise<number> {
       writeManifest(REPO_ROOT, teardownManifest);
       log('--keep left the Worker, container applications, bucket, and generated config in place');
       return;
+    }
+    if (liveFixture !== null) {
+      const liveTeardownErrors = await teardownLiveArms(liveFixture, liveArmBoxes);
+      cleanupErrors.push(...liveTeardownErrors);
+      if (liveTeardownErrors.length > 0) {
+        failure ??= `live teardown failed: ${liveTeardownErrors.join('; ')}`;
+      }
     }
     let workerStopped = false;
     const replay = await replayTeardown(REPO_ROOT, teardownManifest, async (entry): Promise<DeleteOutcome> => {
@@ -1657,8 +2343,9 @@ async function main(): Promise<number> {
     wrangler(['r2', 'bucket', 'create', resources.bucket]);
     const started = await deployFixture(token, resources);
     stop = started.stop;
+    liveFixture = started.fixture;
     for (const strategy of options.arms) {
-      const arm = await measureArm(started.fixture, strategy, options);
+      const arm = await measureArm(started.fixture, strategy, options, (box) => liveArmBoxes.add(box));
       arms.push(arm);
       for (const [name, count] of Object.entries(arm.ops?.calls ?? {})) {
         teardownManifest.counters[name] = (teardownManifest.counters[name] ?? 0) + count;
@@ -1667,7 +2354,13 @@ async function main(): Promise<number> {
     }
   } catch (error) {
     failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    // The stack is the diagnosis: three runs died as a bare `TimeoutError`
+    // with no stage named, and each cost a 15-minute deployment to learn
+    // nothing. A refused run must say which call refused it.
     log(`run failed: ${failure}`);
+    const thrown = parseThrown({ cause: error });
+    if (thrown.stack !== undefined && thrown.stack.length > 0) log(`run failure stack:\n${thrown.stack}`);
+    if (thrown.cause !== undefined) log(`run failure cause: ${describeThrown({ cause: thrown.cause })}`);
   } finally {
     await runTeardownOnce();
   }
@@ -1680,6 +2373,11 @@ async function main(): Promise<number> {
     seed: String(options.seed),
     'loop budget ms': String(options.budgetMs),
   };
+  if (frozenControls.length > 0) {
+    meta['frozen controls provenance'] = frozenControls
+      .map((control) => `${control.artifact}#sha256:${control.sha256}`)
+      .join(', ');
+  }
   const multipartResidue = arms.some((arm) => arm.teardown?.emptyBucketGuaranteed === false) ? 1 : 0;
   const cleanup: CleanupEvidence = options.keep || cleanupReport === null
     ? {
@@ -1689,9 +2387,9 @@ async function main(): Promise<number> {
         runtimeAbsent: false,
         bucketAndMultipartEmpty: false,
         boxDurableStateEmpty: false,
-        localSecretsProcessesAbsent: false,
         countersReconciled: false,
         replayIdempotent: false,
+        localSecretsProcessesAbsent: false,
         multipartResidue,
         errors: cleanupErrors,
       }
@@ -1701,10 +2399,13 @@ async function main(): Promise<number> {
       })();
   const admission = devboxAdmission(arms, meta, token, cleanup);
   mkdirSync(dirname(join(REPO_ROOT, options.out)), { recursive: true });
-  writeFileSync(join(REPO_ROOT, options.out), `${JSON.stringify({ meta, arms, admission }, null, 2)}\n`);
-  process.stdout.write(`${render(arms, meta, admission)}\n`);
+  writeFileSync(
+    join(REPO_ROOT, options.out),
+    `${JSON.stringify({ meta, frozenControls, arms, admission }, null, 2)}\n`,
+  );
+  process.stdout.write(`${render(arms, meta, admission, frozenControls, options.candidatesOnly)}\n`);
   log(`artifact written to ${options.out}`);
-  return failure === null && (admission.admitted || options.keep) ? 0 : 1;
+  return benchmarkExitCode(failure, admission);
 }
 
 if (import.meta.main) process.exit(await main());

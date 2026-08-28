@@ -123,10 +123,143 @@ function soulSummaryFromMarkdown(markdown: string): string {
   return firstContent ?? '';
 }
 
-export function summarizeSoul(markdown: string | null | undefined, maxLength = 220): string {
-  const summary = soulSummaryFromMarkdown(markdown ?? '').replace(/\s+/g, ' ').trim();
+/** Collapse, trim and clip one already-selected summary. The tail of both
+ *  {@link summarizeSoul} and its streaming twin, so the two cannot drift. */
+function clampSummary(text: string, maxLength: number): string {
+  const summary = text.replace(/\s+/g, ' ').trim();
   if (summary.length <= maxLength) return summary;
   return `${summary.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+export function summarizeSoul(markdown: string | null | undefined, maxLength = 220): string {
+  return clampSummary(soulSummaryFromMarkdown(markdown ?? ''), maxLength);
+}
+
+/** Bytes decoded per pass by {@link summarizeSoulBytes}. Only the pass is this
+ *  size; what the scan REMEMBERS is a few hundred characters whatever the
+ *  document weighs. */
+const SOUL_SCAN_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * {@link summarizeSoul} for a document that is still bytes, in bounded state.
+ *
+ * Same answer, same rules — the `## Mission` section if it has text, the first
+ * content line otherwise — read by scanning the WHOLE document a chunk at a
+ * time and keeping only what the answer can still depend on. A caller holding
+ * one frame of a file therefore derives its mission without decoding that frame
+ * into a second whole copy of it.
+ */
+export function summarizeSoulBytes(bytes: Uint8Array, maxLength = 220): string {
+  const decoder = new TextDecoder();
+  const scan = new SoulSummaryScan(maxLength);
+  for (let at = 0; at < bytes.byteLength; at += SOUL_SCAN_CHUNK_BYTES) {
+    const end = Math.min(at + SOUL_SCAN_CHUNK_BYTES, bytes.byteLength);
+    scan.read(decoder.decode(bytes.subarray(at, end), { stream: true }));
+  }
+  scan.read(decoder.decode());
+  return scan.summary();
+}
+
+/**
+ * The line rules of {@link soulSummaryFromMarkdown}, fed a chunk at a time.
+ *
+ * Each line is NORMALIZED as it arrives — runs of whitespace become one space,
+ * leading and trailing whitespace never enter — so classification sees exactly
+ * what `line.trim()` would see however much whitespace precedes a heading. What
+ * is REMEMBERED is capped just past the summary length, because the answer is
+ * cut there: text beyond it cannot change the result, and `overflowed` records
+ * that it existed for the one decision that depends on it.
+ */
+class SoulSummaryScan {
+  private readonly cap: number;
+  private line = '';
+  private lineOverflowed = false;
+  private lineStarted = false;
+  private spacePending = false;
+  private inMission = false;
+  private missionSeen = false;
+  private mission = '';
+  private firstContent: string | null = null;
+
+  constructor(private readonly maxLength: number) {
+    // Enough to decide "longer than the summary" and to cut the ellipsis in.
+    this.cap = maxLength + 8;
+  }
+
+  read(text: string): void {
+    let at = 0;
+    for (;;) {
+      const newline = text.indexOf('\n', at);
+      if (newline < 0) {
+        this.feed(text.slice(at));
+        return;
+      }
+      this.feed(text.slice(at, newline));
+      this.endLine();
+      at = newline + 1;
+    }
+  }
+
+  summary(): string {
+    this.endLine();
+    const chosen = this.mission !== '' ? this.mission : this.firstContent ?? '';
+    return clampSummary(chosen, this.maxLength);
+  }
+
+  /** One piece of the current line, normalized into it. The piece is bounded by
+   *  the caller's chunk, so this allocates a chunk at most. */
+  private feed(piece: string): void {
+    if (piece === '') return;
+    const collapsed = piece.replace(/\s+/g, ' ');
+    const body = collapsed.trim();
+    if (body === '') {
+      this.spacePending = this.spacePending || this.lineStarted;
+      return;
+    }
+    if (this.lineStarted && (this.spacePending || collapsed.startsWith(' '))) this.append(' ');
+    this.append(body);
+    this.lineStarted = true;
+    this.spacePending = collapsed.endsWith(' ');
+  }
+
+  private append(text: string): void {
+    const room = this.cap - this.line.length;
+    if (room <= 0) {
+      this.lineOverflowed = true;
+      return;
+    }
+    if (text.length > room) this.lineOverflowed = true;
+    this.line += text.slice(0, room);
+  }
+
+  private endLine(): void {
+    const line = this.line;
+    const overflowed = this.lineOverflowed;
+    this.line = '';
+    this.lineOverflowed = false;
+    this.lineStarted = false;
+    this.spacePending = false;
+
+    if (this.inMission) {
+      if (/^##\s/.test(line)) { this.inMission = false; return; }
+      if (line === '') return;
+      if (this.mission.length >= this.cap) return;
+      this.mission = this.mission === '' ? line : `${this.mission} ${line}`;
+      if (this.mission.length > this.cap) this.mission = this.mission.slice(0, this.cap);
+      return;
+    }
+    // Only the FIRST mission heading opens the section, exactly as the
+    // whole-document form's `findIndex` does. A line that ran past the cap
+    // carries more than the heading and is therefore not one.
+    if (!this.missionSeen && !overflowed && line.toLowerCase() === '## mission') {
+      this.missionSeen = true;
+      this.inMission = true;
+      return;
+    }
+    if (this.firstContent === null && line !== '' && !line.startsWith('#')) {
+      this.firstContent = line;
+    }
+  }
 }
 
 /**

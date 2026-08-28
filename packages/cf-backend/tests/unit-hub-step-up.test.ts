@@ -23,7 +23,13 @@ function hubEnv() {
     async setName() {},
     async createDurableWebhook(opts: WebhookOptions) {
       calls.push(`webhook:${JSON.stringify(opts)}`);
-      return { trigger_id: 'trg_1', url: '/api/workspaces/jarvis/webhook/trg_1', auth_mode: 'hmac', secret: null };
+      return {
+        trigger_id: '01HZY6QK9N4T7M2P8V3XABCDEF',
+        url: '/api/workspaces/jarvis/webhook/01HZY6QK9N4T7M2P8V3XABCDEF/v1-'
+          + 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        auth_mode: 'hmac',
+        secret: null,
+      };
     },
   };
   const bindings = {
@@ -32,11 +38,15 @@ function hubEnv() {
       get() { return agent; },
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    // Creation refuses without it, because a webhook whose delivery URL cannot
+    // be signed is a row nobody can deliver to. The step-up gate this suite is
+    // about is upstream of that refusal — see unit-webhook-route.test.ts.
+    WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
   };
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, bindings);
-  // SAFETY: the hub route only reaches the locally constructed orchestrator
-  // namespace and credential secret in this suite.
+  // SAFETY: every member the hub route reads is constructed by the assign above
+  // — the orchestrator namespace, the credential secret and the route secret.
   const env = partialEnv as Env;
   return { env, calls };
 }

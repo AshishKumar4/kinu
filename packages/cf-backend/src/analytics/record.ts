@@ -84,6 +84,7 @@ function agentRow(input: {
   ttftMs?: number;
   steps?: number;
   toolCalls?: number;
+  attempts?: number;
   usage?: Usage;
   usd?: number;
 }): AgentRow {
@@ -110,6 +111,7 @@ function agentRow(input: {
     ttftMs: input.ttftMs ?? 0,
     steps: input.steps ?? 0,
     toolCalls: input.toolCalls ?? 0,
+    attempts: input.attempts ?? 0,
     input: usage.input ?? 0,
     output: usage.output ?? 0,
     cacheRead: usage.cacheRead ?? 0,
@@ -239,6 +241,57 @@ export function recordJobSettled(env: AnalyticsEnv, input: JobRowInput): void {
     agentKind: input.agentKind,
     source: input.operation,
     outcome: input.outcome,
+  }));
+}
+
+/**
+ * One durable recovery incident's announcement, settled.
+ *
+ * A container lifecycle failure is made durable by the box before anyone is
+ * told, and the box re-delivers it until this Worker accepts it. This row is
+ * what happened to ONE of those deliveries, and the reason it is a row at all is
+ * that the boundary previously had none: an incident that reached the agent and
+ * an incident that reached nobody produced the same observable result, which is
+ * nothing.
+ *
+ * `outcome` carries the verdict and `code` the class of failure, so a successful
+ * recovery and a refused envelope are separate values of one dimension rather
+ * than a row's presence or absence. `attempts` is the producer's own count, not
+ * a number this side could derive: the box's ledger is where deliveries are
+ * counted, and a Worker that has been evicted between two of them cannot see
+ * how many there were.
+ */
+export interface RecoveryRowInput {
+  readonly workspace: string;
+  /** The lifecycle stage the incident is about — `attach`, `checkpoint`,
+   *  `process`, `port`. Empty when the envelope was refused before a stage could
+   *  be read, which is the one case where no stage is a fact yet. */
+  readonly stage: string;
+  readonly outcome: RowOutcome;
+  readonly code: ErrorCode | '';
+  /** Which delivery attempt this was, as the producer counts them. */
+  readonly attempts: number;
+  /** From the incident's first report to this settlement. Zero when the two are
+   *  the same instant, and zero for a refused envelope, which has no first
+   *  report on record. */
+  readonly durationMs: number;
+}
+
+export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput): void {
+  emit(analyticsPlane(env).agent, agentRow({
+    kind: 'event',
+    event: 'sandbox.recovery_settled',
+    workspace: input.workspace,
+    // The workspace root is what accepts the announcement and owns the ledger.
+    agentKind: 'orchestrator',
+    // `source` on an `event` row is the lifecycle verb that produced it, which
+    // for a recovery is the stage that failed. A closed vocabulary from the
+    // producer's own `IncidentStage`, so it can never be prose.
+    source: input.stage,
+    outcome: input.outcome,
+    code: input.code,
+    attempts: input.attempts,
+    durationMs: input.durationMs,
   }));
 }
 

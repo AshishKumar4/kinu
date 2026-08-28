@@ -318,7 +318,7 @@ function logSessionEvent(agentName: string, event: SessionEvent): void {
   if (event.type === 'turn-start') log(`${agentName}: ${event.kind} turn ${event.event ?? ''}`.trim());
   if (event.type === 'turn-end') log(`${agentName}: turn completed in ${event.turn.durationMs}ms`);
   if (event.type === 'error') log(`${agentName}: error: ${event.message}`);
-  if (event.type === 'evolution') log(`${agentName}: [${event.event}] ${event.message}`);
+  if (event.type === 'evolution' || event.type === 'background') log(`${agentName}: [${event.event}] ${event.message}`);
 }
 
 function readLivePid(): number | null {

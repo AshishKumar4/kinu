@@ -295,12 +295,12 @@ describe('composePrepareStep (the shared step pipeline)', () => {
     { role: 'assistant', content: 'b' },
   ];
 
-  test('extension rewrites first, cache tail markers land LAST on the final array', () => {
+  test('extension rewrites first, cache tail markers land LAST on the final array', async () => {
     const host = new ExtensionHost().register({
       name: 'steer',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 'steered' }],
     });
-    const out = composePrepareStep({ extensions: host, cache: { strategy: { kind: 'anthropic' } } }, { stepNumber: 0, messages: base });
+    const out = await composePrepareStep({ extensions: host, cache: { strategy: { kind: 'anthropic' } } }, { stepNumber: 0, messages: base });
     expect(out?.messages.map((m) => m.content)).toEqual(['a', 'b', 'steered']);
     // The marker rides the injected tail message — proof the markers were
     // applied AFTER the extension rewrite.
@@ -312,22 +312,22 @@ describe('composePrepareStep (the shared step pipeline)', () => {
     expect(tail.providerOptions.anthropic.cacheControl).toEqual({ type: 'ephemeral' });
   });
 
-  test('per-step system override rides the plan (Think TurnConfig is string-only)', () => {
-    const out = composePrepareStep({
+  test('per-step system override rides the plan (Think TurnConfig is string-only)', async () => {
+    const out = await composePrepareStep({
       cache: { strategy: { kind: 'anthropic' }, system: { role: 'system', content: 'cached-sys' } },
     }, { stepNumber: 0, messages: base });
     expect(out?.system).toEqual({ role: 'system', content: 'cached-sys' });
     expect(out?.messages).toHaveLength(2);
   });
 
-  test('no plan → steered messages only; nothing at all → undefined', () => {
+  test('no plan → steered messages only; nothing at all → undefined', async () => {
     const host = new ExtensionHost().register({
       name: 'steer',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 's' }],
     });
-    expect(composePrepareStep({ extensions: host }, { stepNumber: 1, messages: base })?.messages).toHaveLength(3);
-    expect(composePrepareStep({}, { stepNumber: 1, messages: base })).toBeUndefined();
-    expect(composePrepareStep({ extensions: new ExtensionHost() }, { stepNumber: 1, messages: base })).toBeUndefined();
+    expect((await composePrepareStep({ extensions: host }, { stepNumber: 1, messages: base }))?.messages).toHaveLength(3);
+    expect(await composePrepareStep({}, { stepNumber: 1, messages: base })).toBeUndefined();
+    expect(await composePrepareStep({ extensions: new ExtensionHost() }, { stepNumber: 1, messages: base })).toBeUndefined();
   });
 });
 
@@ -400,7 +400,7 @@ describe('ExtensionHost', () => {
     expect(await failing.runTransformContext({ ...ctx, messages: [...ctx.messages] })).toBeUndefined();
   });
 
-  test('runPrepareStep chains outputs and reports no-change as undefined', () => {
+  test('runPrepareStep chains outputs and reports no-change as undefined', async () => {
     const base: ModelMessage[] = [{ role: 'user', content: 'a' }];
     const appendB: KinuExtension = {
       name: 'b',
@@ -409,11 +409,42 @@ describe('ExtensionHost', () => {
     const passthrough: KinuExtension = { name: 'p', prepareStep: () => undefined };
 
     const host = new ExtensionHost().register(passthrough).register(appendB);
-    const out = host.runPrepareStep({ stepNumber: 0, messages: base });
+    const out = await host.runPrepareStep({ stepNumber: 0, messages: base });
     expect(out?.map((m) => m.content)).toEqual(['a', 'b']);
 
     // No extension rewrites → undefined (leave the step untouched).
     const noop = new ExtensionHost().register(passthrough);
-    expect(noop.runPrepareStep({ stepNumber: 0, messages: base })).toBeUndefined();
+    expect(await noop.runPrepareStep({ stepNumber: 0, messages: base })).toBeUndefined();
+  });
+
+  test('runPrepareStep awaits an async rewrite before the next extension sees it', async () => {
+    const admitted = Promise.withResolvers<void>();
+    const seen: string[][] = [];
+    const host = new ExtensionHost()
+      .register({
+        name: 'durable',
+        prepareStep: async ({ messages }) => {
+          await admitted.promise;
+          return [...messages, { role: 'user', content: 'persisted' }];
+        },
+      })
+      .register({
+        name: 'observer',
+        prepareStep: ({ messages }) => {
+          seen.push(messages.map((message) => String(message.content)));
+          return undefined;
+        },
+      });
+
+    const running = host.runPrepareStep({
+      stepNumber: 0,
+      messages: [{ role: 'user', content: 'base' }],
+    });
+    await Promise.resolve();
+    expect(seen).toEqual([]);
+
+    admitted.resolve();
+    expect((await running)?.map((message) => message.content)).toEqual(['base', 'persisted']);
+    expect(seen).toEqual([['base', 'persisted']]);
   });
 });

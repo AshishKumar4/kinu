@@ -22,15 +22,15 @@
 
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
 import { DEVICE_CONNECT_PATH } from "@kinu.run/core";
-import { json } from "./lib/http";
+import { json, readBounded } from "./lib/http";
 import {
   ownerCaller,
   type OwnerCapabilityEnv,
   type UserCaller,
 } from "./user/workspace-capability";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
-import { readKvJson, writeKvJson, type KvStore } from "./lib/kv";
-import { sha256Hex } from "./lib/crypto";
+import { diagnostics, KinuError, renderThrownChain } from "@kinu.run/core/obs";
+import { ingressAdmitted, ingressDenied, peerIp } from "./lib/ingress-budget";
+import type { KvStore } from "./lib/kv";
 import * as v from "valibot";
 
 const DAEMON_JS_URL = "/pc/daemon.js";
@@ -54,6 +54,11 @@ export interface PcIngressEnv<Id> extends OwnerCapabilityEnv {
 
 // ── Ingress guard ──────────────────────────────────────────────────────────
 //
+// Both unauthenticated rails here (`/pc/connect-ticket`, `/pc/connect`) choose
+// a UserDO by a name the caller supplied, so both spend a knock from the shared
+// budget in `lib/ingress-budget.ts` and pass strict shape gates before any
+// `idFromName`. That module states the budget's exact residuals.
+//
 // The preferred architecture would bind an opaque routing id INTO the device
 // token, so the edge could verify which UserDO a token belongs to before
 // choosing one. It cannot be done here without a migration: deployed daemons
@@ -61,104 +66,22 @@ export interface PcIngressEnv<Id> extends OwnerCapabilityEnv {
 // a bare SHA-256 hash inside the user's DO, so nothing about a live token can
 // be checked from the Worker alone. Until UserDO mints — and devices re-register
 // with — the bound format, the honest control on this rail is rate limiting
-// through an existing binding (AUTH_KV) plus strict shape gates, NOT a pretend
-// verification.
-//
-// Exact residuals of that choice:
-//   1. KV is eventually consistent, so isolates in different PoPs can each read
-//      a stale count during the propagation window (tens of seconds) and
-//      together exceed the nominal per-window budget by roughly their number.
-//   2. A request already admitted cannot be revoked; each admitted knock still
-//      wakes exactly one UserDO.
-//   3. Every source behind one NAT address shares one budget.
-//   4. Counters are fixed-window, so a source can spend a full budget at each
-//      window boundary.
-// A distributed attacker rotating IPs stays under the per-source radar; only
-// the token-format migration closes that, because then a wrong guess is
-// rejected at the edge without waking any DO at all.
+// plus shape gates, NOT a pretend verification. A distributed attacker rotating
+// IPs stays under the per-source radar; only the token-format migration closes
+// that, because then a wrong guess is rejected at the edge without waking any
+// DO at all.
 
 /** The ticket request body is two short strings. Anything past 4 KiB is not a
  *  ticket exchange: it is refused before parsing, counted off the stream, and
  *  never buffered whole past the limit. */
 const PC_TICKET_BODY_MAX_BYTES = 4 * 1024;
-const PC_INGRESS_WINDOW_MS = 60_000;
 /** Self-imposed budget, not a measured platform number: generous enough for a
  *  daemon retrying against jitter, far below what a guessing attack needs. */
 const PC_KNOCKS_PER_WINDOW = 30;
 
-const INGRESS_WINDOW_SCHEMA = v.object({ count: v.number(), windowStart: v.number() });
-
 const USER_ID_PATTERN = /^[a-f0-9]{32}$/;
 const DEVICE_TOKEN_PATTERN = /^pdt_[A-Za-z0-9_-]{32,}$/;
 const CONNECT_TICKET_PATTERN = /^pct_[A-Za-z0-9_-]{32,}$/;
-
-/** One admission decision on a device rail. Counts the source's knocks in the
- *  current fixed window through AUTH_KV and admits while under budget. The
- *  get-then-put is not atomic across isolates; residual 1 above states exactly
- *  what that costs. */
-async function ingressAdmitted(
-  kv: KvStore,
-  rail: string,
-  ip: string,
-  limit: number,
-): Promise<boolean> {
-  const now = Date.now();
-  const windowStart = now - (now % PC_INGRESS_WINDOW_MS);
-  const source = await sha256Hex(`${rail}\u0000${ip}`);
-  const key = `pc-ingress:${String(windowStart)}:${source}`;
-  const current = await readKvJson(kv, key, INGRESS_WINDOW_SCHEMA);
-  const count = (current !== null && current.windowStart === windowStart ? current.count : 0) + 1;
-  if (count > limit) return false;
-  await writeKvJson(kv, key, { count, windowStart }, windowStart + 2 * PC_INGRESS_WINDOW_MS);
-  return true;
-}
-
-function ingressDenied(): Response {
-  return json({ error: "too many attempts; retry after a minute" }, { status: 429 });
-}
-
-function peerIp(request: Request): string {
-  return request.headers.get("cf-connecting-ip") ?? "unknown";
-}
-
-/** A small body, or why there is not one. Counted off the stream itself — an
- *  absent content-length is no reason to trust the sender. */
-async function readSmallBody(request: Request, limit: number): Promise<Uint8Array | "too_large" | "unreadable"> {
-  const body = request.body;
-  if (body === null) return new Uint8Array(0);
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > limit) {
-        await reader.cancel("device ticket body over limit");
-        return "too_large";
-      }
-      chunks.push(value);
-    }
-  } catch (cause) {
-    // A body that stops arriving is the sender's connection, not our defect —
-    // but it must not leave here as a throw, because an unanswered public
-    // ingress request has no better outcome than a refusal.
-    diagnostics.failure("pc.ticket.body_unreadable", toKinuError({
-      doing: "reading a device ticket request body",
-      cause,
-      otherwise: "unavailable",
-    }), { bytesRead: total });
-    return "unreadable";
-  }
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return out;
-}
 
 export async function handlePcRequest<Id>(
   request: Request,
@@ -242,9 +165,12 @@ async function handlePcConnectTicket<Id>(
   if (!kv || !ns) return json({ error: "device ingress not configured" }, { status: 503 });
   if (!(await ingressAdmitted(kv, "ticket", peerIp(request), PC_KNOCKS_PER_WINDOW))) return ingressDenied();
 
-  const bounded = await readSmallBody(request, PC_TICKET_BODY_MAX_BYTES);
+  const bounded = await readBounded(request, PC_TICKET_BODY_MAX_BYTES);
   if (bounded === "too_large") return json({ error: "request body too large" }, { status: 413 });
-  if (bounded === "unreadable") return json({ error: "could not read request body" }, { status: 400 });
+  if (bounded instanceof KinuError) {
+    diagnostics.failure("pc.ticket.body_unreadable", bounded);
+    return json({ error: "could not read request body" }, { status: 400 });
+  }
 
   let parsed: unknown;
   try {

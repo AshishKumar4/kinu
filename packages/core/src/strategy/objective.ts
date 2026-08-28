@@ -719,6 +719,86 @@ export interface VectorObjective {
   /** At least two. A front over one dimension is an argmax. */
   readonly components: readonly ScalarObjective[];
 }
+/** One declared component of a Pareto comparison. The identifier is an instance
+ * name for an instanced objective and a metric name for a vector objective. */
+export interface ParetoAxis {
+  readonly id: string;
+  readonly direction: ObjectiveDirection;
+}
+
+/** A candidate's raw, declared-axis evidence. */
+export type ParetoEvidence = Readonly<Record<string, number>>;
+
+export type ParetoAxes =
+  | { readonly axes: readonly ParetoAxis[] }
+  | { readonly reason: string };
+
+/** Derive the comparison axes from the objective rather than from measurements.
+ * This makes a verifier unable to rename, add, or invert an objective dimension. */
+export function paretoObjectiveAxes(objective: InstancedObjective | VectorObjective): ParetoAxes {
+  const axes = objective.kind === 'instanced'
+    ? objective.instances.map((id) => ({ id, direction: objective.direction }))
+    : objective.components.map((component) => ({
+      id: component.metric,
+      direction: component.direction,
+    }));
+  const duplicate = axes.find((axis, index) => axes.findIndex((other) => other.id === axis.id) !== index);
+  return duplicate
+    ? { reason: `Pareto objective declares axis "${duplicate.id}" more than once.` }
+    : { axes };
+}
+
+/** Check that a verifier supplied exactly one finite value for every declared axis.
+ * Missing evidence is not zero, and an added axis is not comparable evidence. */
+export function validateParetoEvidence(
+  axes: readonly ParetoAxis[], evidence: ParetoEvidence,
+): { readonly evidence: ParetoEvidence } | { readonly reason: string } {
+  for (const axis of axes) {
+    const value = evidence[axis.id];
+    if (value === undefined) return { reason: `Pareto evidence is missing declared axis "${axis.id}".` };
+    if (!Number.isFinite(value)) {
+      return { reason: `Pareto evidence for axis "${axis.id}" is non-finite.` };
+    }
+  }
+  for (const id of Object.keys(evidence)) {
+    if (!axes.some((axis) => axis.id === id)) {
+      return { reason: `Pareto evidence names undeclared axis "${id}".` };
+    }
+  }
+  return { evidence };
+}
+
+/** `left` dominates `right` iff it is weakly better on every declared axis and
+ * strictly better on at least one. */
+export function dominatesPareto(
+  axes: readonly ParetoAxis[], left: ParetoEvidence, right: ParetoEvidence,
+): boolean {
+  let strict = false;
+  for (const axis of axes) {
+    const l = left[axis.id];
+    const r = right[axis.id];
+    if (l === undefined || r === undefined || !Number.isFinite(l) || !Number.isFinite(r)) {
+      throw new Error(`cannot compare Pareto evidence on axis "${axis.id}"`);
+    }
+    if (axis.direction === 'maximise' ? l < r : l > r) return false;
+    if (l !== r) strict = true;
+  }
+  return strict;
+}
+
+/** Return the nondominated candidates in their supplied order. Input order is the
+ * deterministic tie rule; equal vectors remain equally nondominated. */
+export function paretoFront<Candidate extends { readonly evidence: ParetoEvidence }>(
+  axes: readonly ParetoAxis[], candidates: readonly Candidate[],
+): readonly Candidate[] {
+  for (const candidate of candidates) {
+    const checked = validateParetoEvidence(axes, candidate.evidence);
+    if ('reason' in checked) throw new Error(checked.reason);
+  }
+  return candidates.filter((candidate, index) =>
+    !candidates.some((other, otherIndex) =>
+      otherIndex !== index && dominatesPareto(axes, other.evidence, candidate.evidence)));
+}
 
 export type Objective =
   | ScalarObjective

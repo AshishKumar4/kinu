@@ -65,7 +65,7 @@ import type {
   ShadowStatus,
   ToolListEntry,
 } from "@kinu.run/core";
-import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@kinu.run/core";
+import { RELEASE_STATUSES, isEngineOwnedTransitionTarget, RUN_EVENT_LIMIT_MAX } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer } from "./cli/auth-store";
@@ -299,7 +299,7 @@ function buildServer(env: Env, agentName: string): McpServer {
       inputSchema: {
         runId: z.string(),
         since: z.number().int().min(0).optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).max(RUN_EVENT_LIMIT_MAX).optional(),
       },
     },
     async ({ runId, since, limit }) => {

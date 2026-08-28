@@ -115,6 +115,38 @@ export const R2FS_S3FS_OPTIONS: readonly string[] = [
 // Nor does anything here pass `use_path_request_style`, `url`, `ahbe_conf` or
 // `ro`: the SDK spreads its own values for those AFTER the caller's, so they are
 // at best a no-op, and `passwd_file` and `url` are refused up front.
+//
+// ── the request bounds, and why they stay at the compiled defaults ───────────
+//
+// The four bounds on a stalled request are s3fs's own and this list overrides
+// none of them. Read from `doc/man/s3fs.1` at tag v1.90, the version in
+// `cloudflare/sandbox:0.12.8`:
+//
+//   `connect_timeout=300` seconds, `readwrite_timeout=120` seconds,
+//   `retries=5`, `multireq_max=20`.
+//
+// The SDK sets none of them either — `R2_DEFAULT_S3FS_OPTIONS` in the shipped
+// bundle is `stat_cache_expire=60`, `enable_noobj_cache`, `multipart_size=5` and
+// nothing more — so those are the values a mount actually runs with. They are
+// BOUNDS, not an absence, and they are facts about the pinned image rather than
+// configuration to restate here: passing a number equal to the default adds a
+// second place for it to drift.
+//
+// Nor is a SMALLER number ours to pick. Neither s3fs nor Cloudflare documents
+// one for this workload and nothing here has been measured on the shipped image,
+// and an elapsed-time cap is the wrong fence anyway: what stops a stalled mount
+// from mattering is the attach owner in `devbox.ts` — its attach budget
+// destroys and replaces a container it cannot fence, so an internal 300s connect
+// can never overlap a retry. A generation, not a clock.
+//
+// `max_thread_count` is NOT an option 1.90 has — absent from that man page
+// entirely — so passing it would fail the mount the way `compat_dir` did.
+//
+// EVERY LINE ABOVE IS PINNED TO ONE VERSION. `r2fs.test.ts` asserts the pinned
+// `@cloudflare/sandbox` version alongside these claims, so a bump turns it red:
+// re-read the man page for the s3fs the new image ships, then update the
+// defaults recorded here and the version the test pins. Neither the numbers nor
+// the version may move alone.
 
 // ── ports ───────────────────────────────────────────────────────────────────
 
@@ -158,8 +190,39 @@ export function isS3fsMounted(procMounts: string, dir: string): boolean {
 // ── the strategy ────────────────────────────────────────────────────────────
 
 export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
+  /** What is wrong with the mount `procMounts` describes, or nothing when it is
+   *  the mount this strategy claims to provide. Takes the reading rather than
+   *  taking it again: `/proc/mounts` costs a container round trip. */
+  const mountDefect = async (procMounts: string): Promise<string | undefined> => {
+    // A successful mount call is not a landed mount, and a landed mount with no
+    // cache directory is a mount that will answer every read from the store
+    // while claiming to be cached. Both facts are read back from the container.
+    if (!isS3fsMounted(procMounts, DEVBOX_WORKDIR)) {
+      return `${DEVBOX_WORKDIR} is not an s3fs mount`;
+    }
+    if (!(await ports.pathExists(R2FS_CACHE_DIR))) {
+      return `${DEVBOX_WORKDIR} is mounted without its cache directory ${R2FS_CACHE_DIR}, so `
+        + 'every read would reach the store';
+    }
+    return undefined;
+  };
+
   const attach = async (): Promise<AttachOutcome> => {
-    if (isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) {
+    const mountsBefore = await ports.readMounts();
+    if (isS3fsMounted(mountsBefore, DEVBOX_WORKDIR)) {
+      // CHECKED, not adopted. A mount already here gets the same read-back a
+      // fresh one does: the previous attach could have refused this very mount a
+      // moment ago, and returning `already-attached` over it would launder a
+      // rejected mount into a healthy answer on the next call.
+      const defect = await mountDefect(mountsBefore);
+      if (defect !== undefined) {
+        await ports.unmount();
+        throw new Error(
+          `${DEVBOX_WORKDIR} was already mounted, but ${defect}. Unmounted; the next attach `
+          + 'starts from a clean container rather than serving a mount this strategy would '
+          + 'have refused.',
+        );
+      }
       const held = await ports.inventory();
       ports.log(`${DEVBOX_WORKDIR} already mounted — mount skipped`);
       return {
@@ -170,20 +233,17 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
     await ports.exec(`mkdir -p '${R2FS_CACHE_DIR}' '${DEVBOX_WORKDIR}'`);
     await ports.mount(R2FS_S3FS_OPTIONS);
 
-    // A successful mount call is not a landed mount, and a landed mount with no
-    // cache directory is a mount that will answer every read from the store
-    // while claiming to be cached. Both facts are read back from the container.
-    if (!isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) {
+    const defect = await mountDefect(await ports.readMounts());
+    if (defect !== undefined) {
+      // UNMOUNT BEFORE REFUSING. Throwing over a live mount left the container
+      // holding exactly the mount this refused, and the next attach saw it in
+      // /proc/mounts and reported `already-attached` — one broken mount, refused
+      // once and then accepted for the rest of the container's life. A refusal
+      // has to leave nothing behind for a later call to adopt.
+      await ports.unmount();
       throw new Error(
-        `mount of ${DEVBOX_WORKDIR} reported success, but ${DEVBOX_WORKDIR} is not an `
-        + 's3fs mount.',
-      );
-    }
-    if (!(await ports.pathExists(R2FS_CACHE_DIR))) {
-      throw new Error(
-        `mount of ${DEVBOX_WORKDIR} landed without its cache directory ${R2FS_CACHE_DIR}, so `
-        + 'every read would reach the store. Refusing to start rather than serve a mount '
-        + 'that is not the one this strategy describes.',
+        `mount of ${DEVBOX_WORKDIR} reported success, but ${defect}. Unmounted; refusing to `
+        + 'start rather than serve a mount that is not the one this strategy describes.',
       );
     }
     const held = await ports.inventory();

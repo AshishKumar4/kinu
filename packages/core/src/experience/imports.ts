@@ -38,8 +38,10 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { checkMisevolution, recordMisevolutionVeto } from '../scaffold/misevolution';
 import { modifyScaffold } from '../scaffold/modify';
+import { getPendingScaffold } from '../scaffold/shadow';
 import { upsertCraftedTool } from '../craft/conflict';
 import { createFactsStore } from '../memory/facts';
+import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import * as v from 'valibot';
@@ -227,6 +229,11 @@ export interface ImportSettlement {
  * A craft the conflict gate declines is discarded too, so no provisional row
  * survives its verdict.
  */
+/** Where each import records that it was DISPOSITIONED — adopted or discarded.
+ *  Written beside the status change it records, so a promotion that failed
+ *  leaves the import retryable rather than silently stranded. */
+const IMPORT_SETTLED_SCOPE = 'import_settled';
+
 export async function settleImportsForTurn(
   rt: AgentRuntime,
   turnId: string,
@@ -238,12 +245,25 @@ export async function settleImportsForTurn(
   const settlement: ImportSettlement = { corroborated: [], discarded: [] };
 
   for (const row of riding) {
+    // PER IMPORT, and recorded WITH the status change rather than before the
+    // promotion. Claiming first was the other failure: a promotion that threw
+    // transiently — a storage fault, a compile the destination refused — left the
+    // import marked settled, so the retried review skipped it and its row stayed
+    // provisional forever, unimportable again.
+    //
+    // What makes the retry safe is the DESTINATION, not this marker: every
+    // `promoteImport` path is an upsert or a keyed archive entry, so promoting
+    // twice adopts one artifact. The marker only stops a resumed review from
+    // appending a second settlement for an import already dispositioned.
+    if (effectAlreadyDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id)) continue;
     if (verdict === 'accepted' && await promoteImport(rt, row)) {
       void rt.storage.sql`UPDATE imported_experience
           SET status = 'corroborated', corroborated_at = ${now} WHERE id = ${row.id}`;
+      recordEffectDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id);
       settlement.corroborated.push({ ...row, status: 'corroborated', corroboratedAt: now });
     } else {
       void rt.storage.sql`DELETE FROM imported_experience WHERE id = ${row.id}`;
+      recordEffectDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id);
       settlement.discarded.push(row);
     }
   }
@@ -266,6 +286,16 @@ export async function settleImportsForTurn(
  * rationale too short, its own misevolution veto). A declined import is
  * discarded rather than left staged, and the library entry stays importable.
  */
+/**
+ * How a pending scaffold says which import produced it.
+ *
+ * Delimited rather than woven into the sentence: this is read back, and matching
+ * incidental prose would break the day a rationale is reworded.
+ */
+function importedScaffoldMarker(importId: string): string {
+  return `[import:${importId}]`;
+}
+
 async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Promise<boolean> {
   const from = `imported from workspace "${row.sourceWorkspace}" (${row.evidence})`;
   switch (row.payload.kind) {
@@ -289,6 +319,10 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Prom
         text: `${row.payload.text}\n(${from})`,
         source: 'import',
         status: 'corroborated',
+        // KEYED on the import. `promoteImport` returns across an await before the
+        // provisional row is settled, so a death there re-promotes — and an
+        // unkeyed insert made that a second copy of one adopted lesson.
+        key: row.id,
       });
       return true;
     }
@@ -302,10 +336,22 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow): Prom
     case 'scaffold': {
       // Provenance in the rationale, because that is what scaffold_versions
       // stores, the day log records and the Evolution Changelog shows the
-      // operator — the same place a local proposal states its case.
+      // operator — the same place a local proposal states its case. It also
+      // carries the import id, which is what a re-promotion reads: the single
+      // pending-candidate gate refuses a second proposal, and without a way to
+      // tell "refused because MINE is already pending" from "refused because
+      // someone else's is", a retry after an interrupted settlement discarded an
+      // import whose scaffold was live.
+      // The marker goes in the rationale because `modifyScaffold` writes that
+      // string in the SAME insert as the version it identifies — so unlike a
+      // tombstone written after the await, it cannot be missing while the
+      // scaffold exists. That is the whole reason this link is prose.
+      const marker = importedScaffoldMarker(row.id);
+      const pending = getPendingScaffold(rt.storage.sql);
+      if (pending?.rationale.includes(marker)) return true;
       const proposed = await modifyScaffold(
         rt,
-        `Imported scaffold, ${from}. Its rationale there: ${row.payload.rationale}`,
+        `Imported scaffold, ${from}. Its rationale there: ${row.payload.rationale} ${marker}`,
         row.payload.code,
       );
       return proposed.ok;

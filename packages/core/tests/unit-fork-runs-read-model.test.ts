@@ -31,7 +31,7 @@ function freshDb() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
+  initMctsSearchTable(execRaw);
   initHeadsTables(execRaw, makeSql(db));
   return { db, sql: makeSql(db) };
 }
@@ -317,6 +317,90 @@ describe('listForkRuns', () => {
   test('nothing searched yet is an empty list, not a throw', () => {
     const { sql } = freshDb();
     expect(listForkRuns(sql).items).toEqual([]);
+  });
+});
+
+/**
+ * A LEASE THAT OUTLIVED ITS TREE.
+ *
+ * `mcts_search_runs.status='running'` is a lease, not an observation. The engine
+ * closes the tree BEFORE recording an outcome (`mcts/engine.ts`) precisely so a
+ * crash between the two leaves a closed tree with a still-`running` row, which
+ * that file calls inert: nothing is selectable. The list used to read the column
+ * and report those runs as running for as long as the row survived — the report
+ * *"this run had 2 reported and rest stopped … still it says 'running'?"*.
+ *
+ * The tree answers it now, over the frontier `mcts/frontier.ts` selects from.
+ */
+describe('a stale running lease', () => {
+  /** One tree with the statuses named, and the ledger row left as given. Raw
+   *  inserts rather than `seedSearchRun`, because the node STATUSES are the
+   *  evidence under test. */
+  function seedTree(
+    db: Database,
+    run: { rootId: string; root: string; branches: readonly string[]; ledger?: string },
+  ): void {
+    const node = db.prepare(
+      `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
+       VALUES (?, ?, ?, 'audit the coupon guard', '', '', 1, ?, ?, ?, ?)`,
+    );
+    node.run(run.rootId, null, run.rootId, 0, 0, run.root, 1000);
+    run.branches.forEach((status, index) => {
+      node.run(`${run.rootId}-n${index}`, run.rootId, run.rootId, 0.4, 1, status, 1001 + index);
+    });
+    if (run.ledger) {
+      db.prepare(
+        `INSERT INTO mcts_search_runs (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
+         VALUES (?, 'audit the coupon guard', 'mcts', 'm1', '{}', 3, 0, ?, 0, 1000, 1000)`,
+      ).run(run.rootId, run.ledger);
+    }
+  }
+
+  test('a closed tree under a running row stopped without an answer', () => {
+    // The reported run: two nodes reported, the rest stopped, nothing won, and a
+    // lease nobody settled. `abandonSearchTree` is what left the nodes `failed`.
+    const { db, sql } = freshDb();
+    seedTree(db, {
+      rootId: 'r-stale', root: 'failed',
+      branches: ['failed', 'failed', 'failed', 'failed'],
+      ledger: 'running',
+    });
+    expect(listForkRuns(sql).items[0]!.status).toBe('partial');
+  });
+
+  test('a tree that converged under a running row is settled, not running', () => {
+    // The other half of the same crash window: `converge` closed the tree and the
+    // `converged` write never landed. A terminal node is written by nothing else.
+    const { db, sql } = freshDb();
+    seedTree(db, {
+      rootId: 'r-won', root: 'pruned', branches: ['terminal', 'pruned'], ledger: 'running',
+    });
+    expect(listForkRuns(sql).items[0]!).toMatchObject({ status: 'completed', winnerScore: 0.4 });
+  });
+
+  test('a search with a frontier left is still running', () => {
+    // The guard on all of it: an open childless node is selectable, so this run
+    // IS at work and must keep saying so.
+    const { db, sql } = freshDb();
+    seedTree(db, {
+      rootId: 'r-live', root: 'open', branches: ['open', 'failed'], ledger: 'running',
+    });
+    expect(listForkRuns(sql).items[0]!.status).toBe('running');
+  });
+
+  test('a search that has not expanded anything yet is running', () => {
+    const { db, sql } = freshDb();
+    seedTree(db, { rootId: 'r-fresh', root: 'open', branches: [], ledger: 'running' });
+    expect(listForkRuns(sql).items[0]!.status).toBe('running');
+  });
+
+  test('an expanded parent left open is not a frontier', () => {
+    // `frontier.ts` selects `status='open' AND NOT EXISTS (children)`. Counting a
+    // bare open node instead would make every legacy tree whose settle left its
+    // root open read as running forever.
+    const { db, sql } = freshDb();
+    seedTree(db, { rootId: 'r-legacy', root: 'open', branches: ['pruned', 'pruned'] });
+    expect(listForkRuns(sql).items[0]!.status).toBe('partial');
   });
 });
 

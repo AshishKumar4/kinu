@@ -64,6 +64,9 @@
  *                                  axes are not recoverable from any read model
  *   /gallery.html?frame=forkrefused → a search that STARTED and reached nothing:
  *                                  a refusal naming its cause, never an empty tree
+ *   /gallery.html?frame=forkstopped → a run whose lease outlived it: two nodes
+ *                                  reported, five stopped, none at work — the
+ *                                  state that used to read `running`
  *   /gallery.html?frame=forkfull → the same competition in the full-screen explorer
  *   /gallery.html?frame=forkswarmfull → the fan-in swarm, full-screen
  *   /gallery.html?frame=forkbig  → the scale probe: 520 nodes, depth 9
@@ -75,7 +78,7 @@
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
-import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
@@ -91,6 +94,7 @@ import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@/lib/public-pages";
 import Sidebar from "@/components/Sidebar";
+import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";
 import { Composer, type ChatMode, type ComposerNotice } from "@/components/Composer";
 import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
@@ -101,12 +105,18 @@ import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
-import { HistoryBoundary, EmptyState, MarkdownContent } from "@/components/surfaces/shared";
+import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent } from "@/components/surfaces/shared";
+import { QualityView } from "@/components/surfaces/evolution-panels";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { FEEDBACK_ENDPOINT } from "@/feedback/contract";
+import { CLIENT_ERROR_ENDPOINT } from "@/client-error/contract";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { APP_ROUTES } from "@/app-routes";
+import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
+import { pageDeployedBuildSha } from "@/hooks/session-recovery";
 import { MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
@@ -114,25 +124,28 @@ import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
-import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
+import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import { AddServerCard } from "@/pages/UserMcpPage";
+import UserSettingsPage from "@/pages/UserSettingsPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, CHARS_PER_TOKEN, TOOL_REACH,
-  JsonObjectSchema, JsonValueSchema, mergeTranscript, seekPage, sortDirEntries,
-  type JsonValue, type PlanReview, type PlanReviewAnnotation,
+  BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
+  CHARS_PER_TOKEN, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
+  profileCatalogDigest, seekPage, sortDirEntries,
+  type JsonValue, type PlanReview, type PlanReviewAnnotation, type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
-import type { AgentStatus } from "@/hooks/use-kinu";
+import { formatWorkspaceError, type AgentStatus, type WorkspaceErrors } from "@/hooks/use-kinu";
+import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@/lib/executors";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { ModelMenuEntry } from "@/lib/user-api";
+import type { ModelMenuEntry, WorkspaceEntry } from "@/lib/user-api";
 import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";
 
@@ -174,17 +187,116 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
     {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
-      expiresAt: NOW + 50 * 864e5,
+      expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
+      replacedAt: null, revokedAt: null, unstoppedAt: null,
     },
   ],
   "/api/user/devices/consents": [
     {
       agentName: "checkout-fixes", deviceId: "dev_1", policy: "remembered",
-      scope: "consented_folder", lastMethod: "exec", lastSummary: "bun test packages/core",
+      scope: "all_local_actions", lastMethod: "exec", lastSummary: "bun test packages/core",
     },
   ],
 });
+
+/* Account-settings failure rig. The browser owns the two transitions: Codex
+   stays failed until `gallery:settings-heal`; the gateway read stays pending
+   until `gallery:settings-release`. Every sibling GET settles immediately, so
+   the gate can observe branch-local publication while one request is held. */
+const SETTINGS_GATEWAY_HOLD = Promise.withResolvers<void>();
+let settingsCodexHealthy = false;
+window.addEventListener("gallery:settings-heal", () => { settingsCodexHealthy = true; });
+window.addEventListener("gallery:settings-release", () => SETTINGS_GATEWAY_HOLD.resolve());
+
+function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function userSettingsFixture(path: string, method: string): Promise<Response> {
+  if (path === "/api/user/profile") {
+    return fixtureJson({ email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW });
+  }
+  if (path === "/api/user/credentials") {
+    return fixtureJson([{ key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW }]);
+  }
+  if (path === "/api/user/codex") {
+    return settingsCodexHealthy
+      ? fixtureJson({ connected: false, accountId: null, expiresAt: null, startedFlow: null })
+      : fixtureJson({ error: "Codex status fixture failed" }, 503);
+  }
+  if (path === "/api/user/models") {
+    return fixtureJson({
+      models: [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai" }],
+      failures: [],
+    });
+  }
+  if (path === "/api/user/providers/catalog") {
+    return fixtureJson([{
+      id: "anthropic", credKey: "anthropic.bearer", name: "Anthropic", connected: true,
+    }]);
+  }
+  if (path === "/api/user/config/default_model") {
+    return fixtureJson({ key: "default_model", value: "workers-ai/llama-4" });
+  }
+  if (path === "/api/user/cloudflare/accounts") {
+    return fixtureJson({
+      connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
+    });
+  }
+  if (path === "/api/user/cloudflare/gateways") {
+    await SETTINGS_GATEWAY_HOLD.promise;
+    return fixtureJson({
+      connected: true, selectedId: "gateway-1",
+      gateways: [{ id: "gateway-1", authenticated: true, createdAt: "2026-01-01" }],
+      error: null,
+    });
+  }
+  if (path === "/api/user/cli") {
+    return fixtureJson({
+      publicOrigin: location.origin, installCommand: "kinu setup",
+      setupCommand: "kinu setup", authCommand: "kinu auth",
+    });
+  }
+  if (path === "/api/user/devices/dev-1" && method === "DELETE") {
+    localStorage.setItem("gallery-device-incident", "revoked");
+    return fixtureJson({ ok: true, unstoppedCommands: 2 });
+  }
+  if (path === "/api/user/devices/dev-1/unstopped" && method === "DELETE") {
+    localStorage.setItem("gallery-device-incident", "acknowledged");
+    return fixtureJson({ ok: true });
+  }
+  if (path === "/api/user/devices") {
+    const incident = localStorage.getItem("gallery-device-incident");
+    if (incident === "acknowledged") return fixtureJson([]);
+    const revoked = incident === "revoked";
+    return fixtureJson([{
+      id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
+      connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+      lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
+      revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
+    }]);
+  }
+  if (path === "/api/user/devices/consents") return fixtureJson([]);
+  if (path === "/api/user/profile-catalog") {
+    return fixtureJson({
+      authority: { kind: "account", accountId: "gallery" },
+      version: 0,
+      digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
+      catalog: BUILTIN_PROFILE_CATALOG,
+    });
+  }
+  return fixtureJson({ error: `gallery has no settings fixture for ${path}` }, 404);
+}
 const STUB = new Map(Object.entries(STUB_DATA));
+
+/** KINU-060 gallery transport control. Every real WorkspaceRosterProvider
+ * mount enters this held list; StrictMode mounts twice, so holding only the
+ * first read would let its second mount publish the ordinary fixture and make
+ * the interleaving a lie. */
+const rosterAuthorityHold = Promise.withResolvers<Response>();
 
 function MODEL_STUBS(): ModelMenuEntry[] {
   return [
@@ -203,6 +315,13 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     : parsedUrl.success ? parsedUrl.output.href
     : parsedRequest.success ? parsedRequest.output.url : location.href;
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
+  const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
+  if (frame === "usersettingsstate" && path.startsWith("/api/user/")) {
+    return userSettingsFixture(path, method);
+  }
+  if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
+    return rosterAuthorityHold.promise;
+  }
   const response = STUB.get(path);
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
@@ -217,6 +336,12 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   // look like a failed send, and would make the control plane untestable in the
   // one state it most needs to be tested in.
   if (path === FEEDBACK_ENDPOINT || path.startsWith('/api/control/')) return realFetch(input, init);
+  // The render-failure report and the build stamp it binds itself to. Both have
+  // to reach the network for the same reason the feedback POST does: the gate
+  // decides their fate through request interception, and it moves the stamp
+  // BETWEEN load and fault to prove the report carries the build this page
+  // loaded rather than whichever is live when it asks.
+  if (path === CLIENT_ERROR_ENDPOINT || path === '/api/health') return realFetch(input, init);
   if (path.startsWith("/api/")) {
     return Promise.resolve(new Response(JSON.stringify({ error: "gallery stub" }), { status: 404 }));
   }
@@ -688,6 +813,9 @@ let galleryAgentPlan: PlanReview = {
 };
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (new URLSearchParams(location.search).get("terminal") === "denied" && method === "getWorkspaceSnapshot") {
+    return new Promise<T>(() => {});
+  }
   if (method === "listSubordinates") return rpcResult([...GALLERY_SUBS]).json<T>();
   if (method === "createSubordinateAgent") {
     maybeRefuseCreate();
@@ -1153,10 +1281,13 @@ const FORK_RUNS: ForkRunSummary[] = [
     hasNodeTranscripts: true, branches: 5, winnerScore: null,
   },
   {
+    // The run whose lease outlived it: two nodes reported, five stopped, and
+    // nothing at work. Its journal is {@link STOPPED_RUN}, and `forkstopped`
+    // focuses it.
     id: "root-merge-0", name: "CLI surface audit",
     task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
     status: "partial", hasSearchTree: false, hasNodeTranscripts: true,
-    branches: 2, winnerScore: null,
+    branches: 7, winnerScore: null,
   },
   ...olderForks(),
 ];
@@ -1227,16 +1358,70 @@ const MERGED_RUN: HeadRunView = {
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 512e4, decisions: [],
     },
     {
+      // CLOSED BY THE SETTLE, not left running. `HeadJournal.cacheMerge`
+      // terminalizes every head still in flight in the same transition that
+      // writes the synthesis, so a settled run cannot also be at work — the
+      // `settled · 1 running · 3 reported` this row used to photograph.
       id: "root-merge-1-h4", parentId: null, depth: 1, task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
-      status: "running", summary: null, errorMessage: null,
+      status: "aborted", summary: null,
+      errorMessage: "no report at the synthesis: the run merged what had arrived, and this head "
+        + "was still in flight when it did",
       usage: { input: 3_180, output: 90 }, wallClockMs: 4_600,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, decisions: [],
     },
   ],
   merge: {
-    narrative: "Three real call sites left — apply-coupon.ts and both reads in pricing.ts — and the same ?? inferKind guard covers all of them. The cart serializer is already null-safe. The admin report could not be checked; that package is not in this sandbox. The API routes are still being walked.",
+    narrative: "Three real call sites left — apply-coupon.ts and both reads in pricing.ts — and the same ?? inferKind guard covers all of them. The cart serializer is already null-safe. The admin report could not be checked; that package is not in this sandbox. The API routes were still being walked when this merged, so they are unread.",
     headCount: 5, totalTokens: 24_820,
   },
+};
+
+/**
+ * A RUN WHOSE LEASE OUTLIVED IT — the state behind *"this run had 2 reported and
+ * rest stopped … still it says 'running'?"*.
+ *
+ * Two nodes reported, five stopped, nothing synthesised, and no node at work.
+ * `read-models/fork-runs.ts` reports this as `partial` now that the TREE decides
+ * whether a search can still be entered; before that the run's ledger row still
+ * said `running` and the row said so too, over a tally in which nothing was.
+ */
+const STOPPED_RUN: HeadRunView = {
+  rootId: "root-merge-0",
+  task: "Audit the CLI surface",
+  rationale: "Seven surfaces, one head each — the audit is per-command.",
+  status: "aborted",
+  spawnedAt: NOW - 9 * 36e5,
+  heads: [
+    swarmNode("root-merge-0-h0", "packages/cli/src/commands/run.ts", "the command every user reaches first", {
+      summary: "Three flags are accepted and never read: `--json`, `--quiet`, `--no-color`.",
+      wallClockMs: 21_400, spawnedAt: NOW - 9 * 36e5, lastStepAt: NOW - 88 * 36e4,
+    }),
+    swarmNode("root-merge-0-h1", "packages/cli/src/commands/login.ts", "the credential path", {
+      summary: "The token is written before the scope check, so a rejected scope still leaves a file.",
+      wallClockMs: 18_900, spawnedAt: NOW - 9 * 36e5, lastStepAt: NOW - 87 * 36e4,
+    }),
+    swarmNode("root-merge-0-h2", "packages/cli/src/commands/logs.ts", "the streaming path", {
+      status: "aborted", wallClockMs: 6_100, spawnedAt: NOW - 9 * 36e5, lastStepAt: NOW - 86 * 36e4,
+      errorMessage: "The workspace was evicted while this head was reading the follow loop.",
+    }),
+    swarmNode("root-merge-0-h3", "packages/cli/src/commands/deploy.ts", "the release path", {
+      status: "aborted", wallClockMs: 5_800, spawnedAt: NOW - 9 * 36e5, lastStepAt: NOW - 86 * 36e4,
+      errorMessage: "The workspace was evicted while this head was reading the release gate.",
+    }),
+    swarmNode("root-merge-0-h4", "packages/cli/src/commands/agents.ts", "the fan-out path", {
+      status: "aborted", wallClockMs: 4_300, spawnedAt: NOW - 9 * 36e5, lastStepAt: NOW - 86 * 36e4,
+      errorMessage: "The workspace was evicted while this head was listing subordinates.",
+    }),
+    swarmNode("root-merge-0-h5", "packages/cli/src/commands/files.ts", "the drive path", {
+      status: "errored", wallClockMs: 3_100, spawnedAt: NOW - 9 * 36e5, lastStepAt: null,
+      errorMessage: "No home could be provisioned for this head after the eviction.",
+    }),
+    swarmNode("root-merge-0-h6", "packages/cli/src/commands/config.ts", "the settings path", {
+      status: "errored", wallClockMs: 2_400, spawnedAt: NOW - 9 * 36e5, lastStepAt: null,
+      errorMessage: "No home could be provisioned for this head after the eviction.",
+    }),
+  ],
+  merge: null,
 };
 
 
@@ -1586,7 +1771,8 @@ const SEARCH_ROWS_BY_ROOT: ReadonlyMap<string, readonly MctsRow[]> = new Map([
 ]);
 
 const JOURNAL_BY_ROOT: ReadonlyMap<string, HeadRunView> = new Map(
-  [MERGED_RUN, SWARM_RUN, PROVE_RUN, REFUSED_RUN, RUNNING_RUN].map((run) => [run.rootId, run]),
+  [MERGED_RUN, SWARM_RUN, PROVE_RUN, REFUSED_RUN, RUNNING_RUN, STOPPED_RUN]
+    .map((run) => [run.rootId, run]),
 );
 
 /**
@@ -1605,6 +1791,8 @@ const CANVAS_ROWS: readonly ExplorationCanvasRun[] = FORK_RUNS.map((run) => ({
   params: FORK_PARAMS.find((entry) => entry.rootId === run.id) ?? null,
   tree: (SEARCH_ROWS_BY_ROOT.get(run.id) ?? []).map((row) => asSearchNode(row, run.id)),
   head: JOURNAL_BY_ROOT.get(run.id) ?? null,
+  // The gallery stub never records complete Pareto evidence; the server says so.
+  frontier: null,
 }));
 
 /** The generator writes the CLIENT's loose row shape, which is what the socket
@@ -1760,6 +1948,16 @@ const refusedRunRpc = focusRun("rf000");
  */
 const runningSwarmRpc = focusRun("lv000");
 
+/**
+ * The run whose lease outlived it: two nodes reported, five stopped, none at
+ * work. What the surface has to say about it is *stopped*, and what it used to
+ * say was `running` — over a tally in which nothing was running, which is the
+ * contradiction the report named. The read model settles the word
+ * (`read-models/fork-runs.ts`); this frame is where the row, the dot and the
+ * node list are read together.
+ */
+const stoppedRunRpc = focusRun("root-merge-0");
+
 /** The `head_activity` counters for the live run's working nodes — the push that
  *  makes a node pulse on the canvas and in the run's node list. A settled node
  *  announces nothing, which is correct: it is not moving. */
@@ -1820,6 +2018,7 @@ function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
     params: FORK_PARAMS.find((entry) => entry.rootId === "n000") ?? null,
     tree: MCTS_ROWS.slice(0, rows).map((row) => asSearchNode(row, "live000")),
     head: null,
+    frontier: null,
   }];
 }
 
@@ -1915,7 +2114,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
 const MCTS_NOTICE: readonly ComposerNotice[] = [{
   id: "mcts",
   tone: "danger",
-  text: "Couldn't refresh live data for MCTS.",
+  text: "Couldn't refresh MCTS.",
   action: { label: "Retry", onClick: () => {} },
 }];
 
@@ -2017,7 +2216,7 @@ function Shell(
             <div className="z-[2] -ml-[3px] w-[5px] shrink-0" />
             <div className="w-[430px] shrink-0 min-w-0">
               <WorkSurface
-                surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]}
+                surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={backgroundJobs} onRefreshJobs={() => {}} pendingActions={pendingActions}
@@ -2352,6 +2551,198 @@ function ChatHistoryFrame() {
           loading: history.loading, exhausted: history.exhausted, error: history.error,
         })}</div>
         <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The first-page authority behind both WorkspacePage chat columns. The first
+ * request stays held until the browser releases it, then fails once; Retry
+ * answers the store's authoritative empty page. The frame mounts the same
+ * ConversationStartBoundary the product mounts, never a copy of its policy.
+ */
+function HistoryAuthorityFrame() {
+  const [hold] = useState(() => Promise.withResolvers<void>());
+  const failFirst = useRef(true);
+  const history = usePagedScroll<ChatHistoryEntry>({
+    grows: "up",
+    fetchPage: useCallback(async () => {
+      await hold.promise;
+      if (failFirst.current) {
+        failFirst.current = false;
+        throw new Error("fixture could not read the first history page");
+      }
+      return { status: "end" as const, items: [] };
+    }, [hold]),
+    // A delivered empty live seed asks the store for its newest page.
+    startFrom: useCallback(() => "newest" as const, []),
+  });
+  const loadMore = history.loadMore;
+  useEffect(() => { loadMore(); }, [loadMore]);
+
+  return (
+    <div data-history-authority className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs clearable={false} />
+        <button data-history-release type="button" onClick={() => hold.resolve()}
+          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
+          Release first page
+        </button>
+        <button data-history-reset type="button" onClick={history.reset}
+          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
+          Clear fetched history
+        </button>
+        <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
+          <ConversationStartBoundary
+            hasEntries={false}
+            streaming={false}
+
+            error={history.error}
+            exhausted={history.exhausted}
+            onRetry={history.loadMore}
+            pending={<ConversationSkeleton />}
+            empty={<EmptyConversation mission="Audit checkout history" />}
+          />
+        </div>
+        <div data-history-probe className="hidden">{JSON.stringify({
+          loading: history.loading,
+          error: history.error,
+          exhausted: history.exhausted,
+        })}</div>
+      </div>
+    </div>
+  );
+}
+/** KINU-060 actual WorkspaceRosterProvider proof. The fixture holds only the
+ * transport response; upsert/rename are the hook's public local transitions,
+ * and an old response must not undo them when released. */
+function RosterAuthorityFrame() {
+  const roster = useWorkspaceRoster();
+  const entry: WorkspaceEntry = {
+    name: "checkout-fixes",
+    displayName: "Checkout coupon bug",
+    createdAt: NOW - 7 * 864e5,
+    lastVisited: NOW - 60e3,
+    archivedAt: null,
+  };
+  return (
+    <div data-roster-authority className="p-bg p-text min-h-screen p-6">
+      <button data-roster-local-rename type="button" onClick={() => {
+        roster.upsert(entry);
+        roster.rename(entry.name, "Renamed locally");
+      }}>Apply local rename</button>
+      <button data-roster-release type="button" onClick={() => {
+        rosterAuthorityHold.resolve(new Response(JSON.stringify(STUB_DATA["/api/user/workspaces"]), {
+          headers: { "content-type": "application/json" },
+        }));
+      }}>Release stale roster</button>
+      <div data-roster-probe>{roster.entries.map((row) => `${row.name}:${row.displayName}`).join("|")}</div>
+    </div>
+  );
+}
+
+const CONTINUITY_LONG_TOKEN = `https://example.invalid/${"unbroken".repeat(90)}`;
+
+/** Real MessageView, SteerBubble, Composer and MarkdownContent in one
+ * interaction rig. Browser input supplies the IME and DataTransfer events; the
+ * hidden probe reports only action results, never an implementation flag. */
+function ClientContinuityFrame() {
+  const [draft, setDraft] = useState("compose this");
+  const [sends, setSends] = useState(0);
+  const [files, setFiles] = useState<string[]>([]);
+  const userMessage: UIMessage = {
+    id: "continuity-user",
+    role: "user",
+    parts: [{ type: "text", text: CONTINUITY_LONG_TOKEN }],
+  };
+
+  return (
+    <div data-client-continuity className="p-bg p-text min-h-screen px-4 py-6">
+      <div className="mx-auto max-w-[760px] space-y-6">
+        <div data-wrap-user>
+          <MessageView message={userMessage} isLast={false} isStreaming={false} />
+        </div>
+        <div data-wrap-steer>
+          <SteerBubble steer={{
+            id: "continuity-steer", text: CONTINUITY_LONG_TOKEN,
+            state: "queued", atStep: null,
+          }} />
+        </div>
+        <Composer
+          value={draft}
+          onValueChange={setDraft}
+          onSend={() => setSends((count) => count + 1)}
+          onStop={() => {}}
+          placeholder="Send a message"
+          disabled={false}
+          streaming={false}
+          attachments={{
+            parts: [],
+            onAdd: (added) => setFiles((current) => [
+              ...current,
+              ...Array.from(added ?? [], (file) => `${file.name}:${file.size}`),
+            ]),
+            onRemove: () => {},
+          }}
+        />
+        <div data-image-success>
+          <MarkdownContent content="![Loaded image](/assets/kinu-icon.svg)" />
+        </div>
+        <div data-image-failure>
+          <MarkdownContent content="![Checkout diagram](/assets/missing-continuity-image.png)" />
+        </div>
+        <button data-continuity-reset type="button"
+          onClick={() => { setDraft(""); setSends(0); setFiles([]); }}
+          className="p-btn-quiet px-2 py-1 text-xs">
+          Reset fixture
+        </button>
+        <div data-continuity-probe className="hidden"
+          data-draft={draft}
+          data-sends={sends}
+          data-files={files.join("|")}
+          data-token-length={CONTINUITY_LONG_TOKEN.length} />
+      </div>
+    </div>
+  );
+}
+
+/** One quality branch fails until the browser heals it; the other stays held
+ * until a separate release. This makes both branch-local failure and loading
+ * observable before either final state can hide the interleaving. */
+function QualityBranchFrame() {
+  const [alignmentHold] = useState(() => Promise.withResolvers<void>());
+  const replayHealthy = useRef(false);
+  useEffect(() => {
+    const heal = () => { replayHealthy.current = true; };
+    const release = () => alignmentHold.resolve();
+    window.addEventListener("gallery:quality-heal", heal);
+    window.addEventListener("gallery:quality-release", release);
+    return () => {
+      window.removeEventListener("gallery:quality-heal", heal);
+      window.removeEventListener("gallery:quality-release", release);
+    };
+  }, [alignmentHold]);
+  const rpc = useMemo<Rpc>(() => async <T,>(method: string): Promise<T> => {
+    if (method === "getReplayEvals") {
+      if (!replayHealthy.current) throw new Error("replay fixture failed");
+      return rpcResult(REPLAY_EVALS).json<T>();
+    }
+    if (method === "getAlignmentConvergence") {
+      await alignmentHold.promise;
+      return rpcResult(ALIGNMENT).json<T>();
+    }
+    if (method === "getOutcomeCalibration") {
+      await alignmentHold.promise;
+      return rpcResult(CALIBRATION).json<T>();
+    }
+    return stubRpc<T>(method);
+  }, [alignmentHold]);
+
+  return (
+    <div data-quality-branches className="p-bg p-text min-h-screen p-6">
+      <div className="mx-auto max-w-[760px]">
+        <QualityView rpc={rpc} />
       </div>
     </div>
   );
@@ -2946,7 +3337,7 @@ function ViewsFrame() {
         <WorkSurface
           surface="view:deploy-health" onSurface={() => {}}
           agentViews={VIEW_TABS}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()}
           onExecute={async () => ({})}
@@ -3182,7 +3573,7 @@ function WorkFrame() {
       <div className="w-[430px] min-h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={PENDING_ACTIONS}
@@ -3224,7 +3615,7 @@ function ApprovalsFrame() {
       <div className="w-[720px] min-h-screen border-x p-border p-5 space-y-5">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
@@ -3253,7 +3644,7 @@ function WorkEmptyFrame() {
       <div className="w-[720px] h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -3327,23 +3718,39 @@ function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
     ["/sandbox/workspace/dist", [{ name: "app.js", type: "file", size: 220_114, mtimeMs: NOW - 30 * 60e3 }]],
   ]);
   if (!offlineLaptop) {
-    tree.set("/pc", [{ name: "home", type: "dir", mtimeMs: NOW - 60e3 }]);
-    tree.set("/pc/home", [{ name: "dev", type: "dir", mtimeMs: NOW - 60e3 }]);
+    // The device tree BELOW its consented root. `/pc` and `/pc/home` are
+    // deliberately absent: the machine's own path guard refuses everything
+    // outside `PC_CONSENTED_ROOT`, and a fixture that listed them could not
+    // fail the way the owner's report failed.
     tree.set("/pc/home/dev", [
       { name: "quarterly-report.txt", type: "file", size: 8_412, mtimeMs: NOW - 2 * 36e5 },
       { name: "shot.png", type: "file", size: 1_204_002, mtimeMs: NOW - 5 * 36e5 },
+      { name: "notes.html", type: "file", size: 402, mtimeMs: NOW - 36e5 },
     ]);
   }
   return tree;
 }
+
+/**
+ * The device's consented directory. Production learns it from the machine
+ * (`deviceFiles`' homeDir), and a bare `/pc` lands here instead of on the
+ * device root nobody consented to.
+ */
+const PC_CONSENTED_ROOT = "/pc/home/dev";
 
 const FILES_TEXT = {
   "/home/user/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
   "/home/user/SOUL.md": "I keep this workspace's changes small and proven.\n",
   "/home/user/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
   "/pc/home/dev/quarterly-report.txt": "Q3 numbers, draft 2 — do not circulate.\n",
+  "/pc/home/dev/notes.html": "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
   "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
 } satisfies Record<string, string>;
+
+interface PreviewDeferred {
+  readonly promise: Promise<{ content: string; revision: number }>;
+  resolve(value: { content: string; revision: number }): void;
+}
 
 /**
  * ONE stateful frame for both the Environment tab and the Files drive: the
@@ -3352,10 +3759,14 @@ const FILES_TEXT = {
  * proves. `frame=environment` and `frame=files` differ only in where they
  * start and how wide they photograph.
  */
-function DriveFrame({ initialSurface, offlineLaptop, width }: {
+function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false }: {
   initialSurface: SurfaceKind;
   offlineLaptop: boolean;
   width: string;
+  /** Fixture control for the real FilesSurface stale-preview proof. The held
+   *  value is transport input only; FilesSurface/FileViewer decide whether it
+   *  may paint after refresh changes their resource identity. */
+  deferPreview?: boolean;
 }) {
   const [surface, setSurface] = useState<SurfaceKind>(initialSurface);
   const executors = useMemo<ExecutorInfo[]>(() => offlineLaptop
@@ -3367,6 +3778,9 @@ function DriveFrame({ initialSurface, offlineLaptop, width }: {
   if (tree.current === null) tree.current = seedCompositeTree(offlineLaptop);
   const text = useRef<Map<string, string> | null>(null);
   if (text.current === null) text.current = new Map(Object.entries(FILES_TEXT));
+  const heldPreview = useRef<PreviewDeferred | null>(null);
+  const heldPreviewContent = useRef("");
+  const previewReads = useRef(0);
 
   const mounts: MountInfo[] = [
     { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
@@ -3385,16 +3799,32 @@ function DriveFrame({ initialSurface, offlineLaptop, width }: {
     if (method === "getExecutorFiles") {
       const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
       if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
-      const dir = path === "" ? "/" : path;
+      const asked = path === "" ? "/" : path;
+      // A bare mount point lands on the machine's consented root, exactly as
+      // `read-models/files.ts` mountLanding resolves it server-side.
+      const dir = asked === "/pc" ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
-      return rpcResult(entries === undefined ? { error: `ENOENT: ${dir}` } : { path: dir, entries }).json<T>();
+      if (entries !== undefined) return rpcResult({ path: dir, entries }).json<T>();
+      // Inside the mount but outside the consented root: the device's own
+      // refusal, in the words `deviceFiles`' path guard uses.
+      const error = dir.startsWith("/pc")
+        ? `EACCES: '${dir.slice("/pc".length) || "/"}' is outside the consented device directory `
+          + `'${PC_CONSENTED_ROOT.slice("/pc".length)}' — grant this agent the full-filesystem `
+          + `consent tier to reach it, list '${dir.slice("/pc".length) || "/"}'`
+        : `ENOENT: ${dir}`;
+      return rpcResult({ error }).json<T>();
     }
     if (method === "readExecutorFile") {
       const [, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
       const content = contents.get(path);
+      if (deferPreview && previewReads.current++ === 0) {
+        heldPreviewContent.current = content ?? "";
+        heldPreview.current = Promise.withResolvers<{ content: string; revision: number }>();
+        return heldPreview.current.promise.then((answer) => rpcResult(answer).json<T>());
+      }
       return rpcResult(content === undefined
         ? { error: "binary file — not previewable" }
-        : { content }).json<T>();
+        : { content, revision: 1 }).json<T>();
     }
     if (method === "renameExecutorFile") {
       const [, from, to] = v.parse(v.tuple([v.string(), v.string(), v.string()]), args ?? []);
@@ -3442,9 +3872,24 @@ function DriveFrame({ initialSurface, offlineLaptop, width }: {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className={`${width} h-screen border-x p-border`}>
+        {deferPreview && (
+          <div className="absolute z-20 flex gap-2 p-2">
+            <button data-files-fixture-mutate type="button" onClick={() => {
+              const path = "/home/user/notes.md";
+              text.current!.set(path, "# Fresh after refresh\n\nThe older reply must not reclaim this preview.\n");
+              tree.current!.set("/home/user", (tree.current!.get("/home/user") ?? []).map((entry) => (
+                entry.name === "notes.md" ? { ...entry, mtimeMs: Date.now() } : entry
+              )));
+            }}>Mutate preview source</button>
+            <button data-files-fixture-release type="button"
+              onClick={() => heldPreview.current?.resolve({ content: heldPreviewContent.current, revision: 1 })}>
+              Release stale preview
+            </button>
+          </div>
+        )}
         <WorkSurface
           surface={surface} onSurface={setSurface}
-          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={executors} executorOutputs={new Map()}
           onExecute={async () => ({})} lastActiveExecutor="workspace"
@@ -3534,9 +3979,12 @@ function olderRuns(): RunSummary[] {
 
 const SUPERVISE_TRIGGERS = [
   {
-    id: "trg_wh1", kind: "webhook", state: "active", created_at: NOW - 12 * 864e5,
-    spec: { path: "/hooks/deploy-failed" }, rate_limit_per_min: 30, fire_count: 41,
+    id: "01K5ZQ8F2P0000000000000WH1", kind: "webhook_durable", state: "active",
+    created_at: NOW - 12 * 864e5, spec: { label: "deploy-failed" },
+    rate_limit_per_min: 30, fire_count: 41,
     last_fire_at: NOW - 3 * 36e5, next_fire_at: null,
+    url: "/api/workspaces/checkout-fixes/webhook/01K5ZQ8F2P0000000000000WH1"
+      + "/v1-4f1c9a02d7b64e8fa3105c6d29be7a41",
   },
   {
     id: "trg_tm1", kind: "timer_cron", state: "active", created_at: NOW - 30 * 864e5,
@@ -3853,6 +4301,35 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
   ],
 });
 
+/** One finished call whose input and output both carry credential-shaped
+ *  fields, nested exactly where a webhook or MCP call would put them. The
+ *  redaction gate (`?frame=toolrun&secrets=1`) expands this row and asserts
+ *  the preview shows `keep: visible` while every secret value is masked. */
+const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
+  type: 'tool-run',
+  toolCallId: 'secret-call',
+  state: 'output-available',
+  input: {
+    runtime: 'sandbox',
+    command: 'curl -s https://api.stripe.example/v1/charges',
+    headers: { authorization: 'Bearer sk-live-REDACTME' },
+    nested: { apiKey: 'sk-live-REDACTME', keep: 'visible' },
+  },
+  output: {
+    status: 200,
+    headers: { authorization: 'Bearer sk-live-REDACTME' },
+    nested: { apiKey: 'sk-live-REDACTME', keep: 'visible' },
+  },
+};
+
+const SECRET_TOOL_RUN_MESSAGE: UIMessage = msg({
+  id: 'tc-secret-run', role: 'assistant',
+  parts: [
+    { type: 'text', text: 'A call that carries credential-shaped fields in both directions.' },
+    SECRET_TOOL_RUN_PART,
+  ],
+});
+
 /** Clicks open every collapsed tool-call row shortly after mount — the
  *  expand/collapse toggle is local component state with no prop to preset
  *  it, and simulating the one click an operator would make is simpler and
@@ -3950,11 +4427,11 @@ function ToolCallsFrame() {
   );
 }
 
-function ToolRunScaleFrame() {
+function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
   return (
     <div className="flex min-h-screen justify-center p-bg p-text">
       <div className="@container w-full max-w-[780px] border-x p-border px-6 py-6">
-        <MessageView message={LARGE_TOOL_RUN_MESSAGE} isLast={false} isStreaming={false} onFork={() => {}} />
+        <MessageView message={secrets ? SECRET_TOOL_RUN_MESSAGE : LARGE_TOOL_RUN_MESSAGE} isLast={false} isStreaming={false} onFork={() => {}} />
       </div>
     </div>
   );
@@ -3991,14 +4468,68 @@ function AdvisorFrame() {
   );
 }
 
+const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n"
+  + "- Percentage coupons carry `kind: null` after Tuesday's migration.\n";
+
+/** The failure the owner reported, as the sources actually hold it: ONE dropped
+ *  connection, every read of the actor failing on it in the same instant. The
+ *  banner text below is produced by the shipped formatter rather than typed
+ *  here, so this frame photographs the product's own sentence — and the line it
+ *  used to print, which said "Network connection lost." twice. */
+const LOST = "Network connection lost.";
+const OUTAGE: WorkspaceErrors = { snapshot: LOST, memoryContent: LOST };
+
+/** One rung of the snapshot ladder: the banner the page shows, over the panes
+ *  it shows it about. If any two rungs photograph the same, that is the defect
+ *  — a workspace that never loaded and a workspace that is genuinely empty had
+ *  exactly one rendering between them. */
+function AgentPanel(
+  { label, snapshot, tools, memoryContent, errors }: {
+    label: string;
+    snapshot: AsyncResource<AgentStatus>;
+    tools: ToolInfo[];
+    memoryContent: string;
+    errors: WorkspaceErrors;
+  },
+) {
+  const banner = formatWorkspaceError(errors, lastValue(snapshot) !== null);
+  return (
+    <section className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
+      <div className="p-eyebrow">{label}</div>
+      <GalleryComposer notices={banner
+        ? [{ id: "load", tone: "danger", text: banner, action: { label: "Retry", onClick: () => {} } }]
+        : []} />
+      <AgentSurface
+        snapshot={snapshot} tools={tools} memory={[]} memoryContent={memoryContent}
+        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc}
+      />
+    </section>
+  );
+}
+
 function AgentFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[740px] border-x p-border min-h-screen p-5">
-        <AgentSurface
-          agentStatus={BRAIN_STATUS} tools={BRAIN_TOOLS} memory={[]}
-          memoryContent={"## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n- Percentage coupons carry `kind: null` after Tuesday's migration.\n"}
-          onSearchMemory={() => {}} rpc={evolutionRpc}
+      <div className="w-[740px] border-x p-border min-h-screen space-y-6 p-5">
+        <AgentPanel
+          label="Loaded — everything current"
+          snapshot={{ status: "ready", value: BRAIN_STATUS }}
+          tools={BRAIN_TOOLS} memoryContent={BRAIN_MEMORY} errors={{}}
+        />
+        <AgentPanel
+          label="Loaded, then the connection dropped — last known data, one reason"
+          snapshot={{ status: "error", message: LOST, last: BRAIN_STATUS }}
+          tools={BRAIN_TOOLS} memoryContent={BRAIN_MEMORY} errors={OUTAGE}
+        />
+        <AgentPanel
+          label="Nothing loaded yet — the snapshot is still coming"
+          snapshot={{ status: "loading" }}
+          tools={[]} memoryContent="" errors={{}}
+        />
+        <AgentPanel
+          label="Nothing loaded — the snapshot failed"
+          snapshot={{ status: "error", message: LOST, last: null }}
+          tools={[]} memoryContent="" errors={OUTAGE}
         />
       </div>
     </div>
@@ -4224,11 +4755,11 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
         ) : (
           <>
             <NewWebhookCard
-              result={{ trigger_id: "trg_01", url: "/api/hooks/checkout-fixes/trg_01", auth_mode: "hmac", secret: LEAK_HMAC }}
+              result={{ trigger_id: "01K5ZQ8F2P0000000000000001", url: "/api/workspaces/checkout-fixes/webhook/01K5ZQ8F2P0000000000000001/v1-8b2e4d17c9053fa6be71204d8ac3915f", auth_mode: "hmac", secret: LEAK_HMAC }}
               onDismiss={() => { /* the card stays up for the capture */ }}
             />
             <NewWebhookCard
-              result={{ trigger_id: "trg_02", url: "/api/hooks/checkout-fixes/trg_02", auth_mode: "bearer", secret: LEAK_BEARER }}
+              result={{ trigger_id: "01K5ZQ8F2P0000000000000002", url: "/api/workspaces/checkout-fixes/webhook/01K5ZQ8F2P0000000000000002/v1-1d7fa39c50b2e846c3915f7b204d8ae2", auth_mode: "bearer", secret: LEAK_BEARER }}
               onDismiss={() => { /* the card stays up for the capture */ }}
             />
             <AddServerCard onCancel={() => { /* the form stays up for the capture */ }}
@@ -4237,6 +4768,233 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
         )}
       </div>
       {modal && <div className="fixed right-4 top-4 z-[60]"><FeedbackButton compact /></div>}
+    </div>
+  );
+}
+
+/**
+ * What a routed, signed-in page looks like to the capture — and the one thing a
+ * screenshot of a scrolling app has to get right.
+ *
+ * The frame around this scene is the SHIPPED shell: `Layout`, its rail, the real
+ * `FeedbackButton` in the account menu, mounted under `/workspace/:agentId`. So
+ * the report a gate sends from here carries the route and the workspace the
+ * router actually resolved, which a bare component mount cannot produce and
+ * which is exactly the half of the submission no fixture ever exercised.
+ *
+ * The panel is a scroll container inside a scroll container: five stacked bands,
+ * one of which holds a row of five side-by-side cells. Each is a solid,
+ * unantialiased fill, and every band and cell is 180px/480px exactly, so a
+ * scroll offset lands one of them flush against its viewport and a sampled pixel
+ * names WHICH one the image caught. No colour is spelled in the gate: it reads
+ * the fill off the band it expects through `getComputedStyle`, so the fixture
+ * and the assertion cannot drift apart.
+ *
+ * A transcript scrolled to the failure and a table scrolled to the wrong column
+ * are the real versions of this, and both came back at the top.
+ */
+const SCROLL_BANDS = ["#12406e", "#14783c", "#c81e5a", "#78148c", "#b4a014"];
+const SCROLL_CELLS = ["#1e7a3c", "#005ab4", "#f0a800", "#9600b4", "#dcc800"];
+
+function FeedbackScrollScene() {
+  return (
+    <div className="h-full overflow-hidden p-bg p-text">
+      <div className="space-y-4 p-6">
+        <p data-visible-copy className="max-w-xl text-sm p-text-2">
+          A screenshot is taken of the page as the reporter left it. A pane they scrolled to the
+          line that failed has to arrive on that line, not back at the top.
+        </p>
+        <div className="p-group max-w-fit">
+          <div className="border-b p-border px-3 py-2 p-label">Nested panes</div>
+          <div data-scroll-outer style={{ height: 180, width: 520, overflowY: "auto", overflowX: "hidden" }}>
+            {SCROLL_BANDS.map((fill, band) => (
+              <div key={fill} data-scroll-band={band} style={{ height: 180, background: fill }}>
+                {band === 2 && (
+                  <div data-scroll-inner style={{ height: 120, width: 480, overflowX: "auto", overflowY: "hidden" }}>
+                    <div style={{ display: "flex", width: 480 * SCROLL_CELLS.length }}>
+                      {SCROLL_CELLS.map((cell, index) => (
+                        <div key={cell} data-scroll-cell={index} style={{ width: 480, height: 120, background: cell }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── A view that fails to render ─────────────────────────────────── */
+
+/**
+ * The message that must never reach a log. Spelled as a needle so the gate can
+ * assert its ABSENCE from a payload that was really produced — V8 puts
+ * `${name}: ${message}` on the first line of `error.stack`, so a report built
+ * without stripping that line carries this string.
+ */
+const RENDER_FAULT_MESSAGE =
+  "Cannot read properties of undefined (reading 'kind') for coupon MESSAGE_LEAKS_IF_REPORTED_0001";
+
+/**
+ * ONE error object across every render attempt, minted on the first.
+ *
+ * Both halves matter. Minted inside the render, so the stack is the render's and
+ * not this module's initialisation. CACHED, because the claim under test is that
+ * one caught error produces one report however many times React re-renders it —
+ * and a fixture that minted a fresh Error per attempt could not tell "the
+ * boundary deduped" from "React only called it once".
+ */
+let renderFault: TypeError | null = null;
+
+/** `?huge=1` replaces the stack with one far over the request bound, so the gate
+ *  can watch the client fit a report rather than send an oversized one. */
+const HUGE_STACK = new URLSearchParams(location.search).get("huge") === "1";
+const HUGE_FRAME = "    at applyCoupon (http://127.0.0.1/assets/index-a1b2c3.js:1:2345)";
+
+/**
+ * Times the fault has actually been thrown, written to the document.
+ *
+ * The gate's dedupe claim is "one caught error, one report", and without this
+ * number that claim is VACUOUS: a page that broke once sends one report too, and
+ * every other reading — the fallback, its retry affordance — is identical either
+ * way. So the assertion that one report left the page is only worth anything
+ * beside a count proving the boundary caught more than once.
+ */
+let renderFaultThrows = 0;
+
+function BreakableView({ broken }: { broken: boolean }) {
+  if (!broken) return <p data-view-intact className="text-sm p-text-2">This view renders.</p>;
+  renderFaultThrows += 1;
+  document.body.dataset.renderFaultThrows = String(renderFaultThrows);
+  if (renderFault === null) {
+    renderFault = new TypeError(RENDER_FAULT_MESSAGE);
+    if (HUGE_STACK) {
+      renderFault.stack = [`TypeError: ${RENDER_FAULT_MESSAGE}`]
+        .concat(Array.from({ length: 600 }, () => HUGE_FRAME)).join("\n");
+    }
+  }
+  throw renderFault;
+}
+
+/**
+ * A render-time throw inside the SHIPPED ErrorBoundary.
+ *
+ * The trigger sits OUTSIDE the boundary on purpose: inside, the fallback would
+ * replace it and the fault could be caused exactly once. From out here the gate
+ * can break the view, take the fallback's own "Try again", and have the same
+ * error caught again — which is the state the boundary's dedupe exists for.
+ */
+function RenderFailureScene() {
+  const [broken, setBroken] = useState(false);
+  return (
+    <div className="h-full overflow-y-auto p-bg p-text" data-render-failure>
+      <div className="space-y-4 p-6">
+        <p data-scene-copy className="max-w-xl text-sm p-text-2">
+          A view that throws while rendering is contained by its boundary. The other panes,
+          this copy, and the control below all keep working.
+        </p>
+        <button
+          data-break
+          onClick={() => setBroken(true)}
+          className="text-xs px-3 py-1.5 rounded-md p-fill border p-border hover:p-text"
+        >
+          Break this view
+        </button>
+        <div className="p-group max-w-2xl" style={{ height: 340 }}>
+          <ErrorBoundary label="workspace"><BreakableView broken={broken} /></ErrorBoundary>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── A code-split route that will not load ───────────────────────── */
+
+/**
+ * Whether the chunk this fixture stands for is in the bundle THIS document
+ * loaded.
+ *
+ * Two ways it can be, and both are the real thing rather than a counter. A
+ * RELOADED document is the deploy case exactly: the reader's tab went to the
+ * origin again and got the current bundle, which is what makes the recovery worth
+ * performing. `navigation.type` says so directly, and unlike a stored marker it
+ * can never be confused with the recovery's own guard key. The other way is the
+ * gate declaring it fixed, which is how a retry that must SUCCEED is driven
+ * without a reload.
+ *
+ * Deliberately NOT "has it failed before": React re-renders a failed subtree in
+ * development to build a component stack, so an attempt counter makes the fixture
+ * succeed on a pass nobody asked for and the error screen never appears at all.
+ */
+function chunkIsPresent(): boolean {
+  if (sessionStorage.getItem(CHUNK_FIXED_KEY) !== null) return true;
+  const [navigation] = performance.getEntriesByType("navigation");
+  return navigation instanceof PerformanceNavigationTiming && navigation.type === "reload";
+}
+
+/** Attempts per fixture loader, written to the document so the gate can read
+ *  them: the claim that only the REJECTED loader is regenerated is a claim about
+ *  these two numbers. */
+const lazyAttempts = { stale: 0, healthy: 0 };
+
+function recordAttempt(which: "stale" | "healthy"): void {
+  lazyAttempts[which] += 1;
+  document.body.dataset[which === "stale" ? "lazyStaleAttempts" : "lazyHealthyAttempts"] =
+    String(lazyAttempts[which]);
+}
+
+/**
+ * `?failure=app` throws an ordinary application error instead of a module-load
+ * one, which is how the gate proves that RECOGNITION is required and skew alone
+ * never authorises a reload.
+ */
+function fixtureFailure(): Error {
+  return new URLSearchParams(location.search).get("failure") === "app"
+    ? new TypeError("Cannot read properties of undefined (reading 'kind')")
+    : new TypeError(
+      `Failed to fetch dynamically imported module: ${location.origin}/assets/MCTSExplorer-a1b2c3.js`,
+    );
+}
+
+const StaleChunkRoute = lazyRoute(async () => {
+  recordAttempt("stale");
+  if (!chunkIsPresent()) throw fixtureFailure();
+  return { default: () => <p data-lazy-loaded className="text-sm p-text-2">The split route rendered.</p> };
+});
+
+/** The sibling that never fails. Its attempt count is the assertion that a
+ *  regenerated loader clears one route's memo and not the others'. */
+const HealthyChunkRoute = lazyRoute(async () => {
+  recordAttempt("healthy");
+  return { default: () => <p data-lazy-healthy className="text-sm p-text-2">The other split route rendered.</p> };
+});
+
+function LazyRouteScene() {
+  return (
+    <div className="h-full overflow-y-auto p-bg p-text" data-lazy-scene>
+      <div className="space-y-4 p-6">
+        <p data-scene-copy className="max-w-xl text-sm p-text-2">
+          A code-split route is a hashed asset. A tab held open across a deploy cannot load one,
+          and reloading is the whole fix — once, and only when the origin really has moved.
+        </p>
+        <div className="p-group max-w-2xl" style={{ height: 260 }}>
+          <ErrorBoundary label="mcts-explorer">
+            <Suspense fallback={<p data-lazy-pending className="p-6 text-sm p-text-3">Loading…</p>}>
+              <StaleChunkRoute />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+        <div className="p-group max-w-2xl" style={{ height: 120 }}>
+          <ErrorBoundary label="control-plane">
+            <Suspense fallback={<p className="p-6 text-sm p-text-3">Loading…</p>}>
+              <HealthyChunkRoute />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4254,16 +5012,15 @@ async function mount() {
   else if (frame === "forks") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
   // The same surface with its config disclosure OPEN. The card is shut by the
   // owner's own ruling — config is asked for, never shoved at a reader — so no
-  // frame could photograph what it holds, and `flat · 5 branches` is an owner
-  // item that has to be reviewable. Opened through the disclosure's own stable
-  // hook rather than by a prop, so the shipped default stays shut.
+  // product prop exists just for gallery capture.
   else if (frame === "forkconfig") {
     node = <OpenConfigDisclosures><Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} /></OpenConfigDisclosures>;
   }
-  else if (frame === "forkmerge") node = <Shell surface="Exploration" rpc={mergeFirstRpc} />;
-  else if (frame === "forkpreset") node = <Shell surface="Exploration" rpc={provePresetRpc} />;
-  else if (frame === "forkfanin") node = <Shell surface="Exploration" rpc={swarmFanInRpc} />;
-  else if (frame === "forkrefused") node = <Shell surface="Exploration" rpc={refusedRunRpc} />;
+  else if (frame === "forkmerge") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={mergeFirstRpc} />;
+  else if (frame === "forkpreset") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={provePresetRpc} />;
+  else if (frame === "forkfanin") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={swarmFanInRpc} />;
+  else if (frame === "forkrefused") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={refusedRunRpc} />;
+  else if (frame === "forkstopped") node = <Shell surface="Exploration" rpc={stoppedRunRpc} />;
   // A multi-node MIXED-STATUS run: nodes reported, nodes still working, one
   // aborted and one failed on the provider, over two levels. The state the whole
   // surface exists for and the one no frame could photograph.
@@ -4299,6 +5056,63 @@ async function mount() {
   else if (frame === "feedbacksecrets") {
     node = <FeedbackSecretsFrame modal={new URLSearchParams(location.search).get("modal") === "1"} />;
   }
+  // The shipped shell, routed as App.tsx routes it: `Layout` owns the rail, the
+  // rail owns the account menu, and the menu owns the Feedback affordance. What
+  // this frame adds over the two above is the ROUTER — the report's route and
+  // workspace fields are read off a resolved `/workspace/:agentId`, not off the
+  // gallery's own `/`.
+  else if (frame === "feedbackrouted") {
+    entries = ["/workspace/checkout-fixes"];
+    node = (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/workspace/:agentId" element={<FeedbackScrollScene />} />
+        </Route>
+      </Routes>
+    );
+  }
+  // A render-time throw in the shipped ErrorBoundary, at a real route.
+  //
+  // Two things this frame does that no other needs. It calls
+  // `pageDeployedBuildSha` the way `index.tsx` does, because the report binds
+  // itself to the build the page LOADED and that read has to happen at load. And
+  // it rewrites the address bar: the report reads the document's own
+  // `location.pathname` — which is what a BrowserRouter page has — while the
+  // gallery routes through a MemoryRouter that leaves the URL at `/`. A
+  // replaceState is a no-op on the network and makes the two agree.
+  else if (frame === "errorboundary") {
+    void pageDeployedBuildSha();
+    history.replaceState(null, "", `/workspace/checkout-fixes${location.search}`);
+    entries = ["/workspace/checkout-fixes"];
+    node = (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path={APP_ROUTES.workspace} element={<RenderFailureScene />} />
+        </Route>
+      </Routes>
+    );
+  }
+  // A code-split route that will not load, in the shipped ErrorBoundary and
+  // Suspense, under the shipped Layout. `pageDeployedBuildSha` is called as
+  // `index.tsx` calls it, because the recovery compares the build this page
+  // loaded against the one the origin serves.
+  //
+  // Unlike the frame above, this one leaves the address bar ALONE. The recovery's
+  // last act is `location.reload()`, which reloads whatever is in it: a rewritten
+  // `/workspace/...` would be served the real `index.html` by Vite's SPA
+  // fallback, and the gate would be measuring the app instead of the fixture.
+  // Nothing here reads the path, so there is nothing to gain by moving it.
+  else if (frame === "lazyroute") {
+    void pageDeployedBuildSha();
+    entries = ["/workspace/checkout-fixes"];
+    node = (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path={APP_ROUTES.workspace} element={<LazyRouteScene />} />
+        </Route>
+      </Routes>
+    );
+  }
   else if (frame === "palette") node = <Palette />;
   else if (frame === "marks") node = <MarksFrame />;
   else if (frame === "tabs") node = <TabsFrame />;
@@ -4320,8 +5134,12 @@ async function mount() {
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "composer") node = <ComposerFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
+  else if (frame === "historyauthority") node = <HistoryAuthorityFrame />;
+  else if (frame === "rosterauthority") node = <RosterAuthorityFrame />;
+  else if (frame === "clientcontinuity") node = <ClientContinuityFrame />;
+  else if (frame === "qualitybranches") node = <QualityBranchFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
-  else if (frame === "toolrun") node = <ToolRunScaleFrame />;
+  else if (frame === "toolrun") node = <ToolRunScaleFrame secrets={new URLSearchParams(location.search).get("secrets") === "1"} />;
   else if (frame === "advisor") node = <AdvisorFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
@@ -4350,6 +5168,7 @@ async function mount() {
             initialSurface={frame === "files" ? "Files" : "Environment"}
             offlineLaptop={params.get("offline") === "laptop"}
             width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
+            deferPreview={params.get("deferpreview") === "1"}
           />} />
       </Routes>
     );
@@ -4371,6 +5190,10 @@ async function mount() {
         <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
       </Routes>
     );
+  }
+  else if (frame === "usersettingsstate") {
+    entries = ["/user/settings"];
+    node = <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>;
   }
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");

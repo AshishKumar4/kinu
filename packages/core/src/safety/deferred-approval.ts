@@ -54,7 +54,6 @@ import {
   formatApproval, gatedGrants, reviewCommand,
   type ApprovalGrant, type DeferredApprovalChannel, type ShellApprovalRequest,
 } from './approval-gate';
-import { reconcileColumns } from '../identity/columns';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, toKinuError } from '../obs/index';
 
@@ -136,7 +135,7 @@ function toAction(r: Row): DeferredApproval {
   };
 }
 
-export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
+export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
     id           TEXT PRIMARY KEY,
     command      TEXT NOT NULL,
@@ -146,13 +145,6 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor
     requested_at INTEGER NOT NULL,
     decided_at   INTEGER
   )`);
-  // A workspace that parked an action before the gate knew about executors has
-  // rows without one; they read back as '' and fail closed everywhere.
-  reconcileColumns(sql, execRaw, 'deferred_approvals', { executor: `TEXT NOT NULL DEFAULT ''` });
-  // Spending deletes its row and writes the approval_consumed run event
-  // instead, so a surviving status='used' row is pre-cutover history no reader
-  // can name — remove it rather than let it linger unreadable.
-  execRaw(`DELETE FROM deferred_approvals WHERE status = 'used'`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status ON deferred_approvals(status)`);
 }
 

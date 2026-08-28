@@ -19,7 +19,7 @@
  * reuses the capture in memory — is the shipped code path.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { HTTPRequest, Page } from 'puppeteer';
+import { TimeoutError, type HTTPRequest, type Page } from 'puppeteer';
 import { diagnosticsSettled, recordDiagnostics, withGallery, type DiagnosticLine } from './gallery-harness';
 
 const FEEDBACK = '/api/feedback';
@@ -93,6 +93,17 @@ interface Submission {
   annotated: string;
   /** Absent when the report carries no screenshot. */
   screenshot: { size: number; type: string; name: string } | null;
+  /**
+   * How the request ENDED: `pending`, `answered`, or the rejected error's own
+   * `name`. Filled in by the recorder when it happens, so it is read after the
+   * fact rather than awaited.
+   *
+   * `pending` is a request the network never answered — the state a stalled POST
+   * leaves behind. `AbortError` is the proof that a stop reached the REQUEST and
+   * not only the button that asked for it: a component that merely ignored the
+   * answer would leave this `pending` for as long as the page lived.
+   */
+  outcome: string;
 }
 
 /**
@@ -130,14 +141,24 @@ async function recordSubmissions(page: Page): Promise<void> {
       const body = init?.body;
       if (url.endsWith(endpoint) && body instanceof FormData) {
         const shot = body.get('screenshot');
-        seen.push({
+        const record: Submission = {
           fields: [...body.keys()],
           note: String(body.get('note') ?? ''),
           route: String(body.get('route') ?? ''),
           workspace: String(body.get('workspace') ?? ''),
           annotated: String(body.get('annotated') ?? ''),
           screenshot: shot instanceof File ? { size: shot.size, type: shot.type, name: shot.name } : null,
-        });
+          outcome: 'pending',
+        };
+        seen.push(record);
+        const sent = real(input, init);
+        // A branch off the same promise, so the component still receives the
+        // original one — rejection included — and this file learns how it ended.
+        void sent.then(
+          () => { record.outcome = 'answered'; },
+          <Thrown,>(thrown: Thrown) => { record.outcome = thrown instanceof Error ? thrown.name : 'unknown'; },
+        );
+        return sent;
       }
       return real(input, init);
     }, { preconnect: real.preconnect });
@@ -149,16 +170,22 @@ async function submissions(page: Page): Promise<Submission[]> {
 }
 
 /**
- * Answer `/api/feedback` at the network. `failFirst` aborts the first attempt so
- * the retry path runs against a real connection failure rather than a simulated
- * error state.
+ * Answer `/api/feedback` at the network, one behaviour per attempt.
+ *
+ * `attempts` names what happens to the first, second, … POST; anything past the
+ * end of the list is answered. `refuse` aborts at the connection, so the retry
+ * path runs against a real network failure rather than a simulated error state.
+ * `hold` NEVER answers and never fails — the request a proxy swallows, which is
+ * the only honest way to drive a dialog that had no way out of it.
  *
  * Vite's HMR socket is refused on the way in. Sibling work in this tree touches
  * `src/` while a gate is running, and an HMR update re-mounts the React root
  * mid-interaction — the dialog simply vanishes. Only the socket carrying
  * `vite-hmr` is stubbed, so module loading is untouched.
  */
-async function serveFeedback(page: Page, options: { failFirst?: boolean } = {}): Promise<void> {
+type Attempt = 'answer' | 'refuse' | 'hold';
+
+async function serveFeedback(page: Page, options: { attempts?: readonly Attempt[] } = {}): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     const Real = WebSocket;
     const Stub = function (url: string, protocols?: string | string[]) {
@@ -179,8 +206,10 @@ async function serveFeedback(page: Page, options: { failFirst?: boolean } = {}):
       void request.continue();
       return;
     }
+    const behaviour = options.attempts?.[attempt] ?? 'answer';
     attempt += 1;
-    if (options.failFirst === true && attempt === 1) {
+    if (behaviour === 'hold') return;
+    if (behaviour === 'refuse') {
       void request.abort('connectionrefused');
       return;
     }
@@ -192,18 +221,20 @@ async function serveFeedback(page: Page, options: { failFirst?: boolean } = {}):
   });
 }
 
-/** Open the dialog and wait for the capture to settle either way. */
-async function openDialog(page: Page, selector = '[data-feedback-open]'): Promise<void> {
-  await page.click(selector);
+/**
+ * Wait for the capture to settle either way, and for the preview to be DRAWN.
+ *
+ * A canvas EXISTS as soon as the ready state renders; it is only drawn once the
+ * decode resolves and the paint effect stamps it. Reading pixels between those
+ * two is how this gate flaked, so every path that samples the image waits for
+ * the stamp rather than for the element.
+ */
+async function captureSettled(page: Page): Promise<void> {
   await page.waitForSelector('[data-feedback-note]');
   await page.waitForFunction(
     () => document.querySelector('[data-feedback-shot="ready"], [data-feedback-shot="failed"]') !== null,
     { timeout: 90_000 },
   );
-  // A canvas EXISTS as soon as the ready state renders; it is only DRAWN once
-  // the decode resolves and the paint effect stamps it. Reading pixels between
-  // those two is how this gate flaked, so every path that samples the image
-  // waits for the stamp rather than for the element.
   await page.waitForFunction(
     () => document.querySelector('[data-feedback-shot="failed"]') !== null
       || document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
@@ -211,12 +242,74 @@ async function openDialog(page: Page, selector = '[data-feedback-open]'): Promis
   );
 }
 
+/** Open the dialog and wait for the capture to settle either way. */
+async function openDialog(page: Page, selector = '[data-feedback-open]'): Promise<void> {
+  await page.click(selector);
+  await captureSettled(page);
+}
+
+/**
+ * Open the dialog WITHOUT moving the page.
+ *
+ * `page.click` scrolls its target into view first, which resets the scroll
+ * position the stage below exists to photograph. A click dispatched in the page
+ * is the same click without the scroll.
+ */
+async function openDialogInPlace(page: Page, selector = '[data-feedback-open]'): Promise<void> {
+  await page.evaluate((target: string) => {
+    const button = document.querySelector<HTMLElement>(target);
+    if (button === null) throw new Error(`no ${target} to open the dialog with`);
+    button.click();
+  }, selector);
+  await captureSettled(page);
+}
+
+/** Wait for the dialog to be sending: the footer's one escape becomes Stop. */
+async function sending(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => document.querySelector('[data-feedback-cancel]')?.getAttribute('data-feedback-cancel') === 'stop',
+    { timeout: 30_000 },
+  );
+}
+
+/** Wait until `count` POSTs have actually left the page, so a stage that stops
+ *  one is stopping a request rather than the work that precedes it. */
+async function posted(page: Page, count: number): Promise<void> {
+  await page.waitForFunction(
+    (wanted: number) => (window.__feedbackSent ?? []).length >= wanted,
+    { timeout: 30_000 }, count,
+  );
+}
+
+/** Which job the footer's escape is currently doing: `stop` or `close`. */
+async function cancelHook(page: Page): Promise<string> {
+  return page.$eval('[data-feedback-cancel]', (node) => node.getAttribute('data-feedback-cancel') ?? '');
+}
+
+async function textOf(page: Page, selector: string): Promise<string> {
+  return page.$eval(selector, (node) => node.textContent ?? '');
+}
+
+/** A bounded wait whose EXPIRY is a reading rather than an error: the assertion
+ *  that follows reports what was observed, where a raised timeout would only
+ *  report when. */
+async function tolerateTimeout(waiting: Promise<unknown>): Promise<void> {
+  try {
+    await waiting;
+  } catch (thrown) {
+    if (!(thrown instanceof TimeoutError)) throw thrown;
+  }
+}
+
 /**
  * Sample the captured image at the on-page position of `selector`.
  *
  * The capture omitted the dialog and the dialog is a fixed overlay, so the live
- * page's layout is the layout that was photographed: a live bounding box scaled
- * by the capture's own scale factor is where that element's pixels are.
+ * page's layout is the layout that was photographed: a live bounding box, moved
+ * by however far the page is scrolled and scaled by the capture's own scale
+ * factor, is where that element's pixels are. The scroll term is what makes the
+ * mapping true of a page the reporter left part-way down, rather than only of one
+ * a stage remembered to send back to the top.
  *
  * The box is inset by 8 device pixels, which is past this design system's
  * `rounded-md` corner. Antialiasing where a rounded block meets the page ground
@@ -236,8 +329,8 @@ async function readRegion(page: Page, selector: string): Promise<Region> {
     const scale = canvas.width / document.documentElement.clientWidth;
     const box = node.getBoundingClientRect();
     const inset = 8;
-    const x = Math.round(box.left * scale) + inset;
-    const y = Math.round(box.top * scale) + inset;
+    const x = Math.round((box.left + window.scrollX) * scale) + inset;
+    const y = Math.round((box.top + window.scrollY) * scale) + inset;
     const w = Math.max(1, Math.round(box.width * scale) - inset * 2);
     const h = Math.max(1, Math.round(box.height * scale) - inset * 2);
     const pixels = context.getImageData(x, y, w, h).data;
@@ -381,8 +474,10 @@ async function readSecretRegions(page: Page): Promise<NamedRegion[]> {
         bottom = Math.min(bottom, clip.bottom - edge(style.borderBottomWidth, style.paddingBottom));
       }
       const inset = Math.max(1, Math.min(6, Math.round(Math.min(right - left, bottom - top) * scale * 0.2)));
-      const x = Math.round(left * scale) + inset;
-      const y = Math.round(top * scale) + inset;
+      // Document coordinates, so the sampling holds wherever the page is
+      // scrolled: the capture spans the whole document and starts at its top.
+      const x = Math.round((left + window.scrollX) * scale) + inset;
+      const y = Math.round((top + window.scrollY) * scale) + inset;
       const w = Math.round((right - left) * scale) - inset * 2;
       const h = Math.round((bottom - top) * scale) - inset * 2;
       const label = `${String(index)}:${node.tagName.toLowerCase()}${node.getAttribute('type') ?? ''}`;
@@ -419,6 +514,82 @@ async function probeSurface(page: Page, needles: readonly string[]): Promise<Sur
   };
 }
 
+/**
+ * One pane of the nested-scroll fixture, as the captured image carries it.
+ *
+ * No colour is spelled in this file. `wanted` and `atRest` are read off the LIVE
+ * fixture through `getComputedStyle`, so the fixture owns its own fills and the
+ * two cannot drift apart; `atRest` is the pane an ignored scroll offset shows,
+ * which is what keeps a passing `seen` from being a coincidence.
+ */
+interface Pane {
+  label: string;
+  /** The one colour every sampled pixel carried, or a count when it was more. */
+  seen: string;
+  /** The fill of the band or cell the reader scrolled to. */
+  wanted: string;
+  /** The fill of the one at offset zero. */
+  atRest: string;
+  sampled: number;
+}
+
+/**
+ * Sample the captured image inside both panes of the nested-scroll fixture: the
+ * strip of the outer band below the inner pane, and the inner pane itself.
+ *
+ * Both boxes are inset past their own scrollbars — a scrollbar is drawn inside
+ * the container, and its groove is neither band nor cell.
+ */
+async function readScrollPanes(page: Page): Promise<Pane[]> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
+    if (canvas === null) throw new Error('no preview canvas');
+    const context = canvas.getContext('2d');
+    if (context === null) throw new Error('no 2d context');
+    const scale = canvas.width / document.documentElement.clientWidth;
+    const at = (selector: string): HTMLElement => {
+      const node = document.querySelector<HTMLElement>(selector);
+      if (node === null) throw new Error(`no ${selector} in the fixture`);
+      return node;
+    };
+    /** `rgb(18, 64, 110)` and `rgba(18, 64, 110, 1)` both come back `18,64,110`,
+     *  so a sampled pixel and a computed fill compare as themselves. */
+    const triple = (css: string): string => (css.match(/\d+/gu) ?? []).slice(0, 3).join(',');
+    const fill = (selector: string): string => triple(getComputedStyle(at(selector)).backgroundColor);
+    const outer = at('[data-scroll-outer]').getBoundingClientRect();
+    const inner = at('[data-scroll-inner]').getBoundingClientRect();
+    const sample = (box: { x: number; y: number; w: number; h: number }) => {
+      const pixels = context.getImageData(
+        Math.round((box.x + window.scrollX) * scale), Math.round((box.y + window.scrollY) * scale),
+        Math.max(1, Math.round(box.w * scale)), Math.max(1, Math.round(box.h * scale)),
+      ).data;
+      const colours = new Set<string>();
+      for (let i = 0; i < pixels.length; i += 4) {
+        colours.add(`${String(pixels[i])},${String(pixels[i + 1])},${String(pixels[i + 2])}`);
+      }
+      const only = [...colours];
+      return {
+        seen: only.length === 1 ? String(only[0]) : `${String(only.length)} colours`,
+        sampled: pixels.length / 4,
+      };
+    };
+    return [
+      {
+        label: 'the outer band, below the inner pane',
+        ...sample({ x: inner.left + 8, y: inner.bottom + 6, w: inner.width - 16, h: outer.bottom - inner.bottom - 12 }),
+        wanted: fill('[data-scroll-band="2"]'),
+        atRest: fill('[data-scroll-band="0"]'),
+      },
+      {
+        label: 'the inner pane, scrolled sideways',
+        ...sample({ x: inner.left + 8, y: inner.top + 8, w: inner.width - 16, h: inner.height - 32 }),
+        wanted: fill('[data-scroll-cell="2"]'),
+        atRest: fill('[data-scroll-cell="0"]'),
+      },
+    ];
+  });
+}
+
 interface Observed {
   desktop: {
     shot: { width: number; height: number; redacted: number };
@@ -447,6 +618,26 @@ interface Observed {
   cards: SurfaceProbe;
   /** The shipped create-webhook dialog, with a secret typed into its field. */
   dialog: SurfaceProbe;
+  /** The shipped shell, routed: the rail's own Feedback affordance, a report
+   *  addressed by the route the router resolved, and two nested panes the
+   *  reporter scrolled. */
+  routed: {
+    openedFromRail: boolean;
+    offsets: { outer: number; inner: number };
+    panes: Pane[];
+    sent: Submission[];
+  };
+  /** A POST the network never answers. */
+  stalled: {
+    whileSending: { cancelHook: string; sendLabel: string; dismissedByEscape: boolean };
+    afterStop: { errorText: string; cancelHook: string; sendLabel: string; canvasSurvived: boolean };
+    outcomes: string[];
+    retryToast: string;
+    diagnostics: DiagnosticLine[];
+    closedAfterStop: boolean;
+  };
+  /** The same page, photographed while the reporter is part-way down it. */
+  scrolledDocument: { scrollY: number; regions: NamedRegion[]; control: Region };
 }
 
 async function run(): Promise<Observed> {
@@ -571,7 +762,7 @@ async function run(): Promise<Observed> {
     // ── a failed send keeps the capture, and retry sends it ──────────────
     const flaky = await browser.newPage();
     await flaky.setViewport({ width: 1280, height: 900 });
-    await serveFeedback(flaky, { failFirst: true });
+    await serveFeedback(flaky, { attempts: ['refuse'] });
     const flakyDiagnostics = recordDiagnostics(flaky);
     await flaky.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await openDialog(flaky);
@@ -709,6 +900,142 @@ async function run(): Promise<Observed> {
     const dialog = await probeSurface(dialogPage, [LEAK_TYPED]);
     await dialogPage.close();
 
+    // ── the shipped shell, routed ────────────────────────────────────────
+    // `Layout`, its rail, and the account menu's own Feedback affordance,
+    // mounted at `/workspace/checkout-fixes`. The two frames above prove the
+    // capture; this one proves the SUBMISSION: the route and the workspace a
+    // report carries are read off a route the router resolved, and no bare
+    // component mount can produce either.
+    const routedPage = await browser.newPage();
+    await routedPage.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(routedPage);
+    await routedPage.goto(`${origin}/gallery.html?frame=feedbackrouted`, { waitUntil: 'networkidle0' });
+    // The rail's account row, addressed by the email the profile renders:
+    // waiting for it is waiting for the signed-in state, and the menu holding
+    // Feedback does not exist until that row is clicked.
+    await routedPage.waitForFunction(
+      () => [...document.querySelectorAll('aside button')].some((row) => (row.textContent ?? '').includes('@')),
+      { timeout: 30_000 },
+    );
+    await routedPage.evaluate(() => {
+      const row = [...document.querySelectorAll<HTMLElement>('aside button')]
+        .find((button) => (button.textContent ?? '').includes('@'));
+      if (row === undefined) throw new Error('no account row in the rail');
+      row.click();
+    });
+    await routedPage.waitForSelector('aside [data-feedback-open]', { timeout: 30_000 });
+    const openedFromRail = await routedPage.$('aside [data-feedback-open]') !== null;
+    // Two bands down and two cells across. The offsets are read BACK, so a
+    // fixture that could not scroll fails here instead of passing by accident.
+    const offsets = await routedPage.evaluate(() => {
+      const outer = document.querySelector<HTMLElement>('[data-scroll-outer]');
+      const inner = document.querySelector<HTMLElement>('[data-scroll-inner]');
+      if (outer === null || inner === null) throw new Error('the nested panes are not in this frame');
+      outer.scrollTop = outer.clientHeight * 2;
+      inner.scrollLeft = inner.clientWidth * 2;
+      return { outer: outer.scrollTop, inner: inner.scrollLeft };
+    });
+    await openDialog(routedPage, 'aside [data-feedback-open]');
+    const panes = await readScrollPanes(routedPage);
+    await routedPage.type('[data-feedback-note]', 'the panes were scrolled when this was taken');
+    await routedPage.click('[data-feedback-send]');
+    await routedPage.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    const routedSent = await submissions(routedPage);
+    await routedPage.close();
+
+    // ── a POST the network never answers ─────────────────────────────────
+    // Held open at the network rather than answered slowly: this is the request
+    // a proxy swallows, and the only honest way to reach the state where the
+    // dialog stayed busy for as long as the request did. Three attempts, and the
+    // middle one answers: stop, retry, then stop and leave.
+    const stalledPage = await browser.newPage();
+    await stalledPage.setViewport({ width: 1280, height: 900 });
+    await serveFeedback(stalledPage, { attempts: ['hold', 'answer', 'hold'] });
+    const stalledDiagnostics = recordDiagnostics(stalledPage);
+    await stalledPage.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+    await openDialog(stalledPage);
+    await stalledPage.type('[data-feedback-note]', 'this one hangs on the way out');
+    await stalledPage.click('[data-feedback-send]');
+    await sending(stalledPage);
+    // The POST has genuinely left before it is stopped. Without this the stage
+    // could stop the dialog during the attach step and prove nothing about a
+    // request in flight.
+    await posted(stalledPage, 1);
+    // Escape while the request is genuinely in flight: the shared dialog keeps
+    // refusing it, because a stray key must not tear down a report mid-write.
+    // The way out is the footer button, and it is the next thing pressed.
+    await stalledPage.keyboard.press('Escape');
+    // Two frames, so "it stayed open" is a reading of a moment that has passed
+    // rather than of one that had not arrived.
+    await stalledPage.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+    }));
+    const whileSending = {
+      cancelHook: await cancelHook(stalledPage),
+      sendLabel: await textOf(stalledPage, '[data-feedback-send]'),
+      dismissedByEscape: await stalledPage.$('[data-feedback-note]') === null,
+    };
+    await stalledPage.click('[data-feedback-cancel]');
+    await stalledPage.waitForSelector('[data-feedback-error]', { timeout: 30_000 });
+    const afterStop = {
+      errorText: await textOf(stalledPage, '[data-feedback-error]'),
+      cancelHook: await cancelHook(stalledPage),
+      sendLabel: await textOf(stalledPage, '[data-feedback-send]'),
+      canvasSurvived: await stalledPage.$('[data-feedback-canvas]') !== null,
+    };
+    await stalledPage.click('[data-feedback-send]');
+    await stalledPage.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    const stalledToast = await textOf(stalledPage, '[data-feedback-sent]');
+    // And a stopped report can be left behind: sent one closed, a second stalls,
+    // stops, and Escape — refused above — now dismisses it.
+    await stalledPage.click('[data-feedback-done]');
+    await stalledPage.waitForFunction(
+      () => document.querySelector('[data-feedback-note]') === null, { timeout: 30_000 },
+    );
+    await openDialog(stalledPage);
+    await stalledPage.type('[data-feedback-note]', 'and this one hangs too');
+    await stalledPage.click('[data-feedback-send]');
+    await sending(stalledPage);
+    await posted(stalledPage, 3);
+    await stalledPage.click('[data-feedback-cancel]');
+    await stalledPage.waitForSelector('[data-feedback-error]', { timeout: 30_000 });
+    await stalledPage.keyboard.press('Escape');
+    await tolerateTimeout(stalledPage.waitForFunction(
+      () => document.querySelector('[data-feedback-note]') === null, { timeout: 10_000 },
+    ));
+    const closedAfterStop = await stalledPage.$('[data-feedback-note]') === null;
+    // Every POST this page made, and how each ENDED. Awaited briefly rather than
+    // read on the spot: a rejection lands a microtask after the click that
+    // caused it, and a dialog that had only stopped listening would leave one
+    // `pending` — which is what the assertion then reports, where a raised
+    // timeout would have said nothing about it.
+    await tolerateTimeout(stalledPage.waitForFunction(
+      () => (window.__feedbackSent ?? []).every((one) => one.outcome !== 'pending'),
+      { timeout: 10_000 },
+    ));
+    const outcomes = (await submissions(stalledPage)).map((one) => one.outcome);
+    await stalledPage.close();
+
+    // ── photographed part-way down a page that scrolls ───────────────────
+    // The capture spans the whole document and starts at its TOP, wherever the
+    // reporter happens to be. Restoring a scrolled pane must not also move the
+    // page: the rasteriser counts `documentElement` among its scroll containers,
+    // and left to itself it takes the reader's own offset off the top of the
+    // image and leaves the same blank at the bottom.
+    const downPage = await browser.newPage();
+    await downPage.setViewport({ width: 1280, height: 800 });
+    await serveFeedback(downPage);
+    await downPage.goto(`${origin}/gallery.html?frame=feedbacksecrets`, { waitUntil: 'networkidle0' });
+    await downPage.waitForSelector('[data-visible-copy]');
+    const scrollY = await downPage.evaluate(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      return document.documentElement.scrollTop;
+    });
+    await openDialogInPlace(downPage);
+    const downRegions = await readSecretRegions(downPage);
+    const downControl = await readRegion(downPage, '[data-visible-copy]');
+    await downPage.close();
+
     return {
       desktop: { shot, password, token, control, consent, sent, toast },
       annotated: { before, afterDrag, afterUndo, sentAnnotated },
@@ -734,6 +1061,13 @@ async function run(): Promise<Observed> {
       mobile: { buttonVisible, dialogWithin, captureSucceeded },
       cards,
       dialog,
+      routed: { openedFromRail, offsets, panes, sent: routedSent },
+      stalled: {
+        whileSending, afterStop, outcomes, closedAfterStop,
+        retryToast: stalledToast,
+        diagnostics: [...stalledDiagnostics],
+      },
+      scrolledDocument: { scrollY, regions: downRegions, control: downControl },
     };
   });
 }
@@ -983,5 +1317,105 @@ describe('on a phone', () => {
 
   test('the capture works at device-pixel-ratio 2', () => {
     expect(observed.mobile.captureSucceeded).toBe(true);
+  });
+});
+
+describe('a report sent from the routed app', () => {
+  test('the affordance is the rail\'s own, in the account menu the app ships', () => {
+    expect(observed.routed.openedFromRail).toBe(true);
+  });
+
+  test('the report is addressed by the route the router resolved', () => {
+    const submission = observed.routed.sent.at(-1);
+    expect(submission).toBeDefined();
+    // Not `/`: the fixture frames send from the gallery's own root, and this
+    // pair of fields is what the ingest keys a report to a workspace by.
+    expect(submission?.route).toBe('/workspace/checkout-fixes');
+    expect(submission?.workspace).toBe('checkout-fixes');
+    expect(submission?.screenshot?.type).toBe('image/png');
+    expect(submission?.outcome).toBe('answered');
+  });
+});
+
+describe('a pane the reporter scrolled', () => {
+  test('the fixture really was scrolled, in both directions', () => {
+    // Two viewports each way. The vertical figure is not a round 360: the design
+    // system's grouped-row rule puts a hairline on the pane's top edge, so the
+    // scrollable viewport is a couple of pixels shorter than its declared
+    // height. Which band the image caught is the claim below; this one only has
+    // to say the fixture moved.
+    expect(observed.routed.offsets.outer).toBeGreaterThan(300);
+    expect(observed.routed.offsets.inner).toBe(960);
+  });
+
+  test('is photographed where they left it, vertically and horizontally', () => {
+    expect(observed.routed.panes).toHaveLength(2);
+    for (const pane of observed.routed.panes) {
+      // `atRest` is the fill an ignored scroll offset shows. Asserting the two
+      // differ is what stops this passing on a fixture that cannot tell them
+      // apart, and the sampled colour is then the whole claim.
+      expect(pane.atRest).not.toBe(pane.wanted);
+      expect({ label: pane.label, seen: pane.seen }).toEqual({ label: pane.label, seen: pane.wanted });
+      expect(pane.sampled).toBeGreaterThan(400);
+    }
+  });
+});
+
+describe('photographed part-way down a page that scrolls', () => {
+  test('the page really was scrolled', () => {
+    expect(observed.scrolledDocument.scrollY).toBeGreaterThan(100);
+  });
+
+  test('the capture still starts at the top of the document', () => {
+    // Every marked region, sampled at its DOCUMENT position. A capture that
+    // moved with the reader would put a card where each block is expected and
+    // fail every one of these.
+    expect(observed.scrolledDocument.regions).toHaveLength(5);
+    for (const region of observed.scrolledDocument.regions) {
+      expect({ label: region.label, offFill: region.offFill, colours: region.colours })
+        .toEqual({ label: region.label, offFill: 0, colours: 1 });
+      expect(region.sampled).toBeGreaterThan(20);
+    }
+  });
+
+  test('and the page around them is really there', () => {
+    expect(observed.scrolledDocument.control.colours).toBeGreaterThan(1);
+  });
+});
+
+describe('a send the network never answers', () => {
+  test('the dialog offers a way out of it', () => {
+    expect(observed.stalled.whileSending.cancelHook).toBe('stop');
+    expect(observed.stalled.whileSending.sendLabel).toBe('Sending…');
+  });
+
+  test('a stray Escape still does not tear down a report mid-write', () => {
+    expect(observed.stalled.whileSending.dismissedByEscape).toBe(false);
+  });
+
+  test('stopping keeps the note and the capture, and says who stopped it', () => {
+    expect(observed.stalled.afterStop.errorText).toContain('you stopped it');
+    expect(observed.stalled.afterStop.errorText).toMatch(/still here/u);
+    expect(observed.stalled.afterStop.canvasSurvived).toBe(true);
+    expect(observed.stalled.afterStop.sendLabel).toBe('Retry');
+    expect(observed.stalled.afterStop.cancelHook).toBe('close');
+  });
+
+  test('the stop reached the request, and retry sent a new one', () => {
+    // Three POSTs for three presses. The first ENDED — a dialog that merely
+    // stopped listening would leave it `pending` for as long as the page lived —
+    // the second was answered, and the third was stopped the same way.
+    expect(observed.stalled.outcomes).toEqual(['AbortError', 'answered', 'AbortError']);
+    expect(observed.stalled.retryToast).toContain('fb-0001');
+  });
+
+  test('a stopped send is not recorded as a failure', () => {
+    // The reporter's own decision. Recording it would make every impatient
+    // person on a slow connection an incident.
+    expect(observed.stalled.diagnostics).toEqual([]);
+  });
+
+  test('and the dialog can then be left', () => {
+    expect(observed.stalled.closedAfterStop).toBe(true);
   });
 });

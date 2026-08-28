@@ -3,7 +3,7 @@
  *
  * Lets the LLM steer ITSELF from inside execute_tools: propose + accept its own
  * Voyager-style curriculum, and schedule future autonomous turns (delivered by
- * the event→turn reactor). Registered exactly like the RLM provider — zero new
+ * the event→turn reactor). Registered exactly like every other codemode provider — zero new
  * top-level builtins, so it respects the 6-tool surface.
  *
  * Every method here calls back into the host, so nothing about it is
@@ -23,7 +23,7 @@
  * one spawn/join implementation, with one more caller.
  */
 import * as v from 'valibot';
-import type { CodemodeProvider } from '../rlm';
+import type { CodemodeProvider } from './sandbox-contract';
 import { readMissionLimits, type MissionGovernor } from '../mission-budget';
 import { nextCronFire } from '../events/hub/cron';
 import { BACKGROUND_POLICY } from '../jobs/index';
@@ -33,6 +33,7 @@ import type { ModifyResult } from '../scaffold/modify';
 import type { ScaffoldVersionView } from '../evolution/control';
 import type { ReplayEvalSummary } from '../evolution/replay';
 import type { TimerTrigger } from '../events/ingress/triggers';
+import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
 import { TOOL_REACH } from './registry';
 import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
@@ -55,7 +56,11 @@ export interface AgentSelfHost {
   /** The cumulative spend governor — a schedule declares its mission budget
    *  here, and `agent.budget` reads it back. */
   readonly budget: MissionGovernor;
-  cancelTrigger(id: string): Promise<{ ok: boolean; changed: boolean }> | { ok: boolean; changed: boolean };
+  /** `caller` is stated by every caller and defaulted by none: the operator's
+   *  surfaces pass `'owner'`, and this tool passes `'self'`, which is what
+   *  stops a turn revoking an owner-created webhook it merely read the id of. */
+  cancelTrigger(id: string, caller: TrustLevel): Promise<{ ok: boolean; changed: boolean; error?: string }>
+    | { ok: boolean; changed: boolean; error?: string };
   jobResult(jobId: string): Promise<BackgroundJob | null>;
   listBackgroundJobs(limit?: number): Promise<BackgroundJob[]>;
   getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]>;
@@ -295,7 +300,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
           if (!parsed.success) return { error: 'agent.cancelSchedule: id must be a non-empty string' };
-          try { return await host.cancelTrigger(parsed.output); }
+          try { return await host.cancelTrigger(parsed.output, 'self'); }
           catch (err) { return { error: `agent.cancelSchedule: ${renderThrownChain({ cause: err })}` }; }
         },
       },

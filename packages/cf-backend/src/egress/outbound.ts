@@ -64,7 +64,10 @@ import {
 import type { OrchestratorAgent } from '../orchestrator';
 import { ownerCaller, type UserCaller } from '../user/workspace-capability';
 import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { kinuUserAgent, reoriginateRequest } from '../lib/http';
+import {
+  classifyErrorCode, diagnostics, renderThrownChain, toKinuError, KinuError,
+} from '@kinu.run/core/obs';
 
 /**
  * The virtual host a container posts its own events to.
@@ -148,8 +151,8 @@ interface ContainerEventClient {
  * Catch-all: every request to every host except the event channel.
  *
  * Ordinary traffic carrying no placeholder is forwarded with one pure,
- * allocation-light scan and no round trip. Only a request that actually
- * carries a placeholder costs a call to the vault.
+ * allocation-light scan and no scrub machinery on the way back. Only a request
+ * that actually carries a placeholder pays for substitution.
  */
 export async function handleContainerEgress(
   request: Request,
@@ -178,25 +181,37 @@ export async function handleContainerEgress(
   // every test passed: the tests asserted the method is on the RPC surface,
   // which it is, and nothing asserted the copy transferred it.
   const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
-  const resolved = await vault.resolveEgressInjection(
-    await ownerCaller(env), facts, params.bindings,
-  );
+  let resolved: EgressInjectionResult;
+  try {
+    resolved = await vault.resolveEgressInjection(
+      await ownerCaller(env), facts, params.bindings,
+    );
+  } catch (cause) {
+    return authorityFailure({ cause, host: url.hostname });
+  }
   if (resolved.kind === 'refuse') return refusal(resolved.status, resolved.reason);
-  if (resolved.substitutions.length === 0) return fetch(request);
 
-  return forwardWithSecrets(request, url, resolved.substitutions);
+  return forwardUpstream(request, url, resolved.substitutions);
 }
 
 /**
  * Substitute, forward, and scrub the way back.
  *
- * `redirect: 'manual'` is load-bearing. The default follows redirects, which
- * would replay the injected credential against whatever host the upstream
- * names — a redirect to an attacker's origin would collect the secret with no
- * further help. Handing the 3xx back to the container instead means its next
- * request is re-evaluated against the binding's host like any other.
+ * ONE construction site for the request that leaves. The no-substitution case
+ * used to hand the intercepted `Request` straight to `fetch`, which meant the
+ * `User-Agent` policy would have had to be applied twice or not at all; it now
+ * runs through the same builder with an empty substitution set, where every
+ * scrub is the identity and the response is returned untouched.
+ *
+ * `redirect: 'manual'` when a secret is attached is load-bearing, not tidiness.
+ * The default follows redirects, which would replay the injected credential
+ * against whatever host the upstream names — a redirect to an attacker's
+ * origin would collect the secret with no further help. Handing the 3xx back
+ * to the container instead means its next request is re-evaluated against the
+ * binding's host like any other. Traffic carrying no secret keeps the redirect
+ * mode the container asked for, because there is nothing to replay.
  */
-async function forwardWithSecrets(
+async function forwardUpstream(
   request: Request,
   url: URL,
   substitutions: readonly EgressInjection[],
@@ -210,14 +225,19 @@ async function forwardWithSecrets(
 
   const headers = new Headers();
   for (const [name, value] of request.headers) headers.set(name, scrubText(value, reveal));
+  headers.set('user-agent', kinuUserAgent(request.headers.get('user-agent')));
   const target = scrubText(url.toString(), reveal);
 
-  const upstream = await fetch(new Request(target, {
-    method: request.method,
-    headers,
-    body: request.body,
-    redirect: 'manual',
-  }));
+  let upstream: Response;
+  try {
+    upstream = await fetch(reoriginateRequest(request, target, {
+      headers,
+      redirect: substitutions.length === 0 ? request.redirect : 'manual',
+    }));
+  } catch (cause) {
+    return upstreamFailure({ cause, host: url.hostname, injected });
+  }
+  if (substitutions.length === 0) return upstream;
 
   // Everything the container can read, scrubbed with the SAME pairs reversed:
   // an upstream that quotes the request into an error body, or returns a
@@ -228,6 +248,59 @@ async function forwardWithSecrets(
   return new Response(
     upstream.body === null ? null : upstream.body.pipeThrough(createScrubStream(injected)),
     { status: upstream.status, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders },
+  );
+}
+
+/**
+ * Kinu's own authority did not answer.
+ *
+ * A throw here reaches nobody: an outbound handler that raises returns no HTTP
+ * response at all, so the container's client prints "Empty reply from server"
+ * and no part of the message says whether the request was refused, delivered,
+ * or never attempted. 503, because the vault call establishes nothing about
+ * the upstream — the request was NOT sent, and a retry is the recovery.
+ *
+ * The cause chain is kept whole, and only in diagnostics: it can name the
+ * owner's Durable Object and the binding ids, which is operator detail, not
+ * something an agent's container is owed.
+ */
+function authorityFailure(input: { cause: unknown; host: string }): Response {
+  const error = toKinuError({
+    doing: 'asking the owner vault what this container may spend on its request',
+    cause: input.cause,
+    otherwise: 'unavailable',
+  });
+  diagnostics.failure('egress.authority_unreachable', error, { host: input.host });
+  return refusal(
+    error.code === 'timeout' ? 504 : 503,
+    `Kinu could not reach the credential authority for this container (${error.code}); the request to ${input.host} was not sent.`,
+  );
+}
+
+/**
+ * The upstream did not answer.
+ *
+ * Classified rather than collapsed: a deadline and a refused connection imply
+ * opposite next moves, and a container that is told only "502" retries the one
+ * it should not.
+ *
+ * THE CHAIN IS SCRUBBED BEFORE IT IS RECORDED, and rebuilt as a fresh
+ * `KinuError` rather than wrapped: workerd's own failure reads
+ * `Fetch API cannot load: <url>`, and that URL is the SUBSTITUTED one, so
+ * keeping the native `cause` would put the owner's secret in Workers Logs.
+ * `injected` maps every secret back to the placeholder the container already
+ * holds, which is the same pairing the response body is scrubbed with.
+ */
+function upstreamFailure(
+  input: { cause: unknown; host: string; injected: readonly ScrubReplacement[] },
+): Response {
+  const { cause, host, injected } = input;
+  const code = classifyErrorCode({ cause }) ?? 'io';
+  const chain = scrubText(renderThrownChain({ cause }), injected);
+  diagnostics.failure('egress.upstream_failed', new KinuError(code, chain), { host });
+  return refusal(
+    code === 'timeout' ? 504 : 502,
+    `Kinu could not complete the request to ${host} (${code}).`,
   );
 }
 
@@ -265,10 +338,32 @@ export async function handleContainerEvent(
 
   // Used, not copied — same defect as `handleContainerEgress`, and it killed the
   // whole container→DO event channel the same way.
-  const agent: ContainerEventClient = await getAgentByName<Env, OrchestratorAgent>(
-    env.OrchestratorAgent, params.workspaceName,
-  );
-  const result = await agent.acceptContainerEvent(body);
+  //
+  // The RPC is classified for the same reason the vault call above is: a throw
+  // out of an outbound handler produces no HTTP response, so a container whose
+  // workspace object was evicted mid-write would see an empty reply and could
+  // not tell "not accepted" from "network gone". 503 says the event was not
+  // recorded and the retry is the recovery.
+  let result: ContainerEventResult;
+  try {
+    const agent: ContainerEventClient = await getAgentByName<Env, OrchestratorAgent>(
+      env.OrchestratorAgent, params.workspaceName,
+    );
+    result = await agent.acceptContainerEvent(body);
+  } catch (cause) {
+    const error = toKinuError({
+      doing: 'delivering a container event to its workspace object',
+      cause,
+      otherwise: 'unavailable',
+    });
+    diagnostics.failure('egress.event_channel_unreachable', error, {
+      workspace: params.workspaceName,
+    });
+    return refusal(
+      error.code === 'timeout' ? 504 : 503,
+      `Kinu could not record this event (${error.code}); it was not accepted, so send it again.`,
+    );
+  }
   if (result.status === 'rejected') return refusal(result.http_status, result.reason);
   return Response.json(
     { accepted: true, event_id: result.event_id, admitted: result.admitted },

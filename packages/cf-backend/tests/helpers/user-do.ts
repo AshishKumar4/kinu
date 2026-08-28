@@ -10,12 +10,14 @@ import { mockAgentsSdk } from './agents-sdk';
 import { sha256Hex } from '../../src/lib/crypto';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
 import {
+  DeviceConsentRegistry,
   JsonValueSchema,
+  type DeviceConsentDecision,
+  type DeviceConsentRequest,
   type DeviceConsentScope,
   type JsonValue,
   type SqlExec,
   type SqlExecRow,
-  type SqlExecutor,
   type SqlValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -51,25 +53,6 @@ export function sqlExec(db: Database): SqlExec {
   };
 }
 
-/** The tagged-template `SqlExecutor` over bun:sqlite — the second of the two SQL
- *  protocols a Durable Object exposes, alongside {@link sqlExec}'s positional one.
- *  `reconcileColumns` needs this form: it binds the table name into
- *  `pragma_table_info(?)`. The row generic is threaded into `prepare` so the rows
- *  are typed at the boundary rather than asserted after the fact. */
-export function taggedSql(db: Database): SqlExecutor {
-  return function <T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    const bound: SQLQueryBindings[] = values.map((value) =>
-      value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-    const statement = db.prepare<T, SQLQueryBindings[]>(query);
-    if (statement.columnNames.length === 0) {
-      statement.run(...bound);
-      return [];
-    }
-    return statement.all(...bound);
-  };
-}
-
 export interface TestUserDO {
   userDO: UserDOInstance;
   db: Database;
@@ -88,14 +71,22 @@ export interface TestUserDO {
     scope: DeviceConsentScope;
     workspaceName?: string;
   }>;
-  /** Cards a client would still be showing. The UserDO reads this before
-   *  raising a provisioning request, so a test can prove the dedupe. */
-  pendingConsents: Array<{ consentId: string; method: string }>;
+  /** Ids of the cards actually RAISED, in order. The registry mints one per
+   *  distinct question, so an identical re-ask adds no entry here. */
+  raisedConsentIds: string[];
   /** Device RPC frames that reached the socket — the observable difference
    *  between "consent let it through" and "consent stopped it". */
   deviceFrames: DeviceFrame[];
-  /** How a prompted workspace answers. Default: refuse. */
-  consentDecision: 'once' | 'always' | 'deny';
+  /**
+   * How a prompted workspace answers. Default: refuse.
+   *
+   * `hold` leaves the card WAITING, which is the only state in which a second
+   * identical ask can be observed joining the first. `answerConsent` then
+   * settles it, and every caller waiting on that one card settles with it.
+   */
+  consentDecision: 'once' | 'always' | 'deny' | 'hold';
+  /** Answer every card left waiting by `hold`. */
+  answerConsent(answer: 'once' | 'always' | 'deny'): void;
   /** Attach (or detach with null) the device this harness's live socket
    *  belongs to — the id `registerDevice` just minted. */
   attachDevice(deviceId: string | null): void;
@@ -124,8 +115,13 @@ export interface TestUserDOOptions {
   /** Answer device RPC frames the way the daemon does, so a call that PASSES
    *  consent completes instead of hanging on a socket nobody listens to. The
    *  difference between "the grant let it through" and "the grant did nothing"
-   *  is only observable when the far end answers. */
-  deviceResponder?: (frame: DeviceFrame) => JsonValue;
+   *  is only observable when the far end answers.
+   *
+   *  A responder may answer LATER by returning a promise. That is how a test
+   *  holds one frame open across another — a command's result withheld until
+   *  after its cancellation — which is the ordering a real machine produces and
+   *  an always-immediate double cannot. */
+  deviceResponder?: (frame: DeviceFrame) => JsonValue | Promise<JsonValue>;
   /** Override the credential encryption key — rotation tests supply the key
    *  that succeeds the one the store was written under. */
   credentialEncryptionKey?: string;
@@ -134,6 +130,10 @@ export interface TestUserDOOptions {
   durableObjectId?: string;
   /** Make workspace teardown fail at the real UserDO -> Orchestrator seam. */
   destroyWorkspaceError?: string;
+  /** Bring a new Durable Object up over storage a retired one wrote, which is
+   *  what an eviction and the next request really are. Ownership of the handle
+   *  stays with the caller: this harness's `close` leaves it open. */
+  storage?: Database;
 }
 
 /** One JSON-RPC frame as the hub's tunnel writes it onto the device socket. */
@@ -158,10 +158,7 @@ interface TestUserEnvironment {
       destroyAgent(): Promise<void>;
       installWorkspaceCapability(token: string): Promise<{ readonly ok: true }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
-      awaitDeviceConsent(request: {
-        method: string; command: string; workspaceName?: string;
-      }): Promise<TestUserDO['consentDecision']>;
-      listPendingConsents(): Promise<TestUserDO['pendingConsents']>;
+      awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
     };
   };
 }
@@ -207,12 +204,12 @@ function installRecordingSocketPair(): void {
 
 export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   installRecordingSocketPair();
-  const db = new Database(':memory:');
+  const db = options.storage ?? new Database(':memory:');
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
-  const pendingConsents: TestUserDO['pendingConsents'] = [];
+  const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const deviceFrames: DeviceFrame[] = [];
   // Bound after construction: the socket answers THROUGH the object that owns
   // it, exactly as the runtime's own message handler does.
@@ -236,9 +233,15 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       deviceFrames.push(call);
       const responder = options.deviceResponder;
       if (!responder) return;
-      void hub.current?.webSocketMessage(
-        socket,
-        JSON.stringify({ id: call.id, result: responder(call) }),
+      // The daemon answers a method that throws with an error frame, so a double
+      // that can only ever answer `result` cannot exercise a failing device call.
+      // A responder that answers later settles the same two ways, so holding a
+      // frame is not a second code path.
+      void (async () => responder(call))().then(
+        (result) => hub.current?.webSocketMessage(socket, JSON.stringify({ id: call.id, result })),
+        (err) => hub.current?.webSocketMessage(socket, JSON.stringify({
+          id: call.id, error: err instanceof Error ? err.message : String(err),
+        })),
       );
     },
     close: () => {},
@@ -250,6 +253,44 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const socket: WebSocket = Object.create(socketBody);
 
   let consentDecision: TestUserDO['consentDecision'] = 'deny';
+
+  /**
+   * ONE registry per agent name, because that is what the runtime has: the real
+   * `DeviceConsentRegistry` lives on the OrchestratorAgent DO, and it is the
+   * authority that decides whether an identical re-ask is a second card or the
+   * same one. A hand-rolled stub that answered every call could not express
+   * that, so the dedupe used to be asserted against a caller-side check the
+   * UserDO no longer performs.
+   *
+   * The card is answered from `announce` — the runtime's own synchronous-answer
+   * path — unless `consentDecision` is `hold`, which leaves it waiting so a
+   * second ask can be seen joining it.
+   */
+  const registries = new Map<string, DeviceConsentRegistry>();
+  let mintedConsents = 0;
+  const registryFor = (name: string): DeviceConsentRegistry => {
+    const existing = registries.get(name);
+    if (existing) return existing;
+    const registry: DeviceConsentRegistry = new DeviceConsentRegistry({
+      newId: () => `cons-${++mintedConsents}`,
+      announce: (notice) => {
+        if (notice.kind !== 'raised') return;
+        const consent = notice.consent;
+        raisedConsentIds.push(consent.consentId);
+        const prompt: TestUserDO['consentPrompts'][number] = {
+          workspace: name,
+          method: consent.method,
+          command: consent.command,
+          scope: consent.scope,
+        };
+        if (consent.workspaceName) prompt.workspaceName = consent.workspaceName;
+        consentPrompts.push(prompt);
+        if (consentDecision !== 'hold') registry.resolve(consent.consentId, consentDecision);
+      },
+    });
+    registries.set(name, registry);
+    return registry;
+  };
 
   // The socket pair is installed once per process (see ACCEPTED_SOCKETS below);
   // this harness reads only the sockets accepted after its own construction.
@@ -263,7 +304,10 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       name: options.durableObjectId ?? 'test-user-do',
       toString: () => options.durableObjectId ?? 'test-user-do',
     },
-    storage: { sql },
+    // REAL, not a callback passthrough: `userMcp_add`/`userMcp_update` claim a
+    // server name by reading and writing inside one `transactionSync`, and a
+    // fake turns that atomic claim into a torn one that still reports success.
+    storage: { sql, transactionSync: <T,>(closure: () => T): T => db.transaction(closure)() },
     getWebSockets: () => [...(attached === null ? [] : [socket]), ...live],
     acceptWebSocket: (ws: typeof socket) => { live.push(ws); },
   };
@@ -283,23 +327,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           const token = installed.get(name);
           return token ? sha256Hex(token) : null;
         },
-        async awaitDeviceConsent(request: {
-          method: string;
-          command: string;
-          scope: DeviceConsentScope;
-          workspaceName?: string;
-        }) {
-          const prompt: TestUserDO['consentPrompts'][number] = {
-            workspace: name,
-            method: request.method,
-            command: request.command,
-            scope: request.scope,
-          };
-          if (request.workspaceName) prompt.workspaceName = request.workspaceName;
-          consentPrompts.push(prompt);
-          return consentDecision;
+        awaitDeviceConsent(request: DeviceConsentRequest) {
+          return registryFor(name).request(request);
         },
-        async listPendingConsents() { return pendingConsents; },
       }),
     },
   };
@@ -319,12 +349,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const userDO = new UserDO(agentContext, userEnv);
   hub.current = userDO;
   return {
-    userDO, db, sql, installed, destroyedWorkspaces, consentPrompts, pendingConsents, deviceFrames,
+    userDO, db, sql, installed, destroyedWorkspaces, consentPrompts, raisedConsentIds, deviceFrames,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },
+    answerConsent: (answer) => {
+      for (const registry of registries.values()) {
+        for (const waiting of registry.list()) registry.resolve(waiting.consentId, answer);
+      }
+    },
     attachDevice: (deviceId) => { attached = deviceId; },
     get acceptedSockets() { return ACCEPTED_SOCKETS.slice(acceptedFrom); },
-    close: () => db.close(),
+    close: () => { if (!options.storage) db.close(); },
   };
 }
 

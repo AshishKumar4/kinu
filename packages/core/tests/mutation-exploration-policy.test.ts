@@ -45,6 +45,7 @@ import * as pristineArchive from '../src/strategy/archive';
 import * as pristineClamp from '../src/tools/clamp';
 import * as pristineMergeBack from '../src/strategy/merge-back';
 import * as pristineRecords from '../src/strategy/records';
+import * as pristineObjective from '../src/strategy/objective';
 import * as pristineSwarmBudget from '../src/strategy/swarm-budget';
 import { BRANCH_REFUSAL_POLICIES } from '../src/strategy/swarm';
 import type { ArchiveWrite } from '../src/strategy/archive';
@@ -65,6 +66,7 @@ type ClampModule = typeof pristineClamp;
 type MergeBackModule = typeof pristineMergeBack;
 type RecordsModule = typeof pristineRecords;
 type SwarmBudgetModule = typeof pristineSwarmBudget;
+type ObjectiveModule = typeof pristineObjective;
 
 const TEST_DIR = new URL('.', import.meta.url).pathname;
 const MUTANTS = scratchDir('mutation-exploration-policy');
@@ -138,6 +140,7 @@ const NEAREST_SEARCH =
   'if (nearest === null || distance < nearest.distance) nearest = { occupant, distance };';
 const IS_BETTER =
   "return direction === 'minimise' ? candidate < incumbent : candidate > incumbent;";
+const PARETO_WEAKER = "if (axis.direction === 'maximise' ? l < r : l > r) return false;";
 const SEAL_CLEARED = "if (state.clearedBy !== null) return { kind: 'admitted' };";
 const POLICY_BEST = "case 'best': return 'apply-winner';";
 const CYCLE_SCAN = 'if (placed.has(member.nodeId)) continue;\n    const stuck = new Map(';
@@ -150,6 +153,7 @@ const SNIPPETS: readonly (readonly [src: string, snippet: string])[] = [
   ['strategy/archive.ts', NEAREST_SEARCH],
   ['strategy/objective.ts', IS_BETTER],
   ['strategy/objective.ts', SEAL_CLEARED],
+  ['strategy/objective.ts', PARETO_WEAKER],
   ['strategy/merge-back.ts', POLICY_BEST],
   ['strategy/merge-back.ts', CYCLE_SCAN],
   ['strategy/swarm.ts', BUDGET_ROOM],
@@ -194,6 +198,7 @@ const RECORDS_SUITE = 'unit-exploration-records.test.ts';
 const MERGE_SUITE = 'unit-merge-back.test.ts';
 const BUDGET_SUITE = 'unit-swarm-budget.test.ts';
 const CLAMP_SUITE = 'unit-clamp-tool-result.test.ts';
+const PARETO_SUITE = 'unit-pareto-advance.test.ts';
 
 const THRESHOLD_IS_A_FLOOR: Defended = {
   file: RECORDS_SUITE,
@@ -231,11 +236,15 @@ const HONOURS_A_CUSTOM_BUDGET: Defended = {
   file: CLAMP_SUITE,
   name: 'honours a custom budget',
 };
+const PARETO_DIRECTION: Defended = {
+  file: PARETO_SUITE,
+  name: 'honours each declared vector direction instead of assuming maximise',
+};
 
 const DEFENDED: readonly Defended[] = [
   THRESHOLD_IS_A_FLOOR, NEAREST_IS_NAMED, DIRECTION_DECIDES, TIE_DOES_NOT_DISPLACE,
   SEAL_WRITES_NOTHING, POLICY_FROM_SETTLE, CYCLE_WHATEVER_THE_ORDER, EVERY_POLICY_REACHABLE,
-  HONOURS_A_CUSTOM_BUDGET,
+  HONOURS_A_CUSTOM_BUDGET, PARETO_DIRECTION,
 ];
 
 /* ── Fixtures, the shapes the defended tests use ──────────────────────────── */
@@ -448,6 +457,20 @@ async function directionDecides(records: RecordsModule): Promise<void> {
   })?.value).toBe(0.9);
 }
 
+/** {@link PARETO_DIRECTION}. */
+async function paretoDirectionDecides(objective: ObjectiveModule): Promise<void> {
+  const front = objective.paretoFront([
+    { id: 'quality', direction: 'maximise' },
+    { id: 'cost', direction: 'minimise' },
+  ], [
+    { id: 'high-quality-expensive', evidence: { quality: 0.9, cost: 10 } },
+    { id: 'lower-quality-cheap', evidence: { quality: 0.8, cost: 2 } },
+    { id: 'worse-both', evidence: { quality: 0.7, cost: 12 } },
+  ]);
+  expect(front.map((candidate) => candidate.id))
+    .toEqual(['high-quality-expensive', 'lower-quality-cheap']);
+}
+
 /** {@link TIE_DOES_NOT_DISPLACE}. */
 async function tieDoesNotDisplace(records: RecordsModule): Promise<void> {
   const sql = store(records);
@@ -549,6 +572,7 @@ function mutantArchive(
 function mutantRecords(
   label: string, edits: readonly (readonly [string, string])[],
 ): Promise<RecordsModule> {
+
   const at = writeMutants(label, [
     { src: 'strategy/objective.ts', edits },
     { src: 'strategy/records.ts' },
@@ -556,6 +580,16 @@ function mutantRecords(
   // SAFETY: `records.ts`'s own text, unedited, importing the edited `objective.ts` beside
   // it — so the export shape is `pristineRecords`'s by construction.
   return import(at('strategy/records.ts')) as Promise<RecordsModule>;
+}
+
+function mutantObjective(
+  label: string, edits: readonly (readonly [string, string])[],
+): Promise<ObjectiveModule> {
+  const at = writeMutants(label, [{ src: 'strategy/objective.ts', edits }]);
+  // SAFETY: the mutant is `objective.ts`'s own text with one checked edit applied, and
+  // writeMutants requires that edit to match exactly once, so its export shape is
+  // pristineObjective's by construction. A dynamic import cannot be typed statically.
+  return import(at('strategy/objective.ts')) as Promise<ObjectiveModule>;
 }
 
 function mutantMergeBack(
@@ -754,6 +788,21 @@ describe('the clamp arithmetic is load-bearing', () => {
       [CLAMP_TAIL, 'const tailLen = maxChars;'],
     ]);
     await expect(honoursACustomBudget(mutant)).rejects.toThrow(ASSERTION_FAILED);
+  });
+});
+
+/* ── Pareto direction ────────────────────────────────────────────────────── */
+
+describe('Pareto direction is load-bearing', () => {
+  test('GREEN: each declared vector direction is honoured', async () => {
+    await paretoDirectionDecides(pristineObjective);
+  });
+
+  test(`RED: weakening a minimise axis turns "${PARETO_DIRECTION.name}" red`, async () => {
+    const mutant = await mutantObjective('pareto-direction-inverted', [
+      [PARETO_WEAKER, "if (axis.direction === 'maximise' ? l < r : l < r) return false;"],
+    ]);
+    await expect(paretoDirectionDecides(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
 

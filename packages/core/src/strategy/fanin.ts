@@ -88,6 +88,10 @@ export interface FanInExpandInput<N extends FanInNode> {
   readonly aggregated: readonly FanInParent[];
   readonly ancestors: readonly N[];
   readonly prefix: readonly ModelMessage[];
+  /** A vertex has no brief but its own: nobody assigned it, so the engine's angle is
+   *  the honest answer and this is always null. Declared because the spawner takes
+   *  it, and one generation path means one input shape. */
+  readonly assignment: null;
 }
 
 /** What one barrier call needs from the search's measurement plane. */
@@ -396,6 +400,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
           atDepth: atDepth + 1,
           task: request.task,
           rationale: `fan-in over ${String(consumed.length)} parents of depth ${String(atDepth)}`,
+          assignment: null,
           // What `context` decides for a vertex is only whether it also inherits the
           // applied member's conversation: its parents' ANSWERS reach it either way, as
           // the seed's fan-in block, because they are what it was created to reconcile.

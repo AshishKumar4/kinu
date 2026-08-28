@@ -2,10 +2,15 @@ import { mock } from 'bun:test';
 import * as v from 'valibot';
 import type { AgentContext, FiberRecoveryContext } from 'agents';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
+import type { McpCredentialTransport } from '../../src/user/mcp';
 
 /** Fiber ids, monotonic per process so a test can read them in creation order.
  *  The real SDK uses `nanoid()`; only uniqueness is contractual. */
 let harnessFiberSeq = 0;
+
+/** Schedule row ids, monotonic per process. The real SDK uses `nanoid()`; only
+ *  uniqueness is contractual. */
+let harnessScheduleSeq = 0;
 
 /** Fibers RUNNING in this process, so the interrupted scan skips them exactly
  *  as `_runFiberActiveFibers` does. Dynamic membership, hence a Set. */
@@ -45,6 +50,15 @@ const MANAGED_ROW_SCHEMA = v.object({
   status: v.string(),
   created_at: v.number(),
 });
+/** One `cf_agents_schedules` row, as the production sweep and `armTimer` read
+ *  it. */
+const SCHEDULE_ROW_SCHEMA = v.object({
+  id: v.string(),
+  callback: v.string(),
+  type: v.string(),
+  time: v.number(),
+});
+export type HarnessScheduleRow = v.InferOutput<typeof SCHEDULE_ROW_SCHEMA>;
 
 /** What a recovery hook may hand back. `undefined` is the pre-`FiberRecoveryResult`
  *  shape the SDK still accepts (a `void` return), so the harness must too. */
@@ -158,13 +172,104 @@ export function mockAgentsSdk(): void {
               return ctx.storage.sql.exec(query, ...values).toArray();
             },
           });
+          this._ensureSchema();
         }
       }
+      /**
+       * The vendor's own migration, at the moment the vendor runs it.
+       *
+       * The real `Agent._ensureSchema` is called BY THE CONSTRUCTOR on every wake
+       * and is documented as protected precisely so a test agent can re-run the
+       * real migration path; `cf_agents_schedules` is one of the tables it
+       * creates. The stand-in used to create that table lazily inside its own
+       * schedule helpers instead, and the ORDER was the defect: an actor's
+       * activation sweep (`orchestrator.ts` — the unrunnable-row DELETE) ran
+       * before anything had created the table, so it failed with `no such table`
+       * and swept nothing, while a subordinate never observed the table at all.
+       * A production-present table was therefore outside the conformance census
+       * on one root and invisible on the other.
+       *
+       * Only the schedules table is mirrored, because the schedule registry is
+       * what this stand-in implements and what the timer chain reads. The SDK's
+       * other internal tables (`cf_agents_state`, `cf_agents_queues`,
+       * `cf_agents_mcp_servers`) have no reader here, and manifesting an
+       * observation nothing exercises would be worse than not observing it.
+       */
+      protected _ensureSchema(): void {
+        this.ctx?.storage.sql.exec(`CREATE TABLE IF NOT EXISTS cf_agents_schedules (
+          id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
+          callback TEXT,
+          payload TEXT,
+          type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed', 'cron', 'interval')),
+          time INTEGER,
+          delayInSeconds INTEGER,
+          cron TEXT,
+          intervalSeconds INTEGER,
+          running INTEGER DEFAULT 0,
+          created_at INTEGER DEFAULT (unixepoch()),
+          execution_started_at INTEGER,
+          retry_options TEXT,
+          owner_path TEXT,
+          owner_path_key TEXT
+        )`);
+      }
+
       /** The SDK's DO heartbeat. Production uses it for work that outlives the
        *  call that started it (the drain timer, the genesis turn), so the stand-in
        *  runs the body — without it those paths throw here and are untestable. */
       async keepAliveWhile<Result>(fn: () => Promise<Result>): Promise<Result> {
         return fn();
+      }
+
+      /**
+       * `cf_agents_schedules` — the SDK's schedule registry, copied rather than
+       * approximated, for the same reason the sub-agent registry below is: in
+       * the real SDK it is pure SQL over the DO's own storage, and the timer
+       * chain is decided by WHICH ROWS EXIST. A test about the chain that ran
+       * against a stand-in registry would prove things about the stand-in.
+       *
+       * The ALARM is not faked here and cannot be: workerd owns it, and
+       * `tests/workerd/do-alarm.test.ts` fires a real one. What this covers is
+       * the row bookkeeping around it.
+       */
+      async schedule(when: Date, callback: string, payload?: JsonValue): Promise<{
+        id: string; callback: string; payload: JsonValue; type: string; time: number;
+      }> {
+        const row = {
+          id: `sched-${String(++harnessScheduleSeq)}`,
+          callback,
+          payload: payload ?? null,
+          type: 'scheduled',
+          time: Math.floor(when.getTime() / 1000),
+        };
+        this.#scheduleTable().exec(
+          `INSERT INTO cf_agents_schedules (id, callback, payload, type, time)
+           VALUES (?, ?, ?, ?, ?)`,
+          row.id, row.callback, JSON.stringify(row.payload), row.type, row.time,
+        );
+        return row;
+      }
+
+      async listSchedules(): Promise<Array<v.InferOutput<typeof SCHEDULE_ROW_SCHEMA>>> {
+        return this.#scheduleTable()
+          .exec(`SELECT id, callback, type, time FROM cf_agents_schedules ORDER BY time`)
+          .toArray()
+          .map((row) => v.parse(SCHEDULE_ROW_SCHEMA, row));
+      }
+
+      async cancelSchedule(id: string): Promise<boolean> {
+        return this.#scheduleTable()
+          .exec(`DELETE FROM cf_agents_schedules WHERE id = ? RETURNING id`, id)
+          .toArray().length > 0;
+      }
+
+      /** The storage the registry lives in. The table itself is created by
+       *  `_ensureSchema` at construction, exactly as the vendor does it, so a
+       *  schedule call cannot be the thing that brings it into existence. */
+      #scheduleTable(): SqlStorage {
+        const sql = this.ctx?.storage.sql;
+        if (!sql) throw new Error('harness Agent: schedules need a ctx');
+        return sql;
       }
 
       /** The vendor base's tracing seam: every startup and submission-drain
@@ -496,15 +601,11 @@ export function mockAgentsSdk(): void {
     routeAgentRequest: async (): Promise<Response | undefined> => undefined,
   }));
   // UserDO imports these at module load; the real ones reach `cloudflare:*`.
-  // No test exercises the live MCP client — the per-user MCP surface is covered
-  // through its pure helpers in unit-user-mcp.test.ts.
-  mock.module('agents/mcp/client', () => ({
-    MCPClientManager: class {
-      mcpConnections = {};
-      async removeServer() {}
-      async restoreConnectionsFromStorage() {}
-    },
-  }));
+  // The double records the manager's WRITABLE state — its server rows and its
+  // live connections — because that state is a second truth beside
+  // `user_mcp_servers`, and the reconciliation and credential-seam contracts are
+  // statements about it (see `recordedMcpServers`).
+  mock.module('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
   mock.module('agents/mcp/do-oauth-client-provider', () => ({
     DurableObjectOAuthClientProvider: class { serverId = ''; },
   }));
@@ -530,7 +631,21 @@ export function mockAgentsSdk(): void {
   mock.module('cloudflare:workers', () => ({
     RpcTarget: class {},
     WorkerEntrypoint: class {},
+    WorkflowEntrypoint: class {},
+    WorkflowEvent: class {},
     DurableObject: class {},
+    exports: {},
+    // Reading platform env under bun is a test reaching for state that does
+    // not exist here; failing by name beats an undefined that reads as
+    // "unbound". Platform bindings are exercised in tests/workerd under
+    // vitest.
+    env: new Proxy({}, {
+      get(_target, property) {
+        throw new Error(
+          `cloudflare:workers env.${String(property)} does not exist under bun test`,
+        );
+      },
+    }),
     tracing: {
       enterSpan: <T>(name: string, fn: (span: NativeSpanStub) => T): T => {
         const index = nativeSpans.length;
@@ -560,6 +675,31 @@ export function mockAgentsSdk(): void {
         } finally {
           if (!closesLater) close();
         }
+      },
+      /**
+       * The Agents SDK's own entry point (`RuntimeTracer.activate`). Records
+       * into the same span log as `enterSpan`, so a test reads ONE trace
+       * regardless of which native API opened a span. The writer's `end()` is
+       * caller-owned, exactly as the platform's is; a body that never ends its
+       * span leaves it open, which is what a nesting assertion should see.
+       */
+      startActiveSpan: <T>(
+        name: string,
+        fn: (span: NativeSpanStub & { end(): void }) => T,
+      ): T => {
+        const index = nativeSpans.length;
+        const attributes = new Map<string, string | number | boolean>();
+        nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes });
+        openSpans.push(index);
+        const close = (): void => {
+          const top = openSpans.lastIndexOf(index);
+          if (top >= 0) openSpans.splice(top, 1);
+        };
+        return fn({
+          isTraced: true,
+          setAttribute: (key: string, value: string | number | boolean) => { attributes.set(key, value); },
+          end: close,
+        });
       },
     },
   }));
@@ -612,4 +752,310 @@ export function renderNativeSpanTree(): string {
   };
   walk(null, 0);
   return lines.join('\n');
+}
+
+/**
+ * The transport option bag `registerServer` is handed, NAMED.
+ *
+ * The SDK accepts whatever it is given, so this was a `Record<string, unknown>`
+ * and every caller that wanted to read `fetch` asserted a signature it had not
+ * established. Naming it costs nothing and buys the two facts every test here
+ * asks about: the credential arrives as a CLOSURE (`fetch`, the one option the
+ * SDK's persistence whitelist does not keep), and the credential never arrives
+ * as DATA (`headers` / `requestInit`, which it does keep). `fetch` reuses the
+ * production contract rather than restating it.
+ *
+ * The remaining fields are the rest of `persistTransportOptions`' whitelist
+ * (agents/dist/client-zqKcsyFa.js:1022-1035); the mock inspects none of them,
+ * they exist so a test can assert what a row WOULD persist.
+ */
+export interface RecordedMcpTransport {
+  fetch?: McpCredentialTransport['fetch'];
+  type?: string;
+  headers?: Record<string, string>;
+  requestInit?: RequestInit;
+  authProvider?: { authUrl?: string | null; clientId?: string | null; serverId?: string };
+  reconnectionOptions?: { maxRetries?: number };
+  skipIssuerMetadataValidation?: boolean;
+  onInsufficientScope?: () => void;
+  maxStepUpRetries?: number;
+  sessionId?: string;
+  protocolVersion?: string;
+}
+
+/** A row of the SDK's own `cf_agents_mcp_servers` table — the state that is
+ *  DERIVED from `user_mcp_servers` and must never disagree with it. */
+export interface RecordedMcpServer {
+  readonly id: string;
+  readonly name: string;
+  readonly url: string;
+  readonly callbackUrl: string;
+  readonly clientId: string | null;
+  readonly authUrl: string | null;
+  /** Exactly what was handed to `registerServer`. A test that asks what the real
+   *  SDK would PERSIST applies its whitelist to this. */
+  readonly transport: RecordedMcpTransport;
+}
+
+interface RecordedMcpConnection {
+  connectionState: string;
+  connectionError: string | null;
+  tools: { name: string; description?: string; title?: string; inputSchema: unknown }[];
+  options: { transport: RecordedMcpTransport };
+}
+
+/** What the manager was asked to do, and how often. `established` /
+ *  `discovered` are server ids; `restored` / `waited` are call counts, which is
+ *  what proves a read did NOT touch the connection machinery. */
+export interface RecordedMcpLifecycle {
+  established: readonly string[];
+  discovered: readonly string[];
+  restored: number;
+  waited: number;
+}
+
+const mcpServers = new Map<string, RecordedMcpServer>();
+const mcpEstablished: string[] = [];
+const mcpDiscovered: string[] = [];
+/** The failure the next `callTool` throws. An `Error`, because that is what the
+ *  SDK's transports raise and what the classification under test reads. */
+let mcpCallToolFailure: Error | null = null;
+
+/** The failure the next `removeServer` throws, exercising the credential-seam
+ * teardown boundary rather than letting a test model it as a successful remove. */
+let mcpRemoveFailure: Error | null = null;
+let liveMcpManager: { mcpConnections: Record<string, RecordedMcpConnection> } | null = null;
+let mcpRestored = 0;
+let mcpWaited = 0;
+/** Set while establishment is gated: `establishConnection` blocks on it. */
+let mcpEstablishGate: Promise<void> | null = null;
+/** Called the first time a caller reaches the gate — the arrival signal
+ *  `hangMcpEstablish` hands back, so a test awaits the real event. */
+let mcpEstablishArrived: (() => void) | null = null;
+
+/** Remember the manager an activation just built, so a test can ask what it
+ *  holds. Its own function because the alternative is `this` leaving a
+ *  constructor through an assignment. */
+function rememberMcpManager(manager: { mcpConnections: Record<string, RecordedMcpConnection> }): void {
+  liveMcpManager = manager;
+}
+
+/** The manager's server rows, in registration order. */
+export function recordedMcpServers(): readonly RecordedMcpServer[] {
+  return [...mcpServers.values()];
+}
+
+/** The credential CLOSURE on a transport, or null when the seam is absent —
+ *  which is the other fact these tests ask about. Typed by the production
+ *  contract, so nothing here narrows or asserts. */
+function credentialClosure(
+  transport: RecordedMcpTransport | undefined,
+): McpCredentialTransport['fetch'] | null {
+  return transport?.fetch ?? null;
+}
+
+/** The closure `registerServer` was HANDED for this server. */
+export function recordedMcpFetch(id: string): McpCredentialTransport['fetch'] | null {
+  return credentialClosure(mcpServers.get(id)?.transport);
+}
+
+/** The closure the LIVE connection is running on — a different question from
+ *  what the row was handed, and the cold-start ordering invariant. */
+export function liveMcpFetch(id: string): McpCredentialTransport['fetch'] | null {
+  return credentialClosure(liveMcpManager?.mcpConnections[id]?.options.transport);
+}
+
+export function recordedMcpLifecycle(): RecordedMcpLifecycle {
+  return { established: mcpEstablished, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+}
+
+/** A gate held over `establishConnection`: `entered` settles when a caller
+ *  reaches it, `release` lets that caller through. */
+export interface McpEstablishGate {
+  entered: Promise<void>;
+  release: () => void;
+}
+
+/**
+ * Block every `establishConnection` until `release` is called — a third party
+ * that accepts the socket and never finishes. The real one awaits
+ * `_connectWithRetry` with no bound here (`client-zqKcsyFa.js:2046,2073`).
+ *
+ * `entered` settles when a caller ACTUALLY reaches the gate. A test needs that
+ * signal rather than a delay: the lane opens a sealed header before it gets
+ * here, so a check taken synchronously after dispatch observes it before it has
+ * begun and would read "not yet started" as "never started" — which turns a
+ * gate assertion vacuous instead of merely early. Awaiting the arrival is
+ * awaiting the real event.
+ */
+export function hangMcpEstablish(): McpEstablishGate {
+  const gate = Promise.withResolvers<void>();
+  const arrival = Promise.withResolvers<void>();
+  mcpEstablishGate = gate.promise;
+  mcpEstablishArrived = () => { arrival.resolve(); };
+  return { entered: arrival.promise, release: () => { gate.resolve(); } };
+}
+
+/** Make the next `callTool` fail, the way a server whose session stopped being
+ *  authorized does. An `Error` because every failure this seam classifies is
+ *  one — the SDK's transports raise `StreamableHTTPError`, `SseError` and
+ *  `UnauthorizedError`, all of them `Error` subclasses. */
+export function failNextMcpToolCall(error: Error): void {
+  mcpCallToolFailure = error;
+}
+
+/** Make the next SDK-server teardown fail. */
+export function failNextMcpRemove(error: Error): void {
+  mcpRemoveFailure = error;
+}
+
+/** Seed an SDK server row directly — the manager's own storage as some earlier
+ *  activation left it. With no config row behind it that is an ORPHAN (what a
+ *  failed rollback or a dropped name twin leaves); with `transport` it is
+ *  whatever a previous build persisted there. */
+export function seedSdkMcpServer(id: string, transport: RecordedMcpTransport = {}): void {
+  mcpServers.set(id, {
+    id, name: id, url: `https://${id}.example/sse`,
+    callbackUrl: '', clientId: null, authUrl: null, transport,
+  });
+}
+
+/** Remove the live credential closure, the state a cold activation presents
+ * before hydration re-registers a credentialed row. Test-only because the
+ * production seam creates this state through activation eviction. */
+export function dropLiveMcpFetch(id: string): void {
+  delete liveMcpManager?.mcpConnections[id]?.options.transport.fetch;
+}
+
+/** The transport options the LIVE connection is running on, which is a
+ *  different question from what the row persisted. */
+export function liveMcpTransport(id: string): RecordedMcpTransport | undefined {
+  return liveMcpManager?.mcpConnections[id]?.options.transport;
+}
+
+/** Give a configured server a live connection with tools, the way discovery
+ *  does. Reaches the manager UserDO built, which is private to it — the state
+ *  under test is what the manager holds, not who holds a reference. */
+export function seedMcpTools(id: string, tools: RecordedMcpConnection['tools']): void {
+  const manager = liveMcpManager;
+  if (!manager) throw new Error('No MCP manager has been constructed yet.');
+  manager.mcpConnections[id] ??= {
+    connectionState: 'ready', connectionError: null, tools: [], options: { transport: {} },
+  };
+  const connection = manager.mcpConnections[id];
+  connection.connectionState = 'ready';
+  connection.tools = tools;
+}
+
+export function resetRecordedMcp(): void {
+  mcpServers.clear();
+  mcpEstablished.length = 0;
+  mcpDiscovered.length = 0;
+  mcpCallToolFailure = null;
+
+  mcpRemoveFailure = null;
+  liveMcpManager = null;
+  mcpRestored = 0;
+  mcpWaited = 0;
+  mcpEstablishGate = null;
+  mcpEstablishArrived = null;
+}
+
+/**
+ * The MCP client manager, faithful in the four respects the per-user plane's
+ * contracts are about:
+ *
+ *  - `registerServer` records what it was handed and does NOT connect, leaving
+ *    the connection in `connecting` exactly as the real one does
+ *    (`client-zqKcsyFa.js:478`) — which is what makes the restore skip it.
+ *  - `createConnection`'s reuse rule: registering over a live connection leaves
+ *    that connection's transport untouched (`:1719-1720`).
+ *  - `restoreConnectionsFromStorage` connects only rows with no connection yet.
+ *  - `removeServer` drops the row AND the connection (`:2299-2305`).
+ */
+class FakeMCPClientManager {
+  mcpConnections: Record<string, RecordedMcpConnection> = {};
+
+  constructor() {
+    // Handed over as an ARGUMENT rather than aliased into a variable: what the
+    // tests need is a way to reach the manager UserDO built, and passing the
+    // instance says so without `this` escaping through an assignment.
+    rememberMcpManager(this);
+  }
+
+  async registerServer(id: string, options: {
+    url: string; name: string; callbackUrl?: string; clientId?: string; authUrl?: string;
+    transport?: RecordedMcpTransport;
+  }): Promise<string> {
+    const transport = { ...options.transport };
+    mcpServers.set(id, {
+      id,
+      name: options.name,
+      url: options.url,
+      callbackUrl: options.callbackUrl ?? '',
+      clientId: options.clientId ?? null,
+      authUrl: options.authUrl ?? null,
+      transport,
+    });
+    this.mcpConnections[id] ??= {
+      connectionState: 'connecting', connectionError: null, tools: [], options: { transport },
+    };
+    return id;
+  }
+
+  listServers(): RecordedMcpServer[] {
+    return [...mcpServers.values()];
+  }
+
+  async removeServer(id: string): Promise<void> {
+    const failure = mcpRemoveFailure;
+    if (failure) {
+      mcpRemoveFailure = null;
+      throw failure;
+    }
+    delete this.mcpConnections[id];
+    mcpServers.delete(id);
+  }
+
+  async restoreConnectionsFromStorage(): Promise<void> {
+    mcpRestored += 1;
+    for (const row of mcpServers.values()) {
+      this.mcpConnections[row.id] ??= {
+        connectionState: 'ready', connectionError: null, tools: [], options: { transport: row.transport },
+      };
+    }
+  }
+
+  async establishConnection(id: string): Promise<void> {
+    mcpEstablished.push(id);
+    // The real one awaits `_connectWithRetry` with no bound, so a gated server
+    // holds its caller here for as long as the test wants.
+    if (mcpEstablishGate) {
+      mcpEstablishArrived?.();
+      await mcpEstablishGate;
+    }
+    const connection = this.mcpConnections[id];
+    if (connection) connection.connectionState = 'ready';
+  }
+
+  async waitForConnections(): Promise<void> {
+    mcpWaited += 1;
+  }
+
+  async discoverIfConnected(id: string): Promise<void> {
+    mcpDiscovered.push(id);
+  }
+
+  /** The SDK's `CallToolResult`, as much of it as this mock produces: an empty
+   *  content list, or the seeded failure. `content` blocks are the SDK's
+   *  discriminated `{ type, text? }` shape rather than `unknown`, so a caller
+   *  reading a result gets a contract. */
+  async callTool(): Promise<{ content: { type: string; text?: string }[] }> {
+    const failure = mcpCallToolFailure;
+    if (failure !== null) {
+      mcpCallToolFailure = null;
+      throw failure;
+    }
+    return { content: [] };
+  }
 }

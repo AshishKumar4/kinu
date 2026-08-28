@@ -18,6 +18,11 @@ name: CI
 # fails naming it. Adding a `run: bun test …` step below is itself a test
 # failure — that assertion is what keeps this file from growing a second list.
 
+# Read the checkout, and nothing else. This workflow runs pull request code, so
+# the default token permissions are the ones that matter most here.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -32,6 +37,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -73,17 +80,11 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install elan + Lean
-        run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> $GITHUB_PATH
-
-      - name: Cache Lean toolchain
-        uses: actions/cache@v4
         with:
-          path: ~/.elan
-          key: lean-${{ hashFiles('lean/lean-toolchain') }}
+          persist-credentials: false
+
+      - name: Set up Lean
+        uses: ./.github/actions/setup-lean
 
       - name: Verify Lean proofs, consistency, and traceability
         run: bash scripts/verify-lean.sh

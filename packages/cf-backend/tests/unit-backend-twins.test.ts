@@ -63,6 +63,23 @@ const REPO = resolve(import.meta.dir, '../../..');
  * share one.
  */
 const KNOWN_TWINS: readonly string[] = [
+  // KINU-021's SANCTIONED adapter surface. Core owns the terminal-transition
+  // vocabulary, declaration, state machine, schema, replay and disposition read
+  // model (orchestrator/terminal-{effects,transition,roster}.ts); what a backend
+  // supplies is exactly two things, and these are them.
+  //
+  // The effect BODIES: what "reply to this delivery" or "title this workspace"
+  // means is the backend's, because the surfaces differ — a device tunnel and an
+  // SMTP channel are not one implementation.
+  'terminalEffectTable',
+  // The WAKE: a Durable Object writes a schedule row the platform fires; a CLI
+  // process has no alarm at all and its carrier is the next start. Neither can be
+  // expressed in the other's terms, which is the whole reason the port exists.
+  'scheduleTerminalRetry',
+  // What keeps the runtime alive for a detached close: a durable fiber on the DO,
+  // the process lifetime on the CLI. Core decides WHEN the transition may close;
+  // this decides what is still running when it does.
+  'holdTerminalClose',
   // The file-checkpoint quartet: two transports to two DIFFERENT stores — a
   // device tunnel to the user's machine on cf, a local git engine on the CLI —
   // not two implementations of one. Their shared vocabulary
@@ -106,6 +123,12 @@ const KNOWN_TWINS: readonly string[] = [
   // is left here is the struct that packs them. This entry is not expected to
   // shrink.
   'scaffoldControl',
+  // Same shape as scaffoldControl: the seam itself. Each backend packs the
+  // refinement lane's ports from what it alone owns — its SQL executor, its
+  // temporary-agent port, its facts store, its skills VFS — and every port's
+  // POLICY is already core's (evolution/refinement-lane.ts). This entry is not
+  // expected to shrink.
+  'refinementDeps',
 ];
 
 /**
@@ -116,6 +139,15 @@ const KNOWN_TWINS: readonly string[] = [
  * cannot launder a real twin.
  */
 const SHARED_TRANSPORTS = {
+  // Both construct core's one lifecycle object over their own storage, effect
+  // table, clock and wake. The state machine inside it is shared by definition.
+  terminal: 'TerminalTransitions',
+  // Both gather their own readings — an accumulator's takes, a pending branch
+  // list, a scaffold candidate — and hand them to core's ONE declaration, which
+  // owns the order, the lanes, the keys and the gates.
+  owedTerminalEffects: 'declareTerminalRoster',
+  // Both resolve the same core naming policy over their own persistence.
+  applyAutoTitle: 'applyWorkspaceTitle',
   acceptWebhookDelivery: 'acceptWebhookDelivery',
   applyScaffoldDecision: 'applyScaffoldDecision',
   // Three lines each over ONE core store (CompactionStateStore). No duplicated
@@ -126,6 +158,12 @@ const SHARED_TRANSPORTS = {
   cancelTrigger: 'cancelTrigger',
   createDurableWebhook: 'registerDurableWebhook',
   createTimerTrigger: 'createTimerTrigger',
+  // KINU continual refinement: the whole lane — stage machine, claim fencing,
+  // owner routing, staged-skill promotion — is core's evolution/refinement*.
+  // Each backend method is a transport over one core symbol; what stays per
+  // backend is only its own deps struct (recorded in KNOWN_TWINS) and, on the
+  // CLI, dropping model-bound state after a step lands.
+  decideRefinement: 'decideRefinementRoute',
   // Both bodies were the SAME eight-field literal binding each live plane to the
   // store that answers it — `agentDynamicContext` owned which planes exist, but
   // which store fed each one was stated once per backend. state/dynamic-context.ts
@@ -144,6 +182,22 @@ const SHARED_TRANSPORTS = {
   // RPC surface each backend has to expose in its own transport.
   getShellApprovalGrants: 'getShellApprovalGrants',
   getShellApprovalMode: 'getShellApprovalMode',
+  // KINU-N028's instruction-trust surface. Every decision the owner makes and
+  // every byte either side reads is core's: the store (safety/instruction-trust.ts)
+  // holds the digest rule, and read-models/instruction-approvals.ts holds the
+  // paging, the on-demand open and the preview sanitizer. What each backend
+  // spells for itself is only the transport: a cf `@callable` against a stub, a
+  // local method behind LocalSessionControls. Both approve/revoke admit the
+  // owner's request through core's `admitInstructionDecision`, so the two sides
+  // share one rule for what counts as a valid decision rather than sharing only
+  // a name — which is the difference this gate is asking about.
+  approveInstruction: 'admitInstructionDecision',
+  revokeInstruction: 'admitInstructionDecision',
+  listInstructionApprovals: 'listInstructionApprovals',
+  readInstructionApproval: 'openInstructionSource',
+  // The migration policy lives in InstructionApprovalStore; each backend only
+  // supplies its own filesystem snapshot before calling it.
+  ensureInstructionApprovalMigration: 'snapshotExistingInstructions',
   getSkillsVfs: 'skillsVfsOver',
   getStoredModelSpec: 'getStoredModelSpec',
   jobResult: 'jobResult',
@@ -153,6 +207,9 @@ const SHARED_TRANSPORTS = {
   listRuns: 'listRuns',
   listScaffoldVersions: 'listScaffoldVersions',
   listTriggers: 'listTriggers',
+  // `refinementDebt` is the direct call the delegation check can see; the row
+  // view beside it (`refinementRequestView`) is passed by reference into map.
+  listRefinements: 'refinementDebt',
   makeScaffoldCallTool: 'createScaffoldCallTool',
   makeScaffoldHistory: 'createScaffoldHistory',
   makeScaffoldLLMStream: 'createScaffoldLLMStream',
@@ -165,6 +222,8 @@ const SHARED_TRANSPORTS = {
   previewScaffoldLive: 'previewScaffoldLive',
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
+  requestRefinement: 'requestRefinement',
+  runRefinementLane: 'advanceRefinementLane',
   recordSystemPromptHash: 'observeSystemPromptHash',
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
@@ -175,9 +234,15 @@ const SHARED_TRANSPORTS = {
   // completion gate exists at all (it is the one-shot CLI surface's mechanism,
   // so cf passes `gateOpen: false` by construction).
   reviewTurnInBackground: 'runAdvisorLane',
+  // One review, from a snapshot: the single body each backend's live lane and its
+  // recovery both run. The verdict policy is the same `runAdvisorLane`; each body
+  // states only which model answers, where the governor lives, and whether a
+  // completion gate exists at all.
+  runAdvisorReview: 'runAdvisorLane',
   // The prompt pair and the parse are core's; each body states only which
   // model answers (its routed 'fast' lane) and its own spend/operation framing.
   suggestTitle: 'suggestWorkspaceTitle',
+  showRefinement: 'showRefinementRoute',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
   runScaffoldOnce: 'runScaffoldOnce',
   // Accessors over ONE core object (ModelCatalogSession), three lines each.
@@ -189,7 +254,6 @@ const SHARED_TRANSPORTS = {
   setRole: 'changeActiveRole',
   setReasoningEffort: 'setReasoningEffort',
   setShellApprovalMode: 'setShellApprovalMode',
-  settlePendingBranches: 'settlePendingBranches',
   wrapToolsForBackground: 'wrapToolsForBackground',
 } satisfies Readonly<Record<string, string>>;
 

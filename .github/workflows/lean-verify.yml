@@ -1,11 +1,16 @@
 name: Lean 4 Verification
 
+# Read the checkout, and nothing else: this workflow runs pull request code.
+permissions:
+  contents: read
+
 on:
   push:
     paths:
       - 'lean/**'
       - 'packages/**/src/**/*.ts'
       - 'scripts/verify-lean.sh'
+      - '.github/actions/setup-lean/**'
       - '.github/workflows/ci.yml'
       - '.github/workflows/lean-verify.yml'
   pull_request:
@@ -13,6 +18,7 @@ on:
       - 'lean/**'
       - 'packages/**/src/**/*.ts'
       - 'scripts/verify-lean.sh'
+      - '.github/actions/setup-lean/**'
       - '.github/workflows/ci.yml'
       - '.github/workflows/lean-verify.yml'
 
@@ -21,17 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install elan
-        run: |
-          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> $GITHUB_PATH
-
-      - name: Cache Lean toolchain
-        uses: actions/cache@v4
         with:
-          path: ~/.elan
-          key: lean-${{ hashFiles('lean/lean-toolchain') }}
+          persist-credentials: false
+
+      # Pinned, checksum-verified, and caching the BUILD as well as the
+      # toolchain — this job used to rebuild every theorem on every run.
+      - name: Set up Lean
+        uses: ./.github/actions/setup-lean
 
       - name: Verify Lean proofs, consistency, and traceability
         shell: bash

@@ -27,7 +27,6 @@ import {
   createMemoryCodemodeProvider,
   createReleaseCodemodeProvider,
   createReportCodemodeProvider,
-  createRLMProvider,
   createTasksCodemodeProvider,
   createWebCodemodeProvider,
   createAgentConfigStore,
@@ -122,10 +121,6 @@ describe('the reach declaration', () => {
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),
       release: () => createReleaseCodemodeProvider(() => releaseDeps),
       agent: () => createAgentSelfProvider(agentSelfHost(rt.storage)),
-      llm: () => createRLMProvider(
-        { normalizeSpecSync: () => 'test/model', resolveModel: () => new MockLanguageModelV3() },
-        () => 'test/model',
-      ),
     } satisfies Record<string, () => CodemodeProvider>;
 
     const declared = Object.entries(TOOL_REACH)
@@ -165,6 +160,6 @@ describe('the reach declaration', () => {
     // is native wherever it exists AND owns a codemode namespace; what the panel
     // was actually rendering was absence on that actor, with no third state to
     // say so.
-    expect(TOOL_REACH.report).toEqual({ native: true, codemode: 'report' });
+    expect(TOOL_REACH.report).toEqual({ native: true, codemode: 'report', replay: 'claimed' });
   });
 });

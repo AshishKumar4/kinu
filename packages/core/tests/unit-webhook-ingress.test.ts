@@ -325,7 +325,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
     const spec: Partial<WebhookTriggerSpec> = h.triggers.get(trigger_id)!.spec;
 
-    expect(cancelTrigger(h.triggers, trigger_id, NOW, h.secrets)).toEqual({ ok: true, changed: true });
+    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets)).toEqual({ ok: true, changed: true });
 
     // The plaintext is gone from storage the moment the trigger closed — one
     // host call, one transaction on the single-threaded SQLite both backends run.
@@ -343,8 +343,45 @@ describe('revocation closes the trigger and deletes its secret together', () => 
   test('repeat revocation is idempotent', async () => {
     const h = hub();
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'k' });
-    expect(cancelTrigger(h.triggers, trigger_id, NOW, h.secrets).changed).toBe(true);
-    expect(cancelTrigger(h.triggers, trigger_id, NOW + 1, h.secrets)).toEqual({ ok: true, changed: false });
+    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets).changed).toBe(true);
+    expect(cancelTrigger(h.triggers, trigger_id, NOW + 1, 'owner', h.secrets)).toEqual({ ok: true, changed: false });
+  });
+
+  test('a model turn cannot close the owner-created ingress whose id it can read', async () => {
+    const h = hub();
+    // `registerDurableWebhook` stamps `creator_trust: 'owner'`, and the drain
+    // renders the trigger id into model-visible context for every admitted
+    // delivery — so the id in the model's hand is this one.
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
+    const spec: Partial<WebhookTriggerSpec> = h.triggers.get(trigger_id)!.spec;
+
+    // `agent.cancelSchedule` reaches the same host call as the operator's route.
+    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'self', h.secrets)).toEqual({
+      ok: false,
+      changed: false,
+      error: 'this trigger was created by the owner; only the owner can revoke it',
+    });
+
+    // Refused all the way down: the ingress still accepts, and its credential
+    // was not collected on the way past.
+    expect(h.triggers.get(trigger_id)!.state).toBe('active');
+    expect(await h.secrets.get(spec.secret_id!)).toBe('shhh');
+
+    // The owner's own surface is unchanged.
+    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets).changed).toBe(true);
+  });
+
+  test('a model turn may still close a schedule of its own making', async () => {
+    const h = hub();
+    // What `agent.schedule` leaves behind: the model's own timer, not the
+    // owner's ingress. Withholding this would break the tool it needs.
+    const own = await h.triggers.register({
+      kind: 'timer_oneshot',
+      spec: { atMs: NOW + 60_000 },
+      creator_trust: 'authenticated',
+    }, NOW);
+
+    expect(cancelTrigger(h.triggers, own, NOW, 'self', h.secrets)).toEqual({ ok: true, changed: true });
   });
 
   test('secrets whose trigger is gone or terminal are purged; a live one survives', async () => {

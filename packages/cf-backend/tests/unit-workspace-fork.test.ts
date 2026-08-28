@@ -1,104 +1,91 @@
 import { describe, expect, test } from 'bun:test';
-import type { ForkSnapshot } from '@kinu.run/core';
+import { writeSoul } from '@kinu.run/core';
 import { deliverCloudFork, type CloudForkRegistry, type CloudForkTarget } from '../src/user/workspace-fork';
 import type { UserCaller } from '../src/user/workspace-capability';
+import { createTestWorkspace } from '../../core/tests/helpers';
 
 const caller = { workspaceToken: 'source-token' } satisfies UserCaller;
-const snapshot = {
-  source: { workspaceId: 'source-id', workspaceName: 'source' },
-  cut: { messageId: 'm1', createdAtMs: 1 },
-  messages: [], assistantMessages: [], files: [],
-  memoryChunks: [], craftedTools: [], agentConfig: [],
-} satisfies ForkSnapshot;
 
-function harness(options: {
-  conflict?: boolean;
-  targetOwnedByAnotherUser?: boolean;
-  copyError?: Error;
-  capabilityError?: Error;
-  rollbackError?: Error;
-} = {}) {
+async function source() {
+  const ws = createTestWorkspace();
+  void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'source'}, ${1})`;
+  await writeSoul(ws.vfs, ws.sql, 'p');
+  void ws.sql`INSERT INTO messages (id, session_id, role, content, created_at)
+    VALUES (${'m1'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
+  return ws;
+}
+
+function harness(options: { conflict?: boolean; publishError?: Error; copyError?: Error } = {}) {
   const calls: string[] = [];
   const registry: CloudForkRegistry = {
     async reserveWorkspace(_caller, name) {
       calls.push(`reserve:${name}`);
       return {
         entry: { name, displayName: name, createdAt: 1, lastVisited: 1, archivedAt: null },
-        reserved: !(options.conflict ?? false),
+        reserved: !options.conflict,
       };
-    },
-    async ensureWorkspaceCapability(name, hash) {
-      calls.push(`capability:${name}:${hash}`);
-      if (options.capabilityError) throw options.capabilityError;
     },
     async releaseWorkspaceReservation(_caller, name, createdAt) {
       calls.push(`release:${name}:${createdAt}`);
       return true;
     },
-    async removeWorkspace(_caller, name, owner) {
-      calls.push(`rollback:${name}:${owner}`);
-      if (options.rollbackError) throw options.rollbackError;
+    async publishWorkspaceReservation(_caller, name, createdAt, capabilityHash) {
+      calls.push(`publish:${name}:${createdAt}:${capabilityHash}`);
+      if (options.publishError) throw options.publishError;
     },
+    async removeWorkspace(_caller, name, owner) { calls.push(`destroy:${name}:${owner}`); },
   };
   const target: CloudForkTarget = {
-    async rawCopyFromFork(name, _snapshot, owner) {
-      calls.push(`copy:${name}:${owner}`);
+    async rawCopyFromFork(name, frame, owner) {
+      calls.push(`frame:${name}:${frame.seq}:${frame.kind}:${owner}`);
       if (options.copyError) throw options.copyError;
-      if (options.targetOwnedByAnotherUser) return { ok: false as const, reason: 'owned_by_another_user' as const };
-      return { ok: true, agentId: 'target-id', capabilityHash: null };
+      if (frame.kind === 'commit') {
+        return { ok: true, status: 'published' as const, agentId: 'TGT', capabilityHash: 'cap', forkPointMs: 1 };
+      }
+      return { ok: true, status: 'staged' as const };
     },
   };
   return { calls, registry, target };
 }
 
-const deliver = (h: ReturnType<typeof harness>) => deliverCloudFork({
-  registry: h.registry,
-  caller,
-  target: h.target,
-  name: 'source-fork-1',
-  snapshot,
-  ownerUserId: '0123456789abcdef0123456789abcdef',
-});
-
 describe('cloud fork ownership transaction', () => {
-  test('reserves the roster, copies bytes, then provisions capability before success', async () => {
+  test('reserves pending, streams direct to target, then publishes the exact reservation', async () => {
+    const src = await source();
     const h = harness();
-    await expect(deliver(h)).resolves.toEqual({ workspaceId: 'target-id' });
-    expect(h.calls).toEqual([
-      'reserve:source-fork-1',
-      'copy:source-fork-1:0123456789abcdef0123456789abcdef',
-      'capability:source-fork-1:null',
-    ]);
+    await expect(deliverCloudFork({
+      registry: h.registry, caller, target: h.target, name: 'source-fork',
+      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+    })).resolves.toEqual({ workspaceId: 'TGT', forkPointMs: 1 });
+    expect(h.calls[0]).toBe('reserve:source-fork');
+    expect(h.calls.some((call) => call.includes(':begin:'))).toBe(true);
+    expect(h.calls.some((call) => call.includes(':commit:'))).toBe(true);
+    expect(h.calls.at(-1)).toBe('publish:source-fork:1:cap');
   });
 
-  test('an existing roster name is never copied over', async () => {
+  test('a collision never sends one source frame', async () => {
+    const src = await source();
     const h = harness({ conflict: true });
-    await expect(deliver(h)).rejects.toThrow('agent name already exists');
-    expect(h.calls).toEqual(['reserve:source-fork-1']);
+    await expect(deliverCloudFork({
+      registry: h.registry, caller, target: h.target, name: 'source-fork',
+      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+    })).rejects.toThrow('agent name already exists');
+    expect(h.calls).toEqual(['reserve:source-fork']);
   });
 
-  test('a global cross-user name collision releases only the new roster reservation', async () => {
-    const h = harness({ targetOwnedByAnotherUser: true });
-    await expect(deliver(h)).rejects.toThrow('agent name already exists');
-    expect(h.calls).toEqual([
-      'reserve:source-fork-1',
-      'copy:source-fork-1:0123456789abcdef0123456789abcdef',
-      'release:source-fork-1:1',
-    ]);
-  });
+  test('a frame or publication failure destroys the pending target', async () => {
+    const src = await source();
+    const frame = harness({ copyError: new Error('frame failed') });
+    await expect(deliverCloudFork({
+      registry: frame.registry, caller, target: frame.target, name: 'source-fork',
+      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+    })).rejects.toThrow('frame failed');
+    expect(frame.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
 
-  test('copy and capability failures destroy the partial target and remove its roster row', async () => {
-    const copy = harness({ copyError: new Error('copy failed') });
-    await expect(deliver(copy)).rejects.toThrow('copy failed');
-    expect(copy.calls.at(-1)).toBe('rollback:source-fork-1:0123456789abcdef0123456789abcdef');
-
-    const capability = harness({ capabilityError: new Error('capability failed') });
-    await expect(deliver(capability)).rejects.toThrow('capability failed');
-    expect(capability.calls.at(-1)).toBe('rollback:source-fork-1:0123456789abcdef0123456789abcdef');
-  });
-
-  test('a cleanup failure is never hidden behind the original failure', async () => {
-    const h = harness({ copyError: new Error('copy failed'), rollbackError: new Error('destroy failed') });
-    await expect(deliver(h)).rejects.toThrow('fork creation failed and cleanup also failed');
+    const publish = harness({ publishError: new Error('publish failed') });
+    await expect(deliverCloudFork({
+      registry: publish.registry, caller, target: publish.target, name: 'source-fork',
+      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+    })).rejects.toThrow('publish failed');
+    expect(publish.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
   });
 });

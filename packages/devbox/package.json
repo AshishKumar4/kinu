@@ -17,10 +17,12 @@
     "valibot": "^1.4.1"
   },
   "scripts": {
-    "check": "tsc --noEmit",
-    "test": "bun test"
+    "check": "tsc --noEmit && tsc --noEmit -p tests/workerd",
+    "test": "bun test tests/*.test.ts bench/*.test.ts && vitest run tests/workerd"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260414.1"
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^4.20260414.1",
+    "vitest": "^4.1.10"
   }
 }

@@ -1,28 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import {
   createLiveRefreshAdmission,
-  formatLiveRefreshError,
+  formatWorkspaceError,
+  loadWorkspaceSnapshot,
   refreshLiveResource,
   resolvePendingConsent,
   type LiveRefreshErrors,
   type LiveRefreshSource,
 } from '../src/hooks/use-kinu';
-
-interface Deferred<Value> {
-  promise: Promise<Value>;
-  resolve(value: Value): void;
-  reject(error: Error): void;
-}
-
-function deferred<Value>(): Deferred<Value> {
-  let resolvePromise = (_value: Value): void => { throw new Error('Deferred promise was not initialized'); };
-  let rejectPromise = (_error: Error): void => { throw new Error('Deferred promise was not initialized'); };
-  const promise = new Promise<Value>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return { promise, resolve: resolvePromise, reject: rejectPromise };
-}
 
 const TEST_ACTOR = 'actor';
 
@@ -61,8 +46,8 @@ function consentReporter(initial: ReadonlyMap<string, string> = new Map()) {
 describe('workspace live refresh failures', () => {
   test('an older completion cannot replace data from a newer refresh', async () => {
     const admission = activeAdmission();
-    const older = deferred<string>();
-    const newer = deferred<string>();
+    const older = Promise.withResolvers<string>();
+    const newer = Promise.withResolvers<string>();
     let visible = 'stale';
     const errors = reporter();
     const olderRefresh = refreshLiveResource(
@@ -90,8 +75,8 @@ describe('workspace live refresh failures', () => {
 
   test('an older failure cannot replace the successful state of a newer refresh', async () => {
     const admission = activeAdmission();
-    const older = deferred<string>();
-    const newer = deferred<string>();
+    const older = Promise.withResolvers<string>();
+    const newer = Promise.withResolvers<string>();
     let visible = 'stale';
     const errors = reporter({ jobs: 'prior failure' });
     const olderRefresh = refreshLiveResource(
@@ -121,8 +106,8 @@ describe('workspace live refresh failures', () => {
   test('a completion admitted for the prior actor cannot repopulate the next actor', async () => {
     const admission = createLiveRefreshAdmission();
     admission.activateActor('prior-actor');
-    const priorActor = deferred<string>();
-    const nextActor = deferred<string>();
+    const priorActor = Promise.withResolvers<string>();
+    const nextActor = Promise.withResolvers<string>();
     let visible = 'stale';
     const errors = reporter();
     const priorRefresh = refreshLiveResource(
@@ -148,7 +133,7 @@ describe('workspace live refresh failures', () => {
     await priorRefresh;
 
     expect(visible).toBe('next actor');
-    expect(formatLiveRefreshError(errors.errors)).toBeNull();
+    expect(formatWorkspaceError(errors.errors, true)).toBeNull();
   });
 
   test('a retained callback from the prior actor cannot admit a new request', async () => {
@@ -174,11 +159,11 @@ describe('workspace live refresh failures', () => {
 
     expect(visible).toBe('actor-b');
     expect(requested).toBeFalse();
-    expect(formatLiveRefreshError(errors.errors)).toBeNull();
+    expect(formatWorkspaceError(errors.errors, true)).toBeNull();
   });
 
   test('all polled surfaces share one stable, non-spammy failure message', () => {
-    expect(formatLiveRefreshError({
+    expect(formatWorkspaceError({
       jobs: 'offline',
       pendingActions: 'offline',
       mcts: 'offline',
@@ -188,8 +173,8 @@ describe('workspace live refresh failures', () => {
       views: 'offline',
       consents: 'offline',
       plan: 'offline',
-    })).toBe(
-      "Couldn't refresh live data for background jobs, pending actions, MCTS, memory content, tools, executors, agent views, device consents, and active plan. Showing last known data. offline",
+    }, true)).toBe(
+      "Couldn't refresh background jobs, pending actions, MCTS, memory content, tools, executors, agent views, device consents, and active plan. Showing last known data. offline",
     );
   });
 
@@ -207,8 +192,8 @@ describe('workspace live refresh failures', () => {
     );
 
     expect(jobs).toEqual(['already visible']);
-    expect(formatLiveRefreshError(errors.errors)).toBe(
-      "Couldn't refresh live data for background jobs. Showing last known data. jobs RPC unavailable",
+    expect(formatWorkspaceError(errors.errors, true)).toBe(
+      "Couldn't refresh background jobs. Showing last known data. jobs RPC unavailable",
     );
   });
 
@@ -232,8 +217,8 @@ describe('workspace live refresh failures', () => {
         admission.admit(TEST_ACTOR, 'views'),
       ),
     ]);
-    expect(formatLiveRefreshError(errors.errors)).toBe(
-      "Couldn't refresh live data for tools and agent views. Showing last known data. catalog offline",
+    expect(formatWorkspaceError(errors.errors, true)).toBe(
+      "Couldn't refresh tools and agent views. Showing last known data. catalog offline",
     );
 
     await refreshLiveResource(
@@ -243,8 +228,8 @@ describe('workspace live refresh failures', () => {
       errors.report,
       admission.admit(TEST_ACTOR, 'tools'),
     );
-    expect(formatLiveRefreshError(errors.errors)).toBe(
-      "Couldn't refresh live data for agent views. Showing last known data. catalog offline",
+    expect(formatWorkspaceError(errors.errors, true)).toBe(
+      "Couldn't refresh agent views. Showing last known data. catalog offline",
     );
 
     await refreshLiveResource(
@@ -254,7 +239,177 @@ describe('workspace live refresh failures', () => {
       errors.report,
       admission.admit(TEST_ACTOR, 'views'),
     );
-    expect(formatLiveRefreshError(errors.errors)).toBeNull();
+    expect(formatWorkspaceError(errors.errors, true)).toBeNull();
+  });
+});
+
+/** The reason a dropped cross-object call surfaces as, verbatim. */
+const CONNECTION_LOST = 'Network connection lost.';
+
+/** The surfaces `loadAllData` re-seeds, as the hook passes them. */
+const SEEDED: readonly LiveRefreshSource[] = ['memoryContent', 'tools', 'executors', 'presence', 'plan'];
+
+describe('the workspace banner', () => {
+  test('one dropped connection is one reason, printed once', () => {
+    // The line an owner reported, verbatim:
+    //   Workspace snapshot failed: Network connection lost. Couldn't refresh
+    //   live data for memory content. Showing last known data. Network
+    //   connection lost.
+    const line = formatWorkspaceError(
+      { snapshot: CONNECTION_LOST, memoryContent: CONNECTION_LOST },
+      true,
+    );
+
+    // The snapshot re-reads memory content itself, so one dropped round trip
+    // is one surface with one reason — not the workspace plus each thing in it.
+    expect(line).toBe("Couldn't refresh this workspace. Showing last known data. Network connection lost.");
+    expect(line?.split(CONNECTION_LOST).length).toBe(2);
+  });
+
+  test('a surface that failed for a reason of its own keeps its name beside the workspace', () => {
+    expect(formatWorkspaceError(
+      { snapshot: CONNECTION_LOST, memoryContent: 'MEMORY.md is unreadable' },
+      true,
+    )).toBe(
+      "Couldn't refresh this workspace and memory content. Showing last known data."
+      + ' Network connection lost. MEMORY.md is unreadable',
+    );
+  });
+
+  test('a workspace with nothing on screen says it could not open, never that it is showing stale data', () => {
+    const line = formatWorkspaceError(
+      { snapshot: CONNECTION_LOST, memoryContent: CONNECTION_LOST },
+      false,
+    );
+
+    expect(line).toBe("Couldn't open this workspace. Network connection lost.");
+    expect(line).not.toContain('last known data');
+  });
+
+  test('an initial failure and a refresh failure are different claims about the same reason', () => {
+    const errors = { snapshot: 'the workspace is asleep' };
+
+    expect(formatWorkspaceError(errors, false)).not.toBe(formatWorkspaceError(errors, true));
+  });
+
+  test('a failed action the user asked for keeps its own sentence', () => {
+    expect(formatWorkspaceError({ model: "Couldn't switch model: rejected" }, true))
+      .toBe("Couldn't switch model: rejected");
+    expect(formatWorkspaceError({ model: "Couldn't switch model: rejected", jobs: 'offline' }, true))
+      .toBe(
+        "Couldn't switch model: rejected"
+        + " Couldn't refresh background jobs. Showing last known data. offline",
+      );
+  });
+
+  test('a healthy workspace says nothing at all', () => {
+    expect(formatWorkspaceError({}, true)).toBeNull();
+    expect(formatWorkspaceError({}, false)).toBeNull();
+  });
+});
+
+describe('loading the workspace snapshot', () => {
+  test('a failure reports the bare reason once and hands the retry back to the caller', async () => {
+    const errors = reporter();
+    const admission = activeAdmission();
+
+    const outcome = await loadWorkspaceSnapshot(
+      () => Promise.reject(new Error(CONNECTION_LOST)),
+      errors.report,
+      (key) => admission.admit(TEST_ACTOR, key),
+      SEEDED,
+    );
+
+    expect(outcome).toEqual({ failed: CONNECTION_LOST });
+    expect(errors.errors.snapshot).toBe(CONNECTION_LOST);
+  });
+
+  test('a snapshot that lands clears every surface it re-read', async () => {
+    // What a reconnect settles: the socket dropped, the 5s poll failed on the
+    // way down, then the reload succeeded. The banner must not keep reporting
+    // stale memory content the same round trip just refreshed.
+    const errors = reporter({
+      snapshot: CONNECTION_LOST,
+      memoryContent: CONNECTION_LOST,
+      tools: CONNECTION_LOST,
+      jobs: 'the jobs table is still unreachable',
+    });
+    const admission = activeAdmission();
+
+    const outcome = await loadWorkspaceSnapshot(
+      () => Promise.resolve(),
+      errors.report,
+      (key) => admission.admit(TEST_ACTOR, key),
+      SEEDED,
+    );
+
+    expect(outcome).toBe('loaded');
+    expect(formatWorkspaceError(errors.errors, true)).toBe(
+      "Couldn't refresh background jobs. Showing last known data."
+      + ' the jobs table is still unreachable',
+    );
+  });
+
+  test('a snapshot cannot clear a failure a newer read of that surface reported', async () => {
+    const errors = reporter();
+    const admission = activeAdmission();
+    const snapshotRead = Promise.withResolvers<void>();
+
+    const loading = loadWorkspaceSnapshot(
+      () => snapshotRead.promise,
+      errors.report,
+      (key) => admission.admit(TEST_ACTOR, key),
+      SEEDED,
+    );
+    await refreshLiveResource(
+      'memoryContent',
+      () => Promise.reject(new Error('MEMORY.md is unreadable')),
+      () => {},
+      errors.report,
+      admission.admit(TEST_ACTOR, 'memoryContent'),
+    );
+    snapshotRead.resolve(undefined);
+
+    expect(await loading).toBe('loaded');
+    expect(errors.errors.memoryContent).toBe('MEMORY.md is unreadable');
+    expect(errors.errors.snapshot).toBeUndefined();
+  });
+
+  test('a snapshot that failed after a newer one landed reports nothing', async () => {
+    const errors = reporter();
+    const admission = activeAdmission();
+    const older = Promise.withResolvers<void>();
+    const newer = Promise.withResolvers<void>();
+
+    const olderLoad = loadWorkspaceSnapshot(
+      () => older.promise, errors.report, (key) => admission.admit(TEST_ACTOR, key), SEEDED,
+    );
+    const newerLoad = loadWorkspaceSnapshot(
+      () => newer.promise, errors.report, (key) => admission.admit(TEST_ACTOR, key), SEEDED,
+    );
+
+    newer.resolve(undefined);
+    expect(await newerLoad).toBe('loaded');
+    older.reject(new Error(CONNECTION_LOST));
+
+    expect(await olderLoad).toBe('superseded');
+    expect(errors.errors.snapshot).toBeUndefined();
+  });
+
+  test('a snapshot admitted for the workspace the reader left reports against neither', async () => {
+    const errors = reporter();
+    const admission = createLiveRefreshAdmission();
+    admission.activateActor('left-behind');
+    const read = Promise.withResolvers<void>();
+
+    const loading = loadWorkspaceSnapshot(
+      () => read.promise, errors.report, (key) => admission.admit('left-behind', key), SEEDED,
+    );
+    admission.activateActor('opened-next');
+    read.reject(new Error(CONNECTION_LOST));
+
+    expect(await loading).toBe('superseded');
+    expect(errors.errors).toEqual({});
   });
 });
 
@@ -307,8 +462,8 @@ describe('device consent resolution', () => {
 
   test('simultaneous decisions for different consent ids remain independent', async () => {
     const pending = ['consent-1', 'consent-2'];
-    const first = deferred<void>();
-    const second = deferred<void>();
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
     const admission = activeAdmission();
     const errors = consentReporter();
     const remove = (id: string) => pending.splice(pending.indexOf(id), 1);

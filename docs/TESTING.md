@@ -63,13 +63,15 @@ measure the packages separately. Bare paths, same day:
 | Command | Pass | Files | Why it differs |
 |---|---|---|---|
 | `bun test packages/core` | 3,807 | 248 | the 242 in `tests/` plus 6 colocated under `src/` |
-| `bun test packages/cf-backend` | 1,353 | 134 | `tests/` holds 139 files; root `bunfig.toml` excludes the 5 in `tests/workerd` |
+| `bun test packages/cf-backend` | 1,353 | 134 | `tests/` held 139 files; the 5 workerd files were excluded from this 2026-08-19 measurement |
 | `bun test packages/cli` | 625 | 75 | the substring also selects `packages/cli-backend/tests` |
 
-Do not quote counts for **workerd** or the **UI gates**. `bun run test:workerd`
-is `vitest run --root packages/cf-backend tests/workerd/`; its five files were
-verified 2026-08-19: `do-alarm`, `do-init-gate`, `do-retention`,
-`do-socket-attachment`, `do-transaction`. The UI command is
+`bun run test:workerd` is `vitest run --root packages/cf-backend
+tests/workerd/`. Its current inventory, measured 2026-08-27, has 14 files:
+`do-alarm`, `do-eviction-recovery`, `do-init-gate`, `do-retention`,
+`do-socket-attachment`, `do-spend-aggregate`, `do-transaction`, `egress-framing`,
+`instruction-digest`, `steer-chain`, `step-cap`, and `tracing-fallback`. These
+files run in workerd, not Bun. The UI command is
 `bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts`.
 It drives Chromium over the gallery. `scripts/ladder.ts:703-705` assigns ci
 23 s; `gate:computed-style` stays standalone at vite plus Chrome over 19
@@ -479,8 +481,23 @@ packages/
 │  ├─ unit-alarm-tracing.test.ts   (the tracing spans on the alarm and RPC paths)
 │  ├─ unit-auth-security.test.ts   (browser OAuth and CLI auth invariants)
 │  ├─ unit-cli-auth-store.test.ts  (KV-backed device-code flow)
+│  ├─ unit-webhook-route.test.ts   (the signed delivery route capability)
 │  ├─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
-│  └─ workerd/                (5 files: vitest inside workerd, not bun)
+│  └─ workerd/                (14 files: vitest inside workerd, not bun)
+│     ├─ agent-fiber-recovery.test.ts
+│     ├─ decorated-agent.test.ts
+│     ├─ do-alarm.test.ts
+│     ├─ do-eviction-recovery.test.ts
+│     ├─ do-init-gate.test.ts
+│     ├─ do-retention.test.ts
+│     ├─ do-socket-attachment.test.ts
+│     ├─ do-spend-aggregate.test.ts
+│     ├─ do-transaction.test.ts
+│     ├─ egress-framing.test.ts
+│     ├─ instruction-digest.test.ts
+│     ├─ steer-chain.test.ts
+│     ├─ step-cap.test.ts
+│     └─ tracing-fallback.test.ts
 ├─ cli-backend/tests/         (32 files)
 │  ├─ local-session.test.ts        (local agent session behavior)
 │  ├─ model-resolver.test.ts       (provider/model selection)
@@ -619,7 +636,7 @@ test('my-strategy explores within budget', async () => {
 `ActorAgent`, its subclasses, `ExplorationAgent`, and the auth/routes dispatcher
 therefore cannot load in `bun test`.
 
-- **`bun run test:workerd`** runs the five `packages/cf-backend/tests/workerd/`
+- **`bun run test:workerd`** runs the 14 `packages/cf-backend/tests/workerd/`
   files in vitest/workerd. They import `cloudflare:workers` and
   `cloudflare:test`; root `bunfig.toml` excludes them and
   `packages/cf-backend/vitest.config.ts:63` includes them. `ladder.test.ts`

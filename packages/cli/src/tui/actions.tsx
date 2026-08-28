@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import { TUI_ADVERTISED_PRESET_BINDINGS } from '@kinu.run/core';
 
 export const KEYMAP_PRESET_IDS = ['pi-omp', 'kinu', 'opencode'] as const;
 export type KeymapPresetId = (typeof KEYMAP_PRESET_IDS)[number];
@@ -140,16 +141,16 @@ const PRESET_BINDINGS = {
     'effort.cycle': ['shift+tab'],
     'tier.cycle': ['ctrl+p'],
     'tier.cycle-reverse': ['shift+ctrl+p'],
-    'tier.quick': ['alt+p'],
+    'tier.quick': [TUI_ADVERTISED_PRESET_BINDINGS['tier.quick']],
+    'palette.toggle': [TUI_ADVERTISED_PRESET_BINDINGS['palette.toggle']],
+    'workspace.toggle': [TUI_ADVERTISED_PRESET_BINDINGS['workspace.toggle']],
+    'hub.agents': [TUI_ADVERTISED_PRESET_BINDINGS['hub.agents']],
     'tool.toggle': ['ctrl+o'],
     'conversation.branch': ['alt+b'],
     'queue.add': ['alt+return'],
     'link.open-last': ['alt+l'],
-    'palette.toggle': ['ctrl+k'],
-    'workspace.toggle': ['alt+w'],
     'settings.toggle': ['ctrl+,'],
     'model.open': ['ctrl+l'],
-    'hub.agents': ['alt+a'],
     'hub.roles': ['alt+r'],
     'hub.tiers': ['alt+t'],
   },
@@ -385,8 +386,8 @@ function strokeOf(event: TuiKeyEvent): KeyStroke {
 }
 
 function sameStroke(left: KeyStroke, right: KeyStroke): boolean {
-  return left.name === right.name
-    && left.ctrl === right.ctrl
+  if (left.name !== right.name) return false;
+  return left.ctrl === right.ctrl
     && left.shift === right.shift
     && left.alt === right.alt
     && left.meta === right.meta

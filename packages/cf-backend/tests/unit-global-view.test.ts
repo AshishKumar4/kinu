@@ -133,7 +133,7 @@ async function openFixture(): Promise<Fixture> {
       const identity = agentIdentity(sql, agentName);
       const root = workspace.vfs.as(ROOT);
       provisionAgentHome(root, agentName, identity);
-      confineAgentTmp(root, workspace.vfs, agentName, identity);
+      confineAgentTmp(workspace.vfs, agentName, identity);
       return agentCred(identity);
     },
     pidFor: (cred) => processes.spawn('agent', ['agent'], WORKSPACE_ROOT, { cred }).pid,

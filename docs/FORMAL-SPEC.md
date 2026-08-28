@@ -17,24 +17,23 @@ TypeScript locations, classification, missing evidence per requirement.
 
 | Area | Theorems | What is modeled | Important boundary |
 |------|---------:|-----------------|--------------------|
-| Exploration | 246 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds | Two modules are conditional by their own headers: the descriptor partition is contingent on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation rather than a bound |
+| Exploration | 248 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds | Two modules are conditional by their own headers: the descriptor partition is contingent on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation rather than a bound |
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale relative to the current provider and the eight-tool builtin surface |
 | MCTS | 11 | exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite backpropagation uses IEEE-754 REAL values, and transition postconditions are hand-maintained |
-| Storage | 84 | index/list properties, byte-chunk reassembly, a list-backed filesystem, and the SQLite filesystem's own correctness obligations | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
+| Storage | 147 | index/list properties, byte-chunk reassembly, a list-backed filesystem, and the SQLite filesystem's own correctness obligations | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
 | Safety | 6 | the shape of operations constructible from modeled provider names | These are constructor witnesses, not a proof of the deployed sandbox boundary |
 
-Counts: `#print axioms` entries in [`lean/Proteus/Axioms.lean`](../lean/Proteus/Axioms.lean)
-grouped by top-level namespace, re-measured 2026-08-25. Grew 330 to 405 on
-2026-08-25, nearly all Storage. All 405 are claimed by traceability-map
-requirements, checked in both directions.
+Counts: `lean/check-traceability.mjs --list-declarations` reports 470
+theorems grouped by top-level namespace, measured 2026-08-27. All 470 are
+claimed by traceability-map requirements, checked in both directions.
 
 **Two denominators.** Status declares on a REQUIREMENT and inherits to every
 theorem it claims, so the same four words count twice over two totals. Name the
 denominator every time.
 
-By theorem, over 468: **378 `proved-in-abstract-model`**, **90
+By theorem, over 470: **380 `proved-in-abstract-model`**, **90
 `by-construction-witness`**. Near-definitional statements (nonnegativity of a
 `Nat` EMA score; a constructor cannot produce `SQLWrite`) are witnesses, not
 deep safety proofs.
@@ -70,11 +69,12 @@ its `remainingEvidence`.
 ## Axiom boundary
 
 [`lean/Proteus/Axioms.lean`](../lean/Proteus/Axioms.lean) prints axioms for all
-468 published theorems; reports contain only kernel `propext`,
+470 published theorems; reports contain only kernel `propext`,
 `Classical.choice`, `Quot.sound`. One separate domain axiom,
 `Proteus.Storage.FTS5Search.fts5_indexed_findable`: an explicit trusted
-assumption about SQLite FTS5 completeness, enrolled by `PR-STORE-002`; no
-published theorem depends on it. No covering `MemoryStore.indexFile` plus
+assumption about SQLite FTS5 completeness, enrolled by `PR-STORE-002`
+(measured 2026-08-27).
+No published theorem depends on it. No covering `MemoryStore.indexFile` plus
 `search` integration test exists; the gap is recorded, not implied away.
 
 ## CI gate

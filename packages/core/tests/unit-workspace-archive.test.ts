@@ -20,9 +20,8 @@ import {
   type ArchiveCursor,
   type SqlValue,
 } from '../src/index';
-import { makeSql, makeExecRaw } from './helpers';
-import { createWorkspaceBundle } from './helpers';
-import { ConversationSearchStore } from "../src/memory/conversation-search";
+import { createWorkspaceBundle, makeExecRaw, makeSql, SDK_SESSION_DDL } from './helpers';
+import { ConversationSearchStore } from '../src/memory/conversation-search';
 
 function fresh() {
   const db = new Database(':memory:');
@@ -95,8 +94,15 @@ describe('workspace archive', () => {
     // The FTS shadow tables are the index's private storage: rebuilt on the
     // target, never carried as rows.
     expect(lines.some((l) => l.includes('"table":"messages_fts_data"'))).toBe(false);
-  });
 
+    // A local archive carries none of the disposable trigger/state pair; its
+    // next durable message mutation therefore remains valid after import.
+    void target.sql`
+      INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'m5'}, ${'default'}, ${null}, ${'user'}, ${'local post-import'}, ${200})`;
+    expect(new ConversationSearchStore(target.sql).search('post-import').map((hit) => hit.messageId))
+      .toEqual(['m5']);
+  });
   test('the workspace capability secret is never in an archive', async () => {
     const source = await seeded();
     source.db.exec(`CREATE TABLE workspace_capability (id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL)`);
@@ -280,5 +286,37 @@ describe('workspace archive', () => {
     const result = await restoreWorkspaceArchive(target.archive, lines);
     expect(result.tables).toBeGreaterThan(0);
     expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM messages`[0]!.n).toBe(0);
+  });
+
+  test('omits derived conversation revision triggers and restores a cloud pane into a mutable local transcript', async () => {
+    const source = fresh();
+    initAllTables(source.execRaw, source.sql);
+    source.execRaw(SDK_SESSION_DDL);
+    void source.sql`
+      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'u1'}, ${''}, ${null}, ${'user'},
+              ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud question' }] })},
+              ${'2026-08-26 12:00:00'})`;
+    void source.sql`
+      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'a1'}, ${''}, ${'u1'}, ${'assistant'},
+              ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud answer' }] })},
+              ${'2026-08-26 12:00:01'})`;
+    new ConversationSearchStore(source.sql).search('cloud');
+
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'cloud', source: 'cloud' });
+    expect(lines.some((line) => line.includes('conversation_fts'))).toBe(false);
+    expect(lines.some((line) => line.includes('conversation_rev_'))).toBe(false);
+
+    const target = fresh();
+    await restoreWorkspaceArchive(target.archive, lines);
+    const pane = target.sql<{ name: string }>`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${'assistant_messages'}`;
+    expect(pane).toEqual([]);
+    void target.sql`
+      INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'u2'}, ${'default'}, ${'a1'}, ${'user'}, ${'local continuation'}, ${1_000})`;
+    expect(new ConversationSearchStore(target.sql).search('local continuation').map((hit) => hit.messageId))
+      .toEqual(['u2']);
   });
 });

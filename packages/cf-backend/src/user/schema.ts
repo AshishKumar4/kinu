@@ -1,22 +1,26 @@
 // UserDO SQL schema. All tables live inside a single Durable Object instance
 // keyed by the stable Kinu userId the auth store derives from the email.
 // Idempotent — safe to call on every DO boot.
+//
+// EVERY COLUMN BELOW IS IN ITS CREATE, so there is nothing to reconcile and no
+// backfill to run. The FIRST column any of these tables gains after release
+// needs a `reconcileColumns` call added beside that CREATE, listing that column
+// and every later one forever — a DO created before it would otherwise break
+// with `no such column`. Until then the CREATE is the single description of the
+// shape, and a writer naming a column it lacks is a bug in one place.
 
 import {
-  initExperienceLibraryTables, initReleaseTables, reconcileColumns,
-  type SqlExec, type SqlExecutor,
+  initExperienceLibraryTables, initReleaseTables, type SqlExec,
 } from '@kinu.run/core';
 import { initAccessTokenTable } from '../cli/access-token-store';
+import { initDeviceInflightTable } from './device-inflight';
 import { initEgressVaultTables } from './egress-vault';
 import { initWorkspaceCapabilityTables } from './workspace-capability';
 
 /** The sole account profile-catalog row in user_config. */
 export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
 
-/** `tagged` is the same storage as `sql`, as the tagged-template primitive:
- *  `reconcileColumns` asks `pragma_table_info` which columns are present rather
- *  than adding them and swallowing the duplicate-column error. */
-export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
+export function initUserTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_schema_meta (
       key   TEXT PRIMARY KEY,
@@ -46,17 +50,21 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
       name_origin   TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user')),
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       last_visited  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      archived_at   INTEGER
+      archived_at   INTEGER,
+      -- A teardown was started and has not finished. The row survives it so the
+      -- cleanup has an owner and a same-name recreate cannot reconnect to
+      -- resources that were never destroyed (KINU-024). No timestamp: nothing
+      -- asks WHEN, only whether.
+      delete_pending INTEGER NOT NULL DEFAULT 0,
+      -- A fork reserved this name and has not committed the transfer yet
+      -- (KINU-027). The row holds the name against a same-name race while the
+      -- workspace it will become does not exist yet, so it is invisible to
+      -- every owner-visible read until publishWorkspaceReservation flips it.
+      -- DEFAULT 0 because every other create is published the moment it lands.
+      create_pending INTEGER NOT NULL DEFAULT 0
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
-  // Existing rows predate provenance. Treat their shown title as owner state:
-  // an automatic title must never overwrite an origin we cannot reconstruct.
-  // New rows always write their measured origin.
-  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_workspaces', {
-    name_origin: "TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user'))",
-  });
-  sql.exec(`UPDATE user_workspaces SET name_origin = 'user' WHERE name_origin IS NULL`);
 
   // Per-workspace capability tokens + the taint registry — the caller boundary
   // every privileged method below is gated on. Table shape owned by the module
@@ -107,7 +115,6 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
       version    INTEGER NOT NULL DEFAULT 0
     )
   `);
-  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_config', { version: 'INTEGER NOT NULL DEFAULT 0' });
 
   // In-flight Codex device-code state (deviceAuthId + userCode), one per
   // attempt. Cleared on successful poll or disconnect.
@@ -144,45 +151,88 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
       updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_mcp_servers_name ON user_mcp_servers (name)`);
+  // NAME IS THE IDENTITY. Server names address the tools
+  // (`mcp_<server>_<tool>`), so two servers sharing one name mint colliding
+  // tool keys. This index is what makes that unrepresentable.
+  //
+  // THE TRANSACTION OWNS THE MESSAGE. `userMcp_add` and `userMcp_update` read
+  // `lower(name)` and write in ONE storage transaction with no await inside it,
+  // so a refusal names the taken name instead of surfacing a constraint
+  // violation. That replaced a SELECT-then-INSERT, which is not a check at all
+  // inside a Durable Object: sealing the row's headers was an await between the
+  // two, and two concurrent adds both passed the SELECT before either INSERTed.
+  // The index is the floor under that boundary, not a substitute for it.
+  sql.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp_servers_name_unique
+      ON user_mcp_servers (lower(name))
+  `);
 
   // User-level connected devices (laptops/PCs). One row per device the user has
   // linked via `kinu connect`. The reverse-WS tunnel + the live socket live
   // on THIS UserDO (the user-level hub) so every one of the user's agents can
   // request the device. `token_hash` is the device's connect secret; raw tokens
   // are returned only once to the authenticated CLI and never stored.
+  //
+  // Device tokens are rotated ON EVERY CONNECT and expire on an ABSOLUTE window
+  // measured from the last rotation. A machine that keeps connecting keeps
+  // rotating and never lapses; a COPY of `device.json` goes stale as soon as the
+  // real daemon reconnects, which is what turns theft of that file from an
+  // indefinite credential into a race.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_devices (
-      id            TEXT PRIMARY KEY,
-      token_hash    TEXT NOT NULL,
-      label         TEXT NOT NULL,
-      os            TEXT,
-      hostname      TEXT,
-      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      connected_at  INTEGER,
-      last_seen_at  INTEGER,
-      expires_at    INTEGER,
-      revoked_at    INTEGER
+      id              TEXT PRIMARY KEY,
+      token_hash      TEXT NOT NULL,
+      -- The superseded secret, held until the new one is first used, so a
+      -- rotation message lost with the socket does not brick the machine.
+      prev_token_hash TEXT,
+      label           TEXT NOT NULL,
+      os              TEXT,
+      hostname        TEXT,
+      created_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      connected_at    INTEGER,
+      last_seen_at    INTEGER,
+      expires_at      INTEGER,
+      revoked_at      INTEGER,
+      -- Provenance of the newest accept, and the record that a second socket
+      -- took the slot. Both are rendered in Account settings, because a silent
+      -- takeover is the shape these three columns exist to expose.
+      last_ip         TEXT,
+      last_agent      TEXT,
+      replaced_at     INTEGER,
+      -- Revocation found a command it could not confirm stopped. This owner-
+      -- visible fact survives removal of its active in-flight row; reconnection
+      -- cannot clear it because a revoked device never reconnects.
+      unstopped_at    INTEGER
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
-  // Device tokens are rotated ON EVERY CONNECT and expire on an ABSOLUTE
-  // window measured from the last rotation. A machine that keeps connecting
-  // keeps rotating and never lapses; a COPY of `device.json` goes stale as
-  // soon as the real daemon reconnects, which is what turns theft of that file
-  // from an indefinite credential into a race. `prev_token_hash` holds the
-  // superseded secret until the new one is first used, so a rotation message
-  // lost with the socket does not brick the machine. `last_ip`/`last_agent`
-  // are the provenance of the newest accept, and `replaced_at` records that a
-  // second socket took the slot — both rendered in Account settings, because a
-  // silent takeover is the shape this whole column set exists to expose.
-  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'user_devices', {
-    expires_at: 'INTEGER',
-    prev_token_hash: 'TEXT',
-    last_ip: 'TEXT',
-    last_agent: 'TEXT',
-    replaced_at: 'INTEGER',
-  });
+
+  // Device commands whose request reached a daemon but has not reached a
+  // terminal response. The table and every statement over it live in
+  // ./device-inflight.ts, which owns the precedence protocol as well.
+  initDeviceInflightTable(sql);
+
+  // Browser sessions, as the ONE authority on whether a session cookie is
+  // still live. The cookie's own record lives in KV, where a delete reaches
+  // other colos within a minute, so KV cannot answer "was this revoked?" —
+  // a cookie copied off the browser replayed at another colo outlived logout
+  // by that window. This row does answer it: presence is active, deletion is
+  // revoked, and every cookie verification reads it in this user's own
+  // Durable Object, which is one place from every colo.
+  //
+  // Two columns and no more. Revocation is the row's absence, so there is no
+  // `revoked_at` bit to disagree with it, and nothing reads a creation time.
+  // The index makes the lazy expiry delete on the verify path an indexed range
+  // delete, so it stays cheap on an account with a long sign-in history and
+  // there is no sweeper and no alarm.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_browser_sessions (
+      token_hash TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    )
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_browser_sessions_exp
+            ON user_browser_sessions (expires_at)`);
 
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is
@@ -219,11 +269,6 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
       PRIMARY KEY (agent_name, device_id)
     )
   `);
-  reconcileColumns(tagged, (ddl) => { sql.exec(ddl); }, 'device_consent', {
-    scope: "TEXT NOT NULL DEFAULT 'all_local_actions'",
-    last_method: 'TEXT',
-    last_summary: 'TEXT',
-  });
 
   // Short-lived, single-use WebSocket tickets for device daemon reconnects.
   // The daemon exchanges its long-lived local device token over HTTPS, then
@@ -262,6 +307,4 @@ export function initUserTables(sql: SqlExec, tagged: SqlExecutor): void {
   // The owner's cross-workspace experience library: the crafts, lessons, facts
   // and agent loops one workspace proved and published for the owner's others.
   initExperienceLibraryTables(sql);
-
 }
-

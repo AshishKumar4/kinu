@@ -20,7 +20,8 @@
  *   1. A REFERENCE — a document naming a code symbol or a repository path. Measured
  *      2026-08-19 at 0fff343e over 31 documents: 379 path claims and 1,110 symbol
  *      claims governed, of which 35 named something absent and are locked. Among
- *      them `cf-backend/src/rlm.ts` (the module is `packages/core/src/rlm.ts`),
+ *      them `cf-backend/src/agents-tool.ts` (the module is
+ *      `packages/core/src/tools/agents-tool.ts`),
  *      `cf-backend/src/lib/timeline.ts` (it is `core/src/read-models/timeline.ts`),
  *      `packages/cf-backend/src/craft-executor.ts` (it is in `cli-backend`),
  *      `VFS_SCHEMA_DDL`, `StorageIsolated` and `triggerEvolution`. Nine of the 35

@@ -85,7 +85,7 @@ Universal SSL on `kinu.run` covers the app host, staging, and every preview host
 
 **`infra:provision`** reads its inventory from `wrangler.jsonc`; there is no second list. Creates what is missing in dependency order (R2 buckets, then Vectorize indexes), printing `CREATED` or `existed` per resource, so a second run is visibly a no-op. A FAILED lookup refuses rather than creates: network-down and does-not-exist differ, and creating through the first leaves two candidate snapshot buckets. What wrangler cannot create prints as a manual worklist, every run.
 
-**`gate:infra`** checks every declared resource exists **and** that the deployed Worker binds it; exits non-zero otherwise. Last of the 54 required gates, the only one that talks to Cloudflare and the only one that runs alone. It checks `KINU_DEPLOY_ENV`, else argv, else production, so staging never takes a production defect's refusal, and reports one verdict per resource instead of dying on the first failure (`scripts/infra-verify.ts` has the reasoning):
+**`gate:infra`** checks every declared resource exists **and** that the deployed Worker binds it; exits non-zero otherwise. It is the only gate that talks to Cloudflare and the last required gate before the build. The deploy script currently runs 57 required gate invocations, all before deployment. It checks `KINU_DEPLOY_ENV`, else argv, else production, so staging never takes a production defect's refusal, and reports one verdict per resource instead of dying on the first failure (`scripts/infra-verify.ts` has the reasoning):
 
 | Verdict | Meaning |
 | --- | --- |
@@ -105,6 +105,7 @@ Derived from `Env` in `env.d.ts`, pinned. A field neither binding nor `vars` ent
 | Value | Handling | Required | Absent means |
 | --- | --- | --- | --- |
 | `CREDENTIAL_ENCRYPTION_KEY` | **prompt**: paste one, or press enter and provisioning generates 32 random bytes and displays them **once** | yes, everywhere | Every signed-in surface answers 503 while public routes answer 200, so the site looks healthy. |
+| `WEBHOOK_ROUTE_SECRET` | **prompt**: paste 32 random bytes (`openssl rand -base64 32`) | yes, everywhere | No workspace can take an inbound webhook. Creating one answers 503, and every delivery URL answers 404 without waking a workspace. Timers and email keep working. |
 | `CLOUDFLARE_OAUTH_CLIENT_SECRET` | **prompt** | where `CLOUDFLARE_OAUTH_CLIENT_ID` is a var | Chat falls back to the platform gateway and bills the **platform** account instead of each user's. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | **prompt** | where `GOOGLE_OAUTH_CLIENT_ID` is a var | Google is not on `/login`. Unset on both environments. |
 | `GITHUB_OAUTH_CLIENT_SECRET` | **prompt** | where `GITHUB_OAUTH_CLIENT_ID` is a var | GitHub is not on `/login`. Unset on both environments. |
@@ -129,9 +130,11 @@ Dependencies with no field in `wrangler.jsonc`, verified against the live accoun
 - **KV titles**: `kv_namespaces` binds by id; `kinu-auth`/`kinu-auth-staging` exist only in the account. `npx wrangler kv namespace list` reports titles.
 - **Email Routing**: verified 2026-08-20, the `kinu.run` zone held zero DNS records and neither Email Routing nor Email Sending was onboarded, so mail is dead despite a correct binding, var and handler. One-time owner action; `docs/EMAIL-INGRESS.md`.
 - **Cron trigger**: written by deploy from `triggers.crons`; no wrangler command reads it back. Declared blind spot.
-- **Container image**: pullable and matching `@cloudflare/sandbox`; both `0.12.8` now (`docker.io/cloudflare/sandbox:0.12.8`). Only a deploy reconciles an image, so the pair can disagree until both sides redeploy after a bump.
+- **Container image**: pullable. Both environments name it by DIGEST — `docker.io/cloudflare/sandbox@sha256:822501de…`, which is `0.12.8` as the registry resolved it on 2026-08-27 — because a tag is a mutable pointer and a container restart would otherwise pick up re-pushed bytes with nothing here changed. `scripts/release-config.test.ts` holds both environments to that one reference, refuses a tagged one, and holds the declared version equal to `@cloudflare/sandbox` in `packages/cf-backend/package.json`. What it cannot do is pull the image or read a running container: only a deploy reconciles an image, so the deployed pair can disagree until both environments redeploy after a bump.
+- **Source maps**: `upload_source_maps` is on in both environments and `vite.config.ts` emits maps for every worker environment — never the client, where a map in `dist/client` would be TypeScript served from the public origin. Cloudflare remaps uncaught exceptions against them before they reach Workers Logs, and maps travel as separate upload parts that do not count against the 10 MB script budget. What no gate proves from here: that Cloudflare remapped a given trace. Read one after a deploy.
+- **Browser errors reach structured diagnostics.** `ErrorBoundary` sends a bounded report to `POST /api/client-errors`. The route requires the session and CSRF checks, validates the route, error class, and stack-frame grammar, labels the browser release as `match`, `stale`, `unreported`, or `undeployed`, and emits `client.render_failed` through `diagnostics` to Workers Logs and Analytics Engine. It returns `202`; it creates no application row. The route keeps the report separate from storage failures such as `storage_unavailable` and `row_write_failed`.
 - **`backups/` reclamation, which must NOT be a lifecycle rule**: each workspace stores an immutable base layer written once plus a cumulative delta (`backups/<uuid>/data.sqsh`, `…/delta.sqsh`). An age rule bricks every workspace older than itself. Do not set one. The delta replaces in place, so growth is base plus changed set. Deleting a workspace discards both objects before DO death; that discard is the reclamation path. A DO dying first strands both objects, and nothing collects them today. Restore-time TTL covers the extraction path only (local dev).
-- **Committed patch on `@cloudflare/sandbox@0.12.8`**: makes SDK mount-handler registration MERGE with subclass handlers instead of replacing them, so an R2 bucket mount cannot unbind KinuSandbox egress/event interception. `bun scripts/patch-parity.ts` (required gate) proves patches match the tree; bumping means regenerating and moving BOTH pins plus the image tag in one commit.
+- **Committed patch on `@cloudflare/sandbox@0.12.8`**: makes SDK mount-handler registration MERGE with subclass handlers instead of replacing them, so an R2 bucket mount cannot unbind KinuSandbox egress/event interception. `bun scripts/patch-parity.ts` (required gate) proves patches match the tree; bumping means regenerating and moving BOTH pins, the version and digest in `scripts/release-config.test.ts`, both `containers[].image` entries, and the root `overrides` entry for `@cloudflare/containers`, in one commit. That override exists because the SDK's own `^0.3.5` range resolved to a second, nested copy at 0.3.6 — which was the only copy the deployed Worker bound, while both manifests pinned 0.3.7 — so a bump has to leave manifests, lockfile, installed graph and emitted artifact naming one version. `scripts/nested-container-resolution.test.ts` measures all four.
 - **Committed patch on `@nimbus-sh/core@0.6.0`**: carries commit `ceb3b736` (merged upstream, unreleased at patch time). Its esbuild-service imported bare `esbuild-wasm`; resolvers ignoring the legacy `browser` field picked Node CJS, which rejects the wasm-module init option (the only Worker form), failing every workspace `.mjs` transform with `The "wasmModule" option only works in the browser`. The patch names `esbuild-wasm/esm/browser.js` in both shipped shapes (`src/` under Bun's export condition, `dist/` under wrangler bundling). Remove once core pins a fixed version; until then regenerate on bump, same commit.
 - **Workspace storage mode**: with `BACKUP_BUCKET`, `/workspace` restores lazy layers at fixed cost regardless of size. Without container outbound interception (local docker), empty workspaces record extraction mode; workspaces holding chain layers refuse to start rather than silently degrade.
 - **The Workers Paid plan**, and **the account**.
@@ -163,6 +166,13 @@ cd packages/cf-backend
 # answer. Keep a copy. If you lose it, every user reconnects every provider.
 openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 
+# REQUIRED for webhook ingress. It signs the route capability in every public
+# delivery URL (`events/webhook-route.ts`), so without it a workspace cannot be
+# given a webhook at all: creation answers 503 and every delivery URL answers
+# 404 without waking a workspace. Separate from the root secret because the two
+# rotate on different clocks — this one's URLs live in other people's systems.
+openssl rand -base64 32 | bunx wrangler secret put WEBHOOK_ROUTE_SECRET
+
 # No AI Gateway token. The platform gateway rides the Workers AI binding.
 
 # OAuth providers appear only when both id and secret are configured.
@@ -187,6 +197,16 @@ openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 
 Each UserDO re-seals on next credential access (`user/credential-envelope.ts`). Delete `PREVIOUS` once every account has been active or after a sweep. It takes comma-separated lists, so an interrupted rotation resumes rather than unwinds. Losing a key with rows still sealed is unrecoverable by design; reconnect those providers.
 
+#### Rotating WEBHOOK_ROUTE_SECRET
+
+Rotating this secret revokes every webhook URL the deployment ever issued, all at once, and there is no two-key window: the capability is derived, not stored, so an old URL simply stops verifying.
+
+```bash
+openssl rand -base64 32 | bunx wrangler secret put WEBHOOK_ROUTE_SECRET
+```
+
+After it, every external system that posts to a Kinu webhook needs the new URL. Owners read it from the triggers list — the Supervise Automations block, or `kinu triggers <workspace> list` — which prints the current URL for each webhook row. Trigger rows, secrets and delivery history are untouched; only the URL changes. Rotate on purpose (a leaked URL, an operator handover), not on a schedule.
+
 ### 3. Build and Deploy
 
 ```bash
@@ -196,7 +216,7 @@ bun run deploy:staging        # staging, https://staging.kinu.run
 
 Both call `scripts/deploy.sh` (§ Deploy Script) with the environment as sole argument. One script so the gates, CLI asset check and six smoke checks cannot exist for production and be absent for staging.
 
-Staging also deploys itself: `.github/workflows/deploy-staging.yml` runs on push to `main`, daily, and on demand. The daily run catches account drift under a Worker nobody touched, which is how `gate:infra` found staging predating the MonitorDO migration.
+Staging also deploys itself, and the operator setup that needs is in § Staging deploys itself. The daily run catches account drift under a Worker nobody touched, which is how `gate:infra` found staging predating the MonitorDO migration.
 
 Never bare `wrangler deploy`: it skips the CLI asset check, and production shipped assetless once. Downloads served the SPA shell while the site looked fine, killing every fresh install and update on checksum mismatch.
 
@@ -297,6 +317,7 @@ Classification is narrow: 429 and 529 always count; a 503 counts only when statu
 |----------|-------|-------------|
 | `CREDENTIAL_ENCRYPTION_KEY` | Wrangler secret | **Required.** Root secret for the user plane: encrypts `user_credentials` at rest and derives the owner capability. Without it no signed-in surface works. |
 | `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
+| `WEBHOOK_ROUTE_SECRET` | Wrangler secret | **Required for webhook ingress.** Signs the route capability every public delivery URL carries (`events/webhook-route.ts`). Without it, webhook creation answers 503 and delivery answers 404. Rotating it revokes every issued URL. |
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
 | `SANDBOX_TRANSPORT` | wrangler.jsonc `vars` | Container control plane, `rpc` in both environments. A stored per-sandbox transport beats this var on a cold start; the var covers a future `getSandbox` that omits the option. |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
@@ -335,7 +356,7 @@ Classification is narrow: 429 and 529 always count; a 503 counts only when statu
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `KinuSandbox` (@cloudflare/sandbox); one container per agent |
 | `ControlPlaneDO` | Durable Object | The admin surface's singleton (one instance, `site`): a fleet index and an audit log. It holds no business logic, and every action it exposes proxies an existing `@callable` on the object that already owns that state |
-| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`. `kinu-auth`, and `kinu-auth-staging` in staging |
+| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`, and so does the one row that says a session is still live. `kinu-auth`, and `kinu-auth-staging` in staging |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
 | `MEMORY_VECTORS` | Vectorize | `kinu-memory`, and `kinu-memory-staging` in staging (384-dim, cosine); optional hybrid recall on top of FTS5 |
@@ -364,9 +385,9 @@ Environments differ in four values: route, wrangler `--env` flag, infrastructure
 
 Dirty checkout refused first, so the `/api/health` build SHA always identifies the published bytes. Then environment preflight, Wrangler auth check, and `bun install --frozen-lockfile` when there is no root `node_modules`.
 
-1. **Required pre-deploy gates.** 54, every one unconditional; each is a `run_required_gate` line in `scripts/deploy.sh`, which is the full list. They enqueue and `flush_gates` runs up to `nproc / 2` concurrently. Two run alone, named with reasons in `SERIAL_GATES` (`scripts/ladder.ts`): preflight first, `gate:infra` last; the other 52 in one wave. Coverage: `bun run check`; the deploy contract test; unit and e2e suites of every package; the exploration mutation suite; deterministic eval/triage/staging-preflight/bench tests; secret-scanner self-test and scan; every gate's self-test; static gates for dead code, duplication, parity, drift, dropped failures, reachability, typecheck coverage, skip ratchet, set equality, citations, commit hygiene, dependency policy, dataset parity, patch parity; Layergate conformance and fault localization; behavioural evals; full Lean proof/consistency/traceability. `gate:computed-style` absent on purpose: it boots Vite and Chrome over 19 gallery frames and would fail environmentally, so only its decision logic runs here. `gate:bench-corpus` runs the cheap half, 159 `git apply --check` invocations at 0.15 s measured; `bench.ts validate` stays nightly. The last gate talks to Cloudflare: everything above proves the source, that one proves the account. Any failure exits before Vite, archive generation, or Wrangler. No variable skips a gate; `KINU_INFRA_ACK` only acknowledges a missing Cloudflare session, which the whoami check already fails on.
+1. **Required pre-deploy gates.** 57, every one unconditional; each is a `run_required_gate` line in `scripts/deploy.sh`, which is the full list. Preflight runs alone first. The other 55 run concurrently, then `gate:infra` runs alone last. `flush_gates` runs up to `nproc / 4` concurrently — each gate is a Bun process with up to four workers, so one outer gate per four hardware threads keeps the aggregate at the machine's thread count. Each gate's verdict is its child's exit status, read with `wait -n -p`: a gate killed by the OOM killer settles as 128+signal and one past the 480s deadline as 124, so a gate that never reports cannot hold the wave open. Coverage: `bun run check`; the deploy contract then continues with build, deploy, and smoke.
 2. **Build.** `vite build`, then `scripts/build-cli-source-archive.sh` (tarball, `.sha256`, `kinu-version.json`); fails if any of the three misses `dist/client/downloads/`.
-3. **Deploy.** `npx wrangler deploy`. Verifies the `KinuSandbox` binding appears in output and the assets directory reported is the one downloads were staged into.
+3. **Deploy.** `npx wrangler deploy --tag <sha> --message "kinu <env> <sha>"`, so the published Worker version carries the build sha as a version annotation: Workers Logs tags an invocation with a version id and nothing else, and `npx wrangler versions list` prints the pair. Verifies the `KinuSandbox` binding appears in output and the assets directory reported is the one downloads were staged into.
 4. **Smoke test.** HTTP 200 plus app content on the production URL; `/api/health` stamp equals the deployed commit; `/downloads/kinu-version.json` parses; the CLI shim points at the deployed archive; archive downloads with expected files; `.sha256` matches. Stamp checks retry with backoff: edge rollout takes about two minutes, and a stamp that never converges is the real failure.
 5. **Summary.** URL, Version ID, build sha.
 
@@ -402,10 +423,24 @@ Step 2 asserts downloads exist in `dist/client/downloads/`, step 3 asserts wrang
 Fully isolated second deployment (`kinu-staging`, own DO namespaces and KV session store, `DEV_USER_EMAIL` headless identity) on https://staging.kinu.run, configured under `env.staging`:
 
 ```bash
-bun run --cwd packages/cf-backend deploy:staging
+bun run deploy:staging
 ```
 
-Rebuilds with `CLOUDFLARE_ENV=staging` so Vite generates the config the redirect points at, builds the CLI archive, deploys, then rebuilds production so the tree keeps a production bundle.
+That is `scripts/deploy.sh staging`, the same script production runs. It exports `CLOUDFLARE_ENV=staging` so Vite generates the config the deploy redirect points at, builds the CLI archive, deploys, and runs the six smoke checks against `staging.kinu.run`. No package deploys itself: `packages/cf-backend` once declared its own `deploy:staging` around a bare `wrangler deploy`, which skipped every gate and both asset checks, and `scripts/deploy.test.ts` now fails if a package script or a document names a second deploy path.
+
+#### Staging deploys itself
+
+`.github/workflows/deploy-staging.yml` runs `bun run deploy:staging` on every push to `main`, once a day, and on demand. The daily run is what catches the account drifting under a Worker nobody touched.
+
+The job holds a Cloudflare credential, so it asks for a GitHub environment and for read-only repository permissions, installs its Lean toolchain from a checksum-verified release, and checks out with no persisted git token. Three things it cannot do for itself:
+
+| Operator setup required | Where | Why the repository cannot do it |
+|---|---|---|
+| Create an environment named `staging` and move `CLOUDFLARE_API_TOKEN` into it. Add a deployment branch rule for `main`. | GitHub → Settings → Environments | The workflow declares `environment: staging`, which is the only boundary a file in the repository can ask for. Which secret that environment holds, and which branches may use it, are dashboard settings. A repository-level secret of the same name still resolves, so nothing is bound until the secret moves. |
+| Mint the token with Edit Cloudflare Workers, plus Workers R2 Storage: Edit, Workers KV Storage: Edit and Vectorize: Edit, scoped to the deploy account. | Cloudflare → My Profile → API Tokens | Nothing in a repository can reduce what an account-scoped token is allowed to do. `scripts/deploy.sh` prints this list when the token is absent, and stops before the build. |
+| Create an environment named `eval` and move `EVAL_SERVICE_TOKEN`, `EVAL_ANTHROPIC_API_KEY` and `EVAL_OPENAI_API_KEY` into it. | GitHub → Settings → Environments | Same boundary, for `.github/workflows/eval.yml`. That job can be started by labelling a pull request, so it checks out the reviewed base revision rather than the branch: a branch that changes the eval harness or corpus has to land, or be dispatched from a trusted ref, before it is measured. `validate-corpus` runs the branch's own code and holds no credential. |
+
+`scripts/release-config.test.ts` (required gate) holds these properties: every workflow declares its token permissions, every credential-bearing job names an environment, a credential-bearing job reachable from a pull request pins the base revision, no workflow pipes a download into a shell, and no action is used from a moving ref.
 
 Staging is the only target tests and evals may hit, so before an eval arm spends anything, verify it runs the branch you think:
 

@@ -11,6 +11,13 @@ import { sha256Hex, stableStringify } from '../../safety/argument-digest';
 import type { IngressDescriptor, KinuEvent, ReadableKinuEvent } from './types';
 import { decodeJsonValue } from '../../utils/json';
 
+/** A subordinate report's ingress identity, spelled once for the two places
+ *  that read it: the admission-time derivation below, and the parent ingress
+ *  asking whether a replayed report is already on its rail. */
+export function subordinateReportDedupeKey(sequenceId: string): string {
+  return `subordinate_report:${sequenceId}`;
+}
+
 /** Map an event to its dedupe key, or null if the variant is not deduped. */
 export function dedupeKeyFor(event: KinuEvent): string | null {
   if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
@@ -63,15 +70,25 @@ function dedupeReadableEvent(
       return `email:${sha256Hex(`${p.from}|${p.to}|${p.subject}|${p.body_text}`, 24)}:${bucket}`;
     }
 
+    case 'subordinate_report':
+      // The sending child's terminal sequence. A report is replayable durable
+      // work on that side, so with no key a replay lands beside the delivery
+      // the parent already admitted and the report is published twice.
+      // A pre-upgrade row carries no sequence — it was admitted with no key at
+      // all, and inventing one now would make two unrelated legacy reports
+      // collide. Absent means unkeyed, exactly as it was.
+      return event.payload.sequence_id === undefined
+        ? null
+        : subordinateReportDedupeKey(event.payload.sequence_id);
+
     case 'chat':
     case 'internal':
     case 'file_changed':
     case 'reply_request':
     case 'subordinate_task':
-    case 'subordinate_report':
-      // No natural idempotency. The runtime trusts the originating layer —
-      // subordinate traffic is a one-shot same-machine facet RPC (no
-      // redelivery loop to dedupe against).
+      // No natural idempotency. An assignment DOWN to a subordinate is a
+      // one-shot same-machine facet RPC with no redelivery loop to dedupe
+      // against.
       return null;
   }
 }

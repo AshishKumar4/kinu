@@ -7,13 +7,15 @@
  * port's secret token inside the Durable Object, and forwards to the container
  * (WebSocket upgrades included). Kinu adds only what the SDK has no opinion
  * about: this host serves previews and nothing else, responses are contained
- * (lib/preview-origin.ts), and a failed forward gets a page a user can act on
- * instead of a bare `Proxy routing error`.
+ * (lib/preview-origin.ts), a failed forward gets a page a user can act on
+ * instead of a bare `Proxy routing error`, and a preview whose exposure did not
+ * survive a container recycle gets ONE repair.
  */
 
-import { proxyToSandbox } from "@cloudflare/sandbox";
+import { getSandbox, proxyToSandbox } from "@cloudflare/sandbox";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "./lib/http";
-import { containPreviewResponse } from "./lib/preview-origin";
+import { containPreviewResponse, previewSandboxIdOf } from "./lib/preview-origin";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 
 /**
@@ -25,18 +27,54 @@ import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 export const SDK_FORWARD_FAILURE = { status: 500, body: 'Proxy routing error' } as const;
 
 /**
+ * The Durable Object's answer when the port token IS VALID but the exposure it
+ * names is not live: the container is stopped or unhealthy, or the activation
+ * belongs to a runtime generation that has been replaced
+ * (`stalePreviewURLResponse` / `validatePreviewURLForRuntime` in the shipped
+ * bundle). Built from the SDK's own object rather than a hand-typed string so
+ * the two cannot drift apart silently.
+ *
+ * AUTHENTICATED BY CONSTRUCTION, and that is what makes it safe to act on: the
+ * DO returns 404 `INVALID_TOKEN` for a token that does not match the port's
+ * stored one, and only reaches this answer after the match. A request that
+ * guessed a hostname cannot make Kinu touch a container.
+ */
+export const SDK_STALE_PREVIEW = {
+  status: 410,
+  body: JSON.stringify({
+    error: 'Preview URL is stale because the sandbox runtime is not active',
+    code: 'STALE_PREVIEW_URL',
+  }),
+} as const;
+
+/**
  * Serve a request that arrived on the preview host. Always answers: a hostname
  * that does not resolve to an exposed port gets a 404, never the app.
  */
 export async function servePreviewRequest(request: Request, env: Env): Promise<Response> {
-  const response = await proxyToSandbox(new Request(request, {
+  const forward = (): Promise<Response | null> => proxyToSandbox(new Request(request, {
     headers: sanitizePreviewRequestHeaders(request.headers),
   }), env);
+
+  let response = await forward();
   if (!response) {
     return containPreviewResponse(new Response(
       JSON.stringify({ error: 'This host serves sandbox previews only.', code: 'NOT_A_PREVIEW' }),
       { status: 404, headers: { 'content-type': 'application/json' } },
     ));
+  }
+
+  // ONE repair, then ONE re-issue. The count is structural rather than a retry
+  // budget: a repair has exactly one before and one after, and the re-issue is
+  // also the only honest test of whether the repair worked — the container's own
+  // re-validation of the port token, not an inference from a lifecycle call
+  // returning. A second stale answer means the exposure did not come back
+  // (a server that no longer listens on the port is the usual reason), which is
+  // the box's problem to report and not something more attempts reach.
+  if (request.method === 'GET' && await isStalePreview(response)) {
+    await repairStalePreview(request, env);
+    const reissued = await forward();
+    if (reissued !== null) response = reissued;
   }
 
   if (response.status === SDK_FORWARD_FAILURE.status
@@ -45,6 +83,46 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
   }
 
   return containPreviewResponse(response);
+}
+
+async function isStalePreview(response: Response): Promise<boolean> {
+  return response.status === SDK_STALE_PREVIEW.status
+    && (await response.clone().text()) === SDK_STALE_PREVIEW.body;
+}
+
+/**
+ * Re-drive the box that minted this preview URL, so the port comes back on its
+ * STORED spec.
+ *
+ * `ensureReady` is the repair, whole: it starts a stopped container and awaits
+ * the restoration that re-exposes each recorded port with the token its URL was
+ * built on — which is why the same URL works afterwards rather than a new one
+ * having to be handed out. It is singleflight on the box's own lifecycle
+ * generation, so a page whose twenty assets all 410 at once joins one attempt
+ * instead of starting twenty.
+ *
+ * Best effort, and deliberately silent to the visitor: a box that refuses to
+ * become ready has already recorded why in its own incident ledger, and the
+ * answer this visitor gets is the stale 410 either way. Turning a stale preview
+ * into a 500 would lose the classification the caller needs.
+ */
+async function repairStalePreview(request: Request, env: Env): Promise<void> {
+  const sandboxId = previewSandboxIdOf(new URL(request.url), env);
+  if (sandboxId === null || !env.Sandbox) return;
+  try {
+    // `{ normalizeId: true, transport: "rpc" }` verbatim from runtime.ts,
+    // orchestrator.ts and terminal-route.ts: the SDK persists the transport and
+    // drops in-flight requests when it changes mid-life for an id, so every
+    // Kinu call site for one sandbox passes the same options.
+    await getSandbox(env.Sandbox, sandboxId, { normalizeId: true, transport: "rpc" })
+      .ensureReady();
+  } catch (cause) {
+    diagnostics.failure('preview.stale_repair_failed', toKinuError({
+      doing: 'restoring the container behind a stale preview URL',
+      cause,
+      otherwise: 'unavailable',
+    }), { sandboxId });
+  }
 }
 
 /**

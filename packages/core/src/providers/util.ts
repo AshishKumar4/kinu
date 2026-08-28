@@ -4,8 +4,11 @@
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
+import { evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
-import { renderThrownChain } from '../obs/index';
+import {
+  KinuError, classifyErrorCode, tolerate, type ErrorCode,
+} from '../obs/index';
 
 export interface AuthedFetchOptions {
   /** Credential key passed to the AuthResolver on every request. */
@@ -137,29 +140,100 @@ export function positiveInteger<T>(value: T): number | undefined {
  *  nest once; two spare levels cover the gateways that re-wrap them. */
 const PROVIDER_ERROR_MAX_DEPTH = 3;
 const PROVIDER_ERROR_MAX_CHARS = 800;
-const ErrorResponseSchema = v.object({
+
+/** The two fields the AI SDK's `APICallError` carries that this boundary
+ *  reads: the status the call failed with, and the body the endpoint answered.
+ *  Declared structurally rather than by `instanceof` so a gateway's own
+ *  re-thrown shape is read the same way. */
+const ApiCallErrorSchema = v.looseObject({
+  statusCode: v.optional(v.number()),
   responseBody: v.optional(v.pipe(v.string(), v.trim(), v.nonEmpty())),
 });
 
+/** A status a plain error payload states about itself. Stream `error` chunks
+ *  from openai-compat endpoints carry one without being an `Error` at all. */
+const StatusFieldSchema = v.looseObject({
+  status: v.optional(v.number()),
+  statusCode: v.optional(v.number()),
+});
+
 /**
- * Human-readable text for anything a provider can fail with.
+ * What a provider failure carries once it has crossed this boundary.
+ *
+ * Kept as fields rather than folded into one string because every consumer
+ * downstream used to recover them by re-matching the prose: the CLI's guidance
+ * layer regex-matched a rendered sentence, and the turn-failure classifier
+ * matched a different one. A status is part of the HTTP protocol and a
+ * provider's `code`/`type` is its own published identifier; neither drifts the
+ * way wording does.
+ */
+export interface ProviderFailureFacts {
+  /** The provider's own reason, safe to show a user. Never a raw response
+   *  body: see {@link providerFailureFacts}. */
+  readonly message: string;
+  /** The provider's stable error code (`code`, else `type`), verbatim. */
+  readonly providerCode?: string;
+  /** The HTTP status the call failed with, when one was reported. */
+  readonly status?: number;
+}
+
+/**
+ * Read a provider failure down to its facts.
  *
  * The AI SDK routes provider failures into the stream as an `error` chunk whose
  * payload is whatever the endpoint sent — frequently a plain object
  * (`{error: {message, code}}` from an OpenAI-shaped SSE body), not an `Error`.
  * `String(thatObject)` is `"[object Object]"`, which is exactly the message
- * users were shown. Dig the message out instead, and fall back to the JSON
- * rather than to a stringification that carries no information.
+ * users were shown, so the message is dug out of the shape instead.
+ *
+ * A response BODY is read as the envelope it is and never forwarded verbatim.
+ * That distinction is the whole point: an unparseable body is an HTML error
+ * page, a signed URL, or a gateway echo of the request that failed — the
+ * request Kinu sent, headers included — and none of those is text for a user's
+ * terminal. The same rule kills the whole-object `JSON.stringify` this used to
+ * fall back to, which forwarded every field an SDK happened to attach.
  */
-export function describeProviderError<T>(error: T, depth = 0): string {
+export function providerFailureFacts(failure: { readonly cause: unknown }): ProviderFailureFacts {
+  return readProviderFailure({ cause: failure.cause, depth: 0 })
+    ?? { message: 'unknown provider error' };
+}
+
+/** The reader behind {@link providerFailureFacts}. Null means the payload said
+ *  nothing readable at all, which is what lets a caller keep the reason it
+ *  already had rather than be handed a placeholder that displaces it. */
+function readProviderFailure(
+  input: { readonly cause: unknown; readonly depth: number },
+): ProviderFailureFacts | null {
+  const { cause: error, depth } = input;
   if (error instanceof Error) {
-    const summary = error.message || error.name;
-    const response = v.safeParse(ErrorResponseSchema, error);
-    const responseBody = response.success ? response.output.responseBody : undefined;
-    return responseBody ? `${summary}: ${responseBody}`.slice(0, PROVIDER_ERROR_MAX_CHARS) : summary;
+    const envelope = v.safeParse(ApiCallErrorSchema, error);
+    const status = envelope.success ? envelope.output.statusCode : undefined;
+    const body = envelope.success ? envelope.output.responseBody : undefined;
+    // The SDK's message for an HTTP failure is the status line
+    // ("AI_APICallError", "Bad Request"), so the provider's reason lives in the
+    // body — read it, never print it. A body that reads as nothing leaves the
+    // SDK's own message standing, and the name is reached with `||` and not
+    // `??` because an Error built with '' HAS a message and it says nothing.
+    const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
+      ? undefined
+      : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+    const fromBody = parsed === undefined
+      ? null
+      : readProviderFailure({ cause: parsed, depth: depth + 1 });
+    // Assigned rather than spread-when-present: `exactOptionalPropertyTypes` is
+    // off, so an absent fact IS `undefined` on an optional field, and a
+    // conditional empty spread only obscures that.
+    return {
+      message: fromBody?.message ?? (error.message || error.name),
+      providerCode: fromBody?.providerCode,
+      status,
+    };
   }
-  const text = v.safeParse(v.string(), error);
-  if (text.success) return text.output.trim() || 'unknown provider error';
+
+  const text = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), error);
+  if (text.success) return { message: text.output };
+  if (v.is(v.string(), error)) return null;
+
   // Shallow on purpose. This used to go through a `JsonObject` guard, and
   // `JsonObjectSchema` is RECURSIVE: a provider error object that references
   // itself — the shape a gateway produces the moment it attaches the request it
@@ -167,41 +241,87 @@ export function describeProviderError<T>(error: T, depth = 0): string {
   // guard's `catch { return false }` reported that overflow as "not an object".
   // Nothing here needs deep JSON validity: each field below re-validates.
   const record = v.safeParse(v.record(v.string(), v.unknown()), error);
-  if (record.success) {
-    const fields = record.output;
-    const message = nonEmptyString(fields.message)
-      ?? nonEmptyString(fields.error_description)
-      ?? nonEmptyString(fields.detail);
-    if (message) {
-      const code = nonEmptyString(fields.code) ?? nonEmptyString(fields.type);
-      return code && !message.toLowerCase().includes(code.toLowerCase()) ? `${message} (${code})` : message;
-    }
-    if (fields.error !== undefined && depth < PROVIDER_ERROR_MAX_DEPTH) {
-      return describeProviderError(fields.error, depth + 1);
-    }
-  }
-  return jsonOrString(error).slice(0, PROVIDER_ERROR_MAX_CHARS);
+  if (!record.success) return null;
+
+  const fields = record.output;
+  const status = v.safeParse(StatusFieldSchema, fields);
+  const reported = status.success ? status.output.status ?? status.output.statusCode : undefined;
+  const providerCode = nonEmptyString(fields.code) ?? nonEmptyString(fields.type);
+  const stated = nonEmptyString(fields.message)
+    ?? nonEmptyString(fields.error_description)
+    ?? nonEmptyString(fields.detail);
+  // A gateway wraps the provider's reason and stamps its own code and status on
+  // the outside, so the envelope's identifiers still count when the payload
+  // inside states neither.
+  const nested = stated !== undefined || fields.error === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
+    ? null
+    : readProviderFailure({ cause: fields.error, depth: depth + 1 });
+  // No reason anywhere: name what the payload carried rather than stringify it.
+  // The keys are the diagnosis; the values are the leak.
+  const named = Object.keys(fields).join(', ') || 'no fields';
+  return {
+    message: stated ?? nested?.message ?? `unrecognised provider error (fields: ${named})`,
+    providerCode: nested?.providerCode ?? providerCode,
+    status: nested?.status ?? reported,
+  };
 }
 
-function jsonOrString<T>(value: T): string {
-  // Two different reasons to fall through, so the thrown one is carried into
-  // the text: `JSON.stringify` returns undefined for a value with no JSON form
-  // at all, and throws for a cycle or a BigInt.
-  let thrownReason = '';
-  try {
-    const json = JSON.stringify(value);
-    if (json !== undefined) return json;
-  } catch (error) {
-    thrownReason = renderThrownChain({ cause: error });
-  }
-  const record = v.safeParse(v.record(v.string(), v.unknown()), value);
-  if (record.success) {
-    const fields = Object.keys(record.output).join(', ') || 'no fields';
-    return thrownReason
-      ? `unserializable provider error (${fields}): ${thrownReason}`
-      : `unserializable provider error (${fields})`;
-  }
-  return String(value);
+/**
+ * Human-readable text for anything a provider can fail with: the reason, plus
+ * the stable identifiers that would otherwise be lost, and never a code the
+ * reason already states.
+ *
+ * Bounded through `evidenceWindow` rather than a head slice. A failure's
+ * useful sentence is usually its LAST one — a tool that throws after a long
+ * preamble puts the reason at the end — so clipping the head off is clipping
+ * the answer off, and `unit-chat-event-fidelity.test.ts` pins exactly that.
+ * Within budget the text passes through byte-identical.
+ */
+export function describeProviderError(failure: { readonly cause: unknown }): string {
+  const facts = providerFailureFacts({ cause: failure.cause });
+  const tags: string[] = [];
+  if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
+  const code = facts.providerCode;
+  if (code !== undefined && !facts.message.toLowerCase().includes(code.toLowerCase())) tags.push(code);
+  const rendered = tags.length > 0 ? `${facts.message} (${tags.join(', ')})` : facts.message;
+  return evidenceWindow(rendered, PROVIDER_ERROR_MAX_CHARS);
+}
+
+/**
+ * HTTP status → the one classification vocabulary (`obs/error.ts`).
+ *
+ * Statuses, not provider wording: a status is part of the protocol, every
+ * provider Kinu resolves speaks it, and it does not drift when a gateway
+ * rephrases its bodies. Null for a status that says nothing about the class.
+ */
+function codeForStatus(status: number): ErrorCode | null {
+  if (status === 401 || status === 402 || status === 403) return 'denied';
+  if (status === 404) return 'missing';
+  if (status === 408 || status === 504) return 'timeout';
+  if (status === 400 || status === 413 || status === 422) return 'bad_input';
+  if (status === 429 || status >= 500) return 'unavailable';
+  return null;
+}
+
+/**
+ * A provider failure as a classified Kinu error: the code the rest of the
+ * system switches on, safe actionable prose, and the raw failure retained on
+ * `cause` for diagnostics.
+ *
+ * This is the boundary. Above it a provider failure is an opaque SDK object
+ * carrying a response body; below it, it is a {@link KinuError} like every
+ * other failure in the process, and `renderCauseChain` renders messages only —
+ * so the body stays available to an observability sink that inspects `cause`
+ * and never reaches a terminal or a chat surface.
+ */
+export function toProviderError(input: { doing: string; cause: unknown }): KinuError {
+  const facts = providerFailureFacts({ cause: input.cause });
+  const code = classifyErrorCode({ cause: input.cause })
+    ?? (facts.status === undefined ? null : codeForStatus(facts.status))
+    ?? 'unavailable';
+  return new KinuError(code, `${input.doing}: ${describeProviderError({ cause: input.cause })}`, {
+    cause: input.cause,
+  });
 }
 
 /** "131k" / "1M" / "1.05M" — compact context-window text shared by the web

@@ -16,6 +16,7 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { RunEvent, RunEventInput, RunEventType } from './types';
 import { JsonValueSchema } from '../utils/json';
+import { boundedInt } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import {
@@ -172,8 +173,56 @@ export interface RunEventQuery {
   until?: number;
   /** Filter to a subset of event types. */
   types?: readonly RunEventType[];
-  /** Maximum rows to return. Default 200. */
+  /** Maximum rows to return. Closed by {@link boundRunEventQuery} to
+   *  [1, {@link RUN_EVENT_LIMIT_MAX}], defaulting to
+   *  {@link RUN_EVENT_LIMIT_DEFAULT}. */
   limit?: number;
+}
+
+/** A run-event query whose numeric bounds have been closed — the only shape an
+ *  untrusted caller's query may take once it crosses the object boundary. */
+export interface BoundedRunEventQuery extends RunEventQuery {
+  since: number;
+  limit: number;
+}
+
+/** Rows one run-event read returns when the caller states no usable limit. */
+export const RUN_EVENT_LIMIT_DEFAULT = 200;
+
+/**
+ * The ceiling on a read an UNTRUSTED caller asked for — the bound the HTTP route
+ * already enforced, applied by {@link boundRunEventQuery} so the route is no
+ * longer the only place it holds.
+ *
+ * It is NOT the recorder's ceiling. An in-object read-model states its own
+ * window because it folds an answer out of the whole of it — `getRunSummaries`
+ * sums a run's usage and prints the total as the workspace's spend, so a window
+ * silently narrowed to a stranger's allowance would be a truncated denominator
+ * presented as a settled figure.
+ */
+export const RUN_EVENT_LIMIT_MAX = 500;
+
+/**
+ * Close an untrusted caller's run-event bounds before they cross the object
+ * boundary: `limit` becomes a finite integer in [1, {@link RUN_EVENT_LIMIT_MAX}]
+ * and `since` a finite non-negative integer, whatever the caller passed.
+ *
+ * Absent and non-finite both mean UNSTATED and take the default. A route that
+ * forwards `Number('abc')` cannot be told apart from one that asked for nothing,
+ * and guessing at the difference is not the boundary's job.
+ *
+ * Applied by the HTTP route and by {@link getRunEvents}, the read-model every
+ * RPC into this log goes through — so a direct RPC gets the same ceiling as a
+ * request that came through the route. {@link RunEventRecorder.read} enforces
+ * its own separate invariant on top, for the in-object callers that never reach
+ * this function.
+ */
+export function boundRunEventQuery(opts: RunEventQuery = {}): BoundedRunEventQuery {
+  return {
+    ...opts,
+    since: boundedInt(opts.since, 0, 0, Number.MAX_SAFE_INTEGER),
+    limit: boundedInt(opts.limit, RUN_EVENT_LIMIT_DEFAULT, 1, RUN_EVENT_LIMIT_MAX),
+  };
 }
 
 /** One run as the log lists it: which run, when it was last written to, and how
@@ -283,14 +332,27 @@ export class RunEventRecorder {
       VALUES (${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
   }
 
+  /**
+   * The log's own invariant, applied to EVERY caller including the in-object
+   * read-models that never pass through {@link boundRunEventQuery}: only a
+   * finite positive integer may reach SQL. SQLite reads `LIMIT -1` as no limit
+   * at all — one negative value turns a paged read into a full read, parse and
+   * serialize of a run's whole history — and takes a fraction or NaN as a
+   * datatype mismatch.
+   *
+   * No ceiling here, deliberately. The ceiling is a question about how much an
+   * UNTRUSTED caller may ask for, which the boundary answers; an in-object fold
+   * states the window its answer is correct over and must get it.
+   */
   read(runId: string, opts: RunEventQuery = {}): RunEvent[] {
-    const limit = opts.limit ?? 200;
-    const since = opts.since ?? 0;
+    const limit = boundedInt(opts.limit, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
+    const since = boundedInt(opts.since, 0, 0, Number.MAX_SAFE_INTEGER);
     const types = opts.types && opts.types.length > 0 ? new Set<string>(opts.types) : null;
 
     // Tagged-template SQL can't safely build dynamic IN-clauses across all
     // SqlExecutor implementations (parameter binding is positional). Fetch
-    // a window and filter client-side — events are small, limit is bounded.
+    // a window and filter client-side — events are small, and the window is
+    // whatever `limit` states, capped at 2000 when a filter widens it.
     const fetchLimit = types ? Math.min(limit * 4, 2000) : limit;
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events

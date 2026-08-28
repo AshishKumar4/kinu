@@ -32,6 +32,7 @@ import { PLATFORM_CATALOG } from "@kinu.run/core";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
+import { SANDBOX_LIFECYCLE_ENVELOPE_VERSION } from "./sandbox-lifecycle";
 import type { SandboxLifecycleFailure } from "./sandbox-lifecycle";
 import {
   CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER,
@@ -160,17 +161,29 @@ export class KinuSandbox extends Devbox<Env> {
 
   /** Tell the agent its container failed. Devbox has already made the incident
    *  durable and will keep re-delivering until this returns `queued`, so the
-   *  only job here is the call itself. */
-  protected override async onIncident(incident: DevboxIncident): Promise<IncidentDisposition> {
+   *  only job here is the call itself.
+   *
+   *  `attempt` is Devbox's own delivery count for THIS incident, handed down
+   *  rather than recounted: the box's ledger is where deliveries are counted,
+   *  and an evicted Worker cannot see how many there have been. It is the one
+   *  dimension the recovery row cannot derive, which is why it rides the
+   *  envelope. */
+  protected override async onIncident(
+    incident: DevboxIncident, attempt: number,
+  ): Promise<IncidentDisposition> {
     const root = await this.#rootAgent();
     if (root === null) return 'rejected';
     // The root's schema is closed and takes plain JSON; a DevboxIncident is
     // exactly that shape, restated field by field so an added Devbox field
-    // cannot silently ride along into a contract that would reject it.
+    // cannot silently ride along into a contract that would reject it. The
+    // version is stamped from the consumer's own constant, so the two halves of
+    // this envelope cannot disagree about which shape it is.
     const report: SandboxLifecycleFailure = {
+      version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
       incidentId: incident.incidentId,
       stage: incident.stage,
       reason: incident.reason,
+      attempts: attempt,
     };
     if (incident.processId !== undefined) report.processId = incident.processId;
     if (incident.port !== undefined) report.port = incident.port;

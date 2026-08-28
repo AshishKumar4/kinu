@@ -10,6 +10,12 @@
   },
   "rules": {
     "import/no-cycle": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/ban-ts-comment": ["error", {
+      "ts-expect-error": true,
+      "ts-ignore": true,
+      "ts-nocheck": true
+    }],
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-copy-rpc-stub": "error",

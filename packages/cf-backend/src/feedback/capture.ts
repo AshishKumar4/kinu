@@ -110,6 +110,23 @@ function captureScale(width: number, height: number): number {
   return Math.min(window.devicePixelRatio || 1, Math.sqrt(MAX_CAPTURE_PIXELS / area));
 }
 
+/**
+ * Cancels the DOCUMENT's own scroll offset, and only that one.
+ *
+ * The rasteriser restores a scroll position by translating the children of
+ * every scrolled element by that element's offsets, and it counts
+ * `documentElement` among them. This capture already spans the whole document,
+ * so translating the page by where the reader happens to be scrolled cuts that
+ * much off the top and leaves the same blank at the bottom — measured, not
+ * feared. A transform on the captured root puts the document's share back and
+ * leaves every nested container's alone.
+ */
+function unscrollDocument(root: Element): { transform: string } | undefined {
+  const { scrollLeft, scrollTop } = root;
+  if (scrollLeft === 0 && scrollTop === 0) return undefined;
+  return { transform: `translate(${String(scrollLeft)}px, ${String(scrollTop)}px)` };
+}
+
 /** A canvas is the re-encode: it holds decoded pixels, so what comes out
  *  carries no chunk that was not drawn. */
 async function encode(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -147,6 +164,15 @@ export async function capturePage(): Promise<Capture> {
     // The page's own ground, so a capture of a dark theme is not matted onto
     // white where the document background does not paint.
     backgroundColor: getComputedStyle(document.body).backgroundColor,
+    // A pane the reader scrolled is photographed WHERE THEY LEFT IT. Off by
+    // default in the rasteriser, and the default is wrong for a bug report: a
+    // transcript scrolled to the failure, or a table scrolled to the wrong
+    // column, came back at the top and showed none of what was being reported.
+    // Per-container and deterministic — each scrolled element translates its
+    // own children — so no second layout tree is built and nothing is measured
+    // twice.
+    features: { restoreScrollPosition: true },
+    style: unscrollDocument(root),
     onCloneNode: (cloned) => {
       if (cloned instanceof Element) redacted = redactClone(cloned);
     },

@@ -30,7 +30,8 @@
 
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { combineAbortSignals } from '@kinu.run/agent-utils';
-import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
+import { DEVICE_REQUEST_OPTION, SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
+import { DeviceRequestOwnership } from './device-ownership';
 import type { BackgroundJobRunner } from './runner';
 import type { WorkMode } from '../prompting/surface';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
@@ -87,6 +88,9 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         const parsedInput = decodeJsonValue({ value: input });
         if (!detachable(parsedInput)) return exec(input, options);
         const controller = new AbortController();
+        // One holder per invocation: it accumulates what this call issues, and
+        // carries the owning job's identity once this call detaches.
+        const ownership = new DeviceRequestOwnership();
         const mode = deps.mode();
         const turnSignal = options.abortSignal;
         const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
@@ -102,19 +106,29 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
             run = withSpawnDetach(
               key,
               (spawnStarted) => {
-                const execOptions: ToolExecutionOptions & { [SPAWN_STARTED_OPTION]: () => void } = {
-                  ...options, abortSignal, [SPAWN_STARTED_OPTION]: spawnStarted,
+                const execOptions: ToolExecutionOptions & {
+                  [SPAWN_STARTED_OPTION]: () => void;
+                  [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
+                } = {
+                  ...options, abortSignal,
+                  [SPAWN_STARTED_OPTION]: spawnStarted,
+                  [DEVICE_REQUEST_OPTION]: ownership,
                 };
                 return exec(input, execOptions);
               },
-              deps.jobRunner.thresholdDeps(key, input, mode, controller),
+              deps.jobRunner.thresholdDeps(key, input, mode, controller, ownership),
             );
           }
         } else {
+          const execOptions: ToolExecutionOptions & {
+            [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
+          } = {
+            ...options, abortSignal, [DEVICE_REQUEST_OPTION]: ownership,
+          };
           run = withBackgroundThreshold(
             key,
-            () => exec(input, { ...options, abortSignal }),
-            deps.jobRunner.thresholdDeps(key, input, mode, controller),
+            () => exec(input, execOptions),
+            deps.jobRunner.thresholdDeps(key, input, mode, controller, ownership),
           );
         }
         return untrack ? run.finally(untrack) : run;

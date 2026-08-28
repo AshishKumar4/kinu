@@ -32,6 +32,7 @@ import { isRateLimitedTurnError } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
+import type { HeadDeltas } from "@/components/head-chat";
 import { cleanNodeLabel, type ExplorerSelection } from "@/components/swarm-tree-model";
 import { explorationForkTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
@@ -65,10 +66,12 @@ export interface ExplorationSurfaceProps {
   /** Per-branch journal-write counter, from the `head_activity` broadcast. What
    *  makes an OPEN branch's transcript grow as that branch works. */
   headActivity: ReadonlyMap<string, number>;
+  /** The live deltas — the step a running branch is writing. */
+  headDeltas?: HeadDeltas;
 }
 
 export function ExplorationSurface({
-  liveTrees, isStreaming, backgroundJobs, rpc, headActivity,
+  liveTrees, isStreaming, backgroundJobs, rpc, headActivity, headDeltas,
 }: ExplorationSurfaceProps) {
   const { agentId } = useParams();
   const [focusedRunId, setFocusedRunId] = useState<string | null>(null);
@@ -164,7 +167,7 @@ export function ExplorationSurface({
             journal={journals.get(opened.id) ?? null}
             tree={trees.get(opened.id) ?? null}
             branchId={inspecting.nodeId}
-            trees={trees} rpc={rpc} headActivity={headActivity}
+            trees={trees} rpc={rpc} headActivity={headActivity} headDeltas={headDeltas}
             onOpenBranch={(nodeId) => setInspect({ runId: opened.id, nodeId })}
             onClose={() => setInspect(null)}
           />
@@ -176,8 +179,18 @@ export function ExplorationSurface({
 
 /* ── the run list ──────────────────────────────────────────────── */
 
+/**
+ * The run's state as a dot, in the product's own status vocabulary.
+ *
+ * `running` is the ACCENT, pulsing: that is what work in flight looks like in
+ * the sidebar, on a subordinate, in the composer and on a tool call, and this
+ * surface was the one place it was drawn as a WARNING instead. Two costs, both
+ * reported: a healthy search read as a problem, and in light mode `--c-warning`
+ * (#7E5205) sits a hair from `--c-text-3` (#5E5344), so running and
+ * stopped-without-an-answer were the same brown dot.
+ */
 const RUN_DOT = {
-  running: "p-dot-warning",
+  running: "p-dot-accent",
   completed: "p-dot-success",
   failed: "p-dot-danger",
   partial: "p-dot-neutral",
@@ -397,7 +410,7 @@ export function useForkRunTree(
  * the folded tree, which is where a node's score lives.
  */
 function RunDetailView({
-  run, params, resolution, journal, tree, branchId, trees, rpc, headActivity, onOpenBranch, onClose,
+  run, params, resolution, journal, tree, branchId, trees, rpc, headActivity, headDeltas, onOpenBranch, onClose,
 }: {
   run: ForkRunSummary;
   params: ForkRunParams | undefined;
@@ -409,6 +422,7 @@ function RunDetailView({
   trees: ReadonlyMap<string, ForkNode>;
   rpc: Rpc;
   headActivity: ReadonlyMap<string, number>;
+  headDeltas?: HeadDeltas;
   onOpenBranch: (branchId: string | null) => void;
   /** Give the column back to the canvas. Only reachable below `@6xl`, where the
    *  pane took the canvas's place; wider, the two are side by side and there is
@@ -450,7 +464,7 @@ function RunDetailView({
       {branchId === null
         ? <RunNodeList journal={journal} tree={tree} activity={headActivity} onOpen={onOpenBranch} />
         : <ForkBranchView run={run} branchId={branchId} trees={trees} rpc={rpc}
-            headActivity={headActivity} nodeCount={journal?.heads.length ?? run.branches}
+            headActivity={headActivity} headDeltas={headDeltas} nodeCount={journal?.heads.length ?? run.branches}
             onBack={() => onOpenBranch(null)} onOpenBranch={onOpenBranch} />}
     </div>
   );
@@ -630,10 +644,14 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   );
 }
 
-/** A node's dot, over the journal's own vocabulary. `interrupted` is
- *  non-terminal and gets the quiet dot rather than a failure's. */
+/** A node's dot, over the journal's own vocabulary. `running` is the accent, as
+ *  it is everywhere else in the product — and as it has to be here, because the
+ *  row above draws a RATE-LIMITED node in `warning`: while running wore the same
+ *  token, the one signal that pacing rather than a fault stopped the node was
+ *  invisible. `interrupted` is non-terminal and gets the quiet dot rather than a
+ *  failure's. */
 function NODE_DOT(status: string): string {
-  if (status === "running") return "p-dot-warning";
+  if (status === "running") return "p-dot-accent";
   if (status === "completed") return "p-dot-success";
   if (status === "errored" || status === "aborted") return "p-dot-danger";
   return "p-dot-neutral";
@@ -660,7 +678,7 @@ function NODE_DOT(status: string): string {
  * control returns to it.
  */
 function ForkBranchView({
-  run, branchId, trees, rpc, headActivity, nodeCount, onBack, onOpenBranch,
+  run, branchId, trees, rpc, headActivity, headDeltas, nodeCount, onBack, onOpenBranch,
 }: {
   run: ForkRunSummary;
   branchId: string;
@@ -669,6 +687,7 @@ function ForkBranchView({
   trees: ReadonlyMap<string, ForkNode>;
   rpc: Rpc;
   headActivity: ReadonlyMap<string, number>;
+  headDeltas?: HeadDeltas;
   /** How many nodes the list behind this one holds. The JOURNAL's count, because
    *  `ForkRunSummary.branches` counts settled search rows: on a live run those
    *  disagree by every node still working, and "all 2 nodes" over a list of nine
@@ -687,7 +706,7 @@ function ForkBranchView({
       </div>
       <NodeTranscript
         selection={{ runId: run.id, nodeId: branchId }}
-        trees={trees} rpc={rpc} headActivity={headActivity}
+        trees={trees} rpc={rpc} headActivity={headActivity} headDeltas={headDeltas}
         onSelect={onOpenBranch} />
     </div>
   );

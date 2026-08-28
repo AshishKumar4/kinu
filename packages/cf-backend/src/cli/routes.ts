@@ -9,6 +9,7 @@ import {
 import { err, escapeHtml, json, safeJson } from '../lib/http';
 import { randomToken } from '../lib/crypto';
 import type { OrchestratorAgent } from '../orchestrator';
+import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '../events/webhook-route';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
@@ -16,6 +17,7 @@ import {
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store';
 import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate';
 import { buildCliInstallCommand } from './install-command';
+import { bunResolutionShell } from './bun-runtime';
 import { listAvailableModels } from '../user/available-models';
 import { handleCreateWorkspaceRequest } from '../user/workspace-access';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
@@ -104,15 +106,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     }
   }
 
-  if (path === '/auth/approve' && method === 'POST') {
-    let identity: AuthIdentity;
-    try { identity = await authenticateRequest(request, env); }
-    catch (e) { return accessError(toError(e), request); }
-    const body = await safeJson(request, v.object({ userCode: v.optional(v.string()) }));
-    if (!body?.userCode) return err(400, 'userCode required');
-    try { return json(await approveCliAuth(env, body.userCode, identity, clientKey(request))); }
-    catch (e) { return cliAuthError(toError(e)); }
-  }
+  // There is deliberately NO JSON approval route beside the browser form above.
+  // Approval is the one step of the device flow that spends the AMBIENT session
+  // cookie, and this whole module is dispatched before server.ts's CSRF gate so
+  // that bearer-token clients are never asked for an `Origin`. A cookie-only
+  // JSON POST here was therefore reachable from any same-site page with a known
+  // user code, and what it minted was an unrestricted CLI token for that user.
+  // The form flow is the approval path: same-origin, double-submit, and the
+  // only URL `startCliAuth` ever publishes.
 
   const cli = await authenticateCli(request, env);
   if (cli instanceof Response) return cli;
@@ -191,7 +192,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       name: minted.record.name,
       scopes: minted.record.scopes,
       createdAt: minted.record.createdAt,
-    }, { status: 201, headers: { 'cache-control': 'no-store' } });
+    }, { status: 201 });
   }
 
   const tokenRevokeMatch = path.match(/^\/tokens\/([^/]+)$/);
@@ -238,9 +239,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       capabilities: ['agent.websocket'],
     });
     if (!issued.ok || !issued.ticket || !issued.expiresAt) return err(403, issued.error ?? 'Could not issue connect ticket.');
-    return json({ ticket: issued.ticket, expiresAt: issued.expiresAt }, {
-      headers: { 'cache-control': 'no-store' },
-    });
+    return json({ ticket: issued.ticket, expiresAt: issued.expiresAt });
   }
 
   const webhookTriggerMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/webhook$/);
@@ -253,6 +252,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
       return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
     }
+    // Same rule the web route states: a webhook whose delivery URL cannot be
+    // signed is a row nobody can deliver to.
+    if (webhookRouteSecret(env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
     const body = await safeJson(request, WebhookRequestSchema);
     if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
     try {
@@ -568,15 +570,21 @@ need curl
 need tar
 need mktemp
 
-install_bun_if_missing() {
-  if command -v bun >/dev/null 2>&1; then return 0; fi
-  if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
-    die "Bun is required. Install Bun or rerun without KINU_INSTALL_BUN=0."
+${bunResolutionShell()}
+# The one runtime this CLI has. An existing compatible Bun is used as it is;
+# otherwise the approved Bun is installed once, under $KINU_HOME, where the
+# launcher's own resolution reaches it without depending on any shell profile.
+provide_bun() {
+  if ! kinu_resolve_bun; then
+    if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
+      die "Bun $KINU_BUN_VERSION or newer is required. Install Bun, or rerun without KINU_INSTALL_BUN=0."
+    fi
+    say "Installing Bun $KINU_BUN_VERSION..."
+    mkdir -p "$KINU_HOME/runtime"
+    curl -fsSL https://bun.sh/install | BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION"
+    kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
   fi
-  say "Installing Bun runtime..."
-  curl -fsSL https://bun.sh/install | bash
-  export PATH="$HOME/.bun/bin:$PATH"
-  command -v bun >/dev/null 2>&1 || die "Bun installation completed but bun is still not on PATH."
+  say "Using Bun $("$KINU_BUN" --version) at $KINU_BUN."
 }
 
 # Permission probes (test -r/-w) pass even without a controlling terminal,
@@ -640,7 +648,7 @@ prepare_cli_source() {
 
 mkdir -p "$BIN_DIR"
 chmod 700 "$KINU_HOME"
-install_bun_if_missing
+provide_bun
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -755,12 +763,7 @@ TARBALL_URL="\${KINU_SOURCE_TARBALL:-${origin}${CLI_SOURCE_TARBALL_PATH}}"
 # is fetched and verification is mandatory.
 TARBALL_SHA256="\${KINU_SOURCE_SHA256:-}"
 
-need_bun() {
-  if command -v bun >/dev/null 2>&1; then return 0; fi
-  echo "Bun is required for this Kinu CLI build."
-  echo "Run the installer again so it can install Bun, or install Bun from https://bun.sh."
-  exit 1
-}
+${bunResolutionShell()}
 
 die() {
   echo "Kinu update error: $*" >&2
@@ -799,7 +802,15 @@ refresh_source() {
   mv "$extracted" "$SRC_DIR"
 }
 
-need_bun
+kinu_resolve_bun || {
+  echo "Bun $KINU_BUN_VERSION or newer is required for this Kinu CLI build." >&2
+  echo "Reinstall Kinu so it can provide one:" >&2
+  echo "  curl -fsSL ${origin}/install.sh | bash" >&2
+  exit 1
+}
+# Whatever the CLI shells out to gets the same Bun this launcher verified.
+PATH="\${KINU_BUN%/*}:$PATH"
+export PATH
 
 case "\${1:-}" in
   update|upgrade) KINU_REFRESH_SOURCE=1 ;;
@@ -811,9 +822,9 @@ fi
 
 cd "$SRC_DIR"
 if [ ! -d node_modules ]; then
-  bun install --frozen-lockfile
+  "$KINU_BUN" install --frozen-lockfile
 fi
-exec bun run packages/cli/bin/cli.ts "$@"
+exec "$KINU_BUN" run packages/cli/bin/cli.ts "$@"
 `;
   return new Response(head ? null : script, {
     headers: {

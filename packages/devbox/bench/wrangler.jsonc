@@ -47,6 +47,8 @@
       { "class_name": "SnapshotChainBox", "name": "SnapshotChainBox" },
       { "class_name": "R2fsBox", "name": "R2fsBox" },
       { "class_name": "OverlayCasBox", "name": "OverlayCasBox" },
+      { "class_name": "BoundedLayersBox", "name": "BoundedLayersBox" },
+      { "class_name": "MerklePackBox", "name": "MerklePackBox" },
       // Accumulates R2 operation counts flushed from the ContainerProxy. A
       // Durable Object rather than module state because the proxy and the fetch
       // handler are separate entrypoints with no guarantee of sharing an
@@ -65,7 +67,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["SnapshotChainBox", "R2fsBox", "OverlayCasBox", "BenchOpCounter"]
+      "new_sqlite_classes": ["SnapshotChainBox", "R2fsBox", "OverlayCasBox", "BoundedLayersBox", "MerklePackBox", "BenchOpCounter"]
     }
   ],
 
@@ -91,6 +93,18 @@
     },
     {
       "class_name": "OverlayCasBox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    },
+    {
+      "class_name": "BoundedLayersBox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    },
+    {
+      "class_name": "MerklePackBox",
       "image": "docker.io/cloudflare/sandbox:0.12.8",
       "max_instances": 1,
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }

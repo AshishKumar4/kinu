@@ -18,6 +18,20 @@ name: Deploy staging
 # in the dashboard by someone who can sign in there. Without it the script's
 # wrangler probe refuses and prints the scopes to ask for. It stops before the
 # build, so a missing token costs a red run and never a half-deployed staging.
+#
+# The token's SCOPE is also that person's decision and cannot be narrowed from
+# here: nothing in a repository can reduce what an account-scoped API token is
+# allowed to do. What this file can do, and does, is bind the token to one
+# GitHub environment and give the job no repository authority it does not use.
+# See docs/DEPLOYMENT.md § Staging deploys itself for the two settings an
+# operator has to make in the dashboard.
+
+# The job reads the checkout and nothing else. Without this block the workflow
+# inherits whatever the repository's default token permissions happen to be,
+# which on a repository created before 2023 is write access to everything —
+# handed to a job that also holds a Cloudflare deploy credential.
+permissions:
+  contents: read
 
 on:
   push:
@@ -37,8 +51,16 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # The deployment boundary GitHub can enforce. `CLOUDFLARE_API_TOKEN` belongs
+    # to this environment rather than to the repository, so no other workflow and
+    # no other job can read it, and the environment's own branch rule and
+    # reviewers decide when a run may use it. OPERATOR SETUP REQUIRED: creating
+    # the environment and moving the secret into it is a dashboard action — until
+    # it is done, a repository-level secret of the same name still resolves and
+    # this line changes nothing.
+    environment: staging
     # The declared deploy tier is 400s of gates, and on a 2-core runner the wave
-    # runs almost serially. Lean is the long pole: the cache below holds
+    # runs almost serially. Lean is the long pole: the setup-lean action caches
     # `lean/.lake`, and on a miss `verify:lean` rebuilds 330 theorems in ~15
     # minutes. Generous enough for a cold cache, tight enough that a hung gate
     # fails rather than idles.
@@ -48,6 +70,11 @@ jobs:
       # --short HEAD`; the smoke test reads that sha back off /api/health, so the
       # checkout has to be a real commit rather than an export.
       - uses: actions/checkout@v4
+        with:
+          # The deploy reads the tree and `git rev-parse`; it never pushes. A
+          # persisted token would sit in `.git/config` for the whole run, inside
+          # the job that runs 53 gates' worth of repository code.
+          persist-credentials: false
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -69,24 +96,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install elan + Lean
-        run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> $GITHUB_PATH
-
-      # BOTH directories. `~/.elan` alone is what the lean-verify workflow
-      # caches, and it holds the toolchain and not the build — so that job pays
-      # the full 15 minutes every time. `lean/.lake` is the build.
-      - name: Cache Lean toolchain and build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.elan
-            lean/.lake
-          key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/**/*.lean') }}
-          restore-keys: |
-            lean-${{ hashFiles('lean/lean-toolchain') }}-
-            lean-
+      # Pinned and checksum-verified, and BEFORE the step that holds the deploy
+      # credential — `verify:lean` is one of the deploy's required gates, so this
+      # toolchain executes inside it. See .github/actions/setup-lean.
+      - name: Set up Lean
+        uses: ./.github/actions/setup-lean
 
       # Chrome for the four gates that boot vite and drive a real page.
       - name: Install Chrome for puppeteer

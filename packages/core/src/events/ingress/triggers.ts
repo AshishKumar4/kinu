@@ -108,7 +108,27 @@ export function listTriggers(registry: TriggerRegistry) {
   };
 }
 
+/** What a cancellation did, or why it was refused. */
+export interface CancelTriggerResult {
+  readonly ok: boolean;
+  readonly changed: boolean;
+  /** Why it was refused. Present only when `ok` is false. */
+  readonly error?: string;
+}
+
 /** Cancel a trigger (revoke). Idempotent.
+ *
+ * `caller` is WHO asked, and it is the authorization: a trigger the OWNER
+ * created may only be revoked by the owner. The model reaches this through
+ * `agent.cancelSchedule`, and a webhook's durable trigger id is model-visible
+ * (the drain renders `triggered_by: webhook (<id>)`), so without this a turn
+ * that merely READ an admitted delivery could permanently close the owner's
+ * step-up-gated ingress by handing that id straight back.
+ *
+ * Deliberately NOT a `TRUST_ORDER` comparison. That scale ranks how far an
+ * EVENT is believed, and it puts `self` above `owner` — true of an agent's own
+ * emissions, and no statement at all about who may revoke the owner's ingress.
+ * The rule here is about a principal, so it is written as one.
  *
  * `secrets` is the webhook secret store over the SAME workspace SQLite as the
  * registry, when the caller has one: with it, closing a trigger and deleting
@@ -118,8 +138,17 @@ export function listTriggers(registry: TriggerRegistry) {
  * revocation history is audit, not state to erase. */
 export function cancelTrigger(
   registry: TriggerRegistry, trigger_id: string, now: number,
+  caller: TrustLevel,
   secrets?: Pick<WebhookSecretStore, 'deleteByTrigger'>,
-) {
+): CancelTriggerResult {
+  const trigger = registry.get(trigger_id);
+  if (trigger && trigger.creator_trust === 'owner' && caller !== 'owner') {
+    return {
+      ok: false,
+      changed: false,
+      error: 'this trigger was created by the owner; only the owner can revoke it',
+    };
+  }
   const changed = registry.revoke(trigger_id, now);
   if (changed) secrets?.deleteByTrigger(trigger_id);
   return { ok: true, changed };

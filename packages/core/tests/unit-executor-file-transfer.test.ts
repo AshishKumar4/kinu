@@ -16,6 +16,7 @@ const MiB = 1024 * 1024;
  *  download must hold at one. */
 function makePlane(seed: Record<string, Uint8Array> = {}) {
   const files = new Map<string, Uint8Array>(Object.entries(seed));
+  const revisions = new Map<string, number>(Object.keys(seed).map((path) => [path, 1]));
   const reads = { count: 0 };
   const vfs: VFS = {
     readFile: async (path) => {
@@ -26,6 +27,15 @@ function makePlane(seed: Record<string, Uint8Array> = {}) {
     },
     writeFile: async (path, data) => {
       files.set(path, data instanceof Uint8Array ? data : new TextEncoder().encode(data));
+      revisions.set(path, (revisions.get(path) ?? 0) + 1);
+    },
+    writeFileIfRevision: async (path, data, expectedRevision) => {
+      const revision = revisions.get(path) ?? 0;
+      if (expectedRevision !== revision) return { ok: false, revision };
+      files.set(path, data);
+      const nextRevision = revision + 1;
+      revisions.set(path, nextRevision);
+      return { ok: true, revision: nextRevision };
     },
     readdir: async () => [],
     stat: async (path) => {
@@ -40,7 +50,7 @@ function makePlane(seed: Record<string, Uint8Array> = {}) {
     getProvider: (id: string) =>
       id === "workspace" ? { files: vfs, homeDir: async () => "/home/user" } : undefined,
   };
-  return { router, files, reads };
+  return { router, files, revisions, reads, vfs };
 }
 
 function patternBytes(length: number): Uint8Array {
@@ -102,6 +112,27 @@ describe("ExecutorFileUpload", () => {
     expect(await upload.chunk(1024, patternBytes(4), true))
       .toMatchObject({ error: expect.stringContaining("settled") });
     expect(plane.files.has("/f.bin")).toBe(false);
+  });
+
+  test("conditional finalization preserves a newer write, while supported and unconditional writes complete", async () => {
+    const path = "/f.bin";
+    const plane = makePlane({ [path]: new TextEncoder().encode("first") });
+    await plane.vfs.writeFile(path, new TextEncoder().encode("newer"));
+
+    const stale = new ExecutorFileUpload(plane.router, "workspace", path, 1);
+    expect(await stale.chunk(0, new TextEncoder().encode("stale"), true))
+      .toEqual({ conflict: true, revision: 2 });
+    expect(new TextDecoder().decode(plane.files.get(path))).toBe("newer");
+
+    const current = new ExecutorFileUpload(plane.router, "workspace", path, 2);
+    expect(await current.chunk(0, new TextEncoder().encode("current"), true))
+      .toEqual({ ok: true, revision: 3 });
+    expect(new TextDecoder().decode(plane.files.get(path))).toBe("current");
+
+    const unconditional = new ExecutorFileUpload(plane.router, "workspace", path);
+    expect(await unconditional.chunk(0, new TextEncoder().encode("unconditional"), true))
+      .toEqual({ ok: true });
+    expect(new TextDecoder().decode(plane.files.get(path))).toBe("unconditional");
   });
 
   test("writeExecutorFileOp round-trips what finalize assembled (the plane contract)", async () => {

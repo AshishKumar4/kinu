@@ -215,14 +215,14 @@ describe('the loop, through the production seams', () => {
     expect(snapshot?.recoveries[0]?.failedSignature).toMatch(/^run/);
   });
 
-  test('a finding recorded between two steps reaches the NEXT step\'s request — the episode improves while running', () => {
+  test('a finding recorded between two steps reaches the NEXT step\'s request — the episode improves while running', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
     // The per-step pipeline exactly as both backends wire it: the ledger lives
     // for the activation, the snapshot re-reads the lessons ledger per step.
     const ledger = new DynamicContextLedger();
-    const step = (stepNumber: number) => composePrepareStep({
+    const step = async (stepNumber: number) => composePrepareStep({
       dynamic: {
         ledger,
         snapshot: () => agentDynamicContext({
@@ -239,12 +239,12 @@ describe('the loop, through the production seams', () => {
     }, { stepNumber, messages: [{ role: 'user', content: 'fix the build' }] });
 
     orch.beginTurn(Date.now());
-    const before = step(0);
+    const before = await step(0);
     expect(JSON.stringify(before?.messages ?? [])).not.toContain('Proven by execution');
 
     grindThenRecover(orch);
-    const after = step(1)!;
-    const rendered = JSON.stringify(after.messages);
+    const after = await step(1);
+    const rendered = JSON.stringify(after?.messages ?? []);
     expect(rendered).toContain('Proven by execution');
     expect(rendered).toContain('bun test');
   });

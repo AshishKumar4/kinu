@@ -32,7 +32,7 @@ import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@/lib/preview-origin";
 import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import { liveTail } from "@/components/message-live-tail";
-import { segmentBySteers } from "@kinu.run/core";
+import { redactPayload, segmentBySteers } from "@kinu.run/core";
 import {
   classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
@@ -291,13 +291,13 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
           ) : input != null ? (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
-              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{JSON.stringify(input, null, 2)}</pre>
+              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{JSON.stringify(redactPayload(input), null, 2)}</pre>
             </div>
           ) : null}
           {output != null && (
             <div>
               <div className="p-eyebrow mb-1">Output</div>
-              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{displayToolValue(output)}</pre>
+              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{displayToolValue(redactPayload(output))}</pre>
             </div>
           )}
         </div>
@@ -636,6 +636,14 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
   return <DrainedEventsCard text={text} state={state} />;
 }
 
+/** The user bubble, shared verbatim by a durable user row and a steer (a steer
+ *  IS one — see SteerBubble). `wrap-anywhere` because a long unbroken token — a
+ *  URL, a hash, a pasted path — must break inside the bubble rather than widen
+ *  it through the column; text with ordinary break opportunities wraps exactly
+ *  as it always did. */
+const USER_BUBBLE_CLASS =
+  "relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-body whitespace-pre-wrap wrap-anywhere";
+
 /**
  * A steer as the thread draws it — the SAME bubble a user message gets, because
  * it IS one. The only difference worth drawing is whether the model has it yet.
@@ -652,7 +660,7 @@ export function SteerBubble({ steer, onFork }: {
 }) {
   return (
     <div className="group flex flex-col items-end animate-fade-in" data-steer={steer.state}>
-      <div className="relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-body whitespace-pre-wrap">
+      <div className={USER_BUBBLE_CLASS}>
         {steer.text}
         {onFork && steer.state === "landed" && (
           <button
@@ -746,7 +754,7 @@ export const MessageView = memo(function MessageView({
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div className="relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-body whitespace-pre-wrap">
+        <div className={USER_BUBBLE_CLASS}>
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}

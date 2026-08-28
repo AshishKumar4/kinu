@@ -19,8 +19,10 @@
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { streamText } from 'ai';
-import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage } from '@kinu.run/core';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage, type JsonObject } from '@kinu.run/core';
 import { repairSseCachedUsage } from '../src/providers/stream-usage-repair';
+import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 
 const ID = 'id-1783943808747';
@@ -210,6 +212,76 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
     // `raw` is what normalizeUsage witnesses presence off, so the repair has to
     // restore the KEY as well as the number — otherwise the step reports no
     // cache read at all and the hit-rate sample is silently dropped.
+    expect(normalizeUsage(usage).cacheRead).toBe(14528);
+  });
+});
+
+// The direct binding transport translates every `data:` line itself, so it
+// applies the repair RULE inside that one pass rather than piping its own output
+// through a second line splitter. Same captures, same rule, one pass.
+describe('cached-usage repair through the direct binding pass', () => {
+  const GLM = '@cf/zai-org/glm-5.2';
+  const DIRECT_ENDPOINT = 'https://kinu-direct-workers-ai.invalid/chat/completions';
+  // The duplicate in the shape that carries no live choice: the transport
+  // absorbs it and reports it once, so the repair has to reach the frame it
+  // synthesizes rather than a forwarded line.
+  const USAGE_ONLY_ZEROED = `data: {${tailHead},"choices":[],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":{"cached_tokens":0}}}`;
+
+  function directBindingFetch(body: string): typeof globalThis.fetch {
+    const ai = {
+      run(_model: string, _inputs: JsonObject, _options?: JsonObject):
+      Promise<Response | ReadableStream<Uint8Array> | JsonObject> {
+        return Promise.resolve(sseResponse(body));
+      },
+    };
+    // SAFETY: the fixture above declares `run` with the exact signature
+    // DirectWorkersAIRunner requires, and `createDirectWorkersAIFetch` narrows
+    // its argument to that one member before calling anything — every other
+    // member of `Ai` is unreachable from this transport, so the assertion is
+    // over a surface the callee provably never touches.
+    return createDirectWorkersAIFetch(ai as Ai);
+  }
+
+  async function streamedText(body: string): Promise<string> {
+    const response = await directBindingFetch(body)(DIRECT_ENDPOINT, {
+      method: 'POST',
+      body: JSON.stringify({ model: GLM, messages: [{ role: 'user', content: 'ping' }], stream: true }),
+    });
+    return response.text();
+  }
+
+  test('a zeroed trailing duplicate is repaired, and untouched frames stay verbatim', async () => {
+    const out = await streamedText(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]'));
+    expect(lastCachedTokens(out)).toBe(14528);
+    expect(out).toContain(`${DELTA_CHUNK}\n`);
+    expect(out).toContain(`${MODEL_USAGE_CHUNK}\n`);
+  });
+
+  test('a duplicate that arrives as a usage-only frame is repaired too', async () => {
+    const out = await streamedText(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, USAGE_ONLY_ZEROED, 'data: [DONE]'));
+    expect(lastCachedTokens(out)).toBe(14528);
+    expect(out).not.toContain('"cached_tokens":0');
+  });
+
+  test('a genuinely uncached stream is never inflated on this path either', async () => {
+    const cold = MODEL_USAGE_CHUNK.replace('{"cached_tokens":14528}', 'null');
+    const out = await streamedText(sse(DELTA_CHUNK, cold, 'data: [DONE]'));
+    expect(out).toContain(`${cold}\n`);
+    expect(out).not.toContain('cached_tokens');
+  });
+
+  test('streamText reads the repaired cache read off a binding stream', async () => {
+    const model = createOpenAICompatible({
+      name: 'workers-ai',
+      baseURL: 'https://kinu-direct-workers-ai.invalid',
+      fetch: directBindingFetch(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, USAGE_ONLY_ZEROED, 'data: [DONE]')),
+    }).chatModel(GLM);
+
+    const result = streamText({ model, prompt: 'ping' });
+    await result.consumeStream();
+
+    const usage = await result.usage;
+    expect(usage.cachedInputTokens).toBe(14528);
     expect(normalizeUsage(usage).cacheRead).toBe(14528);
   });
 });

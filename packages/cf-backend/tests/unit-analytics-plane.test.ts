@@ -270,6 +270,10 @@ describe('column resolution is derived, never spelled', () => {
     expect(blobColumn(AGENT_METRICS_SCHEMA, 'model')).toBe('blob9');
     expect(blobColumn(AGENT_METRICS_SCHEMA, 'tool')).toBe('blob10');
     expect(blobColumn(AGENT_METRICS_SCHEMA, 'source')).toBe('blob11');
+    // The two APPENDED slots. Pinned here for the same reason as every slot
+    // above: a slot that is appended and not pinned is the one a later append
+    // can silently move past, and slot order IS the wire format.
+    expect(blobColumn(AGENT_METRICS_SCHEMA, 'reason')).toBe('blob12');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'count')).toBe('double1');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'durationMs')).toBe('double2');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'ttftMs')).toBe('double3');
@@ -283,6 +287,7 @@ describe('column resolution is derived, never spelled', () => {
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'neurons')).toBe('double11');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'usd')).toBe('double12');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'priced')).toBe('double13');
+    expect(doubleColumn(AGENT_METRICS_SCHEMA, 'attempts')).toBe('double14');
     expect(indexColumn(AGENT_METRICS_SCHEMA)).toBe('index1');
   });
 
@@ -821,7 +826,10 @@ describe('the record adapters write the rows their boundaries promise', () => {
       'turn', 'turn', 'turn.settled', 'failed', 'timeout', 'turn.settled',
       'subordinate', 'workers-ai', 'deepseek-v4', '', '', '',
     ]);
-    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1]);
+    // The trailing 0 is `attempts`: a turn is not a delivery and counts none,
+    // and a plausible 1 there would read as a first attempt in every aggregate
+    // over recovery.
+    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0]);
   });
 
   test('an unpriced call reports priced 0, so an average cost cannot be diluted', () => {
@@ -850,7 +858,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
     expect(point.doubles?.[4]).toBe(1);
     // No token report and no price on a tool row: those belong to a model call,
     // and a plausible-looking zero here would pool into a spend aggregate.
-    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
   });
 
   test('a first-token row is its own kind, so a silent turn is absent rather than zero', () => {

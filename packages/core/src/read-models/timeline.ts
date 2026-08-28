@@ -17,6 +17,7 @@ import type { BackgroundJobStore } from '../jobs/store';
 import type { SqlExecutor } from '../types/primitives';
 import type { Usage } from '../usage';
 import { parseJsonValue, type JsonValue } from '../utils/json';
+import { boundedInt } from '../utils/bounds';
 import { classify } from '../obs/index';
 
 export type TimelineKind =
@@ -142,6 +143,24 @@ export interface RunTimelineDeps {
   readonly currentRunId: string | null;
 }
 
+/** Spans one timeline read returns when the caller states no usable limit —
+ *  what the bare `?? 200` here was. The CLI's local peer keeps its own default
+ *  of 100 and shares only the ceiling. */
+export const RUN_TIMELINE_DEFAULT = 200;
+
+/**
+ * The ceiling on one timeline read.
+ *
+ * Sized from what this surface is recorded asking for and costing, not invented:
+ * the widest ask the product ever made of it was the chat seed's
+ * `getRunTimeline({ limit: 250 })`, which `OrchestratorAgent`'s seed docstring
+ * records being REMOVED for weight (250 merged spans no component read), and the
+ * nearest existing ceiling on a sibling merged diagnostic read is
+ * `ACTIVITY_STEP_WINDOW` at 400. So 400 admits every legitimate recorded caller,
+ * including `kinu timeline`, while closing the unbounded case.
+ */
+export const RUN_TIMELINE_MAX = 400;
+
 /**
  * Merge the sources into one ordered timeline. Defaults to the active run,
  * else the most recent recorded one. Every source is a table
@@ -153,7 +172,12 @@ export function getRunTimeline(
   deps: RunTimelineDeps,
   opts?: { runId?: string; limit?: number },
 ): TimelineSpan[] {
-  const limit = opts?.limit ?? 200;
+  // One caller-supplied number reaches FOUR separate `LIMIT` binds below plus a
+  // tail slice, so it is closed once here. `@callable` reaches this, and an
+  // unclosed value costs four unbounded table reads at `LIMIT -1` or four
+  // datatype mismatches on a fraction; a negative also inverts `slice(-limit)`
+  // into dropping spans from the front.
+  const limit = boundedInt(opts?.limit, RUN_TIMELINE_DEFAULT, 1, RUN_TIMELINE_MAX);
   const recent = deps.sql<{ run_id: string }>`
     SELECT run_id FROM run_events ORDER BY ts DESC LIMIT 1`[0]?.run_id;
   const runId = opts?.runId || deps.currentRunId || recent;

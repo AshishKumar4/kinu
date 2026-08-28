@@ -263,6 +263,12 @@ export const AGENT_METRICS_SCHEMA = defineSchema({
     // unpriced call cannot read as a free one.
     { name: 'usd' },
     { name: 'priced' },
+    // Which delivery attempt a row is reporting, where the producer counts them.
+    // A durable recovery announcement is retried until its host accepts it, so
+    // "how many rows" and "how many incidents" are different questions, and this
+    // slot is what tells them apart. APPENDED, like `reason` above: slot order IS
+    // the wire format. Zero on every row whose producer counts no attempts.
+    { name: 'attempts' },
   ],
 });
 

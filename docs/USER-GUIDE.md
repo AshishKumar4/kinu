@@ -68,9 +68,11 @@ kinu exec -w jarvis --json "…"      # line-delimited JSON events instead of pr
 kinu stop jarvis                    # stop the turn that's running
 ```
 
-In the full-screen TUI: `Ctrl+K` commands, `Ctrl+O` workspaces, `Ctrl+G`
-settings, `Ctrl+P` models, `Esc` closes the active panel, `/` filters commands
-in the composer.
+In the full-screen TUI: `Ctrl+K` opens the command palette, `Alt+W` opens the
+workspace navigator, `Ctrl+,` opens settings, and `Ctrl+L` opens the model picker.
+`Ctrl+O` opens tool details, `Ctrl+G` opens the external editor, `Ctrl+P` cycles
+the inference tier, and `Shift+Tab` cycles reasoning effort. `Esc` interrupts the
+turn or closes the active panel. `/` filters commands in the composer.
 
 Useful on day one:
 
@@ -130,6 +132,12 @@ kinu triggers jarvis cancel <id>
 kinu webhook jarvis deploys                   # a durable webhook endpoint
 ```
 
+`kinu webhook` prints the URL to give the other system, and the secret it must
+sign with. The URL carries a signature of its own, so it cannot be typed or
+guessed — a URL you assemble by hand is refused. If you lose it, read it back
+with `kinu triggers <workspace>`, which prints the current URL for every
+webhook. Cancelling the trigger stops the URL working.
+
 Each workspace also has an email address once the mail domain is set up,
 `<workspace>@kinu.run` (see [docs/EMAIL-INGRESS.md](EMAIL-INGRESS.md)). Mail
 from your verified address starts a turn; the reply comes back on the thread.
@@ -169,11 +177,13 @@ trial, a failed job, unread self-changes.
 **Exploration** is where I go when the agent tried more than one thing. The
 `agents` tool's `swarm` action grows a configured tree of nodes, every node a
 whole tool-calling agent. The agent picks a preset from the task; preset plus
-task is a complete call. Name an objective too and a registered verifier
-measures the search; name none and it falls back to a judged sweep instead of
-refusing. Ideation returns unranked candidates. Local nodes get private homes;
-hosted nodes share the workspace file plane. A node takes as many steps as its
-budget allows, because no turn here carries a step cap.
+task is a complete call. Name an objective and a registered verifier measures
+the search. Without one, the search falls back to a judged sweep instead of
+refusing. Ideation returns unranked candidates. Local nodes get private homes.
+Hosted nodes use the canonical workspace for shared project files. Their
+`/home/node-<id>` is owner-writable and sibling-readable at `0o755`; their
+`/tmp/node-<id>` is private at `0o700` (`core/src/vfs/agent-home.ts`). A node
+takes as many steps as its budget allows because no turn here carries a step cap.
 
 Every search is a row, newest first, and the canvas draws its tree: score in a
 node's fill, rollouts in its radius, a ring on the settled answer. Measured

@@ -20,7 +20,7 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import {
-  DEFAULT_ROLE_ID, TIER_IDS, effectiveRoleCatalog,
+  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type TierId,
 } from '@kinu.run/core';
 import {
@@ -937,6 +937,7 @@ function ChatScene({
         setTurnPhase(`step ${event.stepIndex}`);
         break;
       case 'evolution':
+      case 'background':
         addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
         break;
       case 'error':
@@ -1327,7 +1328,7 @@ function ChatScene({
     ? 'Connecting…'
     : isProcessing
       ? `Type to steer · ${keybindings.hint('queue.add')} queues · ${keybindings.hint('conversation.branch')} branches · ${keybindings.hint('conversation.cancel')} interrupts`
-      : `Send a message… · ${keybindings.hint('editor.newline')} newline`;
+      : `${TUI_COMPOSER_PLACEHOLDER} · ${keybindings.hint('editor.newline')} newline`;
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
   }, [inputFocused]);
@@ -1508,7 +1509,7 @@ function handleHistoryScrollAction(
  *  command when the failure class implies one. Plain text — the TUI styles
  *  system messages itself, so no ANSI here. */
 function errorLine(message: string): string {
-  const guided = guideFailure(message);
+  const guided = guideFailure({ cause: message });
   return guided.hint ? `Error: ${guided.message}\n${guided.hint}` : `Error: ${guided.message}`;
 }
 

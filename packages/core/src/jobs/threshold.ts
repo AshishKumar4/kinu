@@ -11,6 +11,7 @@
 // instead: the work is cancelled and the model is told why.
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
+import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
 
 /** Which client surface owns the invocation, and therefore whether detaching
  * work is cheap or expensive. Every invocation has one fixed surface. */
@@ -152,7 +153,7 @@ export interface ThresholdDeps {
    *  alive durably (settling the job and waking the agent when it resolves), or
    *  refuse — in which case the implementation has already cancelled the work
    *  and `reason` is what the model is told. */
-  onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome;
+  onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome | Promise<DetachOutcome>;
 }
 
 const TIMED_OUT = Symbol('timed-out');
@@ -179,7 +180,7 @@ export async function withBackgroundThreshold<T>(
   }
 
   // Slow path: hand the live work to the background runner.
-  const outcome = deps.onThreshold(kind, promise);
+  const outcome = await deps.onThreshold(kind, promise);
   if (!outcome.detached) {
     return { background: false, kind, message: outcome.reason };
   }
@@ -223,7 +224,7 @@ export async function withSpawnDetach<T>(
     return winner.value;
   }
 
-  const outcome = deps.onThreshold(kind, promise);
+  const outcome = await deps.onThreshold(kind, promise);
   if (!outcome.detached) {
     return { background: false, kind, message: outcome.reason };
   }
@@ -252,6 +253,32 @@ export function readSpawnStarted<T>(toolOptions: T): (() => void) | undefined {
   const parsed = v.safeParse(SpawnStartedOptionsSchema, toolOptions);
   const fn = parsed.success ? parsed.output[SPAWN_STARTED_OPTION] : undefined;
   return fn;
+}
+
+/**
+ * Options-bag key the background wrapper arms per INVOCATION: the ownership
+ * holder for the durable external requests this ONE call issues (see
+ * ./device-ownership, which owns the two-phase rule).
+ *
+ * Per invocation and not per turn, because one turn can hold several parallel
+ * laptop commands and only the detaching call changes hands. A turn-wide
+ * handover would move requests that never detached, and the job-scoped cancel
+ * that follows would then kill work the foreground is still waiting on. Absent
+ * on inline surfaces (codemode, resume re-drives, the raw eval toolset) and on
+ * calls the gate says cannot detach: those own nothing to hand over.
+ */
+export const DEVICE_REQUEST_OPTION = 'kinuDeviceRequest';
+
+const DeviceRequestOptionsSchema = v.object({
+  [DEVICE_REQUEST_OPTION]: v.optional(v.instance(DeviceRequestOwnership)),
+});
+
+/** This invocation's ownership holder out of a tool-call options bag, if the
+ *  background wrapper armed one — narrowed to the two members a tool may use,
+ *  so the claim stays the runner's. */
+export function readDeviceRequestChannel<T>(toolOptions: T): DeviceRequestChannel | undefined {
+  const parsed = v.safeParse(DeviceRequestOptionsSchema, toolOptions);
+  return parsed.success ? parsed.output[DEVICE_REQUEST_OPTION] : undefined;
 }
 
 /**

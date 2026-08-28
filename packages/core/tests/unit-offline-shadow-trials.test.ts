@@ -18,7 +18,8 @@ import * as v from 'valibot';
 import {
   DEFAULT_SHADOW_CONFIG, EvolutionEngine, MAX_QUEUED_SHADOW_TRIALS, SHADOW_TRIAL_CONTEXT_CHARS,
   applyScaffoldDecision, decidePromotion, getPendingScaffold, getShadowStatus,
-  initScaffoldTables, initShadowTables, listQueuedShadowTrials, queueTurnShadowTrial,
+  dropQueuedShadowTrial, initScaffoldTables, initShadowTables, listQueuedShadowTrials,
+  queueShadowTrial, queueTurnShadowTrial,
   runQueuedShadowTrials,
   type CompletedTurn, type JudgeOutput, type ScaffoldControl,
   type ScaffoldReplayContext,
@@ -28,6 +29,7 @@ import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import { decodeJsonValue } from '../src/utils/json';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime } from './helpers';
+import { createTestSql } from '@kinu.run/test-utils';
 
 const TASK = 'what did we decide about the codename?';
 const LIVE_ANSWER = '<<live-answer>>';
@@ -305,7 +307,7 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
   function hostEngine(rt: AgentRuntime, control: ScaffoldControl, enabled: boolean): EvolutionEngine {
     return new EvolutionEngine(rt, {
       enabled,
-      shadowTrialQueue: (turn) => { queueTurnShadowTrial(control, turn); },
+      shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(control, turn, opts),
       shadowTrialRunner: () => runQueuedShadowTrials(control),
     });
   }
@@ -390,5 +392,56 @@ describe('the stored replay context is bounded', () => {
     expect(stored[0].role).toBe('user');
     expect(stored[stored.length - 1]).toEqual(huge[huge.length - 1]);
     expect(JSON.stringify(stored).length).toBeLessThanOrEqual(SHADOW_TRIAL_CONTEXT_CHARS);
+  });
+});
+
+// The queue row is the whole conflict target, and the runner deletes it the
+// moment it has scored the trial. A caller that OWES the queueing — a durable
+// terminal effect whose disposition was never recorded — replays it after that.
+describe('a keyed trial survives the consumption of its queue row', () => {
+  function openQueue() {
+    const { sql, execRaw } = createTestSql();
+    initShadowTables(execRaw);
+    return sql;
+  }
+  const trial = (id?: string, now?: number) => {
+    const args: Parameters<typeof queueShadowTrial>[1] = {
+      pendingVersion: 2, task: TASK, currentOutput: LIVE_ANSWER, context: [],
+    };
+    if (id !== undefined) args.id = id;
+    if (now !== undefined) args.now = now;
+    return args;
+  };
+
+  test('re-queueing a consumed key creates no second trial', () => {
+    const sql = openQueue();
+    expect(queueShadowTrial(sql, trial('trial:seq-1', 1))).toBe('queued');
+    expect(listQueuedShadowTrials(sql, 2)).toHaveLength(1);
+
+    // Scored, and the row that carried it deleted.
+    dropQueuedShadowTrial(sql, 'trial:seq-1');
+    expect(listQueuedShadowTrials(sql, 2)).toEqual([]);
+
+    // The replay: the obligation is discharged and nothing is queued for a
+    // second scoring.
+    expect(queueShadowTrial(sql, trial('trial:seq-1', 9))).toBe('queued');
+    expect(listQueuedShadowTrials(sql, 2)).toEqual([]);
+  });
+
+  test('a full queue does not make a consumed key report queue_full', () => {
+    const sql = openQueue();
+    queueShadowTrial(sql, trial('trial:seq-1', 1));
+    dropQueuedShadowTrial(sql, 'trial:seq-1');
+    for (let i = 0; i < MAX_QUEUED_SHADOW_TRIALS; i++) queueShadowTrial(sql, trial());
+
+    expect(queueShadowTrial(sql, trial('trial:seq-1', 9))).toBe('queued');
+    expect(queueShadowTrial(sql, trial())).toBe('queue_full');
+  });
+
+  test('unkeyed queueings stay distinct — two turns, two trials', () => {
+    const sql = openQueue();
+    expect(queueShadowTrial(sql, trial(undefined, 1))).toBe('queued');
+    expect(queueShadowTrial(sql, trial(undefined, 2))).toBe('queued');
+    expect(listQueuedShadowTrials(sql, 2)).toHaveLength(2);
   });
 });

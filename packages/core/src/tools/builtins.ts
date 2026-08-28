@@ -839,7 +839,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // MCP tools land under the `mcp_<server>_<name>` prefix (core mcpToolKey,
+  // No builtin may take the `mcp_` prefix (isMcpToolKey is the one predicate,
   // shared by both backends). Reserve that prefix exclusively for MCP so a
   // future builtin can't silently collide with a user's MCP server.
   for (const name of Object.keys(tools)) {

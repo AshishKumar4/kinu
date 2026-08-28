@@ -35,6 +35,32 @@ describe('diversity angles', () => {
     expect(new Set(angles).size).toBe(n);
   });
 
+  test('a wave wider than the shape list still hands out distinct angles', () => {
+    // THE DEFECT: the angle was `SHAPES[i % 6]`, so branch 7 was handed branch 1's
+    // angle BYTE FOR BYTE — and the angle is the only thing that differs between
+    // siblings in the count-based mode, so those two were asked an identical question
+    // and then compared against each other. `branches` has no upper bound; the named
+    // presets run 3-5, which is why it stayed invisible.
+    for (const n of [7, 12, 30]) {
+      const angles = Array.from({ length: n }, (_unused, i) => diversityAngle(i, n));
+      expect(new Set(angles).size).toBe(n);
+      // …and no branch is ever told to differ from its own angle.
+      for (let i = 0; i < n; i += 1) {
+        expect(siblingAngles(i, n)).not.toContain(diversityAngle(i, n));
+      }
+    }
+  });
+
+  test('the first six branches read exactly as they always did', () => {
+    // The six shapes are the honest distinctions and every run this engine has done
+    // was asked in those words. The second axis is reached only by a wider wave, so a
+    // five-wide `ideate` is byte-identical before and after the fix.
+    for (let i = 0; i < 6; i += 1) {
+      expect(diversityAngle(i, 6)).not.toContain('starting from');
+      expect(diversityAngle(i, 30)).toBe(diversityAngle(i, 6));
+    }
+  });
+
   test('directive names the sibling angles and demands a distinct approach', () => {
     const directive = diversityDirective(['the simplest possible solution']);
     expect(directive).toContain('the simplest possible solution');

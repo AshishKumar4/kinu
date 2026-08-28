@@ -1,7 +1,13 @@
 /**
- * Built-in skills shipped with Kinu core. Discovered automatically and
- * merged with any VFS-stored skills the agent has authored. VFS skills
- * shadow built-ins with the same name — the agent can override us.
+ * Built-in skills shipped with Kinu core. Discovered automatically and merged
+ * with the workspace skills under `/workspace/skills/`.
+ *
+ * These names are RESERVED (KINU-N028): that directory is writable by the
+ * agent's own file tool and shell, so a file there may not take a built-in's
+ * name. Shadowing would replace shipped doctrine — including the
+ * `allowed_tools` a built-in declares — by choosing a filename, and no owner
+ * approval could make that the right answer, because the built-in would simply
+ * be gone. `discoverSkills` refuses such a file and says why.
  *
  * Adding a built-in skill: write the SKILL.md inline as a template
  * string, parse it through `parseSkillFile(..., 'builtin')`, push the

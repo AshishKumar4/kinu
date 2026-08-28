@@ -462,6 +462,31 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
   });
 });
 
+describe('advisor negatives use the canonical pane conversation', () => {
+  test('a pane-only cloud turn supplies advisor input and answer', () => {
+    const ws = setup();
+    ws.execRaw(`CREATE TABLE assistant_messages (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
+      role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME NOT NULL)`);
+    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'u-pane'}, ${''}, ${null}, ${'user'},
+              ${JSON.stringify({ id: 'u-pane', role: 'user', parts: [{ type: 'text', text: 'inspect the deploy' }] })},
+              ${'2026-08-16 22:00:00'})`;
+    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'a-pane'}, ${''}, ${'u-pane'}, ${'assistant'},
+              ${JSON.stringify({ id: 'a-pane', role: 'assistant', parts: [{ type: 'text', text: 'I only guessed' }] })},
+              ${'2026-08-16 22:00:01'})`;
+    void ws.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+      VALUES (${'advisor-pane'}, ${'advisor_note'}, ${'should have delegated'},
+              ${JSON.stringify({ severity: 'concern', class: 'missed-capability', turnId: 'a-pane' })}, ${2000})`;
+
+    const split = buildOutcomeEvalSplit(ws.sql, 2);
+    const instance = [...split.train, ...split.val].find((row) => row.input === 'inspect the deploy');
+    expect(instance).toBeDefined();
+    expect(instance!.expected?.recordedResponse).toBe('I only guessed');
+  });
+});
+
 describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () => {
   function seed(sql: ReturnType<typeof makeSql>, negatives: number, accepted: number) {
     for (let i = 0; i < negatives; i++) {

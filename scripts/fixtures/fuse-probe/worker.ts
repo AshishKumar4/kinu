@@ -14,34 +14,32 @@
  *     blockConcurrencyWhile window without risking a forced DO reset.
  *   - `/prepare` verifies the image and bun after startup, before measurement.
  *     A mismatch throws ImageIdentityError.
- *   - destroy() is the one disposable method: the SDK's own teardown
- *     (mounts, tunnels, container instance) followed by clearing this
- *     ephemeral DO's storage, so nothing outlives the run.
+ *   - destroy() first kills every retained process record, then delegates SDK
+ *     teardown and clears this ephemeral DO's storage.
  *
  * The token-guarded JSON API is a thin forwarder: every route maps onto one
  * SDK method via handleProbeOp from ./worker-contract, so what the probe
  * measures is the platform, not this file. Routes: `/exec`, `/put`, `/prepare`,
- * `/stop` (restart only), and `/destroy` (teardown).
+ * `/start`, `/poll`, `/stop` (restart only), and `/destroy` (teardown).
  * Everything measured lives in probe.ts, which the driver uploads through
  * `/put` and runs through `/exec`. Lifecycle wiring is pinned by source-text
  * assertions in bench-fuse-probe.test.ts plus the fixture workers-types tsc;
  * route behaviour is tested against pure contract fakes.
  */
 
-import * as v from "valibot";
 
 import { Sandbox, getSandbox } from "@cloudflare/sandbox";
 
 import {
-  CommandSchema,
   ImageIdentityError,
   SANDBOX_IMAGE,
   SANDBOX_IMAGE_VERSION,
+  destroyProbeRuntime,
   handleProbeOp,
   isAuthorized,
+  parseProbeRequest,
 } from "./worker-contract";
-import type { ProbeCommand, RunIdentity } from "./worker-contract";
-
+import type { ProbeRequest, RunIdentity } from "./worker-contract";
 export { Sandbox } from "@cloudflare/sandbox";
 export { ContainerProxy } from "@cloudflare/sandbox";
 export { FuseProbeBox };
@@ -103,16 +101,12 @@ class FuseProbeBox extends Sandbox<ProbeEnv> {
   }
 
   override async destroy(): Promise<void> {
-    try {
-      // Mounts, tunnels, port tokens and the container instance are the SDK's
-      // own teardown; nothing here re-implements them.
-      await super.destroy();
-    } finally {
-      // This DO is ephemeral: cleared storage means a replayed teardown pass
-      // finds nothing, and no run leaves rows behind even if the teardown
-      // above failed partway.
-      await this.ctx.storage.deleteAll();
-    }
+    await destroyProbeRuntime(
+      async () => this.listProcesses(),
+      async (processId) => this.killProcess(processId),
+      async () => super.destroy(),
+      async () => this.ctx.storage.deleteAll(),
+    );
   }
 }
 
@@ -127,9 +121,9 @@ export default {
     }
     // getSandbox returns the typed FuseProbeBox RPC surface.
     const sandbox = getSandbox(env.Sandbox, SANDBOX_ID, { normalizeId: true, transport: "rpc" });
-    let command: ProbeCommand;
+    let command: ProbeRequest;
     try {
-      command = v.parse(CommandSchema, await request.json());
+      command = parseProbeRequest(pathname, await request.json());
     } catch (error) {
       return Response.json(
         { error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) },

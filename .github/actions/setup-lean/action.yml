@@ -1,0 +1,64 @@
+name: Set up Lean
+description: Install elan from a checksum-verified release artifact, then restore the toolchain and build cache.
+
+# WHY THIS IS NOT THREE `curl … | sh` LINES ANY MORE.
+#
+# All three workflows that verify the Lean proofs ran the same installer:
+#
+#   curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
+#
+# That is `master` of somebody else's repository, piped into a shell, fetched
+# fresh on every run — and in `deploy-staging.yml` the toolchain it installs then
+# runs inside the step that holds `CLOUDFLARE_API_TOKEN`, because `verify:lean` is
+# one of the deploy's required gates. Whoever can move that branch can run code in
+# a job that can deploy. Nothing about the installer was pinned: not a version,
+# not a hash, and the script's own downloads were whatever it decided to fetch.
+#
+# So: a NAMED RELEASE artifact, a sha256 checked before anything executes, and the
+# binary run from the extracted archive. The digest is the release asset's, taken
+# on 2026-08-27:
+#
+#   curl -sL -o elan.tar.gz https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-unknown-linux-gnu.tar.gz
+#   sha256sum elan.tar.gz
+#   42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
+#
+# A version bump edits the two values below together. A tampered or truncated
+# download fails the checksum and the job stops before `elan-init` runs at all.
+#
+# ONE PLACE FOR THE CACHE TOO. The caches had drifted apart: this caches BOTH
+# `~/.elan` (the toolchain) and `lean/.lake` (the build), where `ci.yml` and
+# `lean-verify.yml` cached only the toolchain and therefore rebuilt 330 theorems —
+# about fifteen minutes — on every single run.
+
+runs:
+  using: composite
+  steps:
+    - name: Install elan
+      shell: bash
+      env:
+        ELAN_VERSION: v4.2.4
+        ELAN_ARCHIVE: elan-x86_64-unknown-linux-gnu.tar.gz
+        ELAN_SHA256: 42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
+      run: |
+        set -euo pipefail
+        work="$(mktemp -d)"
+        trap 'rm -rf "$work"' EXIT
+        curl -fsSL --retry 3 -o "$work/elan.tar.gz" \
+          "https://github.com/leanprover/elan/releases/download/${ELAN_VERSION}/${ELAN_ARCHIVE}"
+        printf '%s  %s\n' "$ELAN_SHA256" "$work/elan.tar.gz" | sha256sum --check --strict
+        tar -xzf "$work/elan.tar.gz" -C "$work"
+        # No toolchain here: `lean-toolchain` in the repository decides which one,
+        # and elan installs it on first use.
+        "$work/elan-init" -y --default-toolchain none --no-modify-path
+        printf '%s\n' "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+    - name: Cache the Lean toolchain and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.elan
+          lean/.lake
+        key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/**/*.lean') }}
+        restore-keys: |
+          lean-${{ hashFiles('lean/lean-toolchain') }}-
+          lean-

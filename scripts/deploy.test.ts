@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { EXCLUSION_GROUPS, SERIAL_GATES, deployExclusions, deployWaves } from "./ladder";
+import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const temporaryDirectories: string[] = [];
 
+/** The bench gate's argv AS THE FIXTURE REPO EXPANDS IT: the first seven words
+ *  are what bash resolves the two globs to inside `runDeploy`'s fixture, and the
+ *  rest are literal path words. One list drives both the files written into that
+ *  fixture and the command line REQUIRED_GATES expects, so the two cannot
+ *  disagree. */
 const BENCH_GATE_FILES = [
   "scripts/bench-inference-proxy.test.ts",
   "scripts/bench-pi-worker.test.ts",
@@ -17,6 +23,14 @@ const BENCH_GATE_FILES = [
   "packages/core/tests/unit-bench-split.test.ts",
   "packages/core/tests/unit-bench-stats.test.ts",
   "scripts/sandbox-durability-probe.test.ts",
+  "scripts/capture-probe.test.ts",
+  "scripts/capture-probe-live.test.ts",
+  "scripts/storage-matrix-admission.test.ts",
+  "scripts/storage-matrix-cleanup.test.ts",
+  "scripts/storage-matrix-manifest.test.ts",
+  "scripts/storage-matrix-protocol.test.ts",
+  "scripts/deploy-substrate.test.ts",
+  "scripts/payload-transport.test.ts",
 ] as const;
 
 const REQUIRED_GATES = [
@@ -37,12 +51,15 @@ const REQUIRED_GATES = [
   "bun scripts/secret-scan.ts",
   "bun scripts/schema-drift.ts",
   "bun scripts/tracing-gate.ts",
-  "bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts",
+  "bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts",
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/wired.test.ts",
   "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts",
   "bun test scripts/public-pages.test.ts",
+  "bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts",
+  "bun test scripts/react-runtime-identity.test.ts",
+  "bun test scripts/nested-container-resolution.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",
   "bun test scripts/chat-scroll.test.ts",
   "bun test scripts/ladder.test.ts",
@@ -114,6 +131,14 @@ function commandStub(name: string): string {
   return `#!/usr/bin/bash
 command_line="${name} $*"
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
+if [ "$KINU_DEPLOY_KILL" = "$command_line" ]; then
+  # SIGKILL the process the runner is waiting on: the timeout wrapper, which is
+  # this stub's parent. The gate then ends having published nothing about itself,
+  # which is the OOM-kill shape — the runner has to settle it from the child's
+  # fate alone.
+  kill -9 "$PPID"
+  sleep 30
+fi
 if [ "$KINU_DEPLOY_FAIL" = "$command_line" ]; then
   exit 47
 fi
@@ -121,7 +146,26 @@ exit 0
 `;
 }
 
-function runDeploy(failingGate: string, dirty = false, environment = "production") {
+/** One deploy run against stub gates.
+ *
+ *  `failingGate` exits 47; `killGate` SIGKILLs the process the runner waits on,
+ *  so that gate settles with no verdict of its own. `tmpdir` points the gate log
+ *  directory somewhere, including somewhere that cannot exist. */
+interface DeployRun {
+  readonly failingGate?: string;
+  readonly killGate?: string;
+  readonly dirty?: boolean;
+  readonly environment?: string;
+  readonly tmpdir?: string;
+}
+
+function runDeploy({
+  failingGate = "",
+  killGate = "",
+  dirty = false,
+  environment = "production",
+  tmpdir: temporaryRoot,
+}: DeployRun = {}) {
   const fixture = mkdtempSync(join(tmpdir(), "kinu-deploy-gate-"));
   temporaryDirectories.push(fixture);
   const log = join(fixture, "events.log");
@@ -169,6 +213,10 @@ exit 87
       ...process.env,
       PATH: `${fixture}:/usr/bin:/bin`,
       KINU_DEPLOY_FAIL: failingGate,
+      KINU_DEPLOY_KILL: killGate,
+      // Always explicit. The gate runner creates its log directory under TMPDIR,
+      // and one test points it somewhere that cannot exist.
+      TMPDIR: temporaryRoot ?? tmpdir(),
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
@@ -203,7 +251,7 @@ describe("deploy gate", () => {
   //     strictly shorter than a whole run;
   //   - nothing mutates before the gates finish.
   test("runs every declared gate before the first build mutation", () => {
-    const run = runDeploy("");
+    const run = runDeploy();
 
     expect(run.status).not.toBe(0);
     expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
@@ -223,11 +271,27 @@ describe("deploy gate", () => {
     expect(alone.sort()).toEqual(Object.keys(SERIAL_GATES).sort());
     // Three waves: preflight, one concurrent source block, then infrastructure.
     // Barriers around every source gate would satisfy `alone` and make the
-    // pipeline serial, so pin the middle size.
+    // pipeline serial, so the middle size is pinned. DERIVED from the two lists
+    // above rather than written as a number: a literal here has to be edited
+    // every time a gate is added, and a number nobody can derive gets edited
+    // without being read. The property is the same either way, because a gate
+    // that leaves the middle wave has to appear in `SERIAL_GATES` to satisfy the
+    // assertion above it.
     expect(waves.length).toBe(3);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
-    expect(waves[1]?.length).toBe(52);
+    expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length);
     expect(waves[2]).toEqual(["bun run gate:infra"]);
+  });
+
+  // The Worker version is what a persisted error names, so it has to name the
+  // build. Asserted as text because the fixture cannot reach step 3: its build
+  // stub fails on purpose, which is what every other test here depends on.
+  test("the published version is annotated with the build sha", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    expect(source).toContain(
+      'KINU_WRANGLER_ARGS+=(--tag "$KINU_SHA" --message "kinu $KINU_ENV $KINU_SHA")',
+    );
+    expect(source).toContain('npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"');
   });
 
   test("every gate has a process-tree deadline", () => {
@@ -238,13 +302,41 @@ describe("deploy gate", () => {
     );
   });
 
-  test("gate status publication is atomic and a dead reporter fails closed", () => {
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain('> "$dir/$pick.status.$BASHPID.tmp"');
-    expect(source).toContain('mv "$dir/$pick.status.$BASHPID.tmp" "$dir/$pick.status"');
-    expect(source).toContain('! kill -0 "${pids[index]}"');
-    expect(source).toContain("printf '%s\\n' '125'");
-    expect(source).toContain('gate process exited without reporting a status');
+  // A gate can end without saying anything about itself: the OOM killer takes it,
+  // or something outside its process tree SIGKILLs it. The runner settles that
+  // from the child's exit status, which the kernel supplies whether the gate
+  // cooperates or not.
+  //
+  // The previous runner published each verdict into a status FILE and, when the
+  // file was missing, probed `kill -0` on a pid it had already reaped. A recycled
+  // pid answers that probe as somebody else's live process, so the gate never
+  // settled, nothing was left to wait on, and the wave spun at 100% CPU with the
+  // deploy unable to finish. Asserted through a real run rather than by reading
+  // the script: the source-text version of this test passed over a runner that
+  // could not report.
+  test("a gate killed without a verdict of its own fails the deploy", () => {
+    const run = runDeploy({ killGate: "bun run check" });
+
+    expect(run.status).not.toBe(0);
+    // 128 + SIGKILL. The status is the child's fate, not a claim the gate made.
+    expect(run.stdout).toContain("Strict lint and TypeScript failed (exit 137)");
+    expect(run.events, "the killed gate never launched").toContain("bun run check");
+    expect(
+      run.events.some((event) => event.startsWith("MUTATE ")),
+      "a gate died unreported and the build ran anyway",
+    ).toBe(false);
+  }, 30_000);
+
+  // Every gate's output lands in one temp directory and every failure is reported
+  // out of it, so a directory that cannot be created is a wave that cannot be
+  // reported on. With the creation unchecked, `$dir` is empty, each gate writes to
+  // `/0.log`, and a box out of inodes deploys on the strength of logs nobody has.
+  test("a gate log directory that cannot be created deploys nothing", () => {
+    const run = runDeploy({ tmpdir: join(tmpdir(), "kinu-deploy-no-such-root", "nowhere") });
+
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toContain("cannot create a gate log directory");
+    expect(run.events).toEqual([]);
   });
 
   test("the exclusion table in the runner is the one the ladder declares", () => {
@@ -273,7 +365,7 @@ describe("deploy gate", () => {
   });
 
   test("the serial gates are the ends of the real run", () => {
-    const run = runDeploy("");
+    const run = runDeploy();
     const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
 
     expect(gates[0]).toBe("bun scripts/preflight.ts");
@@ -287,7 +379,7 @@ describe("deploy gate", () => {
   test("every gate fails closed even when the former skip variable is set", () => {
     const last = REQUIRED_GATES.at(-1);
     for (const gate of REQUIRED_GATES) {
-      const run = runDeploy(gate);
+      const run = runDeploy({ failingGate: gate });
 
       expect(run.status, `${gate} did not fail the deploy`).not.toBe(0);
       expect(run.events, `${gate} failed and never ran`).toContain(gate);
@@ -307,7 +399,7 @@ describe("deploy gate", () => {
   }, 60_000);
 
   test("a dirty checkout is rejected before verification or mutation", () => {
-    const run = runDeploy("", true);
+    const run = runDeploy({ dirty: true });
 
     expect(run.status).not.toBe(0);
     expect(run.events).toEqual([]);
@@ -321,7 +413,7 @@ describe("deploy gate", () => {
   // absent for staging. The two environments differ in four values, and these
   // tests are about the two an operator can see.
   test("staging runs the same gates as production, against the staging route", () => {
-    const run = runDeploy("", false, "staging");
+    const run = runDeploy({ environment: "staging" });
 
     expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
     expect(run.stdout).toContain("Environment:  staging");
@@ -330,11 +422,275 @@ describe("deploy gate", () => {
   });
 
   test("an unknown environment deploys nothing", () => {
-    const run = runDeploy("", false, "preprod");
+    const run = runDeploy({ environment: "preprod" });
 
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging>");
+  });
+});
+
+// ── One deploy path ───────────────────────────────────────────────────
+//
+// `scripts/deploy.sh` publishes both environments, and the way that stops being
+// true is a SECOND entry point rather than a change to this script. There was
+// one: `packages/cf-backend` declared `deploy:staging` as
+// `CLOUDFLARE_ENV=staging vite build && … && wrangler deploy && vite build`,
+// which skips every required gate, the CLI download asset check and all six
+// post-deploy smoke checks — and docs/DEPLOYMENT.md § Staging documented it as
+// the way to deploy staging, so following the documentation was the bypass.
+//
+// The manifests, the workflows, the composite actions and the shell scripts all
+// come from the one repository enumerator, so a new package, a new workflow or a
+// new script cannot be outside this assertion's denominator.
+describe("one deploy path", () => {
+  /** Publishing a Worker or its assets. A manifest script, a workflow step or a
+   *  shell line naming one of these is a deploy path, wherever it lives.
+   *
+   *  Read off `wrangler --help` at the installed 4.125.0 rather than remembered.
+   *  `triggers deploy` is in that surface and was missing here: it re-points the
+   *  routes and crons an uploaded version serves, so it publishes without the
+   *  bytes ever passing through this repository's deploy script. `wrangler
+   *  preview` is deliberately absent — it is private beta, and it creates a
+   *  preview rather than moving what a route serves. */
+  const PUBLISH_COMMANDS = [
+    "wrangler deploy",
+    "wrangler versions upload",
+    "wrangler versions deploy",
+    "wrangler pages deploy",
+    "wrangler rollback",
+    "wrangler triggers deploy",
+  ] as const;
+
+  /** Reaching `scripts/deploy.sh`: the root scripts, or the script itself.
+   *  `bun run deploy` is a prefix of `bun run deploy:staging`, so these two
+   *  words cover both environments and every documented spelling. */
+  const DEPLOY_ENTRYPOINTS = ["bun run deploy", "scripts/deploy.sh"] as const;
+
+  /** A per-package deploy: `--cwd <package> deploy`. ONE shape, read by the
+   *  document check and by the workflow check — a command is no less a bypass
+   *  for sitting in a step body rather than in prose. */
+  const PER_PACKAGE_DEPLOY = /--cwd\s+\S+\s+deploy/u;
+
+  /** Launching an eval. The tier script, the root scripts that run it, and the
+   *  report driver a workflow runs directly. */
+  const EVAL_LAUNCHERS = [
+    "scripts/eval-tier.sh",
+    "scripts/eval.ts",
+    "bun run test:eval",
+    "bun run evals:",
+  ] as const;
+
+  /** The one process that rules on which deployment an eval credential may name
+   *  (`packages/test-utils/src/eval-identity.ts` holds the allowlist it reads).
+   *  The benchmark job used to take an origin and an auth header straight from
+   *  repository secrets, so one secret could name production and nothing asked. */
+  const EVAL_RESOLVER = "scripts/eval-credentials.ts";
+
+  const ScriptsSchema = v.object({ scripts: v.optional(v.record(v.string(), v.string())) });
+  const manifests = trackedFiles().filter((file) => basename(file) === "package.json");
+  const scriptsOf = (manifest: string): Record<string, string> =>
+    v.parse(ScriptsSchema, JSON.parse(readRepositoryFile(REPO_ROOT, manifest))).scripts ?? {};
+
+  test("every tracked package manifest is in the denominator", () => {
+    expect(manifests, "the enumerator stopped listing the root manifest").toContain("package.json");
+    expect(manifests, "the enumerator stopped listing the deployed package")
+      .toContain("packages/cf-backend/package.json");
+    expect(manifests.length, "the manifest corpus collapsed").toBeGreaterThan(2);
+  });
+
+  test("the root scripts are the deploy script, one per environment", () => {
+    const scripts = scriptsOf("package.json");
+
+    expect(scripts.deploy).toBe("bash scripts/deploy.sh production");
+    expect(scripts["deploy:staging"]).toBe("bash scripts/deploy.sh staging");
+  });
+
+  test("no package script publishes anything itself", () => {
+    for (const manifest of manifests) {
+      for (const [name, body] of Object.entries(scriptsOf(manifest))) {
+        for (const command of PUBLISH_COMMANDS) {
+          expect(body, `${manifest} script "${name}" publishes with \`${command}\``)
+            .not.toContain(command);
+        }
+      }
+    }
+  });
+
+  // Harness boundary: the manifest's own `scripts` block, parsed. Blind spot:
+  // one level of indirection — a script that runs `bun scripts/x.ts` is one word
+  // here whatever `x.ts` launches.
+  test("no package script launches an eval outside the tier script", () => {
+    let tierLaunches = 0;
+    for (const manifest of manifests) {
+      for (const [name, body] of Object.entries(scriptsOf(manifest))) {
+        if (body.includes("scripts/eval-tier.sh")) tierLaunches += 1;
+        // The tier resolves the credential, writes a spend file per arm and runs
+        // the skip ratchet. A script around the report driver has none of that,
+        // and an eval that measures nothing reads as an eval that passed.
+        expect(body, `${manifest} script "${name}" runs the eval driver outside the tier script`)
+          .not.toContain("scripts/eval.ts");
+      }
+    }
+    // Non-vacuity: the corpus really does contain the eval launch site.
+    expect(tierLaunches, "no package script launches the eval tier any more").toBeGreaterThan(0);
+  });
+
+  // The documented commands and the runnable ones are the same set or the
+  // documentation is a bypass. A `--cwd <package> deploy…` line is that shape.
+  test("no document names a per-package deploy command", () => {
+    const documents = trackedFiles().filter(isDocument);
+    expect(documents.length, "the document corpus collapsed").toBeGreaterThan(0);
+
+    let rootCommands = 0;
+    for (const document of documents) {
+      const text = readRepositoryFile(REPO_ROOT, document);
+      const scoped = PER_PACKAGE_DEPLOY.exec(text);
+      expect(scoped?.[0], `${document} documents a per-package deploy command`).toBeUndefined();
+      if (text.includes("bun run deploy")) rootCommands += 1;
+    }
+    // Non-vacuity: the check runs over prose that really does name the deploy.
+    expect(rootCommands, "no document names the root deploy command any more")
+      .toBeGreaterThan(0);
+  });
+
+  /** Every YAML GitHub executes, from the one repository enumerator: the
+   *  workflows AND the composite actions beside them. `release-config.test.ts`
+   *  reads `.github/workflows` alone, and a composite action's `run:` body is a
+   *  command this repository executes inside the job that holds the deploy
+   *  credential — `setup-lean` is one, which is why it is checksum-verified. */
+  const automationFiles = trackedFiles()
+    .filter((file) => file.startsWith(".github/") && /\.ya?ml$/u.test(file));
+
+  /** The two shapes GitHub takes a shell body in, named at the boundary. A
+   *  workflow keeps its steps under `jobs.<id>.steps[]` and a composite action
+   *  keeps them under `runs.steps[]`. `looseObject` on purpose: these assertions
+   *  read one key, and a schema that stripped the rest would start answering
+   *  other questions. */
+  const StepSchema = v.looseObject({ run: v.optional(v.string()) });
+  const StepListSchema = v.looseObject({ steps: v.optional(v.array(StepSchema)) });
+  const AutomationSchema = v.looseObject({
+    jobs: v.optional(v.record(v.string(), StepListSchema)),
+    runs: v.optional(StepListSchema),
+  });
+
+  /** `run:` bodies, grouped by the job that runs them, because a job is the unit
+   *  GitHub binds an environment and its secrets to. A composite action makes
+   *  one group under its own file name: the job it runs in belongs to whoever
+   *  used it.
+   *
+   *  Blind spot of the parse: a third place GitHub grows for a shell body needs
+   *  an arm above. The two named are every place it allows one today, and a file
+   *  that parses as neither yields no bodies — which the non-vacuity count below
+   *  fails on rather than passing quietly. */
+  function automationJobs(): readonly { label: string; bodies: readonly string[] }[] {
+    const bodiesOf = (steps: v.InferOutput<typeof StepListSchema> | undefined): string[] =>
+      (steps?.steps ?? []).flatMap((step) => (step.run === undefined ? [] : [step.run]));
+
+    return automationFiles.flatMap((file) => {
+      const parsed = v.parse(AutomationSchema, Bun.YAML.parse(readRepositoryFile(REPO_ROOT, file)));
+      return [
+        ...Object.entries(parsed.jobs ?? {})
+          .map(([job, definition]) => ({ label: `${file}#${job}`, bodies: bodiesOf(definition) })),
+        { label: file, bodies: bodiesOf(parsed.runs) },
+      ].filter(({ bodies }) => bodies.length > 0);
+    });
+  }
+
+  const automation = automationJobs();
+  const automationSteps = automation
+    .flatMap(({ label, bodies }) => bodies.map((body) => ({ label, body })));
+
+  // Harness boundary: the PARSED YAML of every tracked `.github` file, so a body
+  // is read as GitHub will run it and a commented-out command is not a finding.
+  // Blind spot: what a body then executes — `bun scripts/x.ts` is one word here
+  // whatever `x.ts` publishes.
+  test("every automation file GitHub executes is in the denominator", () => {
+    expect(automationFiles, "the enumerator stopped listing the deploy workflow")
+      .toContain(".github/workflows/deploy-staging.yml");
+    expect(automationFiles, "the enumerator stopped listing the composite actions")
+      .toContain(".github/actions/setup-lean/action.yml");
+    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(4);
+    expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(10);
+
+    // Non-vacuity: the corpus really contains a deploy, and that deploy really
+    // does go through the root script. Without this the rule below is satisfied
+    // by a repository that deploys nothing.
+    const deploying = automationSteps.filter(({ body }) =>
+      DEPLOY_ENTRYPOINTS.some((entrypoint) => body.includes(entrypoint)));
+    expect(deploying.map(({ label }) => label), "no workflow deploys through the deploy script")
+      .toContain(".github/workflows/deploy-staging.yml#deploy");
+  });
+
+  // Harness boundary: string containment over a step body, the same authority
+  // `PUBLISH_COMMANDS` gives the manifest check. Blind spot: an argv array —
+  // `scripts/bench-*.ts` spell theirs `runWrangler(root, ['deploy', …])`, which
+  // writes no such word — and any command assembled at run time.
+  test("no automation step publishes anything itself", () => {
+    // Positive control, as a literal: a matcher that stops matching is
+    // indistinguishable from a clean tree.
+    expect(PUBLISH_COMMANDS.some((command) =>
+      "bunx wrangler deploy --env staging".includes(command))).toBe(true);
+
+    for (const { label, body } of automationSteps) {
+      for (const command of PUBLISH_COMMANDS) {
+        expect(body, `${label} publishes with \`${command}\` instead of running scripts/deploy.sh`)
+          .not.toContain(command);
+      }
+      expect(PER_PACKAGE_DEPLOY.exec(body)?.[0], `${label} deploys one package around the deploy script`)
+        .toBeUndefined();
+    }
+  });
+
+  /** The one script that may publish. Every other shell script is a caller of
+   *  it, or of nothing. */
+  const SHELL_PUBLISHER = "scripts/deploy.sh";
+  const shellScripts = trackedFiles().filter((file) => file.endsWith(".sh"));
+
+  // Harness boundary: the script's executable lines, with whole-line `#`
+  // comments dropped — deploy.sh's own header names the publish in prose a dozen
+  // times, and so does the header of the archive builder beside it. Blind spot:
+  // a trailing `# wrangler deploy` comment reads as an invocation here, and a
+  // publish assembled from variables reads as none.
+  test("no shell script but the deploy script publishes", () => {
+    const executable = (file: string): string => readRepositoryFile(REPO_ROOT, file)
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+
+    expect(shellScripts, "the enumerator stopped listing the deploy script").toContain(SHELL_PUBLISHER);
+    expect(shellScripts.length, "the shell corpus collapsed").toBeGreaterThan(5);
+    // Non-vacuity: the known publishing site is in the corpus, and this reading
+    // of it really does contain the publish this rule is about.
+    expect(executable(SHELL_PUBLISHER), "the deploy script stopped publishing")
+      .toContain("npx wrangler deploy");
+
+    for (const file of shellScripts) {
+      if (file === SHELL_PUBLISHER) continue;
+      for (const command of PUBLISH_COMMANDS) {
+        expect(executable(file), `${file} publishes with \`${command}\`; the deploy path is ${SHELL_PUBLISHER}`)
+          .not.toContain(command);
+      }
+    }
+  });
+
+  // Harness boundary: the JOB, because a job is the unit GitHub binds an
+  // environment and its secrets to. Blind spot: ORDER inside the job — this
+  // reads that the resolving step is in the same job, not that it runs first.
+  // `eval-credentials.ts` refusing a target it does not allow is what stops a
+  // credential aimed at production; this only proves the refusal is reachable.
+  test("an eval a workflow launches resolves its target through the one resolver", () => {
+    let launching = 0;
+    for (const { label, bodies } of automation) {
+      if (!bodies.some((body) => EVAL_LAUNCHERS.some((launcher) => body.includes(launcher)))) continue;
+      launching += 1;
+      expect(
+        bodies.some((body) => body.includes(EVAL_RESOLVER)),
+        `${label} launches an eval without resolving its target through ${EVAL_RESOLVER}`,
+      ).toBe(true);
+    }
+    // Non-vacuity: a workflow really does launch an eval with a credential.
+    expect(launching, "no workflow launches an eval any more").toBeGreaterThan(0);
   });
 });
 

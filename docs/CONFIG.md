@@ -11,6 +11,8 @@ for when you want to read or edit it yourself. The authoritative shape is
   bin/                      the kinu command + your workspace alias shims
   source/                   the CLI source cache the launcher runs
   <workspace>/agent.db      one per LOCAL workspace: its entire state
+  <workspace>/agent.db.partial
+                            a workspace mid-creation; renamed into place
   sessions/                 recorded CLI sessions
   checkpoints/              shadow-git file snapshots that `/undo` restores from
   heads/                    scratch databases for branch runs

@@ -11,18 +11,30 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 /**
- * Startup budget — spawning the child and listing its tools happens inside a
- * turn, so a server that never comes up must not stall one. Mirrors the cap cf
- * puts on its own connection warmup (`waitForConnections({ timeout: 5_000 })`).
+ * Startup budget for spawning a stdio child and listing its tools.
+ *
+ * THIS IS A SETUP COMMAND, NOT A TURN. `connectMcpServers` is reached only from
+ * `LocalSession.connectMcp`, and that is called once at session open —
+ * `agent-host/host.ts` while building the session entry, and
+ * `cli/src/local-agent-client.ts`'s `connect()` before any `send()`. The tools it
+ * returns are merged into the session's surface once and reused by every turn
+ * after, so nothing here runs on a turn's critical path.
+ *
+ * That is why the bound stays while cf-backend's mirror of it is gone. cf read
+ * its MCP surface per turn and had no place to defer to but the next turn, so a
+ * deadline there bounded the wrong thing (and, because hydration awaited the
+ * connect before the timer started, bounded nothing at all). Here there is no
+ * next turn to defer to: the process connects once, an interactive `kinu` is
+ * waiting on it, and a hung `npx` resolving a package would hang startup with no
+ * turn to report into.
  *
  * PENDING MEASUREMENT, and named as such rather than defended: 5_000 is a round
- * number on both sides of that mirror, and what it bounds is a THIRD-PARTY
- * process starting up. A vendored binary is milliseconds; an `npx`-launched
- * server resolving a package on a cold cache is not, and nothing here or in
- * cf-backend records either. Missing it costs that server's tools for the turn
- * with a diagnostic, so the failure is reported rather than silent — which is why
- * this is a pending number and not a live defect. The measurement that settles
- * it: connect-to-listTools wall clock for one vendored and one `npx` server, cold
+ * number and what it bounds is a THIRD-PARTY process starting up. A vendored
+ * binary is milliseconds; an `npx`-launched server on a cold cache is not, and
+ * nothing records either. Missing it costs that server's tools for the session
+ * with a diagnostic the model is shown (`LocalSession.mcpUnavailable`), so the
+ * failure is reported rather than silent. The measurement that settles it:
+ * connect-to-listTools wall clock for one vendored and one `npx` server, cold
  * and warm.
  */
 const MCP_STARTUP_TIMEOUT_MS = 5_000;

@@ -2,15 +2,10 @@ import type { SqlExecutor } from "../types";
 import type { ReadWriteVFS } from "../vfs/types";
 import { readVfsText } from "../core/utils";
 import { chunkMarkdown } from "./chunker";
-import { sanitizeFtsQuery } from "./query";
+import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "./query";
 import type { MemorySearchResult } from "./query";
 
 const DEFAULT_SNIPPET_MAX_CHARS = 700;
-
-export interface SearchConfig {
-	orFallback?: boolean;
-	stopWords?: boolean;
-}
 
 export interface MemoryConfig {
 	memoryDir?: string;
@@ -19,7 +14,6 @@ export interface MemoryConfig {
 	indexedPrefixes?: string[];
 	indexedFiles?: string[];
 	snippetMaxChars?: number;
-	search?: SearchConfig;
 }
 
 interface FtsRow { id: string; path: string; start_line: number; end_line: number; text: string; rank: number }
@@ -83,7 +77,6 @@ export class MemoryStore {
 	private indexedPrefixes: string[];
 	private indexedFiles: string[];
 	private snippetMaxChars: number;
-	private searchConfig: Required<SearchConfig>;
 
 	constructor(vfs: ReadWriteVFS, sql: SqlExecutor, config?: MemoryConfig) {
 		this.vfs = vfs;
@@ -94,10 +87,6 @@ export class MemoryStore {
 		this.indexedPrefixes = config?.indexedPrefixes ?? ["memory/", "identity.md"];
 		this.indexedFiles = config?.indexedFiles ?? [];
 		this.snippetMaxChars = config?.snippetMaxChars ?? DEFAULT_SNIPPET_MAX_CHARS;
-		this.searchConfig = {
-			orFallback: config?.search?.orFallback ?? true,
-			stopWords: config?.search?.stopWords ?? true,
-		};
 	}
 
 	ensureSchema(): void {
@@ -202,19 +191,21 @@ export class MemoryStore {
 		void this.sql`DELETE FROM memory_chunks WHERE path = ${path}`;
 	}
 
+	/**
+	 * Ranked chunk hits, best first: the strict all-term page, then ranked partial
+	 * matches until `limit` distinct chunks are held. Same fill policy as the
+	 * transcript recall surface in core, because it is the same question — see
+	 * {@link fillToCapacity} for why one partial page of `limit` rows suffices.
+	 */
 	search(query: string, limit = 10): MemorySearchResult[] {
 		if (!query.trim()) return [];
 
-		const { orFallback, stopWords } = this.searchConfig;
-		const safeQuery = sanitizeFtsQuery(query, { stopWords });
-		let rows = this.runFtsQuery(safeQuery, limit);
-
-		if (rows.length === 0 && orFallback) {
-			const tokens = safeQuery.split(" ").filter(Boolean);
-			if (tokens.length > 1) {
-				rows = this.runFtsQuery(tokens.join(" OR "), limit);
-			}
-		}
+		const safeQuery = sanitizeFtsQuery(query);
+		const strict = this.runFtsQuery(safeQuery, limit);
+		const relaxed = strict.length >= limit ? null : relaxFtsQuery(safeQuery);
+		const rows = relaxed === null
+			? strict
+			: fillToCapacity(strict, this.runFtsQuery(relaxed, limit), limit, (row) => row.id);
 
 		// bm25() is negative, more negative = more relevant. The displayed score
 		// must be monotone WITH relevance: |rank|/(1+|rank|) maps the strongest
@@ -237,7 +228,7 @@ export class MemoryStore {
 			FROM memory_chunks_fts
 			JOIN memory_chunks mc ON mc.rowid = memory_chunks_fts.rowid
 			WHERE memory_chunks_fts MATCH ${ftsQuery}
-			ORDER BY rank ASC
+			ORDER BY rank ASC, mc.rowid ASC
 			LIMIT ${limit}
 		`;
 	}

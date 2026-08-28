@@ -200,10 +200,24 @@ export async function handleUserRequest(
     });
     return json({ origin: cliOrigin, installCommand }, { status: 201 });
   }
+  const deviceAcknowledgeMatch = path.match(/^\/devices\/([^/]+)\/unstopped$/);
+  if (deviceAcknowledgeMatch && method === 'DELETE') {
+    try {
+      const result = await stub.acknowledgeUnstoppedDevice(await ownerCaller(env), decodeURIComponent(deviceAcknowledgeMatch[1]));
+      if (!result.ok) return err(404, 'No unconfirmed command incident matched this revoked device');
+      return json({ ok: true });
+    } catch (e) {
+      return err(400, renderThrownChain({ cause: e }));
+    }
+  }
   const deviceMatch = path.match(/^\/devices\/([^/]+)$/);
   if (deviceMatch && method === 'DELETE') {
-    try { await stub.revokeDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1])); return json({ ok: true }); }
-    catch (e) { return err(400, renderThrownChain({ cause: e })); }
+    try {
+      const result = await stub.revokeDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1]));
+      return json(result);
+    } catch (e) {
+      return err(400, renderThrownChain({ cause: e }));
+    }
   }
   if (deviceMatch && method === 'PATCH') {
     const body = await safeJson(request, v.object({ name: v.optional(v.string()) }));

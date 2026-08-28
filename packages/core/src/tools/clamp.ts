@@ -87,7 +87,7 @@ export async function clampToolResult(
   const marker = savedPath
     ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +
       'read or filter it with workspace.readFile inside execute_tools ' +
-      `(oversize: slice + llm.query each slice, aggregate), or rerun with a filter]${reason}`
+      `(oversize: hand the path to a temporary agent as \`context_ref\` on an agents ask, or range-read it), or rerun with a filter]${reason}`
     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]${reason}`;
   const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
   if (opts.budget) {

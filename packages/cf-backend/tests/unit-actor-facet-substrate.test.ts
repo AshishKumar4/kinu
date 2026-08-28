@@ -122,6 +122,8 @@ describe('actor substrate — facet feasibility contract', () => {
       currentTask: null,
       createdAt: 1,
       dismissedAt: null,
+      lifetime: 'durable',
+      taskEventId: null,
     });
 
     // Rostered, hired as a facet: the one combination that passes through.

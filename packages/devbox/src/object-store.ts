@@ -11,6 +11,8 @@
  * reader that finds a delta object finds a whole delta.
  */
 
+import { createHash } from 'node:crypto';
+
 import { describeThrown } from './lifecycle';
 
 /** Largest object moved through memory in one PUT before multipart takes over.
@@ -35,11 +37,42 @@ export const MULTIPART_PART_BYTES = 8 * 1024 * 1024;
  * the small route buffers at most {@link SMALL_PUT_BYTES} and then PROMOTES the
  * buffer into a multipart upload rather than trusting the hint — a stale small
  * hint over a huge stream stays bounded in memory and still lands every byte.
- * The count returned here is the one a durable record may carry.
+ * What comes back is what a durable record may carry: see
+ * {@link LandedObject}.
  */
 export interface MultipartLifecycle {
   started(key: string, uploadId: string): Promise<void>;
   finished(key: string, uploadId: string): Promise<void>;
+}
+
+/**
+ * What an upload landed.
+ *
+ * THREE FACTS, AND NONE IS DERIVABLE FROM ANOTHER.
+ *
+ * `bytes` is what the store now holds, which a caller's own size hint has been
+ * wrong about in production.
+ *
+ * `digest` is the SHA-256 of exactly those bytes, taken as they went past. It
+ * cannot be recovered afterwards without reading the whole object back, which
+ * is why a record that wants to know its archive's identity has to carry it.
+ * ONE PASS, NO BUFFER: the hash is updated per chunk on the way through, so it
+ * costs one CPU pass over bytes already in hand and holds nothing.
+ *
+ * `objectVersion` is the store's OWN name for this upload. R2 generates it per
+ * upload and hands it back from both `put` and multipart `complete`, and
+ * `head` reports it forever after. It is the one identity that survives where
+ * the digest cannot be compared: the Workers multipart API carries no checksum,
+ * so a large archive replaced by a different archive of identical length — even
+ * one whose metadata was written to match — is a DIFFERENT upload and says so
+ * through this field.
+ */
+export interface LandedObject {
+  readonly bytes: number;
+  /** Lowercase hex SHA-256 over every byte this upload sent. */
+  readonly digest: string;
+  /** The store's own version for this upload. */
+  readonly objectVersion: string;
 }
 
 export async function putStream(
@@ -49,8 +82,9 @@ export async function putStream(
   size: number,
   options?: R2PutOptions,
   lifecycle?: MultipartLifecycle,
-): Promise<number> {
+): Promise<LandedObject> {
   const reader = stream.getReader();
+  const digest = createHash('sha256');
   const buffered: Uint8Array[] = [];
   let held = 0;
   let multipart: R2MultipartUpload | undefined;
@@ -59,6 +93,9 @@ export async function putStream(
     for (;;) {
       const { done, value } = await reader.read();
       if (done === true || value === undefined) break;
+      // HASHED ON THE WAY PAST, before anything routes it, so one byte is
+      // hashed exactly once whichever route it takes.
+      digest.update(value);
       if (slicer === undefined) {
         // The small route holds at most SMALL_PUT_BYTES in memory. `size`
         // ROUTES, IT DOES NOT BOUND: it is a measurement of a file the caller
@@ -98,7 +135,7 @@ export async function putStream(
           );
         }
       }
-      return landed;
+      return { ...landed, digest: digest.digest('hex') };
     }
     const buffer = new Uint8Array(held);
     let at = 0;
@@ -106,8 +143,18 @@ export async function putStream(
       buffer.set(chunk, at);
       at += chunk.byteLength;
     }
-    await bucket.put(key, buffer, options);
-    return held;
+    // THE STORE VERIFIES THIS ROUTE ITSELF. A single PUT may carry the digest,
+    // so R2 checks the bytes it received against it and refuses the object
+    // rather than storing something else under this key — and it then REPORTS
+    // that checksum on every later `head`, which is the only way a reader can
+    // ask the store what it holds without reading the whole object back.
+    // Multipart has no equivalent: neither `R2MultipartOptions` nor
+    // `R2UploadPartOptions` carries a checksum. What BOTH routes have is the
+    // stored object's `version`, which R2 mints per upload, so that is what
+    // travels for a large archive.
+    const hex = digest.digest('hex');
+    const stored = await bucket.put(key, buffer, { ...options, sha256: hex });
+    return { bytes: held, digest: hex, objectVersion: stored.version };
   } catch (error) {
     // THE ORIGINAL ERROR IS THE ONE THAT MATTERS. Abandoning the upload is
     // best-effort cleanup: if the abort itself fails, saying so must not
@@ -166,14 +213,17 @@ class PartSlicer {
     this.#carry = merged;
   }
 
-  async finish(): Promise<number> {
+  /** Complete the upload, and answer both what landed and WHICH UPLOAD it was:
+   *  `complete()` hands back the stored object, whose `version` R2 generates
+   *  fresh for this upload and for no other. */
+  async finish(): Promise<{ bytes: number; objectVersion: string }> {
     if (this.#carry.byteLength > 0) {
       this.#parts.push(await this.upload.uploadPart(this.#partNumber, this.#carry));
       this.#landed += this.#carry.byteLength;
       this.#carry = new Uint8Array(0);
     }
-    await this.upload.complete(this.#parts);
-    return this.#landed;
+    const stored = await this.upload.complete(this.#parts);
+    return { bytes: this.#landed, objectVersion: stored.version };
   }
 }
 

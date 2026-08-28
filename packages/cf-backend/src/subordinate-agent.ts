@@ -1,7 +1,6 @@
 import * as v from 'valibot';
 import { callable, getAgentByName, type AgentContext, type SubAgentClass } from 'agents';
 import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface';
-import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
 import {
   EvolutionEngine,
@@ -10,18 +9,31 @@ import {
   snapshotCompletedTurn,
   // Names how this turn ended, from facts. Never a string chosen here.
   classifyRunEnd,
+  projectJsonValue, nanoid,
+  shadowTrialPlan, trimTrialContext,
+  type SubordinateEventResult,
   type SubordinateHandoff,
   type WorkMode,
   type SubordinateReportStatus,
+  type SubordinateLifetime,
+  type TaskTurnEnding,
+  temporaryRunSettles,
+  terminalTaskReport,
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
   type PlanReview,
   planReviewAwaitingDecision,
   subordinateDescriptorSource,
-  type RoleSelection,
+  type RoleSelection, type InlineSteer,
   type TierId,
+  type InstructionApproval,
   TIER_IDS,
+} from '@kinu.run/core';
+import {
+  terminalEffect, declareTerminalRoster, SUBORDINATE_REPORT_STATUSES,
+  WorkModeSchema,
+  type TerminalEffectTable,
 } from '@kinu.run/core';
 import {
   ActorAgent,
@@ -35,8 +47,8 @@ import {
   describeSubordinateHandoff,
   readSubordinateLiveStatus,
   subordinateRelaysTurnEnd,
-  type SubordinateLiveStatus,
-  type SubordinateReportOrigin,
+  type SubordinateReportOrigin, type SubordinateLiveStatus,
+  type TerminalTurnParts,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
@@ -60,6 +72,10 @@ export interface SetSubordinateIdentityInput {
   /** Optional tier override for this child. */
   tier?: TierId | null;
   mission: string;
+  /** How long this child is meant to live. It rides the SEED because only the
+   *  child sees its own turn end, and a `task` child owes its blocked caller one
+   *  terminal report for every way that turn can end. */
+  lifetime: SubordinateLifetime;
   /** The PARENT workspace's capability token, pushed down at spawn so this
    *  facet reaches the owner's UserDO as its workspace — and is attenuated
    *  with it. Refreshed by the parent's installWorkspaceCapability fan-out if
@@ -96,6 +112,19 @@ export class SubordinateAgent extends ActorAgent {
   private _identity: SubordinateIdentityStore | null = null;
   private _engine: EvolutionEngine | null = null;
   private reportedThisTurn = false;
+  /**
+   * Has a report that SETTLES a temporary run already gone out this turn?
+   *
+   * A second bit rather than a reuse of {@link reportedThisTurn}, because the two
+   * questions are genuinely different and conflating them hung an ask: a task
+   * child is invited to file a mid-task `progress` note, that note sets
+   * `reportedThisTurn`, and `temporaryRunSettles` correctly does NOT treat it as
+   * the answer — so a child that filed one and then answered had its terminal
+   * report suppressed while its caller waited forever. `reportedThisTurn` still
+   * means "spoke this turn", which is what the DURABLE relay policy asks; this
+   * means "already answered", which is what the temporary rung asks.
+   */
+  private settledRunThisTurn = false;
 
   private get identity(): SubordinateIdentityStore {
     if (!this._identity) this._identity = new SubordinateIdentityStore(this.ctx.storage.sql, this.boundSql);
@@ -152,6 +181,22 @@ export class SubordinateAgent extends ActorAgent {
     }
     return await getAgentByName<Env, OrchestratorAgent>(this.env[WORKSPACE_ACTOR_CLASS], parent.name);
   }
+
+  /**
+   * A facet shares the parent's VFS but not its actor SQL. Fetch the root
+   * workspace authority before every turn so a child cannot mint a private
+   * migration marker, grandfather a later file, or miss a root revocation.
+   */
+  protected override async refreshInstructionApprovalAuthority(): Promise<void> {
+    this._workspaceInstructionApprovals =
+      await (await this.parentActor()).getWorkspaceInstructionApprovals();
+  }
+
+  @callable()
+  override async getWorkspaceInstructionApprovals(): Promise<readonly InstructionApproval[]> {
+    return await (await this.parentActor()).getWorkspaceInstructionApprovals();
+  }
+
 
   protected getOwnerUserId(): string | null {
     return this.identity.ownerUserId();
@@ -210,6 +255,11 @@ export class SubordinateAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
+        // The grading group as ONE unit, for the reason the root states: a
+        // synchronous run in a Durable Object is already atomic, and answering
+        // through the platform's own primitive keeps it so whatever core comes
+        // to put between the statements.
+        transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's own model calls debit the mission the reviewed turn
         // ran under — the same ledger, through the same seam, as the work it
         // reviews. Unbudgeted turns never reach it.
@@ -254,9 +304,16 @@ export class SubordinateAgent extends ActorAgent {
       ...deps,
       report: {
         report: async (input) => {
-          const result = await this.sendReport(input.status, input.content, 'report_tool');
+          const { id, disposition } = await this.sendReport(input.status, input.content, 'report_tool');
           this.reportedThisTurn = true;
-          return result;
+          // Only a run-SETTLING report counts as the answer. Same predicate the
+          // parent's ingress settles the waiter on, so the child cannot come to
+          // believe it has answered when the caller is still waiting.
+          this.settledRunThisTurn ||= temporaryRunSettles({ status: input.status, origin: 'report_tool' });
+          // Projected onto the tool's JSON contract. `disposition` is the useful
+          // half now that the ingress dedupes: it says whether the parent took
+          // this report or already held it.
+          return { id, disposition };
         },
       },
     };
@@ -329,6 +386,7 @@ export class SubordinateAgent extends ActorAgent {
       parentWorkspace: bootstrap.parentWorkspace,
       ownerUserId: bootstrap.ownerUserId,
       depth: bootstrap.depth,
+      lifetime: input.lifetime,
     });
     // Both rows together: the shown title and WHOSE it is. Seeding the title
     // alone left `name_origin` unset, which the title policy reads as "never
@@ -372,24 +430,41 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   /**
-   * An auto title lands on this subordinate's own config first, then on the
-   * parent's roster row — which is the one every roster reader shows, so
-   * skipping it would leave the owner looking at a blank tab for an agent
-   * that has named itself.
+   * Commit an auto title to this subordinate's OWN naming state.
    *
-   * The parent write is not swallowed: a title only this facet knows about is
-   * a title nobody can see, and reporting `false` would claim the owner
-   * renamed it, re-arming a titling pass that already spent a model call.
+   * Local only. The parent's roster refresh is {@link propagateTitleToParent},
+   * run after this by the effect that owes both — because the refresh re-reads
+   * this child's descriptor, so notifying first published the previous name and
+   * left nothing to correct it.
    */
   protected async persistAutoTitle(displayName: string): Promise<boolean> {
+    await Promise.resolve();
+    // The owner's rename wins. Checked here rather than upstream because the
+    // model call this follows takes seconds, and a name that landed during it is
+    // a choice a person made.
     if (this.config.getNameOrigin() === 'user') return false;
     this.config.setDisplayNameOrigin(displayName, 'auto');
     this._cachedSoulText = null;
     this._cachedSystemPrompt = null;
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
+    return true;
+  }
+
+  /**
+   * Tell the parent this child's roster row should be re-read — the roster row
+   * is the one every reader shows, so a title it never heard about is a title
+   * nobody can see.
+   *
+   * Runs AFTER the local stamp, because the parent's refresh re-reads this
+   * child's descriptor: notifying first published the previous name and left
+   * nothing behind to correct it.
+   */
+  protected override async publishAutoTitle(): Promise<void> {
+    if (this.config.getNameOrigin() !== 'auto') return;
+    const displayName = this.config.getDisplayName();
+    if (displayName === null) return;
     const parent = await this.parentActor();
     await parent.recordSubordinateTitle(this.name, displayName);
-    return true;
   }
 
   /** Synchronous by contract — see `OrchestratorAgent.onStart`. The scaffold this
@@ -397,6 +472,20 @@ export class SubordinateAgent extends ActorAgent {
    *  above, and on the turn path (`ActorAgent.beforeTurn`). */
   onStart(): void {
     this.ensureSchema();
+    // The same budget-first prune the root runs: a subordinate carries the same
+    // four durable lanes, so it accumulates the same interrupted-fiber rows.
+    this.sweepUnrecoverableFiberRows();
+    // And the same terminal sweep, for the same reason the root has one and for
+    // one more: this is the only carrier a sequence has when the ledger could not
+    // arm its wake at all. A subordinate owes reports, titles and recordings
+    // exactly as a root does, and without this an interrupted one waited on an
+    // alarm that a failed schedule never wrote.
+    void this.terminal.resumeAll()
+      .catch((err) => diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
+        doing: 'finishing what interrupted terminal transitions still owed',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name }));
   }
 
   /**
@@ -453,6 +542,7 @@ export class SubordinateAgent extends ActorAgent {
     mission: string;
     model: string | null;
     activePlan: PlanReview | null;
+    pendingSteers: InlineSteer[];
   }> {
     this.ensureSchema();
     const identity = this.identity.read();
@@ -466,14 +556,39 @@ export class SubordinateAgent extends ActorAgent {
       mission: identity.mission,
       model: this.getStoredModelId(),
       activePlan: await this.getActivePlanReview(),
+      pendingSteers: this.pendingSteerRuns(),
     };
   }
+
+  /** This child's own lifetime, off its immutable identity row. Absent before
+   *  the seed, which reads as durable: nothing is waiting on an unseeded facet. */
+  private ownLifetime(): SubordinateLifetime {
+    return this.identity.read()?.lifetime ?? 'durable';
+  }
+
+  /**
+   * The report this child owes for one ending, or null when it owes none.
+   *
+   * Thin on purpose: the DECISION is core's closed map (`terminalTaskReport`),
+   * so the cloud child and the local one cannot come to word the same ending
+   * differently, and a new ending cannot reach either without a decision.
+   */
+  private taskTerminalReport(ending: TaskTurnEnding, assistantText: string) {
+    return terminalTaskReport({ lifetime: this.ownLifetime(), ending, assistantText });
+  }
+
 
   private async sendReport(
     status: SubordinateReportStatus,
     content: string,
     origin: SubordinateReportOrigin,
-  ): Promise<{ id: string; admitted: boolean }> {
+    /** The terminal sequence that owes this report, and the mode the reported
+     *  turn ran in. Both TRAVEL rather than being re-derived at either end: the
+     *  sequence id is the parent's ingress dedupe key, so a replayed report is
+     *  recognised as the one already held, and a cold replay must not turn a Plan
+     *  report into a Build one because the live turn metadata moved on. */
+    owedBy?: { readonly sequenceId: string; readonly mode: WorkMode },
+  ): Promise<SubordinateEventResult> {
     const identity = this.identity.read();
     if (!identity) throw new Error('Subordinate identity is not initialized.');
     // The agent that HIRED this one, which past depth 1 is not the workspace
@@ -485,13 +600,75 @@ export class SubordinateAgent extends ActorAgent {
       status,
       content,
       origin,
-      mode: this.turnWorkMode(),
+      mode: owedBy?.mode ?? this.turnWorkMode(),
+      sequenceId: owedBy?.sequenceId ?? `live:${this.name}:${nanoid()}`,
     });
+  }
+
+  /**
+   * The three effects a settled subordinate turn owes.
+   *
+   * `parent_report` is the one that made a durable disposition necessary here at
+   * all: it is a cross-DO call, and a second report of one answer reads to the
+   * parent as a second piece of progress. It is nonetheless replayable, because
+   * the parent's ingress admits by dedupe key rather than by arrival — so a
+   * re-drive of the SAME answer is recognised, while losing it silently is not
+   * recoverable at all.
+   */
+  protected override terminalEffectTable(): TerminalEffectTable {
+    return {
+      ...this.sharedTerminalEffects(),
+      auto_title: terminalEffect({
+        input: v.object({ subject: v.string() }),
+        // Once-only at its own boundary: persisting marks `name_origin`, after
+        // which the shared policy no longer matches. The lane verdict is core's
+        // one derivation, asked here rather than stashed by another effect, so a
+        // replay whose spine ran on an earlier activation still gets an answer.
+        run: async ({ subject }) => {
+          await this.applyAutoTitle(subject);
+          return { status: 'completed' };
+        },
+      }),
+
+      parent_report: terminalEffect({
+        input: v.object({
+          text: v.string(), status: v.picklist(SUBORDINATE_REPORT_STATUSES),
+          sequenceId: v.string(), mode: WorkModeSchema,
+        }),
+        // Replayable because the parent's ingress dedupes on the SEQUENCE ID this
+        // carries: a re-drive of the same answer is recognised as the report the
+        // parent already holds, while losing it silently is not recoverable at all.
+        run: async ({ text, status, sequenceId, mode }) => {
+          const { disposition } = await this.sendReport(
+            status, text, 'turn_end', { sequenceId, mode },
+          );
+          return disposition === 'admitted'
+            ? { status: 'completed' }
+            : { status: 'completed', detail: `the parent reported it ${disposition}` };
+        },
+      }),
+    };
   }
 
   async onChatResponse(result: ChatResponseResult): Promise<void> {
     const { programmaticUserMessage, errorText, completed } = this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
+    // The identity of THIS terminal sequence: the durable turn plus the response
+    // being settled. Both, because Think fires this hook once per response and a
+    // continuation keeps the turn's user-message id.
+    //
+    // NOTHING FROM HERE TO `settle` MAY AWAIT, for the reason the root says it
+    // there: Think has already persisted the answer, so an await before the claim
+    // exists is a window where recovery finds a durable answer with no incomplete
+    // transition and replays nothing. The response-to-model-message conversion
+    // used to sit here and is now inside the `turn_end_extensions` body.
+    const durableTurnId = this.durableTurnId();
+    // An EMPTY assistant id is not an identity, exactly as the root reads it:
+    // every per-effect scope derives from this value, so two such responses would
+    // share one scope and the second would read the first's work as its own.
+    const transition = durableTurnId === null || result.message.id === ''
+      ? null
+      : { turnId: durableTurnId, messageId: result.message.id };
 
     const userMessages = this.messages.filter((message) => message.role === 'user');
     const lastUserMessage = programmaticUserMessage ?? userMessages.at(-1);
@@ -515,55 +692,95 @@ export class SubordinateAgent extends ActorAgent {
       origin: ownerDriven ? 'user' : 'programmatic',
     };
     if (result.message.id) completedTurn.turnId = result.message.id;
-    // The same settle spine the root uses, on every status. This method used to
-    // early-return on a turn that did not complete, so a cut or errored
-    // subordinate turn reached neither the outcome review nor its extensions —
-    // the identical drop the root had, one class down. Plan turns still record
-    // nothing; core's `turnEvolutionEnabled` gate owns that. The spine hands
-    // back the SAME verdict core returned — whether the completed-build
-    // improvement lanes may run — and the auto-title below consumes that, not
-    // its own spelling of the condition.
-    const improvementLanesOpen = await this.settleTurnSpine({
-      status: classifyRunEnd({
-        completed, interrupted: result.status === 'aborted', errorText,
-        // Think reports 'completed' for a turn its own stop condition cut, so
-        // the model's last word is the only thing that can tell the two apart.
-        lastFinishReason: this.acc.lastFinishReason,
-      }).reason,
-      turn: snapshotCompletedTurn(this.acc, completedTurn),
-      onTurnEnd: async () => {
-        await this.extensions.emitTurnEnd({
-          text: assistantText,
-          responseMessages: await convertToModelMessages(
-            [result.message], { ignoreIncompleteToolCalls: true },
-          ),
-        });
-      },
-    });
-    if (!completed) {
-      this.reportedThisTurn = false;
-      return;
-    }
+    const turn = snapshotCompletedTurn(this.acc, completedTurn);
+    const status = classifyRunEnd({
+      completed, interrupted: result.status === 'aborted', errorText,
+      // Think reports 'completed' for a turn its own stop condition cut, so the
+      // model's last word is the only thing that can tell the two apart.
+      lastFinishReason: this.acc.lastFinishReason,
+    }).reason;
+    const messageId = result.message.id;
 
-    // Title this agent from the first thing its OWNER said to it.
+    // Sampled only for a turn the promotion gate can learn from, and keyed on
+    // that turn rather than rolled — the root's two reasons, which are this
+    // facet's too.
+    const sampledVersion = this.orch.improvementLanesOpen(status, this.turnWorkMode())
+      ? shadowTrialPlan(this.scaffoldControl, messageId)
+      : null;
+    // Titled from the first thing its OWNER said to it, and the mission is
+    // deliberately not the source. A subordinate's mission is either its hire
+    // brief — already turned into a role-derived name its parent chose — or, for
+    // an agent the owner added with nothing to say, the workspace's own mission,
+    // which every sibling shares. Titling from that would name them all the same.
+    // WHICH report this turn owes its parent, decided once and carried by the
+    // claimed effect below rather than by a detached send.
     //
-    // The mission is deliberately not the source here, and that is the one
-    // place this differs from the workspace root. A subordinate's mission is
-    // either its hire brief — already turned into a role-derived name its
-    // parent chose — or, for an agent the owner added with nothing to say,
-    // the workspace's own mission, which every sibling shares. Titling from
-    // it would name them all the same thing. What actually distinguishes this
-    // agent is what the owner brings to it, so that is what names it.
-    //
-    // Fire-and-forget and once-only: persisting marks `name_origin`, after
-    // which the shared policy no longer matches. A programmatic turn is not a
-    // trigger — a parent's assignment is not the owner talking.
-    if (ownerDriven && improvementLanesOpen) void this.maybeAutoTitle(userText);
-
-    if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText })) {
-      void this.sendReport('progress', assistantText, 'turn_end')
-        .catch(reportSubordinateFailure('turn_end'));
-    }
+    // A `task` child owes its caller a terminal answer on EVERY ending, because
+    // an `agents.ask` is blocked on it: the branch that used to return without
+    // one simply went quiet and the caller never came back. A `durable` child
+    // relays only a completed turn worth relaying. Both are suppressed by a
+    // report that already SETTLED the run — a mere progress note leaves the
+    // caller waiting and therefore leaves the answer owed, while a second
+    // settling message would reach it as a second result for one question.
+    const ending: TaskTurnEnding = completed
+      ? 'answered'
+      : result.status === 'aborted' ? 'interrupted' : 'errored';
+    const taskReport = this.settledRunThisTurn ? null : this.taskTerminalReport(ending, assistantText);
+    const parentReport = taskReport ?? (
+      completed && subordinateRelaysTurnEnd({
+        reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText,
+      })
+        ? { status: 'progress' as const, content: assistantText }
+        : null
+    );
+    const scopedTurn = projectJsonValue({ value: this.orch.scopedTurn(turn) });
+    const shadowTrial = sampledVersion === null ? undefined : {
+      pendingVersion: sampledVersion,
+      trialContext: projectJsonValue({
+        value: trimTrialContext(this._lastTurnOpts?.messages ?? []),
+      }),
+    };
+    const autoTitle = ownerDriven ? { subject: userText } : undefined;
+    const parentReportPart = parentReport === null ? undefined : {
+      text: parentReport.content,
+      status: parentReport.status,
+      // A live report with no terminal sequence behind it still needs an
+      // identity nothing else shares: keyed on an empty message id, the
+      // parent's ingress dedupes every later report as the first one.
+      sequenceId: transition === null
+        ? `live:${this.name}:${nanoid()}`
+        : this.terminal.sequenceId(transition),
+    };
+    const parts: TerminalTurnParts = {
+      turnEndExtensions: { message: projectJsonValue({ value: result.message }) },
+      advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(turn)) }),
+      shadowTrial,
+      autoTitle,
+      parentReport: parentReportPart,
+    };
+    const owed = declareTerminalRoster({
+      messageId,
+      status,
+      workMode: this.turnWorkMode(),
+      continuity: this._turnContinuity,
+      completed,
+      userText,
+      assistantText,
+      scopedTurn,
+      recordedAt: Date.now(),
+      evolutionEnabled: this._turnEvolutionEnabled,
+    }, parts);
     this.reportedThisTurn = false;
+    this.settledRunThisTurn = false;
+
+    // The same core state machine the root drives, with this facet's own effect
+    // bodies and its own fiber behind the close. There is no second copy of the
+    // choreography here any more: the guard, the claim, the roster freeze and the
+    // close are all one implementation.
+    await this.terminal.settle({
+      transition,
+      declare: () => owed,
+      hold: (claimed, close) => { this.holdTerminalClose(claimed, close, result.requestId); },
+    });
   }
 }

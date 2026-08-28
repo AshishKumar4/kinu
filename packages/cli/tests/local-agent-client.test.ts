@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
-import type { LLMProviderConfig } from '@kinu.run/core';
+import { NO_COUNT_ENDPOINT, type LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime, type LocalModelResolver } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
@@ -82,6 +82,14 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
     modelInfo: async () => null,
     judgeCandidates: async () => [],
     getAuth: async () => null,
+    // The fake vendor publishes no count endpoint, which is what the real seam
+    // answers for it: the turn is assembled ungated rather than gated on an
+    // estimate.
+    countInputTokens: async () => ({
+      kind: 'unsupported' as const,
+      provider: 'fake',
+      reason: NO_COUNT_ENDPOINT,
+    }),
   };
 }
 

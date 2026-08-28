@@ -1,8 +1,7 @@
 diff --git a/packages/core/src/steer-branch.ts b/packages/core/src/steer-branch.ts
-index 86eab3a..79949d5 100644
 --- a/packages/core/src/steer-branch.ts
 +++ b/packages/core/src/steer-branch.ts
-@@ -206,8 +206,8 @@ export function settleBranchIntoTakes(
+@@ -286,8 +286,8 @@ export function settleBranchIntoTakes(
      task: input.task,
      turnId: input.turnId,
      sessionId: input.sessionId,
@@ -11,5 +10,5 @@ index 86eab3a..79949d5 100644
 +    liveText: input.report.summary,
 +    branchText: input.liveText,
      now: input.now,
-   });
-   if (!set) {
+   };
+   const set = recordBranchTakeSet(

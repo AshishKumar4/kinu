@@ -769,11 +769,11 @@ describe('C11 mechanical steering rides the actor loop\'s one extension, never t
   const REPEATED = { command: 'wc -l reference.ts' };
 
   for (const kind of ACTOR_LOOP_KINDS) {
-    test(`${kind}: the turn-start hint splices at step 0 through the loop's own extension`, () => {
+    test(`${kind}: the turn-start hint splices at step 0 through the loop's own extension`, async () => {
       const orch = fixtureFor(kind).turnLoopSeam();
       expect(orch, `${kind}: the loop has no orchestrator seam to steer through`).not.toBeNull();
       orch!.steering.reset();
-      const spliced = orch!.turnExtension.prepareStep?.({
+      const spliced = await orch!.turnExtension.prepareStep?.({
         stepNumber: 0,
         messages: [{ role: 'user', content: 'Refactor the ingestion path.' }],
       });
@@ -784,7 +784,7 @@ describe('C11 mechanical steering rides the actor loop\'s one extension, never t
       expect(text).toContain(TURN_STEERING_HEADER);
     });
 
-    test(`${kind}: a repeat loop is steered, and conversion is recorded on the durable row`, () => {
+    test(`${kind}: a repeat loop is steered, and conversion is recorded on the durable row`, async () => {
       const orch = fixtureFor(kind).turnLoopSeam();
       expect(orch).not.toBeNull();
       orch!.steering.reset();
@@ -794,7 +794,7 @@ describe('C11 mechanical steering rides the actor loop\'s one extension, never t
           toolName: 'run', args: REPEATED, result: 'reference.ts has 412 lines', success: true,
         });
       }
-      const spliced = orch!.turnExtension.prepareStep?.({
+      const spliced = await orch!.turnExtension.prepareStep?.({
         stepNumber: IDENTICAL_CALLS_BEFORE_STEER, messages: [...HISTORY],
       });
       const text = textOfMessages(spliced);

@@ -130,7 +130,7 @@ describe('local webhook ingress', () => {
       label: 'ci', auth_mode: 'bearer', secret: 'k',
     });
 
-    expect(session.cancelTrigger(webhook.trigger_id)).toEqual({ ok: true, changed: true });
+    expect(session.cancelTrigger(webhook.trigger_id, 'owner')).toEqual({ ok: true, changed: true });
     expect(await session.acceptWebhookDelivery(delivery({
       trigger_id: webhook.trigger_id, bearer_header: 'Bearer k',
     }))).toEqual({ status: 'rejected', http_status: 503, reason: 'trigger revoked' });

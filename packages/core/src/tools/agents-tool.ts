@@ -8,18 +8,25 @@
  *   hire    — a persistent named subordinate that keeps its own context
  *             across turns and stays in the roster until dismissed;
  *             scope=workspace creates a specialist peer workspace instead.
- *   ask     — hand any agent work and expect the answer back: a subordinate's
- *             report (or a peer's reply) arrives as an event that wakes you.
+ *   ask     — TWO targets, one action, and the target decides the lifetime.
+ *             `agent` hands an EXISTING agent work: a subordinate's report (or
+ *             a peer's reply) arrives as an event that wakes you. `role`
+ *             creates a temporary full agent for this one question, waits for
+ *             its single answer, returns it here, and releases it — it never
+ *             enters the roster, and its transcript is kept.
  *   send    — fire-and-forget message to any agent.
  *   reply   — answer an incoming agent message event by event_id.
- *   list    — the unified roster: subordinates + peer workspaces.
+ *   list    — the unified roster: subordinates, peer workspaces, and the
+ *             temporary agents running right now.
  *   dismiss — retire a subordinate (archived by default; context kept).
  *
  * The machinery underneath: swarm dispatches through `strategy/swarm-run.ts`,
  * whose nodes are real tool-using agents on the heads runtime; hire/ask/send
- * ride TeamToolDeps' facet substrate, and peer messaging rides PeersToolDeps'
- * EventsHub transport. Which actions exist is decided structurally by which
- * deps the backend wires — see agentsActionsFor.
+ * ride TeamToolDeps' facet substrate — a role-targeted ask through the very
+ * same `SubordinateRuntime`, which is why a temporary agent is a REAL agent and
+ * not a bare model call — and peer messaging rides PeersToolDeps' EventsHub
+ * transport. Which actions exist is decided structurally by which deps the
+ * backend wires — see agentsActionsFor.
  *
  * The swarm action's call contract is specified by docs/EXPLORATION.md — "Presets",
  * "Validity over the resolved configuration" and "Accepted and ignored".
@@ -36,14 +43,16 @@ import {
   DELEGATION_RUNGS,
   type AgentsToolAction,
 } from './registry';
-import { SwarmConfigSchema, SwarmObjectiveSchema } from './swarm-input';
+import { SwarmConfigSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
+import type { PublishHeadStream } from '../heads/head-stream';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE,
   resolveSwarm, swarmValidity,
-  type NamedSwarmPreset, type SwarmConfig, type SwarmInput, type SwarmPreset,
+  type NamedSwarmPreset, type SwarmConfig, type SwarmInput, type SwarmNodeAssignment,
+  type SwarmPreset,
 } from '../strategy/swarm';
 import {
   TIER_IDS,
@@ -59,7 +68,7 @@ import {
   localMissionScope, readMissionLimits,
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
-import { agentHomeNodeProvisioner, type NodeHomeHost } from '../strategy/node-workspace';
+import type { NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -72,6 +81,11 @@ import {
   type DelegationBudget,
   type DelegationDepthRefusal,
 } from '../subordinates/depth';
+import type {
+  SubordinateLifetime,
+  TemporaryAgentPort,
+  TemporaryRunRequest,
+} from '../subordinates/temporary';
 import {
   parseJsonObject,
   type JsonObject,
@@ -98,6 +112,20 @@ export interface SubordinateRosterEntry {
   currentTask: string | null;
   createdAt: number;
   dismissedAt: number | null;
+  /**
+   * How long this helper is MEANT to live — the one fact a role-targeted `ask`
+   * adds to this roster, and the one nothing else can derive: a task-lifetime
+   * row working on its question and a durable row working on an assignment are
+   * the same shape, and only the first is released when it answers.
+   */
+  lifetime: SubordinateLifetime;
+  /**
+   * The EventLog id of the assignment this row is working on, or null when it
+   * has none open. It is the id the eventual `subordinate_report` cites and the
+   * id the sender was handed as {@link SubordinateHandoff.eventId}, so it is the
+   * correlation this surface already documents rather than a second one.
+   */
+  taskEventId: string | null;
 }
 
 /**
@@ -204,7 +232,20 @@ export interface TeamToolDeps {
   assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string; mode: WorkMode }): Promise<
     { ok: true; name: string } & SubordinateHandoff
   >;
-  /** Roster row + live snapshot for one subordinate, or the whole roster. */
+  /**
+   * Does this roster hold `name` AT ALL — including a row it has archived?
+   *
+   * Separate from {@link list} because the two questions differ on exactly the
+   * rows that matter here. `list` is the WORKING SET, and ask/send route on it:
+   * a dismissed agent must not be handed new work. This is PROVENANCE, and
+   * `list`'s answer was wrong for it — a released temporary agent's own result
+   * names it, and a `list` detail lookup on that name fell through to the peer
+   * path and dead-ended. Archived rows are readable, never addressable.
+   */
+  knows(name: string): Promise<boolean>;
+  /** Roster row + live snapshot for one subordinate, or the whole roster.
+   *  Resolves an ARCHIVED row too, which is what makes a released temporary
+   *  agent's transcript reachable by the name its result reported. */
   status(input: { name?: string }): Promise<object>;
   /** Conversational injection into the subordinate's next turn. */
   message(input: { name: string; content: string; mode: WorkMode }): Promise<
@@ -221,6 +262,22 @@ export interface TeamToolDeps {
   }): Promise<{
     ok: true; name: string; historyKept: boolean;
   }>;
+  /**
+   * The TEMPORARY rung: one full child agent, run to completion inside the
+   * call, its single answer returned as the tool result, and ARCHIVED in the
+   * roster above the moment it answers. It is a row in that one roster while it
+   * works, under `lifetime:'task'` — the rung adds a lifetime, never a register.
+   *
+   * OPTIONAL IN THE TYPE, REQUIRED IN EFFECT wherever a backend wires a child
+   * substrate at all — the same shape {@link AgentsForkDeps.resolveModel}
+   * carries. It is a port and not a deps GROUP because it is not a capability
+   * an actor can hold independently: it rides this roster's own
+   * `SubordinateRuntime`, so an actor with a roster has the substrate for it by
+   * construction and one without has nothing to build it from. Unwired, `ask`
+   * takes only an existing agent — structurally, in the schema, in the sandbox
+   * declaration and in the prompt.
+   */
+  readonly temporary?: TemporaryAgentPort;
 }
 
 // ── Peers (cross-workspace agents) deps contract ────────────────────────────
@@ -281,9 +338,10 @@ const ASSIGN_NOTES = {
  * workspace to measure in. Wired under the `fork` key on
  * {@link AgentsToolDeps}; both backends construct the same typed contract.
  *
- * `runSwarmAction` reads `rt`, `model`, `nodeHost`, `nodeHome` and
- * `compactShared`. The members exist because the backends' one builder
- * produces the whole bag, not because this module dispatches a strategy.
+ * `runSwarmAction` reads `rt`, `model`, `nodeHost`, `provisionNodeHome`,
+ * `reportNodeDelta` and `compactShared`. The members exist because the
+ * backends' one builder produces the whole bag, not because this module
+ * dispatches a strategy.
  */
 export interface AgentsForkDeps {
   rt: AgentRuntime;
@@ -330,21 +388,37 @@ export interface AgentsForkDeps {
    */
   nodeHost?: () => NodeLoopHost;
   /**
-   * The three host-owned things a node's PRIVATE HOME needs — a uid-0 view of
-   * the workspace filesystem, the principal registry that scopes `/tmp`, and
-   * durable SQL for the uid allocation. *Isolation*.
+   * The host-owned provisioner for one node's private home. The provisioner is
+   * async because a hosted Nimbus session owns the filesystem; a synchronous
+   * `SqliteVFS` view is only one possible implementation, not the contract.
    *
-   * A FACTORY returning a promise, for `nodeHost`'s reason plus one of its own:
-   * an in-isolate filesystem boots, so a backend that resolved this at wiring
-   * time would serialise every turn on a boot only a search needs.
-   *
-   * Absent is a host with no credentialled filesystem — the hosted backend,
-   * whose workspace is a remote Nimbus session with no uid-0 view in the isolate
-   * and no `confinePrincipal` RPC. Then every node reports
-   * `shared-origin-plane`, which is REPORTED rather than disguised as a home: an
-   * invented directory would be a boundary a node believes in and does not have.
+   * It is resolved per swarm call. Absent means this backend cannot provide a
+   * credentialed home, so nodes accurately report the shared plane.
    */
-  nodeHome?: () => Promise<NodeHomeHost>;
+  provisionNodeHome?: () => NodeWorkspaceProvisioner;
+  /**
+   * The host-owned builder for one node's own runtime, over the workspace that
+   * provisioner just handed back.
+   *
+   * Paired with {@link provisionNodeHome} and useless without it: a home is
+   * uid/gid/mode on real inodes, and the shell and file plane the node's loop
+   * uses have to act as that uid or the boundary holds on neither. Absent is a
+   * backend that provisions but cannot re-credential its own primitives, and
+   * then the loop runs as the origin — see
+   * {@link NodeAgentDeps.runtimeForWorkspace}.
+   */
+  runtimeForNodeWorkspace?: () => (workspace: NodeWorkspace) => Promise<AgentRuntime>;
+  /**
+   * Where a node's transient output frames go while a step is still being
+   * produced — the backend's own broadcast channel, resolved per call for the
+   * same reason {@link nodeHost} is.
+   *
+   * A HOSTED node does not use this: its facet publishes to the parent over the
+   * RPC it already holds. This is the IN-ISOLATE half, where there is no facet
+   * and the loop runs beside the socket. Absent is a backend with nothing
+   * watching, and costs a node nothing — the frames are superseded by its steps.
+   */
+  reportNodeDelta?: () => PublishHeadStream;
   /**
    * The shared-prefix compaction ladder for *Inherited context*, over the same
    * `SwarmRunDeps.compactShared` seam the engine consumes. The backend wires the real
@@ -428,6 +502,9 @@ export interface AgentsToolDeps {
 }
 
 interface UnifiedRosterResult {
+  /** ONE roster. A temporary agent is a row in it while it works, carrying
+   *  `lifetime:'task'`; a released one is the archived row this same roster
+   *  keeps, readable through `list` with an `agent` name. */
   subordinates?: SubordinateRosterEntry[];
   peers?: Array<{ name: string; displayName?: string }>;
   note?: string;
@@ -464,6 +541,7 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const use = [
     DELEGATION_FRAME,
     ...(deps.fork ? [DELEGATION_RUNGS.swarm] : []),
+    ...(deps.team?.temporary ? [DELEGATION_RUNGS.temporary] : []),
     ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.peers
       ? [DELEGATION_CONVERSE]
@@ -513,10 +591,17 @@ export interface AgentsToolInput {
   name?: string;
   branches?: number;
   depth?: number;
-  /** The role a delegation runs under — the swarm's nodes or the hired
-   *  subordinate. Explicit wins; omitted, a swarm rides the caller's own
-   *  active role. One swarm is ROLE-HOMOGENEOUS — mixed-role candidates
-   *  confound comparison, so there is one role per call, never a list. */
+  /** The first level, node by node: `{ prompt, task }` each. Mutually exclusive
+   *  with `branches`, whose count-based mode has the engine vary the angle
+   *  instead. See {@link SwarmInput.nodes}. */
+  nodes?: readonly SwarmNodeAssignment[];
+  /** The role a delegation runs under — the swarm's nodes, the hired
+   *  subordinate, or the TEMPORARY agent a role-targeted `ask` creates.
+   *  Explicit wins; omitted, a swarm rides the caller's own active role. One
+   *  swarm is ROLE-HOMOGENEOUS — mixed-role candidates confound comparison, so
+   *  there is one role per call, never a list. On `ask` it is the target: it is
+   *  mutually exclusive with `agent`, and naming it is what asks for a helper
+   *  that does not exist yet. */
   role?: RoleId;
   /** The inference tier the delegation runs at: `tiny|fast|default|slow|deep`.
    *  Explicit wins; omitted resolves through the role's default tier, then
@@ -533,6 +618,17 @@ export interface AgentsToolInput {
   deadline_hint?: string;
   event_id?: string;
   keep_history?: boolean;
+  /**
+   * Material a role-targeted `ask` answers over, BY WORKSPACE PATH.
+   *
+   * The paths are authorized against this workspace's file plane and handed to
+   * the temporary agent, which reads them itself — in ranges when they are
+   * large, because it is a real agent with real file tools. The bytes never
+   * enter YOUR window, which is the whole reason to name a spill file here
+   * instead of pasting it into `message`. A path this workspace cannot resolve
+   * is refused by name; nothing is truncated and nothing is guessed.
+   */
+  context_ref?: readonly string[];
 }
 
 /** Every input field except the discriminant. */
@@ -569,11 +665,19 @@ export const AGENTS_ACTION_FIELDS = {
   // ignored. They join this list when something enforces them.
   swarm: [
     'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'name', 'branches', 'depth',
+    'nodes',
     'role', 'tier',
     'budget_usd', 'budget_tokens', 'budget_label',
   ],
   hire: ['agent', 'role', 'mission', 'tier', 'scope', 'message'],
-  ask: ['agent', 'message', 'topic', 'deliverable', 'deadline_hint'],
+  // Two TARGETS, one action. `agent` names one that exists; `role` asks for one
+  // that does not and gets a temporary agent for the question. `context_ref`
+  // belongs to the second only — an existing agent already has this workspace,
+  // so naming paths at it would be advice, not a channel.
+  // Ordered by VARIANT, existing target first: the codemode declaration renders
+  // one object per variant and the union of those objects is held to this list,
+  // so the order here is the order a reader meets the fields in.
+  ask: ['agent', 'message', 'topic', 'deliverable', 'deadline_hint', 'role', 'context_ref'],
   send: ['agent', 'message', 'topic'],
   reply: ['event_id', 'message'],
   list: ['agent'],
@@ -609,6 +713,7 @@ const AgentsInputEntries = {
   name: v.optional(v.string()),
   branches: v.optional(v.number()),
   depth: v.optional(v.number()),
+  nodes: v.optional(SwarmNodeAssignmentsSchema),
   agent: v.optional(v.string()),
   role: v.optional(v.string()),
   mission: v.optional(v.string()),
@@ -623,6 +728,7 @@ const AgentsInputEntries = {
   deadline_hint: v.optional(v.string()),
   event_id: v.optional(v.string()),
   keep_history: v.optional(v.boolean()),
+  context_ref: v.optional(v.array(v.pipe(v.string(), v.minLength(1)))),
 };
 
 /**
@@ -648,6 +754,7 @@ export const AGENTS_FIELD_TS_TYPES = {
   name: 'string',
   branches: 'number',
   depth: 'number',
+  nodes: '{ prompt: string; task: string }[]',
   role: 'string',
   tier: `"${TIER_IDS.join('" | "')}"`,
   agent: 'string',
@@ -659,6 +766,7 @@ export const AGENTS_FIELD_TS_TYPES = {
   deadline_hint: 'string',
   event_id: 'string',
   keep_history: 'boolean',
+  context_ref: 'string[]',
 } as const satisfies Record<AgentsToolInputField, string>;
 
 /**
@@ -676,12 +784,17 @@ export const AGENTS_ACTION_REQUIRED_FIELDS = {
   list: [],
   dismiss: ['agent'],
 } as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
-
 const HIRE_SUBORDINATE_FIELDS = [
   'agent', 'role', 'mission', 'tier',
 ] as const satisfies readonly AgentsToolInputField[];
 const HIRE_WORKSPACE_FIELDS = [
   'agent', 'mission', 'scope', 'message',
+] as const satisfies readonly AgentsToolInputField[];
+/** The temporary rung's own fields. `tier` is deliberately absent: a temporary
+ *  agent runs at its ROLE's tier, which is the one routing input this surface
+ *  has, and a second knob here would be a model spec by another name. */
+const ASK_ROLE_FIELDS = [
+  'role', 'message', 'context_ref',
 ] as const satisfies readonly AgentsToolInputField[];
 
 export interface AgentsActionInputVariant {
@@ -689,6 +802,18 @@ export interface AgentsActionInputVariant {
   readonly fields: readonly AgentsToolInputField[];
   readonly scope?: 'subordinate' | 'workspace';
   readonly scopeOptional?: boolean;
+  /**
+   * Fields that must be ABSENT for this variant — the XOR half of a choice with
+   * no discriminant field to be `const` on.
+   *
+   * `hire` has one: `scope` is a literal, so exactly one branch matches and the
+   * variants separate themselves. `ask` has none — its two targets are two
+   * different FIELDS, so without this the two branches overlap and a call
+   * naming both would satisfy each of them. Stated here, the schema TELLS the
+   * model the targets are exclusive; the dispatch below is what enforces it,
+   * with a message a caller can correct itself from.
+   */
+  readonly excludes?: readonly AgentsToolInputField[];
 }
 
 /** The accepted input variants for one action on this actor. Native JSON
@@ -697,6 +822,7 @@ export function agentsActionInputVariantsFor(
   deps: AgentsToolDeps,
   action: AgentsToolAction,
 ): readonly AgentsActionInputVariant[] {
+  if (action === 'ask') return askInputVariants(deps);
   if (action !== 'hire') {
     return [{
       fields: agentsActionFieldsFor(deps, action),
@@ -724,6 +850,30 @@ export function agentsActionInputVariantsFor(
   return variants;
 }
 
+/** `ask`'s targets: the existing-agent handoff always, and the temporary agent
+ *  only where the port that runs one is wired. */
+function askInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
+  const existing: AgentsToolInputField[] = ['agent', 'message'];
+  if (deps.peers) existing.push('topic');
+  if (deps.team) existing.push('deliverable', 'deadline_hint');
+  const existingTarget: AgentsActionInputVariant = {
+    fields: existing,
+    required: ['agent', 'message'],
+  };
+  // The exclusion only exists when the other target does: with no temporary port
+  // there is no `role` on this action to be exclusive WITH.
+  if (deps.team?.temporary) Object.assign(existingTarget, { excludes: ['role'] });
+  const variants: AgentsActionInputVariant[] = [existingTarget];
+  if (deps.team?.temporary) {
+    variants.push({
+      fields: ASK_ROLE_FIELDS,
+      required: ['role', 'message'],
+      excludes: ['agent'],
+    });
+  }
+  return variants;
+}
+
 /** Fields one action actually reads under the transports this actor wires. */
 export function agentsActionFieldsFor(
   deps: AgentsToolDeps,
@@ -746,6 +896,7 @@ export function agentsActionFieldsFor(
       return fields.filter(field =>
         field === 'agent'
         || field === 'message'
+        || ((field === 'role' || field === 'context_ref') && deps.team?.temporary !== undefined)
         || (field === 'topic' && deps.peers !== undefined)
         || ((field === 'deliverable' || field === 'deadline_hint') && deps.team !== undefined));
     case 'send':
@@ -770,11 +921,20 @@ function agentsJsonSchemaVariants(
         action: { const: action },
         scope: variant.scope === undefined ? false : { const: variant.scope },
       };
-      return {
+      const branch = {
         type: 'object' as const,
         properties,
         required: ['action', ...variant.required],
       };
+      // Exclusivity as JSON Schema: the fields this branch REFUSES. Without it
+      // the two `ask` targets overlap and a call naming both matches each, so
+      // `oneOf` would be decorative on exactly the mistake it is here for.
+      if (variant.excludes && variant.excludes.length > 0) {
+        Object.assign(branch, {
+          not: { anyOf: variant.excludes.map((field) => ({ required: [field] })) },
+        });
+      }
+      return branch;
     }));
 }
 
@@ -1295,6 +1455,7 @@ async function runSwarmAction(
     branches: input.branches,
     depth: input.depth,
     name: input.name,
+    nodes: input.nodes,
   };
 
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
@@ -1344,14 +1505,21 @@ async function runSwarmAction(
   // one: an absent key is what runs the loop in this isolate.
   const host = fork.nodeHost?.();
   if (host) Object.assign(runDeps, { host });
-  // The per-node private home, from the ONE construction site: a backend hands
-  // over the three things only a host has, never a provisioner of its own, so
-  // there is exactly one place a node's boundary is built. Resolved once per
-  // swarm call and awaited per node, so a turn that never searches never boots a
-  // filesystem, and an absent factory leaves the key absent — which is what makes
-  // every node report the shared plane instead of a home it does not have.
-  const nodeHome = fork.nodeHome;
-  if (nodeHome) Object.assign(runDeps, { provisionHome: agentHomeNodeProvisioner(nodeHome()) });
+  // The transient frames an IN-ISOLATE node publishes. Only wired when this
+  // isolate is also the one holding the socket, which is exactly the case a
+  // hosted node's own facet-to-parent RPC covers instead.
+  const reportNodeDelta = host ? undefined : fork.reportNodeDelta?.();
+  if (reportNodeDelta) Object.assign(runDeps, { publishHeadStream: reportNodeDelta });
+  // A host constructs the provisioner around its authoritative filesystem. It
+  // may be an in-isolate SqliteVFS or the hosted Nimbus session; the node loop
+  // sees the same async contract either way.
+  const provisionNodeHome = fork.provisionNodeHome?.();
+  if (provisionNodeHome) Object.assign(runDeps, { provisionHome: provisionNodeHome });
+  // And the runtime the node's loop uses once it has that home. Wired only
+  // beside the provisioner, because re-credentialing a runtime with no
+  // credential to use is nothing.
+  const runtimeForNodeWorkspace = provisionNodeHome ? fork.runtimeForNodeWorkspace?.() : undefined;
+  if (runtimeForNodeWorkspace) Object.assign(runDeps, { runtimeForWorkspace: runtimeForNodeWorkspace });
   // The *Inherited context* barrier: the backend's real compaction ladder, handed to the
   // run so a fork parent past the threshold is rewritten once instead of inherited
   // verbatim until the provider refuses. Absent stays absent — the seam's documented
@@ -1477,7 +1645,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
       type: 'object',
       description: 'For action=swarm: OPTIONAL, and the upgrade from a judged sweep to a MEASURED search — omit it and the preset runs its own judged sweep, which is already a complete call. Supply it as {kind:"scalar", metric, unit, direction:"minimise"|"maximise", scale:"linear"|"log", target, verify:{kind, spec}} with an optional floor:{value, kind:"certificate", proof, best_known_honest}. verify names a REGISTERED instrument and hands it its WHOLE spec in ONE call — the fields are checked together, so sending them one at a time costs a round trip each. '
         + `Registered: ${verifierKindSummary()}. `
-        + 'A metric nothing can execute is not an objective, and a script path invented here is refused rather than run — if the thing you want cannot be measured by running code, leave this out. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable. kind:"instanced" and kind:"vector" declare a FRONT, and this runner measures one number per candidate, so both are refused today — reduce what you want to one scalar. Field names are snake_case, like every field on this tool.',
+        + 'A metric nothing can execute is not an objective, and a script path invented here is refused rather than run — if the thing you want cannot be measured by running code, leave this out. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable. kind:"instanced" and kind:"vector" declare a FRONT and run only with advance:"pareto": instanced measures ONE metric on every declared instance (at least two, {kind:"instanced", metric, unit, direction, scale, target, instances}); vector measures at least two scalar components that each keep their own metric/unit/direction ({kind:"vector", components:[...]}). Every declared axis must come back finite from the verifier or the run refuses, and expand:"aggregate" is refused with pareto because a merged node has no scalar re-grade. Field names are snake_case, like every field on this tool.',
     },
     key: { type: 'string', description: 'For action=swarm with advance:"archive": the coverage descriptor elites are binned into, required there and refused under every other advance. It must name a quantity the objective\'s own verifier REPORTS beside its value, because the cell a candidate lands in is witnessed by the measurement rather than claimed by the candidate — a key naming nothing that instrument reports is refused before any candidate is expanded, and a key that can only say "distinct idea" means the task wants preset:"ideate".' },
     config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
@@ -1488,7 +1656,20 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     },
     label: { type: 'string', maxLength: 120, description: 'For action=swarm with preset:"custom": required provenance. A composed shape recorded repeatedly under one label is the evidence for a new preset.' },
     name: { type: 'string', maxLength: 60, description: 'For action=swarm: a SHORT name for this search — two to four words, what you would call it in a sentence ("repo audit", "coupon 500 hunt"). It is what the exploration surface labels the tree and its row with, so a reader tells two searches apart without reading either task. Omit and the surface derives one from `task`, which is a paragraph and reads like one.' },
-    branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion. Omit to take the preset\'s own width.' },
+    branches: { type: 'integer', minimum: 1, description: 'For action=swarm: candidates per expansion, when you want the engine to vary the angle for you. Omit to take the preset\'s own width. Mutually exclusive with `nodes`.' },
+    nodes: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', minLength: 1, description: 'What THIS node is asked — its own question, distinct from every other node\'s.' },
+          prompt: { type: 'string', minLength: 1, description: 'The brief THIS node works under: the angle, the constraint, what to start from.' },
+        },
+        required: ['task', 'prompt'],
+      },
+      description: 'For action=swarm: assign the first level node by node instead of giving a count. Its length IS the branch count, so do not send `branches` as well. Every `task` must be distinct — two nodes asked the same question pay twice for one answer. Use this when you know what each node should do; use `branches` when you want N takes on one task and will let the engine hand out distinct angles.',
+    },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
     role: { type: 'string', description: `For action=swarm: the role every node runs under. Omit and the nodes ride your own active role. One swarm is role-homogeneous — there is no per-node role.${roleSummaryText(deps)}` },
     tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=swarm: the inference tier the nodes run at — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
@@ -1508,7 +1689,8 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   const properties: ConverseSchemaProperties = {
     agent: {
       type: 'string',
-      description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for hire (auto-generated from the role when omitted) and detail filter for list.`,
+      description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for hire (auto-generated from the role when omitted) and detail filter for list.`
+        + (deps.team?.temporary ? ' On ask it is EXCLUSIVE with `role`: name one or the other.' : ''),
     },
     // Says what a mission is FOR, because the hire rung's context fact makes it
     // load-bearing: this text plus a bounded digest of the caller's recent
@@ -1533,13 +1715,31 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
     });
   }
   if (deps.team) {
+    const temporary = deps.team.temporary !== undefined;
     Object.assign(properties, {
-      role: { type: 'string', maxLength: 64, description: `For action=hire: the catalog role to hire — one of the ids listed below.${roleSummaryText(deps)}` },
+      role: {
+        type: 'string', maxLength: 64,
+        description: (temporary
+          ? 'The catalog role — for action=hire the role to hire, and for action=ask the role of a TEMPORARY agent created for that one question (exclusive with `agent`; it answers here, then is released). One of the ids listed below.'
+          : 'For action=hire: the catalog role to hire — one of the ids listed below.')
+          + roleSummaryText(deps),
+      },
       tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
       deliverable: { type: 'string', maxLength: 2000, description: 'For ask to a subordinate: what the finished result should be (optional).' },
       deadline_hint: { type: 'string', maxLength: 200, description: 'For ask to a subordinate: optional urgency/deadline hint.' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
     });
+    if (temporary) {
+      Object.assign(properties, {
+        context_ref: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'For a role-targeted ask: workspace paths the temporary agent reads ITSELF. '
+            + 'The bytes never enter your own window — name a spill file here instead of pasting it '
+            + 'into `message`. An unresolvable path is refused by name.',
+        },
+      });
+    }
   }
   return properties;
 }
@@ -1628,15 +1828,27 @@ export async function dispatchAgentsAction(
   // seeded after its facet is built, so a build that ran before the seed could
   // not have known the depth. Depth is fixed for an actor's whole life, so
   // reaching this is a stale build rather than a budget that ran out mid-turn.
-  if (input.action === 'hire' && team && delegationExhausted(team.delegation)) {
-    return delegationDepthRefusal(team.delegation);
-  }
+  //
+  // BOTH SPAWNING RUNGS, not just `hire`. A role-targeted `ask` births a child
+  // through the identical substrate and therefore adds a level exactly as a hire
+  // does — so a cap that covered only `hire` was a cap the other rung walked
+  // straight past, one call per level, each spending real money. `ask` by NAME
+  // is not a spawn and stays available: talking to an agent that already exists
+  // adds no depth, and an actor at the cap still has to be able to use its team.
+  // The guard lives INSIDE each spawning arm, on the same read that arm routes
+  // on — the ask arm's `if (input.role)` IS its spawn predicate, so the seam
+  // and the dispatcher can no longer disagree about what a spawn is (they once
+  // did, on exactly `role: ''`, which the schema permits).
+  const spawnDepthRefusal = () =>
+    team && delegationExhausted(team.delegation) ? delegationDepthRefusal(team.delegation) : null;
   try {
     switch (input.action) {
       case 'swarm':
         return await runSwarmAction(deps, input, mode, toolOptions, deps.budget);
 
       case 'hire': {
+        const hireDepth = spawnDepthRefusal();
+        if (hireDepth) return hireDepth;
         if ((input.scope ?? 'subordinate') === 'workspace') {
           // Classified, not a bare `{error}`: this is the escape route the depth
           // cap closes — a fresh workspace is the root of its own tree with the
@@ -1715,7 +1927,66 @@ export async function dispatchAgentsAction(
       }
 
       case 'ask': {
-        if (!input.agent || !input.message) return badInput('ask requires agent and message');
+        // A role-targeted ask SPAWNS (see the rung note above the dispatch);
+        // ask by name talks to an agent that exists and stays available at the cap.
+        if (input.role) {
+          const askDepth = spawnDepthRefusal();
+          if (askDepth) return askDepth;
+        }
+        // The XOR, enforced where a caller can be told about it. The schema
+        // states the two targets are exclusive (`AgentsActionInputVariant.excludes`);
+        // the sandbox namespace has no schema at all, so this is the one place
+        // both surfaces meet the rule.
+        const temporary = team?.temporary;
+        if (input.agent && input.role) {
+          return badInput(
+            'ask takes ONE target: `agent` to hand work to an agent that exists, or `role` to get a '
+            + 'temporary agent for this question. Naming both leaves it undecided which lifetime you '
+            + 'asked for, and they answer differently — an existing agent reports back later, a '
+            + 'temporary one answers here.',
+          );
+        }
+        if (input.role) {
+          if (!input.message) return badInput('ask requires role and message');
+          if (!temporary) {
+            return {
+              reason: 'denied',
+              error: 'ask by `role` creates a temporary agent, which this actor has no substrate for — '
+                + 'name an existing agent with `agent` instead (action:"list" shows the roster).',
+            } satisfies DelegationDepthRefusal;
+          }
+          const ctx = deps.profile?.();
+          // Same resolver, same precedence, same refusal as a hire: a role this
+          // catalog cannot resolve is refused rather than seeded onto a child
+          // whose first turn could not read it.
+          let role: RoleSelection;
+          if (ctx) {
+            const delegated = resolveDelegatedProfile(ctx, input.role, undefined);
+            if ('error' in delegated) return badInput(delegated.error);
+            role = { kind: 'catalog', roleId: delegated.resolved.role.id };
+          } else {
+            role = { kind: 'legacy', text: input.role };
+          }
+          const request: TemporaryRunRequest = {
+            role,
+            roleLabel: input.role,
+            task: input.message,
+            mode,
+          };
+          if (input.context_ref && input.context_ref.length > 0) {
+            Object.assign(request, { contextRefs: input.context_ref });
+          }
+          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+          return await temporary.run(request);
+        }
+        // The existing-agent target's refusal is UNCHANGED — same words, same
+        // classification — because nothing about it changed. Only a caller that
+        // named no target at all reads the two-target sentence.
+        if (!input.agent || !input.message) {
+          return badInput(temporary && !input.agent && !input.message
+            ? 'ask requires a target and a message: `agent` for an agent that exists, or `role` for a temporary one.'
+            : 'ask requires agent and message');
+        }
         const asked = requestedTopic(input);
         if ('error' in asked) return asked;
         if (team && await isSubordinate(input.agent)) {
@@ -1776,9 +2047,17 @@ export async function dispatchAgentsAction(
         return await peers.reply({ eventId: input.event_id, message: input.message });
 
       case 'list': {
-        if (input.agent && team && await isSubordinate(input.agent)) {
+        // PROVENANCE, not addressing: `knows` includes archived rows, so the name
+        // a released temporary agent reported still resolves to its record. The
+        // ask/send arms keep routing on the ACTIVE roster (`isSubordinate`), so
+        // nothing dismissed can be handed work.
+        if (input.agent && team && await team.knows(input.agent)) {
           return await team.status({ name: input.agent });
         }
+        // ONE roster read. A temporary agent appears here while it works,
+        // under `lifetime:'task'` — an agent spending the owner's money right
+        // now is a helper, and a roster that called itself empty while one ran
+        // was the defect this rung had to not repeat.
         const subordinates = team ? await team.list() : undefined;
         const peerRoster = peers ? await peers.listPeers() : undefined;
         const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
@@ -1831,7 +2110,11 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
               'swarm = run a configured search over ephemeral nodes of yourself — `preset` and `task` are the whole call, and naming an `objective` upgrades its judged sweep to a search measured by your own verifier.',
             ] : []),
             ...(team || peers ? [
-              'hire = create a persistent named helper. ask = hand an agent work and get its answer back. send = fire-and-forget message. list = the unified roster.'
+              'hire = create a persistent named helper. ask = hand work to an agent and get the answer back'
+              + (team?.temporary
+                ? ' — `agent` for one that exists (it reports back later), or `role` for a temporary agent created for that one question, whose finished answer comes straight back here.'
+                : '.')
+              + ' send = fire-and-forget message. list = the unified roster.'
               // How much tree is left, stated the way head-tools states nesting
               // room ("You may nest N more level(s)") — the same fact from the
               // same kind of derived budget, so a caller near the cap can plan

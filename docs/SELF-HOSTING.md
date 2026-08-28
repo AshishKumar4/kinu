@@ -67,8 +67,9 @@ bun run infra:provision      # the secrets; `wrangler secret put` needs the Work
 
 Provisioning runs twice because `wrangler secret put` refuses on a Worker that
 does not exist yet. The first run says so; the second creates nothing the first
-created. `bun run deploy` runs the repository's 54 required gates before it
-uploads anything; a failed gate exits before Wrangler runs.
+created. `bun run deploy` runs 57 required gate invocations before deployment.
+Preflight runs first, 55 gates run concurrently, and `gate:infra` runs last. A
+failed gate exits before Wrangler runs.
 
 The fresh deployment does not have hosted Python, Bash, Ruby, or Clang until an
 operator supplies a Nimbus runtime catalog. The base workspace and the

@@ -7,7 +7,7 @@
 
 <p align="center">
   <strong>Kinu gives AI agents a durable computer of their own.<br>
-  It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks<br>
+  It records outcomes, runs locally or fully in the cloud, and evaluates hard tasks<br>
   by exploring multiple approaches and letting executable checks choose the winner.</strong><br>
   <strong><a href="https://kinu.run">kinu.run</a></strong>
 </p>
@@ -34,10 +34,10 @@
 ## Demo
 
 <p align="center">
-  <img alt="Kinu fixes a coupon bug end to end. It reproduces the 500, the reviewer annotates the plan and approves revision 2, three candidate patches race, and the focused suite selects the one that passes all seven tests." src="docs/assets/kinu-bugfix-demo.webp" width="976" height="648">
+  <img alt="Recorded bug-fix flow: plan approval, three candidate patches, and a focused suite." src="docs/assets/kinu-bugfix-demo.webp" width="976" height="648">
 </p>
 
-<p align="center"><em>A bug fix end to end. The plan gets approved, three candidate patches race, and the focused suite picks the one that passes.</em></p>
+<p align="center"><em>Recorded bug-fix flow: plan approval, three candidate patches, and a focused suite.</em></p>
 
 ## What you get
 
@@ -90,8 +90,9 @@ bun run infra:provision      # the secrets; wrangler needs the Worker to exist f
 bun run gate:infra           # every declared resource exists and is bound
 ```
 
-`bun run deploy` refuses to upload until the repository's 54 gates pass. You bring
-a Workers Paid account, a zone, and OAuth applications for sign-in.
+`bun run deploy` refuses to upload until 57 required gate invocations pass.
+Preflight runs first, 55 gates run concurrently, and `gate:infra` runs last.
+You bring a Workers Paid account, a zone, and OAuth applications for sign-in.
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) lists each prerequisite;
 [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks an empty account end to end.
 
@@ -119,7 +120,6 @@ a Workers Paid account, a zone, and OAuth applications for sign-in.
 
 - Measure evolution's lift on the sealed bench and publish the number.
 - Settle the default container storage strategy from the deployed three-way benchmark.
-- Give a hosted swarm node a private file plane, matching local nodes.
 - Add `advance:'pareto'` for multi-objective searches.
 - Seed the hosted runtime catalog so a fresh self-host gets Python without a manual step.
 

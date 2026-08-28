@@ -44,7 +44,9 @@
  */
 
 import type { ModelMessage } from 'ai';
-import { DYNAMIC_CONTEXT_OPEN_TAG } from './sections';
+import {
+  DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, sealDelimiters,
+} from './sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
@@ -510,34 +512,11 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
 
   const present = sections.filter((section): section is string => section !== null);
   if (present.length === 0) return null;
-  const body = sealDelimiters([DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n'));
+  const body = sealDelimiters(
+    [DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n'),
+    DYNAMIC_CONTEXT_DELIMITER, 'dynamic_context',
+  );
   return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
-}
-
-/** The block's own delimiter, wherever it appears inside the block's body. */
-const DELIMITER_IN_BODY = /<(\/?)dynamic_context/g;
-
-/**
- * Neutralize the block's own delimiter inside its body.
- *
- * Every free-text plane in this block is authored by the model or by content
- * the model read: task titles, background-job labels sliced off a tool input,
- * search rationales, the gated command an approval is waiting on, and the
- * recovery ledger's verbatim echo of a previous call's ARGUMENTS. None of it is
- * escaped, deliberately — the model has to read markdown, paths and code
- * exactly as written, and an escaped body would be a worse lie than an
- * unescaped one.
- *
- * So the one thing that must not survive into the body is the delimiter itself.
- * A task titled `</dynamic_context>` would otherwise close the live-state
- * ledger and let whatever followed open a forged one — and this block is
- * precisely where the model reads which searches are running and which approvals
- * are the human's, so a forgeable boundary here is a forgeable claim about the
- * state of the system. Applied at the single point that wraps the body, so a
- * plane added later cannot forget it.
- */
-function sealDelimiters(body: string): string {
-  return body.replace(DELIMITER_IN_BODY, '&lt;$1dynamic_context');
 }
 
 /** The per-turn tail block (or null when there is nothing to say). */
@@ -567,6 +546,7 @@ export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | n
   const text = renderTurnLocalContext(ctx);
   return text ? { role: 'user', content: text } : null;
 }
+
 
 interface LedgerBlock {
   /** Message count of the un-woven array when the block was born — it renders

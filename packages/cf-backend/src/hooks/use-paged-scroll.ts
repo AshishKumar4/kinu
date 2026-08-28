@@ -26,6 +26,16 @@ export interface PagedScroll<Item> {
   exhausted: boolean;
   /** Idempotent while a fetch is in flight; safe to call on every scroll tick. */
   loadMore: () => void;
+  /**
+   * Abandon everything fetched and start the walk over.
+   *
+   * The generation is what makes this safe: a page already in flight belongs to
+   * the walk that asked for it, and once this is called that walk is not the
+   * current one, so its reply is discarded instead of re-seeding a list the
+   * caller just emptied. Clearing a conversation's history while its first page
+   * was in flight used to put that page straight back on screen.
+   */
+  reset: () => void;
 }
 
 export interface PagedScrollOptions<Item> {
@@ -86,6 +96,10 @@ export function usePagedScroll<Item>({
   // `false` and start its own duplicate request.
   const inFlight = useRef(false);
   const cursor = useRef<SeekCursor | null>(null);
+  // Which walk a reply belongs to. Only the current walk may publish, so a
+  // page fetched before a reset can neither append to the new list nor move its
+  // cursor nor declare it exhausted.
+  const walk = useRef(0);
   const latest = useRef({ fetchPage, startFrom });
   latest.current = { fetchPage, startFrom };
 
@@ -93,20 +107,36 @@ export function usePagedScroll<Item>({
     if (inFlight.current || exhausted) return;
     const from = cursor.current ?? latest.current.startFrom();
     if (from === null) return;
+    const generation = walk.current;
     inFlight.current = true;
     setLoading(true);
     void latest.current.fetchPage(from === "newest" ? undefined : from).then((page) => {
+      if (generation !== walk.current) return;
       setFetched((prev) => grows === "up" ? [...page.items, ...prev] : [...prev, ...page.items]);
       setError(null);
       if (page.status === "end") setExhausted(true);
       else cursor.current = page.next;
     }, (err) => {
+      if (generation !== walk.current) return;
       setError(describeError(err));
     }).finally(() => {
+      if (generation !== walk.current) return;
       inFlight.current = false;
       setLoading(false);
     });
   }, [grows, exhausted]);
 
-  return { fetched, loading, error, exhausted, loadMore };
+  const reset = useCallback(() => {
+    walk.current += 1;
+    // The abandoned walk's `finally` can no longer clear these, which is why
+    // they are cleared here: the new walk starts idle, not mid-fetch.
+    inFlight.current = false;
+    cursor.current = null;
+    setFetched([]);
+    setLoading(false);
+    setError(null);
+    setExhausted(false);
+  }, []);
+
+  return { fetched, loading, error, exhausted, loadMore, reset };
 }

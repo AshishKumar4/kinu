@@ -12,7 +12,7 @@ import {
 import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
-import { withConfigLock } from './config-lock';
+import { withConfigLock, withConfigLockAsync } from './config-lock';
 import { writeSecretFile } from './secret-file';
 
 const storedCodexCredentialSchema = v.object({
@@ -67,12 +67,18 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
   };
 }
 
+/**
+ * One rotation per refresh token, whoever asks. The whole read-check-refresh-write
+ * runs inside the lock — the network call included, which is the point: released
+ * at the first `await`, the lock lets a second caller submit the same refresh
+ * token and race its own replacement into the file.
+ */
 async function refreshUnderLock(
   configPath: string,
   original: OAuthCredential,
   fetchFn?: typeof fetch,
 ): Promise<OAuthCredential> {
-  return withConfigLock(configPath, async () => {
+  return withConfigLockAsync(configPath, async () => {
     const latest = readCredential(configPath);
     if (latest?.accessToken && latest.accessToken !== original.accessToken && !needsRefresh(latest)) {
       return latest;

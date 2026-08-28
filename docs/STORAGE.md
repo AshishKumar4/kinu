@@ -26,6 +26,24 @@ it is a source of truth. A user's identity lives in their `UserDO`, keyed on a
 userId derived from the verified email, so an emptied namespace costs everyone
 a fresh sign-in and nothing more.
 
+A session cookie's KV record says who signed in. It does not say whether the
+session is still live. A KV delete needs up to a minute to reach every colo, so
+a copied cookie replayed at another colo would outlive logout by that window.
+One row per live session in the signing-in user's own `UserDO` answers that
+instead, and every cookie check reads it. Logout deletes that row first, and
+the KV delete that follows is cleanup, so a failed cleanup does not report a
+revocation that landed as one that did not.
+
+A store that will not answer gives a 503. It is never an admitted request, and
+never the 401 that would tell a signed-in user to sign in again. A sign-out
+that cannot reach the store keeps the cookie and offers a retry: the cookie is
+the only handle that can still revoke that session, so clearing it would leave
+the session live with nothing able to reach it. A record that is missing or
+lapsed is simply not signed in. A record that no longer decodes is both a fault
+and a dead credential: it is reported once, cleared from the row and from KV,
+and still answered as not signed in, so the browser can sign in again instead of
+being trapped behind a cookie it cannot replace.
+
 ## Entity Relationship
 
 The relational workspace tables, as created by the Core schema initializers
@@ -164,6 +182,21 @@ erDiagram
         TEXT source_message_id "Where the copy stopped"
         INTEGER source_message_created_at "Epoch ms"
         INTEGER forked_at "Epoch ms"
+    }
+    fork_transfer {
+        INTEGER id PK "Single row, or empty when no fork is arriving"
+        INTEGER head_declared "1 once a begin frame declared the fork"
+        TEXT head_cut_message_id "Where the copy stops"
+        TEXT mission "Read from the inherited SOUL.md bytes"
+        TEXT transfer_id "The transfer these columns belong to"
+        INTEGER expected_seq "The frame the receiver will accept next"
+        TEXT stream "Rolling digest over the frames that arrived"
+        TEXT file_path "The file whose ranges are still arriving"
+        INTEGER file_bytes "How many of that file's bytes the staging holds"
+        INTEGER published "1 once the commit published the fork"
+    }
+    fork_staged_files {
+        TEXT path PK "A file this unpublished transfer already published"
     }
 
     memory_chunks ||--|| memory_chunks_fts : "FTS5 external content"
@@ -335,7 +368,8 @@ The pass runs in this order:
    guarded both ways so the audit trail survives.
 3. `initAllTables` (`core/src/identity/schema.ts`): `workspace_identity`, then
    `initActorTables` (the actor substrate plus `initSearchTables`,
-   `initScaffoldTables` and `initViewTables`), then `fork_lineage`.
+   `initScaffoldTables` and `initViewTables`), then `fork_lineage`,
+   `fork_transfer` and `fork_staged_files`.
 4. `migrateWorkspaceStorage` adopts a pre-rename `agent_identity` row and a
    pre-rename `fork_lineage`.
 5. Each subsystem's own `init*` from the tables above.

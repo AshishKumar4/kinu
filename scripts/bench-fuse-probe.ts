@@ -28,11 +28,13 @@ import {
   runTeardownOnce, runWrangler, WRANGLER_FAILED,
 } from './fixtures/r2-bench/deploy-substrate';
 import {
-  classifyMaterialization, classifyRun, imageMismatchVerdict, RunIdentitySchema,
-  SANDBOX_IMAGE_VERSION, Stage1ReportSchema, Stage2ReportSchema,
+  classifyMaterialization, classifyRun, classifyWritableMmap, classifyWritableMmapControls,
+  imageMismatchVerdict, RunIdentitySchema, SANDBOX_IMAGE, SANDBOX_IMAGE_VERSION,
+  Stage1ReportSchema, Stage2ReportSchema, Stage3ReportSchema,
 } from './fixtures/fuse-probe/core';
 import type {
-  FuseProbeArtifact, RunIdentity, Stage1Report, Stage2Report,
+  FuseProbeArtifact, RunIdentity, Stage1Report, Stage2Report, Stage3Report,
+  WritableMmapControl, WritableMmapMutation,
 } from './fixtures/fuse-probe/core';
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
@@ -47,7 +49,8 @@ export const PHASES = [
   ['P3', 'FUSE bring-up', 'custom raw /dev/fuse server, direct and uid=65534 helper mount routes'],
   ['P4', 'semantics', 'range digest refusal, cache, links, executable mode, wide/deep lookup and overlay composition'],
   ['P5', 'performance', 'cold root, first stat/read, fixed working set, full walk and native lower control'],
-  ['P6', 'restart and cleanup', 'stop+wake, remount, forced unmount, residue/process scan and idempotent replay'],
+  ['P6', 'writable mmap barrier', 'pinned C/libfuse 7.39 direct-I/O MAP_SHARED stores, ordered WRITE/FSYNC/SYNCFS fence, daemon kill/restart/remount'],
+  ['P7', 'restart and cleanup', 'stop+wake, remount, forced unmount, residue/process scan and idempotent replay'],
 ] as const;
 
 export interface Deployment {
@@ -57,6 +60,8 @@ export interface Deployment {
   readonly origin: string;
   /** Process-local only: reaches /destroy during teardown, never persisted. */
   readonly token: string;
+  /** Immutable custom image for the writable C/libfuse stage. */
+  readonly writableImage: string;
 }
 
 const ExecResponseSchema = v.looseObject({
@@ -66,6 +71,23 @@ const ExecResponseSchema = v.looseObject({
   wallMs: v.optional(v.number()),
 });
 type ExecResponse = v.InferOutput<typeof ExecResponseSchema>;
+
+const ProcessStartSchema = v.strictObject({
+  operationId: v.string(),
+  status: v.string(),
+  exitCode: v.nullable(v.number()),
+  started: v.boolean(),
+  stdout: v.optional(v.string()),
+  stderr: v.optional(v.string()),
+});
+
+const ProcessPollSchema = v.strictObject({
+  operationId: v.string(),
+  status: v.string(),
+  exitCode: v.nullable(v.number()),
+  stdout: v.optional(v.string()),
+  stderr: v.optional(v.string()),
+});
 
 const OkSchema = v.object({ ok: v.boolean() });
 
@@ -87,13 +109,25 @@ const FixtureConfigSchema = v.looseObject({
   containers: v.array(v.looseObject({ class_name: v.string(), image: v.string() })),
 });
 
+/** The writable stage never deploys a mutable tag. The image must be built from
+ * fixtures/fuse-probe/Dockerfile, pushed by the operator, and addressed by its
+ * registry digest so a later tag overwrite cannot change an artifact's claim. */
+export function requireWritableProbeImage(image = process.env.FUSE_PROBE_IMAGE): string {
+  if (image === undefined || !/^[^\s@]+@sha256:[a-f0-9]{64}$/.test(image)) {
+    throw new Error('FUSE_PROBE_IMAGE must be an immutable registry image digest built from scripts/fixtures/fuse-probe/Dockerfile');
+  }
+  return image;
+}
+
 /** Pure config derivation: tests prove a run cannot re-use the fixture name or
  * omit its token. The fixture has no bucket; cleanup is Worker+container only. */
-export function deriveFixtureConfig(template: string, workerName: string, token: string): FixtureConfig {
+export function deriveFixtureConfig(template: string, workerName: string, token: string, writableImage = SANDBOX_IMAGE): FixtureConfig {
+  const parsed = v.parse(FixtureConfigSchema, JSON.parse(stripWholeLineComments(template)));
   return {
-    ...v.parse(FixtureConfigSchema, JSON.parse(stripWholeLineComments(template))),
+    ...parsed,
     name: workerName,
     vars: { FUSE_PROBE_TOKEN: token },
+    containers: parsed.containers.map((container) => ({ ...container, image: writableImage })),
   };
 }
 
@@ -121,6 +155,8 @@ export function planText(): string {
   return [
     'fuse-probe plan — no deployment or container is started:',
     ...PHASES.map(([id, name, proves]) => `  ${id} ${name}: ${proves}`),
+    '  writable image: build scripts/fixtures/fuse-probe/Dockerfile, push it, then set FUSE_PROBE_IMAGE=registry/name@sha256:<digest>.',
+    '  live command: FUSE_PROBE_IMAGE=registry/name@sha256:<digest> bun scripts/bench-fuse-probe.ts --run',
     '  cleanup: /destroy twice, then container application deleted and proven absent, Worker deleted, generated config removed — every step twice, already-absent succeeds.',
     `  evidence: immutable JSON under ${ARTIFACT_DIR}`,
   ].join('\n');
@@ -141,6 +177,7 @@ interface ProbeCommandBody {
   path?: string;
   contentBase64?: string;
   timeoutMs?: number;
+  operationId?: string;
 }
 
 /** The raw transport result: status plus body text. Parsing happens against a
@@ -185,8 +222,9 @@ async function request<T>(
   path: string,
   body: ProbeCommandBody,
   schema: v.GenericSchema<T>,
+  doFetch: FetchLike = fetch,
 ): Promise<T> {
-  const { status, parsed } = await requestJson(origin, token, path, body, schema);
+  const { status, parsed } = await requestJson(origin, token, path, body, schema, doFetch);
   if (status < 200 || status >= 300) throw new Error(`${path} failed (${status}): ${JSON.stringify(parsed).slice(0, 800)}`);
   return parsed;
 }
@@ -305,12 +343,45 @@ function parseExecReport<T>(
   }
 }
 
-async function deploy(runId: string, token: string): Promise<Deployment> {
+/** The C probe exits non-zero for a proved NO_GO. Its JSON is therefore parsed
+ * before interpreting the exit code; discarding it would erase the evidence
+ * that explains the refusal. */
+export function parseWritableMmapOutput(result: ExecResponse): Stage3Report {
+  if (result.exitCode !== 0 && result.exitCode !== 86) {
+    throw new Error(`writable mmap probe exited ${String(result.exitCode)}: ${(result.stderr ?? '').slice(-800)}`);
+  }
+  const line = (result.stdout ?? '').trim().split('\n').filter(Boolean).at(-1);
+  if (line === undefined) throw new Error(`writable mmap probe emitted no JSON: ${(result.stderr ?? '').slice(-800)}`);
+  try {
+    const report = v.parse(Stage3ReportSchema, JSON.parse(line));
+    if (result.exitCode === 0 && !report.linearizable) throw new Error('writable mmap probe exited 0 with a non-linearizable report');
+    if (result.exitCode === 86 && report.linearizable) throw new Error('writable mmap probe exited 86 with a linearizable report');
+    return report;
+  } catch (error) {
+    throw new Error(`writable mmap probe emitted invalid evidence: ${describeThrown({ cause: error })}`, { cause: error });
+  }
+}
+export interface WritableMmapEvidence {
+  readonly exitCode: 0 | 86;
+  readonly report: Stage3Report;
+}
+
+export function parseWritableMmapEvidence(result: ExecResponse): WritableMmapEvidence {
+  const report = parseWritableMmapOutput(result);
+  const exitCode = result.exitCode;
+  if (exitCode !== 0 && exitCode !== 86) {
+    throw new Error(`writable mmap probe exit code missing or unsupported: ${String(exitCode)}`);
+  }
+  return { exitCode, report };
+}
+
+
+async function deploy(runId: string, token: string, writableImage: string): Promise<Deployment> {
   const workerName = `kinu-fuse-probe-${runId}`;
   const containerAppName = containerApplicationName(workerName, 'FuseProbeBox');
   const configPath = join(FIXTURE_DIR, `wrangler.${runId}.jsonc`);
   const template = await readFile(join(FIXTURE_DIR, 'wrangler.jsonc'), 'utf8');
-  await writeFile(configPath, `${JSON.stringify(deriveFixtureConfig(template, workerName, token), null, 2)}\n`, 'utf8');
+  await writeFile(configPath, `${JSON.stringify(deriveFixtureConfig(template, workerName, token, writableImage), null, 2)}\n`, 'utf8');
   const deployed = runWrangler(REPO_ROOT, ['deploy', '--config', configPath], { allowFailure: true });
   if (deployed.startsWith(WRANGLER_FAILED)) {
     await releaseResources(liveReleaseHooks(configPath, workerName, containerAppName));
@@ -318,7 +389,7 @@ async function deploy(runId: string, token: string): Promise<Deployment> {
   }
   const origin = /https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/.exec(deployed)?.[0];
   if (origin === undefined) throw new Error('wrangler deploy printed no workers.dev URL');
-  return { workerName, containerAppName, configPath, origin, token };
+  return { workerName, containerAppName, configPath, origin, token, writableImage };
 }
 
 async function wake(origin: string, token: string): Promise<void> {
@@ -326,8 +397,7 @@ async function wake(origin: string, token: string): Promise<void> {
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       // Exit status, not stdout: `test ! -e` prints nothing on either branch,
-      // so only exitCode 0 proves the pre-stop marker is gone, i.e. this is a
-      // fresh instance rather than the one that was stopped.
+      // so only exitCode 0 proves a fresh instance.
       const result = await exec(origin, token, 'test ! -e /tmp/fuse-probe-restart-marker', 60_000);
       if (result.exitCode === 0) return;
     } catch (error) { last = error; }
@@ -467,8 +537,11 @@ export function composeFuseProbeArtifact(input: {
   readonly finishedAt: string;
   readonly workerName: string;
   readonly identity?: RunIdentity;
+  readonly writableImage?: string;
   readonly stage1?: Stage1Report;
   readonly stage2?: Stage2Report;
+  readonly stage3?: Stage3Report;
+  readonly writableControls?: readonly WritableMmapControl[];
   readonly failure?: string;
   readonly cleanupFailure?: string;
 }): FuseProbeArtifact {
@@ -476,6 +549,18 @@ export function composeFuseProbeArtifact(input: {
   const censored = mismatch !== undefined;
   const stage1 = censored ? undefined : input.stage1;
   const stage2 = censored ? undefined : input.stage2;
+  const stage3 = censored ? undefined : input.stage3;
+  const readOnlyVerdict = censored
+    ? mismatch
+    : classifyRun(stage1, stage2, input.failure);
+  const writableMmap = censored
+    ? mismatch
+    : classifyWritableMmap(stage3);
+  const writableControls = censored ? [] : [...(input.writableControls ?? [])];
+  const controlsVerdict = censored
+    ? mismatch
+    : classifyWritableMmapControls(writableControls);
+  const writableVerdict = writableMmap.outcome === 'pass' ? controlsVerdict : writableMmap;
   return {
     schemaVersion: 1,
     command: 'bun scripts/bench-fuse-probe.ts --run',
@@ -483,9 +568,7 @@ export function composeFuseProbeArtifact(input: {
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
     workerName: input.workerName,
-    verdict: censored
-      ? mismatch
-      : classifyRun(stage1, stage2, input.failure),
+    verdict: writableVerdict.outcome === 'pass' ? readOnlyVerdict : writableVerdict,
     materialization: censored || stage1 === undefined
       ? (mismatch ?? {
           outcome: 'no_go',
@@ -493,12 +576,92 @@ export function composeFuseProbeArtifact(input: {
           detections: [],
         })
       : classifyMaterialization(stage1.openat2),
+    writableMmap,
+    writableControls,
     identity: input.identity,
+    writableImage: input.writableImage,
     stage1,
     stage2,
+    stage3,
     failure: input.failure,
     cleanupFailure: input.cleanupFailure,
   };
+}
+
+/** The retained process has its own bounded watchdog. The driver itself has no
+ * elapsed deadline and polls until the provider records this process exit. */
+export function writableProbeCommand(mutation?: WritableMmapMutation): string {
+  const arg = mutation === undefined ? '' : ` --mutation=${mutation}`;
+  return `timeout -k 5s 90s /usr/local/bin/fuse-mmap-probe${arg}; code=$?; `
+    + 'for f in /tmp/fuse-mmap-probe.*/events.ndjson; do '
+    + 'if test -f "$f"; then echo "=== $f ===" >&2; cat "$f" >&2; fi; '
+    + 'done; exit "$code"';
+}
+
+/** Deterministic operation identity gives a redriven driver the same durable
+ * process record, rather than a second concurrent writable probe. */
+export function writableProbeOperationId(runId: string, mutation?: WritableMmapMutation): string {
+  return `fuse-${runId}-${mutation ?? 'positive'}`;
+}
+
+/** Start once and observe until the provider settles it. There is deliberately
+ * no elapsed deadline: stage three's process is the authority on completion.
+ * Only a signal or the explicit teardown changes that outcome. */
+export async function awaitWritableMmapResult(
+  deployment: Deployment,
+  operationId: string,
+  mutation: WritableMmapMutation | undefined = undefined,
+  doFetch: FetchLike = fetch,
+  sleep: (ms: number) => Promise<void> = delay,
+): Promise<WritableMmapEvidence> {
+  const started = await request(
+    deployment.origin,
+    deployment.token,
+    '/start',
+    { operationId, command: writableProbeCommand(mutation) },
+    ProcessStartSchema,
+    doFetch,
+  );
+  if (started.operationId !== operationId) {
+    throw new Error(`/start returned operation ${started.operationId}, expected ${operationId}`);
+  }
+  for (;;) {
+    const polled = await request(
+      deployment.origin,
+      deployment.token,
+      '/poll',
+      { operationId },
+      ProcessPollSchema,
+      doFetch,
+    );
+    if (polled.operationId !== operationId) {
+      throw new Error(`/poll returned operation ${polled.operationId}, expected ${operationId}`);
+    }
+    if (polled.exitCode === null) {
+      if (polled.status !== 'starting' && polled.status !== 'running') {
+        throw new Error(`writable mmap process ${operationId} settled without an exit code`);
+      }
+      await sleep(250);
+      continue;
+    }
+    if (polled.stdout === undefined || polled.stderr === undefined) {
+      throw new Error(`writable mmap process ${operationId} settled without complete logs`);
+    }
+    const result: ExecResponse = {
+      exitCode: polled.exitCode,
+      stdout: polled.stdout,
+      stderr: polled.stderr,
+    };
+    return parseWritableMmapEvidence(result);
+  }
+}
+
+async function runWritableProbe(
+  deployment: Deployment,
+  operationId: string,
+  mutation?: WritableMmapMutation,
+): Promise<WritableMmapEvidence> {
+  return awaitWritableMmapResult(deployment, operationId, mutation);
 }
 
 export async function run(): Promise<FuseProbeArtifact> {
@@ -509,50 +672,68 @@ export async function run(): Promise<FuseProbeArtifact> {
   let identity: RunIdentity | undefined;
   let stage1: Stage1Report | undefined;
   let stage2: Stage2Report | undefined;
+  const writableControls: WritableMmapControl[] = [];
+  let stage3: Stage3Report | undefined;
+  let writableImage: string | undefined;
   let failure: string | undefined;
   let cleanupFailure: string | undefined;
   try {
-    deployment = await deploy(runId, token);
+    writableImage = requireWritableProbeImage();
+    deployment = await deploy(runId, token, writableImage);
     publishTeardown(async () => { await teardown(deployment); });
     console.log(`fuse probe origin ${deployment.origin}`);
-    // Prove the freshly deployed Worker accepts this run's token before any
-    // container call. A workers.dev hostname can still serve the old Worker
-    // while the new deployment propagates.
     await awaitFixtureReady(deployment.origin, token);
     await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
-    // Verify image and bun outside the Durable Object startup window.
-    identity = await request(
-      deployment.origin,
-      token,
-      '/prepare',
-      {},
-      RunIdentitySchema,
-    );
+    identity = await request(deployment.origin, token, '/prepare', {}, RunIdentitySchema);
     if (identity.actualVersion !== SANDBOX_IMAGE_VERSION) {
       throw new Error(`container identity mismatch: reports SANDBOX_VERSION ${identity.actualVersion}, configured ${SANDBOX_IMAGE_VERSION}`);
     }
-    await uploadProbeBundle(deployment.origin, token);
 
+    // C exits 86 for a proved NO_GO; preserve that report instead of treating
+    // it as an infrastructure crash.
+    const positive = await runWritableProbe(deployment, writableProbeOperationId(runId));
+    stage3 = positive.report;
+    const writableSource = await readFile(join(FIXTURE_DIR, 'writable-probe.c'));
+    const sourceHasher = new Bun.CryptoHasher('sha256');
+    sourceHasher.update(writableSource);
+    const expectedSourceDigest = sourceHasher.digest('hex');
+    if (stage3.protocol.kernelHeader?.headers.sourceSha256 !== expectedSourceDigest) {
+      throw new Error('custom writable probe source digest does not match the reviewed fixture source');
+    }
+    for (const mutation of [
+      'reply-before-log',
+      'fence-closes-request-loop',
+      'omit-msync',
+      'post-fence-contamination',
+      'intent-fsync-failure',
+      'result-fsync-failure',
+      'restart-truncation',
+      'skip-recovery',
+    ] as const satisfies readonly WritableMmapMutation[]) {
+      const evidence = await runWritableProbe(deployment, writableProbeOperationId(runId, mutation), mutation);
+      const report = evidence.report;
+      const verdict = classifyWritableMmap(report);
+      if (evidence.exitCode !== 86 || report.mutation !== mutation || report.linearizable
+          || report.protocol.kernelHeader?.headers.sourceSha256 !== expectedSourceDigest
+          || verdict.outcome !== 'no_go') {
+        throw new Error(`writable negative control ${mutation} did not produce its exit-86 refusal evidence`);
+      }
+      writableControls.push({ mutation, exitCode: evidence.exitCode, report, verdict });
+    }
+
+    await uploadProbeBundle(deployment.origin, token);
     const first = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.mjs stage1', 300_000);
     stage1 = parseExecReport('stage1', first, Stage1ReportSchema);
-    // The shared RangeReadIntent contract is parsed inside Stage1ReportSchema.
-    // Reading this field makes the dependency explicit at the evidence boundary.
-    if (stage1.rangeReads.some((record) => !record.verified)) throw new Error('reference range read returned bytes that failed its shared-contract digest');
+    if (stage1.rangeReads.some((record) => !record.verified)) {
+      throw new Error('reference range read returned bytes that failed its shared-contract digest');
+    }
 
     await stopAndProveRestart(deployment.origin, token);
     await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe');
-    const restartedIdentity = await request(
-      deployment.origin,
-      token,
-      '/prepare',
-      {},
-      RunIdentitySchema,
-    );
+    const restartedIdentity = await request(deployment.origin, token, '/prepare', {}, RunIdentitySchema);
     if (restartedIdentity.actualVersionDigest !== identity.actualVersionDigest) {
       throw new Error('container restart changed the measured image identity');
     }
-    // Container disk is ephemeral by contract. Reinstall the immutable probe
-    // bundle exactly as product onStart reinstalls its daemon.
     await uploadProbeBundle(deployment.origin, token);
     const second = await exec(deployment.origin, token, 'bun /tmp/fuse-probe/probe.mjs stage2', 180_000);
     stage2 = parseExecReport('stage2', second, Stage2ReportSchema);
@@ -568,8 +749,11 @@ export async function run(): Promise<FuseProbeArtifact> {
     finishedAt: new Date().toISOString(),
     workerName: deployment?.workerName ?? `kinu-fuse-probe-${runId}`,
     identity,
+    writableImage,
     stage1,
     stage2,
+    stage3,
+    writableControls,
     failure,
     cleanupFailure,
   });

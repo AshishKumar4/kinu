@@ -6,6 +6,11 @@
  *   contextWindow()   catalog-reported, else the static window table — feeds
  *                     compaction, the step-prune budget, and overflow recovery
  *                     with the SAME number.
+ *   modelOutputLimit() the answer allowance context admission reserves out of
+ *                     that window. Catalog-reported, else the whole window —
+ *                     an unanswered catalog says nothing about how much of the
+ *                     window the answer takes, and a picked number here would
+ *                     read as a fact.
  *   acceptedMedia()   the attachment sanitizer's policy input — provider class
  *                     caps the wire format immediately (conservative: errs
  *                     toward sanitizing, never toward a rejected request); the
@@ -49,6 +54,20 @@ export class ModelCatalogSession {
 
   contextWindow(): number {
     return this.info()?.contextWindow ?? contextWindowForModel(this.deps.effectiveSpec());
+  }
+
+  /**
+   * The largest answer the resolved model will produce, out of the window
+   * {@link contextWindow} reports.
+   *
+   * An unreported allowance is not a small one: a catalog that has not landed
+   * says nothing about how much of the window the answer may take, so the
+   * honest reading is the whole window, and context admission splits from
+   * there (prompting/step-prune.ts). Reporting a picked number here instead
+   * would put a fact in the catalog's mouth.
+   */
+  modelOutputLimit(): number {
+    return this.info()?.modelOutputLimit ?? this.contextWindow();
   }
 
   /** What the resolved model charges, or null when the catalog has not landed

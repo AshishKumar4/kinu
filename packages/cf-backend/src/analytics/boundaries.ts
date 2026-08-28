@@ -138,6 +138,20 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
       + 'its deletion visible.',
   },
   {
+    id: 'sandbox.recovery',
+    family: 'error',
+    event: 'sandbox.recovery_settled',
+    site: 'packages/cf-backend/src/orchestrator.ts',
+    mechanism: 'writer',
+    emitter: 'recordSandboxRecovery',
+    means: 'One delivery of a container lifecycle failure to the agent settled: '
+      + 'which stage failed, whether the announcement reached the agent, which '
+      + 'attempt it was, and how long since the incident was first reported. A '
+      + 'SUCCESSFUL recovery is a row here too, which is the point — the seam '
+      + 'used to produce no rows at all, so an incident nobody was told about '
+      + 'and one the agent acted on were both silence.',
+  },
+  {
     id: 'turn.settled',
     family: 'turn',
     event: 'turn.settled',

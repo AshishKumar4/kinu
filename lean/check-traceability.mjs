@@ -16,12 +16,14 @@ const allowedStatuses = new Set([
   "specified-not-modeled",
 ]);
 const qualifiedNamePattern = /^Proteus(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/;
+const leanConstructorPattern = /\|\s*([A-Za-z_][A-Za-z0-9_']*)/g;
 // --manifest-only stops before the kernel axiom audit, which needs a built Lean
 // toolchain. Everything up to that point is pure file reading: the manifest is
-// well-formed, every tsRef still resolves to a real line of TypeScript, and
-// every claimed theorem/axiom exists as an exact source declaration. That is
-// the drift check a deploy gate can afford; scripts/verify-lean.sh runs the
-// full audit.
+// well-formed, every tsRef still resolves to a live TypeScript declaration,
+// every declared state mirror still matches the set the code ships, and every
+// claimed theorem/axiom exists as an exact source declaration. That is the
+// drift check a deploy gate can afford; scripts/verify-lean.sh runs the full
+// audit.
 const manifestOnly = process.argv.includes("--manifest-only");
 const failures = [];
 
@@ -219,6 +221,7 @@ function walkLeanSources(directory) {
 function collectDeclarations(paths) {
   const theorems = new Set();
   const axioms = new Set();
+  const inductives = new Map();
 
   for (const path of paths) {
     const source = stripLeanAttributes(stripLeanComments(readFileSync(path, "utf8")));
@@ -227,7 +230,26 @@ function collectDeclarations(paths) {
     }
     let namespace = [];
     const scopes = [];
+    // Set while the lines after an `inductive` may still carry constructors.
+    let collecting;
     for (const [lineIndex, line] of source.split("\n").entries()) {
+      if (collecting !== undefined) {
+        if (/^\s*\|/.test(line)) {
+          for (const match of line.matchAll(leanConstructorPattern)) collecting.push(match[1]);
+          continue;
+        }
+        if (line.trim() !== "") collecting = undefined;
+      }
+      const inductiveMatch = line.match(/^\s*inductive\s+([A-Za-z_][A-Za-z0-9_']*)\b(.*)$/);
+      if (inductiveMatch) {
+        // Constructors sit on the `inductive` line itself, or on the `|` lines
+        // under it, or both. Doc comments between two constructors are already
+        // blank here, so a blank line continues rather than ends the list.
+        const constructors = [...inductiveMatch[2].matchAll(leanConstructorPattern)].map((m) => m[1]);
+        inductives.set([...namespace, inductiveMatch[1]].join("."), { path, constructors });
+        collecting = constructors;
+        continue;
+      }
       const namespaceMatch = line.match(/^\s*namespace\s+([A-Za-z_][A-Za-z0-9_'.]*)\s*$/);
       if (namespaceMatch) {
         const components = namespaceMatch[1].split(".");
@@ -266,7 +288,7 @@ function collectDeclarations(paths) {
     }
     if (scopes.length !== 0) fail(`unclosed namespace or section while scanning ${relativePath(path)}`);
   }
-  return { theorems, axioms };
+  return { theorems, axioms, inductives };
 }
 
 function collectExpectedAxiomReports(source) {
@@ -287,11 +309,292 @@ function relativePath(path) {
   return path.startsWith(`${repoRoot}/`) ? path.slice(repoRoot.length + 1) : path;
 }
 
+// ── TypeScript references ─────────────────────────────────────────────────────
+//
+// A tsRef names a LIVE SYMBOL: `path#Symbol`, or `path#Owner.member` for a
+// requirement that cites a method or a field rather than a top-level function.
+// The reference is resolved to an exact declaration in that file, so renaming or
+// deleting what a requirement cites fails by name, while moving it inside its
+// own file does not.
+//
+// The earlier grammar was `path:line`, and the only check was
+// `line <= fileLineCount`. Every in-range number passed, so a reference could
+// point at a blank line, at a doc comment, or at an unrelated statement after any
+// edit. And they did: the audit that produced these numbers predates this branch,
+// so most rows had already slid onto prose. A line number in a manifest nobody
+// re-derives is not a citation.
+//
+// WHAT THIS DOES NOT CHECK, stated here so nobody reads more into a green gate.
+// It holds that a cited declaration EXISTS. It says nothing about what that
+// declaration does, so a body rewritten to do the opposite of the requirement's
+// statement still resolves, and no theorem here is evidence about the shipped
+// code's behaviour. The scanner is also textual: it indexes declarations by
+// brace depth rather than by parsing TypeScript, so a same-named local one brace
+// deep inside a member-owning declaration can answer for a deleted member, and a
+// file TypeScript cannot even PARSE can still satisfy every citation into it.
+// That last one is measured rather than assumed: a stray backtick inside a
+// comment inside a SQL template ends the literal early, and because the SQL
+// carries no braces the depth survives and all four cited members still resolve.
+// Deciding parseability is tsc's job and this gate must not be read as doing it.
+const tsRefPattern =
+  /^([A-Za-z0-9_.\-/]+\.ts)#([A-Za-z_$][A-Za-z0-9_$]*)(?:\.([A-Za-z_$][A-Za-z0-9_$]*))?$/;
+const tsTopDeclarationPattern =
+  /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(function\s*\*?|class|interface|type|enum|const\s+enum|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
+// A member name is followed immediately by `(`, `<`, `:`, `,`, `;` or `}`, or by
+// an `=` after optional space. `if (x) {` and `for (const c of cs) {` are the
+// shapes that separate a declaration from a statement, and neither has the name
+// against its bracket. A keyword list would be wrong here: `delete`, `new`,
+// `default` and `in` are all legal member names.
+const tsMemberDeclarationPattern =
+  /^\s*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set|declare)\s+)*\*?\s*([A-Za-z_$][A-Za-z0-9_$]*)[?!]?(?:\s*=(?![=>])|(?=[(<:,;}]|$))/;
+// Members are addressable under these kinds only. A function body sits at the
+// same brace depth as a class body, so without this a local would answer to
+// `Owner.member` and outlive the member it was standing in for.
+const tsMemberOwnerKinds = new Set(["class", "interface", "type", "enum", "const enum", "const", "let", "var"]);
+const regexOpensAfter = new Set([
+  "return", "typeof", "case", "in", "of", "new", "delete", "void", "await", "yield", "throw", "do", "else",
+]);
+
+/**
+ * One pass over a TypeScript source, producing two line-aligned views: `code`
+ * blanks comments and string bodies, which is what brace depth and declaration
+ * matching read, and `text` blanks comments only, which is where a mirrored
+ * declaration's string literals come from.
+ */
+function tsScan(source) {
+  let code = "";
+  let text = "";
+  // A `/` opens a regular expression rather than dividing when the code before it
+  // cannot end an expression: one of these characters, or one of these keywords.
+  // `return /["'{}]/.test(x)` is the shape that makes this load-bearing. Read as
+  // division, its quotes open a string and swallow the rest of the file.
+  let previous = "\n";
+  let word = "";
+  let lastWord = "";
+  const blank = (char) => (char === "\n" ? "\n" : " ");
+  const emit = (into) => {
+    code += into;
+    text += into;
+  };
+  const closes = (char) => {
+    previous = char;
+    word = "";
+    lastWord = "";
+  };
+  let i = 0;
+  while (i < source.length) {
+    const char = source[i];
+    const next = source[i + 1];
+    if (char === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") i += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        emit(blank(source[i]));
+        i += 1;
+      }
+      i += 2;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      emit(char);
+      i += 1;
+      while (i < source.length && source[i] !== char && source[i] !== "\n") {
+        if (source[i] === "\\") {
+          code += `${blank(source[i])}${blank(source[i + 1] ?? " ")}`;
+          text += source.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
+        code += blank(source[i]);
+        text += source[i];
+        i += 1;
+      }
+      if (source[i] === char) {
+        emit(char);
+        i += 1;
+      }
+      closes(char);
+      continue;
+    }
+    if (char === "`") {
+      emit(char);
+      i += 1;
+      // A template's own text is not a declared set, so it is blanked in both
+      // views; the substitution depth is tracked only to find the closing tick.
+      let substitution = 0;
+      while (i < source.length) {
+        if (source[i] === "\\") {
+          emit(`${blank(source[i])}${blank(source[i + 1] ?? " ")}`);
+          i += 2;
+          continue;
+        }
+        if (substitution === 0 && source[i] === "`") break;
+        if (source[i] === "$" && source[i + 1] === "{") {
+          substitution += 1;
+          emit("  ");
+          i += 2;
+          continue;
+        }
+        if (substitution > 0 && source[i] === "}") substitution -= 1;
+        emit(blank(source[i]));
+        i += 1;
+      }
+      if (source[i] === "`") {
+        emit("`");
+        i += 1;
+      }
+      closes("`");
+      continue;
+    }
+    if (char === "/" && (regexOpensAfter.has(lastWord) || "(,=:[!&|?{};+-*%~^<>\n".includes(previous))) {
+      let end = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (end < source.length && source[end] !== "\n") {
+        if (source[end] === "\\") {
+          end += 2;
+          continue;
+        }
+        if (source[end] === "[") inClass = true;
+        else if (source[end] === "]") inClass = false;
+        else if (source[end] === "/" && !inClass) {
+          closed = true;
+          break;
+        }
+        end += 1;
+      }
+      if (closed) {
+        emit(" ".repeat(end - i + 1));
+        i = end + 1;
+        closes("/");
+        continue;
+      }
+    }
+    emit(char);
+    if (/[A-Za-z0-9_$]/.test(char)) word += char;
+    else {
+      if (word !== "") {
+        lastWord = word;
+        word = "";
+      }
+      // Punctuation ends the keyword's reach; whitespace does not.
+      if (char.trim() !== "") lastWord = "";
+    }
+    if (char.trim() !== "") previous = char;
+    else if (char === "\n") previous = "\n";
+    i += 1;
+  }
+  return { code, text };
+}
+
+/**
+ * Every top-level declaration of one file by name, each with the members
+ * declared one brace deep inside it. A declaration's `bound` is the last line
+ * before the next declaration at the same or an outer depth.
+ */
+function tsDeclarations(codeLines) {
+  const found = [];
+  let depth = 0;
+  for (const [index, line] of codeLines.entries()) {
+    if (depth === 0) {
+      const top = tsTopDeclarationPattern.exec(line);
+      if (top !== null) {
+        const kind = top[1].startsWith("function") ? "function" : top[1].replace(/\s+/g, " ");
+        found.push({ name: top[2], kind, line: index + 1, depth, source: line });
+      }
+    } else if (depth === 1) {
+      const member = tsMemberDeclarationPattern.exec(line);
+      if (member !== null) {
+        found.push({ name: member[1], kind: "member", line: index + 1, depth, source: line });
+      }
+    }
+    for (const char of line) {
+      if (char === "{") depth += 1;
+      else if (char === "}" && depth > 0) depth -= 1;
+    }
+  }
+
+  const declarations = new Map();
+  let owner;
+  for (const [position, entry] of found.entries()) {
+    let bound = codeLines.length;
+    for (let after = position + 1; after < found.length; after += 1) {
+      if (found[after].depth <= entry.depth) {
+        bound = found[after].line - 1;
+        break;
+      }
+    }
+    if (entry.depth === 0) {
+      owner = {
+        line: entry.line,
+        bound,
+        members: new Map(),
+        // A value declared as a function is not a member owner however it is spelled.
+        ownsMembers: tsMemberOwnerKinds.has(entry.kind) && !/=>|\bfunction\b/.test(entry.source),
+      };
+      if (!declarations.has(entry.name)) declarations.set(entry.name, owner);
+    } else if (owner !== undefined && owner.ownsMembers && !owner.members.has(entry.name)) {
+      owner.members.set(entry.name, { line: entry.line, bound });
+    }
+  }
+  return declarations;
+}
+
+const tsFiles = new Map();
+function tsFile(path) {
+  let file = tsFiles.get(path);
+  if (file === undefined) {
+    const scanned = tsScan(readFileSync(path, "utf8"));
+    const code = scanned.code.split("\n");
+    file = { code, text: scanned.text.split("\n"), declarations: tsDeclarations(code) };
+    tsFiles.set(path, file);
+  }
+  return file;
+}
+
+/** The declaration a reference names, or the reason it names none. */
+function resolveTsRef(reference) {
+  const match = tsRefPattern.exec(reference);
+  if (match === null) return { error: "is not a `path#Symbol` or `path#Owner.member` reference" };
+  const [, relative, symbol, member] = match;
+  const path = resolve(repoRoot, relative);
+  if (!path.startsWith(`${repoRoot}/`)) return { error: "escapes the repository root" };
+  let file;
+  try {
+    file = tsFile(path);
+  } catch (error) {
+    // A read that fails carries an errno; anything else is this scanner's own
+    // bug and must not read as a missing file.
+    if (error.code === undefined) throw error;
+    return { error: "names a file that does not exist" };
+  }
+  const declaration = file.declarations.get(symbol);
+  if (declaration === undefined) return { error: `names \`${symbol}\`, which ${relative} does not declare` };
+  if (member === undefined) return { file, span: declaration };
+  const owned = declaration.members.get(member);
+  if (owned === undefined) return { error: `names \`${member}\`, which \`${symbol}\` does not declare` };
+  return { file, span: owned };
+}
+
+/** The single-quoted literals one declaration lists, up to its first blank line. */
+function tsStringLiterals(file, span) {
+  const values = [];
+  for (let line = span.line; line <= span.bound; line += 1) {
+    if (line > span.line && file.code[line - 1].trim() === "") break;
+    for (const match of file.text[line - 1].matchAll(/'([^']+)'/g)) values.push(match[1]);
+  }
+  return values;
+}
+
 const requirements = parseTraceability(readFileSync(traceabilityPath, "utf8"));
 if (requirements.size === 0) fail("traceability.yaml contains no requirements");
 
 const theoremOwners = new Map();
 const axiomOwners = new Map();
+const citedSymbols = new Set();
 for (const requirement of requirements.values()) {
   for (const field of ["statement", "status", "theorems", "tsRefs", "remainingEvidence"]) {
     if (!requirement.fields.has(field)) fail(`${requirement.id}: missing required field ${field}`);
@@ -333,23 +636,16 @@ for (const requirement of requirements.values()) {
       fail(`axiom claimed more than once: ${name} (${axiomOwners.get(name)}, ${requirement.id})`);
     } else axiomOwners.set(name, requirement.id);
   }
+  const ownRefs = new Set();
   for (const ref of requirement.tsRefs) {
-    const match = ref.match(/^([^:]+):([1-9][0-9]*)$/);
-    if (!match) {
-      fail(`${requirement.id}: invalid tsRef ${ref}`);
+    if (ownRefs.has(ref)) {
+      fail(`${requirement.id}: tsRef is cited twice: ${ref}`);
       continue;
     }
-    const path = resolve(repoRoot, match[1]);
-    if (!path.startsWith(`${repoRoot}/`)) {
-      fail(`${requirement.id}: tsRef escapes repository root: ${ref}`);
-      continue;
-    }
-    try {
-      const lineCount = readFileSync(path, "utf8").split("\n").length;
-      if (Number(match[2]) > lineCount) fail(`${requirement.id}: tsRef line is out of range: ${ref}`);
-    } catch {
-      fail(`${requirement.id}: tsRef file does not exist: ${ref}`);
-    }
+    ownRefs.add(ref);
+    citedSymbols.add(ref);
+    const resolved = resolveTsRef(ref);
+    if (resolved.error !== undefined) fail(`${requirement.id}: tsRef ${ref} ${resolved.error}`);
   }
 }
 
@@ -365,88 +661,82 @@ for (const name of declarations.axioms) {
   if (!axiomOwners.has(name)) fail(`source axiom is not enrolled as a trusted model assumption: ${name}`);
 }
 
-// A Lean inductive that claims to mirror a TS axis constant, and nothing checking
-// it, reads as verified and is only asserted. `Settle.lean` carried `step`,
-// `trajectory`, `mutate`, `agree`, `novelty` and `beam` after the code cut all
-// six, plus whole `Observe` and `Decorrelate` axes after the code removed both,
-// under a heading claiming it matched `swarm.ts` exactly. Constructors are
-// lowercase identifiers and the TS values are string literals, so the comparison
-// is a set equality; camelCase spans the hyphen (`bestFirst` <-> `best-first`).
+// A Lean inductive that claims to mirror an implementation's state set, and
+// nothing checking it, reads as verified and is only asserted. `Settle.lean`
+// carried `step`, `trajectory`, `mutate`, `agree`, `novelty` and `beam` after the
+// code cut all six, plus whole `Observe` and `Decorrelate` axes after the code
+// removed both, under a heading claiming it matched `swarm.ts` exactly.
+// Constructors are identifiers and the shipped values are string literals, so the
+// comparison is a set equality over names folded to letters: camelCase spans a
+// hyphen or an underscore (`bestFirst` <-> `best-first`, `experienceLibrary` <->
+// `experience_library`) and a Lean keyword takes a trailing one (`open_` <->
+// `open`).
 //
 // Enrolled rather than discovered: a mirror nobody declared cannot be checked, so
-// adding an axis means adding a row here, which is a reviewable edit.
-const AXIS_MIRRORS = [
-  { lean: "Proteus.Exploration.Settle.Unit", ts: "SWARM_UNITS" },
-  { lean: "Proteus.Exploration.Settle.Expand", ts: "SWARM_EXPANDS" },
-  { lean: "Proteus.Exploration.Settle.Score", ts: "SWARM_SCORES" },
-  { lean: "Proteus.Exploration.Settle.Advance", ts: "SWARM_ADVANCES" },
-  { lean: "Proteus.Exploration.Settle.Carry", ts: "SWARM_CARRIES" },
-  { lean: "Proteus.Exploration.Arbitration.Context", ts: "SWARM_CONTEXTS" },
+// adding one is a reviewable edit. Two mirrors are deliberately absent because
+// they hold in neither direction today and the model, not the gate, is what has
+// to move: `Execution.Capabilities.ExecutorKind` still names `container` and `ssh`
+// against `ExecutorKind`'s `sandbox`, `laptop` and `parent`, and
+// `Execution.ToolSystem.TopLevelTool` still names five tools against
+// `BUILTIN_TOOLS`. Both are recorded as remaining evidence on PR-EXEC-001 and
+// PR-EXEC-002.
+const STATE_MIRRORS = [
+  { lean: "Proteus.Exploration.Settle.Unit", ts: "packages/core/src/strategy/swarm.ts#SWARM_UNITS" },
+  { lean: "Proteus.Exploration.Settle.Expand", ts: "packages/core/src/strategy/swarm.ts#SWARM_EXPANDS" },
+  { lean: "Proteus.Exploration.Settle.Score", ts: "packages/core/src/strategy/swarm.ts#SWARM_SCORES" },
+  { lean: "Proteus.Exploration.Settle.Advance", ts: "packages/core/src/strategy/swarm.ts#SWARM_ADVANCES" },
+  { lean: "Proteus.Exploration.Settle.Carry", ts: "packages/core/src/strategy/swarm.ts#SWARM_CARRIES" },
+  { lean: "Proteus.Exploration.Settle.SettleKind", ts: "packages/core/src/strategy/swarm.ts#SwarmSettle" },
+  { lean: "Proteus.Exploration.Arbitration.Context", ts: "packages/core/src/strategy/swarm.ts#SWARM_CONTEXTS" },
+  { lean: "Proteus.Exploration.Arbitration.Refusal", ts: "packages/core/src/strategy/swarm.ts#BRANCH_REFUSAL_POLICIES" },
+  { lean: "Proteus.Exploration.Direction", ts: "packages/core/src/strategy/objective.ts#ObjectiveDirection" },
+  { lean: "Proteus.Exploration.FloorKind", ts: "packages/core/src/strategy/objective.ts#Floor.kind" },
+  { lean: "Proteus.Exploration.Publication.Hypothesis", ts: "packages/core/src/strategy/objective.ts#FloorBreach.hypotheses" },
+  { lean: "Proteus.Exploration.Publication.Publication", ts: "packages/core/src/strategy/objective.ts#PublicationState" },
+  { lean: "Proteus.Exploration.Publication.Surface", ts: "packages/core/src/strategy/objective.ts#PUBLICATION_SURFACES" },
+  { lean: "Proteus.NodeStatus", ts: "packages/core/src/types/mcts.ts#NodeStatus" },
+  { lean: "Proteus.Execution.Capabilities.Capability", ts: "packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES" },
+  { lean: "Proteus.Storage.SnapshotChain.Kind", ts: "packages/devbox/src/storage.ts#CheckpointKind" },
+  { lean: "Proteus.Storage.DurableRoot.AwaitPoint", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_AWAIT_POINTS" },
+  { lean: "Proteus.Storage.DurableRoot.OperationKind", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_OPERATION_KINDS" },
 ];
-const AXIS_SOURCE = "packages/core/src/strategy/swarm.ts";
 
-/** `| a | b | c` constructor names of one inductive, or null when absent. */
-function leanConstructors(source, name) {
-  const declaration = new RegExp(`^\\s*inductive\\s+${name}\\s+where\\s*$`, "m").exec(source);
-  if (declaration === null) return null;
-  const names = [];
-  for (const line of source.slice(declaration.index + declaration[0].length).split("\n")) {
-    if (/^\s*\|/.test(line)) {
-      for (const match of line.matchAll(/\|\s*([A-Za-z][\w']*)/g)) names.push(match[1]);
-    } else if (names.length > 0) break;
-  }
-  return names;
-}
-
-function auditAxisMirrors() {
-  let axisSource;
-  try {
-    axisSource = readFileSync(join(repoRoot, AXIS_SOURCE), "utf8");
-  } catch {
-    fail(`axis mirror source does not exist: ${AXIS_SOURCE}`);
-    return;
-  }
-  const fold = (value) => value.replaceAll("-", "").toLowerCase();
-  for (const { lean, ts } of AXIS_MIRRORS) {
-    const declared = new RegExp(
-      `export const ${ts}\\s*=\\s*\\[([^\\]]*)\\]\\s*as const`,
-    ).exec(axisSource);
-    if (declared === null) {
-      fail(`axis mirror: ${AXIS_SOURCE} declares no \`export const ${ts} = [...] as const\``);
+function auditStateMirrors(inductives) {
+  const fold = (value) => value.replaceAll(/[-_]/g, "").toLowerCase();
+  for (const { lean, ts } of STATE_MIRRORS) {
+    const inductive = inductives.get(lean);
+    if (inductive === undefined) {
+      fail(`state mirror: no Lean inductive is declared as ${lean}`);
       continue;
     }
-    const values = [...declared[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    const resolved = resolveTsRef(ts);
+    if (resolved.error !== undefined) {
+      fail(`state mirror ${lean}: ${ts} ${resolved.error}`);
+      continue;
+    }
+    const values = tsStringLiterals(resolved.file, resolved.span);
     if (values.length === 0) {
-      fail(`axis mirror: ${ts} parsed as empty, so the comparison would pass on nothing`);
+      fail(`state mirror ${lean}: ${ts} lists no string literal, so the comparison would pass on nothing`);
       continue;
     }
-    const dot = lean.lastIndexOf(".");
-    const module = join(leanRoot, `${lean.slice(0, dot).replaceAll(".", "/")}.lean`);
-    let constructors;
-    try {
-      constructors = leanConstructors(stripLeanComments(readFileSync(module, "utf8")), lean.slice(dot + 1));
-    } catch {
-      fail(`axis mirror: no Lean module for ${lean} at ${relativePath(module)}`);
-      continue;
-    }
-    if (constructors === null) {
-      fail(`axis mirror: ${relativePath(module)} declares no \`inductive ${lean.slice(dot + 1)}\``);
-      continue;
-    }
-    const modelled = new Set(constructors.map(fold));
+    const modelled = new Set(inductive.constructors.map(fold));
     const shipped = new Set(values.map(fold));
-    const extra = constructors.filter((c) => !shipped.has(fold(c)));
+    if (modelled.size !== inductive.constructors.length || shipped.size !== values.length) {
+      fail(`state mirror ${lean}: two names fold to one, so a difference between the sets could hide`);
+      continue;
+    }
+    const extra = inductive.constructors.filter((c) => !shipped.has(fold(c)));
     const missing = values.filter((v) => !modelled.has(fold(v)));
     if (extra.length > 0) {
-      fail(`axis mirror ${lean}: models ${extra.join(", ")}, which ${ts} does not ship`);
+      fail(`state mirror ${lean}: models ${extra.join(", ")}, which ${ts} does not ship`);
     }
     if (missing.length > 0) {
-      fail(`axis mirror ${lean}: ${ts} ships ${missing.join(", ")}, which the model omits`);
+      fail(`state mirror ${lean}: ${ts} ships ${missing.join(", ")}, which the model omits`);
     }
   }
 }
 
-auditAxisMirrors();
+auditStateMirrors(declarations.inductives);
 
 // `scripts/lean-citations.ts` checks the reverse direction — that a source header
 // naming a Lean theorem names one that exists. It needs this scanner's answer and
@@ -471,6 +761,7 @@ if (manifestOnly) {
   exitOnFailures();
   console.log(
     `check-traceability: manifest OK — ${requirements.size} requirements, ` +
+    `${citedSymbols.size} cited TypeScript declarations, ${STATE_MIRRORS.length} state mirrors, ` +
     `${theoremOwners.size} claimed theorems (kernel axiom audit skipped: --manifest-only)`,
   );
   process.exit(0);

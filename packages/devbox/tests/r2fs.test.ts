@@ -9,6 +9,10 @@
 // what the container reports, never from what a call returned.
 import { describe, expect, test } from 'bun:test';
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as v from 'valibot';
+
 import {
   isS3fsMounted,
   R2FS_CACHE_DIR,
@@ -16,6 +20,13 @@ import {
   r2fsStorage,
   type R2fsPorts,
 } from '../src/r2fs';
+import {
+  classifyRecovery,
+  ContainerStartOverrun,
+  recoveryStep,
+  openStartBudget,
+  withContainerStartDeadline,
+} from '../src/lifecycle';
 import {
   CHECKPOINT_OUTCOME_KINDS,
   DEVBOX_WORKDIR,
@@ -48,6 +59,10 @@ function harness(overrides: {
   objects?: number;
   bytes?: number;
   syncExit?: number;
+  /** The mount call never answers, which is what a stalled store request looks
+   *  like from here: s3fs is inside its own connect and retry budgets and this
+   *  side has nothing to observe. */
+  mountHangs?: boolean;
 } = {}): Harness {
   const calls: string[] = [];
   let mounted = overrides.mountedAtStart ?? false;
@@ -70,6 +85,7 @@ function harness(overrides: {
     },
     mount: (s3fsOptions) => {
       calls.push(`mount:${s3fsOptions.join(',')}`);
+      if (overrides.mountHangs === true) return Promise.withResolvers<void>().promise;
       mounted = overrides.mountLands ?? true;
       return Promise.resolve();
     },
@@ -153,6 +169,103 @@ describe('s3fs options — the disk cache is the reason this strategy exists', (
   });
 });
 
+// ── the request bounds ──────────────────────────────────────────────────────
+//
+// KINU-038 read this list as omitting connection, read-write, multirequest and
+// retry bounds. It does not set them, which is not the same thing: s3fs compiles
+// its own, the SDK adds none, and those defaults are facts about ONE pinned
+// image. Recording a fact twice is how a fact drifts, so the module records them
+// in prose and these tests make the prose fail when the image moves.
+
+const PINNED_SANDBOX = '0.12.8';
+
+/** The exact version the recorded s3fs defaults were read against. A range would
+ *  defeat the whole pin. */
+function pinnedSandboxVersion(): string {
+  const manifest = v.parse(
+    v.object({ dependencies: v.object({ '@cloudflare/sandbox': v.string() }) }),
+    JSON.parse(readFileSync(join(import.meta.dir, '../package.json'), 'utf8')),
+  );
+  return manifest.dependencies['@cloudflare/sandbox'];
+}
+
+describe('the request bounds are facts about a pinned image, not options', () => {
+  test('the pinned sandbox version is the one the recorded defaults were read from', () => {
+    // A bump lands here FIRST. The s3fs in the new image may not be 1.90, and
+    // every default recorded in r2fs.ts — connect_timeout=300,
+    // readwrite_timeout=120, retries=5, multireq_max=20 — has to be re-read from
+    // that version's man page before this string moves.
+    expect(pinnedSandboxVersion()).toBe(PINNED_SANDBOX);
+  });
+
+  test('the recorded defaults and the pinned version cannot move apart', () => {
+    const module = readFileSync(join(import.meta.dir, '../src/r2fs.ts'), 'utf8');
+    expect(module).toContain(`cloudflare/sandbox:${PINNED_SANDBOX}`);
+    expect(module).toContain('v1.90');
+    for (const recorded of [
+      'connect_timeout=300', 'readwrite_timeout=120', 'retries=5', 'multireq_max=20',
+    ]) {
+      expect(module).toContain(recorded);
+    }
+  });
+
+  test('no request bound is restated as an option', () => {
+    const names = R2FS_S3FS_OPTIONS.map(option => option.split('=')[0]);
+    for (const bound of ['connect_timeout', 'readwrite_timeout', 'retries', 'multireq_max']) {
+      expect(names).not.toContain(bound);
+    }
+  });
+
+  test('max_thread_count is never passed: s3fs 1.90 has no such option', () => {
+    // Same class of defect as `compat_dir`: an option the shipped s3fs does not
+    // know fails the mount outright, so every attach on this strategy would die.
+    expect(R2FS_S3FS_OPTIONS.map(option => option.split('=')[0]))
+      .not.toContain('max_thread_count');
+  });
+
+  test('a stalled mount is cancelled by the attach owner, never waited out by s3fs', async () => {
+    // The trigger, from the strategy side. s3fs would spend 300s connecting and
+    // then retry five times; nothing here observes any of that. What ends it is
+    // the attach budget abandoning the work, whose recovery class is `abandoned`
+    // and whose step is REPLACE — destroying the container identity is the
+    // cancellation, because work left inside an unfenceable container cannot be
+    // stopped any other way.
+    //
+    // The class-level proof that `replace` destroys once, persists the stage
+    // first and proves the container gone lives in lifecycle-generation.test.ts
+    // ("the SECOND failure of that identity destroys it, and proves it gone");
+    // decisions.test.ts owns the budget and taxonomy cases. This test owns only
+    // the link they cannot reach: a real strategy attach that never returns.
+    const record = harness({ mountHangs: true });
+    const late: string[] = [];
+    const run = withContainerStartDeadline(
+      'Devbox.attach',
+      openStartBudget(0),
+      () => r2fsStorage(record.ports).attach(),
+      (failure) => { late.push(String(failure.cause)); },
+    );
+
+    let overrun: { readonly cause: unknown } | undefined;
+    try {
+      await run;
+    } catch (error) {
+      // A caught binding is not a parameter, so the thrown value reaches the
+      // classifier without a boundary that admits anything.
+      overrun = { cause: error };
+    }
+    expect(overrun?.cause).toBeInstanceOf(ContainerStartOverrun);
+    expect(classifyRecovery(overrun ?? { cause: undefined })).toBe('abandoned');
+    expect(recoveryStep({
+      owned: true, failure: 'abandoned', stage: undefined,
+    })).toEqual({ action: 'replace', stage: 'replace' });
+    // The mount was reached and never answered, and the attach did not proceed
+    // past it: no read-back, no inventory, no `attached` outcome.
+    expect(record.calls.some(call => call.startsWith('mount:'))).toBe(true);
+    expect(record.calls).not.toContain('unmount');
+    expect(late).toEqual([]);
+  });
+});
+
 // ── attach ──────────────────────────────────────────────────────────────────
 
 describe('attach — the mount must be observed, in the shape claimed', () => {
@@ -183,7 +296,39 @@ describe('attach — the mount must be observed, in the shape claimed', () => {
     // failure anyone would notice.
     const record = harness({ cacheExists: false });
     await expect(r2fsStorage(record.ports).attach())
-      .rejects.toThrow(/landed without its cache directory/);
+      .rejects.toThrow(/mounted without its cache directory/);
+  });
+
+  // KINU-038. A refusal used to be thrown OVER a live mount. The mount stayed,
+  // /proc/mounts showed it, and the very next attach reported
+  // `already-attached` on the mount the previous one had just rejected — one
+  // broken mount, refused once and then accepted for the rest of the
+  // container's life.
+  test('a refused mount is unmounted, so nothing is left for a later attach to adopt', async () => {
+    const record = harness({ cacheExists: false });
+
+    await expect(r2fsStorage(record.ports).attach()).rejects.toThrow(/Unmounted/);
+
+    expect(record.calls).toContain('unmount');
+    expect(record.mounted()).toBe(false);
+  });
+
+  test('a mount already there is CHECKED, not adopted', async () => {
+    // The state the old refusal left behind: mounted, and missing its cache.
+    const record = harness({ mountedAtStart: true, cacheExists: false });
+
+    await expect(r2fsStorage(record.ports).attach())
+      .rejects.toThrow(/was already mounted, but .* mounted without its cache directory/);
+
+    expect(record.calls).toContain('unmount');
+    expect(record.mounted()).toBe(false);
+  });
+
+  test('a healthy mount already there is still adopted without a remount', async () => {
+    const record = harness({ mountedAtStart: true });
+
+    expect((await r2fsStorage(record.ports).attach()).kind).toBe('already-attached');
+    expect(record.calls).not.toContain('unmount');
   });
 });
 

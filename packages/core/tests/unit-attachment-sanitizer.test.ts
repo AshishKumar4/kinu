@@ -119,6 +119,29 @@ describe('sanitizeAttachmentsForModel', () => {
     expect(await vfs.readdir('attachments')).toHaveLength(1);
   });
 
+  test('a spill path that does not hold the attachment bytes is not reused', async () => {
+    // KINU-016: the address was a 64-bit FNV hash and an existing path was
+    // reused because it EXISTED. Any path holding other bytes — a collision, a
+    // truncated write, a file the agent wrote there itself — silently became
+    // the payload the model was told to read. The address is now a
+    // cryptographic digest AND reuse verifies the bytes behind it.
+    const { vfs, writes } = countingVfs();
+    const policy = { accepts: accepts(), vfs };
+    const first = await sanitizeAttachmentsForModel([pdfMessage()], policy);
+    const path = savedPath(textParts(first[0]!)[0]!.text);
+    expect(writes()).toBe(1);
+
+    // Somebody else's bytes now occupy the address.
+    await vfs.writeFile(path, new Uint8Array([9, 9, 9]));
+
+    const again = await sanitizeAttachmentsForModel([pdfMessage()], policy);
+    // The reference is still byte-stable (the prompt-cache prefix holds)...
+    expect(savedPath(textParts(again[0]!)[0]!.text)).toBe(path);
+    // ...and it resolves to the attachment, not to the impostor.
+    const stored = await vfs.readFile(path);
+    expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
+  });
+
   test('passes images through for image-capable models and replaces them for text-only ones', async () => {
     const { vfs } = countingVfs();
     const message: ModelMessage = {
@@ -231,7 +254,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     expect(text.length).toBeLessThan(3_000);
     expect(text).toContain('PASTE-HEAD');
     expect(text).toContain(`${HUGE_PASTE.length} bytes`);
-    expect(text).toContain('slice + llm.query each slice, aggregate');
+    expect(text).toContain('as `context_ref` on an agents ask');
     const path = savedPath(text);
     expect(path).toStartWith('attachments/');
     expect(new TextDecoder().decode(v.parse(v.instance(Uint8Array), await vfs.readFile(path)))).toBe(HUGE_PASTE);

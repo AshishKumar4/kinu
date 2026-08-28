@@ -10,6 +10,13 @@
  *    no native OUTCOME either, which is why a failure is an attribute here.
  * 2. `ctx.tracing` is `undefined`. Only the module import works. Probing
  *    `typeof tracing` proves nothing; the member is what can be absent.
+ * 3. An absent or non-callable `enterSpan` used to take the CALLER down with it.
+ *    `tests/workerd/tracing-fallback.test.ts` measured it on real workerd: the
+ *    wrapped callback ran zero times and a `TypeError` escaped, so an
+ *    instrumented request would have failed for no reason but the instrument.
+ *    The pinned runtime does supply a callable member, which is why this is a
+ *    guard and not a migration — but a capability that is checked only by being
+ *    used is one whose absence is indistinguishable from a broken caller.
  *
  * Every span here reports `isTraced === false` under `wrangler dev` or
  * Miniflare with no tail consumer attached, and `true` with one — which is why
@@ -57,10 +64,65 @@ import {
   type Tracer,
 } from '@kinu.run/core/obs';
 
+/**
+ * The span a callback is handed when the runtime has no tracer.
+ *
+ * `isTraced` is FALSE, which is the truth rather than a fallback's apology:
+ * nothing recorded this call. Attributes and failures go nowhere, and
+ * deliberately NOT to a log. Property 2 above is the reason — an instrument that
+ * logs when it cannot trace doubles every failure report onto a sink the caller
+ * did not choose, and on a runtime with no tracing at all it would do that on
+ * every span rather than once.
+ *
+ * One frozen value, not one per call: it holds no state, and a tracer is on the
+ * path of everything.
+ */
+const UNTRACED_SPAN: ScopedSpan = Object.freeze({
+  isTraced: false,
+  setAttribute(): void {},
+  fail(): void {},
+});
+
+/** The one native entry point this file spends. Named so the capability below
+ *  has a type rather than a shape asserted at a call site. */
+type NativeEnterSpan = typeof tracing.enterSpan;
+
+/**
+ * The platform's tracer, bound and ready to call, or `null` on a runtime that
+ * has none.
+ *
+ * THE WHOLE RUNTIME QUESTION LIVES HERE, once. The module's declaration says
+ * `enterSpan` is always a callable member and fact 3 above says workerd is what
+ * decides, so the local annotation states the honest shape and the narrowing
+ * hands back a VALUE instead of a verdict — which is what keeps `span` below a
+ * plain null check, with nothing to re-derive and nothing to cast.
+ *
+ * Bound rather than returned bare: `enterSpan` is inherited from
+ * `Tracing.prototype` and reads `this`, so an unbound reference would call
+ * against the wrong receiver.
+ */
+function nativeEnterSpan(): NativeEnterSpan | null {
+  const entry: NativeEnterSpan | undefined = tracing.enterSpan;
+  return entry instanceof Function ? entry.bind(tracing) : null;
+}
+
 export function createWorkersTracer(): Tracer {
   return {
     span<T>(name: string, attributes: SpanOpenAttributes, fn: (span: ScopedSpan) => T): T {
-      return tracing.enterSpan(name, (native) => {
+      // CAPABILITY, CHECKED BEFORE IT IS SPENT, and asked exactly once.
+      const enter = nativeEnterSpan();
+      if (enter === null) {
+        // EXACTLY ONCE, and the value untouched — sync result, promise, thenable
+        // or throw, all by identity. There is no try/catch and no wrapper here on
+        // purpose: this arm must be indistinguishable from calling `fn` directly,
+        // because that is what it is.
+        return fn(UNTRACED_SPAN);
+      }
+      // And no attempt is made to recover from a CALLABLE `enterSpan` that
+      // throws. The callback may already have run and may already have had
+      // effects, so a retry there would be the instrument duplicating the work
+      // it was measuring.
+      return enter(name, (native) => {
         native.setAttribute(SPAN_ATTR_ISOLATE_GEN, attributes.isolateGen);
         native.setAttribute(SPAN_ATTR_SELF_PATH, attributes.selfPath);
         const failed = (): void => { native.setAttribute(SPAN_ATTR_ERROR, true); };

@@ -45,7 +45,11 @@ export interface ReleaseToolDeps {
     stderr?: string | null;
     durationMs?: number | null;
   }): Promise<ReleaseCheck>;
-  requestApproval(changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval>;
+  requestApproval(
+    changeId: string,
+    approvalType: ReleaseApproval['approvalType'],
+    opts?: { command?: string | null },
+  ): Promise<ReleaseApproval>;
   recordDeployment(changeId: string, input: {
     environment: ReleaseDeployment['environment'];
     workerVersionId?: string | null;
@@ -164,7 +168,15 @@ export async function runReleaseAction(
         });
       case 'request_approval':
         if (!args.changeId || !args.approvalType) return { error: 'request_approval requires changeId and approvalType' };
-        return await releases.requestApproval(args.changeId, args.approvalType);
+        // A rollback approval binds the command it authorises, so the owner is
+        // approving a specific restore rather than the word "rollback".
+        // `deployment.command` is where the caller already states it, and
+        // `rollback()` recomputes the same digest before executing.
+        return args.approvalType === 'rollback'
+          ? await releases.requestApproval(args.changeId, args.approvalType, {
+            command: args.deployment?.command ?? null,
+          })
+          : await releases.requestApproval(args.changeId, args.approvalType);
       case 'record_deployment':
         if (!args.changeId || !args.deployment?.environment) return { error: 'record_deployment requires changeId and deployment.environment' };
         if (releases.engine) {

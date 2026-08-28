@@ -35,7 +35,7 @@ import {
   withApprovalGatedShell,
   createAgentConfigStore, initActorTables, initAgentConfigTable, initScaffoldTables,
   resolveModelRoute,
-  type ModelCallSink, type ModelOperationSink, type NodeHomeHost,
+  type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -43,6 +43,7 @@ import {
   workspaceToolchainCapabilities,
 } from '@kinu.run/core/workspace';
 import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
+import { localNodeRuntime } from './node-runtime';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
@@ -184,6 +185,12 @@ export interface CLIRuntime extends AgentRuntime {
    * type, and then its nodes report `shared-origin-plane`.
    */
   nodeHome?: () => Promise<NodeHomeHost>;
+  /**
+   * This workspace addressed as one provisioned node, both planes credentialed
+   * — `node-runtime.ts`. Present exactly where {@link nodeHome} is, because a
+   * home owned by the node is a home the ORIGIN's plane cannot write.
+   */
+  nodeRuntime?: (node: NodeWorkspace) => Promise<AgentRuntime>;
 }
 
 /** The bun:sqlite surface every local SQL adapter here needs. */
@@ -217,11 +224,15 @@ export function makeSql(db: Database): SqlExecutor {
     // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
     // native type); bun:sqlite only binds TypedArrays, so coerce.
     const bound = values.map((value) => bunSqlBinding({ value }));
-    const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
-    const stmt = db.prepare<T, SQLQueryBindings[]>(query);
-    if (isRead) return stmt.all(...bound);
-    stmt.run(...bound);
-    return [];
+    // `all()` for EVERY statement, not only the ones opening with a read verb.
+    // A Durable Object's `storage.sql` returns whatever rows a statement
+    // produces, and `UPDATE … RETURNING` is a write that produces them — so
+    // sniffing the leading keyword answered `[]` while still performing the
+    // write, which is how core's two RETURNING sites (the stranded event-delivery
+    // reclaim, the deferred shell-approval claim) read as "nothing matched" on
+    // this backend only. bun's `all()` executes any statement and returns its
+    // rows; DDL and plain writes simply have none.
+    return db.prepare<T, SQLQueryBindings[]>(query).all(...bound);
   };
   return sql;
 }
@@ -280,12 +291,12 @@ const WORKSPACE_RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRunti
 export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
   const exec: SqlExec['exec'] = (query, ...bindings) => {
     const bound = bindings.map((value) => bunSqlBinding({ value }));
-    const stmt = db.prepare<LocalSqlRow, SQLQueryBindings[]>(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-      return { toArray: () => stmt.all(...bound).map(toSqlRow) };
-    }
-    stmt.run(...bound);
-    return { toArray: () => [] };
+    // Executed here rather than inside `toArray`, and read with `all()`
+    // whatever the verb — see makeSql above for why the verb cannot decide it.
+    // Eager also matches the seam it stands in for: `storage.sql.exec` runs the
+    // statement and hands back a cursor over its rows.
+    const rows = db.prepare<LocalSqlRow, SQLQueryBindings[]>(query).all(...bound).map(toSqlRow);
+    return { toArray: () => rows };
   };
   return { exec };
 }
@@ -547,10 +558,18 @@ export function createCLIRuntime(
   executionRouter.register(createInlineExecutor(inlineOptions));
 
   const hostRoot = config.hostRoot === undefined ? cwd ?? process.cwd() : config.hostRoot;
-  if (hostRoot !== null) {
-    const hostShell = withCheckpointedShell(createHostShell(hostRoot), checkpoints, hostRoot);
-    executionRouter.register(createLocalLaptopExecutor(hostRoot, hostShell, checkpoints, limits));
-  }
+  // Held, because a node's router registers this SAME provider: the host
+  // filesystem is the host filesystem whoever asks, and a second construction
+  // would be a second set of checkpoints over one directory.
+  const laptop = hostRoot === null
+    ? null
+    : createLocalLaptopExecutor(
+      hostRoot,
+      withCheckpointedShell(createHostShell(hostRoot), checkpoints, hostRoot),
+      checkpoints,
+      limits,
+    );
+  if (laptop) executionRouter.register(laptop);
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     sql,
@@ -603,6 +622,11 @@ export function createCLIRuntime(
   // of being handed a home in a filesystem its work cannot reach.
   if (!cwd) {
     runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
+    // And the runtime that home is only real through — see `node-runtime.ts`,
+    // which owns the whole of what a second runtime over one workspace means.
+    runtime.nodeRuntime = localNodeRuntime({
+      workspace, origin: runtime, approvalPolicy, inline: inlineOptions, laptop,
+    });
   }
   return runtime;
 }

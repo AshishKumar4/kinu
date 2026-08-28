@@ -33,6 +33,7 @@ import {
   type SerializedMessage,
   type SqlExec,
   type SubordinateDelivery,
+  type SubordinateIdentity,
   type SubordinateHandoff,
   type SubordinateReportOrigin,
   type SubordinateReportPayload,
@@ -49,8 +50,17 @@ import { CODE_IS_REFUSAL } from '../src/obs/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql as makeTagged, makeSqlExec, makeExecRaw } from './helpers';
 
+/** One fixed clock for every roster write these scenes make. */
+const NOW = 1_700_000_000_000;
+
 function makeSql(): SqlExec {
   return makeSqlExec(new Database(':memory:'));
+}
+
+/** The roster store needs BOTH sql forms: `reconcileColumns` binds the table
+ *  name into `pragma_table_info` through the tagged one. */
+function makeRosterStore(db: Database = new Database(':memory:')): SubordinateRosterStore {
+  return new SubordinateRosterStore(makeSqlExec(db), makeTagged(db));
 }
 
 /** One in-memory database as BOTH sql primitives — what
@@ -67,17 +77,19 @@ function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
     from_subordinate: v.string(),
     status: v.picklist(['progress', 'completed', 'blocked']),
     content: v.string(),
+    sequence_id: v.string(),
     task: v.optional(v.string()),
     content_path: v.optional(v.string()),
     kinu_mode: v.picklist(['build', 'plan']),
   }), event.payload);
 }
-const identityInput = {
+const identityInput: SubordinateIdentity = {
   name: 'researcher',
   mission: 'Map the market.',
   parentWorkspace: 'kinu-main',
   ownerUserId: 'owner-123',
   depth: 1,
+  lifetime: 'durable',
 };
 
 describe('subordinate identity', () => {
@@ -96,15 +108,27 @@ describe('subordinate identity', () => {
     expect(identity.read()).toEqual(identityInput);
   });
 
+  test('a retry cannot retarget the subordinate name or workspace', () => {
+    const identity = makeIdentityStore();
+    identity.ensureSchema();
+    identity.seed(identityInput);
+
+    expect(() => identity.seed({ ...identityInput, name: 'attacker' }))
+      .toThrow('already initialized');
+    expect(() => identity.seed({ ...identityInput, parentWorkspace: 'other-workspace' }))
+      .toThrow('already initialized');
+    expect(identity.read()).toEqual(identityInput);
+  });
+
   // The depth is what the cap is enforced FROM, so retargeting it must be
   // refused exactly as retargeting the owner is: a subordinate that could
   // re-seed itself shallower would hand itself a fresh subtree.
   test('depth is part of the immutable identity, not a settable field', () => {
     const identity = makeIdentityStore();
     identity.ensureSchema();
-    identity.seed({ ...identityInput, depth: 3 });
+    identity.seed({ ...identityInput, depth: 3, lifetime: 'durable' });
 
-    expect(() => identity.seed({ ...identityInput, depth: 1 }))
+    expect(() => identity.seed({ ...identityInput, depth: 1, lifetime: 'durable' }))
       .toThrow('already initialized');
     expect(identity.read()?.depth).toBe(3);
   });
@@ -117,7 +141,7 @@ describe('subordinate identity', () => {
     const db = new Database(':memory:');
     const first = makeIdentityStore(db);
     first.ensureSchema();
-    first.seed({ ...identityInput, depth: 3 });
+    first.seed({ ...identityInput, depth: 3, lifetime: 'durable' });
     expect(first.delegationBudget()).toEqual({ depth: 3, maxDepth: 1 });
 
     const resumed = makeIdentityStore(db);
@@ -265,15 +289,17 @@ const initialRosterEntry: SubordinateRosterEntry = {
   currentTask: 'Map the market.',
   createdAt: 100,
   dismissedAt: null,
+  lifetime: 'durable',
+  taskEventId: null,
 };
 
 describe('workspace subordinate roster', () => {
   test('owns closed status transitions and can restore an exact snapshot', () => {
-    const roster = new SubordinateRosterStore(makeSql());
+    const roster = makeRosterStore();
     roster.ensureSchema();
     roster.create(initialRosterEntry);
 
-    roster.applyReport('researcher', 'blocked');
+    roster.applyReport('researcher', 'blocked', 'report_tool', NOW);
     expect(roster.requireActive('researcher')).toMatchObject({
       status: 'awaiting_input', currentTask: 'Map the market.',
     });
@@ -281,15 +307,15 @@ describe('workspace subordinate roster', () => {
     roster.resumeAfterMessage('researcher');
     expect(roster.requireActive('researcher').status).toBe('working');
 
-    roster.applyReport('researcher', 'completed');
+    roster.applyReport('researcher', 'completed', 'report_tool', NOW);
     expect(roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
 
     // Progress without an assignment must not invent work in the roster.
-    roster.applyReport('researcher', 'progress');
+    roster.applyReport('researcher', 'progress', 'report_tool', NOW);
     expect(roster.requireActive('researcher').status).toBe('idle');
 
     roster.assign('researcher', 'Compare vendors');
-    roster.applyReport('researcher', 'progress');
+    roster.applyReport('researcher', 'progress', 'report_tool', NOW);
     expect(roster.requireActive('researcher')).toMatchObject({
       status: 'working', currentTask: 'Compare vendors',
     });
@@ -369,7 +395,7 @@ interface TeamHarness {
 const HARNESS_OWN_MISSION = 'Keep the release train moving.';
 
 function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarness {
-  const roster = new SubordinateRosterStore(makeSql());
+  const roster = makeRosterStore();
   roster.ensureSchema();
   const calls: string[] = [];
   const assignments: Array<{ body: string; inheritedContext?: string }> = [];
@@ -434,7 +460,7 @@ describe('team action routing', () => {
       subordinate: {
         name: 'researcher-a1b2c3',
         createdBy: 'user', status: 'idle', currentTask: null,
-        createdAt: 1_700_000_000_000, dismissedAt: null,
+        createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null,
       },
     });
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
@@ -445,6 +471,9 @@ describe('team action routing', () => {
     expect(h.seeds[0]).toMatchObject({
       displayName: 'Research Partner', nameOrigin: 'auto',
       role: { kind: 'legacy', text: 'research partner' },
+      // A hire seeds a DURABLE child, so the child keeps the selective relay
+      // policy — only a task child always reports.
+      lifetime: 'durable',
     });
     expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Understand the domain.']);
     expect(h.assignments).toEqual([]);
@@ -467,6 +496,8 @@ describe('team action routing', () => {
       currentTask: null,
       createdAt: 1_700_000_000_000,
       dismissedAt: null,
+      lifetime: 'durable',
+      taskEventId: null,
     });
     expect(created.displayName).toBe('');
     // The mission is the workspace's, read at create time.
@@ -476,6 +507,7 @@ describe('team action routing', () => {
       nameOrigin: 'auto',
       mission: HARNESS_OWN_MISSION,
       role: { kind: 'catalog', roleId: 'general' },
+      lifetime: 'durable',
     }]);
     // Idle: a mission defines it, and does not become a task.
     expect(h.assignments).toEqual([]);
@@ -633,6 +665,10 @@ describe('team action routing', () => {
       name: 'researcher-a1b2c3',
       createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.',
       createdAt: 1_700_000_000_000, dismissedAt: null,
+      // A hire is DURABLE, and its mission is its first assignment — so the row
+      // names that assignment's event, which is the id its report will cite.
+      // One correlation for both lifetimes, written where the roster is.
+      lifetime: 'durable', taskEventId: 'evt-starts_now',
     }]);
     expect(h.calls.slice(0, 2)).toEqual([
       'spawn:researcher-a1b2c3:Map the market.',
@@ -654,7 +690,7 @@ describe('team action routing', () => {
       },
     });
 
-    h.roster.applyReport('researcher-a1b2c3', 'blocked');
+    h.roster.applyReport('researcher-a1b2c3', 'blocked', 'report_tool', NOW);
     await h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Include pricing.' });
     expect(h.roster.requireActive('researcher-a1b2c3').status).toBe('working');
 
@@ -672,7 +708,7 @@ describe('team action routing', () => {
     for (const operation of operations) {
       const h = makeTeamHarness();
       if (operation !== 'spawn') await h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Initial mission' });
-      if (operation === 'message') h.roster.applyReport('researcher-a1b2c3', 'blocked');
+      if (operation === 'message') h.roster.applyReport('researcher-a1b2c3', 'blocked', 'report_tool', NOW);
       const before = h.roster.get('researcher-a1b2c3');
       const broadcastsBefore = h.broadcasts.length;
       h.failures.add(operation);
@@ -722,7 +758,7 @@ describe('team action routing', () => {
   });
 
   test('publishes roster transitions before invoking the corresponding facet action', async () => {
-    const roster = new SubordinateRosterStore(makeSql());
+    const roster = makeRosterStore();
     roster.ensureSchema();
     const observed: Array<{ operation: string; roster: SubordinateRosterEntry | null }> = [];
     const runtime: SubordinateRuntime = {
@@ -753,7 +789,7 @@ describe('team action routing', () => {
 
     await team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Initial mission' });
     await team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' });
-    roster.applyReport('researcher-a1b2c3', 'blocked');
+    roster.applyReport('researcher-a1b2c3', 'blocked', 'report_tool', NOW);
     await team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' });
     await team.dismiss({ name: 'researcher-a1b2c3' });
 
@@ -785,7 +821,7 @@ describe('team action routing', () => {
     const h = makeTeamHarness();
     await h.team.spawn({ mode: 'build', role: { kind: 'catalog', roleId: 'researcher' }, mission: 'Map the market.' });
 
-    h.roster.applyReport('researcher-a1b2c3', 'completed');
+    h.roster.applyReport('researcher-a1b2c3', 'completed', 'report_tool', NOW);
     const afterCompletion = await h.team.list();
     expect(afterCompletion).toHaveLength(1);
     expect(afterCompletion[0]).toMatchObject({ name: 'researcher-a1b2c3', status: 'idle', currentTask: null });
@@ -825,7 +861,8 @@ describe('subordinate event admission', () => {
       deliverable: 'Report', deadlineHint: 'today', mode: 'build', now: 10,
     });
     const report = admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate', mode: 'build', now: 11,
+      fromSubordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
+      sequenceId: 'settle:msg-1', mode: 'build', now: 11,
     });
 
     expect(task.admitted).toBe(true);
@@ -840,7 +877,8 @@ describe('subordinate event admission', () => {
     expect(log.pending({ variant: 'subordinate_report' })[0]).toMatchObject({
       trust: 'authenticated', priority: 'background',
       payload: {
-        from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate', kinu_mode: 'build',
+        from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
+        sequence_id: 'settle:msg-1', kinu_mode: 'build',
       },
     });
   });
@@ -911,8 +949,13 @@ describe('subordinate event admission', () => {
       fromWorkspace: 'main', kind: 'task', body: ' ', mode: 'build', now: 1,
     })).toThrow('body');
     expect(() => admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'progress', content: ' ', mode: 'build', now: 1,
+      fromSubordinate: 'researcher', status: 'progress', content: ' ',
+      sequenceId: 'settle:msg-1', mode: 'build', now: 1,
     })).toThrow('content');
+    expect(() => admitSubordinateReport(log, {
+      fromSubordinate: 'researcher', status: 'progress', content: 'work',
+      sequenceId: ' ', mode: 'build', now: 1,
+    })).toThrow('sequenceId');
     expect(log.pending()).toEqual([]);
   });
 });
@@ -931,11 +974,14 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     const sql = makeSql();
     initEventsHubTables(sql);
     const log = new EventLog(sql);
-    const roster = new SubordinateRosterStore(makeSql());
+    const roster = makeRosterStore();
     roster.ensureSchema();
     // Spawned with a mission, so the parent starts out waiting on an answer.
     roster.create(initialRosterEntry);
 
+    // Each arrival is a distinct report, so each names its own sequence — this
+    // scenario is about WHO may wake the parent, not about replay.
+    let sequence = 0;
     const arrivesAtParent = (
       origin: SubordinateReportOrigin,
       content: string,
@@ -943,8 +989,11 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     ) => {
       const entry = roster.requireActive('researcher');
       if (!parentAdmitsSubordinateReport({ entry })) return;
-      admitSubordinateReport(log, { fromSubordinate: 'researcher', status, content, mode: 'build', now: 1 });
-      roster.applyReport('researcher', status);
+      admitSubordinateReport(log, {
+        fromSubordinate: 'researcher', status, content,
+        sequenceId: `settle:msg-${++sequence}`, mode: 'build', now: 1,
+      });
+      roster.applyReport('researcher', status, 'report_tool', NOW);
     };
 
     return {
@@ -1042,7 +1091,7 @@ describe('oversize subordinate reports stay reachable', () => {
     const contentPath = await spillEventContent(vfs, content);
     const input = {
       fromSubordinate: 'researcher', status: 'completed', content,
-      task: 'Survey auth', mode: 'build', now: 11,
+      sequenceId: 'settle:msg-1', task: 'Survey auth', mode: 'build', now: 11,
     } satisfies Parameters<typeof admitSubordinateReport>[1];
     if (contentPath) Object.assign(input, { contentPath });
     return admitSubordinateReport(log, input);
@@ -1096,7 +1145,7 @@ describe('the parent ingress, in the order it runs', () => {
     const sql = makeSql();
     initEventsHubTables(sql);
     const log = new EventLog(sql);
-    const roster = new SubordinateRosterStore(makeSql());
+    const roster = makeRosterStore();
     roster.ensureSchema();
     roster.create(initialRosterEntry);
     const { vfs, files } = createMemoryVfs();
@@ -1133,10 +1182,10 @@ describe('the parent ingress, in the order it runs', () => {
 
     const result = await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'researcher', status: 'completed', content: `${content}\n`,
-      origin: 'report_tool', mode: 'build',
+      origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
     }, 11);
 
-    expect(result.admitted).toBe(true);
+    expect(result.disposition).toBe('admitted');
     // Normalized before spilling: the cited file is the content the brief
     // truncates, never the untrimmed wire text.
     expect(await scene.files.get(spilled)).toBe(content);
@@ -1149,14 +1198,14 @@ describe('the parent ingress, in the order it runs', () => {
 
   test('drops what the parent is not waiting on before the spill, leaving no file behind', async () => {
     const scene = parent();
-    scene.roster.applyReport('researcher', 'completed');   // no open assignment left
+    scene.roster.applyReport('researcher', 'completed', 'report_tool', NOW);   // no open assignment left
 
     const result = await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'researcher', status: 'progress', content: 'x'.repeat(4000),
-      origin: 'turn_end', mode: 'build',
+      origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'build',
     }, 12);
 
-    expect(result).toEqual({ id: '', admitted: false });
+    expect(result).toEqual({ id: '', disposition: 'not_awaited' });
     expect(scene.files.size).toBe(0);
     expect(scene.seen).toEqual([]);
     expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
@@ -1165,8 +1214,61 @@ describe('the parent ingress, in the order it runs', () => {
   test('a report from a subordinate this parent does not have is refused, not admitted', async () => {
     const scene = parent();
     await expect(receiveSubordinateEvent(scene.deps, {
-      fromSubordinate: 'ghost', status: 'progress', content: 'hello', origin: 'report_tool', mode: 'build',
+      fromSubordinate: 'ghost', status: 'progress', content: 'hello',
+      origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
     }, 13)).rejects.toThrow('unknown subordinate "ghost"');
     expect(scene.files.size).toBe(0);
+  });
+
+  // The child's report is replayable durable work: its ledger re-runs the
+  // delivery until the parent holds it. Before the sequence was the key, the
+  // second delivery published a second event and billed a second parent turn.
+  test('one sequence delivered twice wakes the parent once, and says the second was already held', async () => {
+    const scene = parent();
+    const deliver = () => receiveSubordinateEvent(scene.deps, {
+      fromSubordinate: 'researcher', status: 'completed', content: 'Market mapped.',
+      origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'build',
+    }, 20);
+
+    const first = await deliver();
+    const replay = await deliver();
+
+    expect(first.disposition).toBe('admitted');
+    expect(replay).toEqual({ id: first.id, disposition: 'already_held' });
+    expect(scene.log.pending({ variant: 'subordinate_report' })).toHaveLength(1);
+    // The replay did NOTHING else either: no second announce, no second wake,
+    // no second roster transition, and no file written for it.
+    expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
+    expect(scene.announced).toHaveLength(1);
+  });
+
+  test('two sequences from one subordinate are two parent events', async () => {
+    const scene = parent();
+    const deliver = (sequenceId: string, content: string) =>
+      receiveSubordinateEvent(scene.deps, {
+        fromSubordinate: 'researcher', status: 'progress', content,
+        origin: 'turn_end', sequenceId, mode: 'build',
+      }, 20);
+
+    expect((await deliver('settle:msg-1', 'Mapped 8 so far.')).disposition).toBe('admitted');
+    expect((await deliver('settle:msg-2', 'Mapped 14 now.')).disposition).toBe('admitted');
+
+    expect(scene.log.pending({ variant: 'subordinate_report' }).map((e) => reportPayload(e).content))
+      .toEqual(['Mapped 8 so far.', 'Mapped 14 now.']);
+  });
+
+  // A cold replay settles long after the child's live turn metadata is gone.
+  // The mode therefore travels with the report: re-deriving it at either end
+  // turned a Plan report into a Build one.
+  test('the report carries the mode its sender stated', async () => {
+    const scene = parent();
+    await receiveSubordinateEvent(scene.deps, {
+      fromSubordinate: 'researcher', status: 'progress', content: 'Three options, no code yet.',
+      origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'plan',
+    }, 20);
+
+    const event = scene.log.pending({ variant: 'subordinate_report' })[0];
+    expect(reportPayload(event).kinu_mode).toBe('plan');
+    expect(reportPayload(event).sequence_id).toBe('settle:msg-1');
   });
 });

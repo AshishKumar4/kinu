@@ -23,23 +23,51 @@ export function isAbortError<Failure>(err: Failure): boolean {
 
 /**
  * Run `work` but stop waiting when `signal` aborts, rejecting with an
- * AbortError carrying `message`. A pre-aborted signal rejects without
- * starting the work at all. This cancels only the WAIT — callers whose
- * underlying work cannot be killed remotely must say so in `message`.
+ * AbortError.
+ *
+ * Two abort cases, and they are not the same claim. A signal that is ALREADY
+ * aborted rejects with `message` without starting the work at all — nothing
+ * ran, so there is nothing to stop. A signal that aborts while the work is
+ * running rejects with whatever `terminate` resolves, which is where a caller
+ * that can actually kill its work says what killing achieved; the wait ends
+ * only once that answer is in. A caller with no `terminate` cancels only the
+ * WAIT, and its `message` must say so.
+ *
+ * `terminate` is expected to resolve, including on failure: "the work is gone"
+ * and "nobody could stop it" are both answers, and only a thrown rejection
+ * would leave the caller with neither.
  */
 export function raceAbort<T>(
 	work: () => Promise<T>,
 	signal: AbortSignal | undefined,
 	message: string,
+	terminate?: () => Promise<string>,
 ): Promise<T> {
 	if (!signal) return work();
-	if (signal.aborted) return Promise.reject(new DOMException(message, "AbortError"));
+	const abortError = (text: string) => new DOMException(text, "AbortError");
+	if (signal.aborted) return Promise.reject(abortError(message));
 	return new Promise<T>((resolve, reject) => {
-		const onAbort = () => reject(new DOMException(message, "AbortError"));
+		let aborting = false;
+		const onAbort = () => {
+			aborting = true;
+			if (!terminate) { reject(abortError(message)); return; }
+			terminate().then(
+				(text) => reject(abortError(text)),
+				(err) => reject(abortError(`${message} — stopping the work failed: ${String(err)}`)),
+			);
+		};
 		signal.addEventListener("abort", onAbort, { once: true });
 		work().then(
-			(value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
-			(err) => { signal.removeEventListener("abort", onAbort); reject(err); },
+			(value) => {
+				if (aborting) return;
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(err) => {
+				if (aborting) return;
+				signal.removeEventListener("abort", onAbort);
+				reject(err);
+			},
 		);
 	});
 }

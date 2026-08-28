@@ -73,7 +73,7 @@ export async function runMCTS(
   initAlternateTakesTable(rt.storage.execRaw, rt.storage.sql);
 
   const search = config.search;
-  if (search) initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
+  if (search) initMctsSearchTable(rt.storage.execRaw);
 
   // Resume an unfinished search for this task (one evicted mid-run): continue its
   // remaining budget against the persisted tree instead of starting over (B6).

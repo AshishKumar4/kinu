@@ -31,8 +31,8 @@ import { isJsonObject, type JsonValue } from '../utils/json';
 import { VERIFIER_KIND_DOC, VERIFIER_KINDS, floorMargin } from './objective';
 import { DEFAULT_CONFIG } from '../config';
 import type {
-  CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, PublicationState,
-  VerifierKind, VerifierSpec,
+  CarrySuppression, Floor, MeasuredValue, Objective, ObjectiveDirection, ParetoEvidence,
+  PublicationState, VerifierKind, VerifierSpec,
 } from './objective';
 import {
   NAMED_SWARM_PRESETS,
@@ -354,6 +354,22 @@ export interface SwarmConfig {
    */
 }
 
+/**
+ * ONE NODE'S EXPLICIT ASSIGNMENT: the question it is asked, and the brief it is
+ * asked it under.
+ *
+ * The SHAPE the search is written over; `tools/swarm-input.ts` owns the wire schema
+ * that admits it and is annotated with this type, exactly as `Objective` and
+ * `SwarmConfig` are. Two fields and not three: `context` is a run-level axis because
+ * it is what makes siblings comparable, and `prompt` IS the brief — the engine
+ * carries it in the branch `rationale` the expansion path already reads, so a node's
+ * assignment lands in the two journal columns it has always landed in.
+ */
+export interface SwarmNodeAssignment {
+  readonly task: string;
+  readonly prompt: string;
+}
+
 
 /**
  * A call.
@@ -444,6 +460,26 @@ export interface SwarmInput {
    * above every system in the literature (ToT <=3, LATS 7, Koh 5).
    */
   readonly depth?: number;
+  /**
+   * THE FIRST LEVEL, NODE BY NODE: what each one is asked, and the brief it is
+   * asked it under. Mutually exclusive with {@link branches}, which is the
+   * COUNT-based mode where the engine hands out its own diversity angles.
+   *
+   * WHY IT IS HERE. Every other per-node assignment in this engine arrives as a
+   * parent's proposal, and at level 1 the parent is the ROOT — the workspace as
+   * found, which no model wrote and which therefore proposes nothing. So every
+   * sibling of the first level received `task` verbatim and differed only by a
+   * canned angle, and no axis could say otherwise: the six are run-scoped single
+   * values and `branches` is an integer. This field is the root's proposal,
+   * written by the caller.
+   *
+   * `nodes.length` IS the branch count, so declaring both is refused rather than
+   * resolved by precedence — two numbers for one width is exactly the drift the
+   * caps table exists to prevent. Every `task` must be distinct: a search whose
+   * nodes were explicitly assigned the same question is paying N times for one
+   * answer, and the caller who wanted that wanted `branches`.
+   */
+  readonly nodes?: readonly SwarmNodeAssignment[];
 }
 
 /**
@@ -835,7 +871,7 @@ export const SWARM_PRESET_DOCTRINE: readonly string[] = [
  * `advance` value cannot join the axis and quietly fall outside every tree rule.
  */
 export const SWARM_TREE_ADVANCES = SWARM_ADVANCES.filter(
-  (advance) => advance !== 'archive' && advance !== 'pareto' && advance !== 'none',
+  (advance) => advance !== 'archive' && advance !== 'none',
 );
 
 export function isTreeAdvance(advance: SwarmAdvance): boolean {
@@ -929,6 +965,12 @@ export interface ResolvedSwarm {
   readonly task: string;
   readonly objective: Objective | null;
   readonly key: string | null;
+  /**
+   * The caller's explicit first-level assignments, or null for the count-based mode
+   * where the engine hands out diversity angles. `caps.branches` is `nodes.length`
+   * when this is present, so the two can never disagree about width.
+   */
+  readonly nodes: readonly SwarmNodeAssignment[] | null;
 }
 
 /** A validity refusal, built through the one projection every other refusal in the
@@ -998,6 +1040,33 @@ function resolveCap(
  */
 function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
   const composed = input.preset === 'custom';
+  // THE TWO WIDTH MODES ARE EXCLUSIVE, and this is refused rather than resolved by
+  // precedence: `nodes.length` IS the width, so a call that also states `branches`
+  // has named the same number twice and one of the two is going to be ignored. The
+  // caller is told which mode they are in instead.
+  if (input.nodes && input.branches !== undefined) {
+    return badInput('`nodes` assigns the first level node by node, so its length is the branch count — '
+      + `you named ${String(input.nodes.length)} node(s) and \`branches: ${String(input.branches)}\` as `
+      + 'well, and one of the two would be ignored. Drop `branches` to keep your own assignments, or '
+      + 'drop `nodes` to let the engine hand out that many diversity angles.');
+  }
+  // EVERY ASSIGNED TASK DISTINCT. The count-based mode differentiates its siblings
+  // with angles; this mode differentiates them by what the caller wrote, so two
+  // nodes carrying one question is N answers bought for one question — the exact
+  // duplication the field exists to remove, restated by the caller.
+  const assigned = input.nodes;
+  if (assigned) {
+    const seen = new Set<string>();
+    for (const node of assigned) {
+      const task = node.task.trim();
+      if (seen.has(task)) {
+        return badInput('`nodes` gives every node its own question, and two of yours are the same: '
+          + `${JSON.stringify(task.slice(0, 80))}. A search that asks one question twice pays twice for `
+          + 'one answer. Make the tasks distinct, or use `branches` and let the engine vary the angle.');
+      }
+      seen.add(task);
+    }
+  }
   if (composed) {
     if (!input.config) {
       return badInput('`custom` is the statement that no preset is the base, so it needs the axes '
@@ -1097,12 +1166,17 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
     config,
     settle: settleOf(config),
     caps: {
-      branches: resolveCap(input.branches, base?.branches),
+      // `nodes.length` IS the width when the caller assigned the level itself, and it
+      // arrives here as a `call` cap for the same reason an explicit `branches` does:
+      // the caller stated it. Stating both is already refused above, so there is no
+      // precedence rule here to get backwards.
+      branches: resolveCap(input.nodes?.length ?? input.branches, base?.branches),
       depth: resolveCap(input.depth, base?.depth),
     },
     task: input.task,
     objective: input.objective ?? null,
     key: input.key ?? null,
+    nodes: input.nodes ?? null,
   };
 }
 
@@ -1685,6 +1759,9 @@ export interface SwarmCandidate {
   readonly id: string;
   readonly artifact: string;
   readonly measured: MeasuredValue | null;
+  /** Complete raw evidence over the declared Pareto axes. Null outside a Pareto run
+   * and when the instrument could not supply comparable evidence. */
+  readonly pareto: ParetoEvidence | null;
   /** Why the INSTRUMENT produced no number for an answer this node did produce. */
   readonly unmeasurable: string | null;
   /**
@@ -1819,10 +1896,12 @@ export interface SwarmResumeReport {
    *  deliberately not the sum: it is what this activation's ledger was charged, and
    *  adding a figure nobody charged here to it would make the two disagree. */
   readonly inheritedTokens: number | null;
-  /** Node rows the dead attempt left `running`, retired through the journal's own
-   *  transition. Zero on a clean re-entry, which is the common case: the activation's
-   *  start-of-life reconciliation usually got there first. */
-  readonly abandonedNodes: number;
+  /** Nodes this attempt RE-RAN under their own ids: spawned by an earlier attempt,
+   *  never recorded in the tree, and re-entered rather than retired or replaced. Zero
+   *  on a re-entry that lost nothing mid-level. They are inside
+   *  `inheritedExpansions` — the search paid for them once — so a re-run costs no
+   *  budget and creates no node. */
+  readonly resumedNodes: number;
   /** Ledger rows for the same task this re-entry superseded — empty unless two
    *  identical-task attempts were both left `running`. */
   readonly superseded: readonly string[];
@@ -1929,5 +2008,8 @@ export interface SwarmResult {
    *  candidate was unmeasurable — refusing to read a winner out of no signal. */
   readonly best: SwarmCandidate | null;
   readonly candidates: readonly SwarmCandidate[];
+  /** The nondominated candidates, in deterministic candidate order. Null when this
+   * run did not use `advance:"pareto"`. */
+  readonly frontier: readonly SwarmCandidate[] | null;
   readonly profile?: SwarmProfileSnapshot;
 }

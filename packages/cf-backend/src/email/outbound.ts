@@ -1,7 +1,9 @@
 /**
  * Mission Inbox — outbound side, over the Workers `send_email` binding
- * (Cloudflare Email Sending). Three surfaces, one send path:
+ * (Cloudflare Email Sending). Four surfaces, one send path:
  *
+ *   sendInboundEmailReceipt — the acknowledgement an accepted message gets
+ *     straight away, before any turn runs.
  *   createEmailThreadDispatcher — the `email_thread` ReplyDispatcher: a
  *     drained turn's answer goes back onto the inbound mail's thread with
  *     correct In-Reply-To / References.
@@ -12,9 +14,13 @@
  *     (Evolution Changelog digests, background-job completions).
  */
 
-import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@kinu.run/core';
+import {
+  boundedMessageId, boundedReferences,
+  JsonValueSchema,
+  type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore,
+} from '@kinu.run/core';
 import { agentEmailAddress } from './inbound';
-import type { EmailOutbox } from './outbox';
+import type { EmailOutbox, OutboundEmailMessage } from './outbox';
 import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -47,14 +53,81 @@ function replySubject(subject: string): string {
   return /^\s*re:/i.test(subject) ? subject : `Re: ${subject}`;
 }
 
-/** Threading headers per RFC 5322: reply points In-Reply-To at the inbound
- *  Message-ID and appends it to the inherited References chain. */
+/**
+ * Threading headers per RFC 5322 §3.6.4, bounded.
+ *
+ * The chain the reply carries is the inbound chain plus the message being
+ * answered, and `boundedReferences` is what keeps that from growing past the
+ * 998-octet line every receiver is allowed to reject. It never returns null
+ * for a usable In-Reply-To, so the `??` is the compiler's question, not a
+ * second policy.
+ */
 export function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): EmailThreadingHeaders {
-  if (!addr.message_id) return {};
+  const inReplyTo = boundedMessageId(addr.message_id, 'In-Reply-To');
+  if (!inReplyTo) return {};
   return {
-    'In-Reply-To': addr.message_id,
-    References: addr.references ? `${addr.references} ${addr.message_id}` : addr.message_id,
+    'In-Reply-To': inReplyTo,
+    References: boundedReferences(addr.references, inReplyTo) ?? inReplyTo,
   };
+}
+
+/**
+ * One outbound message on an inbound thread — the shape a turn's answer and
+ * the immediate receipt both take, so the From identity, the `Re:` rule and
+ * the loop guard are decided once.
+ *
+ * RFC 3834: `Auto-Submitted: auto-replied` is what stops a vacation responder
+ * or a peer agent bouncing this back into an endless thread — our own inbound
+ * gate drops mail carrying it, and so do other conforming responders.
+ */
+function threadReply(
+  addr: EmailThreadAddr, agentDisplayName: string, text: string,
+): OutboundEmailMessage {
+  return {
+    from: { email: addr.from, name: agentDisplayName },
+    to: addr.to,
+    subject: replySubject(addr.subject),
+    text,
+    headers: { 'Auto-Submitted': 'auto-replied', ...threadingHeaders(addr) },
+  };
+}
+
+/**
+ * Tell the sender the message landed, now.
+ *
+ * Without this the only thing an accepted message produces is a turn, and a
+ * turn can take minutes, can be queued behind others, and can end with nothing
+ * to say — `dispatchEmailRepliesForTurn` sends no mail for an empty answer. So
+ * the sender's evidence that Kinu has the message was, until the answer
+ * arrived, nothing at all.
+ *
+ * IDEMPOTENT THROUGH THE OUTBOX, not through a new table. The key is the
+ * admitted event's id, which the ingress dedupe makes stable across
+ * redeliveries of the same Message-ID, so a re-delivered message resolves to
+ * the same key and the outbox answers `deduped` without touching the binding.
+ * The receipt therefore cannot become a storm, and it rides the same stable
+ * outbound Message-ID as everything else this outbox sends.
+ */
+export async function sendInboundEmailReceipt(
+  ctx: EmailSendContext,
+  thread: EmailThreadAddr,
+  eventId: string,
+): Promise<boolean> {
+  if (!ctx.email) return false;
+  const result = await ctx.outbox.send(ctx.email, `receipt:${eventId}`, threadReply(
+    thread,
+    ctx.agentDisplayName,
+    `${ctx.agentDisplayName} has your message.\nThe reply comes back on this thread.`,
+  ), Date.now());
+  if (result.status === 'failed') {
+    diagnostics.failure(
+      'email.receipt_failed',
+      new KinuError('unavailable', result.error),
+      { messageId: result.messageId },
+    );
+    return false;
+  }
+  return true;
 }
 
 function payloadText(payload: JsonValue): string {
@@ -84,19 +157,14 @@ export function createEmailThreadDispatcher(
       if (!addr.to || !addr.from) {
         return { delivered: false, detail: 'email_thread holder_addr missing addresses' };
       }
-      const text = payloadText(payload);
-      // RFC 3834: mark our reply auto-replied so peers (and our own inbound
-      // guard) don't bounce it back into an infinite thread loop.
-      const headers = { 'Auto-Submitted': 'auto-replied', ...threadingHeaders(addr) };
       // Idempotency key = the channel (one reply per channel); a lease re-drive
       // after a crash mid-send re-sends the SAME Message-ID, deduped downstream.
-      const result = await ctx.outbox.send(ctx.email, `reply:${channel.id}`, {
-        from: { email: addr.from, name: ctx.agentDisplayName },
-        to: addr.to,
-        subject: replySubject(addr.subject),
-        text,
-        headers,
-      }, Date.now());
+      const result = await ctx.outbox.send(
+        ctx.email,
+        `reply:${channel.id}`,
+        threadReply(addr, ctx.agentDisplayName, payloadText(payload)),
+        Date.now(),
+      );
       if (result.status === 'failed') return { delivered: false, detail: result.error };
       return { delivered: true };
     },

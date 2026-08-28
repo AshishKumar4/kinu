@@ -61,6 +61,7 @@ import {
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
+  WORKSPACE_RUN_ID,
 } from '../../packages/core/src/index';
 import {
   createDefaultWebSearchProvider, createWebCodemodeProvider,
@@ -128,9 +129,9 @@ export type { LedgerTotals };
  *     FORK of the session's own CLIRuntime. `defaultOptions` has no consumer in
  *     the shipped tree anyway: declared at agents-tool.ts:299, produced by
  *     fork-deps.ts:145, read nowhere.
- *   - `rlmAvailable` is `false` and `llm.query` is unwired, which is what
- *     production does for a static-model session with no resolver
- *     (local-session.ts:1790, :2885).
+ *   - `temporaryAsk` is `false`, because the eval session wires no team deps —
+ *     the same structural absence a session with no child substrate has, so the
+ *     prompt never advertises a rung the action would refuse.
  * `report` stays unwired: the conformance manifest declares it absent on the
  * `cli` root, so wiring it here would make the eval surface WIDER than the
  * product's.
@@ -168,13 +169,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const taskList = new TaskListStore(sql);
   const config = createAgentConfigStore(sql);
   const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
-  // `nodeHome` exactly as production passes it (local-session.ts:2499): the
-  // uid-0 view is a property of an in-isolate filesystem, so it rides the
-  // runtime, and a runtime without one makes its nodes report
-  // `shared-origin-plane` rather than a home they lack.
-  const fork: AgentsForkDeps = rt.nodeHome
-    ? { rt, model, nodeHome: rt.nodeHome }
-    : { rt, model };
+  const fork: AgentsForkDeps = { rt, model };
   const agents: AgentsToolDeps = { mode: 'build', fork };
   const tools = buildActorTools({
     rt,
@@ -189,6 +184,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     }),
     codemodeLoader: { __cli: true },
     agents,
+    effectClaims: { sql, turnId: () => WORKSPACE_RUN_ID },
     facts,
     webSearch,
   });
@@ -202,9 +198,9 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       executors: rt.executionRouter?.listExecutors() ?? [],
       availableTools: builtinTools,
       agentsActions,
-      // No model resolver here, same as a static-model session: the prompt must
-      // not advertise a decomposition path that would throw.
-      rlmAvailable: false,
+      // No child substrate here: the prompt must not advertise a rung the
+      // action would refuse.
+      temporaryAsk: false,
       externalTools: [],
       backend: 'cli-local',
       workMode: 'build',

@@ -618,17 +618,25 @@ describe('engine.rollback', () => {
   /** Deployed change whose latest deployment rolls back to a PLATFORM version
    *  id (a wrangler UUID), not a git sha — e.g. the second deploy of a
    *  wrangler-deployed change. */
-  async function platformDeployedSetup(): Promise<Setup & { head: () => string }> {
+  async function platformDeployedSetup(
+    opts: { approvedCommand?: string } = {},
+  ): Promise<Setup & { head: () => string }> {
     const s = await deployedSetup({ deployTarget: 'bunx wrangler deploy' });
     s.store.recordDeployment(s.changeId, {
       environment: 'staging',
       workerVersionId: 'ffffffff-1111-2222-3333-444444444444',
       rollbackTarget: PLATFORM_TARGET,
     });
-    const approval = s.store.requestApproval(s.changeId, 'rollback');
+    // A platform rollback runs a command, so the approval binds THAT command —
+    // an approval that named nothing is not authority to run anything.
+    const approval = opts.approvedCommand === undefined
+      ? s.store.requestApproval(s.changeId, 'rollback')
+      : s.store.requestApproval(s.changeId, 'rollback', { command: opts.approvedCommand });
     s.store.decideApproval(approval.id, 'approved', 'owner-1');
     return s;
   }
+
+  const PLATFORM_ROLLBACK_COMMAND = `bunx wrangler rollback ${PLATFORM_TARGET}`;
 
   test('a platform-version-id target without a rollback command errors up front — no git reset runs', async () => {
     const s = await platformDeployedSetup();
@@ -645,11 +653,11 @@ describe('engine.rollback', () => {
   });
 
   test('a platform-version-id target WITH an explicit command rolls back via that command, never git', async () => {
-    const s = await platformDeployedSetup();
+    const s = await platformDeployedSetup({ approvedCommand: PLATFORM_ROLLBACK_COMMAND });
     s.sandbox.on(/wrangler rollback/, { stdout: `Rolled back to version ${PLATFORM_TARGET}` });
     const before = s.sandbox.commands.length;
 
-    const result = await s.engine.rollback(s.changeId, { command: `bunx wrangler rollback ${PLATFORM_TARGET}` });
+    const result = await s.engine.rollback(s.changeId, { command: PLATFORM_ROLLBACK_COMMAND });
     expect(result).toMatchObject({ ok: true, restored: PLATFORM_TARGET, verified: true, status: 'rolled_back' });
 
     const after = s.sandbox.commands.slice(before);
@@ -666,10 +674,10 @@ describe('engine.rollback', () => {
   });
 
   test('a failing platform rollback command does NOT flip the ledger', async () => {
-    const s = await platformDeployedSetup();
+    const s = await platformDeployedSetup({ approvedCommand: PLATFORM_ROLLBACK_COMMAND });
     s.sandbox.on(/wrangler rollback/, { exitCode: 1, stderr: 'A version with this ID does not exist' });
 
-    const result = await s.engine.rollback(s.changeId, { command: `bunx wrangler rollback ${PLATFORM_TARGET}` });
+    const result = await s.engine.rollback(s.changeId, { command: PLATFORM_ROLLBACK_COMMAND });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('does not exist');
 

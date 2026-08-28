@@ -92,7 +92,7 @@ describe('cross-process config read-modify-write', () => {
     const home = mkdtempSync(join(tmpdir(), 'kinu-config-lock-crash-'));
     try {
       const result = runIn(home, `
-        const { existsSync } = await import('node:fs');
+        const { lstatSync } = await import('node:fs');
         const { saveConfigFile, updateConfigFile, loadConfigFile, CONFIG_PATH } = await import(${CONFIG_TS});
         saveConfigFile({ origin: 'https://before.test' });
         try {
@@ -101,7 +101,10 @@ describe('cross-process config read-modify-write', () => {
           console.log(JSON.stringify({
             message: error.message,
             fileIntact: loadConfigFile().origin,
-            lockReleased: !existsSync(CONFIG_PATH + '.lock'),
+            // A held lock is a symlink to its owner record, so presence is an
+            // lstat question: existsSync follows the link and answers false for
+            // a lock that is there.
+            lockReleased: !lstatSync(CONFIG_PATH + '.lock', { throwIfNoEntry: false }),
           }));
         }
       `);
@@ -125,21 +128,25 @@ describe('cross-process config read-modify-write', () => {
     }
   });
 
-  test('a lock left behind by a crashed process is taken over once stale', () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-config-lock-stale-'));
+  test('a lock left behind by a killed process is taken over', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kinu-config-lock-abandoned-'));
     try {
       const result = runIn(home, `
-        const { existsSync, utimesSync, writeFileSync } = await import('node:fs');
+        const { lstatSync, symlinkSync } = await import('node:fs');
         const { CONFIG_PATH, loadConfigFile, updateConfigFile } = await import(${CONFIG_TS});
-        // A holder killed mid-write leaves its lock file behind. Backdate it
-        // past the staleness window instead of waiting one out.
-        writeFileSync(CONFIG_PATH + '.lock', '99999\\n0\\n');
-        const longAgo = new Date(Date.now() - 120_000);
-        utimesSync(CONFIG_PATH + '.lock', longAgo, longAgo);
+        const lock = CONFIG_PATH + '.lock';
+        // A holder killed mid-write leaves its lock behind. The owner record is
+        // the symlink's target: one hold's token, then the pid and process start
+        // time that identify the holder. Breakability is that identity and
+        // nothing else — no clock is touched here, and no duration would change
+        // either answer. This pid has exited and been reaped, so Linux says
+        // plainly that there is no such process.
+        const dead = Bun.spawnSync({ cmd: ['/bin/true'] }).pid;
+        symlinkSync('v1 linux 00000000-0000-4000-8000-000000000004 ' + dead + ' 12345', lock);
         updateConfigFile((config) => { config.origin = 'https://after.test'; });
         console.log(JSON.stringify({
           origin: loadConfigFile().origin,
-          lockGone: !existsSync(CONFIG_PATH + '.lock'),
+          lockGone: !lstatSync(lock, { throwIfNoEntry: false }),
         }));
       `);
       expect(result.code).toBe(0);

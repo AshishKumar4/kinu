@@ -4,14 +4,15 @@
 
 export {
   createWorkspace, nextWorkspaceGeneration,
+  type WorkspaceAgent, type WorkspaceAgentPlane,
   type WorkspaceBundle, type WorkspaceOptions, type WorkspaceVFS,
 } from './nimbus-workspace';
 export { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 export {
-  agentHome, agentTmpRoot, agentCred, agentIdentity,
+  agentHome, agentTmpRoot, agentCred, agentIdentity, agentHomeLayout,
   provisionAgentHome, confineAgentTmp,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
-  type AgentIdentity, type HomeRootVfs, type TmpConfiner,
+  type AgentDir, type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,

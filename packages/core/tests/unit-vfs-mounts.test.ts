@@ -228,6 +228,67 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await base.exists('/report.txt')).toBe(false);
 	});
 
+	test('a cross-plane rename replaces an existing destination only after source deletion', async () => {
+		const base = fakeTree({ '/report.txt': 'source copy' });
+		const device = fakeTree({ '/home/dev/report.txt': 'existing destination' });
+		const mounted = withMountTable(base, [mountOf('pc', device)]);
+
+		await mounted.rename('/report.txt', '/pc/home/dev/report.txt');
+
+		expect(await base.exists('/report.txt')).toBe(false);
+		expect(await device.readFile('/home/dev/report.txt', { encoding: 'utf8' })).toBe('source copy');
+	});
+
+	test('a cross-plane carry that cannot destroy the source removes its copy', async () => {
+		// KINU-013: the carry wrote the far side and then unlinked the near one.
+		// A failed unlink left the file on BOTH planes and reported failure, so
+		// nothing said which copy was the file. A rename either happened or it
+		// did not.
+		const base: VFS = {
+			...fakeTree({ '/report.txt': 'workspace copy' }),
+			unlink: async (path) => { throw Object.assign(new Error(`EBUSY: ${path}`), { code: 'EBUSY' }); },
+		};
+		const device = fakeTree({});
+		const mounted = withMountTable(base, [mountOf('pc', device)]);
+
+		await expect(mounted.rename('/report.txt', '/pc/home/dev/report.txt')).rejects.toThrow(/EBUSY/);
+		expect(await base.exists('/report.txt')).toBe(true);
+		expect(await device.exists('/home/dev/report.txt')).toBe(false);
+	});
+
+	test('a carry whose copy did not land refuses instead of destroying the source', async () => {
+		// A plane that accepts a write and keeps nothing used to lose the file:
+		// the source was unlinked on the strength of a write that returned.
+		const base = fakeTree({ '/report.txt': 'workspace copy' });
+		const device: VFS = { ...fakeTree({}), writeFile: async () => undefined };
+		const mounted = withMountTable(base, [mountOf('pc', device)]);
+
+		await expect(mounted.rename('/report.txt', '/pc/home/dev/report.txt'))
+			.rejects.toMatchObject({ code: 'EIO' });
+		expect(await base.readFile('/report.txt', { encoding: 'utf8' })).toBe('workspace copy');
+	});
+
+	test('a carry whose destination write kept nothing refuses and restores the source', async () => {
+		// The staged copy is checked, and so is the destination it is copied to:
+		// a plane that keeps the first write and drops the second used to delete
+		// the source AND the staged copy, then report success with no file.
+		const base = fakeTree({ '/report.txt': 'workspace copy' });
+		const tree = fakeTree({});
+		const device: VFS = {
+			...tree,
+			writeFile: async (path, data) => {
+				if (path === '/home/dev/report.txt') return;
+				await tree.writeFile(path, data);
+			},
+		};
+		const mounted = withMountTable(base, [mountOf('pc', device)]);
+
+		await expect(mounted.rename('/report.txt', '/pc/home/dev/report.txt'))
+			.rejects.toMatchObject({ code: 'EIO' });
+		expect(await base.readFile('/report.txt', { encoding: 'utf8' })).toBe('workspace copy');
+		expect(await device.exists('/home/dev/report.txt')).toBe(false);
+	});
+
 	test('a directory refuses to rename where only bytes could carry it', async () => {
 		const device = fakeTree({ '/home/dev/src/app.ts': 'export {};' });
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);

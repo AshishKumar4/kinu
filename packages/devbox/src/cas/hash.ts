@@ -10,7 +10,7 @@
 
 import { createHash } from 'node:crypto';
 
-import type { ChunkRef, Sha256Hex } from './types';
+import type { FileDataPart, Sha256Hex } from './types';
 
 export const CHUNK_SIZE = 512 * 1024;
 
@@ -21,7 +21,7 @@ export function sha256Hex(bytes: Uint8Array): Sha256Hex {
 export interface FileDigest {
   readonly hash: Sha256Hex;
   readonly size: number;
-  readonly chunks: readonly ChunkRef[];
+  readonly parts: readonly FileDataPart[];
 }
 
 /**
@@ -30,11 +30,11 @@ export interface FileDigest {
  */
 export function digestBytes(bytes: Uint8Array): FileDigest {
   const whole = createHash('sha256');
-  const chunks: ChunkRef[] = [];
+  const parts: FileDataPart[] = [];
   for (let offset = 0; offset < bytes.byteLength; offset += CHUNK_SIZE) {
     const view = bytes.subarray(offset, Math.min(offset + CHUNK_SIZE, bytes.byteLength));
     whole.update(view);
-    chunks.push({ hash: sha256Hex(view), size: view.byteLength });
+    parts.push({ kind: 'data', hash: sha256Hex(view), size: view.byteLength });
   }
-  return { hash: whole.digest('hex'), size: bytes.byteLength, chunks };
+  return { hash: whole.digest('hex'), size: bytes.byteLength, parts };
 }

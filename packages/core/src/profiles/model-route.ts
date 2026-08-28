@@ -51,7 +51,6 @@ const MODEL_ROUTE_POLICY = {
   head: { kind: 'invocation' },
   mcts: { kind: 'invocation' },
   swarm: { kind: 'invocation' },
-  sandbox: { kind: 'invocation' },
   // Fixed slots: account-wide tier assignments decide these, never a pin.
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },

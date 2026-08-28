@@ -43,6 +43,16 @@ export function ulid(): string {
   return tsChars.join('') + rand;
 }
 
+/** Built from the alphabet above so the two cannot drift: a 26-char id in
+ *  Crockford base32 is one `ulid()` could have minted. Callers that route on an
+ *  id — the signed webhook delivery path — need to refuse anything else before
+ *  it reaches a Durable Object name. */
+const ULID_PATTERN = new RegExp(`^[${ULID_ALPHABET}]{26}$`, 'u');
+
+export function isUlid(value: string): boolean {
+  return ULID_PATTERN.test(value);
+}
+
 function rollRandom(): number[] {
   const out: number[] = [];
   for (let i = 0; i < 16; i++) out.push(Math.floor(Math.random() * 32));

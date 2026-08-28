@@ -5,7 +5,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import {
-  ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
+  branchHeadId, ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview,
   type RoleSelection,
 } from "@kinu.run/core";
@@ -27,6 +27,9 @@ import type {
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
+import {
+  appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
+} from "../components/head-chat";
 import type { InlineSteer } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
@@ -38,8 +41,11 @@ import {
   createSessionRecovery,
   fetchDeployedBuildSha,
   isNewerDeployedBuild,
+  pageDeployedBuildSha,
   type SessionRecovery,
 } from "./session-recovery";
+import { abandonTurn, admitTurn, newSendLatch } from "./send-admission";
+import type { AsyncResource } from "./use-async-resource";
 
 export type { ExecutorInfo };
 
@@ -267,6 +273,13 @@ const SocketMessageSchema = v.variant("type", [
     turnId: v.optional(v.string()), message: v.optional(v.string()),
   }),
   v.object({ type: v.literal("head_activity"), headId: v.string() }),
+  /** Transient intra-step output from a running head — the provider's own
+   *  deltas, in the two streams it separates. Best-effort paint: the durable
+   *  step is the truth, and `head_activity` above retires this. */
+  v.object({
+    type: v.literal("head_stream"), headId: v.string(),
+    kind: v.picklist(["text", "reasoning"]), delta: v.string(),
+  }),
   v.object({
     type: v.literal("steer_status"), steerId: v.string(), text: v.string(),
     status: v.picklist(["queued", "landed", "returned"]),
@@ -304,8 +317,14 @@ export function parsePlanReview<Value>(value: Value): PlanReview | null {
   return parsed.success ? parsed.output : null;
 }
 /** Where a surfaced failure came from — each source owns (and clears) its own
- *  message so a recovery in one never hides a still-broken other. */
+ *  message so a recovery in one never hides a still-broken other.
+ *
+ *  Every entry is a READ of this actor, the one-round-trip snapshot included:
+ *  they fail together when the transport does. Each source stores the bare
+ *  reason and never a sentence, because the sentence has one author, below. */
 export type LiveRefreshSource =
+  | "snapshot"
+  | "roster"
   | "jobs"
   | "pendingActions"
   | "presence"
@@ -326,6 +345,8 @@ interface LiveRefreshDescriptor {
 }
 
 const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
+  { source: "snapshot", label: "this workspace" },
+  { source: "roster", label: "the agent roster" },
   { source: "jobs", label: "background jobs" },
   { source: "pendingActions", label: "pending actions" },
   { source: "mcts", label: "MCTS" },
@@ -339,7 +360,25 @@ const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
   { source: "plan", label: "active plan" },
 ];
 
-type ErrorSource = "snapshot" | "roster" | "model" | "memory" | LiveRefreshSource;
+/** The live sources the workspace snapshot reads for itself (`loadAllData`).
+ *  A snapshot that landed IS a fresh read of each of them, so its success
+ *  clears their failures: leaving them set left the banner reporting stale
+ *  data for surfaces the same round trip had just refreshed, and across a
+ *  flapping socket no 5s poll ever completed to clear them. */
+const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
+  "memoryContent",
+  "tools",
+  "executors",
+  "presence",
+  "plan",
+];
+
+/** A failed read, plus the two failures that belong to an action the user
+ *  asked for: those name what did not happen, which no refresh sentence can
+ *  say for them, so they keep their own prose. */
+type ErrorSource = LiveRefreshSource | "model" | "memory";
+
+export type WorkspaceErrors = Partial<Record<ErrorSource, string>>;
 
 type LiveRefreshReporter = (source: LiveRefreshSource, message: string | null) => void;
 type ConsentResolutionReporter = (consentId: string, message: string | null) => void;
@@ -379,17 +418,93 @@ export function createLiveRefreshAdmission(): LiveRefreshAdmission {
   };
 }
 
-export function formatLiveRefreshError(errors: LiveRefreshErrors): string | null {
+/**
+ * Every failed read's label, and the distinct reasons behind them.
+ *
+ * A snapshot failure SUBSUMES the surfaces the snapshot re-reads when they
+ * failed on its reason: that is one round trip dropping, and naming each of its
+ * five surfaces beside the workspace is one outage listed six times. A seeded
+ * surface that failed for a reason of its own keeps its label.
+ */
+function collectReadFailures(errors: LiveRefreshErrors) {
+  const subsumed = errors.snapshot;
   const labels: string[] = [];
   const reasons: string[] = [];
   for (const descriptor of LIVE_REFRESH_DESCRIPTORS) {
     const reason = errors[descriptor.source];
     if (!reason) continue;
-    if (!labels.includes(descriptor.label)) labels.push(descriptor.label);
     if (!reasons.includes(reason)) reasons.push(reason);
+    if (reason === subsumed && SNAPSHOT_SEEDED_SOURCES.includes(descriptor.source)) continue;
+    if (!labels.includes(descriptor.label)) labels.push(descriptor.label);
   }
-  if (labels.length === 0) return null;
-  return `Couldn't refresh live data for ${formatNaturalList(labels)}. Showing last known data. ${formatNaturalList(reasons)}`;
+  return { labels, reasons };
+}
+
+/**
+ * The one line the workspace banner shows.
+ *
+ * `loaded` is whether this workspace has ever produced a snapshot. Until it
+ * has there is no last known data, so a failed read is a failed OPEN and the
+ * line says that: "Showing last known data" over a workspace that has never
+ * shown any is a claim about data the reader cannot see.
+ *
+ * Every read shares one sentence and each distinct reason appears once. One
+ * dropped connection fails the snapshot and every poll in the same instant,
+ * and this banner used to print that single reason twice in one line:
+ *
+ *   Workspace snapshot failed: Network connection lost. Couldn't refresh live
+ *   data for memory content. Showing last known data. Network connection lost.
+ */
+export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): string | null {
+  const { labels, reasons } = collectReadFailures(errors);
+  // The labels are a noun list; the reasons are whatever an RPC rejected with,
+  // so they are set down one after another rather than conjoined — "Network
+  // connection lost. and MEMORY.md is unreadable" is not a sentence.
+  const read = labels.length === 0
+    ? null
+    : loaded
+      ? `Couldn't refresh ${formatNaturalList(labels)}. Showing last known data. ${reasons.join(" ")}`
+      : `Couldn't open this workspace. ${reasons.join(" ")}`;
+  return combineErrorMessages(errors.model ?? errors.memory ?? null, read);
+}
+
+/** What one snapshot load settled as. `superseded` is neither outcome: a newer
+ *  load, or a different actor, took the surface while this one was in flight,
+ *  so it reports nothing and nothing may be scheduled for it. */
+export type SnapshotLoad = "loaded" | "superseded" | { failed: string };
+
+/**
+ * Read the workspace snapshot and settle every source it speaks for.
+ *
+ * The snapshot is a read like any poll, so it is admitted the same way: its own
+ * key for the load, plus one per surface it re-seeds. A snapshot that landed IS
+ * a fresh read of each of those surfaces, so its success clears their failures
+ * — except any whose own refresh was admitted after this load started, because
+ * that read is newer and owns the surface.
+ *
+ * The reason is returned rather than acted on: the retry cadence belongs to the
+ * caller, and nothing else has to interpret a transport error.
+ */
+export async function loadWorkspaceSnapshot(
+  read: (isCurrent: () => boolean) => Promise<void>,
+  report: LiveRefreshReporter,
+  admit: (requestKey: LiveRefreshSource) => () => boolean,
+  seeded: readonly LiveRefreshSource[],
+): Promise<SnapshotLoad> {
+  const isCurrent = admit("snapshot");
+  const seededReads = seeded.map((source) => [source, admit(source)] as const);
+  try {
+    await read(isCurrent);
+    if (!isCurrent()) return "superseded";
+    report("snapshot", null);
+    for (const [source, stillCurrent] of seededReads) if (stillCurrent()) report(source, null);
+    return "loaded";
+  } catch (error) {
+    if (!isCurrent()) return "superseded";
+    const failed = errorMessage(error);
+    report("snapshot", failed);
+    return { failed };
+  }
 }
 
 export async function refreshLiveResource<Value>(
@@ -540,13 +655,18 @@ export function useKinu(target?: string | KinuActorAddress) {
     liveRefreshAdmission.activateActor(actorKey);
     return () => liveRefreshAdmission.invalidateActor(actorKey);
   }, [actorKey, liveRefreshAdmission]);
-  const primaryError = errors.snapshot ?? errors.roster ?? errors.model ?? errors.memory ?? null;
   const consentResolutionReasons = [...new Set(consentResolutionErrors.values())];
   const liveErrors = consentResolutionReasons.length === 0
     ? errors
     : { ...errors, consentResolution: formatNaturalList(consentResolutionReasons) };
-  const liveError = formatLiveRefreshError(liveErrors);
-  const error = combineErrorMessages(primaryError, liveError);
+  // `agentStatus` is written only by a completed snapshot and cleared only by a
+  // workspace switch, so it IS "this workspace has last known data" — the fact
+  // the banner needs to choose its sentence and the panes need before any of
+  // them may say "none".
+  const snapshot: AsyncResource<AgentStatus> = errors.snapshot !== undefined
+    ? { status: "error", message: errors.snapshot, last: agentStatus }
+    : agentStatus === null ? { status: "loading" } : { status: "ready", value: agentStatus };
+  const error = formatWorkspaceError(liveErrors, agentStatus !== null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
@@ -597,6 +717,29 @@ export function useKinu(target?: string | KinuActorAddress) {
       return next;
     });
   }, []);
+  /**
+   * The step each running head is writing but has not journalled yet, keyed by
+   * head id — its prose and its reasoning, because `head_stream` carries the
+   * provider's own deltas and the provider separates those two streams.
+   *
+   * EPHEMERAL AND SUBORDINATE. The durable step is the truth; this exists only
+   * so the step being written is visible while it is written. It is retired the
+   * moment that step lands — by the `head_activity` push, by a reader whose own
+   * re-read found the step (`HeadDeltas.retire`), by a branch reaching a
+   * terminal status, by a cancelled turn, and by the socket dropping. Nothing
+   * reads it back, nothing persists it, and a dropped delta needs no repair:
+   * the step that replaces it arrives anyway.
+   */
+  const [headDeltaMap, setHeadDeltaMap] = useState<ReadonlyMap<string, HeadDelta>>(new Map());
+  const retireDelta = useCallback((headId: string) => {
+    setHeadDeltaMap((previous) => retireHeadDelta(previous, headId));
+  }, []);
+  // Nothing is being written any more: the socket went away, or the work did.
+  const forgetDeltas = useCallback(() => { setHeadDeltaMap(new Map()); }, []);
+  const headDeltas = useMemo<HeadDeltas>(() => ({
+    get: (headId) => headDeltaMap.get(headId),
+    retire: retireDelta,
+  }), [headDeltaMap, retireDelta]);
   // Mid-turn steers — what the user typed while the agent was working, shown in
   // the thread from the moment the server takes it until the durable user row
   // it becomes arrives in `messages`.
@@ -636,7 +779,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   // window claiming it had none, and then replaced that claim with the
   // transcript. False is "not yet", never "nothing".
   const [transcriptSeeded, setTranscriptSeeded] = useState(false);
-  const terminallyClosed = useRef(false);
 
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -645,14 +787,19 @@ export function useKinu(target?: string | KinuActorAddress) {
     // "error", a successful reopen must recover the UI. Without this, a
     // single transient error event traps the user on the disconnect
     // banner forever (STABILITY-AUDIT §A1).
-    onOpen: useCallback(() => {
-      terminallyClosed.current = false;
-      setConnectionStatus("connected");
-    }, []),
-    onClose: useCallback((event: CloseEvent) => {
-      terminallyClosed.current = event.code === 1008 || event.code >= 4000;
+    onOpen: useCallback(() => setConnectionStatus("connected"), []),
+    onClose: useCallback(() => {
+      // No close-code list here. The SDK classifies a terminal close itself
+      // (`isTerminalCloseEvent`: 1008 or 4000-4999) and publishes the outcome
+      // as `connectionError`, so a second reading of the same codes in this
+      // file would be a duplicate authority that could disagree with it.
       setConnectionStatus("disconnected");
-    }, []),
+      // The live paint belongs to this socket. Across the gap a head keeps
+      // working and nothing here hears it, so a half-written step left on
+      // screen would claim to be current for as long as the reconnect takes.
+      // The durable steps arrive again either way.
+      forgetDeltas();
+    }, [forgetDeltas]),
     // Don't clobber a healthy status; partysocket auto-reconnects in the
     // background and the next onOpen recovers. onError is a transient no-op.
     onError: useCallback(() => {}, []),
@@ -692,14 +839,41 @@ export function useKinu(target?: string | KinuActorAddress) {
     regenerate,
     clearHistory,
     stop,
-    isStreaming,
+    isStreaming: streamingTokens,
+    status: chatStatus,
     error: streamError,
+    connectionError,
   } = useAgentChat({
     agent,
     // Throttle UI updates during high-frequency token deltas (50ms ≈ 20fps).
     // The chat library forwards this option to @ai-sdk's useChat.
     experimental_throttle: 50,
   });
+
+  /**
+   * A turn this pane started or observed is live — what every surface reading
+   * `isStreaming` means by "busy".
+   *
+   * The SDK's own flag is `status === 'streaming' || isServerStreaming`, so it
+   * is FALSE for the whole `submitted` window: the message is on the socket and
+   * the turn has begun, but no token has arrived yet. Over that window the old
+   * value said idle — the composer offered Send, the working chip was absent,
+   * and a second press was admitted. `status` is the SDK's own reactive state
+   * for exactly that phase, so this is one derivation over state that already
+   * exists rather than a second flag to keep in step with the latch below.
+   */
+  const isStreaming = streamingTokens || chatStatus === "submitted";
+
+  /**
+   * SEND ADMISSION. The latch lives in `send-admission.ts` — a ref mutated in
+   * the same statement that reads it, so a second press inside one tick sees it
+   * held. `isStreaming` above only MIRRORS it for rendering; it never decides.
+   */
+  const sendLatch = useRef(newSendLatch());
+  const startTurn = useCallback(
+    (begin: () => Promise<void>): boolean => admitTurn(sendLatch.current, begin),
+    [],
+  );
 
   // The live-stream error channel: the ws transport turns an in-band
   // `error:true` frame into useChat's `error` state — fold it into the same
@@ -709,25 +883,22 @@ export function useKinu(target?: string | KinuActorAddress) {
     if (streamError) setChatError({ body: streamError.message || String(streamError), replayed: false });
   }, [streamError]);
 
-  // ── Version-skew signal: /api/health's build sha, read once as this page's
+  // ── Version-skew signal: /api/health's build sha, read once per PAGE as the
   // baseline and compared on each reconnect. A supersede the socket rode
   // through leaves the running SPA stale against the deployment now serving
   // it — say so once, with a reload affordance, instead of waiting for the
   // next dynamic import to fail on a chunk that no longer exists.
+  //
+  // The baseline is `pageDeployedBuildSha`, not a ref this hook fills at mount:
+  // WorkspacePage is keyed on the workspace, so this hook is remounted on every
+  // workspace navigation and a per-hook baseline re-read itself onto whatever
+  // was live at that moment — losing the skew it exists to report. One read per
+  // document also means the render-failure report and this notice can never
+  // disagree about which build the page is running.
   const [newerDeployedBuild, setNewerDeployedBuild] = useState(false);
-  const deployedShaBaseline = useRef<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchDeployedBuildSha().then((sha) => {
-      if (!cancelled && sha !== null && deployedShaBaseline.current === null) {
-        deployedShaBaseline.current = sha;
-      }
-    });
-    return () => { cancelled = true; };
-  }, []);
   const refreshDeployedBuild = useCallback(async () => {
-    const live = await fetchDeployedBuildSha();
-    if (isNewerDeployedBuild(deployedShaBaseline.current, live)) setNewerDeployedBuild(true);
+    const [baseline, live] = await Promise.all([pageDeployedBuildSha(), fetchDeployedBuildSha()]);
+    if (isNewerDeployedBuild(baseline, live)) setNewerDeployedBuild(true);
   }, []);
 
   // ── A2: resume the durable stream on EVERY reconnect, not just first mount.
@@ -850,32 +1021,34 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
       void rpc("getSubordinateSnapshot", []).then(
         () => setSourceError("snapshot", null),
-        (error) => setSourceError("snapshot", `Subordinate liveness probe failed: ${errorMessage(error)}`),
+        (error) => setSourceError("snapshot", errorMessage(error)),
       );
     }, 25_000);
     return () => clearInterval(id);
   }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
 
+  // A subordinate's snapshot seeds none of the polled surfaces, so it speaks
+  // only for itself. The cancellation this effect used to also track is the
+  // admission's job: re-running it admits a newer load, which retires this one.
   useEffect(() => {
-    let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const label = isSubordinate ? "Subordinate" : "Workspace";
-    const isCurrent = liveRefreshAdmission.admit(actorKey, "snapshot");
-    (isSubordinate ? loadSubordinateData(isCurrent) : loadAllData(isCurrent))
-      .then(() => {
-        if (cancelled || !isCurrent()) return;
+    void loadWorkspaceSnapshot(
+      isSubordinate ? loadSubordinateData : loadAllData,
+      setSourceError,
+      (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
+      isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
+    ).then((outcome) => {
+      if (outcome === "superseded") return;
+      if (outcome === "loaded") {
         failureStreak.current = 0;
-        setSourceError("snapshot", null);
-      })
-      .catch((err) => {
-        if (cancelled || !isCurrent()) return;
-        setSourceError("snapshot", `${label} snapshot failed: ${errorMessage(err)}`);
-        const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
-        failureStreak.current += 1;
-        timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
-      });
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [actorKey, isSubordinate, liveRefreshAdmission, loadGeneration, rpc, subordinate, workspace]);
+        return;
+      }
+      const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
+      failureStreak.current += 1;
+      timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
+    });
+    return () => clearTimeout(timer);
+  }, [actorKey, isSubordinate, liveRefreshAdmission, loadGeneration, rpc, setSourceError, subordinate, workspace]);
 
   const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
     "jobs",
@@ -932,13 +1105,23 @@ export function useKinu(target?: string | KinuActorAddress) {
   }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
 
   /**
-   * Send a message WITHOUT stopping the running turn: the server splices it into
-   * the turn's next step. `"idle"` means the turn had already finished and
-   * nothing was buffered — the caller must send it as an ordinary message,
-   * which is the whole reason this reports which happened instead of a boolean.
+   * Send a message WITHOUT stopping the running turn.
+   *
+   * The actor decides in its own turn queue: `"mid-turn"` means it was spliced
+   * into the running turn's next step, `"queued"` means that turn had already
+   * ended and the actor enqueued it as the next ordinary turn. Either way the
+   * text has landed somewhere, which is why nothing here re-sends it. The shape
+   * this replaced answered `"idle"` and left the client to call `sendChat`
+   * afterwards — a decision and an enqueue that were not atomic, so guidance
+   * meant for one turn could become an ordinary turn after another had started.
    */
-  const steerChat = useCallback(async (text: string): Promise<"mid-turn" | "idle"> => {
-    const { landed } = await rpc<{ landed: "mid-turn" | "idle" }>("steerTurn", [text]);
+  const steerChat = useCallback(async (
+    text: string, mode: "plan" | "build" = "build",
+  ): Promise<"mid-turn" | "queued"> => {
+    // `mode` rides the enqueued turn as its `kinuMode`, the same way `sendChat`
+    // binds it: a Plan-locked composer whose steer missed its turn must queue a
+    // PLAN turn, not silently become a build one.
+    const { landed } = await rpc<{ landed: "mid-turn" | "queued" }>("steerTurn", [text, mode]);
     return landed;
   }, [rpc]);
 
@@ -973,6 +1156,9 @@ export function useKinu(target?: string | KinuActorAddress) {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
           setConsentResolutionError(msg.consentId, null);
         } else if (msg.type === "work_cancelled") {
+          // Every head stopped mid-step. Whatever they had written is either
+          // journalled or gone, and neither case is still being written.
+          forgetDeltas();
           void refreshBackgroundJobs();
         } else if (msg.type === "pending_actions_changed") {
           // A command was parked on the owner, or they decided one. The queue
@@ -981,12 +1167,17 @@ export function useKinu(target?: string | KinuActorAddress) {
           // and updates every open tab, not just the one that clicked.
           void refreshPendingActions();
         } else if (msg.type === "branch_status") {
+          const status = msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running";
+          // A branch that has stopped is writing nothing. Its head id is
+          // derived from the run id, so the accumulator can be retired without
+          // waiting for a journal write that a failed branch never makes.
+          if (status !== "running") retireDelta(branchHeadId(msg.branchId));
           setBranchRuns((prev) => [
             ...prev.filter((b) => b.branchId !== msg.branchId),
             {
               branchId: msg.branchId,
               task: msg.task ?? "",
-              status: msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running",
+              status,
               takeSetId: msg.takeSetId,
               turnId: msg.turnId,
               message: msg.message,
@@ -997,7 +1188,14 @@ export function useKinu(target?: string | KinuActorAddress) {
           // shape as `pending_actions_changed`: an open transcript re-reads the
           // journal it already renders from, so the stream and the store cannot
           // drift, and a reader with nothing open pays nothing.
+          //
+          // This also RETIRES the in-progress paint for that head: the step it
+          // was painting has landed, so the durable read replaces it and the
+          // two can never both be on screen.
+          retireDelta(msg.headId);
           bumpHeadActivity(msg.headId);
+        } else if (msg.type === "head_stream") {
+          setHeadDeltaMap((previous) => appendHeadDelta(previous, msg.headId, msg.kind, msg.delta));
         } else if (msg.type === "steer_status") {
           // `returned` is a removal: the abort dropped it and the composer has
           // it back, so leaving a bubble in the thread would claim the agent
@@ -1033,8 +1231,16 @@ export function useKinu(target?: string | KinuActorAddress) {
         }
     };
     agent.addEventListener("message", handler);
-    return () => agent.removeEventListener("message", handler);
-  }, [agent, bumpHeadActivity, refreshBackgroundJobs, refreshPendingActions, setConsentResolutionError, setMctsTreeFromRows, isSubordinate]);
+    return () => {
+      agent.removeEventListener("message", handler);
+      // The paint belongs to a socket. A new one cannot know what a running
+      // head had half-written, and the durable steps arrive again anyway.
+      forgetDeltas();
+    };
+  }, [
+    agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshPendingActions,
+    retireDelta, setConsentResolutionError, setMctsTreeFromRows, isSubordinate,
+  ]);
 
   const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent(
     consentId,
@@ -1105,7 +1311,9 @@ export function useKinu(target?: string | KinuActorAddress) {
   const retryLoad = useCallback(() => {
     failureStreak.current = 0;
     setSourceError("model", null);
-    sessionRecovery.manualRetry(terminallyClosed.current);
+    // The SDK stops auto-redialling exactly when it sets `connectionError`,
+    // so that is the condition under which Retry must force one.
+    sessionRecovery.manualRetry(agentRef.current?.connectionError != null);
     if (!isSubordinate) void refreshLiveData();
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
@@ -1197,7 +1405,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       })
       .catch((err) => {
         if (generation !== subordinateRefreshGeneration.current) return;
-        setSourceError("roster", `Subordinate roster failed: ${errorMessage(err)}`);
+        setSourceError("roster", errorMessage(err));
       });
   }, [isSubordinate, rpc, setSourceError]);
 
@@ -1213,6 +1421,11 @@ export function useKinu(target?: string | KinuActorAddress) {
     failureStreak.current = 0;
     wasStreaming.current = false;
     isFirstOpen.current = true;
+    // This conversation is a different one now, so the send latch belongs to
+    // nobody. The abandoned turn's own settle can no longer release it — the
+    // owner token it holds is stale — which is exactly the ordering that keeps
+    // a late completion from opening the door for whoever holds it next.
+    abandonTurn(sendLatch.current);
     searchSeq.current += 1;
     clearTimeout(searchTimer.current);
     setErrors({});
@@ -1241,22 +1454,33 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSignalCards([]);
   }, [workspace, subordinate]);
 
-  // File attachments ride as data-URL FileUIParts ahead of the text part —
-  // the whole downstream pipeline (WS transport, DO persistence, Think's
-  // convertToModelMessages) natively carries them to multimodal models.
+  /**
+   * Start a turn with this text and these attachments.
+   *
+   * Answers whether the send was ADMITTED. `false` means a turn already holds
+   * this conversation's send latch and nothing was sent, so the caller must
+   * keep the composer's contents; callers must not pre-check streaming state,
+   * because a reactive pre-check is the race this closes.
+   *
+   * File attachments ride as data-URL FileUIParts ahead of the text part — the
+   * whole downstream pipeline (WS transport, DO persistence, Think's
+   * convertToModelMessages) natively carries them to multimodal models.
+   */
   const sendChat = useCallback((
     content: string,
     files: FileUIPart[] = [],
     mode: "plan" | "build" = "build",
-  ) => {
+  ): boolean => {
     const parts: UIMessage["parts"] = [
       ...files,
       ...(content ? [{ type: "text" as const, text: content }] : []),
     ];
-    if (parts.length === 0) return;
-    setChatError(null);
-    sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
-  }, [sendMessage]);
+    if (parts.length === 0) return false;
+    return startTurn(() => {
+      setChatError(null);
+      return sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
+    });
+  }, [startTurn, sendMessage]);
 
   /**
    * Re-run the turn that failed — the SDK's own `regenerate`, not a fresh send.
@@ -1268,12 +1492,18 @@ export function useKinu(target?: string | KinuActorAddress) {
    * (or keeps the trailing user message when the turn produced none), sends
    * `trigger: 'regenerate-message'`, and the host reconciles against its own
    * history rather than growing it.
+   *
+   * Under the SAME latch as `sendChat`: a retry starts a turn, so two presses
+   * of the error card's Retry are one turn for the same reason two presses of
+   * Send are. One admission authority, not two.
    */
-  const retryLastMessage = useCallback(() => {
-    if (messages.length === 0) return;
-    setChatError(null);
-    void regenerate();
-  }, [messages.length, regenerate]);
+  const retryLastMessage = useCallback((): boolean => {
+    if (messages.length === 0) return false;
+    return startTurn(() => {
+      setChatError(null);
+      return regenerate();
+    });
+  }, [startTurn, messages.length, regenerate]);
 
   // Every keystroke used to fire its own searchMemoryHybrid with nothing
   // ordering the replies, so a slow early query could land last and leave the
@@ -1399,11 +1629,19 @@ export function useKinu(target?: string | KinuActorAddress) {
      *  `messages` being empty means "not delivered", not "there is nothing". */
     transcriptSeeded,
     connectionStatus,
+    /** Set when the socket closed for a reason reconnecting cannot change —
+     *  the workspace is not this caller's, or it is not there. Carries the
+     *  close code and the server's own reason. The SDK owns the
+     *  classification and clears this on open, so there is nothing to
+     *  mirror. */
+    terminalClose: connectionError,
     /** The deployment's build sha changed since this page loaded — the tab is
      *  stale against the server now answering it. Latched once per page load;
      *  the surface renders the reload affordance from this. */
     newerDeployedBuild,
-    /** The sticky load/action failure, if any — never auto-expires. */
+    /** The one sticky failure line — never auto-expires. Says the workspace
+     *  could not OPEN while nothing has loaded, and names the stale surfaces
+     *  once a snapshot has. */
     error,
     /** Re-run the initial load now (also cancels the pending backoff retry and
      *  clears a stale action error). The `error` banner's way out. */
@@ -1414,6 +1652,11 @@ export function useKinu(target?: string | KinuActorAddress) {
     clearChatError: () => setChatError(null),
     retryLastMessage,
     agentStatus,
+    /** The snapshot as this repo's tri-state, for the surfaces it seeds: a pane
+     *  may only report "none" for a read that came back, and `agentStatus`
+     *  alone cannot tell a load still coming from one that failed. Carries no
+     *  reason — `error` says why, once. */
+    snapshot,
     tools,
     memory,
     memoryContent,
@@ -1457,6 +1700,11 @@ export function useKinu(target?: string | KinuActorAddress) {
      *  reader whose branch id ticked re-reads the journal; every other reader
      *  sees an unchanged number and does nothing. */
     headActivity,
+    /** The step each running head is writing — prose and reasoning — with the
+     *  retire a reader calls when its own re-read found that step. Best-effort
+     *  paint under `headActivity`: retired the moment the step lands, so a
+     *  reader never shows the same text twice. */
+    headDeltas,
     /** Mid-turn steers the server has taken, queued → landed. Dropped ones are
      *  removed by the server's `returned` broadcast, not by the surface. */
     steerRuns,

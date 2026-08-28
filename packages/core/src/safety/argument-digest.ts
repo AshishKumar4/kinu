@@ -25,10 +25,11 @@ export function stableStringify(value: JsonValue): string {
   return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key]!)).join(',') + '}';
 }
 
-/** Hex SHA-256 of a string. `hexChars` truncates the output (dedupe keys use a
- *  short prefix); omit it for the full collision-resistant digest. */
-export function sha256Hex(text: string, hexChars?: number): string {
-  const hex = createHash('sha256').update(text).digest('hex');
+/** Hex SHA-256 of a string, or of raw bytes. `hexChars` truncates the output
+ *  (dedupe keys use a short prefix); omit it for the full collision-resistant
+ *  digest. */
+export function sha256Hex(data: string | Uint8Array, hexChars?: number): string {
+  const hex = createHash('sha256').update(data).digest('hex');
   return hexChars ? hex.slice(0, hexChars) : hex;
 }
 

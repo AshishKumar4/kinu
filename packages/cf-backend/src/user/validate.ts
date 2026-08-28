@@ -62,10 +62,23 @@ export function validateCredentialKey(key: string): void {
   }
 }
 
+/** The one workspace-name grammar. Named so the throwing gate and the
+ *  predicate below cannot drift into two different ideas of a valid name. */
+const WORKSPACE_NAME = /^[a-zA-Z0-9._-]{1,64}$/;
+
+/** Whether a name COULD be a workspace's. For a caller that is asking a
+ *  question rather than admitting a value — feedback attribution asks the
+ *  registry only about names the registry could hold, so a malformed one is
+ *  refused here instead of arriving as a thrown error from a Durable Object
+ *  that no caller can tell apart from an outage. */
+export function isWorkspaceName(name: string): boolean {
+  return WORKSPACE_NAME.test(name);
+}
+
 /** Agent names follow the same rule. The DO id system already restricts to
  *  printable ascii; this is just an extra-strict guard at our API boundary. */
 export function validateWorkspaceName(name: string): void {
-  if (!/^[a-zA-Z0-9._-]{1,64}$/.test(name)) {
+  if (!isWorkspaceName(name)) {
     throw new Error('Invalid workspace name. Use alphanumerics, dot, underscore and dash only (max 64 chars).');
   }
 }

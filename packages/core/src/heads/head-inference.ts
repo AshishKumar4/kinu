@@ -37,6 +37,7 @@ import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from 
 import { nanoid } from '../utils/nanoid';
 import { extractFinalText, synthesizeHeadSummary, toHeadStep } from './head-summary';
 import { HeadFileChanges } from './file-changes';
+import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { diagnostics, renderCauseChain, renderThrownChain, toKinuError } from '../obs/index';
@@ -218,11 +219,11 @@ function renderHeadToolConventions(
         + '`workspace.*` is the canonical workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
         + '`sandbox.*` is its container, and `laptop.*` is the user\'s machine. '
         + '`workspace.exec` runs a real shell in the workspace, so `grep -rn X .` searches it in one call. '
-        + '`web.*` and `llm.query` are also in scope.'
+        + '`web.*` is also in scope.'
       : '- execute_tools runs JavaScript across the environments exposed to this local head: '
         + '`workspace.*` is your private scratch, `parent.*` is the canonical parent workspace containing the task\'s code and data, '
         + 'and `laptop.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
-        + '`web.*` and `llm.query` are also in scope.';
+        + '`web.*` is also in scope.';
     lines.push(
       executionDoctrine,
       ...(input.mode === 'plan'
@@ -463,11 +464,10 @@ export interface HeadInferenceDeps {
   /**
    * Where each finished step is recorded, while the head is still running.
    *
-   * This is the head's whole observability story and the ONLY writer of its
+   * The head's whole DURABLE observability story and the only writer of its
    * trace — the report carries a count, not the rows. A fork is not an actor:
    * it has no chat, no run-event recorder and no socket a surface can watch, so
-   * the ordered trace it pushes here is the one thing that makes a running
-   * branch legible.
+   * the ordered trace it pushes here is what makes a running branch legible.
    *
    * The sink is the journal holding this head's own row, which is whoever
    * spawned it. Omitted only for a recursive sub-head on the hosted backend:
@@ -476,6 +476,23 @@ export interface HeadInferenceDeps {
    * never appeared on the Exploration surface at all.
    */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
+  /**
+   * Where this head's output goes WHILE a step is still being produced.
+   *
+   * The gap {@link reportStep} cannot close: a step takes tens of seconds, and
+   * until it lands the durable trace says nothing, so an open transcript sat
+   * still while its branch was working. Frames published here paint that
+   * interval and are superseded by the step itself.
+   *
+   * ONE CALL PER PROVIDER DELTA, in stream order and never buffered, so a
+   * consumer that concatenates holds exactly what the model emitted. A transport
+   * that crosses an isolate boundary must therefore not await it.
+   *
+   * Omitted where nothing is watching. Absence costs nothing: no reader ever
+   * reads a frame back, so the branch is exactly as legible either way once its
+   * steps land.
+   */
+  reportDelta?: ReportHeadDelta;
   /**
    * The prompt this loop runs, when the caller is not a head.
    *
@@ -685,6 +702,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       };
       if (deps.signal !== undefined) turn.signal = deps.signal;
       for await (const event of runChat(turn)) {
+        // Forwarded as the provider drew them: one frame per delta, in order,
+        // never held. Nothing survives the step boundary, so the durable row that
+        // lands next supersedes the paint without a tail to reconcile.
+        if (event.type === 'text-delta') { deps.reportDelta?.('text', event.delta); continue; }
+        if (event.type === 'reasoning-delta') { deps.reportDelta?.('reasoning', event.delta); continue; }
         if (event.type !== 'done') continue;
         settled = true;
         // The turn's own response messages, tool calls already paired by the

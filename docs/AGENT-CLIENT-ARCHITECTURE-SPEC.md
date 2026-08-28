@@ -31,7 +31,7 @@ is the canonical cloud client via `useAgent`/`useAgentChat`
 | User identity | KV session store plus `UserDO` | local config, local prefs only | Cloud identity never comes from local config. |
 | Workspace roster | `UserDO.user_workspaces` | local config plus local DB discovery | The CLI caches aliases, not the roster. |
 | Identity and soul | `SOUL.md` in the workspace VFS | local VFS and SQLite | One `SOUL.md` per backend. |
-| Chat history | Think session store in `OrchestratorAgent` | recorded terminal transcript | The cloud TUI reads Durable Object history. |
+| Chat history | SDK `messages` projection via `getChatHistoryPage` | `messages` SQLite rows for inspection; `AgentClient.history()` reads the active CLI JSONL for rendering | Cloud clients read the SDK projection; local render history remains a diagnostic view. |
 | Model selection | `agent_config` in the Durable Object | local `agent_config` | A cloud model change goes to the Durable Object. |
 | Memory, VFS, craft, scaffold | Durable Object SQLite and VFS | local SQLite and VFS | The client fetches. It never mirrors. |
 | Exploration, heads, GEPA | Durable Object tables | local tables | The adapter projects the same surfaces. |
@@ -116,10 +116,33 @@ identity ownership and `claimOwner()` run on.
 
 Frames are the installed `agents/chat` package's own: the client imports
 `CHAT_MESSAGE_TYPES` (`cloud-agent-client.ts:1`), so `USE_CHAT_REQUEST`,
-`USE_CHAT_RESPONSE`, `CHAT_REQUEST_CANCEL`, `STREAM_RESUMING` and
-`STREAM_RESUME_ACK` come from there.
+`USE_CHAT_RESPONSE`, `CHAT_REQUEST_CANCEL`, `STREAM_RESUMING`,
+`STREAM_RESUME_ACK`, `STREAM_RESUME_REQUEST`, `STREAM_RESUME_NONE` and
+`STREAM_PENDING` come from there.
 `packages/cli/tests/cloud-agent-client.test.ts` drives a mock agent server and
 pins frames both ways, including stream resume and cancel.
+
+## A dropped socket does not drop the turn
+
+The DO persists a chat request when it accepts it and keeps its stream
+resumable, so a dead socket loses the CLI's BINDING to a turn, never the turn.
+The client keeps its in-flight turns across the drop, reconnects once, and sends
+`STREAM_RESUME_REQUEST`. The DO answers one of three things, so nothing here
+waits on a clock: `STREAM_RESUMING` (ack it and the stream replays),
+`STREAM_PENDING` (accepted, not streaming yet — a later `STREAM_RESUMING` or
+`STREAM_RESUME_NONE` follows), or `STREAM_RESUME_NONE` (nothing held, so the
+client acks its own request id, which always answers with a terminal frame).
+
+Two rules make the replay safe. The ack goes out once per socket generation,
+because each ack replays the whole buffer. And `CloudTurnStream`
+(`packages/cli/src/cloud-turn-stream.ts`) counts the bodies it has applied, so a
+replay that repeats them adds nothing to the answer. The prompt is never
+re-submitted, so a rebind cannot produce a second turn.
+
+A turn nothing rebound is reported rather than settled as complete: a replayed
+terminal that is the first frame back, or a second drop before the rebind lands,
+ends the turn with `hadError` and says the answer is in the workspace
+transcript.
 
 ## API surface
 
@@ -189,13 +212,14 @@ path; see [WORKSPACES.md](WORKSPACES.md).
 ## History and the `messages` projection
 
 Canonical read: `getChatHistoryPage`
-(`packages/core/src/read-models/status.ts:167`), declared on `ActorAgent` so
-subordinates get it too (`packages/cf-backend/src/actor-agent.ts:3042`).
-Consumers: web chat pane via `useChatHistory`
-(`packages/cf-backend/src/hooks/use-chat-history.ts:68`, used at
-`pages/WorkspacePage.tsx:353`), cloud client (`cloud-agent-client.ts:517`),
-`kinu debug messages` (`packages/cli/src/commands/debug.ts:307`), local peer
-`getLocalChatHistory` (`packages/cli/src/local-inspection.ts:472`).
+(`packages/core/src/read-models/status.ts:146`), exposed by `ActorAgent`
+(`packages/cf-backend/src/actor-agent.ts:3609`).
+Consumers: the web chat pane via `useChatThread`
+(`packages/cf-backend/src/hooks/use-chat-thread.ts:88`, used at
+`pages/WorkspacePage.tsx:395` and `:657`), cloud client
+(`cloud-agent-client.ts:505-508`), `kinu debug messages`
+(`packages/cli/src/commands/debug.ts:356`), and local peer
+(`packages/cli/src/local-inspection.ts:510-516`).
 
 `messages` projects the SDK message DAG rather than mirroring it.
 `reconcileSessionTree(this.boundSql)` runs in `onChatResponse` before the
@@ -205,12 +229,13 @@ search, status read model and evolution outcome window.
 `packages/core/tests/unit-session-tree.test.ts:161-163` pins idempotence:
 first call reconciles two rows, next two none.
 
-A recorded CLI transcript is a terminal log, never state; `AgentClient.cliSession`
-says so in its doc comment (`agent-client.ts:254`). `readCliSessionTranscript`
-and `transcriptMessages` live in `packages/cli/src/session.ts`, read only at
-`local-agent-client.ts:504`. No client carries a session-history capability;
-`kinu transcripts` (`packages/cli/src/commands/transcripts.ts`) lists them as
-diagnostics, not conversations to reopen.
+A recorded CLI transcript remains a terminal log, not cloud chat state. `AgentClient`
+exposes `history()` for the active client's renderable messages
+(`packages/cli/src/agent-client.ts:320-321`); local clients project their JSONL
+record, and cloud clients page the Durable Object history. `kinu transcripts`
+(`packages/cli/src/commands/transcripts.ts`) lists JSONL records as diagnostics,
+not conversations to reopen. The canonical cloud read is still
+`getChatHistoryPage`; the transcript is a client view, not a second store.
 
 ## Walk-back fork
 

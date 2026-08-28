@@ -132,18 +132,31 @@ describe('the Kinu timer rides the SDK scheduler', () => {
     expect(armTimer).toContain('Math.min(targetSec, ...armed.map((row) => row.time))');
   });
 
-  test('the stale sweep runs before the SDK reads due rows, and spares recurring rows', () => {
+  test('the stale sweep runs before the SDK reads due rows, spares recurring rows, and exempts the Kinu wake', () => {
     // `memberBody`, not `indexOf` + slice: anchored on a literal signature, a
     // slice silently becomes `slice(-1, …)` the day the method's signature
     // changes, and a wiring test that matches nothing passes.
     const onStart = memberBody(orchestrator, 'onStart(): void', 'orchestrator.ts');
     expect(onStart).toContain('this.sweepUnrunnableSchedules()');
+    // The wake row is derived state, so an activation is where a workspace whose
+    // only wake was lost gets it back. Behaviour is in
+    // unit-alarm-wake-chain.test.ts; what a source guard adds is that the
+    // activation still CALLS it.
+    expect(onStart).toContain('this.reconcileTimerRow()');
     const sweep = orchestrator.slice(
       orchestrator.indexOf('private sweepUnrunnableSchedules('),
       orchestrator.indexOf('protected get engine()'),
     );
     expect(sweep).toContain("type IN ('delayed', 'scheduled')");
     expect(sweep).toContain('STALE_SCHEDULE_HORIZON_MS');
+    // Dropping a row a STATE-driven wake rides stops the work it carries; running
+    // one late costs a single immediate tick (KINU-N027). Two are exempt: the
+    // Kinu timer, and the terminal retry whose obligation is whatever the effect
+    // ledger still holds — which does not expire, and which a root activation
+    // cannot even read when the row belongs to a facet.
+    expect(sweep).toContain('callback NOT IN (?, ?)');
+    expect(sweep).toContain('KINU_TIMER_CALLBACK');
+    expect(sweep).toContain('TERMINAL_RETRY_CALLBACK');
   });
 
   // The first sabotage attempt on this guard passed only because the injected

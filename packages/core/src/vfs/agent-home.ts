@@ -36,6 +36,15 @@
  * agent's own home is read/exec-only, which means readable — and it does not
  * compromise search independence, because independence is a property of what
  * reaches a node's CONTEXT, not of what it could theoretically open.
+ *
+ * OWNER MEANS THE AGENT ON BOTH PLANES, and that is a requirement rather than a
+ * remark. An agent reaches this tree through its commands and through its file
+ * tools, and a file plane that acts as the session user would refuse the agent's
+ * own tool writes inside its own home — measured, `EACCES` on `/home/node-aX9`,
+ * before `nimbusSessionFiles` took a credential. So both planes carry the
+ * agent's credential (`vfs/nimbus-workspace.ts` in this isolate,
+ * `execution/nimbus.ts` on a remote session), and the session user stays what it
+ * has always been: the ORIGIN, which reads every home and writes its own tree.
  */
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -102,16 +111,17 @@ export function agentHome(agentName: string): string {
 }
 
 /**
- * The storage key of this agent's private `/tmp`.
+ * This agent's private `/tmp`, as an absolute path.
  *
- * A storage key, not a path: `SqliteVFS.confinePrincipal` takes the root it
- * will rewrite `/tmp` to, and that surface addresses keys without a leading
- * slash (`tmp/<agent>`), which is the spelling `unit-private-tmp.test.ts`
- * drives.
+ * One spelling for two uses: the directory the hosted backend creates and
+ * points `TMPDIR` at, and the root `SqliteVFS.confinePrincipal` rewrites `/tmp`
+ * to for this agent's uid in this isolate. The registry accepts the absolute
+ * form, so a second key-shaped spelling would only be a second thing to keep
+ * in step.
  */
 export function agentTmpRoot(agentName: string): string {
   assertAgentName(agentName);
-  return `tmp/${agentName}`;
+  return `/tmp/${agentName}`;
 }
 
 function assertAgentName(agentName: string): void {
@@ -202,7 +212,32 @@ export interface TmpConfiner {
 }
 
 /**
- * Create this agent's home and hand it over, host-side.
+ * The directories an agent's layout is made of, and the ownership each must end
+ * up with.
+ *
+ * DATA, because two backends apply it by different means: a uid-0 filesystem
+ * view in this isolate, and a uid-0 shell on a remote Nimbus session that has
+ * no such view. Both read this table, so there is one answer to who owns a home
+ * and at what mode — a second spelling on the hosted side is how the two
+ * backends start disagreeing about the same directory.
+ */
+export interface AgentDir {
+  readonly path: string;
+  readonly uid: number;
+  readonly gid: number;
+  readonly mode: number;
+}
+
+/** An agent's home and its private tmp, in the order they must be created. */
+export function agentHomeLayout(agentName: string, identity: AgentIdentity): readonly AgentDir[] {
+  return [
+    { path: agentHome(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_HOME_MODE },
+    { path: agentTmpRoot(agentName), uid: identity.uid, gid: identity.gid, mode: AGENT_TMP_MODE },
+  ];
+}
+
+/**
+ * Create this agent's layout and hand it over, host-side.
  *
  * The order is forced rather than chosen: a per-agent `chown` is uid-0 only
  * (`SqliteVFS` allows a non-root credential its own uid and a group it already
@@ -212,30 +247,29 @@ export interface TmpConfiner {
  * refusal.
  */
 export function provisionAgentHome(root: HomeRootVfs, agentName: string, identity: AgentIdentity): string {
-  const home = agentHome(agentName);
-  root.mkdir(home, { recursive: true });
-  root.chown(home, identity.uid, identity.gid);
-  root.chmod(home, AGENT_HOME_MODE);
-  return home;
+  for (const dir of agentHomeLayout(agentName, identity)) {
+    root.mkdir(dir.path, { recursive: true });
+    root.chown(dir.path, dir.uid, dir.gid);
+    root.chmod(dir.path, dir.mode);
+  }
+  return agentHome(agentName);
 }
 
 /**
- * Give this agent a private `/tmp` at the shared path.
+ * Make `/tmp` resolve to this agent's own tmp for this agent's uid.
  *
- * Two steps and both are required: the root has to exist and be owned before
- * the rewrite points at it, because `confinePrincipal` records a root rather
- * than creating one.
+ * The directory itself is {@link provisionAgentHome}'s, because it is a line in
+ * the layout table like the home is. This registers the rewrite and nothing
+ * else, and it exists only in this isolate: `confinePrincipal` is a `SqliteVFS`
+ * method with no RPC, so a remote session points `TMPDIR` at the same directory
+ * and a command that hardcodes `/tmp` there lands in the shared one.
  */
 export function confineAgentTmp(
-  root: HomeRootVfs,
   confiner: TmpConfiner,
   agentName: string,
   identity: AgentIdentity,
 ): string {
   const tmpRoot = agentTmpRoot(agentName);
-  root.mkdir(tmpRoot, { recursive: true });
-  root.chown(tmpRoot, identity.uid, identity.gid);
-  root.chmod(tmpRoot, AGENT_TMP_MODE);
   confiner.confinePrincipal(identity.uid, tmpRoot);
   return tmpRoot;
 }

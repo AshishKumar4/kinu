@@ -8,6 +8,6 @@
     "allowImportingTsExtensions": true,
     "moduleDetection": "force"
   },
-  "include": ["worker.ts"],
+  "include": ["worker.ts", "wrangler-text-modules.d.ts"],
   "exclude": ["container-harness.ts"]
 }

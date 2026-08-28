@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/events/hub/log.ts b/packages/core/src/events/hub/log.ts
-index 612153d..de0d3b3 100644
+index f67fae291..046576cd9 100644
 --- a/packages/core/src/events/hub/log.ts
 +++ b/packages/core/src/events/hub/log.ts
-@@ -297,7 +297,7 @@ export class EventLog {
+@@ -534,7 +534,7 @@ export class EventLog {
           WHERE kind = 'event'
             AND turn_id LIKE 'evt-%'
             AND consumed_at IS NOT NULL
--           AND consumed_at <= ?
-+           AND consumed_at >= ?
+-           AND consumed_at <= ?${exclusion}
++           AND consumed_at >= ?${exclusion}
         )
         RETURNING id`,
        cutoff,

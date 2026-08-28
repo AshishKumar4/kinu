@@ -17,13 +17,14 @@
  */
 
 import * as v from 'valibot';
-import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
+import { isAbortError } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import type { VFS } from '../types/primitives';
 import { makeVfsError } from '../vfs/errno';
+import type { VfsNativeReads } from '../vfs/mounts';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -70,6 +71,20 @@ interface SandboxExposeOptions {
  * URL straight through — the Worker routes it back with the SDK's own
  * `proxyToSandbox` (packages/cf-backend/src/preview-proxy.ts).
  */
+/**
+ * What a caller may ask of {@link SandboxHandle.exec}.
+ *
+ * Named because BOTH ends build it: core assembles one here and every adapter
+ * reads it, so an anonymous restatement at either end is a second copy of the
+ * same contract. See `SandboxHandle.exec` for what each field means and what an
+ * adapter owes it.
+ */
+export interface SandboxExecOptions {
+  cwd?: string;
+  timeout?: number;
+  signal?: AbortSignal;
+}
+
 export interface SandboxHandle {
   /** Resolve once this container generation's post-start restoration has
    *  settled (processes restarted, ports re-exposed). Every operation here
@@ -90,8 +105,18 @@ export interface SandboxHandle {
    * Nothing in this module ever sets one. A detach window bounds a WAIT; a lane
    * deadline silently outranks every window larger than itself, which is how a
    * 30s detach that worked became a 60s kill on the 300s one-shot surface.
+   *
+   * `signal` CANCELS THE REMOTE WORK, not the wait. An adapter that takes it
+   * must reach the process it started and kill it, and must not settle until
+   * that process is definitively gone — killed, exited, or absent from the
+   * container's own process table. Settling earlier reports `cancelled` over a
+   * command that is still writing to the workspace, which is exactly what this
+   * contract used to permit: core raced the signal against the wait, abandoned
+   * the wait, and told the agent the command "may still finish inside the
+   * container". An adapter whose transport has no kill must not accept a
+   * signal, so the gap stays visible in the type rather than in a sentence.
    */
-  exec(command: string, opts?: { cwd?: string; timeout?: number }):
+  exec(command: string, opts?: SandboxExecOptions):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
   /** The SDK auto-detects binary files and returns their content base64-
    *  encoded with `encoding: 'base64'`; text comes back as plain utf-8. */
@@ -266,6 +291,16 @@ function normalize(res: { output?: string; stdout?: string; stderr?: string; exi
   return formatExecResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
 }
 
+/** The caller gave up before this attempt reached the container, so there is no
+ *  remote process to cancel and nothing to wait for. Distinct wording from the
+ *  adapter's own cancellation, which names the process it killed. */
+function notDispatched(): Error {
+  return new DOMException(
+    'sandbox exec cancelled before dispatch — no container process was started',
+    'AbortError',
+  );
+}
+
 /**
  * Build an ExecutorProvider from a live SandboxHandle.
  * Pass `undefined` to get a "not configured" stub that appears in the UI's
@@ -314,17 +349,25 @@ export function createSandboxExecutor(
           // detach window above it, so a long command on the 300s one-shot
           // surface was killed where it should have detached.
           //
-          // Abort still stops the WAIT; the sandbox SDK has no kill for work
-          // already in flight, so the command keeps running in the container.
-          const res = await raceAbort(
-            () => withSandboxRetry(() => touch(() => handle.exec(command, {
-              // /workspace is the REAL default cwd — stated in the doctrine
-              // below and passed explicitly so the container cannot outvote it.
-              cwd: '/workspace',
-            }))),
-            signal,
-            'sandbox exec aborted — the command may still finish inside the container',
-          );
+          // THE SIGNAL GOES TO THE CONTAINER, and nothing here races it. The
+          // adapter owns the process id, so it is the only layer that can kill
+          // the command an abort is about; racing the wait here instead let the
+          // turn move on while that command kept writing to /workspace. What
+          // the signal still does locally is refuse to DISPATCH — once before
+          // the first attempt and again before each retry, because a transient
+          // failure must not start a second process for a caller that has
+          // already given up.
+          const res = await withSandboxRetry(() => touch(() => {
+            if (signal?.aborted) throw notDispatched();
+            // /workspace is the REAL default cwd — stated in the doctrine below
+            // and passed explicitly so the container cannot outvote it. The
+            // signal is added only when a caller gave one, so an adapter can
+            // still tell "no cancellation asked for" from "cancellation asked
+            // for and already fired".
+            const opts: SandboxExecOptions = { cwd: '/workspace' };
+            if (signal !== undefined) opts.signal = signal;
+            return handle.exec(command, opts);
+          }));
           return normalize(res);
         } catch (err) {
           if (isAbortError(err)) throw err;
@@ -557,10 +600,18 @@ export function createSandboxExecutor(
           { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
         ) ?? WORKSPACE_BACKUP_DIR;
         try {
-          const started = await withSandboxRetry(() => touch(async () => {
-            await handle.ensureReady();
+          // Readiness is retried; the START is not. Creating a supervised
+          // process and recording its durable spec are two steps inside the
+          // container, so a failure between them leaves a live process with no
+          // spec — and a retry, which can only look for a spec, starts a second
+          // one. Two processes then fight over one port and the unrecorded one
+          // cannot be listed, stopped or restored. Waking the container creates
+          // nothing, so the transient window the retry exists for is still
+          // covered, and one call now makes at most one process.
+          const started = await touch(async () => {
+            await withSandboxRetry(() => handle.ensureReady());
             return handle.startSupervisedProcess(command, { cwd });
-          }));
+          });
           return JSON.stringify({ ...started, cwd, restartable: true });
         } catch (err) {
           return refusalText(sandboxFailure({ doing: `sandbox startProcess \`${command}\``, cause: err }));
@@ -789,8 +840,13 @@ declare namespace sandbox {
  * is 0, never invented), and mkdir/exists go through the container's shell.
  * Binary content rides the SDK's base64 encoding both ways — the SDK flags a
  * binary read itself — so bytes round-trip exactly.
+ *
+ * `readdirStats` exists because that synthesis makes a per-child stat cost a
+ * FULL RELISTING of the same directory: a browser listing an N-child folder ran
+ * one listing plus N more identical ones. One listing already carries every
+ * field the synthesized stat can report, so this hands them back together.
  */
-export function sandboxFiles(handle: SandboxHandle): VFS {
+export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 'readdirStats' | 'readRange'> {
   const isDir = (f: { type?: string; isDirectory?: boolean }): boolean =>
     f.isDirectory ?? (f.type === 'directory' || f.type === 'dir');
   const nameOf = (f: { name?: string; path?: string }): string => {
@@ -812,6 +868,26 @@ export function sandboxFiles(handle: SandboxHandle): VFS {
       return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
     },
 
+    /**
+     * A bounded byte window, through the container's own streamed process
+     * surface. The SDK's `readFile` has no offset/length and materializes the
+     * file; `dd` reads only this range and base64 is the same binary boundary
+     * this adapter's whole-file read already uses. Path is shell-quoted, and
+     * numeric bounds are validated before becoming command syntax.
+     */
+    async readRange(path, offset, length) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
+        throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
+      }
+      const r = await handle.exec(
+        `set -o pipefail; dd if=${shellQuote(path)} bs=1 skip=${String(offset)} count=${String(length)} status=none | base64 -w 0`,
+      );
+      if ((r.exitCode ?? 0) !== 0) {
+        throw makeVfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'range read failed'}, open '${path}'`, path);
+      }
+      return base64ToBytes(r.stdout ?? r.output ?? '');
+    },
+
     async writeFile(path, data) {
       if (v.is(v.string(), data)) await handle.writeFile(path, data);
       else await handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' });
@@ -820,6 +896,20 @@ export function sandboxFiles(handle: SandboxHandle): VFS {
     async readdir(path) {
       const r = await handle.listFiles(path, { recursive: false });
       return (r.files ?? []).map(nameOf).filter((n) => n.length > 0);
+    },
+
+    async readdirStats(path) {
+      const r = await handle.listFiles(path, { recursive: false });
+      return (r.files ?? [])
+        .map((f) => ({ name: nameOf(f), entry: f }))
+        .filter(({ name }) => name.length > 0)
+        .map(({ name, entry }) => ({
+          name,
+          // Every field the synthesized `stat` below can report, off the listing
+          // it would have re-run to get them. No mtime here for the same reason
+          // there is none there: the SDK reports none, and 0 says so.
+          stat: { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) },
+        }));
     },
 
     async stat(path) {

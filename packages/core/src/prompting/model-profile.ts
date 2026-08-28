@@ -12,6 +12,9 @@ export interface PromptModelContext {
   reasoning?: boolean;
   capabilities?: readonly string[];
   contextWindow?: number;
+  /** The largest answer the resolved model will produce, out of that same
+   *  window. Absent when the catalog has not answered. */
+  modelOutputLimit?: number;
 }
 
 export interface PromptModelProfile {

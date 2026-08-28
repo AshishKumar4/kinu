@@ -28,10 +28,10 @@ const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 
 const FEATURES = [
-  ['Learns from feedback', 'Explicit feedback and classifiable follow-ups become lessons that later evidence can confirm.'],
+  ['Learns from feedback', 'Your corrections become corroborated lessons. Tool-only reflections stay provisional.'],
   ['Crafts its own tools', 'Recurring patterns become tools it builds, scores, and calls on its own.'],
   ['Builds subagent DAGs', 'Complex work branches across specialists that pass evidence to each dependent step.'],
-  ['Your cloud, or yours alone', 'Run it on kinu.run today, or deploy the same Worker into your own account.'],
+  ['Your cloud, or yours alone', 'Run it on kinu.run today, or deploy the same platform into your own Cloudflare account.'],
 ] as const;
 
 function RuleLabel({ children }: { children: ReactNode }): ReactElement {
@@ -81,7 +81,7 @@ function PlatformSection(): ReactElement {
             <p className="max-w-[480px] text-[15px] leading-[1.7] p-text-3">Create a local workspace in the terminal, or connect the TUI to a cloud workspace. The same agents, conversations, and tools follow.</p>
           </article>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t p-border p-recessed px-7 py-4 font-mono text-[11px] p-text-4"><span>ONE BACKEND-AGNOSTIC CORE</span><span>web · TUI · CLI · ACP</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t p-border p-recessed px-7 py-4 font-mono text-[11px] p-text-4"><span>ONE CORE · CLOUD AND LOCAL</span><span>web · TUI · CLI · ACP</span></div>
       </div>
       <div className="grid border-y p-border md:grid-cols-3">
         {examples.map(([title, body], index) => <div key={title} className={`py-6 md:px-7 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)] md:border-l md:border-t-0' : 'md:pl-0'} ${index === examples.length - 1 ? 'md:pr-0' : ''}`}><h3 className="mb-2.5 text-[13px] font-semibold p-gold">{title}</h3><p className="text-sm leading-[1.65] p-text-3">{body}</p></div>)}
@@ -190,18 +190,18 @@ function EvolutionSection(): ReactElement {
     {
       time: 'After crafted code runs',
       title: 'Tool fitness',
-      evidence: 'The execute_tools result and later turn outcomes',
+      evidence: 'Finished tool runs and later turn outcomes',
       change: 'Update the crafted tool fitness score',
       persists: 'Evidence for future crafted tool selection',
-      detail: 'Returned and raised outcomes update a crafted tool. Later turn evidence can revise the same score.',
+      detail: 'Each finished run the scorer records updates the tool\u2019s fitness. Later turn evidence can revise the same score.',
     },
     {
-      time: 'After classifiable feedback',
+      time: 'After corrective feedback',
       title: 'Lesson extraction',
-      evidence: 'Explicit feedback, a classifiable follow-up, or execution evidence',
+      evidence: 'Your feedback, a corrective follow-up, or execution evidence',
       change: 'Record a provisional lesson',
       persists: 'A durable lesson row',
-      detail: 'Unconfirmed lessons remain provisional and stay out of MEMORY.md. Corroborated lessons can enter workspace memory.',
+      detail: 'Unconfirmed lessons stay provisional. Corroborated lessons enter workspace memory.',
     },
     {
       time: 'After a corrected turn window',

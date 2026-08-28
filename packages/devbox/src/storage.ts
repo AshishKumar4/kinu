@@ -120,6 +120,46 @@ export interface RecordedFailure {
   readonly reason: string;
 }
 
+/** Any strategy's durable row, seen only as the one field a stamp writes. */
+type StampableRow = { readonly lastFailure: RecordedFailure | undefined };
+
+/** What writing a failure stamp needs: the row's writer, a clock and a
+ *  console. Every strategy's port set already satisfies it. */
+export interface FailureStampDeps<S> {
+  readonly writeState: (next: S) => Promise<void>;
+  readonly log: (line: string) => void;
+  readonly now: () => number;
+}
+
+/**
+ * Stamp `reason` on the durable row, and treat a failure to write it as a
+ * console line.
+ *
+ * THE STAMP IS A NOTE ABOUT SOMETHING THAT HAS ALREADY HAPPENED, and the writer
+ * it needs is the one that just failed. Letting its rejection travel is how one
+ * storage failure became two outcomes it must never produce: a scheduled
+ * callback that throws instead of a classified answer, and — where the stamp
+ * follows a commit — a caller's catch re-writing the record it read BEFORE that
+ * commit over the published one. So the stamp is best effort, by construction,
+ * everywhere it is written.
+ *
+ * The cause of the failed write is not rendered here: this module imports
+ * nothing, `describeThrown` is the package's one renderer and it reads these
+ * types. What an operator needs is on the line above this one — the failure
+ * itself, in full — plus the fact that it did not reach the record.
+ */
+export async function stampFailure<S extends StampableRow>(
+  deps: FailureStampDeps<S>,
+  state: S,
+  reason: string,
+): Promise<void> {
+  try {
+    await deps.writeState({ ...state, lastFailure: { at: deps.now(), reason } });
+  } catch {
+    deps.log(`${DEVBOX_WORKDIR} that failure could not be stamped on the durable record`);
+  }
+}
+
 /**
  * Write a checkpoint failure down, then return it as a value.
  *
@@ -127,24 +167,22 @@ export interface RecordedFailure {
  * matters has to be something the caller can turn into an incident. One
  * implementation for every strategy: two copies of this body drifted once.
  *
+ * THE DIAGNOSTIC GOES FIRST, because it is the only part that cannot fail. It
+ * used to follow the stamp, so the one storage failure that could suppress it
+ * was a storage failure — the case where a reader most needs the line.
+ *
  * `bytes`/`movedBytes` are `undefined`, not 0: a checkpoint that threw
  * mid-flight may have landed objects before it failed, so "how much moved" is
  * genuinely unanswerable here. Reporting 0 would assert nothing moved, which
  * is a stronger claim than this path can make.
  */
-export async function recordCheckpointFailure<S extends { readonly lastFailure: RecordedFailure | undefined }>(
-  deps: {
-    readonly writeState: (next: S) => Promise<void>;
-    readonly log: (line: string) => void;
-    readonly now: () => number;
-  },
+export async function recordCheckpointFailure<S extends StampableRow>(
+  deps: FailureStampDeps<S>,
   state: S | null,
   reason: string,
 ): Promise<CheckpointOutcome> {
-  if (state !== null) {
-    await deps.writeState({ ...state, lastFailure: { at: deps.now(), reason } });
-  }
   deps.log(`${DEVBOX_WORKDIR} checkpoint failed: ${reason}`);
+  if (state !== null) await stampFailure(deps, state, reason);
   return { kind: 'failed', reason, bytes: undefined, movedBytes: undefined };
 }
 
@@ -158,8 +196,23 @@ export interface DevboxStorage {
    * an agent handed a silently empty workspace is worse than a failed start.
    */
   attach(): Promise<AttachOutcome>;
-  /** Commit what changed. Returns its outcome; does not throw for an ordinary
-   *  failure. */
+  /**
+   * Re-establish live serving state on the same already-attached container
+   * without replaying the durable head. Used only after boot identity proves
+   * the container survived an isolate reset.
+   */
+  repairAttached?(): Promise<void>;
+  /**
+   * Commit what changed. Returns its outcome; does not throw for an ordinary
+   * failure.
+   *
+   * A FAILURE TO RECORD A FAILURE IS ORDINARY, and it is the case that broke
+   * this contract in all four implementations at once: the durable write a
+   * refusal is stamped with can be refused by the same storage. So recording is
+   * best effort everywhere — see {@link stampFailure} — the classification is
+   * always the operation's own, and an outcome that had already committed stays
+   * `committed`.
+   */
   checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome>;
   /** Release live mounts that the host SDK tracks before the container stops. */
   detach?(): Promise<void>;
@@ -181,13 +234,26 @@ export interface DevboxStore {
   readonly bucket: R2Bucket;
 }
 
-/** The three strategies, by name. A devbox picks one and keeps it: bytes written
- *  one way are not readable the other way, so the choice belongs to the class,
- *  not to a call. */
-export type DevboxStrategyName = 'snapshot-chain' | 'r2fs' | 'overlay-cas';
+/** The five storage strategies, by name. A devbox picks one and keeps it:
+ * bytes written by one format are not readable by another, so the choice
+ * belongs to the class, not a call. */
+export type DevboxStrategyName =
+  | 'snapshot-chain'
+  | 'r2fs'
+  | 'overlay-cas'
+  | 'bounded-layers'
+  | 'merkle-pack';
 
 export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {
-  if (value === 'snapshot-chain' || value === 'r2fs' || value === 'overlay-cas') return value;
+  if (
+    value === 'snapshot-chain' ||
+    value === 'r2fs' ||
+    value === 'overlay-cas' ||
+    value === 'bounded-layers' ||
+    value === 'merkle-pack'
+  ) {
+    return value;
+  }
   return null;
 }
 

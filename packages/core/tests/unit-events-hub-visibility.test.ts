@@ -144,7 +144,7 @@ describe('renderForLLM', () => {
         ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
         payload: {
           from_subordinate: 'researcher', status: 'completed', content: longReport, content_path,
-          kinu_mode: 'build',
+          sequence_id: 'seq-1', kinu_mode: 'build',
         },
       });
       // Bounded, but it SAYS it is bounded and where the rest lives: head,
@@ -166,7 +166,7 @@ describe('renderForLLM', () => {
         ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
         payload: {
           from_subordinate: 'researcher', status: 'completed', content: shortReport,
-          task: 'Survey auth', kinu_mode: 'build',
+          sequence_id: 'seq-2', task: 'Survey auth', kinu_mode: 'build',
         },
       });
       expect(r.brief).toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');

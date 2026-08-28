@@ -44,7 +44,12 @@ const lastRequestedSandboxId = (): string | null => requestedSandboxId;
  *  container it does not own, so this must stay at zero however it is touched. */
 let restoresPerformed = 0;
 let egressConfigured = 0;
+// Keep the REAL module for everything this file does not fake: the mock is
+// process-wide, and a missing `proxyToSandbox`/`Sandbox` export is a load-time
+// failure for whichever later file binds them.
+import * as actualSandboxSdk from '@cloudflare/sandbox';
 mock.module('@cloudflare/sandbox', () => ({
+  ...actualSandboxSdk,
   getSandbox: (_ns: DurableObjectNamespace, id: string) => {
     requestedSandboxId = id;
     return {

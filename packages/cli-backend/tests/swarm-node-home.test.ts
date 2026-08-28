@@ -20,8 +20,8 @@
  * five `swarm.node_settled` lines is the count a passing run must show; an arm
  * that scanned for one `private-home` line would also pass on a run that emitted
  * exactly one node, or on a filtered list that happened to be empty. And the same
- * call with `nodeHome` withheld is run beside it: if that arm did not report
- * `shared-origin-plane`, the positive arm would be measuring nothing.
+ * call with no `provisionNodeHome` wired is run beside it: if that arm did not
+ * report `shared-origin-plane`, the positive arm would be measuring nothing.
  *
  * Specified by docs/EXPLORATION.md — "Isolation".
  */
@@ -30,6 +30,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   AGENT_UID_FLOOR,
+  agentHomeNodeProvisioner,
   agentIdentity,
   nodeAgentName,
   createAgentsTool,
@@ -83,6 +84,18 @@ function cliRuntime(label: string): CLIRuntime {
     llm: DUMMY_LLM,
     hostRoot: null,
   });
+}
+
+/** This backend's node-home wiring, as `local-session.ts` builds it: the host it
+ *  hands over, and the `provisionNodeHome` seam a fork's deps carry — the
+ *  canonical provisioner over that host, never a second one written here.
+ *
+ *  The missing host is a THROW rather than an absence, because an arm that
+ *  quietly passed nothing would report the shared plane and assert it. */
+function nodeHomeWiring(rt: CLIRuntime) {
+  const nodeHome = rt.nodeHome;
+  if (!nodeHome) throw new Error('createCLIRuntime must supply a node home host');
+  return { nodeHome, provisionNodeHome: () => agentHomeNodeProvisioner(nodeHome()) };
 }
 
 /** `diagnostics` writes one JSON line per event to console.error and has no
@@ -148,8 +161,9 @@ async function runShippedSwarm(fork: AgentsForkDeps): Promise<SettledNode[]> {
 describe('a node in a shipped agents.swarm run reports private-home', () => {
   test('every node of the run, and the count the preset fans', async () => {
     const rt = cliRuntime('swarm-node-home-private');
+    const { provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), nodeHome: rt.nodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))
@@ -158,10 +172,9 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
 
   test('the homes are real directories in the ORIGIN\u2019s own filesystem', async () => {
     const rt = cliRuntime('swarm-node-home-inodes');
-    const nodeHome = rt.nodeHome;
-    if (!nodeHome) throw new Error('createCLIRuntime must supply a node home host');
+    const { nodeHome, provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), nodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     // Read through `rt.storage.vfs` — the ORIGIN's own view, the one the `file`

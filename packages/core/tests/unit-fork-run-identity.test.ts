@@ -22,6 +22,9 @@
  * No timers: the controller records the split and every spawn synchronously,
  * before its first await, so an interrupted drive has already left its journal
  * rows by the time `run()` yields.
+ *
+ * Specified by docs/EXPLORATION.md — "One node, one row, across every re-entry",
+ * whose fork paragraph states the derived-id rule and the one merged answer.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -29,7 +32,6 @@ import { Database } from 'bun:sqlite';
 import {
   HeadController,
   HeadJournal,
-  RECLAIMED_RUN_REASON,
   type HeadInput,
   type HeadReport,
   type HeadRuntime,
@@ -58,7 +60,7 @@ function freshJournal() {
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw, makeSql(db));
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
+  initMctsSearchTable(execRaw);
   const sql = makeSql(db);
   return { db, sql, journal: new HeadJournal(sql) };
 }
@@ -70,7 +72,7 @@ function freshJournal() {
  * never arrive, which is what a fork looks like when the activation driving it
  * dies. `settles: true` is the attempt that lands.
  */
-function runtime(opts: { settles: boolean; spawned: HeadInput[] }): HeadRuntime {
+function runtime(opts: { settles: boolean; spawned: HeadInput[]; compiled?: string[] }): HeadRuntime {
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       opts.spawned.push(input);
@@ -96,7 +98,10 @@ function runtime(opts: { settles: boolean; spawned: HeadInput[] }): HeadRuntime 
         async abort() {},
       };
     },
-    async mergeLLM(): Promise<MergeOutput> { return MERGE; },
+    async mergeLLM(prompt: string): Promise<MergeOutput> {
+      opts.compiled?.push(prompt);
+      return MERGE;
+    },
   };
 }
 
@@ -138,24 +143,100 @@ describe('a re-driven fork job stays one run', () => {
     expect(spawned).toHaveLength(20);
   });
 
-  test('the interrupted attempt stays visible as retired branches, with a reason a human can read', async () => {
+  test('N heads requested stays exactly N journal rows through repeated resets', async () => {
+    // THE OWNER'S `Systemfork interrupted` REPORT, as a test. A re-drive used to
+    // reclaim the run id, stamp every unreported row `aborted` with "Interrupted
+    // before it reported. This fork was restarted, and the branches below it are the
+    // retry.", and then mint a FRESH nanoid id per head — so one five-branch request
+    // accumulated five more aborted rows on every re-drive, up to the runner's
+    // attempt cap, and the surface drew every one of them as a failed branch.
+    //
+    // The head id is now derived from the branch point and the slot, so a re-drive
+    // re-spawns the SAME ids and `insertSpawn` re-opens the rows they already have.
     const { sql, journal } = freshJournal();
     const spawned: HeadInput[] = [];
 
-    void drive(journal, spawned, false);
+    // Three resets that never report, then one that lands.
+    for (let i = 0; i < 3; i++) void drive(journal, spawned, false);
     await drive(journal, spawned, true);
 
     const rows = sql<{ id: string; status: string; error_message: string | null }>`
       SELECT id, status, error_message FROM head_journal
-      WHERE root_id = ${spawned[0]!.rootId} ORDER BY spawned_at, id`;
-    expect(rows.filter((row) => row.status === 'aborted')).toHaveLength(5);
-    expect(rows.filter((row) => row.status === 'completed')).toHaveLength(5);
-    expect(rows.filter((row) => row.status === 'aborted')
-      .every((row) => row.error_message === RECLAIMED_RUN_REASON)).toBe(true);
-    expect(RECLAIMED_RUN_REASON).not.toMatch(/nanoid|root_id|epoch|null/);
+      WHERE root_id = ${spawned[0]?.rootId ?? ''} ORDER BY rowid`;
+    // FIVE ROWS FOR FIVE BRANCHES, after four drives. The incident produced twenty.
+    expect(rows).toHaveLength(5);
+    // …and they are the same five ids every attempt spawned.
+    expect(new Set(spawned.map((head) => head.id)).size).toBe(5);
+    // Each reset re-ran the work — that is unavoidable for an ephemeral facet — so
+    // the spawn count still counts attempts, not branches.
+    expect(spawned).toHaveLength(20);
 
-    // Both attempts are branches of the same single run.
+    // NO FAKE TERMINAL ROW. Every row reached the real outcome of the attempt that
+    // reported, and none carries a takeover reason of any kind.
+    expect(rows.every((row) => row.status === 'completed')).toBe(true);
+    expect(rows.filter((row) => row.status === 'aborted')).toHaveLength(0);
+    expect(rows.every((row) => row.error_message === null)).toBe(true);
+    expect(sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM head_journal WHERE error_message LIKE '%the retry%'`[0]?.n)
+      .toBe(0);
+
+    // ONE run, and its report compiles once: one cached merge for one root.
     expect(listForkRuns(sql, null, 30).items).toHaveLength(1);
+    expect(sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM head_merge_results`[0]?.n).toBe(1);
+  });
+
+  test('two parents splitting at one depth get distinct branch ids', async () => {
+    // The other half of deriving the id. It used to be keyed on the ROOT, so two
+    // parents splitting at the same depth under one root produced the same
+    // `${rootId}-d${depth}-${idx}` prefix and only the random suffix kept them apart.
+    // Keyed on the branch POINT, uniqueness needs no randomness.
+    const { journal } = freshJournal();
+    const spawned: HeadInput[] = [];
+    const controller = new HeadController(runtime({ settles: true, spawned }), journal);
+    const shared = { mode: 'build' as const, inheritedContext: [], request: splitRequest(2) };
+
+    await controller.run({ ...shared, parentHeadId: null });
+    const [firstParent, secondParent] = spawned.map((head) => head.id);
+    await controller.run({ ...shared, parentHeadId: firstParent ?? '' });
+    await controller.run({ ...shared, parentHeadId: secondParent ?? '' });
+
+    expect(new Set(spawned.map((head) => head.id)).size).toBe(spawned.length);
+  });
+
+  test('one request compiles exactly ONE answer, however many times it is re-driven', async () => {
+    // EXACTLY-ONCE COMPILATION. The heads are re-RUN on every reset — they are
+    // ephemeral facets with no checkpoint, so there is nothing else a resume can
+    // do — but the SYNTHESIS is the run's answer, and a run holds one. Two ways
+    // that could break, and both are asserted here rather than reasoned about:
+    // an attempt that never reported must compile nothing, because there is no
+    // set of findings to compile; and the attempt that lands must compile once,
+    // not once per branch.
+    const { sql, journal } = freshJournal();
+    const spawned: HeadInput[] = [];
+    const compiled: string[] = [];
+
+    for (let i = 0; i < 3; i++) {
+      void new HeadController(runtime({ settles: false, spawned, compiled }), journal).run({
+        mode: 'build', parentHeadId: null, inheritedContext: [], request: splitRequest(5),
+      });
+    }
+    expect(compiled).toEqual([]);
+
+    await new HeadController(runtime({ settles: true, spawned, compiled }), journal).run({
+      mode: 'build', parentHeadId: null, inheritedContext: [], request: splitRequest(5),
+    });
+
+    // ONE synthesis for five branches and four drives.
+    expect(compiled).toHaveLength(1);
+    // One durable answer, under one run identity — `cacheMerge` is keyed on the
+    // root, so a re-drive that had minted a fresh id would have added a row here
+    // rather than replaced one.
+    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_merge_results`[0]?.n).toBe(1);
+    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_runs`[0]?.n).toBe(1);
+    const [row] = sql<{ merged_narrative: string }>`
+      SELECT merged_narrative FROM head_merge_results`;
+    expect(row?.merged_narrative).toBe(MERGE.narrative);
   });
 
   test('a settled run is never reclaimed: the next fork on the same task is its own run', async () => {

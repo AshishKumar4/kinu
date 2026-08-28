@@ -5,8 +5,8 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
-import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentSearchNode } from './agent-client';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REFINEMENT_DECISIONS, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView, AgentSearchNode } from './agent-client';
 import { loadActiveProfile, updateDefaultTier } from './profiles';
 
 export interface SlashCommandInfo {
@@ -29,6 +29,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
+  { name: '/refine', description: 'Review recent corrected turns and propose the smallest fixes; read and decide what one staged', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]' },
   { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]' },
   { name: '/tree', description: 'Show MCTS search tree' },
   { name: '/jobs', description: 'List background jobs' },
@@ -39,6 +40,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/fork', description: 'Walk back: fork the conversation before an earlier message', usage: '/fork [number]' },
   { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
+  { name: '/instructions', description: 'Approve which AGENTS.md and skill files are followed as instructions', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls' },
   { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
   { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]' },
   { name: '/exit', description: 'Exit chat' },
@@ -133,6 +135,10 @@ export type SlashOutcome =
   | { kind: 'unknown'; command: string };
 
 const ADVISOR_USAGE = `Usage: /advisor on | off | severity <${ADVISOR_SEVERITIES.join(' | ')}>`;
+const REFINE_USAGE =
+  'Usage: /refine | /refine now | /refine show <n> <edit>\n'
+  + `       /refine <${REFINEMENT_DECISIONS.join('|')}> <n> <edit> <digest>\n`
+  + '  n and edit are the indexes /refine prints; digest is what /refine show prints.';
 
 export async function executeSlashCommand(client: AgentClient, input: string): Promise<SlashOutcome> {
   const [rawCmd, ...rest] = input.split(/\s+/);
@@ -194,6 +200,52 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
         };
       }
       return { kind: 'changelog', view: await client.changelog() };
+    }
+    case '/refine': {
+      const [sub, ...args] = rest.filter((token) => token);
+      if (sub === 'now') {
+        return { kind: 'text', text: renderRefinementRequest(await client.requestRefinement()) };
+      }
+      if (sub === 'show') {
+        const located = resolveRefinementEdit(await client.refinements(), args[0], args[1]);
+        if (!located.ok) return { kind: 'text', text: located.error };
+        const shown = await client.showRefinement(located.id, located.index);
+        return {
+          kind: 'text',
+          text: shown.ok ? renderStagedSkill(shown.view, located.requestRef, located.editRef) : shown.error,
+        };
+      }
+      const decision = sub === undefined
+        ? undefined
+        : REFINEMENT_DECISIONS.find((candidate) => candidate === sub);
+      if (decision !== undefined) {
+        const [requestRef, editRef, token] = args;
+        const located = resolveRefinementEdit(await client.refinements(), requestRef, editRef);
+        if (!located.ok) return { kind: 'text', text: located.error };
+        if (token === undefined) {
+          return {
+            kind: 'text',
+            text: `Read it first: /refine show ${located.requestRef} ${located.editRef}\n`
+              + `Then repeat the digest it prints: /refine ${decision} ${located.requestRef} ${located.editRef} <digest>\n`
+              + 'The digest is what makes the decision about those exact bytes rather than about a '
+              + 'position in a list that may have moved.',
+          };
+        }
+        const result = await client.decideRefinement({
+          requestId: located.id,
+          routeIndex: located.index,
+          expectedDigest: token,
+          decision,
+        });
+        return {
+          kind: 'text',
+          text: result.ok
+            ? `${result.detail}\n\n${renderRefinementRequest(result.request)}`
+            : `Could not ${decision}: ${result.error}`,
+        };
+      }
+      if (sub !== undefined) return { kind: 'text', text: REFINE_USAGE };
+      return { kind: 'text', text: renderRefinementsText(await client.refinements()) };
     }
     case '/takes': {
       const set = await client.latestTakes();
@@ -268,6 +320,108 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
         return { kind: 'text', text: `Shell approval: ${client.localControls.setShellApprovalMode(arg)}` };
       }
       return { kind: 'text', text: 'Usage: /approval strict | allow_all | deny_all' };
+    }
+    case '/instructions': {
+      if (!client.localControls) return { kind: 'unknown', command: cmd };
+      const [sub, pageToken, indexToken, rowToken, reviewedDigest] = rest.filter((token) => token);
+      const pageCursor = (token: string | undefined): { after: string } | null | 'invalid' => {
+        if (token === undefined || token === 'root') return null;
+        // Page anchors contain a NUL separator, so they cannot travel verbatim
+        // through a shell-style command. Base64url is terminal-safe; the
+        // alphabet check is the complete malformed-input policy and means no
+        // decoder exception has to be caught or silently dropped.
+        if (!/^[A-Za-z0-9_-]+$/.test(token)) return 'invalid';
+        const after = Buffer.from(token, 'base64url').toString('utf8');
+        return after.includes('\u0000') ? { after } : 'invalid';
+      };
+      const cursor = pageCursor(sub === 'page' ? pageToken : undefined);
+      if (cursor === 'invalid') {
+        return { kind: 'text', text: 'That instruction page cursor is invalid; start again with /instructions.' };
+      }
+      const page = await client.localControls.listInstructionApprovals(
+        cursor === null ? {} : { cursor },
+      );
+      const rows = page.items;
+      const tokenFor = (after: string | undefined): string =>
+        after === undefined ? 'root' : Buffer.from(after).toString('base64url');
+      const rowTokenFor = (path: string): string => Buffer.from(path).toString('base64url');
+      const actionUsage = (pageId: string, index: number, path: string): string =>
+        `/instructions read ${pageId} ${String(index)} ${rowTokenFor(path)}`;
+      if (sub === undefined || sub === 'page') {
+        if (rows.length === 0) {
+          return { kind: 'text', text: 'No AGENTS.md or workspace skills found here.' };
+        }
+        const pageId = tokenFor(cursor?.after);
+        return {
+          kind: 'text',
+          text: [
+            'Instruction files the agent can write. Only the contents you approve are followed.',
+            ...rows.map((row, index) => {
+              const state = row.reason !== undefined
+                ? `not readable: ${row.reason}`
+                : row.decision === 'grandfathered' ? 'carried over'
+                  : row.decision === 'approved' ? 'approved'
+                    : row.decision === 'revoked' ? 'refused' : 'not decided';
+              const kind = row.kind === 'skill' ? 'skill' : 'AGENTS.md';
+              return `  ${String(index + 1)}. [${state}] ${row.path} (${kind}, ${String(row.bytes)} bytes) — ${actionUsage(pageId, index + 1, row.path)}`;
+            }),
+            ...(page.status === 'more'
+              ? [`More: /instructions page ${tokenFor(page.next.after)}`]
+              : []),
+          ].join('\n'),
+        };
+      }
+      const actionCursor = pageCursor(pageToken);
+      if (actionCursor === 'invalid') {
+        return { kind: 'text', text: 'That instruction page cursor is invalid; start again with /instructions.' };
+      }
+      const actionPage = await client.localControls.listInstructionApprovals(
+        actionCursor === null ? {} : { cursor: actionCursor },
+      );
+      const at = Number(indexToken);
+      const row = Number.isInteger(at) ? actionPage.items[at - 1] : undefined;
+      if (!row) {
+        return { kind: 'text', text: `That instruction row is no longer on this page; list it again before acting.` };
+      }
+      if (rowToken === undefined || !/^[A-Za-z0-9_-]+$/.test(rowToken)) {
+        return { kind: 'text', text: 'That instruction action lacks the row identity; list the page again before acting.' };
+      }
+      const reviewedPath = Buffer.from(rowToken, 'base64url').toString('utf8');
+      if (reviewedPath !== row.path) {
+        return { kind: 'text', text: 'That instruction row changed on this page; list it again before acting.' };
+      }
+      if (sub === 'read') {
+        const opened = await client.localControls.readInstructionApproval(row.path);
+        if (!opened) {
+          return { kind: 'text', text: `${row.path} could not be read${row.reason === undefined ? '' : `: ${row.reason}`}.` };
+        }
+        const pageId = tokenFor(actionCursor?.after);
+        return {
+          kind: 'text',
+          text: [
+            opened.path,
+            `digest ${opened.digest}`,
+            '',
+            opened.preview,
+            '',
+            `Approve exactly these reviewed bytes: /instructions approve ${pageId} ${String(at)} ${rowTokenFor(opened.path)} ${opened.digest}`,
+          ].join('\n'),
+        };
+      }
+      if (sub === 'approve') {
+        if (reviewedDigest === undefined) {
+          return { kind: 'text', text: 'Read the file first; approve requires the digest you reviewed.' };
+        }
+        const decided = await client.localControls.approveInstruction(row.path, reviewedDigest);
+        if (!decided.ok) return { kind: 'text', text: `Nothing was approved: ${decided.error}` };
+        return { kind: 'text', text: `Approved ${row.path}. Editing it drops it back to reference material.` };
+      }
+      if (sub === 'revoke') {
+        const decided = await client.localControls.revokeInstruction(row.path);
+        if (!decided.ok) return { kind: 'text', text: `Nothing was revoked: ${decided.error}` };
+        return { kind: 'text', text: `Revoked ${row.path}. It is passed to the agent as reference material now.` };
+      }
+      return { kind: 'text', text: 'Usage: /instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]' };
     }
     case '/advisor': {
       const [sub, level, ...extra] = rest.filter((token) => token).map((token) => token.toLowerCase());
@@ -478,6 +632,116 @@ export function renderTakesText(set: AlternateTakeSet): string {
     lines.push(`       ${candidate.text.replace(/\s+/g, ' ').slice(0, 160)}`);
   });
   lines.push('Pick with /takes <n> — your pick becomes a real preference signal.');
+  return lines.join('\n');
+}
+
+/**
+ * The staged file, whole, with the digest a decision has to quote back.
+ *
+ * Deliberately unbounded where every other renderer here clamps: this is the
+ * approval surface, and a truncated one asks for a decision about bytes the
+ * decider could not see.
+ */
+function renderStagedSkill(view: StagedSkillView, requestRef: string, editRef: string): string {
+  return [
+    `Staged skill for ${view.target}`,
+    `digest ${view.digest}`,
+    view.intact
+      ? ''
+      : 'WARNING: these bytes are not the ones the refinement recorded — something rewrote the '
+        + 'staging. Approving is refused until the refinement is re-run.',
+    '',
+    view.source,
+    '',
+    `Approve:  /refine approve ${requestRef} ${editRef} ${view.digest}`,
+    `Reject:   /refine reject ${requestRef} ${editRef} ${view.digest}`,
+  ].filter((line, index) => line !== '' || index > 2).join('\n');
+}
+
+/** A `/refine <verb> <n> <m>` reference resolved against the live listing. */
+type LocatedRefinementEdit =
+  | { readonly ok: true; readonly id: string; readonly index: number;
+      readonly requestRef: string; readonly editRef: string }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * Resolve `/refine approve 1 2` against the listing the operator just read.
+ *
+ * By INDEX, because that is what the listing prints and what a person can type;
+ * the ids are nanoids nobody retypes. Re-fetched before resolving, so the index
+ * always resolves against the same ordering the decision is made from — the same
+ * discipline `/changelog revert <n>` follows.
+ */
+function resolveRefinementEdit(
+  view: AgentRefinementView,
+  requestRef: string | undefined,
+  editRef: string | undefined,
+): LocatedRefinementEdit {
+  const n = Number.parseInt(requestRef ?? '', 10);
+  const edit = Number.parseInt(editRef ?? '', 10);
+  if (!Number.isInteger(n) || n < 1 || !Number.isInteger(edit) || edit < 1) {
+    return { ok: false, error: REFINE_USAGE };
+  }
+  const request = view.requests[n - 1];
+  if (!request) {
+    return { ok: false, error: `No refinement ${n} — /refine lists ${view.requests.length}.` };
+  }
+  if (!request.routes[edit - 1]) {
+    return {
+      ok: false,
+      error: `Refinement ${n} has no edit ${edit} — it lists ${request.routes.length}.`,
+    };
+  }
+  return {
+    ok: true, id: request.id, index: edit - 1,
+    requestRef: String(n), editRef: String(edit),
+  };
+}
+
+/** One route line: which authority took the edit, and what state it is in. */
+function renderRefinementRoute(route: RefinementRoute, index: number): string {
+  const where = route.owner === '' ? 'no owning authority' : route.owner;
+  // Offered only where a decision is still the owner's to make. A decided row
+  // that still advertised the action would invite a click that is refused.
+  const decide = route.disposition === 'pending_owner_approval'
+    ? '  ← /refine show to read it, then approve|reject'
+    : '';
+  return `      ${index + 1}. ${route.kind} → ${route.target || '(none)'} `
+    + `[${route.disposition}] · ${where}${decide}`
+    + (route.reason === undefined ? '' : `\n         ${route.reason}`);
+}
+
+/** What one request became, for the surface that just opened it. */
+function renderRefinementRequest(request: RefinementRequestView): string {
+  const lines = [
+    `Refinement ${request.id} — ${request.stage} (${request.scope} scope, ${request.trigger})`,
+    `  reviewed ${request.turnIds.length} graded turn${request.turnIds.length === 1 ? '' : 's'}`
+      + (request.detail === '' ? '' : `\n  ${request.detail}`),
+  ];
+  request.routes.forEach((route, index) => lines.push(renderRefinementRoute(route, index)));
+  if (request.routes.length > 0) {
+    lines.push('', 'Nothing pending is live yet: /changelog shows each proposal with its evidence and revert.');
+  }
+  return lines.join('\n');
+}
+
+/** The `/refine` listing: what is owed, then what has been refined. */
+function renderRefinementsText(view: AgentRefinementView): string {
+  const lines = [view.debt.summary];
+  if (view.debt.owed) {
+    lines.push('  /refine now opens one over those turns.');
+  }
+  if (view.requests.length === 0) {
+    lines.push('', 'No refinements yet.');
+    return lines.join('\n');
+  }
+  lines.push('', `Refinements (${view.requests.length})`);
+  view.requests.forEach((request, index) => {
+    const when = new Date(request.createdAt).toISOString().slice(0, 16).replace('T', ' ');
+    lines.push(`${String(index + 1).padStart(3)}. ${request.stage} · ${when} · ${request.trigger}`);
+    lines.push(`      ${request.detail || '(no detail yet)'}`);
+    request.routes.forEach((route, index) => lines.push(renderRefinementRoute(route, index)));
+  });
   return lines.join('\n');
 }
 

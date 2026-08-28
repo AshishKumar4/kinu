@@ -31,6 +31,9 @@ import type { CompletedTurn } from './types';
 import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
+import {
+  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+} from '../identity/effect-tombstones';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 
@@ -61,6 +64,12 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   missionLabels: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
 });
 
+/** The keyed append of one recorded turn. */
+const APPEND_SCOPE = 'turn_append';
+/** That turn's review having RUN — its `turn_outcomes` row, craft EMA move and
+ *  lesson. Distinct from the row's `done` state, which is only the lease. */
+const REVIEW_SCOPE = 'turn_review';
+
 export function initCompletedTurnTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS completed_turns (
     id         TEXT PRIMARY KEY,
@@ -70,6 +79,11 @@ export function initCompletedTurnTable(execRaw: RawSqlExec, sql: SqlExecutor): v
     review     TEXT NOT NULL CHECK (review IN ('none','awaiting_followup','queued','claimed','done')),
     created_at INTEGER NOT NULL
   )`);
+  // Both of this row's lifetimes end in a DELETE, and both of them are keyed
+  // durable work a backend can replay — so the tombstones are as much a part of
+  // this table's contract as its own columns, and the store must never be
+  // constructed without them.
+  initEffectTombstoneTable(execRaw);
   // One-shot cutover for a workspace that predates the unified row: window
   // rows keep their membership and their awaiting flag becomes the typed
   // state; deferred-review rows become owed queued reviews with the follow-up
@@ -196,6 +210,23 @@ export interface AppendTurnOpts {
    *  invocation is an independent task, not a reply — parking either would
    *  hand the classifier a "follow-up" that is not one. */
   awaitsFollowup: boolean;
+  /** The row identity, when the caller has a durable one for the turn being
+   *  recorded. It makes this append IDEMPOTENT: a replay of one turn's
+   *  recording refuses instead of writing a second row, so the session
+   *  cadence — which counts window rows — is not advanced twice by one turn.
+   *
+   *  The refusal is decided by the `turn_append` TOMBSTONE, not by the row:
+   *  `sweepSettled` deletes the row as soon as its review is done and it has
+   *  left the window, and `ON CONFLICT(id) DO NOTHING` protects nothing once
+   *  that has happened — a replay would reinsert the same turn with a fresh
+   *  queued review and `in_window = 1`.
+   *
+   *  The identity is the CALLER's because only the caller knows it. A window
+   *  that minted its own could never recognise a replay: the second call would
+   *  arrive with a fresh id and look like a new turn. A caller with no durable
+   *  identity (an interactive session, whose recording cannot be replayed
+   *  because nothing durable owes it) passes none and gets a fresh row. */
+  id?: string;
   /** Epoch ms to stamp the row with. Defaults to now. */
   now?: number;
 }
@@ -205,7 +236,8 @@ export interface CompletedTurnStore {
    *  conversational follow-up can still grade it — additionally waits for
    *  that follow-up. Returns the row id (pass it to `enqueueReview`/
    *  settlement when the caller reviews immediately), or null when the turn
-   *  could not be serialized. */
+   *  could not be serialized. With `opts.id` the append is idempotent and the
+   *  returned id is that one, whether this call wrote the row or found it. */
   append(turn: CompletedTurn, opts: AppendTurnOpts): string | null;
   /** How many turns the open window holds. */
   size(): number;
@@ -219,10 +251,24 @@ export interface CompletedTurnStore {
    *  The CALLER decides when that happened: an independent task's arrival
    *  proves the conversational follow-up can never grade its predecessor,
    *  while a programmatic turn proves nothing about the conversation and must
-   *  not displace it. Returns how many rows were demoted. */
-  expireAwaitingReviews(): number;
-  /** The claimed review ran — its obligation is settled. */
+   *  not displace it. Returns how many rows were demoted.
+   *
+   *  `before` scopes the demotion to rows created at or before that instant —
+   *  the recorded turn's own clock, for a caller whose recording is replayable.
+   *  A replay of an independent task that ended long ago must not demote the
+   *  parked review of a NEWER conversational turn that did not exist when it
+   *  ran. Absent, every parked row is demoted, which is what a live caller
+   *  standing at the present moment means. */
+  expireAwaitingReviews(opts?: { before?: number }): number;
+  /** The claimed review ran — its obligation is settled, and the row may be
+   *  swept. */
   settleReview(rowId: string): void;
+  /** The review's own side effects have landed (the `turn_outcomes` row, the
+   *  craft EMA move, the lesson). Split from its lease so recovery can tell
+   *  "the review ran" from "a host held the row": a claim is only a lease, so
+   *  an eviction after the side effects but before {@link settleReview} used to
+   *  re-run the whole review on the next activation. Idempotent. */
+  recordReviewRan(rowId: string): void;
   /** Defer one turn's review. With `storedRowId`, the turn is ALREADY a row
    *  here (just claimed) and the row itself becomes the owed review instead of
    *  a second copy. Returns what happened so the caller reports an honest
@@ -233,14 +279,17 @@ export interface CompletedTurnStore {
     opts?: { storedRowId?: string },
   ): EnqueueOutcome;
   /** Take the oldest `limit` queued reviews. Each taken row moves to
-   *  `claimed`; settle or release it afterwards. */
+   *  `claimed`; settle or release it afterwards. A row whose review has already
+   *  run is not offered — it is settled instead, so it stops being owed. */
   takeQueuedReviews(limit: number): TakenTurnReviews;
   /** Return a claimed queued review to the queue — a refusal that is a
    *  decision (budget), not a completion. */
   releaseQueuedReview(rowId: string): void;
   countQueuedReviews(): number;
   /** Activation recovery: a `claimed` review whose claiming process died is
-   *  owed again. Returns how many rows were re-queued. */
+   *  owed again — UNLESS its work already ran, in which case the claim outlived
+   *  the review and the row is settled rather than re-queued. Returns how many
+   *  rows were re-queued. */
   resetStaleClaims(): number;
 }
 
@@ -278,6 +327,9 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
 
   return {
     append(turn, opts) {
+      // Refused before the encode: a keyed replay has nothing to add and the
+      // row it would have written may already be gone.
+      if (opts.id !== undefined && effectAlreadyDone(sql, APPEND_SCOPE, opts.id)) return opts.id;
       // A turn that cannot be serialized cannot be replayed to the engine
       // later, and losing the whole window to one bad tool result would be
       // worse than losing that turn — so a failed encode drops just this turn.
@@ -291,10 +343,24 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
         );
         return null;
       }
-      const review = opts.awaitsFollowup ? 'awaiting_followup' : 'none';
-      const id = `turn-${nanoid()}`;
+      // `queued`, not `none`, and written in the SAME insert as the turn. The
+      // review of a turn with no follow-up coming used to be DISPATCHED inline by
+      // the caller after this insert returned, so an eviction between the two
+      // left the row at `none` with its review lost, while a replay of the
+      // recording dispatched it a second time. The obligation is now part of the
+      // row, and the durable queued-review lane claims it exactly once.
+      const review = opts.awaitsFollowup ? 'awaiting_followup' : 'queued';
+      const id = opts.id ?? `turn-${nanoid()}`;
+      const now = opts.now ?? nowMs();
+      // DO NOTHING, not a replace: the row the first append wrote is the
+      // recording, and a replay must leave the window membership and the
+      // review state that row has since reached exactly as they are.
       void sql`INSERT INTO completed_turns (id, turn, followup, in_window, review, created_at)
-          VALUES (${id}, ${encoded}, ${null}, 1, ${review}, ${opts.now ?? nowMs()})`;
+          VALUES (${id}, ${encoded}, ${null}, 1, ${review}, ${now})
+          ON CONFLICT(id) DO NOTHING`;
+      // Same synchronous pass as the insert, so nothing can observe the row
+      // without the tombstone that outlives it.
+      if (opts.id !== undefined) recordEffectDone(sql, APPEND_SCOPE, opts.id, now);
       sweepSettled();
       return id;
     },
@@ -338,16 +404,27 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
     },
 
     settleReview(rowId) {
+      // The tombstone first: settling makes the row sweepable, and after the
+      // sweep the row can no longer say that its review ran.
+      recordEffectDone(sql, REVIEW_SCOPE, rowId);
       void sql`UPDATE completed_turns SET review = 'done' WHERE id = ${rowId}`;
       sweepSettled();
     },
 
-    expireAwaitingReviews() {
+    recordReviewRan(rowId) {
+      recordEffectDone(sql, REVIEW_SCOPE, rowId);
+    },
+
+    expireAwaitingReviews(opts) {
+      // MAX_SAFE_INTEGER, not a second query: `created_at` is epoch ms, so an
+      // absent cutoff is the same predicate with a bound nothing can exceed.
+      const before = opts?.before ?? Number.MAX_SAFE_INTEGER;
       const stale = sql<{ id: string }>`
-        SELECT id FROM completed_turns WHERE review = 'awaiting_followup'`;
+        SELECT id FROM completed_turns
+        WHERE review = 'awaiting_followup' AND created_at <= ${before}`;
       if (stale.length === 0) return 0;
       void sql`UPDATE completed_turns SET review = 'queued'
-          WHERE review = 'awaiting_followup'`;
+          WHERE review = 'awaiting_followup' AND created_at <= ${before}`;
       return stale.length;
     },
 
@@ -382,6 +459,13 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
       const reviews: DeferredTurnReview[] = [];
       const refused: RefusedTurnReview[] = [];
       for (const row of rows) {
+        // Its work already landed and something re-queued the lease. Not a
+        // refusal — there is nothing wrong with the row and nothing owed by it
+        // — so it is settled here and never offered again.
+        if (effectAlreadyDone(sql, REVIEW_SCOPE, row.id)) {
+          void sql`UPDATE completed_turns SET review = 'done' WHERE id = ${row.id}`;
+          continue;
+        }
         const turn = decode(row);
         if (!turn) {
           retireUnreadable(row, new Error('the stored turn is not a CompletedTurn'));
@@ -391,6 +475,7 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
         void sql`UPDATE completed_turns SET review = 'claimed' WHERE id = ${row.id}`;
         reviews.push({ id: row.id, turn, followup: row.followup, queuedAt: row.created_at });
       }
+      sweepSettled();
       return { reviews, refused };
     },
 
@@ -406,8 +491,23 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
       const stale = sql<{ id: string }>`
         SELECT id FROM completed_turns WHERE review = 'claimed'`;
       if (stale.length === 0) return 0;
-      void sql`UPDATE completed_turns SET review = 'queued' WHERE review = 'claimed'`;
-      return stale.length;
+      // THE defect this split exists for. A claim is a lease, not the work: an
+      // eviction after `reviewTurn` appended its `turn_outcomes` row and moved
+      // the craft EMAs, but before `settleReview`, used to arrive here and
+      // re-run the whole review on the next activation — and both of those
+      // writes are append-only or cumulative, so the duplicate is observable.
+      // A row whose work is tombstoned is settled; only the rest is owed again.
+      let requeued = 0;
+      for (const row of stale) {
+        if (effectAlreadyDone(sql, REVIEW_SCOPE, row.id)) {
+          void sql`UPDATE completed_turns SET review = 'done' WHERE id = ${row.id}`;
+          continue;
+        }
+        void sql`UPDATE completed_turns SET review = 'queued' WHERE id = ${row.id}`;
+        requeued++;
+      }
+      sweepSettled();
+      return requeued;
     },
   };
 }

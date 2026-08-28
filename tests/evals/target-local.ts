@@ -56,7 +56,7 @@ import { createWorkspace } from '../../packages/core/src/identity/index';
 import { LocalAgentSession } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
-  makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime,
+  makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime,
 } from '../../packages/cli-backend/src/runtime';
 import {
   probeVerifier, walkRunEvents,
@@ -256,7 +256,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
    * test before the call was added.
    */
   roster(): Promise<readonly string[]> {
-    const roster = new SubordinateRosterStore(makeSqlExec(this.db));
+    const roster = new SubordinateRosterStore(makeSqlExec(this.db), makeSql(this.db));
     roster.ensureSchema();
     return Promise.resolve(roster.list().map((entry) => entry.name).sort());
   }

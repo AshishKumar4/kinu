@@ -479,10 +479,11 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts',
     tier: 'push',
-    // Measured 2026-08-24 after analytics dataset parity joined: 11.08s.
-    seconds: 12,
+    // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
+    // config adds 1.44s (2026-08-27).
+    seconds: 13,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
       + 'genuinely different body — and, for scratch-ownership, the three shapes that '
@@ -508,7 +509,13 @@ export const LADDER: readonly Gate[] = [
       + 'by the Worker tolerating the loss — plus provisioning issuing no argv at all on a second '
       + 'run, teardown refusing a phrase that names another deployment, and the two pins '
       + '(SUPPLY against the derived `Env` census, UNOBSERVABLE against the rows that came back '
-      + 'blind) proven red in both directions.',
+      + 'blind) proven red in both directions. For release config, the two facts about the '
+      + 'DEPLOYED wrangler config that cannot be established after an incident: every deployable '
+      + "environment names the sandbox container image by digest — refused in both directions, "
+      + 'including the `tag@digest` form that pulls correctly and leaves a mutable tag in the '
+      + 'file — against the `@cloudflare/sandbox` version that actually ships, and every one of '
+      + 'them uploads source maps with the Vite half that produces them, called rather than read '
+      + 'as text.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
       + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
       + 'creates a bucket.',
@@ -845,24 +852,42 @@ export const LADDER: readonly Gate[] = [
     // by an entry that did not name them. The durability probe is explicit rather
     // than absorbed by that glob because its name is a contract: a real container
     // measurement that remains only in stdout is not evidence.
-    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts',
+    //
+    // The eight rig self-tests after it are explicit for the same reason, and they
+    // are on THIS row because each one guards a `scripts/bench-*.ts` rig or the
+    // fixtures it runs on — bench-capture-probe, bench-devbox-strategies,
+    // bench-payload-transports, and the r2-bench deploy substrate. Not one of
+    // their names starts with `bench`, so all eight shipped tracked, passing by
+    // hand, and claimed by NO tier: 89 tests that ran in no pipeline.
+    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts',
     tier: 'ci',
-    // 3.97s: 257 tests over 11 files, median of 3.94 / 3.97 / 3.99 on the
-    // 24-thread box, measured 2026-08-24 after durability-artifact evidence
-    // joined. That is the corpus-absent basis every fresh clone sees; a checkout
-    // with terminal-bench-2.1 on disk also pays the sampler over the real corpus
-    // in bench-external.test.ts.
-    seconds: 3.97,
+    // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
+    // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
+    // those tests for 0.07s of that cost, which is what a suite running nowhere
+    // was worth avoiding. That is the corpus-absent basis every fresh clone sees;
+    // a checkout with terminal-bench-2.1 on disk also pays the sampler over the
+    // real corpus in bench-external.test.ts.
+    seconds: 5.42,
     catches: 'the bench harness guarantees — sandbox isolation, the seal, '
       + 'anti-self-scoring, budget enforcement, corpus well-formedness, and the '
       + 'durability probe retaining complete or failed JSON evidence without '
       + 'overwriting a prior run — plus the census `gate:bench-corpus` runs at '
       + 'commit tier proven able to FAIL, which the committed assertion over a '
       + 'healthy corpus cannot do by itself: a patch whose anchor moved, and a '
-      + 'patch file no tasks.jsonl line names, each driven from a fixture. No '
+      + 'patch file no tasks.jsonl line names, each driven from a fixture. And now '
+      + 'the four experiment rigs\' own admission and teardown logic: a capture '
+      + 'mechanism decided from a report that never passed the probe contract, an '
+      + 'ephemeral live probe whose generated config carries its own bearer token '
+      + 'or whose teardown cannot replay, a storage cell ranked without its '
+      + 'red-check evidence or scored without the Latin-square order and the '
+      + 'CV/budget censoring the protocol requires, a pilot counted as ranking, a '
+      + 'payload arm judged on an image or an operation it never started, and a '
+      + 'Wrangler failure read as proof that an ephemeral worker is gone. No '
       + 'model, no credentials.',
-    blind: 'anything about what the bench measures. It only guards the instrument, '
-      + 'which is what four independent instrument bugs cost us to learn.',
+    blind: 'anything about what the bench measures, and any live run: the rig '
+      + 'suites drive planners, decisions, manifests and fixtures, never a real '
+      + 'deploy or container. It only guards the instrument, which is what four '
+      + 'independent instrument bugs cost us to learn.',
   },
   {
     run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts',
@@ -930,6 +955,55 @@ export const LADDER: readonly Gate[] = [
       + 'edge — a stale cached object at Cloudflare (measured on staging 2026-08-21) '
       + 'passes here and serves anyway. No pixel is compared, so a legible-but-ugly '
       + 'regression passes, and copy quality is unread beyond the zero-proteus grep.',
+  },
+  {
+    run: 'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts',
+    tier: 'ci',
+    // Two puppeteer suites, one gate: both boot the same gallery and both measure a
+    // browser giving up on something. Measured 2026-08-27: 38s together.
+    seconds: 45,
+    catches: 'what the browser does when a client-side failure has nowhere to go. The '
+      + 'error boundary reports to the server rather than only to a console nobody '
+      + 'reads, a stalled report never leaves the page waiting, retry and navigation '
+      + 'both stay reachable, and a rejected lazy chunk offers the one-shot reload '
+      + 'that recovers a stale build. Both classes shipped green under every '
+      + 'source-reading gate in this repository, because the defect is a state the '
+      + 'user is left in rather than a call that is absent.',
+    blind: 'a local browser over a locally built bundle. A stale asset served from the '
+      + 'edge, a real network stall that never delivers headers, and whether the '
+      + 'report reaches a deployed sink are all outside it. Nothing compares pixels.',
+  },
+  {
+    run: 'bun test scripts/react-runtime-identity.test.ts',
+    tier: 'ci',
+    // Runs the real client build twice, then drives three routes in Chromium.
+    // Measured 2026-08-27: 8.92s.
+    seconds: 20,
+    catches: 'which React the shipped bundle contains and which dispatcher the page '
+      + 'runs on. It builds with the production Vite config the deploy uses, then '
+      + 'asserts one React runtime module in one chunk, zero development-only text '
+      + 'surviving, and, in Chromium, exactly one renderer with production bundleType '
+      + 'and one dispatcher slot shared by react and react-dom. A second React copy '
+      + 'or a development build reaching production is invisible to tsc, to oxlint '
+      + 'and to every source-reading instrument here.',
+    blind: 'the locally built artifact, not the object the edge serves. It cannot see a '
+      + 'CDN serving an older bundle, and it says nothing about render correctness.',
+  },
+  {
+    run: 'bun test scripts/nested-container-resolution.test.ts',
+    tier: 'ci',
+    // Walks the deployed module graph with the bundler as a pure resolver.
+    // Measured 2026-08-27: 8.80s.
+    seconds: 20,
+    catches: 'which copy of a duplicated dependency the deployed artifact actually '
+      + 'binds. Two Containers runtimes are installed and only the NESTED one reaches '
+      + 'the artifact, so a manifest pin, a document and a gate can all name a version '
+      + 'that never runs. It also resolves every relative specifier the reachable '
+      + 'dependency modules import, which is what an extensionless ESM claim needs '
+      + 'before it is a claim.',
+    blind: 'module resolution, not runtime. A container cold start is a different '
+      + 'premise and needs an image build. It reads the installed tree, so it cannot '
+      + 'see what a fresh install on another lockfile resolution would produce.',
   },
   {
     run: 'bun test scripts/swarm-tree-geometry.test.ts',

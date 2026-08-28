@@ -177,6 +177,33 @@ export function uiMessageText(content: string): string {
 }
 
 /**
+ * The stored rows of older pages as renderable messages, oldest first,
+ * self-deduplicated: a page boundary that re-delivered a row would render it
+ * twice under one React key, which React resolves by silently dropping one — a
+ * pagination bug would then look like a message going missing rather than like
+ * a duplicate.
+ *
+ * A pure projection of the fetched pages — it knows nothing of the live list —
+ * so a streaming pane can hold one projection (and its row identities) across
+ * stream ticks and re-run only the live-overlap filter when the live window's
+ * ids actually change.
+ */
+export function restoredRows(older: readonly ChatHistoryEntry[]): UIMessage[] {
+  const seen = new Set<string>();
+  const restored: UIMessage[] = [];
+  for (const entry of older) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    const row: UIMessage = {
+      id: entry.id, role: entry.role, parts: [{ type: 'text', text: entry.content }],
+    };
+    if (entry.metadata !== undefined) row.metadata = entry.metadata;
+    restored.push(row);
+  }
+  return restored;
+}
+
+/**
  * One transcript out of the two places a chat message reaches a surface from.
  *
  * The live list is the agents SDK's: `get-messages` seeds it with
@@ -202,19 +229,5 @@ export function mergeTranscript(
   live: readonly UIMessage[],
 ): UIMessage[] {
   const known = new Set(live.map((message) => message.id));
-  const restored: UIMessage[] = [];
-  for (const entry of older) {
-    // Also guards the older half against itself: a page boundary that
-    // re-delivered a row would render it twice under one React key, which
-    // React resolves by silently dropping one — a pagination bug would then
-    // look like a message going missing rather than like a duplicate.
-    if (known.has(entry.id)) continue;
-    known.add(entry.id);
-    const row: UIMessage = {
-      id: entry.id, role: entry.role, parts: [{ type: 'text', text: entry.content }],
-    };
-    if (entry.metadata !== undefined) row.metadata = entry.metadata;
-    restored.push(row);
-  }
-  return [...restored, ...live];
+  return [...restoredRows(older).filter((row) => !known.has(row.id)), ...live];
 }

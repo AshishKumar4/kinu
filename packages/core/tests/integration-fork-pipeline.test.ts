@@ -23,6 +23,7 @@ import {
 } from '../src/index';
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
 
+
 async function seedSource(src: TestWorkspace) {
   // The SDK creates its store on first append, so a fixture that seeds pane rows
   // has to seed the table too — production's own DDL, from one definition.
@@ -68,6 +69,7 @@ describe('fork pipeline (end-to-end)', () => {
     // Fork side: land it.
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
       workspaceId: 'FORK-DO-ID', workspaceName: 'my-fork', now: 88888,
+      targetAuthority: 'pane',
     });
 
     // Assertions — the fork has correct state after the round-trip
@@ -78,9 +80,13 @@ describe('fork pipeline (end-to-end)', () => {
 
     expect(await readSoul(tgt.vfs)).toBe('help with testing');
 
+    // The snapshot carried rich rows, so the transcript lands in the pane
+    // store — ONCE. No plain mirror rows exist on the target.
     const msgs = tgt.sql<{ id: string }>`
-      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC`;
+      SELECT id FROM assistant_messages WHERE role != 'system' ORDER BY rowid ASC`;
     expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 is not an ancestor of m2
+    const mirrorRows = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
+    expect(mirrorRows).toBe(0);
 
     const tools = tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`;
     expect(tools.map(t => t.name)).toEqual(['helper']);
@@ -95,14 +101,14 @@ describe('fork pipeline (end-to-end)', () => {
     expect(lineage!.sourceMessageId).toBe('m2');
     expect(lineage!.forkedAt).toBe(88888);
 
-    // The fork marker is a message in the tree, parented on the cut point, so
+    // The fork marker is a node of the tree, parented on the cut point, so
     // an ancestry walk from it reaches the whole inherited chain.
-    const marker = tgt.sql<{ id: string; parent_id: string | null; content: string; created_at: number }>`
-      SELECT id, parent_id, content, created_at FROM messages WHERE role = 'system'
+    const marker = tgt.sql<{ id: string; parent_id: string | null; content: string; created_at: string }>`
+      SELECT id, parent_id, content, created_at FROM assistant_messages WHERE role = 'system'
     `;
     expect(marker.length).toBe(1);
     expect(marker[0]!.parent_id).toBe('m2');
-    expect(marker[0]!.created_at).toBe(snapshot.cut.createdAtMs + 1);
+    expect(Date.parse(`${marker[0]!.created_at.replace(' ', 'T')}Z`)).toBe(snapshot.cut.createdAtMs + 1);
     expect(marker[0]!.content).toContain('forked from workspace');
     expect(marker[0]!.content).toContain('source-agent');
 
@@ -177,6 +183,7 @@ describe('fork pipeline (end-to-end)', () => {
 
     const options = {
       workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,
+      targetAuthority: 'pane',
     } as const;
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
@@ -189,10 +196,10 @@ describe('fork pipeline (end-to-end)', () => {
     const l = readForkLineage(tgt.sql);
     expect(l!.forkedAt).toBe(99999);
 
+    // The transcript landed once, in the pane store; the plain mirror is gone.
     const messages = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`;
     const assistant = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`;
-    // +1 for the fork marker, which lands in both stores exactly once.
-    expect(messages[0]!.c).toBe(snapshot.messages.length + 1);
+    expect(messages[0]!.c).toBe(0);
     expect(assistant[0]!.c).toBe(snapshot.assistantMessages.length + 1);
   });
 });

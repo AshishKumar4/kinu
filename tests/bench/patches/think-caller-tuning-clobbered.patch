@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
-index f8712b58..8150fa16 100644
+index 076a20fb9..f1a87e0ca 100644
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -217,7 +217,7 @@ export class EvolutionEngine {
+@@ -291,7 +291,7 @@ export class EvolutionEngine {
  
    constructor(rt: AgentRuntime, config?: Partial<EvolutionConfig>) {
      this.rt = rt;
@@ -10,4 +10,4 @@ index f8712b58..8150fa16 100644
 +    this.config = { ...config, ...DEFAULT_EVOLUTION_CONFIG };
      this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
  
-     // The engine owns the outcome + lessons + replay + session-window ledgers,
+     // The engine owns the outcome + lessons + replay + completed-turn +

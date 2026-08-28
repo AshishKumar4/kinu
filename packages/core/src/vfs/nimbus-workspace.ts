@@ -26,8 +26,10 @@
  */
 
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { HomeRootVfs, TmpConfiner } from './agent-home';
 import { provisionWorkspaceRuntimes } from './workspace-runtimes';
@@ -79,6 +81,10 @@ function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefin
 export interface WorkspaceVFS extends VFS {
   removeRecursive(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
+  /** Exactly this window of one file's bytes, read out of the chunk rows that
+   *  cover it. A caller that must not hold a whole file — the fork wire — reads
+   *  through this rather than `readFile`. */
+  readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
 }
 
 function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
@@ -129,6 +135,10 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
     async rename(oldPath, newPath) {
       await (await fs()).rename(workspacePath(oldPath), workspacePath(newPath));
     },
+
+    async readRange(path, offset, length) {
+      return (await open()).vfs.as(CRED_SESSION_USER).readRange(workspacePath(path), offset, length);
+    },
   };
   return self;
 }
@@ -150,6 +160,65 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     },
   };
+}
+
+/**
+ * The same filesystem as ONE AGENT: the same rows, reached with the agent's own
+ * credential on both planes.
+ *
+ * Two members and not one, because an agent reaches the tree two ways and a
+ * boundary that held for only one is not a boundary. Its file tools go through
+ * {@link vfs}; its commands go through {@link shell}, which starts in the
+ * agent's home with `HOME` and `TMPDIR` already pointing at the agent's own
+ * directories.
+ */
+export interface WorkspaceAgentPlane {
+  readonly vfs: WorkspaceVFS;
+  readonly shell: Shell;
+}
+
+/** Who the agent is, and where its own directories are — as
+ *  `vfs/agent-home.ts` provisioned them. */
+export interface WorkspaceAgent {
+  readonly cred: VfsCred;
+  readonly home: string;
+  readonly tmp: string;
+}
+
+/**
+ * The agent's file plane: the SAME `SqliteVFS`, credentialed.
+ *
+ * Not the workspace's own `.fs`, which is pinned to the session user by
+ * construction (`NimbusWorkspace`'s constructor) — that identity is the ORIGIN
+ * and it is exactly what must not be reused here. The sync surface is adapted
+ * rather than wrapped in another cache: one filesystem instance, one set of
+ * rows, one content cache.
+ */
+function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
+  const self: WorkspaceVFS = {
+    async readFile(path, opts) {
+      const absolute = workspacePath(path);
+      return opts?.encoding === 'utf8' ? vfs.readFileString(absolute) : vfs.readFile(absolute);
+    },
+    async writeFile(path, data) { vfs.writeFile(workspacePath(path), data); },
+    async readdir(path) { return vfs.readdir(workspacePath(path)).map((entry) => entry.name); },
+    async stat(path) {
+      try {
+        const stat = vfs.stat(workspacePath(path));
+        return { size: stat.size, mtimeMs: stat.mtime, isDir: stat.type === 'directory' };
+      } catch (error) {
+        if (isEnoent({ error })) return null;
+        throw error;
+      }
+    },
+    async unlink(path) { vfs.unlink(workspacePath(path)); },
+    async mkdir(path, opts) { vfs.mkdir(workspacePath(path), opts); },
+    async exists(path) { return vfs.exists(workspacePath(path)); },
+    async removeRecursive(path) { vfs.removeRecursive(workspacePath(path)); },
+    async rename(oldPath, newPath) { vfs.rename(workspacePath(oldPath), workspacePath(newPath)); },
+    async readRange(path, offset, length) { return vfs.readRange(workspacePath(path), offset, length); },
+  };
+  return self;
 }
 
 /**
@@ -185,6 +254,15 @@ export interface WorkspaceBundle {
    * serialise a host's whole startup on a boot nothing has asked for yet.
    */
   privileged(): Promise<WorkspacePrivileged>;
+  /**
+   * The same filesystem as one provisioned agent, on both planes.
+   *
+   * One plane per agent and cached by uid, because a shell HOLDS state — a
+   * working directory, exported variables — so an agent that got a fresh shell
+   * per command would lose its own `cd`. Idempotent for that reason too: the
+   * second call for a uid is the first plane again.
+   */
+  asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
 }
 
 export interface WorkspaceOptions {
@@ -247,6 +325,13 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     );
   });
   const open = (): Promise<NimbusWorkspace> => booting;
+  // The session's process owner, here because a credentialed shell needs a REAL
+  // pid: `ShellCommandIdentity` carries one, append capabilities are keyed by
+  // it, and a number invented locally would collide with a live writer. One
+  // supervisor for this filesystem, so two agents can never be handed the same
+  // pid.
+  const processes = new SessionProcessSupervisor();
+  const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
   return {
     vfs: workspaceVfs(open),
     shell: workspaceShell(open),
@@ -254,6 +339,39 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     async privileged() {
       const workspace = await open();
       return { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs };
+    },
+    async asAgent(agent) {
+      const held = planes.get(agent.cred.uid);
+      if (held) return await held;
+      const opening = (async (): Promise<WorkspaceAgentPlane> => {
+        const origin = await open();
+        const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
+        // A SECOND SHELL over the SAME `SqliteVFS` — never a second filesystem.
+        // `vfs` is handed over rather than reopened for exactly that reason: a
+        // second instance over one database is a second content cache, and one
+        // of the two would serve a stale read. `runAs` is the origin shell's,
+        // or this shell loses the identity-transition path `sudo` and `su`
+        // dispatch on.
+        const asAgent = await NimbusWorkspace.create({
+          sql: opts.sql,
+          transactions: opts.transactions,
+          vfs: origin.vfs,
+          cwd: agent.home,
+          env: { HOME: agent.home, TMPDIR: agent.tmp },
+          identity: {
+            pid: process.pid,
+            cred: processes.cred(process.pid),
+            setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
+            runAs: origin.shell.getRunAsHost(),
+          },
+        });
+        return {
+          vfs: agentVfs(origin.vfs.as(agent.cred)),
+          shell: workspaceShell(() => Promise.resolve(asAgent)),
+        };
+      })();
+      planes.set(agent.cred.uid, opening);
+      return await opening;
     },
   };
 }

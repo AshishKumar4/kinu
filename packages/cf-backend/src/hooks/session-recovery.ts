@@ -189,6 +189,28 @@ export async function fetchDeployedBuildSha(): Promise<string | null> {
   }
 }
 
+/** This page's baseline, read at most once. */
+let pageBuild: Promise<string | null> | null = null;
+
+/**
+ * The build this PAGE loaded, read once and shared.
+ *
+ * One read per document, memoised, because a baseline that is re-read is not a
+ * baseline. Two callers need the same answer and would otherwise each capture
+ * their own: the version-skew notice, whose per-workspace hook is remounted on
+ * every navigation and so re-baselined itself onto whatever was live at the time
+ * — hiding the very skew it exists to report — and the render-failure report,
+ * which is asked for a sha at the moment of a fault and must not answer with the
+ * deployment now serving instead of the one that produced the stack.
+ *
+ * Called eagerly by `index.tsx` at load, so the read happens while the page is
+ * still the page it says it is. Never rejects — see `fetchDeployedBuildSha`.
+ */
+export function pageDeployedBuildSha(): Promise<string | null> {
+  pageBuild ??= fetchDeployedBuildSha();
+  return pageBuild;
+}
+
 /** Skew needs BOTH ends identified: without a baseline (the health read failed
  *  at mount) or a live stamp (dev) there is nothing to compare, and no claim
  *  about versions is honest. */

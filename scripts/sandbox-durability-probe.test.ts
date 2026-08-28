@@ -22,9 +22,15 @@ describe('sandbox durability evidence', () => {
     const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
     temporaryDirectories.push(root);
     const artifact: DurabilityProbeArtifact = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       command: 'bun scripts/sandbox-durability-probe.ts --run',
       runId: '31158290',
+      build: {
+        gitSha: 'a'.repeat(40),
+        workerName: 'kinu-dur-probe-31158290',
+        origin: 'https://kinu-dur-probe-31158290.example.workers.dev',
+        bucketName: 'kinu-dur-probe-31158290',
+      },
       startedAt: '2026-08-24T00:00:00.000Z',
       finishedAt: '2026-08-24T00:11:00.000Z',
       baseMiB: 64,
@@ -40,9 +46,16 @@ describe('sandbox durability evidence', () => {
           chainAlive: true,
           instanceReplaced: true,
           workspaceIntact: true,
-          supervisedServing: true,
         },
         P6: { intactAfterFinalStop: true },
+        P7: {
+          failedProcessId: 'process-failed',
+          failedPort: 18_081,
+          ready: false,
+          unready: 'process process-failed did not restart; no port was exposed',
+          listenerAbsent: true,
+          specsRetained: true,
+        },
       },
     };
 
@@ -56,9 +69,15 @@ describe('sandbox durability evidence', () => {
     const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
     temporaryDirectories.push(root);
     const artifact: DurabilityProbeArtifact = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       command: 'bun scripts/sandbox-durability-probe.ts --run',
       runId: 'e54c7de8',
+      build: {
+        gitSha: 'b'.repeat(40),
+        workerName: 'kinu-dur-probe-e54c7de8',
+        origin: undefined,
+        bucketName: 'kinu-dur-probe-e54c7de8',
+      },
       startedAt: '2026-08-24T00:00:00.000Z',
       finishedAt: '2026-08-24T00:11:00.000Z',
       baseMiB: 64,
@@ -83,9 +102,15 @@ describe('sandbox durability evidence', () => {
     const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
     temporaryDirectories.push(root);
     const artifact: DurabilityProbeArtifact = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       command: 'bun scripts/sandbox-durability-probe.ts --run',
       runId: 'failed-p5',
+      build: {
+        gitSha: 'c'.repeat(40),
+        workerName: 'kinu-dur-probe-failed-p5',
+        origin: undefined,
+        bucketName: 'kinu-dur-probe-failed-p5',
+      },
       startedAt: '2026-08-24T00:00:00.000Z',
       finishedAt: '2026-08-24T00:11:00.000Z',
       baseMiB: 64,

@@ -10,7 +10,7 @@ import {
 } from '../src/jobs/runner';
 import { SignalDelivery } from '../src/orchestrator/signals';
 import {
-  BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
+  BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership,
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
 } from '../src/jobs/index';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index';
@@ -59,6 +59,8 @@ function fakeHost() {
  *  place orphan recovery can happen. */
 function setup(opts: {
   resume?: JobResumer; policy?: BackgroundPolicy; db?: Database; harvest?: JobHarvester;
+  onDetached?: (jobId: string, requestIds: readonly string[]) => Promise<void> | void;
+  onCancelled?: (jobId: string) => Promise<void> | void;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
@@ -86,6 +88,8 @@ function setup(opts: {
     scheduleDrain: () => { drainSchedules++; },
     logActivity: (e: string, d?: string) => logs.push({ e, d }),
     onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
+    onDetached: opts.onDetached,
+    onCancelled: opts.onCancelled,
     resume: opts.resume,
     policy: opts.policy ? () => opts.policy! : undefined,
     harvest: opts.harvest,
@@ -122,6 +126,29 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     // The notification seam fired once, with the settled job.
     expect(notified).toEqual([{ id, status: 'completed' }]);
     expect(eventLog.pending()).toEqual([]);
+  });
+
+  test('starts its durable fiber only after external work is transferred to the job', async () => {
+    const handoff = Promise.withResolvers<void>();
+    const transferred: string[] = [];
+    const { runner, store, stashes, settled } = setup({
+      onDetached: async (jobId) => {
+        transferred.push(jobId);
+        await handoff.promise;
+      },
+    });
+    const controller = new AbortController();
+    const deps = runner.thresholdDeps('run', {}, 'build', controller);
+    const detaching = deps.onThreshold('run', Promise.resolve('done'));
+    await Promise.resolve();
+    expect(transferred).toHaveLength(1);
+    expect(stashes).toEqual([]);
+
+    handoff.resolve();
+    const outcome = await detaching;
+    expect(outcome.detached).toBe(true);
+    await settled();
+    expect(store.list(2).some((job) => job.status === 'completed')).toBe(true);
   });
 
   test('rejecting work fails the job + the wake says failed', async () => {
@@ -285,6 +312,136 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     await settled();
     expect(store.get(id)?.status).toBe('cancelled');        // NOT relabelled failed
     expect(enqueued).toHaveLength(1);                        // and not woken a second time
+  });
+
+  test('cancelling one detached job cancels only its transferred external work', async () => {
+    const cancelled: string[] = [];
+    const { runner, settled } = setup({ onCancelled: async (jobId) => { cancelled.push(jobId); } });
+    const id = runner.create('run', {}, 'build', new AbortController());
+    const work = Promise.withResolvers<never>();
+    runner.detach(id, 'run', work.promise);
+
+    expect(await runner.cancel(id)).toBe(true);
+    expect(cancelled).toEqual([id]);
+
+    work.reject(new Error('aborted'));
+    await settled();
+  });
+
+  test('keeps a job retryable when its transferred external work cannot be cancelled', async () => {
+    let attempts = 0;
+    const { runner, store, settled } = setup({
+      onCancelled: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('device unavailable');
+      },
+    });
+    const controller = new AbortController();
+    const id = runner.create('run', {}, 'build', controller);
+    const work = Promise.withResolvers<never>();
+    runner.detach(id, 'run', work.promise);
+
+    expect(await runner.cancel(id)).toBe(false);
+    expect(store.get(id)?.status).toBe('running');
+    expect(controller.signal.aborted).toBe(false);
+    expect(await runner.cancel(id)).toBe(true);
+    expect(store.get(id)?.status).toBe('cancelled');
+    expect(controller.signal.aborted).toBe(true);
+
+    work.reject(new Error('aborted'));
+    await settled();
+  });
+
+  // Blocker 2. The external cancel must be confirmed BEFORE the job is marked
+  // terminal (the test above is why), and the job's own work can finish inside
+  // that await. Without a fence the settle path recorded `completed` over a
+  // cancel in progress, so the operator's cancel then landed on an
+  // already-terminal job and the device work it named was never stopped.
+  test('work that RESOLVES while the external cancel is confirming does not settle over it', async () => {
+    const confirm = Promise.withResolvers<void>();
+    const { runner, store, settled, enqueued } = setup({ onCancelled: () => confirm.promise });
+    const id = runner.create('run', {}, 'build', new AbortController());
+    const work = Promise.withResolvers<string>();
+    runner.detach(id, 'run', work.promise);
+
+    const cancelling = runner.cancel(id);
+    work.resolve('the command finished anyway');
+    await settled();
+    // The fiber has run to its end and recorded NOTHING: the cancel owns the row.
+    expect(store.get(id)?.status).toBe('running');
+
+    confirm.resolve();
+    expect(await cancelling).toBe(true);
+    expect(store.get(id)?.status).toBe('cancelled');
+    // One wake, and it is the cancel's — not a completion the operator stopped.
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]?.text).toContain('no result to collect');
+  });
+
+  test('work that REJECTS in that same window is not recorded failed either', async () => {
+    const confirm = Promise.withResolvers<void>();
+    const { runner, store, settled, notified } = setup({ onCancelled: () => confirm.promise });
+    const id = runner.create('run', {}, 'build', new AbortController());
+    const work = Promise.withResolvers<never>();
+    runner.detach(id, 'run', work.promise);
+
+    const cancelling = runner.cancel(id);
+    work.reject(new Error('the device dropped the connection'));
+    await settled();
+    expect(store.get(id)?.status).toBe('running');
+
+    confirm.resolve();
+    expect(await cancelling).toBe(true);
+    expect(store.get(id)?.status).toBe('cancelled');
+    expect(notified).toEqual([]);
+  });
+
+  test('a second cancel while the first is in flight fires no second external cancel', async () => {
+    const confirm = Promise.withResolvers<void>();
+    let externalCancels = 0;
+    const { runner, store, settled } = setup({
+      onCancelled: () => { externalCancels += 1; return confirm.promise; },
+    });
+    const id = runner.create('run', {}, 'build', new AbortController());
+    const work = Promise.withResolvers<never>();
+    runner.detach(id, 'run', work.promise);
+
+    const first = runner.cancel(id);
+    // The operator clicking Stop twice: the row still says running, so only the
+    // fence can tell this apart from a fresh cancel.
+    expect(await runner.cancel(id)).toBe(false);
+    expect(externalCancels).toBe(1);
+
+    confirm.resolve();
+    expect(await first).toBe(true);
+    expect(store.get(id)?.status).toBe('cancelled');
+
+    work.reject(new Error('aborted'));
+    await settled();
+  });
+
+  test('a REFUSED cancel hands back the outcome its work reached while refusing', async () => {
+    // The other side of the fence. The refusal leaves the job running by its own
+    // rule, so the work that finished under it is still the job's real story —
+    // holding that outcome back forever would strand a `running` row with no
+    // executor and no result.
+    const confirm = Promise.withResolvers<void>();
+    const { runner, store, settled, enqueued } = setup({
+      onCancelled: async () => { await confirm.promise; throw new Error('device unavailable'); },
+    });
+    const id = runner.create('run', {}, 'build', new AbortController());
+    const work = Promise.withResolvers<string>();
+    runner.detach(id, 'run', work.promise);
+
+    const cancelling = runner.cancel(id);
+    work.resolve('the build finished');
+    await settled();
+
+    confirm.resolve();
+    expect(await cancelling).toBe(false);
+    expect(store.get(id)?.status).toBe('completed');
+    expect(store.get(id)?.result).toBe('"the build finished"');
+    expect(enqueued).toHaveLength(1);
   });
 
   test('cancelRunning aborts every running job and leaves settled jobs alone', async () => {
@@ -508,10 +665,10 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 });
 
 describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring', () => {
-  test('crossing the threshold mints a running job (carrying input) + logs bg_job_started', () => {
+  test('crossing the threshold mints a running job (carrying input) + logs bg_job_started', async () => {
     const { runner, store, logs } = setup();
     const deps = runner.thresholdDeps('heads', { code: '1+1' }, 'build', new AbortController());
-    const outcome = deps.onThreshold('heads', new Promise(() => { /* still running */ }));
+    const outcome = await deps.onThreshold('heads', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
     const id = outcome.detached ? outcome.jobId : '';
     expect(store.get(id)?.status).toBe('running');
@@ -545,7 +702,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       .toBeGreaterThan(BACKGROUND_POLICY.interactive.detachAfterMs);
   });
 
-  test('past the concurrency cap the detach is refused and the work is cancelled', () => {
+  test('past the concurrency cap the detach is refused and the work is cancelled', async () => {
     // A model that sees no result from a slow call launches another; without a
     // bound that compounds into a fork storm (52 concurrent builds → OOM kill).
     const { runner, store, logs } = setup();
@@ -554,7 +711,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     }
     const controller = new AbortController();
     const deps = runner.thresholdDeps('run', { command: 'pystan build' }, 'build', controller);
-    const outcome = deps.onThreshold('run', new Promise(() => { /* still running */ }));
+    const outcome = await deps.onThreshold('run', new Promise(() => { /* still running */ }));
 
     expect(outcome.detached).toBe(false);
     // No new job: the cap is a cap, not a warning.
@@ -567,27 +724,80 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(logs.some((l) => l.e === 'bg_job_refused')).toBe(true);
   });
 
-  test('under the cap a refusal never happens — the boundary is exact', () => {
+  test('under the cap a refusal never happens — the boundary is exact', async () => {
     const { runner, store } = setup();
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
-    const outcome = runner
+    const outcome = await runner
       .thresholdDeps('run', {}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
   });
 
-  test('a settled job frees a slot — the cap counts what is in flight, not what ever ran', () => {
+  test('a settled job frees a slot — the cap counts what is in flight, not what ever ran', async () => {
     const { runner, store } = setup();
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
     store.settle('busy-0', 0, 'done', Date.now());
-    const outcome = runner
+    const outcome = await runner
       .thresholdDeps('run', {}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
+  });
+
+  test('the detach transfers what the call had issued, and OWNS what it issues next', async () => {
+    // Blocker 1. The handover used to be a snapshot taken at the crossing, so a
+    // request the tool issued afterwards — an `execute_tools` script still
+    // launching laptop commands minutes later — belonged to nobody: the turn was
+    // over and the transfer had already named its set. The claim now lands
+    // BEFORE the transfer is awaited, so a request issued from that moment on is
+    // registered under the job at its own INSERT.
+    const ownership = new DeviceRequestOwnership();
+    ownership.report('req-1');
+    ownership.report('req-2');
+    const received: string[][] = [];
+    const ownersDuringTransfer: Array<string | null> = [];
+    const { runner } = setup({
+      onDetached: async (_jobId, requestIds) => {
+        received.push([...requestIds]);
+        // A laptop exec that starts while the handover is still in flight.
+        ownersDuringTransfer.push(ownership.owningJobId);
+        ownership.report('req-late');
+      },
+    });
+    const outcome = await runner
+      .thresholdDeps('run', {}, 'build', new AbortController(), ownership)
+      .onThreshold('run', Promise.resolve('done'));
+
+    expect(outcome.detached).toBe(true);
+    const jobId = outcome.detached ? outcome.jobId : null;
+    expect(received).toEqual([['req-1', 'req-2']]);
+    expect(ownersDuringTransfer).toEqual([jobId]);
+    expect(ownership.owningJobId).toBe(jobId);
+    // `req-late` was never queued for a second transfer — it is the job's.
+    expect(ownership.drain(jobId ?? '')).toEqual([]);
+  });
+
+  test('a refused transfer refuses the detach — no running job, no claim left behind', async () => {
+    const ownership = new DeviceRequestOwnership();
+    ownership.report('req-1');
+    const { runner, store } = setup({
+      onDetached: () => { throw new Error('the device refused the handover'); },
+    });
+    const controller = new AbortController();
+    const outcome = await runner
+      .thresholdDeps('run', {}, 'build', controller, ownership)
+      .onThreshold('run', Promise.resolve('done'));
+
+    expect(outcome.detached).toBe(false);
+    // Live work behind a running job no fiber owns is the state this prevents.
+    expect(store.countRunning()).toBe(0);
+    expect(controller.signal.aborted).toBe(true);
+    // The job it named was just failed; a holder still pointing at it would
+    // insert later requests under a dead owner.
+    expect(ownership.owningJobId).toBeNull();
   });
 });
 

@@ -15,6 +15,11 @@
  * as zero, so the only bound that holds for a body whose length is not announced
  * is the counter the stream is read through.
  *
+ * WHO A REPORT IS ABOUT IS PROVEN, NOT ACCEPTED. The workspace field is a name
+ * the browser read off a URL, so it is checked against the reporter's own
+ * registry before anything is stored, written or counted as accepted. A report
+ * that names no workspace asks nothing and is unchanged.
+ *
  * THE COMMIT POINT IS THE ROW, NOT THE OBJECT. R2 is written first because the
  * row has to carry a pointer to something, which means a failed row write leaves
  * an object nothing references. That object is deleted here before the request
@@ -29,7 +34,7 @@
 
 import type { AuthIdentity } from '../auth/session';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
-import { err, json } from '../lib/http';
+import { err, json, readBounded } from '../lib/http';
 import { sanitizePng, type PngFault } from './png';
 import {
   feedbackRouteFamily,
@@ -58,6 +63,29 @@ export interface FeedbackStore {
 }
 
 /**
+ * What the ownership authority answered about a workspace a report names.
+ *
+ * THREE ARMS, NOT TWO. "Not yours" and "we could not ask" are different facts
+ * with different owners: the first is the reporter's attribution to fix, the
+ * second is our outage, and folding them together would either blame a reporter
+ * for our downtime or accept an unproven attribution during it.
+ *
+ * `owned` carries the name BACK rather than being a boolean, so the row is
+ * written from the authority's answer and never from the submitted string. The
+ * registry keys a workspace by that name — there is no second identifier to
+ * canonicalise to — so what this guarantees is that nothing unproven can reach
+ * the row: a caller cannot write through this type without an answer.
+ *
+ * A name that is not a workspace name at all, and a name that is somebody
+ * else's, are ONE arm on purpose: telling them apart would answer "does this
+ * workspace exist" for any string a prober cares to send.
+ */
+export type WorkspaceAttribution =
+  | { kind: 'owned'; workspace: string }
+  | { kind: 'refused' }
+  | { kind: 'unavailable'; error: string };
+
+/**
  * Everything the submission policy reaches outside itself. Injected rather than
  * imported so the policy is drivable without R2, a Durable Object or an
  * analytics binding — the three things a unit test cannot have and the three
@@ -69,6 +97,11 @@ export interface FeedbackDeps {
    *  the deployment rather than blaming the reporter. */
   store: FeedbackStore | null;
   record(row: FeedbackRecord): Promise<{ id: string } | { error: string }>;
+  /** Whether the reporter owns the workspace their report names. Asked before
+   *  any byte is stored, any row is written and any marker says `accepted`, so
+   *  an attribution nobody proved cannot reach triage. Never asked at all when
+   *  a report names no workspace — general feedback is not a workspace claim. */
+  attributeWorkspace(userId: string, workspace: string): Promise<WorkspaceAttribution>;
   mark(marker: FeedbackMarker): void;
   newId(): string;
   now(): number;
@@ -148,59 +181,6 @@ function readField(form: FormData, name: string, max: number): string {
  *  a refusal drift into two different messages for one refusal. */
 const OVER_REQUEST_LIMIT = `Feedback is limited to ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB. Send the note without the screenshot, or capture a smaller area.`;
 const UNREADABLE_FORM = 'Could not read the feedback form.';
-
-/**
- * The body, or why there is not one. THE BOUND LIVES HERE.
- *
- * `content-length` cannot be the gate: an absent header is `Number('') === 0`,
- * which passes every declared-size check, so a chunked or HTTP/2 upload of any
- * size reached `formData()` and was materialised whole before the screenshot
- * part was ever measured. Counting the stream is the bound that holds whether or
- * not a length was announced.
- *
- * `'too_large'` is answered at the chunk carrying the first byte past `limit`,
- * and the stream is CANCELLED there rather than drained: the rest of the upload
- * is never pulled, EOF is never reached, and no partial form is assembled.
- */
-async function readBounded(
-  request: Request,
-  limit: number,
-): Promise<Uint8Array<ArrayBuffer> | 'too_large' | 'unreadable'> {
-  const body = request.body;
-  if (body === null) return new Uint8Array(0);
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > limit) {
-        await reader.cancel('the feedback body is over the request limit');
-        return 'too_large';
-      }
-      chunks.push(value);
-    }
-  } catch (cause) {
-    // A body that stops arriving is the caller's connection, not our defect —
-    // but it must not leave here as a throw, because an unanswered request is
-    // the one outcome this endpoint has no marker for.
-    diagnostics.failure('feedback.body_unreadable', toKinuError({
-      doing: 'reading a feedback submission body',
-      cause,
-      otherwise: 'unavailable',
-    }), { bytesRead: total });
-    return 'unreadable';
-  }
-  const bounded = new Uint8Array(total);
-  let at = 0;
-  for (const chunk of chunks) {
-    bounded.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return bounded;
-}
 
 /**
  * The bounded bytes as the multipart form they claim to be, or the classified
@@ -283,7 +263,8 @@ async function handleFeedbackSubmission(
   if (bounded === 'too_large') {
     return refuse(deps, 413, OVER_REQUEST_LIMIT, 'too_large', blank);
   }
-  if (bounded === 'unreadable') {
+  if (bounded instanceof KinuError) {
+    diagnostics.failure('feedback.body_unreadable', bounded);
     return refuse(deps, 400, UNREADABLE_FORM, 'malformed', blank);
   }
 
@@ -311,20 +292,57 @@ async function handleFeedbackSubmission(
   if (part !== null && shot === null) {
     return refuse(deps, 415, 'The screenshot must be a PNG file.', 'bad_content_type', observed);
   }
+  if (shot !== null) {
+    // Recorded BEFORE any refusal below it, so a rejection marker states that a
+    // screenshot was carried and how big the part was, whatever the arm — the
+    // attribution refusals included, which happen before the bytes are read.
+    observed.screenshotAttempted = true;
+    observed.screenshotBytes = shot.size;
+  }
 
   if (shot === null && note.length === 0) {
     return refuse(deps, 400, 'Add a note or a screenshot before sending.', 'no_content', observed);
+  }
+
+  // WHO THE REPORT IS ABOUT IS NOT THE REPORTER'S TO ASSERT. The workspace field
+  // is a string the browser derived from a URL, so a caller can put any name in
+  // it; attributing a report to somebody else's workspace corrupts triage and
+  // the audit trail of an account that never filed it. The authority answers
+  // before the screenshot is stored, before the row is written and before any
+  // marker says `accepted` — the three things an unproven claim must not reach.
+  //
+  // A report that names NO workspace is untouched: general feedback is not a
+  // claim about anything, and nothing is asked about it.
+  const attribution = workspaceField.length === 0
+    ? null
+    : await deps.attributeWorkspace(identity.userId, workspaceField);
+  if (attribution?.kind === 'refused') {
+    return refuse(
+      deps, 403,
+      'That workspace is not one of yours. Send the report without a workspace, or file it from the workspace it is about.',
+      'unowned_workspace', observed,
+    );
+  }
+  if (attribution?.kind === 'unavailable') {
+    // OUR outage, and said as one. The report is refused rather than filed
+    // unattributed: a report silently stripped of the workspace it was about is
+    // a worse answer than one the reporter can send again.
+    diagnostics.failure('feedback.workspace_unverified', toKinuError({
+      doing: 'confirming the reporter owns the workspace their report names',
+      cause: attribution.error,
+      otherwise: 'unavailable',
+    }), { feedbackRoute: feedbackRouteFamily(route) });
+    return refuse(
+      deps, 503,
+      'That workspace could not be confirmed right now. Try again in a moment.',
+      'workspace_unverified', observed,
+    );
   }
 
   let screenshot: { key: string; bytes: Uint8Array } | null = null;
   const id = deps.newId();
 
   if (shot !== null) {
-    // Recorded BEFORE any refusal below it, so a rejection marker states that a
-    // screenshot was carried and how big the part was, whatever the arm.
-    observed.screenshotAttempted = true;
-    observed.screenshotBytes = shot.size;
-
     // A COURTESY REFUSAL, NOT THE GATE. Measured 2026-08-24: a multipart part
     // sent with `Content-Type: image/jpeg` and the filename `shot.png` parses
     // back with `File.type === 'image/png'` — the runtime derives the type from
@@ -387,7 +405,9 @@ async function handleFeedbackSubmission(
     email: identity.email,
     note,
     route,
-    workspace: workspaceField.length > 0 ? workspaceField : null,
+    // The authority's answer, never the submitted string: the two refusal arms
+    // above are the only other ways past this line.
+    workspace: attribution?.workspace ?? null,
     objectKey: screenshot?.key ?? null,
     contentType: screenshot === null ? null : FEEDBACK_SCREENSHOT_TYPE,
     bytes: screenshot?.bytes.length ?? null,

@@ -107,19 +107,20 @@ function searchableDeps(opts: {
         displayName: 'Helper',
         subordinate: {
           name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
         },
       }),
       rename: async (input) => ({
         ok: true, name: input.name, displayName: input.displayName,
         subordinate: {
           name: input.name, displayName: input.displayName, role: 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
         },
       }),
       recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, applied: true }),
       spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
       assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
+      knows: async () => true,
       status: async () => ({}),
       message: async (input) => { spawns.push(`send:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
@@ -198,6 +199,9 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
       ['swarm', { task: 'x', ...TWO_BRANCHES }],
       ['hire', { role: 'r', mission: 'm' }],
       ['ask', { agent: 'helper', message: 'm' }],
+      // Both ask TARGETS spend, and the guard runs before either is resolved:
+      // an exhausted label must not be able to mint a temporary agent either.
+      ['ask', { role: 'auditor', message: 'm' }],
       ['send', { agent: 'helper', message: 'm' }],
     ] as const) {
       const refusal = v.parse(BudgetRefusalSchema, await ns[member]!(input));

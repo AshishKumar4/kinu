@@ -140,8 +140,8 @@ export type RunEvent =
       context?: ContextComposition;
     })
   /** A model call that was NOT a turn step — a judge, the fast tier, the
-   *  evolution engine, a compaction fold, a scaffold's own loop, a sandbox
-   *  program's `llm.query`, the memory embedder. `source` is which of them
+   *  evolution engine, a compaction fold, a scaffold's own loop, the memory
+   *  embedder. `source` is which of them
    *  (`events/model-call.ts`), and it is the reason this is its own row type
    *  rather than a `source` field on `step_finish`: the step rows feed the
    *  turn loop's prefix-cache EMA, and a judge's cold prompt in that window

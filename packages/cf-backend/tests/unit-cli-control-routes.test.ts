@@ -1,6 +1,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes';
+import { PRIVATE_NO_STORE } from '../src/lib/security-headers';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
@@ -22,6 +23,9 @@ interface ControlRouteTestBindings<UserStub, AgentStub> {
   UserDO: TestNamespace<UserStub>;
   OrchestratorAgent: TestNamespace<AgentStub>;
   CREDENTIAL_ENCRYPTION_KEY: string;
+  /** The CLI webhook route refuses without it: an unsignable delivery URL is a
+   *  trigger nobody can deliver to (events/webhook-route.ts). */
+  WEBHOOK_ROUTE_SECRET: string;
 }
 
 function testEnv<UserStub, AgentStub>(bindings: ControlRouteTestBindings<UserStub, AgentStub>): Env {
@@ -141,7 +145,12 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     },
     async createDurableWebhook(opts: JsonObject) {
       calls.push(`triggers:webhook:${JSON.stringify(opts)}`);
-      return { trigger_id: 'trg_webhook', url: '/api/workspaces/jarvis/webhook/trg_webhook', secret: 'secret' };
+      return {
+        trigger_id: '01HZY6QK9N4T7M2P8V3XABCDEF',
+        url: '/api/workspaces/jarvis/webhook/01HZY6QK9N4T7M2P8V3XABCDEF/v1-'
+          + 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        secret: 'secret',
+      };
     },
     // Off-table on purpose: the rpc dispatcher must never reach this.
     async destroyAgent(expectedOwnerUserId: string) {
@@ -161,7 +170,10 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     OrchestratorAgent: {
       idFromName(name: string) { return name; },
       get() { return agent; },
-    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+    },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
+  });
   return { env, calls };
 }
 
@@ -208,7 +220,10 @@ describe('CLI control routes', () => {
 
     const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
-    expect(handled(ticket).headers.get('cache-control')).toBe('no-store');
+    // A ticket is a bearer credential in a JSON body. It used to say `no-store`
+    // because this route remembered to; it says the account policy now because
+    // `json()` applies it to every authenticated answer.
+    expect(handled(ticket).headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
     expect(v.parse(TicketResponseSchema, await handled(ticket).json()))
       .toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
     expect(calls).toContain(`connect-ticket:${USER_ID}:jarvis:hash`);
@@ -310,7 +325,10 @@ describe('CLI control routes', () => {
           async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
           async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
         }),
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+      },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
+    });
     const thrown = await handleCliRequest(rpcRequest('createTimerTrigger', [{}]), env);
     expect(thrown?.status).toBe(400);
     expect((await errorBody(thrown)).error).toContain('Timer trigger requires cron or atMs');
@@ -333,7 +351,10 @@ describe('shared ownership claim status mapping', () => {
       OrchestratorAgent: {
         idFromName: (n: string) => n,
         get: () => ({ async claimOwner() { throw new Error(message); } }),
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+      },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
+    });
   }
 
   test('cross-user collision → 403', async () => {

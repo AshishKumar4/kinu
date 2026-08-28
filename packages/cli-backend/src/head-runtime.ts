@@ -55,7 +55,7 @@ export interface CLIHeadRuntimeDeps {
    *  head's `web` tool. */
   webSearch: WebSearchProvider;
   /** Extra codemode namespaces spliced into the head's execute_tools sandbox —
-   *  `web.*` and `llm.query`, WITHOUT `agents.*`/`agent.*`: a head forks its
+   *  `web.*`, WITHOUT `agents.*`/`agent.*`: a head forks its
    *  parent's resources, never its authority to delegate. */
   codemodeExtras: () => CodemodeProvider[];
   /** Execution-grounding seam — the same executor + judge the MCTS engine uses,

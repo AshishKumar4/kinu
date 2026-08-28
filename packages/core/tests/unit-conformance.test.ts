@@ -195,7 +195,8 @@ describe('event briefs name only real callables', () => {
       kind: 'task', body: 'do the thing', from_workspace: 'ws', kinu_mode: 'build',
     } },
     { ...EVENT_BASE, variant: 'subordinate_report', payload_visibility: 'full', payload: {
-      status: 'completed', content: 'done', from_subordinate: 'sub', kinu_mode: 'build',
+      status: 'completed', content: 'done', from_subordinate: 'sub',
+      sequence_id: 'seq-1', kinu_mode: 'build',
     } },
     { ...EVENT_BASE, variant: 'email', payload_visibility: 'full', payload: {
       from: 'a@b.c', to: 'agent@b.c', subject: 's', body_text: 'hi', message_id: null,

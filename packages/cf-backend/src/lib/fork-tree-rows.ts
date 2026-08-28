@@ -28,10 +28,13 @@ export interface MctsRow {
   branch_agent_key?: string | null; msg_id?: string | null; created_at?: number;
 }
 
-/** The empty tree, for a payload that named no node at all. */
+/** The empty tree, for a payload whose vertices link into no root at all — every
+ *  caller guards the empty case, so this is the malformed one. No `action`: the
+ *  band labels its root from the RUN's name when the node carries none, and the
+ *  word `root` in this slot is what a reader saw instead of the search's name. */
 const NO_TREE: ForkNode = {
   id: "root", parentId: null, depth: 0, visits: 0, value: 0,
-  status: "open", action: "root", children: [],
+  status: "open", action: "", children: [],
 };
 
 /**

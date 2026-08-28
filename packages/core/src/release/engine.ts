@@ -42,6 +42,7 @@ import type {
   ReleaseSource,
 } from './types';
 import { shellQuote } from '../utils/shell';
+import { validateReleasePatchTargets } from './path-safety';
 import {
   approvalTypeForEnvironment,
   deployApprovalDigest,
@@ -366,10 +367,20 @@ export class ReleaseEngine {
     if (!change.patch?.trim()) {
       return { ok: false, error: 'change has no patch — store the unified diff first (action=update with patch), then apply' };
     }
+    // BEFORE the working copy is set up, let alone written: the protected-path
+    // rule is an authority question, and answering it after a clone has already
+    // run is answering it late. `validateReleasePatchPath` has existed and been
+    // exported this whole time; nothing on the apply path ever called it, so a
+    // patch naming `.env`, `.ssh/`, `wrangler.jsonc` or `.git/` applied with no
+    // inspection at all.
+    const forbidden = validateReleasePatchTargets(change.patch);
+    if (forbidden) {
+      await this.ledger.recordCheck(changeId, { name: 'apply patch', status: 'failed', stderr: cap(forbidden) });
+      return { ok: false, error: forbidden };
+    }
 
     const statusErr = await this.normalizeToPatching(change);
     if (statusErr) return { ok: false, error: statusErr };
-
     const workdir = this.workdirFor(changeId);
     const setupErr = binding.kind === 'github'
       ? await this.ensureGithubWorkdir(exec, changeId, binding, workdir)
@@ -649,6 +660,31 @@ export class ReleaseEngine {
         error:
           `rollback target ${target} is a platform version id, not a git commit — no git reset can restore it. ` +
           `Pass deployment.command with an explicit rollback command (e.g. "bunx wrangler rollback ${target}")`,
+      };
+    }
+
+    // Digest-bound approval, the same rule `deploy()` already enforces. Without
+    // it `hasApproved` was the whole gate: any approved rollback could be spent
+    // on whatever `opts.command` the caller passed, and the model's release tool
+    // is one of the callers. `platformCommand` is null for a commit target,
+    // which is the same "no command — restore this target with git" the approval
+    // recorded, so a git rollback needs no new ceremony and a platform rollback
+    // must have had ITS command approved.
+    const expectedDigest = deployApprovalDigest({
+      approvalType: 'rollback',
+      patch: change.patch,
+      command: platformCommand,
+    });
+    const digestBound = approvals.some(
+      (a) => a.approvalType === 'rollback' && a.decision === 'approved' && a.argumentDigest === expectedDigest,
+    );
+    if (!digestBound) {
+      return {
+        ok: false,
+        error:
+          "rollback rejected: the approved 'rollback' approval was for different arguments (the patch or the "
+          + 'rollback command changed after approval). Request a fresh rollback approval for this command, '
+          + 'then roll back.',
       };
     }
 

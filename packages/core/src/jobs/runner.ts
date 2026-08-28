@@ -15,6 +15,7 @@ import type { Schedule } from '../types/primitives';
 import type { AgentSignal, SignalDeliverer, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
 import type { ActiveRoster } from '../prompting/volatile-context';
 import { nanoid } from '../utils/nanoid';
@@ -160,6 +161,16 @@ export interface BackgroundJobRunnerDeps {
    *  the backend's notification seam (e.g. Mission Inbox owner emails).
    *  Never throws into the fiber. */
   onSettled?(job: BackgroundJob): void;
+  /** Transfer the external requests this invocation had already issued when it
+   *  crossed the threshold to the job's durable identity, before the foreground
+   *  promise is released. Throws when it cannot: a job that does not own its
+   *  external work must not run. Requests issued AFTER the handoff are not
+   *  transferred at all — the owning job's identity travels with the call
+   *  instead (see ./device-ownership). */
+  onDetached?(jobId: string, requestIds: readonly string[]): Promise<void> | void;
+  /** Cancel external work transferred to this exact durable job. Throws to
+   *  REFUSE the cancel, which leaves the job running and retryable. */
+  onCancelled?(jobId: string): Promise<void> | void;
   /** Re-drive an evicted job from its durable checkpoint. When absent, an evicted
    *  running job is failed (legacy behavior); when present, the runner reclaims
    *  the job under a fresh lease epoch and re-drives it in a new durable fiber. */
@@ -235,6 +246,30 @@ export class BackgroundJobRunner {
    *  a DO eviction loses them, and recover() then fails the orphan. */
   private readonly controllers = new Map<string, AbortController>();
 
+  /**
+   * Jobs whose operator cancel is in flight, and the terminal write each one is
+   * holding back.
+   *
+   * The fence exists because {@link cancel} must confirm the EXTERNAL teardown
+   * before it marks the job terminal (a refused device cancel has to leave the
+   * job running and retryable), and the job's own work can finish inside that
+   * await. Without the fence the settle path recorded `completed` over a cancel
+   * in progress, so the operator's cancel then landed on an already-terminal
+   * job and the device work it named was never stopped.
+   *
+   * In-memory, and no durable flag is wanted: a cancel is an operator action
+   * inside ONE activation, so an isolate that dies mid-cancel correctly leaves
+   * the job `running` for the operator to cancel again. A durable "cancelling"
+   * mark would instead need its own recovery path to un-stick.
+   *
+   * `fenced` is the outcome the work reached while the fence was held. It is
+   * REPLAYED when the external cancel is refused — the job goes on running by
+   * that refusal's own rule, so its completed work is still its real story and
+   * the agent is still owed the wake — and dropped when the cancel succeeds.
+   */
+  private readonly cancelling = new Set<string>();
+  private readonly fenced = new Map<string, () => Promise<void>>();
+
   constructor(private readonly deps: BackgroundJobRunnerDeps) {}
 
   /** Mint a job row (carrying the tool input for retry) + register its cancel
@@ -301,17 +336,30 @@ export class BackgroundJobRunner {
 
   /** ThresholdDeps for withBackgroundThreshold: on cross, mint a job and keep
    *  the live work alive durably — unless the concurrency cap is already full,
-   *  in which case the work is cancelled and the model is told why. */
-  thresholdDeps<T>(kind: string, input: T, mode: WorkMode, controller: AbortController): ThresholdDeps {
+   *  in which case the work is cancelled and the model is told why.
+   *
+   *  `ownership` is THIS invocation's device-request holder. A detach drains it
+   *  — claiming the invocation for the job and taking the ids issued so far in
+   *  one step — so every request the call issues afterwards is registered under
+   *  the job directly, with no second transfer to race. */
+  thresholdDeps<T>(
+    kind: string,
+    input: T,
+    mode: WorkMode,
+    controller: AbortController,
+    ownership?: DeviceRequestOwnership,
+  ): ThresholdDeps {
     return {
       thresholdMs: this.policy.detachAfterMs,
-      onThreshold: (k, promise) => this.onThreshold(k, input, mode, controller, promise),
+      onThreshold: async (k, promise) =>
+        await this.onThreshold(k, input, mode, controller, promise, ownership),
     };
   }
 
-  private onThreshold<T>(
+  private async onThreshold<T>(
     kind: string, input: T, mode: WorkMode, controller: AbortController, promise: Promise<T>,
-  ): DetachOutcome {
+    ownership?: DeviceRequestOwnership,
+  ): Promise<DetachOutcome> {
     const running = this.deps.store.countRunning();
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
       controller.abort(new Error('background-job concurrency cap reached'));
@@ -320,8 +368,56 @@ export class BackgroundJobRunner {
     }
     const jobId = this.create(kind, input, mode, controller);
     this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
-    this.detach(jobId, kind, promise);
-    return { detached: true, jobId };
+    const detached = await this.beginDetachedWork(jobId, kind, controller, promise, ownership);
+    return detached
+      ? { detached: true, jobId }
+      : { detached: false, reason: `The "${kind}" call could not transfer its external work to the background, so it was cancelled.` };
+  }
+
+  /** Complete ownership transfer before the durable fiber begins. A failed
+   * transfer must not leave live work behind a running job no fiber owns. */
+  private async beginDetachedWork<T>(
+    jobId: string,
+    kind: string,
+    controller: AbortController,
+    promise: Promise<T>,
+    ownership?: DeviceRequestOwnership,
+  ): Promise<boolean> {
+    // Drained BEFORE the transfer is awaited: the job's identity has to be
+    // visible to any request the call issues while that transfer is in flight,
+    // and the drain closes the transferred set in the same tick so no id falls
+    // between the two (./device-ownership).
+    const requestIds = ownership?.drain(jobId) ?? [];
+    try {
+      await this.deps.onDetached?.(jobId, requestIds);
+      this.detach(jobId, kind, promise);
+      return true;
+    } catch (err) {
+      // The job this named is about to be failed, so it must stop being the
+      // owner a later request would be inserted under.
+      ownership?.release();
+      controller.abort(err);
+      this.controllers.delete(jobId);
+      this.failUnsettled(jobId, err);
+      try {
+        await this.wake(jobId);
+      } catch (wakeError) {
+        diagnostics.failure('jobs.detach_transfer_wake_failed', toKinuError({
+          doing: 'wake an agent after its external-work transfer failed', cause: wakeError, otherwise: 'io',
+        }), { jobId });
+      }
+      // The live promise no longer has a fiber consuming it. Observe the abort
+      // rejection so a handoff failure cannot create an unhandled rejection.
+      void promise.catch((reason) => {
+        if (reason === err) return;
+        diagnostics.failure('jobs.detach_transfer_work_rejected', toKinuError({
+          doing: 'observe work after its external-work transfer failed',
+          cause: reason,
+          otherwise: 'unavailable',
+        }), { jobId });
+      });
+      return false;
+    }
   }
 
   /** Keep a backgrounded promise alive in a durable fiber; on settle, record the
@@ -387,16 +483,25 @@ export class BackgroundJobRunner {
     // A cancelled job was already marked; its promise rejects with the abort,
     // which we must NOT relabel as a generic failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
-    if (outcome.ok) this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
-    else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
-    // The lifecycle's OTHER end: start/refuse/cancel/resume already reach
-    // logActivity (console.log + the queryable activity_log table), but the
-    // terminal settle/fail never did — the one event that actually answers
-    // "is this job still running", silently missing from both `wrangler tail`
-    // and the activity log an operator would otherwise check.
-    this.deps.logActivity?.('bg_job_settled', outcome.ok ? `${jobId} completed` : `${jobId} failed — ${outcome.error}`);
-    this.notifySettled(jobId);
-    await this.wake(jobId);
+    const record = async (): Promise<void> => {
+      if (outcome.ok) this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
+      else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
+      // The lifecycle's OTHER end: start/refuse/cancel/resume already reach
+      // logActivity (console.log + the queryable activity_log table), but the
+      // terminal settle/fail never did — the one event that actually answers
+      // "is this job still running", silently missing from both `wrangler tail`
+      // and the activity log an operator would otherwise check.
+      this.deps.logActivity?.('bg_job_settled', outcome.ok ? `${jobId} completed` : `${jobId} failed — ${outcome.error}`);
+      this.notifySettled(jobId);
+      await this.wake(jobId);
+    };
+    // A cancel is confirming this job's external teardown right now, and it will
+    // decide the terminal row (see `cancelling`). Hold the outcome for it.
+    if (this.cancelling.has(jobId)) {
+      this.fenced.set(jobId, record);
+      return;
+    }
+    await record();
   }
 
   /**
@@ -473,6 +578,9 @@ export class BackgroundJobRunner {
    *  is what usually failed, and the settle notification (which never throws)
    *  already surfaces the job in the Tasks view. */
   private failUnsettled<T>(jobId: string, err: T): boolean {
+    // A cancel in flight decides this job's terminal row; a force-fail written
+    // under it would be exactly the write the fence exists to stop.
+    if (this.cancelling.has(jobId)) return false;
     try {
       const job = this.deps.store.get(jobId);
       if (!job || job.status !== 'running') return true;
@@ -616,6 +724,35 @@ export class BackgroundJobRunner {
    * rejection or wake a second time.
    */
   async cancel(jobId: string): Promise<boolean> {
+    if (this.deps.store.get(jobId)?.status !== 'running') return false;
+    // A second operator click must not fire a second device cancel over work the
+    // first one is still tearing down.
+    if (this.cancelling.has(jobId)) return false;
+    this.cancelling.add(jobId);
+    let refusal: { readonly error: unknown } | undefined;
+    try {
+      // The external owner must confirm first. Marking the job terminal before
+      // this call made a failed device cancel unretryable while its work ran.
+      await this.deps.onCancelled?.(jobId);
+    } catch (err) {
+      refusal = { error: err };
+    } finally {
+      // Left here and not later: everything below runs synchronously up to the
+      // wake, so the job's own settle cannot interleave between the two.
+      this.cancelling.delete(jobId);
+    }
+    const held = this.fenced.get(jobId);
+    this.fenced.delete(jobId);
+    if (refusal) {
+      diagnostics.failure('jobs.external_cancel_failed', toKinuError({
+        doing: 'cancel external work transferred to a background job', cause: refusal.error, otherwise: 'unavailable',
+      }), { jobId });
+      // Refused, so the job goes on running — and if its work finished while the
+      // refusal was in flight, that outcome is the job's real story and the
+      // agent is still owed it.
+      if (held) await held();
+      return false;
+    }
     if (!this.settleCancelled(jobId)) return false;
     await this.wake(jobId);
     return true;

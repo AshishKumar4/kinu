@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/scaffold/shadow.ts b/packages/core/src/scaffold/shadow.ts
+index 1c2659d2e..8687f105a 100644
 --- a/packages/core/src/scaffold/shadow.ts
 +++ b/packages/core/src/scaffold/shadow.ts
-@@ -595,7 +595,7 @@
-     }
+@@ -715,7 +715,7 @@ export async function applyPromotionDecision(
+     void sql`UPDATE scaffold_versions
+         SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
+         WHERE version = ${pending.version}
+-           OR (status = 'current' AND version != ${pending.version})`;
++           OR (status = 'current' AND version = ${pending.version})`;
+     // Pointer committed. The live file is the rebuildable view, refreshed
+     // after; execution reads the pointer's version file either way.
      await rt.identity.scaffold.write(pendingCode);
-     void sql`UPDATE scaffold_versions SET status = 'historical'
--        WHERE status = 'current' AND version != ${pending.version}`;
-+        WHERE status = 'current' AND version = ${pending.version}`;
-     void sql`UPDATE scaffold_versions SET status = 'current'
-         WHERE version = ${pending.version}`;
-     return { newCurrentVersion: pending.version, action: 'promote' };

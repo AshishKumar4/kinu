@@ -104,6 +104,34 @@ describe('hosted Nimbus workspace provider', () => {
     });
   });
 
+  test('the origin file plane reads a bounded prefix through fixed Node code', async () => {
+    const box = fakeBox();
+    const expected = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    let requestEnv: Record<string, string> | undefined;
+    box.exec = async (command, options) => {
+      requestEnv = options?.env;
+      return {
+        command,
+        success: true,
+        stdout: Buffer.from(expected).toString('base64'),
+        stderr: '',
+        exitCode: 0,
+      };
+    };
+
+    const bytes = await nimbusSessionFiles(box).readRange('/home/user/large.png', 0, 512 * 1024);
+
+    expect(bytes).toEqual(expected);
+    // The reader is fixed Node source. Path, offset and length travel only in
+    // its JSON environment payload — never interpolated into shell text — and
+    // it receives the admitted window, not an implicit whole-file read.
+    expect(requestEnv).toBeDefined();
+    const payload = Object.values(requestEnv ?? {})[0] ?? '';
+    expect(payload).toContain('"path":"/home/user/large.png"');
+    expect(payload).toContain('"offset":0');
+    expect(payload).toContain('"length":524288');
+  });
+
   test('declares inbound networking only when the host can publish previews', () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();

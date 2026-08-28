@@ -128,6 +128,20 @@ export interface LiveHeadRun {
   readonly total: number;
 }
 
+/**
+ * Why a head carries no report of its own on a run that settled.
+ *
+ * The synthesis is the run's answer, and it is written from the reports that
+ * arrived. A head still in flight when that happens has missed its own run:
+ * `head_merge_results` is what every reader treats as the settlement, so the
+ * head cannot report into it afterwards. Its own sentence rather than
+ * `FORK_INTERRUPTED_REASON`, which is about a later activation finding no
+ * executor — a different fact with a different remedy.
+ */
+export const UNREPORTED_AT_MERGE_REASON =
+  'no report at the synthesis: the run merged what had arrived, and this head '
+  + 'was still in flight when it did';
+
 /** One run whose heads were still marked `running` when nothing was left to
  *  run them — what {@link HeadJournal.abandonRunning} settled. */
 export interface AbandonedHeadRun {
@@ -150,12 +164,74 @@ export class HeadJournal {
       ON CONFLICT(root_id) DO UPDATE SET rationale = excluded.rationale`;
   }
 
+  /**
+   * Open this branch's row — or RE-OPEN the row this id already has.
+   *
+   * THE ONE RESET TRANSITION, and both re-drive paths reach it. It is an UPSERT
+   * because a branch has no durable checkpoint: a re-drive can only re-RUN it, and
+   * the one thing it must not do is re-run it as a NEW branch. Both callers therefore
+   * arrive with an id they already used —
+   *
+   *   - a swarm's re-entry re-runs a node that was spawned and never recorded a tree
+   *     row, under the id its own row carries (`strategy/swarm-resume.ts`);
+   *   - a fork's re-drive re-spawns a head whose id is DERIVED from its branch point
+   *     and slot rather than minted (`heads/controller.ts`).
+   *
+   * so neither needs a reset of its own, and there is no second place where a head
+   * row's outcome is cleared.
+   *
+   * A plain `INSERT` could not be reached twice, which is why both paths used to
+   * retire the old rows and mint a parallel set: a five-branch request grew five
+   * fresh `aborted` rows per attempt until thirty rows described five branches, and
+   * the surface drew every one of them as a failure.
+   *
+   * WHAT A RE-OPEN CLEARS is everything the previous attempt asserted about an
+   * OUTCOME — the terminal status, its clock, its summary, its error, its decisions
+   * and artifacts, and every usage column. Usage especially: a re-attempt that
+   * inherited the dead one's token counts would bill the search twice for the work
+   * it is doing again.
+   *
+   * `spawned_at` MOVES TO NOW, and that is load-bearing rather than cosmetic.
+   * {@link markInterrupted} and {@link abandonRunning} are both bounded by
+   * `spawnedBefore`, so a re-opened row is outside a sweep running beside it —
+   * whichever order the two run in.
+   *
+   * THE STEPS GO WITH IT. `head_steps` is this branch's transcript and the seq space
+   * is its own, so leaving the dead attempt's tail under a shorter new one would
+   * render a transcript no single attempt ever produced.
+   *
+   * THE CONFLICT ARM IS THE RE-DRIVE, and a FIRST attempt never reaches it: a fresh
+   * root's ids have never been written. So this is not a general-purpose upsert with
+   * a hidden second meaning — the insert opens a branch, the update re-opens one.
+   */
   insertSpawn(input: HeadInput): void {
     void this.sql`INSERT INTO head_journal
       (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
       VALUES (${input.id}, ${input.parentId}, ${input.rootId}, ${input.depth},
               ${input.task}, ${input.rationale}, 'running', ${input.budget.spawnedAt},
-              ${input.mergeStrategy})`;
+              ${input.mergeStrategy})
+      ON CONFLICT(id) DO UPDATE SET
+        status = 'running',
+        spawned_at = excluded.spawned_at,
+        task = excluded.task,
+        rationale = excluded.rationale,
+        completed_at = NULL,
+        wall_clock_ms = 0,
+        summary = NULL,
+        error_message = NULL,
+        decisions_json = NULL,
+        artifacts_json = NULL,
+        tool_calls_json = NULL,
+        child_head_ids_json = NULL,
+        file_changes_json = NULL,
+        token_input = NULL,
+        token_output = NULL,
+        token_cache_read = NULL,
+        token_cache_write = NULL,
+        token_cache_write_1h = NULL,
+        token_reasoning = NULL,
+        neurons = NULL`;
+    void this.sql`DELETE FROM head_steps WHERE head_id = ${input.id}`;
   }
 
   recordReport(report: HeadReport): void {
@@ -472,7 +548,35 @@ export class HeadJournal {
     }));
   }
 
+  /**
+   * The settlement — and the transition that CLOSES the roster.
+   *
+   * A cached merge IS the run's settlement: `findResumableRun` treats a run with
+   * a `head_merge_results` row as finished, and `assembleRun` reports it
+   * `completed`. So every head still claiming to execute has to be settled HERE,
+   * in the same transition, and before the merge row exists: a settled run whose
+   * roster still counts a running head is a run the surface describes as *settled
+   * · 1 running · 3 reported*, and a run that has already synthesised cannot
+   * accept a report from that head afterwards.
+   *
+   * `aborted` with a reason, which is the terminal state {@link abandonRunning}
+   * writes for the same fact — a head that will not report. NOT
+   * `FORK_INTERRUPTED_REASON`: that sentence is about a later activation finding
+   * no executor, and what happened here is that the synthesis went ahead without
+   * this head. The counts stay total-consistent because the status moves and
+   * nothing else does — no row is added, none is removed.
+   *
+   * Idempotent in both halves: `INSERT OR REPLACE` for the merge, and a
+   * predicate that matches only unfinished rows, so settling twice writes the
+   * same row and touches no head the first pass already closed.
+   */
   cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void {
+    void this.sql`UPDATE head_journal
+      SET status = 'aborted', completed_at = ${Date.now()},
+          error_message = ${UNREPORTED_AT_MERGE_REASON}
+      WHERE root_id = ${rootId}
+        AND id != ${rootId}
+        AND (status = 'running' OR status = 'interrupted')`;
     void this.sql`INSERT OR REPLACE INTO head_merge_results
       (root_id, merged_narrative, selected_decisions_json, unresolved_questions_json,
        recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
@@ -534,6 +638,24 @@ export class HeadJournal {
         total: row.total,
       }));
     return { items, total };
+  }
+
+  /**
+   * Every run with a head still marked running, as full run projections.
+   *
+   * This is an authority/recovery read, not a UI page: omitting a 101st root
+   * would leave it permanently live after an activation sweep. The root query
+   * stays bounded by the running-status index rather than by journal history,
+   * then each root uses the same projection as listRuns/readRun.
+   */
+  listRunningRuns(): HeadRunView[] {
+    const roots = this.sql<{ root_id: string; spawned_at: number }>`
+      SELECT root_id, MIN(spawned_at) AS spawned_at
+      FROM head_journal
+      WHERE status = 'running'
+      GROUP BY root_id
+      ORDER BY spawned_at ASC`;
+    return roots.map((row) => this.assembleRun(row.root_id, row.spawned_at));
   }
 
   listRuns(limit: number): HeadRunView[] {

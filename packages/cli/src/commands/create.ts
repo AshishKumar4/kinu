@@ -48,7 +48,7 @@ export async function createCommand(name: string | undefined, opts: {
       console.log(`\n${DIM('Run:')} ${ACCENT(alias || `kinu run ${name}`)} ${DIM('"do something"')}\n`);
     } catch (err) {
       spinner.fail('Create failed');
-      printFailure(err);
+      printFailure({ cause: err });
       process.exit(1);
     }
     return;
@@ -67,7 +67,7 @@ export async function createCommand(name: string | undefined, opts: {
     if (hint) console.log(DIM(hint));
   } catch (err) {
     spinner.fail('Create failed');
-    printFailure(err);
+    printFailure({ cause: err });
     process.exit(1);
   }
 }
@@ -89,7 +89,7 @@ async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: st
     console.log(`\n${DIM('Run:')} ${ACCENT(`kinu chat ${created.name}`)}\n`);
   } catch (err) {
     spinner.fail('Could not add an agent');
-    printFailure(err);
+    printFailure({ cause: err });
     process.exit(1);
   }
 }

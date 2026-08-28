@@ -10,18 +10,34 @@
  * not attach.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, decide, opsAreBlind, priceOps,
   sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
+import { refusalText } from './fixtures/storage-matrix/admission';
 import {
   addressArmRequest,
+  benchmarkExitCode,
+  devboxAdmission,
+  fixtureConfigForArms,
   isTransientContainerCreateError,
+  parseFrozenControlArtifact,
+  parseOptions,
+  postLiveTeardown,
   rankableTicks,
+  renderFrozenControls,
   resourceNames,
+  startupPollVerdict,
+  recommend,
+  teardownLiveArms,
 } from './bench-devbox-strategies';
-
 const tick = (
   arm: string, workload: string, wallMs: number,
   extra: Partial<TickRecord> = {},
@@ -68,6 +84,35 @@ describe('arm request addressing', () => {
       path: '/create?box=ab-overlay-cas',
       body: { strategy: 'snapshot-chain' },
     });
+  });
+});
+
+describe('startup polling contract', () => {
+  test('waits for this restoration, not a stale durable attach record', () => {
+    expect(startupPollVerdict({
+      state: {
+        restoration: 'unstarted',
+        lastAttach: { kind: 'attached', detail: 'the previous generation' },
+      },
+    })).toEqual({ kind: 'pending' });
+  });
+
+  test('returns only after restoration publishes its durable attach outcome', () => {
+    expect(startupPollVerdict({
+      state: {
+        restoration: 'attached',
+        lastAttach: { kind: 'attached', detail: 'the work directory is mounted' },
+      },
+    })).toEqual({
+      kind: 'attached',
+      attach: { kind: 'attached', detail: 'the work directory is mounted' },
+    });
+  });
+
+  test('stops polling only on a definitive unattached restoration', () => {
+    expect(startupPollVerdict({
+      state: { restoration: 'unattached', unready: 'the recovery ladder refused' },
+    })).toEqual({ kind: 'failed', reason: 'the recovery ladder refused' });
   });
 });
 
@@ -154,23 +199,55 @@ describe('the decision rule', () => {
   });
 });
 
-describe('the verify gate at the rule', () => {
-  test('a verify-failed arm filtered out leaves the rule refusing, not ranking', () => {
-    // THE HOLE THIS PINS. A real run had overlay-cas fail /verify and still
-    // produce twenty priced ticks, so `decide` computed a ratio from an arm that
-    // never attached and would have published `chain stays default` with
-    // numbers. The gate lives at the caller, so this proves the shape the caller
-    // must produce: with the failed arm's ticks removed, the rule refuses.
-    const withFailedArm = clearsTheBar;
-    expect(decide(withFailedArm, 'snapshot-chain', 'overlay-cas').kind).toBe('o-p-wins');
-
-    const filtered = rankableTicks([
+describe('the lifecycle-proof gate at the rule', () => {
+  test('a blank-disk arm is filtered out and the rule refuses to rank it', () => {
+    const eligible = rankableTicks([
       { strategy: 'snapshot-chain', verifyPassed: true },
       { strategy: 'overlay-cas', verifyPassed: false },
-    ], withFailedArm);
-    const verdict = decide(filtered, 'snapshot-chain', 'overlay-cas');
+    ], clearsTheBar);
+    const verdict = decide(eligible, 'snapshot-chain', 'overlay-cas');
     expect(verdict.kind).toBe('inconclusive');
     expect(verdict.kind === 'inconclusive' ? verdict.reason : '').toContain('overlay-cas produced no');
+  });
+
+  test('a blank lifecycle arm refuses admission, ranking, recommendation, and success', () => {
+    const arm = {
+      strategy: 'bounded-layers' as const,
+      box: 'blank-arm',
+      verifyPassed: false,
+      verifyChecks: [{ name: 'wake restoration', pass: false, detail: 'blank disk' }],
+      attachColdMs: null, attachColdKind: '', attachWarmMs: null, attachWarmKind: '',
+      checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '', phases: [], decisiveTicks: [
+        tick('bounded-layers', 'git', 10),
+      ],
+      quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
+      generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
+      ops: null, teardown: null, notes: [],
+    };
+    const cleanup = {
+      attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
+      bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
+      localSecretsProcessesAbsent: true, countersReconciled: true,
+      replayIdempotent: true, multipartResidue: 0, errors: [],
+    };
+    const admission = devboxAdmission([arm], {
+      date: '2026-08-28', worker: 'blank-fixture', bucket: 'blank-bucket',
+      image: 'docker.io/cloudflare/sandbox:0.12.8', seed: '1', 'loop budget ms': '1',
+    }, 'test-token', cleanup);
+
+    expect(admission.admitted).toBe(false);
+    expect(refusalText(admission)).toContain('blank disk');
+    expect(rankableTicks([arm], arm.decisiveTicks)).toEqual([]);
+    expect(() => recommend([arm], admission)).toThrow('RECOMMENDATION REFUSED');
+    expect(benchmarkExitCode(null, admission)).toBe(1);
+    // `--keep` may retain the resources for inspection; it cannot turn refusal
+    // into a successful benchmark process.
+    expect(benchmarkExitCode(null, admission)).toBe(1);
+  });
+
+  test('the driver has no monolithic verification request', () => {
+    const source = readFileSync(new URL('./bench-devbox-strategies.ts', import.meta.url), 'utf8');
+    expect(source).not.toContain('/verify?box=');
   });
 
   test('a ratio near 1.0 is what a chain-measured-twice fallthrough would look like', () => {
@@ -357,15 +434,307 @@ describe('container create retry classification', () => {
   });
 });
 
-describe('per-run resource ownership', () => {
-  test('one run owns one uniquely named Worker, bucket and container-app set', () => {
-    const resources = resourceNames('20260826003000');
-    expect(resources.worker).toBe('kinu-devbox-bench-20260826003000');
-    expect(resources.bucket).toBe(resources.worker);
-    expect(resources.containerApps).toEqual([
-      `${resources.worker}-snapshotchainbox`,
-      `${resources.worker}-r2fsbox`,
-      `${resources.worker}-overlaycasbox`,
+describe('per-run fixture deployment', () => {
+  const template = readFileSync(join(import.meta.dir, '..', 'packages/devbox/bench/wrangler.jsonc'), 'utf8');
+  const runId = '20260826003000';
+  /** Typed by the driver's own parameter, so a strategy typo fails here. */
+  interface FixtureCase {
+    readonly arms: Parameters<typeof resourceNames>[1];
+    readonly classes: readonly string[];
+    readonly apps: readonly string[];
+  }
+  const cases: readonly FixtureCase[] = [
+    {
+      arms: ['bounded-layers', 'merkle-pack'],
+      classes: ['BoundedLayersBox', 'MerklePackBox', 'BenchOpCounter'],
+      apps: ['boundedlayersbox', 'merklepackbox'],
+    },
+    {
+      arms: ['merkle-pack'],
+      classes: ['MerklePackBox', 'BenchOpCounter'],
+      apps: ['merklepackbox'],
+    },
+    {
+      arms: ['snapshot-chain', 'r2fs', 'overlay-cas', 'bounded-layers', 'merkle-pack'],
+      classes: ['SnapshotChainBox', 'R2fsBox', 'OverlayCasBox', 'BoundedLayersBox', 'MerklePackBox', 'BenchOpCounter'],
+      apps: ['snapshotchainbox', 'r2fsbox', 'overlaycasbox', 'boundedlayersbox', 'merklepackbox'],
+    },
+    {
+      arms: [],
+      classes: ['BenchOpCounter'],
+      apps: [],
+    },
+  ];
+
+  for (const { arms, classes, apps } of cases) {
+    test(`deploys only the selected [${arms.join(', ')}] fixture classes`, () => {
+      const resources = resourceNames(runId, arms);
+      const config = JSON.parse(fixtureConfigForArms(template, resources, arms, '/tmp/candidate.Dockerfile'));
+
+      expect(resources.worker).toBe(`kinu-devbox-bench-${runId}`);
+      expect(resources.bucket).toBe(resources.worker);
+      expect(resources.containerApps).toEqual(apps.map((app) => `${resources.worker}-${app}`));
+      expect(config.durable_objects.bindings.map((binding: { class_name: string }) => binding.class_name)).toEqual(classes);
+      expect(config.migrations[0].new_sqlite_classes).toEqual(classes);
+      expect(config.containers.map((container: { class_name: string }) => container.class_name)).toEqual(
+        classes.filter((className: string) => className !== 'BenchOpCounter'),
+      );
+      for (const container of config.containers) {
+        expect(container.image).toBe(
+          container.class_name === 'BoundedLayersBox' || container.class_name === 'MerklePackBox'
+            ? '/tmp/candidate.Dockerfile'
+            : 'docker.io/cloudflare/sandbox:0.12.8',
+        );
+      }
+    });
+  }
+  test('drops a future migration whose classes are all pruned', () => {
+    const synthetic = template.replace(
+      '"migrations": [',
+      '"migrations": [{ "tag": "future", "new_sqlite_classes": ["FutureBox"] },',
+    );
+    const config = JSON.parse(fixtureConfigForArms(
+      synthetic,
+      resourceNames(runId, ['bounded-layers']),
+      ['bounded-layers'],
+      '/tmp/candidate.Dockerfile',
+    ));
+    expect(config.migrations.some((migration: { tag: string }) => migration.tag === 'future')).toBe(false);
+  });
+});
+
+
+describe('candidate-only controls', () => {
+  const multiArmArtifact = JSON.stringify({
+    meta: {
+      date: '2026-08-25',
+      worker: 'control-worker',
+      bucket: 'control-bucket',
+      image: 'docker.io/cloudflare/sandbox:0.12.8',
+      seed: '20260824',
+      'loop budget ms': '6000',
+    },
+    arms: [
+      { strategy: 'snapshot-chain', verifyPassed: true },
+      { strategy: 'r2fs', verifyPassed: false },
+      { strategy: 'bounded-layers', verifyPassed: true },
+    ],
+  });
+
+  test('selects current candidates and accepts optional, strategy-qualified controls', () => {
+    const options = parseOptions([
+      '--candidates-only',
+      '--control', 'snapshot-chain=bench-artifacts/controls.json',
+      '--control', 'r2fs=bench-artifacts/controls.json',
     ]);
+
+    expect(options.arms).toEqual(['bounded-layers', 'merkle-pack']);
+    expect(options.controls).toEqual([
+      { strategy: 'snapshot-chain', path: 'bench-artifacts/controls.json' },
+      { strategy: 'r2fs', path: 'bench-artifacts/controls.json' },
+    ]);
+    expect(parseOptions(['--candidates-only']).controls).toEqual([]);
+    expect(() => parseOptions(['--candidates-only', '--arms', 'snapshot-chain'])).toThrow(
+      '--candidates-only selects bounded-layers and merkle-pack',
+    );
+    expect(() => parseOptions(['--control', '--plan'])).toThrow(
+      '--control requires <strategy>=<path>',
+    );
+    expect(() => parseOptions(['--control', 'snapshot-chain'])).toThrow(
+      '--control requires <strategy>=<path>; got "snapshot-chain"',
+    );
+    expect(() => parseOptions(['--control', 'bounded-layers=bench-artifacts/control.json'])).toThrow(
+      '--control strategy "bounded-layers" is not a historical control; known controls: snapshot-chain, r2fs, overlay-cas',
+    );
+    expect(() => parseOptions([
+      '--control', 'snapshot-chain=bench-artifacts/one.json',
+      '--control', 'snapshot-chain=bench-artifacts/two.json',
+    ])).toThrow('--control must not repeat strategy "snapshot-chain"');
+  });
+
+  test('plans candidate-only work and reports strategy-qualified control context', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'devbox-control-'));
+    const path = join(directory, 'control.json');
+    writeFileSync(path, multiArmArtifact);
+    try {
+      const plan = Bun.spawnSync(
+        [
+          'bun', 'scripts/bench-devbox-strategies.ts', '--candidates-only', '--plan',
+          '--control', `snapshot-chain=${path}`,
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+
+      expect(plan.exitCode, plan.stderr.toString()).toBe(0);
+      expect(plan.stdout.toString()).toContain('arms          bounded-layers, merkle-pack');
+      expect(plan.stdout.toString()).toContain(`controls      snapshot-chain=${path}`);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('documents strategy-qualified controls in CLI help', () => {
+    const help = Bun.spawnSync(
+      ['bun', 'scripts/bench-devbox-strategies.ts', '--help'],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    expect(help.exitCode, help.stderr.toString()).toBe(0);
+    expect(help.stdout.toString()).toContain('--control <strategy>=<path>');
+    expect(help.stdout.toString()).toContain('snapshot-chain, r2fs, overlay-cas');
+  });
+
+  test('selects exactly one named control from a multi-arm artifact and preserves provenance', () => {
+    const parsed = parseFrozenControlArtifact(
+      'r2fs',
+      'bench-artifacts/multi-arm-control.json',
+      multiArmArtifact,
+    );
+
+    expect(parsed).toMatchObject({
+      strategy: 'r2fs',
+      verifyPassed: false,
+      artifact: 'bench-artifacts/multi-arm-control.json',
+      date: '2026-08-25',
+      worker: 'control-worker',
+      bucket: 'control-bucket',
+      image: 'docker.io/cloudflare/sandbox:0.12.8',
+      seed: '20260824',
+      budgetMs: '6000',
+      sha256: createHash('sha256').update(multiArmArtifact).digest('hex'),
+    });
+    const report = renderFrozenControls([parsed]);
+    expect(report).toContain('bench-artifacts/multi-arm-control.json#sha256:');
+    expect(report).toContain('control-worker');
+    expect(report).toContain('control-bucket');
+    expect(report).toContain('6000');
+    expect(report).toContain('REFUSED');
+    expect(report).toContain('Candidate ranking uses only measurements from this run.');
+  });
+
+  test('refuses missing or duplicate selected strategies in a valid multi-arm artifact', () => {
+    expect(() => parseFrozenControlArtifact('overlay-cas', 'bench-artifacts/missing.json', multiArmArtifact)).toThrow(
+      'control artifact bench-artifacts/missing.json must contain exactly one requested overlay-cas arm; found 0',
+    );
+    expect(() => parseFrozenControlArtifact(
+      'snapshot-chain',
+      'bench-artifacts/duplicate.json',
+      JSON.stringify({
+        meta: {
+          date: '2026-08-25',
+          image: 'docker.io/cloudflare/sandbox:0.12.8',
+          seed: '20260824',
+          'loop budget ms': '6000',
+        },
+        arms: [
+          { strategy: 'snapshot-chain', verifyPassed: true },
+          { strategy: 'snapshot-chain', verifyPassed: false },
+          { strategy: 'merkle-pack', verifyPassed: true },
+        ],
+      }),
+    )).toThrow(
+      'control artifact bench-artifacts/duplicate.json must contain exactly one requested snapshot-chain arm; found 2',
+    );
+  });
+
+  test('refuses artifacts outside the control contract', () => {
+    expect(() => parseFrozenControlArtifact(
+      'r2fs',
+      'bench-artifacts/bad-control.json',
+      JSON.stringify({ meta: {}, arms: [{ strategy: 'r2fs', verifyPassed: true }] }),
+    )).toThrow('control artifact bench-artifacts/bad-control.json does not match the control contract');
+  });
+});
+
+class DeferredVerifyResponse extends EventEmitter {
+  readonly statusCode = 200;
+
+  destroy(error?: Error): void {
+    if (error !== undefined) this.emit('error', error);
+  }
+}
+
+class DeferredVerifyRequest extends EventEmitter {
+  body = '';
+  onEnd: ((body: string) => void) | null = null;
+
+  end(body: string): void {
+    this.body = body;
+    this.onEnd?.(body);
+  }
+
+  destroy(error?: Error): void {
+    if (error !== undefined) this.emit('error', error);
+  }
+}
+
+describe('live arm teardown', () => {
+  test('purges every potential arm twice after a timeout before the first result', async () => {
+    const boxes = ['ab-snapshot-chain-20260827000000', 'ab-r2fs-20260827000000'];
+    const calls: { box: string; payload: unknown }[] = [];
+    const errors = await teardownLiveArms(
+      { origin: 'https://fixture.invalid', token: 'memory-only-token' },
+      boxes,
+      async (_fixture, box, payload) => {
+        calls.push({ box, payload });
+        if (box === boxes[0] && calls.filter((call) => call.box === box).length === 1) {
+          throw new DOMException('the first arm timed out', 'TimeoutError');
+        }
+      },
+    );
+
+    expect(calls).toEqual([
+      { box: boxes[0], payload: { purge: true, prefix: '', whole: true } },
+      { box: boxes[1], payload: { purge: true, prefix: '', whole: true } },
+      { box: boxes[0], payload: { purge: true, prefix: '', whole: true } },
+      { box: boxes[1], payload: { purge: true, prefix: '', whole: true } },
+    ]);
+    expect(errors).toEqual([
+      `live teardown pass 1 ${boxes[0]}: the first arm timed out`,
+    ]);
+  });
+});
+
+describe('long teardown transport', () => {
+  test('waits for a deferred HTTPS purge reply without an elapsed timeout', async () => {
+    const release = Promise.withResolvers<void>();
+    const request = new DeferredVerifyRequest();
+    let requestedUrl = '';
+    let headers: Readonly<Record<string, string>> = {};
+    const teardown = postLiveTeardown(
+      { origin: 'https://fixture.invalid', token: 'memory-only-token' },
+      'ab-snapshot-chain-20260827000000',
+      (url, options, respond) => {
+        requestedUrl = url.toString();
+        headers = options.headers;
+        request.onEnd = () => {
+          void release.promise.then(() => {
+            const response = new DeferredVerifyResponse();
+            respond(response);
+            response.emit('data', JSON.stringify({ ok: true, purged: 4 }));
+            response.emit('end');
+          });
+        };
+        return request;
+      },
+    );
+
+    await Promise.resolve();
+    expect(request.body).toBe(JSON.stringify({
+      purge: true,
+      prefix: '',
+      whole: true,
+      strategy: 'snapshot-chain',
+    }));
+    expect(requestedUrl).toBe('https://fixture.invalid/teardown?box=ab-snapshot-chain-20260827000000');
+    expect(headers).toMatchObject({
+      authorization: 'Bearer memory-only-token',
+      'content-type': 'application/json',
+    });
+    expect(requestedUrl).not.toContain('memory-only-token');
+    expect(request.body).not.toContain('memory-only-token');
+
+    release.resolve();
+    await expect(teardown).resolves.toBeUndefined();
   });
 });

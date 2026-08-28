@@ -504,10 +504,18 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // the registry is not that place. Without it a caller learned the shape one field
     // per round trip from the bound instrument, which is the incident this pin's
     // neighbours describe.
+    // GROWN BY FOUR for the Pareto frontier landing. `paretoObjectiveAxes`,
+    // `dominatesPareto` and `paretoFront` are the executable half of
+    // `Exploration/Records.lean`'s `frontier_nondominance`, and
+    // `validateParetoEvidence` is the call-time refusal over that evidence —
+    // consumed by settle, swarm-scoring, swarm-setup, the GEPA engine and the
+    // exploration canvas, so the vocabulary lives where `swarmValidity` can
+    // import it.
     expect(Object.keys(objectiveModule).sort()).toEqual([
       'PUBLICATION_SURFACES', 'PUBLISHING_CARRIES', 'VERIFIER_KINDS', 'VERIFIER_KIND_DOC',
-      'admitsPublication', 'carrySuppression', 'floorMargin', 'isBetter', 'measuredHalf',
-      'normalisedScore',
+      'admitsPublication', 'carrySuppression', 'dominatesPareto', 'floorMargin', 'isBetter',
+      'measuredHalf', 'normalisedScore', 'paretoFront', 'paretoObjectiveAxes',
+      'validateParetoEvidence',
     ]);
     // GROWN BY FOUR since *Arbitration*'s arbiter landed. `arbitrateBranch` is the executable
     // port of `Exploration/Arbitration.lean`'s `arbitrate`, and two of the constants are

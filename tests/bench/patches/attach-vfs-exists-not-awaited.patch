@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/prompting/attachment-sanitizer.ts b/packages/core/src/prompting/attachment-sanitizer.ts
+index dc95ebca2..faee26718 100644
 --- a/packages/core/src/prompting/attachment-sanitizer.ts
 +++ b/packages/core/src/prompting/attachment-sanitizer.ts
-@@ -294,7 +294,7 @@
-   policy: AttachmentPolicy,
- ): Promise<string> {
-   const path = `${ATTACHMENTS_DIR}/${fnv1a64Bytes(bytes)}.${extensionFor(mediaType)}`;
--  if (!(await policy.vfs.exists(path))) {
-+  if (!policy.vfs.exists(path)) {
-     try {
-       await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
-     } catch (err) {
+@@ -319,7 +319,7 @@ async function storeContentAddressed(
+  *  it is the ordinary first spill of a payload — but a path that exists and
+  *  does not hold them is not reusable, and the write below repairs it. */
+ async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
+-  if (!(await vfs.exists(path))) return false;
++  if (!vfs.exists(path)) return false;
+   const stored = await vfs.readFile(path);
+   // Discriminated on the class rather than with a runtime `typeof`, which is
+   // how prompting/agents-md.ts already narrows the same `string | Uint8Array`

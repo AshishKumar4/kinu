@@ -11,7 +11,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  readSoul, readMission, writeSoul, seedSoul, summarizeSoul, SOUL_PATH,
+  readSoul, readMission, writeSoul, seedSoul, summarizeSoul, summarizeSoulBytes, SOUL_PATH,
 } from '../src/identity/soul';
 import { initAllTables } from '../src/identity/schema';
 import { createWorkspace } from '../src/identity/create';
@@ -115,5 +115,38 @@ describe('workspace birth and open', () => {
 
     expect(await rt.storage.vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })).toContain('async');
     expect(await rt.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toContain('atlas');
+  });
+});
+
+describe('the mission of a document that is still bytes', () => {
+  // Every shape the whole-document reader distinguishes, plus the ones a
+  // chunked scan could get wrong: a mission far past any fixed prefix, a
+  // mission split across the 64 KiB scan boundary, a multi-byte character on
+  // that boundary, an empty mission that falls back to the first content line,
+  // and a document that is one enormous line.
+  const filler = (bytes: number): string => 'filler line\n'.repeat(Math.ceil(bytes / 12));
+  const documents = {
+    'the shape every SOUL is written in': '# Atlas\n\n## Mission\n\nHelp with testing.\n',
+    'a mission far past a fixed prefix': `# Atlas\n\n${filler(96 * 1024)}\n## Mission\n\nHelp late in the file.\n`,
+    'a mission straddling the scan boundary': `# Atlas\n\n## Mission\n\n${filler(64 * 1024)}the tail of the mission\n`,
+    'a multi-byte character on the scan boundary': `# Atlas\n\n## Mission\n\n${'é'.repeat(32 * 1024)}\n`,
+    'an empty mission section': '# Atlas\n\n## Mission\n\n## Notes\n\nThe fallback line.\n',
+    'no mission heading at all': '# Atlas\n\nJust a line.\n',
+    'one enormous line': `# Atlas\n\n## Mission\n\n${'word '.repeat(64 * 1024)}`,
+    'a mission indented past anything a scan could keep': `# A\n\n## Mission\n\n${' '.repeat(1000)}actual`,
+    'a heading behind a wall of whitespace': `# A\n\n${' '.repeat(4096)}## Mission\n\nfound anyway\n`,
+    'a single mission line of several megabytes': `# A\n\n## Mission\n\n${'long '.repeat(512 * 1024)}\n`,
+    'nothing at all': '',
+  } satisfies Record<string, string>;
+
+  for (const [document, soul] of Object.entries(documents)) {
+    test(`reads what the whole-document form reads: ${document}`, () => {
+      expect(summarizeSoulBytes(new TextEncoder().encode(soul))).toBe(summarizeSoul(soul));
+    });
+  }
+
+  test('the mission is the one a late heading declares, not a truncated prefix', () => {
+    const soul = `# Atlas\n\n${filler(96 * 1024)}\n## Mission\n\nHelp late in the file.\n`;
+    expect(summarizeSoulBytes(new TextEncoder().encode(soul))).toBe('Help late in the file.');
   });
 });

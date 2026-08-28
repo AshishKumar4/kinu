@@ -34,9 +34,49 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   the block releases, so the bound meant to protect it could never fire. A
   deployed Worker answered 500 with `A call to blockConcurrencyWhile() in a
   Durable Object waited for too long. The call was canceled and the Durable
-  Object was reset.` The attach runs in a schedule row instead, every operation
-  awaits a readiness gate, and a failed attach records an incident, refuses
-  operations with its reason and re-arms at the heartbeat cadence.
+  Object was reset.` The attach runs in a schedule row instead, and every
+  operation awaits a readiness gate.
+
+  A failed attach is classified from the SDK's own error codes rather than from
+  its prose, and recovered by one bounded ladder: ask the same container identity
+  again at the heartbeat cadence, then destroy and replace that identity, then
+  refuse. Storage exhaustion and permanent configuration refuse at once, because
+  asking again spends the same resource or reads the same input. The ladder is
+  one durable row, and it is claimed: each attempt writes down a token, every
+  later write to that row is conditional on the token still being there, and the
+  compare and the write happen inside one critical section. So an attempt whose
+  write races a newer attempt's success changes nothing instead of resurrecting a
+  stage that success had cleared. A terminal refusal KEEPS its stage rather than
+  clearing it, because a ladder that reset itself on the next eviction could
+  destroy one identity after another; `attachNow()` is the explicit re-attempt,
+  it destroys nothing, and any attach that lands deletes the row. Work that the
+  attach budget abandoned goes straight to replacement: it is still running
+  inside the container, where nothing in the Durable Object can fence it, so
+  SIGKILL is the only cancellation there is. Every startup attempt owns a
+  lifecycle generation and re-checks it after each await, so an attempt the
+  platform superseded publishes no readiness, files no failure and destroys no
+  identity.
+
+  One budget covers the whole restoration rather than the attach alone: the
+  attach, the workload restart, every listener proof, every exposure and the boot
+  stamp. The listener proof used to carry a window per port, so three silent
+  ports added about ninety seconds while every caller waited in the readiness
+  gate. Every step now draws an allowance from the one clock — what is left
+  divided by the steps still to run.
+
+  What exhaustion means depends on what is abandoned. The attach is mid-mount, so
+  overrunning it throws and the container identity is replaced. Every step after
+  it mutates no mount, so exhaustion is reported instead: the box stays attached,
+  its specs stay, no failed port is exposed, and `unready` names what did not come
+  back. A slow dev server costs the box its readiness and nothing else, and an
+  explicit `attachNow()` retries it — the walk asks the container first, so a
+  process it already holds is not started twice.
+
+  Readiness is honest. A port is exposed only after its own listener answers, no
+  port is exposed at all when a supervised process failed to restart, and `ready`
+  means the attach landed and every process, listener and port came back;
+  `unready` carries the reason when it did not. Operations stay permitted while a
+  restored service is down, so the agent whose server failed can repair it.
 
   `KinuSandbox` is now a thin subclass, 211 lines against 294, holding only what
   no other host can supply: the store, the preview zone, the two questions the box
@@ -100,7 +140,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   aggregate, and the absence of a step cap. Two new required gates ship with
   them: committed patches must reproduce the installed `node_modules`
   (`gate:patch-parity`), and the declared Analytics Engine datasets must equal the
-  bound ones. The required-gate count is 54.
+  bound ones. The deploy script currently runs 57 required gate invocations
+  before deployment: preflight first, 55 concurrently, and `gate:infra` last.
 
 - Additional agents are ordinary conversations now, created with one click.
   The role+mission spawn dialog is gone: the tab strip's `+` (and the
@@ -172,6 +213,42 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   the chat model where it does not.
 
 ### Changed
+
+- **One deploy path, an immutable container image, and no credential beside
+  unreviewed code.** `packages/cf-backend` declared its own `deploy:staging`
+  around a bare `wrangler deploy`, and `docs/DEPLOYMENT.md` documented it as the
+  way to deploy staging — a path with none of the required gates, neither asset
+  check and no smoke test. It is gone: `scripts/deploy.sh` is the only deploy, and
+  `scripts/deploy.test.ts` fails if a package script or a document names another
+  one.
+
+  Both environments now name the sandbox container by digest
+  (`docker.io/cloudflare/sandbox@sha256:822501de…`, which is `0.12.8` as the
+  registry resolved it) rather than by a tag anybody who can push that repository
+  could re-point under a running deployment. `upload_source_maps` is on and the
+  Vite build emits worker maps, so a persisted production stack trace names files
+  a person can open; the client build stays without maps, which would otherwise be
+  TypeScript served from the public origin.
+
+  Every workflow declares read-only token permissions and checks out with no
+  persisted git token. The eval benchmark job — startable by labelling a pull
+  request, and holding three secrets — now runs the reviewed base revision instead
+  of the branch, and both credential-bearing jobs ask for a GitHub environment.
+  The elan installer is a checksum-verified release artifact in one shared action
+  instead of `curl … | sh` of somebody's default branch in three workflows, which
+  mattered most in the staging deploy, where that toolchain runs inside the step
+  holding the Cloudflare token. TruffleHog is pinned to a commit rather than
+  `@main`. What no file in a repository can do is narrow an account-scoped API
+  token or create a protected environment: docs/DEPLOYMENT.md § Staging deploys
+  itself lists those as operator setup.
+
+  The gate runner takes each gate's verdict from `wait -n -p` rather than from a
+  status file. A gate whose process was killed without writing one used to be
+  detected by probing `kill -0` on an already-reaped pid, which a recycled pid
+  answers as a live process: the wave then had nothing left to wait on and spun at
+  100% CPU with the deploy unable to finish. A killed gate now settles as
+  128+signal, and a gate log directory that cannot be created stops the deploy
+  instead of sending every gate's output to `/0.log`.
 
 - **No turn on either backend carries a step cap.** What ends a turn is the model
   finishing without tool calls, the mission budget where a label is scoped, or an
@@ -404,6 +481,61 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A public webhook URL is now a capability, so a workspace name is no longer a
+  door.** `POST /api/workspaces/<name>/webhook/<trigger>` resolved the workspace
+  object for whatever name the caller typed, before anything knew whether that
+  workspace or that trigger existed. Naming one was therefore enough to start a
+  persistent Durable Object, with no account and no credential, at whatever rate
+  the caller chose. The edge knock budget priced that; it did not close it.
+  Nothing upstream could: the control-plane workspace index is best-effort by
+  design, and the owner's own registry cannot be asked, because the URL names no
+  owner.
+
+  The URL now ends in `v1-<32 hex>`, an HMAC-SHA-256 over the workspace and
+  trigger identity under a new `WEBHOOK_ROUTE_SECRET`. The Worker derives it and
+  compares in constant time before it spends the ingress budget, before it reads
+  the body, and before it addresses any workspace, so an unminted URL answers
+  404 and reaches nothing. It is a routing capability and nothing more: the
+  trigger's own HMAC, Bearer or mTLS check still decides whether the payload is
+  authentic. Nothing durable was added — the capability is derived from facts
+  that cannot change, so existing trigger rows need no migration, and the
+  workspace name and trigger id are checked against the grammars that issued
+  them both where a URL is minted and before any comparison.
+
+  **Every webhook URL in use has to be replaced.** The old unsigned path is
+  gone rather than deprecated, because it cannot be made safe. Owners read the
+  new URL from the triggers list — the Supervise Automations block, or
+  `kinu triggers <workspace> list` — and paste it into whatever posts to it.
+  Trigger rows, their secrets and their history are untouched. Without the
+  secret, creating a webhook answers 503 and names the variable, and delivery
+  answers 404 without waking a workspace; rotating it revokes every URL the
+  deployment ever issued. See docs/DEPLOYMENT.md § Rotating WEBHOOK_ROUTE_SECRET.
+
+- **Signing out ends the session at once, everywhere, and only that session.**
+  Logout deleted the cookie's KV record and nothing else. A KV delete needs up
+  to a minute to reach every colo, so a cookie copied off the browser kept
+  working at any colo the delete had not reached — proven with a two-colo KV
+  double, where the copy verified back to the full identity after logout had
+  returned. A session is now live while one row in the signing-in user's own
+  Durable Object says so: sign-in publishes that row before the browser gets a
+  cookie, every cookie check reads it, and logout deletes it before anything
+  else. The KV delete that follows is cleanup, and the KV record is only the
+  identity as it stood at sign-in. Because one row is one session, signing out
+  of a borrowed browser leaves a phone and a desktop signed in.
+
+  A store that will not answer is a 503 saying so, never a KV-only pass and
+  never the 401 that would send a signed-in user into a sign-in the same outage
+  fails. A record that is missing or lapsed stays a plain 401. A record that no
+  longer decodes is a fault AND a dead credential, so it is reported once,
+  cleared from the row and from KV, and still answered 401, which keeps a
+  browser able to sign in again rather than trapped behind a cookie it cannot
+  replace. A sign-out that cannot reach the
+  store KEEPS the cookie and offers a retry, because that cookie is the only
+  handle that can still revoke that session; clearing it would leave the
+  session live with nothing able to reach it. Session tokens now carry the user
+  id that addresses their authority, so revocation never depends on a cached
+  read. Sessions issued before this release stop verifying, and everyone signs
+  in once more.
 - **A feedback screenshot no longer photographs a secret.** The capture blanked
   password inputs and regions marked for redaction, and none of the app's real
   secret surfaces was either: a webhook secret is shown once as text, the curl

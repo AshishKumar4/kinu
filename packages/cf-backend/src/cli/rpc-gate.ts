@@ -144,6 +144,31 @@ export const AGENT_RPC_ACCESS = {
   // listing is interactive for the same reason `listPendingActions` is: it is
   // the surface an owner reads immediately before authorising something.
   decideDeferredApprovals: 'interactive',
+  // Instruction trust (KINU-N028), and 'interactive' for exactly the reason
+  // above. Approving a workspace instruction file is what grants those bytes
+  // system placement, so a scoped token that could call it would be a way for
+  // agent-written bytes to authorise themselves — the whole hole this closes.
+  // The listing is the surface an owner reads immediately before deciding, and
+  // it carries file CONTENT previews, the same sensitivity class as
+  // `getRunEvents`.
+  approveInstruction: 'interactive',
+  revokeInstruction: 'interactive',
+  listInstructionApprovals: 'interactive',
+  readInstructionApproval: 'interactive',
+  // Continual refinement. Opening one spends a child agent's inference and
+  // writes an explicit user preference straight into memory, so it is the
+  // owner's decision rather than a scoped token's. The listing is interactive
+  // for the reason `getEvolutionChangelog` is: it carries the trajectory's own
+  // wording and the proposals made about it.
+  requestRefinement: 'interactive',
+  listRefinements: 'interactive',
+  // Approving a staged skill grants those bytes system placement. Same class as
+  // `approveInstruction`, and the same reason a scoped token must not reach it.
+  decideRefinement: 'interactive',
+  // Carries proposed instruction bytes in full — the same sensitivity class as
+  // `readInstructionApproval`, and the surface an owner reads immediately
+  // before deciding.
+  showRefinement: 'interactive',
   // Adding an agent to the workspace, and naming one. Both are the owner's
   // own decisions about who is in their workspace, so both are interactive
   // for the same reason `dismissSubordinate` is.

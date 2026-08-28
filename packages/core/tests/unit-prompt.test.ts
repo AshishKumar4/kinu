@@ -21,7 +21,8 @@ import {
   AGENTS_TOOL_ACTIONS,
   BUILTIN_SKILLS,
   SWARM_PRESET_DOCTRINE,
-  type ParsedSkill,
+  skillIndexLine,
+  type SkillHeader,
 } from '../src/index';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
 import { DELEGATION_SECTION } from '../src/prompting/section-templates';
@@ -163,12 +164,12 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the agents schema description leads with positive delegation triggers', () => {
-    // The ladder lost a rung when `fork` went: the two that remain differ on
-    // lifetime and on who decides the answer, and the frame names both axes
-    // before it names either rung, so the sentence is a trigger rather than a
-    // menu.
+    // Three rungs — ephemeral search, one-question temporary agent, persistent
+    // subordinate — differing on lifetime and on who decides the answer, and the
+    // frame names both axes before it names any rung, so the sentence is a
+    // trigger rather than a menu.
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /Use when: One delegation ladder, two rungs, and they differ on lifetime and on who decides/,
+      /Use when: One delegation ladder, three rungs, and they differ on lifetime and on who decides/,
     );
     // The frame states BOTH scorers now. It used to promise that a search's candidates
     // "are MEASURED against a number you declare", which described the shape a preset
@@ -557,34 +558,32 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('advertises llm.query only where the provider is wired (rlmAvailable), on any backend', () => {
+  test('advertises the temporary-agent channel only where the port is wired, on any backend', () => {
     const { rt } = createTestRuntime();
-    const withRlm = buildSystemPromptSync(rt, { backend: 'cf', rlmAvailable: true });
-    expect(withRlm).toMatch(/Code execution and learned capabilities/);
-    expect(withRlm).toMatch(/llm\.query/);
-    // The recipe names the search rung for deeper decomposition (depth via
-    // agents, not nested sub-calls).
-    expect(withRlm).toContain('action=swarm');
-    // Regression: we previously had `splitLargeText(input, 4000)` which
-    // doesn't exist anywhere in the runtime surface.
-    expect(withRlm).not.toContain('splitLargeText');
+    const withTemporary = buildSystemPromptSync(rt, { backend: 'cf', temporaryAsk: true });
+    expect(withTemporary).toMatch(/Code execution and learned capabilities/);
+    expect(withTemporary).toContain('agents.ask({ role, message, context_ref');
+    // The referenced-context channel is the half that makes the recipe compose
+    // with the spill doctrine, so the prompt must name it and not only the call.
+    expect(withTemporary).toContain('context_ref');
+    expect(withTemporary).not.toContain('rlm.query');
 
-    // A static-model CLI session has no resolver, so llm.query would throw —
-    // never advertise it there. The scaffold self-provider ships on BOTH
-    // backends since the shared-spine parity, so it is always advertised.
-    const withoutRlm = buildSystemPromptSync(rt, { backend: 'cli-local' });
-    expect(withoutRlm).toMatch(/Code execution and learned capabilities/);
-    expect(withoutRlm).not.toMatch(/llm\.query/);
-    // The scaffold lane is still advertised where llm.query is not — that is
-    // what this half of the test is for. It is advertised as the NAMESPACE now
-    // rather than as a copied signature (see the note in the craft test above);
-    // the signature itself is asserted against its one declaration.
-    expect(withoutRlm).toContain('`agent.*` namespace inside execute_tools');
-    expect(withoutRlm).toMatch(/scaffold proposals/);
-    expect(withoutRlm).not.toContain('agent.proposeScaffold(');
+    // An actor with no child substrate cannot run one, so the rung is never
+    // advertised there. The scaffold self-provider ships on BOTH backends since
+    // the shared-spine parity, so it is always advertised.
+    const withoutTemporary = buildSystemPromptSync(rt, { backend: 'cli-local' });
+    expect(withoutTemporary).toMatch(/Code execution and learned capabilities/);
+    expect(withoutTemporary).not.toContain('agents.ask({ role');
+    // The scaffold lane is still advertised where the temporary rung is not —
+    // that is what this half of the test is for. It is advertised as the
+    // NAMESPACE now rather than as a copied signature (see the note in the craft
+    // test above); the signature itself is asserted against its one declaration.
+    expect(withoutTemporary).toContain('`agent.*` namespace inside execute_tools');
+    expect(withoutTemporary).toMatch(/scaffold proposals/);
+    expect(withoutTemporary).not.toContain('agent.proposeScaffold(');
     expect(agentSelfTypes()).toContain('proposeScaffold');
-    const cliWithRlm = buildSystemPromptSync(rt, { backend: 'cli-local', rlmAvailable: true });
-    expect(cliWithRlm).toMatch(/llm\.query/);
+    const cliWithTemporary = buildSystemPromptSync(rt, { backend: 'cli-local', temporaryAsk: true });
+    expect(cliWithTemporary).toContain('agents.ask({ role, message, context_ref');
   });
 
   test('does not advertise removed context tools or blocks', () => {
@@ -632,14 +631,19 @@ describe('buildSystemPromptSync', () => {
     // auto-activates is invisible to the model — nothing in the prompt names
     // it, and there is no tool call left that lists it either.
     const { rt } = createTestRuntime();
-    const dormant: ParsedSkill = {
+    const dormant: SkillHeader = {
       name: 'dormant-skill', description: 'Not active this turn, but the model should still know it exists.',
       allowed_tools: [], keywords: [], auto_activate: false, disable_model_invocation: false,
-      user_invocable: true, body: 'DORMANT-BODY-MUST-NOT-APPEAR', ext: {}, source: 'vfs',
+      user_invocable: true, ext: {}, source: 'vfs',
     };
-    const prompt = buildSystemPromptSync(rt, { availableSkills: [dormant] });
+    // The index is what the admission already decided to print, so a fixture
+    // states its lines rather than a corpus to re-admit.
+    const prompt = buildSystemPromptSync(rt, {
+      availableSkills: { lines: [skillIndexLine(dormant)], omitted: 0, tokens: 0 },
+    });
     expect(prompt).toContain('## Skills');
-    expect(prompt).toContain('**dormant-skill** — Not active this turn');
+    // A workspace file says so in the index — provenance, not a verdict on it.
+    expect(prompt).toContain('**dormant-skill** (workspace file) — Not active this turn');
     // Progressive disclosure: index carries the description, never the body.
     expect(prompt).not.toContain('DORMANT-BODY-MUST-NOT-APPEAR');
   });
@@ -1244,7 +1248,7 @@ describe('buildSystemPromptSync', () => {
       // — the same "you don't need to check, you'll be told" doctrine as the
       // Background work section, stated where this tool is introduced.
       // 2026-08-25: LOWERED 1610 → 830, measured 801 (−425 on this surface,
-      //   −777 with llm.query present). The six `agent.*` API bullets were a
+      //   −777 with rlm.query present). The six `agent.*` API bullets were a
       //   hand-maintained second copy of the `agent.*` codemode type block,
       //   which ships to the model inside the execute_tools description — and
       //   the weaker copy: the proposeScaffold bullet omitted the required

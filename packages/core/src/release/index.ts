@@ -39,6 +39,8 @@ export {
   normalizeReleasePath,
   redactReleaseDiff,
   validateReleasePatchPath,
+  validateReleasePatchTargets,
+  assertGithubRepoUrl,
   type ReleasePathValidation,
 } from './path-safety';
 export {

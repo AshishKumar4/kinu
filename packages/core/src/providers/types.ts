@@ -9,6 +9,7 @@
 // happens inside the customFetch wrappers each provider passes to the
 // underlying SDK, so model construction never blocks the chat loop.
 import type { LanguageModel } from 'ai';
+import type { CountableRequest, InputTokenCount } from './input-tokens';
 
 /** Parsed `<provider>/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; }
@@ -32,6 +33,12 @@ export interface ModelInfo {
   label?: string;
   capabilities?: ModelCapability[];
   contextWindow?: number;
+  /** The largest answer the model will produce, as its catalog reports it
+   *  (models.dev `limit.output`). It is a per-request maximum out of the SAME
+   *  window `contextWindow` names, not capacity beside it — context admission
+   *  reserves against it (prompting/step-prune.ts). Absent means the catalog
+   *  has not answered. */
+  modelOutputLimit?: number;
   /** Per-1M-token USD rates, when the catalog publishes them. Absent means
    *  unknown — never zero (a free model is `input: 0`). */
   cost?: ModelPricing;
@@ -148,6 +155,23 @@ export interface ModelProvider {
 
   /** Build a LanguageModel SYNCHRONOUSLY. Auth/refresh happens in customFetch. */
   createModel(modelId: string, deps: ProviderDeps): LanguageModel;
+
+  /**
+   * Count what an assembled request costs BEFORE it is submitted, using this
+   * provider's own documented pre-request count endpoint.
+   *
+   * Optional because most vendors publish no such endpoint: absent means
+   * exactly that (see `NO_COUNT_ENDPOINT`), and admission then runs ungated
+   * rather than on a number nobody measured. An implementation may also report
+   * `unsupported` for a REQUEST it cannot represent in its count body — a
+   * dropped part would under-report by that part's whole cost, which is the one
+   * error admission cannot survive.
+   */
+  countInputTokens?(
+    modelId: string,
+    deps: ProviderDeps,
+    request: CountableRequest,
+  ): Promise<InputTokenCount>;
 }
 
 /** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive intact. */

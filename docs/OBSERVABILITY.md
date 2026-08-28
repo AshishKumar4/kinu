@@ -245,9 +245,9 @@ caveat. SQL costs 62 ms versus 55 ms for two windowed reads, on 31 MiB and
 
    No labels means an unwrapped `LLM`. A spent cap throws
    `MissionBudgetExhausted` before a request; `runDeferredTurnReviews`
-   (`evolution/engine.ts:687`) records `{reason: 'budget'}` and leaves the
-   sound row queued. It retires unreadable rows; `RefusedTurnReview` separates
-   counts (`evolution/review-queue.ts:103`). COUNT-triggered session
+   (`evolution/engine.ts:688`) records `{reason: 'budget'}` and leaves the
+   source row queued. It retires unreadable rows; `RefusedTurnReview` separates
+   those counts (`evolution/session-window.ts:169-172`). Count-triggered session
    reflection, scaffold proposal and GEPA spend is outside mission caps.
 
 2. The external bench cannot count it. `closeTurnRun`
@@ -264,8 +264,9 @@ caveat. SQL costs 62 ms versus 55 ms for two windowed reads, on 31 MiB and
    (`scripts/bench-agent-worker.ts:32-37`, totalled `:109`); its answer
    includes it. The external answer is the lower bound.
 
-`oneShot` queues reviews; only daemon or interactive open drains them
-(`evolution/review-queue.ts`). A Terminal-Bench container dies after its fresh
+`oneShot` queues reviews in `completed_turns`; only the daemon or an interactive
+open drains them through `runDeferredTurnReviews`
+(`evolution/session-window.ts`). A Terminal-Bench container dies after its fresh
 trial, so `ArmSpend.executionGradedTurns`
 (`scripts/bench-external.ts:197`, `:161`, via `turn_outcomes`) is 0 for
 `evolve=true`. That is truthful but makes the preregistered figure

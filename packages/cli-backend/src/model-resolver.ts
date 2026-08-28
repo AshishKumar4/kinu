@@ -36,6 +36,9 @@ import {
   type ProviderDeps,
   type ProviderInfo,
   type ModelCallSpend,
+  countRequestInputTokens,
+  type CountableRequest,
+  type InputTokenCount,
 } from '@kinu.run/core';
 import type { OAuthCredential } from '@kinu.run/core';
 import { generateText, streamText } from 'ai';
@@ -145,6 +148,13 @@ export interface LocalModelResolver {
    *  judge/panel selection walks (core's `availableJudgeSpecs`, the same rule
    *  the DO backend uses). */
   judgeCandidates(): Promise<string[]>;
+  /**
+   * What the resolved spec's provider says an assembled request costs, before
+   * it is submitted (core `providers/input-tokens.ts`). Reports `unsupported`
+   * for a provider that publishes no pre-request count endpoint — the turn is
+   * then assembled ungated rather than gated on an estimate.
+   */
+  countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
@@ -446,6 +456,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       const spec = normalizeSpecSync(specOrNull);
       const { provider, modelId } = parseModelSpec(spec);
       return catalogModelInfo(registry.get(provider), deps, modelId);
+    },
+    async countInputTokens(specOrNull, request) {
+      const spec = normalizeSpecSync(specOrNull);
+      const { provider, modelId } = parseModelSpec(spec);
+      return countRequestInputTokens(registry.get(provider), modelId, deps, request);
     },
     getAuth: deps.getAuth,
   };

@@ -20,6 +20,145 @@ const { actorActiveTools } = await import('../src/actor-agent');
 const REPORT_DEPS: ReportToolDeps = { report: async () => undefined };
 
 describe('subordinate wiring', () => {
+  /**
+   * THE TEMPORARY RUNG'S CF WIRING — the three facts that make it the same
+   * roster and the same child, and the one that makes it work at all.
+   *
+   * The rung's behaviour is core's (core/tests/unit-temporary-agents.test.ts)
+   * and its end-to-end run is proved on the local substrate
+   * (cli-backend/tests/agent-host.test.ts). What is BACKEND-SPECIFIC is
+   * composition, which is what this reads.
+   */
+  /**
+   * THE CHILD KNOWS ITS OWN LIFETIME, and reports terminally because of it.
+   *
+   * This is the half no parent can do: only the child sees its own turn end. A
+   * temporary agent's caller is BLOCKED on one report, so every terminal state
+   * has to produce one — and the endings that previously produced none are
+   * exactly the ones the durable policy withholds.
+   */
+  test('a task child is seeded with its lifetime and reports on every terminal ending', () => {
+    const actor = source('actor-agent.ts');
+    const subordinate = source('subordinate-agent.ts');
+
+    // Threaded at the SEED, because the child reads it back off its own
+    // immutable identity row and must still know it after an eviction.
+    expect(actor).toContain('lifetime: input.lifetime,');
+    expect(subordinate).toContain('lifetime: input.lifetime,');
+    expect(subordinate).toContain("return this.identity.read()?.lifetime ?? 'durable';");
+
+    // EVERY ending is classified in one place and reported through the claimed
+    // effect. The branch that used to return without reporting is gone, and so
+    // is the second detached path an errored turn used to take — a failing turn
+    // emits both an error and a turn-end, which is how one question got two
+    // answers.
+    expect(subordinate).toContain("const ending: TaskTurnEnding = completed\n"
+      + "      ? 'answered'\n"
+      + "      : result.status === 'aborted' ? 'interrupted' : 'errored';");
+    // A task child reports even with nothing to say, which the durable relay
+    // withholds — and the durable relay is still what runs for a hire.
+    expect(subordinate).toContain('this.taskTerminalReport(ending, assistantText)');
+    expect(subordinate).toContain('subordinateRelaysTurnEnd({');
+    // The DECISION is core's closed map, never worded here — so the cloud child
+    // and the local one cannot describe the same ending differently.
+    expect(subordinate).toContain('return terminalTaskReport({ lifetime: this.ownLifetime(), ending, assistantText });');
+    // The two facts stay SEPARATE. A mid-task `progress` note means the child
+    // SPOKE without ANSWERING, so gating the answer on "spoke" parked the caller
+    // forever; and only a run-settling report is the answer.
+    expect(subordinate).toContain("this.settledRunThisTurn ||= temporaryRunSettles({ status: input.status, origin: 'report_tool' });");
+    // Reset together at the top of the next settle, so neither leaks into it.
+    expect(subordinate).toContain('    this.reportedThisTurn = false;\n    this.settledRunThisTurn = false;');
+    // The completed branch is gated on the same bit, which is also what stops a
+    // healthy report-tool answer emitting a second turn_end report the parent's
+    // ingress can only refuse with a throw.
+    expect(subordinate).toContain('const taskReport = this.settledRunThisTurn ? null : this.taskTerminalReport(');
+    // The DURABLE policy still reads "spoke this turn", untouched.
+    expect(subordinate).toContain('reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText,');
+    // The ending an interrupted turn earns is now carried by its own CLAIMED
+    // row rather than re-derived by a recovery hook: the roster declares a
+    // parent report for every ending, so a replay sends the report the turn
+    // actually owed instead of a generic 'recovered' one invented afterwards.
+    expect(subordinate).toContain('status: parentReport.status,');
+    expect(subordinate).not.toContain('relayTaskTerminal');
+  });
+
+  /** NO DEADLINES. A delegation is never cut off by a clock in this engine, so
+   *  the rung must contain no timer at all — what makes the wait terminate is the
+   *  child always reporting, not an elapsed bound. */
+  test('the temporary rung carries no timer, deadline or elapsed bound', () => {
+    const rung = readFileSync(
+      join(import.meta.dir, '..', '..', 'core', 'src', 'subordinates', 'temporary.ts'), 'utf8');
+    // Code shapes only: the module's prose explains WHY there is no deadline,
+    // and banning the word would ban the explanation.
+    for (const banned of ['setTimeout(', 'setInterval(', 'AbortSignal.timeout', 'timeoutMs', 'silenceLimit']) {
+      expect({ banned, present: rung.includes(banned) }).toEqual({ banned, present: false });
+    }
+  });
+
+  test('the temporary rung rides this actor\'s own roster, child runtime and report ingress', () => {
+    const actor = source('actor-agent.ts');
+
+    // ONE child substrate, memoized, shared by both rungs. Two copies would be
+    // two `subAgent` paths to the same facets.
+    expect(actor).toContain('protected subordinateRuntime(): SubordinateRuntime {');
+    expect(actor).toContain('runtime: this.subordinateRuntime(),');
+
+    // ONE ROSTER. The port is built over `subordinateRoster` — there is no
+    // second store, and no table of its own to construct.
+    expect(actor).toContain('roster: this.subordinateRoster,');
+    expect(actor).not.toContain('TemporaryAgentStore');
+    expect(actor).not.toContain('workspace_temporary_agents');
+
+    // The port is built ONCE PER ACTOR, and that is load-bearing rather than a
+    // caching nicety: `run` parks a waiter on it and the report ingress resolves
+    // that waiter, and those are two different calls on the same isolate. A port
+    // rebuilt per call would hand the ingress an empty waiter map and leave
+    // every ask hanging on an answer that had already arrived.
+    expect(actor).toContain('private _temporaryAgentPort: TemporaryAgentPort | null = null;');
+    expect(actor).toContain('this._temporaryAgentPort ??= createTemporaryAgentPort({');
+    expect(actor).toContain('temporary: this.temporaryAgentPort(),');
+    // Both readers reach the SAME port: the deps the model dispatches through,
+    // and the ingress a child reports into.
+    expect(actor.match(/temporary: this\.temporaryAgentPort\(\),/gu)?.length).toBe(2);
+
+    // A `context_ref` is AUTHORIZED here and never read here: the bytes are the
+    // child's to fetch, which is the whole saving the channel exists for.
+    expect(actor).toContain('statRef: async (path) => (await this.rt.storage.vfs.stat(path)) !== null,');
+    expect(actor).not.toContain('vfs.readFile(path, { encoding: \'utf8\' })');
+
+    // The roster store takes both sql forms, because the table has gained
+    // columns and IF NOT EXISTS is a no-op on a workspace that already had it.
+    expect(actor).toContain('new SubordinateRosterStore(this.ctx.storage.sql, this.boundSql)');
+  });
+
+  /** The standalone recursive-LM namespace is gone from this backend's sandbox
+   *  and from its prompt flags — one delegation surface, no second lane. */
+  test('no rlm provider, model spec or prompt flag survives in the cf composition', () => {
+    const actor = source('actor-agent.ts');
+    const execTools = source('execute-tools.ts');
+    const exploration = source('exploration.ts');
+    for (const [name, text] of [
+      ['actor-agent.ts', actor],
+      ['execute-tools.ts', execTools],
+      ['exploration.ts', exploration],
+    ] as const) {
+      expect({ name, hit: /createRLMProvider|rlmAvailable|rlm\.query/u.test(text) })
+        .toEqual({ name, hit: false });
+    }
+    // The sandbox tool no longer needs a model registry at all, because nothing
+    // in it calls a model directly any more.
+    expect(execTools).not.toContain('registry:');
+    expect(execTools).not.toContain('modelSpec');
+    // And BOTH prompt paths gate the rung on a per-actor depth fact rather than
+    // asserting it as a constant of this backend: a depth-capped subordinate
+    // wires no team deps, so advertising it there would promise what the
+    // dispatch refuses.
+    expect(actor).toContain('const temporaryAsk = !delegationExhausted(this.delegationBudget());');
+    expect(actor).toContain('temporaryAsk: turnActorDeps.team?.temporary !== undefined,');
+    // Keyed, because it varies per actor and the base prompt is cached.
+    expect(actor).toContain('${String(temporaryAsk)}`;');
+  });
+
   test('all user-level gates present the parent workspace name, never the facet name', () => {
     const actor = source('actor-agent.ts');
     const runtime = source('runtime.ts');
@@ -220,16 +359,30 @@ describe('subordinate wiring', () => {
   // BOTH hops actually consult it, and that neither hop can be reached around.
   test('every upward channel is tagged with the origin the relay policy reads', () => {
     const subordinate = source('subordinate-agent.ts');
+    // The fourth parameter is what makes a replayed report recognisable: the
+    // sequence that owes it, and the mode it ran in, both TRAVEL rather than
+    // being re-derived at either end.
     expect(subordinate).toContain(
       'private async sendReport(\n    status: SubordinateReportStatus,\n'
-      + '    content: string,\n    origin: SubordinateReportOrigin,\n  )');
+      + '    content: string,\n    origin: SubordinateReportOrigin,');
+    expect(subordinate).toContain(
+      'owedBy?: { readonly sequenceId: string; readonly mode: WorkMode },');
     // The three senders, and what each of them is: a deliberate choice, and two
     // automatic relays.
     expect(subordinate).toContain("await this.sendReport(input.status, input.content, 'report_tool')");
-    expect(subordinate).toContain("void this.sendReport('progress', assistantText, 'turn_end')");
+    // The turn-end relay is a CLAIMED terminal effect, so its send sits in that
+    // effect's body and is awaited: the disposition is what the send reports. The
+    // STATUS is recorded too — a task child's terminal answer and a durable
+    // child's progress note are different words, and a cold replay must not
+    // re-derive which one this turn owed.
+    expect(subordinate).toContain(
+      "await this.sendReport(\n            status, text, 'turn_end', { sequenceId, mode },\n          )");
     expect(subordinate).toContain("void this.sendReport('progress', `${subject}\\n\\n${body}`, 'turn_end')");
-    // …and those three are all of them: one declaration plus exactly the three
-    // call sites above, so no upward channel can skip the origin.
+    // …and those are ALL of them: one declaration plus exactly three call sites,
+    // so no upward channel can skip the origin. The temporary rung's two extra
+    // sends are gone — a task child's terminal answer is the SAME claimed
+    // `parent_report` effect a hire's progress note goes through, which is what
+    // stopped one failing turn reaching the parent down two paths at once.
     expect(subordinate.match(/sendReport\(/g)).toHaveLength(4);
   });
 
@@ -238,8 +391,24 @@ describe('subordinate wiring', () => {
 
     expect(subordinate).toContain(
       'const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();');
+    // Split across the claim: WHICH report is owed is decided when the sequence
+    // is declared, and the send is the effect that owes it.
+    //
+    // A task child reports FIRST and on every ending, because an `agents.ask` is
+    // blocked on it; a hire falls through to the SAME selective policy it always
+    // had, which is what keeps durable behaviour exactly as it was. Both are
+    // suppressed by a report that already settled the run.
     expect(subordinate).toContain(
-      'if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText }))');
+      'const taskReport = this.settledRunThisTurn ? null : this.taskTerminalReport(ending, assistantText);');
+    expect(subordinate).toContain('const parentReport = taskReport ?? (\n'
+      + '      completed && subordinateRelaysTurnEnd({\n'
+      + '        reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText,\n'
+      + '      })');
+    // A root has NO parentReport part — `undefined`, never a body that succeeds
+    // over a parent nobody has. The spelling moved off the conditional spread
+    // when anti-slop banned it; the invariant is the absent part itself.
+    expect(subordinate).toContain('const parentReportPart = parentReport === null ? undefined : {');
+    expect(subordinate).toContain('      parentReport: parentReportPart,');
     expect(subordinate).toContain('if (!this.lastUserTurnIsProgrammatic()) {');
     expect(subordinate).toContain('submitPlan: { submit: (edits) => this.submitPlanEdits(edits) }');
     expect(subordinate).toContain('return report ? [createReportCodemodeProvider(() => report)] : [];');

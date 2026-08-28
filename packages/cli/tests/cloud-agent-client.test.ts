@@ -356,27 +356,51 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
-  test('stop sends cf_agent_chat_request_cancel and resolves with the partial output', async () => {
+  test('stop cancels the chat stream and waits for durable device cancellation', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
-
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
     const turn = client.send('long task');
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'partial ' }));
-    await Bun.sleep(50);
+    await waitFor(
+      () => events.find((event) => event.type === 'text-delta'),
+      'partial response',
+    );
 
     client.stop();
-    const result = await turn;
-    expect(result.text).toBe('partial ');
-
     const cancel = await waitFor(
       () => mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.CHAT_REQUEST_CANCEL),
       'cancel frame',
     );
     expect(cancel.id).toBe(request.id);
+    const durableCancel = await waitFor(
+      () => mock.frames.find((f) => f.type === 'rpc' && f.method === 'cancelCurrentWork'),
+      'durable cancellation rpc',
+    );
+    expect(durableCancel.args).toEqual([]);
+    let turnSettled = false;
+    void turn.then(() => { turnSettled = true; });
+    await Promise.resolve();
+    expect(turnSettled).toBe(false);
+
+    mock.reply({
+      type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE,
+      id: request.id,
+      body: 'cancelled',
+      done: true,
+      error: true,
+    });
+    mock.reply({ type: 'rpc', id: durableCancel.id, success: true, result: {
+      ok: true, abortedTools: 1, deviceCommands: [{ outcome: 'terminated' }], returnedSteers: [],
+    } });
+    const result = await turn;
+    expect(result.text).toBe('partial ');
+    expect(events.some((event) => event.type === 'error')).toBe(false);
     await client.close();
   });
 
@@ -539,7 +563,11 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
-  test('connection close mid-turn settles the in-flight send with hadError', async () => {
+  // A dropped socket alone is NOT a failed turn — the DO still owns it, so the
+  // client rebinds instead (see the rebind suite below). A workspace that has
+  // gone away entirely is the case where there is nothing left to rebind to,
+  // and that is what has to reach the caller rather than hang.
+  test('an unreachable workspace settles the in-flight send with hadError', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
     const events: AgentClientEvent[] = [];
@@ -550,11 +578,12 @@ describe('CloudAgentClient protocol', () => {
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? true : undefined,
       'chat request frame',
     );
-    mock.socket().close();
+    mock.close();
 
     const result = await turn;
     expect(result.hadError).toBe(true);
-    expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'Cloud workspace connection closed.' });
+    expect(events.find((event) => event.type === 'error')?.message)
+      .toContain('Could not reconnect to resume this cloud turn');
     expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(1);
     await client.close();
   });
@@ -636,6 +665,157 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     expect(client.branch('nothing running')).toBe(false);
     expect(client.branch('   ')).toBe(false);
     expect(mock.frames).toHaveLength(0);
+    await client.close();
+  });
+});
+
+// A cloud turn is acknowledged by the DO the moment it accepts it: the request
+// is persisted and its stream is resumable. So a dead socket is a lost BINDING,
+// never a lost turn — and the client's job at every one of these await
+// boundaries is to rebind (never re-submit) or to say honestly that it could
+// not. Each test kills the socket at a different point in that handshake.
+describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or duplicates it', () => {
+  /** The chat request frames sent so far. A rebind that re-submitted would
+   *  show up here as a second one — the duplicate a resumable turn must never
+   *  produce. */
+  function chatRequests(mock: MockAgentServer): JsonObject[] {
+    return mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
+  }
+
+  function resumeAcks(mock: MockAgentServer): JsonObject[] {
+    return mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK);
+  }
+
+  async function dropAndProbe(mock: MockAgentServer): Promise<void> {
+    const connects = mock.connectUrls.length;
+    mock.socket().close();
+    await waitFor(
+      () => mock.connectUrls.length > connects || undefined,
+      'reconnect after the socket dropped',
+    );
+    await waitFor(
+      () => mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.STREAM_RESUME_REQUEST),
+      'stream-resume probe',
+    );
+  }
+
+  test('mid-stream drop: the turn survives, the replay is not applied twice, one request total', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('summarize the incident');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request frame',
+    );
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'the cause was ' }));
+    await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
+
+    await dropAndProbe(mock);
+    // The turn is still pending: nothing settled it, because the DO still owns
+    // it. A `turn-end` here would be this client inventing a failure.
+    expect(events.some((e) => e.type === 'turn-end')).toBe(false);
+
+    // The DO announces the same stream; the ack asks for the replay, which
+    // restarts at chunk zero — including the body already rendered.
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: request.id });
+    await waitFor(() => resumeAcks(mock).find((f) => f.id === request.id), 'resume ack');
+    mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: 'the cause was ' }), replay: true });
+    mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: 'a stale lease.' }), replay: true });
+    mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: '' }, true), replay: true });
+
+    await expect(turn).resolves.toMatchObject({
+      text: 'the cause was a stale lease.',
+      hadError: false,
+    });
+    // Exactly one submission: the rebind replays the DO's stream, it never
+    // sends the prompt again.
+    expect(chatRequests(mock)).toHaveLength(1);
+    expect(resumeAcks(mock)).toHaveLength(1);
+    await client.close();
+  });
+
+  test('resume-none: the client claims the turn by ack and reports it rather than faking an answer', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('deploy the hotfix');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request frame',
+    );
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'starting' }));
+    await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
+
+    await dropAndProbe(mock);
+    // "I hold no stream for you" — so the client acks its own request id, which
+    // is the one frame the DO always answers with a terminal.
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE, reason: 'idle' });
+    await waitFor(() => resumeAcks(mock).find((f) => f.id === request.id), 'resume ack after resume-none');
+    mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: '' }, true), replay: true });
+
+    const result = await turn;
+    expect(result.hadError).toBe(true);
+    expect(events.some((e) => e.type === 'error' && e.message.includes('no resumable stream'))).toBe(true);
+    // The partial output is kept — it is what this process really saw — but the
+    // turn is NOT reported as a completed one.
+    expect(result.text).toBe('starting');
+    expect(chatRequests(mock)).toHaveLength(1);
+    await client.close();
+  });
+
+  test('a second drop before anything rebinds reports the turn instead of chasing it forever', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('long migration');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request frame',
+    );
+    await dropAndProbe(mock);
+    mock.socket().close();
+
+    const result = await turn;
+    expect(result.hadError).toBe(true);
+    expect(events.some((e) => e.type === 'error' && e.message.includes('dropped again'))).toBe(true);
+    expect(chatRequests(mock)).toHaveLength(1);
+    expect(request.id).toBeTruthy();
+    await client.close();
+  });
+
+  test('stream-pending is a wait, not a settle: the client holds the turn until the DO names its outcome', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('queued work');
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request frame',
+    );
+    await dropAndProbe(mock);
+
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING, id: request.id });
+    await Bun.sleep(50);
+    expect(events.some((e) => e.type === 'turn-end')).toBe(false);
+    expect(resumeAcks(mock)).toHaveLength(0);
+
+    // The stream started after all: the DO's follow-up is what binds the turn.
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: request.id });
+    await waitFor(() => resumeAcks(mock).find((f) => f.id === request.id), 'resume ack after pending');
+    mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: 'ran late' }), replay: true });
+    mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: '' }, true), replay: true });
+
+    await expect(turn).resolves.toMatchObject({ text: 'ran late', hadError: false });
+    expect(chatRequests(mock)).toHaveLength(1);
     await client.close();
   });
 });

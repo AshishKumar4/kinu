@@ -2,7 +2,9 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
-  DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_UNRESPONSIVE, type TunnelSocket,
+  DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_UNRESPONSIVE, DEVICE_DUPLICATE_REQUEST,
+  DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
+  nextDeviceRequestId, type TunnelSocket,
 } from '../src/execution/device-tunnel';
 import { JsonValueSchema } from '../src/utils/json';
 
@@ -56,6 +58,18 @@ describe('DeviceTunnel', () => {
     const p = t.rpc('exec', ['boom']);
     t.handleMessage(JSON.stringify({ id: sock.sent[0].id, error: 'command failed' }));
     await expect(p).rejects.toThrow('command failed');
+  });
+
+  test('settles the response even when terminal cleanup throws', async () => {
+    const sock = fakeSocket();
+    const t = new DeviceTunnel(sock);
+    const p = t.rpc('exec', ['true'], {
+      onTerminal: () => { throw new Error('durable cleanup failed'); },
+    });
+
+    expect(() => t.handleMessage(JSON.stringify({ id: sock.sent[0].id, result: 'ok' })))
+      .toThrow('durable cleanup failed');
+    expect(await p).toBe('ok');
   });
 
   test('concurrent calls are correlated by id', async () => {
@@ -178,6 +192,106 @@ describe('DeviceTunnel', () => {
       const after = sock.sent.length;
       await new Promise((r) => setTimeout(r, 35));
       expect(sock.sent.length).toBe(after);
+    });
+  });
+
+  /**
+   * Request identity, which is two things at once: what a response is paired
+   * with, and what a cancellation names.
+   *
+   * Ids used to be a bare instance counter. A hub evicted mid-command woke with
+   * that counter back at zero while the command kept running on the machine, so
+   * the machine's late answer paired with whatever call now held `rpc-1` — one
+   * workspace's result read as another's, on the same user's device.
+   */
+  describe('request identity', () => {
+    test('a rebuilt tunnel cannot reissue an id a previous one used', async () => {
+      // Two tunnels in one isolate stand in for before and after a wake: the
+      // counter starts over per instance, and only the epoch stops the ids
+      // from colliding. Both calls are ended through the tunnel that owns them,
+      // so each rejection is asserted rather than dropped.
+      const before = fakeSocket();
+      const after = fakeSocket();
+      const first = new DeviceTunnel(before);
+      const firstCall = first.rpc('exec', ['make'], { timeoutMs: 0 });
+      const second = new DeviceTunnel(after);
+      const secondCall = second.rpc('exec', ['ls'], { timeoutMs: 0 });
+
+      expect(after.sent[0].id).not.toBe(before.sent[0].id);
+
+      first.dispose();
+      second.dispose();
+      await expect(firstCall).rejects.toThrow(TUNNEL_DISCONNECTED);
+      await expect(secondCall).rejects.toThrow(TUNNEL_DISCONNECTED);
+    });
+
+    test('a stale answer from before the wake resolves nothing after it', async () => {
+      const before = fakeSocket();
+      const first = new DeviceTunnel(before);
+      const abandoned = first.rpc('exec', ['make'], { timeoutMs: 0 });
+      const staleId = before.sent[0].id;
+      // The hub is evicted: the old tunnel's call ends here, and the command it
+      // issued keeps running on the machine.
+      first.dispose();
+      await expect(abandoned).rejects.toThrow(TUNNEL_DISCONNECTED);
+
+      const after = fakeSocket();
+      const second = new DeviceTunnel(after);
+      const live = second.rpc('exec', ['git status'], { timeoutMs: 0 });
+      let settled = false;
+      void live.then(() => { settled = true; }, () => { settled = true; });
+
+      // The device finally answers the command the OLD tunnel issued.
+      second.handleMessage(JSON.stringify({ id: staleId, result: { stdout: 'STALE', exitCode: 0 } }));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      second.handleMessage(JSON.stringify({ id: after.sent[0].id, result: { stdout: 'clean', exitCode: 0 } }));
+      expect(await live).toEqual({ stdout: 'clean', exitCode: 0 });
+    });
+
+    test('a caller that must be able to cancel issues the call under its own id', async () => {
+      // The id has to exist before the frame goes out: it is what the daemon
+      // registers the command's process group under, so a caller learning it
+      // from the answer could never stop the command.
+      const sock = fakeSocket();
+      const t = new DeviceTunnel(sock);
+      const requestId = nextDeviceRequestId();
+      const p = t.rpc('exec', ['sleep 600'], { timeoutMs: 0, requestId });
+
+      expect(sock.sent[0].id).toBe(requestId);
+      t.handleMessage(JSON.stringify({ id: requestId, result: { stdout: '', exitCode: 137 } }));
+      expect(await p).toEqual({ stdout: '', exitCode: 137 });
+    });
+
+    test('an id already in flight is refused rather than correlated twice', async () => {
+      const sock = fakeSocket();
+      const t = new DeviceTunnel(sock);
+      const requestId = nextDeviceRequestId();
+      const first = t.rpc('exec', ['make'], { timeoutMs: 0, requestId });
+
+      await expect(t.rpc('exec', ['make again'], { timeoutMs: 0, requestId }))
+        .rejects.toThrow(DEVICE_DUPLICATE_REQUEST);
+      // The refusal costs the live call nothing: it is still the only claimant
+      // on that id, and it still gets its own answer.
+      expect(sock.sent).toHaveLength(1);
+      t.handleMessage(JSON.stringify({ id: requestId, result: { stdout: 'built', exitCode: 0 } }));
+      expect(await first).toEqual({ stdout: 'built', exitCode: 0 });
+    });
+
+    test('a cancellation answer speaks only for the request it names', () => {
+      // The verb and the id are one claim, not two facts. Reading `terminated`
+      // without checking which command it is about is how a stopped-command
+      // report gets attached to processes that are still running.
+      const requestId = nextDeviceRequestId();
+      const answer = { requestId, cancelled: 'terminated' } as const;
+      expect(parseDeviceCancelAnswer(requestId, answer)).toEqual(answer);
+      expect(() => parseDeviceCancelAnswer(nextDeviceRequestId(), answer))
+        .toThrow(DEVICE_CANCEL_MISPAIRED);
+      // An answer that is not one of the two outcomes at all confirms nothing
+      // either — silence and gibberish are the same claim.
+      expect(() => parseDeviceCancelAnswer(requestId, { requestId, cancelled: 'probably' })).toThrow();
+      expect(() => parseDeviceCancelAnswer(requestId, undefined)).toThrow();
     });
   });
 });

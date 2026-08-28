@@ -3,10 +3,15 @@
  *
  * Public surface:
  *
- *   - types:    `ParsedSkill`, `ActiveSkillSet`, …
- *   - parse:    `parseSkillFile`, `stringifySkillFile`, `validateSkillName`
- *   - discover: `discoverSkills`, `skillPath`, `SkillsVfs`, `BUILTIN_SKILLS`
- *   - loader:   `resolveActiveSkills`, `extractExplicitInvocations`
+ *   - types:    `SkillHeader`, `DiscoveredSkill`, `ActiveSkill`, `SkillsIndex`, …
+ *   - parse:    `parseSkillFile`, `stringifySkillFile`, `validateSkillName`,
+ *               `skillNameProblem`
+ *   - discover: `discoverSkills` (headers only — no body is read), `skillPath`,
+ *               `readSkillBody`, `compareSkillNames`, `SkillsVfs`,
+ *               `BUILTIN_SKILLS`, `BUILTIN_SKILL_HEADERS`
+ *   - loader:   `resolveActiveSkills`, `extractExplicitInvocations`,
+ *               `admitSkillsIndex` + `admitActiveSkills` (the model-window
+ *               admission both prompt sections are spent out of)
  *   - render:   `renderActiveSkillsSection` (active bodies),
  *               `renderSkillsIndexSection` (ambient name+description index),
  *               `unionAllowedTools`, `toolAllowedBySkills`
@@ -17,19 +22,29 @@
  */
 
 export * from './types';
-export { parseSkillFile, stringifySkillFile, validateSkillName } from './parse';
-export { discoverSkills, skillPath, type SkillsVfs, type DiscoverOpts } from './discover';
+export {
+  parseSkillFile, stringifySkillFile, validateSkillName, skillNameProblem,
+} from './parse';
+export {
+  discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames,
+  BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
+  type SkillsVfs, type DiscoverOpts, type SkillsDiscovery, type UnreadSkillFile,
+} from './discover';
 export { BUILTIN_SKILLS } from './builtins';
 export {
   resolveActiveSkills,
   extractExplicitInvocations,
+  admitSkillsIndex,
+  admitActiveSkills,
   type LoadActiveSkillsOpts,
+  type ActivatedSkill,
 } from './loader';
 export {
   renderActiveSkillsSection,
   renderSkillsIndexSection,
+  skillIndexLine,
+  unreadSkillLine,
   unionAllowedTools,
   toolAllowedBySkills,
-  ACTIVE_SKILLS_MAX_CHARS,
-  SKILLS_INDEX_MAX_CHARS,
+  trustedActiveSkills,
 } from './render';

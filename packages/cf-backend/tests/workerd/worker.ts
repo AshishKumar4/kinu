@@ -19,12 +19,46 @@ import { DurableObject } from 'cloudflare:workers';
 export { SteerProbeDO } from './steer-probe';
 // The eviction probes — the same charter exception, for the recovery machinery.
 export { EvictionProbeDO, WitnessDO } from './eviction-probe';
+export { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 // The step-cap probes — the same charter exception, for the turn loop's bound.
 export { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
 // The spend aggregate — the same charter exception, for the one production read
 // whose method is platform SQLite features (`WITH`, `json_extract`).
 export { SpendProbeDO } from './spend-probe';
+export { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
+// The send-admission probe — the same charter exception, for the durable
+// submission ledger two concurrent clients race.
+export { SendAdmissionProbeDO } from './send-admission-probe';
+// The durable device-command ledger — the same charter exception, for a
+// precedence protocol whose whole subject is surviving an activation reset.
+export { DeviceLedgerProbeDO } from './device-inflight-probe';
+// The terminal-effect ledger — the same charter exception, for what one settled
+// turn still owes after the isolate running its effects dies.
+export { TerminalEffectProbeDO } from './terminal-effect-probe';
 import * as v from 'valibot';
+
+/**
+ * Cap'n Web owns a transferred writable stream after the RPC invocation that
+ * returned it. The close and abort callbacks make that lifetime durable.
+ */
+export class StreamLifecycleDO extends DurableObject<Cloudflare.Env> {
+  private static readonly WRITE_CLOSED = 'write-closed';
+  private static readonly WRITE_ABORTED = 'write-aborted';
+
+  openWritable(): WritableStream<Uint8Array> {
+    return new WritableStream({
+      close: async () => await this.ctx.storage.put(StreamLifecycleDO.WRITE_CLOSED, true),
+      abort: async () => await this.ctx.storage.put(StreamLifecycleDO.WRITE_ABORTED, true),
+    });
+  }
+
+  async streamEffects(): Promise<{ readonly writeClosed: boolean; readonly writeAborted: boolean }> {
+    return {
+      writeClosed: (await this.ctx.storage.get<boolean>(StreamLifecycleDO.WRITE_CLOSED)) === true,
+      writeAborted: (await this.ctx.storage.get<boolean>(StreamLifecycleDO.WRITE_ABORTED)) === true,
+    };
+  }
+}
 
 /** The storage key `armTimer` commits. Named after the real one so a reader of
  *  orchestrator.ts:542 recognises what is being lost. */
@@ -443,10 +477,50 @@ export class AlarmDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-/** The pool requires a default export from `main`. Nothing routes to it: every
- *  test addresses a Durable Object stub directly. */
+/**
+ * The send route two concurrent clients arrive on.
+ *
+ * One hop, resolved the way production resolves one: the conversation's name is
+ * a path segment, `idFromName` turns it into the object, and the send is
+ * forwarded. What it adds over calling the stub from the test is the part the
+ * duplicate-send question is about — two INDEPENDENT HTTP requests, each its own
+ * worker invocation, overlapping at one Durable Object.
+ */
+async function routeSend(request: Request, env: Cloudflare.Env, url: URL): Promise<Response> {
+  const [, name, key] = url.pathname.split('/').filter((segment) => segment.length > 0);
+  if (name === undefined || key === undefined) return new Response('bad send path', { status: 400 });
+  const stub = env.SEND_ADMISSION_PROBE.get(env.SEND_ADMISSION_PROBE.idFromName(name));
+  return Response.json(await stub.submit(await request.text(), key));
+}
+
+/**
+ * Defect 6 — transfer framing across a re-origination.
+ *
+ * The pool requires a default export from `main`, and it is the one thing here
+ * that is a plain handler rather than a Durable Object: reached over `SELF`, it
+ * is a real workerd HTTP peer, so what it reports is what the runtime actually
+ * put on the wire.
+ *
+ * WHY `bun test` CANNOT HOST IT. Bun's `Request` sets no `content-length` at
+ * all when a body is attached, so the difference between a fixed-length send
+ * and a chunked one is invisible there by construction — a re-origination that
+ * silently turned every upload chunked would pass every bun assertion. workerd
+ * derives the framing from the body it is handed and DISCARDS an author-set
+ * `content-length`, which is the semantic `egress-framing.test.ts` pins.
+ *
+ * The body is drained rather than ignored so `bytes` proves the payload
+ * survived whichever framing was chosen.
+ */
 export default {
-  fetch(): Response {
-    return new Response('workerd test worker', { status: 200 });
+  async fetch(request: Request, env: Cloudflare.Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith('/send/')) return routeSend(request, env, url);
+    const body = await request.arrayBuffer();
+    return Response.json({
+      contentLength: request.headers.get('content-length'),
+      transferEncoding: request.headers.get('transfer-encoding'),
+      userAgent: request.headers.get('user-agent'),
+      bytes: body.byteLength,
+    });
   },
 } satisfies ExportedHandler<Cloudflare.Env>;

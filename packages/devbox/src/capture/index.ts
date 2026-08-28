@@ -9,14 +9,20 @@ export {
   auditCapture,
   canonicalManifestBytes,
   contentEquals,
+  contentExtents,
   contentSize,
   expandContent,
   manifestSha256,
   prefixState,
   stateEquals,
-  tick,
+  requireCompleteCaptureTree,
   toCapturedCut,
+  requireAuditedCapture,
+  issueVerifiedJournalCapture,
+  AuditedCapture,
   MutationLog,
+  readCaptureRange,
+  MAX_SEALED_EXTENT_BYTES,
 } from './model';
 export type {
   CapturedCutIdentity,
@@ -28,11 +34,15 @@ export type {
   MutationOp,
   NodeEntry,
   NodeKind,
+  SealedContent,
+  SealedContentReader,
+  SealedExtent,
   SparseRun,
-  StatSnapshot,
   StateSnapshot,
   UpperPath,
+  VerifiedJournalCut,
 } from './model';
+
 
 export { logView } from './view';
 export type { CaptureView } from './view';

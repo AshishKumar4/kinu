@@ -7,11 +7,14 @@
  */
 
 import type { ToolSet } from 'ai';
-import { resolveActiveSkills, extractExplicitInvocations } from '../skills/loader';
-import { discoverSkills, type SkillsVfs } from '../skills/discover';
-import { BUILTIN_SKILLS } from '../skills/builtins';
-import { unionAllowedTools, toolAllowedBySkills } from '../skills/render';
-import type { ActiveSkillSet, ParsedSkill } from '../skills/types';
+import {
+  resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
+} from '../skills/loader';
+import { discoverSkills, BUILTIN_SKILL_HEADERS, type SkillsVfs } from '../skills/discover';
+import { unionAllowedTools, toolAllowedBySkills, trustedActiveSkills } from '../skills/render';
+import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
+import type { InstructionTrustResolver } from '../types/instruction-trust';
+import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
 import type { VFS } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -23,6 +26,7 @@ export function skillsVfsOver(vfs: VFS): SkillsVfs {
     readFile: (p, opts) => vfs.readFile(p, opts),
     writeFile: (p, data) => vfs.writeFile(p, data),
     readdir: (p) => vfs.readdir(p),
+    stat: (p) => vfs.stat(p),
     unlink: (p) => vfs.unlink(p),
     mkdir: (p, opts) => vfs.mkdir(p, opts),
   };
@@ -32,50 +36,88 @@ export interface TurnSkillsConfig {
   getAlwaysActiveSkills(): string[];
 }
 
-/** What a turn needs from the skills store: every available skill (for the
- *  ambient index, always rendered) plus whichever ones are active this turn
- *  (for the expanded-body section and the tool-surface restriction). */
+/** What a turn needs from the skills store: the ambient index (rendered every
+ *  turn) plus whichever skills are active this turn (for the expanded-body
+ *  section and the tool-surface restriction). Both are what the turn's
+ *  allocation ADMITTED, not everything the store holds. */
 export interface TurnSkillSurface {
-  available: ParsedSkill[];
+  available: SkillsIndex;
   activeSkills: ActiveSkillSet | undefined;
 }
 
 /**
- * Resolve this turn's skill surface — every available skill (built-ins + VFS,
- * for the ambient name+description index every turn renders) and which of
- * them are active (explicit /invocation, always-active config, or a builtin's
- * auto-activate keyword match).
+ * Resolve this turn's skill surface — the ambient name+description index every
+ * turn renders, and which skills are active (explicit /invocation, always-active
+ * config, or an auto-activate keyword match).
  *
- * Discovery now runs on every turn: the ambient index needs the full catalogue
- * regardless of whether anything activates, which is the one filesystem walk
- * this call was previously skipping on a vanilla turn. Never fails the turn —
- * a discovery error still returns the built-ins so the index isn't silently
- * empty. */
+ * Bounded by the model rather than by a char cap: `stepContextLimit` over the
+ * resolved window and its answer reserve IS the allocation, the ambient index is
+ * charged against it first, and the active bodies get the remainder — the same
+ * derivation the MCP catalogue admission uses (cf-backend/src/user/mcp.ts). That
+ * same number is what stops discovery from opening a file it could never afford.
+ *
+ * Discovery runs on every turn: the ambient index needs the full catalogue
+ * whether or not anything activates. It reads front matter only — bodies are
+ * fetched here, for the active skills the allocation admitted, and for nothing
+ * else. Never fails the turn: a VFS failure still yields the built-in floor so
+ * the index isn't silently empty.
+ */
 export async function resolveTurnSkills(opts: {
   vfs: SkillsVfs;
   config: TurnSkillsConfig;
   userText: string;
+  /** The resolved model's window and the answer allowance it reserves. */
+  limits: ModelWindow;
+  /** Whether the owner approved a workspace skill's exact bytes. Required, so
+   *  no caller can obtain skills that were never classified. */
+  trust: InstructionTrustResolver;
   roleSkills?: readonly string[];
 }): Promise<TurnSkillSurface> {
-  let available: ParsedSkill[];
+  const admissionTokens = stepContextLimit(opts.limits);
   try {
-    available = await discoverSkills(opts.vfs);
+    return await admitTurnSkills(opts, admissionTokens);
   } catch (err) {
     diagnostics.failure(
       'skills.discovery_failed',
       toKinuError({ doing: 'discover the turn\'s skills', cause: err, otherwise: 'io' }),
     );
-    available = [...BUILTIN_SKILLS];
+    // The built-in floor: those bodies are module constants, so this surface
+    // needs no VFS at all and cannot fail the way the walk just did.
+    return {
+      available: admitSkillsIndex({ skills: [...BUILTIN_SKILL_HEADERS], unread: [] }, admissionTokens),
+      activeSkills: undefined,
+    };
   }
-  const explicit = extractExplicitInvocations(opts.userText);
-  const alwaysActive = [
-    ...opts.config.getAlwaysActiveSkills(),
-    ...(opts.roleSkills ?? []),
-  ];
-  const activeSet = resolveActiveSkills({
-    available, explicit, userMessage: opts.userText, alwaysActive,
+}
+
+async function admitTurnSkills(
+  opts: {
+    vfs: SkillsVfs;
+    config: TurnSkillsConfig;
+    userText: string;
+    trust: InstructionTrustResolver;
+    roleSkills?: readonly string[];
+  },
+  admissionTokens: number,
+): Promise<TurnSkillSurface> {
+  const discovery = await discoverSkills(opts.vfs, { admissionTokens });
+  const available = admitSkillsIndex(discovery, admissionTokens);
+  const activated = resolveActiveSkills({
+    available: discovery.skills,
+    explicit: extractExplicitInvocations(opts.userText),
+    userMessage: opts.userText,
+    alwaysActive: [...opts.config.getAlwaysActiveSkills(), ...(opts.roleSkills ?? [])],
   });
-  return { available, activeSkills: activeSet.active.length > 0 ? activeSet : undefined };
+  if (activated.length === 0) return { available, activeSkills: undefined };
+  return {
+    available,
+    activeSkills: await admitActiveSkills({
+      vfs: opts.vfs,
+      activated,
+      admissionTokens: admissionTokens - available.tokens,
+      trust: opts.trust,
+    }),
+  };
 }
 
 /** The one restriction rule: the active skills' allowed_tools union bounds
@@ -86,7 +128,13 @@ export async function resolveTurnSkills(opts: {
  *  and omits execute_tools means it, the same as it means it for any other
  *  tool. Discovering or authoring more skills mid-restriction can wait for
  *  the next turn, where resolveTurnSkills re-evaluates from the new message,
- *  unaffected by what the previous turn excluded. */
+ *  unaffected by what the previous turn excluded.
+ *
+ *  Only TRUSTED skills are counted (KINU-N028). `allowed_tools` is policy, and
+ *  the union is a widening operation, so an unapproved file could otherwise
+ *  hand itself a tool a legitimately active skill had excluded — or invent a
+ *  restriction where the owner intended none. A skill the agent may have
+ *  written renders as reference material and sets no policy. */
 function allowedBySkills(name: string, allowedUnion: string[]): boolean {
   return toolAllowedBySkills(name, allowedUnion);
 }
@@ -99,7 +147,7 @@ export function filterToolNamesBySkills<T extends string>(
   activeSkills: ActiveSkillSet | undefined,
 ): T[] {
   if (!activeSkills) return [...names];
-  const allowedUnion = unionAllowedTools(activeSkills.active);
+  const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
   if (allowedUnion.length === 0) return [...names];
   return names.filter((name) => allowedBySkills(name, allowedUnion));
 }
@@ -108,7 +156,7 @@ export function filterToolNamesBySkills<T extends string>(
  *  union. Returns the input object untouched when skills don't restrict. */
 export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillSet | undefined): ToolSet {
   if (!activeSkills) return tools;
-  const allowedUnion = unionAllowedTools(activeSkills.active);
+  const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
   if (allowedUnion.length === 0) return tools;
   const filtered: ToolSet = {};
   for (const [name, t] of Object.entries(tools)) {

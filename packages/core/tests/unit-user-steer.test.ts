@@ -30,7 +30,7 @@ function drain(inFlight = true) {
     drained,
     drain: new UserSteerDrain({
       turnInFlight: () => inFlight,
-      onDrain: (steers, atStep) => drained.push({ steers: [...steers], atStep }),
+      onDrain: (steers, atStep) => { drained.push({ steers: [...steers], atStep }); },
     }),
   };
 }
@@ -49,16 +49,27 @@ describe('UserSteerDrain — accepting', () => {
     expect(d.accept({ text: 'also check staging' })).toBe('mid-turn');
     expect(d.pendingCount).toBe(1);
   });
+
+  test('durable reset state replaces the process-local queue in its stored order', () => {
+    const { drain: d } = drain();
+    const restored = [
+      { id: 's1', text: 'first' },
+      { id: 's2', text: 'second' },
+    ];
+    d.restorePending(restored);
+    expect(d.pendingSteers()).toEqual(restored);
+    expect(d.pendingSteers()).not.toBe(restored);
+  });
 });
 
 describe('UserSteerDrain — draining into the step', () => {
-  test('everything pending lands as ONE user message at the step tail', () => {
+  test('everything pending lands as ONE user message at the step tail', async () => {
     const { drain: d, drained } = drain();
     d.beginTurn();
     d.accept({ text: 'also check staging' });
     d.accept({ text: 'and the logs' });
 
-    const rewritten = d.prepareStep(step(0, HISTORY));
+    const rewritten = await d.prepareStep(step(0, HISTORY));
 
     // At the TAIL: after the latest tool results, which is what keeps role
     // alternation provider-safe.
@@ -75,43 +86,43 @@ describe('UserSteerDrain — draining into the step', () => {
     expect(d.pendingCount).toBe(0);
   });
 
-  test('the drain reports WHICH step it landed in, not just that it landed', () => {
+  test('the drain reports WHICH step it landed in, not just that it landed', async () => {
     // A turn is one assistant message, so "it landed" places a steer before or
     // after the whole turn and nowhere else. The step index is the only thing
     // that can put the operator's words where the model actually read them —
     // which is the report: seen at the next step, drawn at the bottom.
     const { drain: d, drained } = drain();
     d.beginTurn();
-    d.prepareStep(step(0, HISTORY));
+    await d.prepareStep(step(0, HISTORY));
     d.accept({ text: 'use the swarm for this' });
-    d.prepareStep(step(7, HISTORY));
+    await d.prepareStep(step(7, HISTORY));
 
     expect(drained).toEqual([{
       steers: [{ text: 'use the swarm for this' }], atStep: 7,
     }]);
   });
 
-  test('a step with nothing pending re-applies earlier steers at the index the model first saw them', () => {
+  test('a step with nothing pending re-applies earlier steers at the index the model first saw them', async () => {
     const { drain: d } = drain();
     d.beginTurn();
     d.accept({ text: 'also check staging' });
-    d.prepareStep(step(0, HISTORY));
+    await d.prepareStep(step(0, HISTORY));
 
     // streamText rebuilds each step's messages from scratch, so a steer that is
     // not re-applied simply vanishes from the conversation after one step.
     const laterStep = [...HISTORY, { role: 'assistant' as const, content: 'ran a tool' }];
-    expect(d.prepareStep(step(1, laterStep))).toEqual([
+    expect(await d.prepareStep(step(1, laterStep))).toEqual([
       ...HISTORY,
       { role: 'user', content: 'also check staging' },
       { role: 'assistant', content: 'ran a tool' },
     ]);
   });
 
-  test('a fresh turn resets splice coordinates but KEEPS a steer typed for it', () => {
+  test('a fresh turn resets splice coordinates but KEEPS a steer typed for it', async () => {
     const { drain: d } = drain();
     d.beginTurn();
     d.accept({ text: 'first turn steer' });
-    d.prepareStep(step(0, HISTORY));
+    await d.prepareStep(step(0, HISTORY));
     expect(d.drainedTexts()).toEqual(['first turn steer']);
 
     // Typed while the previous turn was finishing: it belongs to the turn that
@@ -120,9 +131,68 @@ describe('UserSteerDrain — draining into the step', () => {
     d.beginTurn();
     expect(d.drainedTexts()).toEqual([]);
     expect(d.pendingCount).toBe(1);
-    expect(d.prepareStep(step(0, HISTORY))).toEqual([
+    expect(await d.prepareStep(step(0, HISTORY))).toEqual([
       ...HISTORY,
       { role: 'user', content: 'typed as the turn ended' },
+    ]);
+  });
+
+  test('awaits durable landing before returning provider-visible words', async () => {
+    const landing = Promise.withResolvers<void>();
+    const d = new UserSteerDrain({
+      turnInFlight: () => true,
+      onDrain: async () => landing.promise,
+    });
+    d.beginTurn();
+    d.accept({ id: 's1', text: 'wait for storage' });
+
+    let returned = false;
+    const preparing = d.prepareStep(step(0, HISTORY)).then((messages) => {
+      returned = true;
+      return messages;
+    });
+    let barrierSettled = false;
+    const barrier = d.waitForLanding().then(() => { barrierSettled = true; });
+    await Promise.resolve();
+
+    expect(returned).toBe(false);
+    expect(barrierSettled).toBe(false);
+    expect(d.pendingSteers()).toEqual([{ id: 's1', text: 'wait for storage' }]);
+    expect(d.recordedMessages()).toEqual([]);
+
+    landing.resolve();
+    expect(await preparing).toEqual([
+      ...HISTORY,
+      { role: 'user', content: 'wait for storage' },
+    ]);
+    await barrier;
+    expect(barrierSettled).toBe(true);
+    expect(d.pendingSteers()).toEqual([]);
+  });
+
+  test('a failed durable landing restores the exact prefix before newer steers', async () => {
+    let attempt = 0;
+    const d = new UserSteerDrain({
+      turnInFlight: () => true,
+      onDrain: async () => {
+        attempt += 1;
+        if (attempt === 1) throw new Error('storage unavailable');
+      },
+    });
+    d.beginTurn();
+    d.accept({ id: 's1', text: 'first' });
+
+    await expect(d.prepareStep(step(0, HISTORY))).rejects.toThrow('storage unavailable');
+    d.accept({ id: 's2', text: 'second' });
+    expect(d.pendingSteers()).toEqual([
+      { id: 's1', text: 'first' },
+      { id: 's2', text: 'second' },
+    ]);
+    expect(d.recordedMessages()).toEqual([]);
+
+    expect(await d.prepareStep(step(0, HISTORY))).toEqual([
+      ...HISTORY,
+      { role: 'user', content: 'first\n\nsecond' },
     ]);
   });
 
@@ -142,13 +212,13 @@ describe('UserSteerDrain — draining into the step', () => {
 });
 
 describe('UserSteerDrain — the three load-bearing semantics', () => {
-  test('a drained steer is available VERBATIM for persistence, one row per steer', () => {
+  test('a drained steer is available VERBATIM for persistence, one row per steer', async () => {
     const { drain: d } = drain();
     d.beginTurn();
     d.accept({ text: 'also check staging' });
-    d.prepareStep(step(0, HISTORY));
+    await d.prepareStep(step(0, HISTORY));
     d.accept({ text: 'and the logs' });
-    d.prepareStep(step(1, HISTORY));
+    await d.prepareStep(step(1, HISTORY));
 
     // Per STEER, not per drain: the walk-back fork pivot matches an individual
     // user message, so a merged "staging\n\nlogs" row would make one of them
@@ -156,7 +226,7 @@ describe('UserSteerDrain — the three load-bearing semantics', () => {
     expect(d.drainedTexts()).toEqual(['also check staging', 'and the logs']);
   });
 
-  test('an interrupt returns what the model never saw, and drops it from the turn', () => {
+  test('an interrupt returns what the model never saw, and drops it from the turn', async () => {
     const { drain: d } = drain();
     d.beginTurn();
     d.accept({ id: 's1', text: 'change of plans' });
@@ -166,15 +236,29 @@ describe('UserSteerDrain — the three load-bearing semantics', () => {
     expect(d.interrupt()).toEqual([{ id: 's1', text: 'change of plans' }]);
     expect(d.pendingCount).toBe(0);
     // And it must NOT then reappear in the next step or as a leftover turn.
-    expect(d.prepareStep(step(1, HISTORY))).toBeUndefined();
+    expect(await d.prepareStep(step(1, HISTORY))).toBeUndefined();
     expect(d.takeLeftover()).toEqual([]);
   });
 
-  test('an interrupt leaves a steer the model already read in the durable record', () => {
+  test('a failed durable interrupt delete can restore its exact prefix after earlier landings', async () => {
+    const { drain: d } = drain();
+    d.beginTurn();
+    d.accept({ id: 'landed', text: 'already seen' });
+    await d.prepareStep(step(0, HISTORY));
+    d.accept({ id: 'queued', text: 'return only this' });
+
+    const interrupted = d.interrupt();
+    d.restoreInterrupted(interrupted);
+
+    expect(d.pendingSteers()).toEqual([{ id: 'queued', text: 'return only this' }]);
+    expect(d.drainedTexts()).toEqual(['already seen']);
+  });
+
+  test('an interrupt leaves a steer the model already read in the durable record', async () => {
     const { drain: d } = drain();
     d.beginTurn();
     d.accept({ text: 'also check staging' });
-    d.prepareStep(step(0, HISTORY));
+    await d.prepareStep(step(0, HISTORY));
 
     // Interrupting after the drain cannot un-send it: the model acted on it, so
     // it stays in the history the next turn inherits.
@@ -183,10 +267,10 @@ describe('UserSteerDrain — the three load-bearing semantics', () => {
     expect(d.recordedMessages()).toEqual([{ role: 'user', content: 'also check staging' }]);
   });
 
-  test('a steer that never saw a step boundary comes back as a leftover to rerun', () => {
+  test('a steer that never saw a step boundary comes back as a leftover to rerun', async () => {
     const { drain: d } = drain();
     d.beginTurn();
-    d.prepareStep(step(0, HISTORY));
+    await d.prepareStep(step(0, HISTORY));
     // Typed while the model was writing its final answer — there is no further
     // step for it to land on.
     d.accept({ text: 'one more thing' });
@@ -196,11 +280,11 @@ describe('UserSteerDrain — the three load-bearing semantics', () => {
     expect(d.pendingCount).toBe(0);
   });
 
-  test('the spliced conversation replays into the turn response at the position the model saw it', () => {
+  test('the spliced conversation replays into the turn response at the position the model saw it', async () => {
     const { drain: d } = drain();
     d.beginTurn();
     d.accept({ text: 'also check staging' });
-    d.prepareStep(step(0, HISTORY));
+    await d.prepareStep(step(0, HISTORY));
 
     // The durable-history merge: base coordinates are the step-0 count, so the
     // steer lands ahead of the assistant work that followed it.

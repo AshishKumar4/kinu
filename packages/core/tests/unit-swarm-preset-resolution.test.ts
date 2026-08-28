@@ -73,6 +73,64 @@ function legal(input: SwarmInput): ResolvedSwarm {
   return resolved;
 }
 
+/**
+ * PER-NODE ASSIGNMENTS: `nodes` is the caller writing the first level themselves,
+ * instead of asking for N takes on one task.
+ *
+ * THE DEFECT IT CLOSES. Every level-1 node received the run's `task` verbatim —
+ * `swarm-run.ts` reads each child's assignment off the parent's granted proposal, and
+ * at level 1 the parent is the ROOT, which no model wrote and which therefore
+ * proposes nothing. The only thing that differed between siblings was a canned
+ * diversity angle. No axis could say otherwise: the six are run-scoped single values
+ * and `branches` is an integer.
+ */
+describe('the caller can assign the first level node by node', () => {
+  const ASSIGNED = [
+    { task: 'measure the cold-start path', prompt: 'profile it first, then cut the biggest term' },
+    { task: 'measure the cache-hit path', prompt: 'assume the cache is warm and find the next bound' },
+    { task: 'measure the eviction path', prompt: 'start from the failure you most expect' },
+  ];
+
+  test('its length IS the branch count, and it lands on the resolved call', () => {
+    const resolved = legal({ preset: 'ideate', task: 'make it faster', nodes: ASSIGNED });
+    expect(resolved.caps.branches).toEqual({ value: 3, origin: 'call' });
+    expect(resolved.nodes).toEqual(ASSIGNED);
+    // …and `ideate`'s own width of 5 is overridden by the caller's three, exactly as
+    // an explicit `branches: 3` would be. One width, from one place.
+    expect(SWARM_PRESET_POINTS.ideate.branches).toBe(5);
+  });
+
+  test('a count-based call resolves with no assignments at all', () => {
+    // The other direction, without which a change that assigns every run passes the
+    // test above: absent means absent, never an invented list.
+    expect(legal({ preset: 'ideate', task: 'make it faster', branches: 3 }).nodes).toBeNull();
+  });
+
+  test('naming both widths is refused rather than resolved by precedence', () => {
+    const refusal = resolveSwarm({
+      preset: 'ideate', task: 'make it faster', nodes: ASSIGNED, branches: 5,
+    });
+    expect('reason' in refusal).toBe(true);
+    if ('reason' in refusal) {
+      expect(refusal.error).toContain('branch count');
+      expect(refusal.error).toContain('would be ignored');
+    }
+  });
+
+  test('two nodes asked the same question are refused', () => {
+    // The duplication the field exists to remove, restated by the caller. A search
+    // that asks one question twice pays twice for one answer.
+    const first = ASSIGNED[0] ?? { task: '', prompt: '' };
+    const refusal = resolveSwarm({
+      preset: 'ideate',
+      task: 'make it faster',
+      nodes: [first, { task: first.task, prompt: 'a different brief entirely' }],
+    });
+    expect('reason' in refusal).toBe(true);
+    if ('reason' in refusal) expect(refusal.error).toContain('two of yours are the same');
+  });
+});
+
 describe('every named preset resolves to a tuple validity accepts', () => {
   test('all six resolve, and none of them resolves into a refusal', () => {
     // The acceptance criterion whole. Before this change `research`, `audit` and

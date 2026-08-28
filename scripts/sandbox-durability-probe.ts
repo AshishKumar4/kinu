@@ -16,13 +16,21 @@
  *                  then-extract restore cannot answer that read in seconds)
  *   P3 whiteouts   modify one file, DELETE another, tick a delta; stop; wake —
  *                  the deletion survives the base+delta restore, the edit too
- *   P4 supervision a supervised HTTP server comes back after stop+wake and serves
- *                  again; listProcesses marks it restartable
+ *   P4 supervision a supervised process comes back under the same id after stop+wake;
+ *                  listProcesses marks it restartable and its port token survives
  *   P5 heartbeat   the heartbeat schedule exists and, after an idle window LONGER
  *                  than the platform's 10-minute default sleep, an ephemeral
  *                  /tmp marker still exists — the container never slept
  *   P6 final stop  forced checkpoint → keepAlive off → SIGTERM; the next wake
  *                  restores the workspace intact
+ *   P7 honesty     a real restored process/listener failure leaves the box
+ *                  attached and unready, exposes no dead service, and retains
+ *                  the specs needed for a later repair
+ *
+ * Every artifact carries its exact git SHA plus the dated ephemeral Worker,
+ * origin and bucket identities. A failed deploy still persists those facts and
+ * cleans its bucket/config before returning; a partial artifact without them is
+ * not lifecycle evidence.
  *
  * HOW IT REACHES A REAL CONTAINER. Not `wrangler dev --remote`: wrangler states
  * on startup that Containers and SQLite Durable Objects are LOCAL-ONLY in remote
@@ -110,10 +118,21 @@ const PortTokenResponseSchema: v.GenericSchema<PortTokenResponse> = v.object({
 /** The one slice of `devboxState()` P5 reads. Parsed at the I/O boundary so the
  *  verdict below branches on a domain value, never on a raw shape. */
 const IdleTickSchema = v.object({
+  bootId: v.nullish(v.string()),
   lastTick: v.nullish(v.object({
     at: v.number(),
     armedNext: v.optional(v.boolean()),
   })),
+});
+
+/** The lifecycle evidence group reads the honest readiness projection, not raw
+ *  container calls: it has to prove the box says UNREADY after a restored service
+ *  failed, while ordinary operations remain available to repair it. */
+const LifecycleStateSchema = v.object({
+  ready: v.boolean(),
+  unready: v.nullish(v.string()),
+  supervised: v.array(v.object({ processId: v.string() })),
+  ports: v.array(v.object({ port: v.number() })),
 });
 
 const BASE_MIB = Number(process.env.PROBE_BASE_MIB ?? 64);
@@ -126,9 +145,14 @@ export const PHASES: readonly Phase[] = [
   { id: "P1", name: "base layer", proves: "first tick writes ONE full base under backups/<uuid>/" },
   { id: "P2", name: "lazy restore", proves: "stop+wake re-attaches by mounting; single-slice read stays fast" },
   { id: "P3", name: "whiteouts", proves: "deletion survives base+delta restore" },
-  { id: "P4", name: "supervision", proves: "supervised process returns after restart and serves" },
+  { id: "P4", name: "supervision", proves: "supervised process returns under its persisted id and keeps its port token" },
   { id: "P5", name: "heartbeat hold", proves: `container alive past ${IDLE_MINUTES} min idle (> default 10 m)` },
   { id: "P6", name: "final SIGTERM", proves: "checkpoint → keepAlive off → stop; next wake intact" },
+  {
+    id: "P7",
+    name: "lifecycle honesty",
+    proves: "a restored process/listener failure leaves the container attached and unready, publishes no dead port, and keeps its specs for repair",
+  },
 ];
 
 export interface ProbeEvidence {
@@ -159,10 +183,19 @@ export interface ProbeEvidence {
     readonly chainAlive: true;
     readonly instanceReplaced: boolean;
     readonly workspaceIntact: true;
-    readonly supervisedServing: true;
   };
   P6?: {
     readonly intactAfterFinalStop: true;
+  };
+  /** Real container failure: a process exits on restart, its persisted port
+   *  never listens, and the box must stay attached but honestly unready. */
+  P7?: {
+    readonly failedProcessId: string;
+    readonly failedPort: number;
+    readonly ready: false;
+    readonly unready: string;
+    readonly listenerAbsent: true;
+    readonly specsRetained: true;
   };
 }
 
@@ -171,9 +204,17 @@ export interface ProbeEvidence {
  * beside the code that writes it, rather than only in terminal scrollback.
  */
 export interface DurabilityProbeArtifact {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly command: 'bun scripts/sandbox-durability-probe.ts --run';
   readonly runId: string;
+  /** Build identity is evidence, not a terminal claim: a dated artifact must say
+   *  which source and ephemeral deployment produced it. */
+  readonly build: {
+    readonly gitSha: string;
+    readonly workerName: string;
+    readonly origin: string | undefined;
+    readonly bucketName: string;
+  };
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly baseMiB: number;
@@ -309,6 +350,16 @@ function wrangler(args: readonly string[], cwd: string): Promise<{ stdout: strin
   return promise;
 }
 
+async function gitSha(): Promise<string> {
+  const child = Bun.spawn(['git', 'rev-parse', 'HEAD'], { stdout: 'pipe', stderr: 'ignore' });
+  const output = await new Response(child.stdout).text();
+  const code = await child.exited;
+  if (code !== 0 || !/^[0-9a-f]{40}\n$/u.test(output)) {
+    throw new Error(`could not read the exact probe build identity (git exit ${code})`);
+  }
+  return output.trim();
+}
+
 interface Deployment {
   readonly origin: string;
   readonly workerName: string;
@@ -346,9 +397,20 @@ async function deployEphemeral(runId: string, token: string): Promise<Deployment
   if (bucket.code !== 0) throw new Error(`could not create the ephemeral bucket ${bucketName}`);
 
   const deployed = await wrangler(["deploy", "--config", configFile], fixtureDir);
-  if (deployed.code !== 0) throw new Error("wrangler deploy failed; see output above");
   const url = deployed.stdout.match(/https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/);
-  if (!url) throw new Error("deploy printed no workers.dev URL");
+  if (deployed.code !== 0 || url === null) {
+    // CREATED HERE, SO CLEANED HERE. The outer finally cannot tear down a
+    // `Deployment` that was never returned, and leaving an ephemeral bucket
+    // behind after validation rejects the Worker is exactly the kind of failed
+    // evidence run that must leave the account as it found it.
+    const cleanup = await wrangler(["r2", "bucket", "delete", bucketName], fixtureDir);
+    await rm(`${fixtureDir}${configFile}`, { force: true });
+    const detail = deployed.code !== 0
+      ? "wrangler deploy failed; see output above"
+      : "deploy printed no workers.dev URL";
+    if (cleanup.code !== 0) throw new Error(`${detail}; cleanup bucket delete exited ${cleanup.code}`);
+    throw new Error(detail);
+  }
   return { origin: url[0], workerName, bucketName, configFile, fixtureDir };
 }
 
@@ -457,11 +519,19 @@ export async function run(): Promise<DurabilityProbeArtifact> {
   const startedAt = new Date().toISOString();
   const evidence: ProbeEvidence = {};
   let deployment: Deployment | undefined;
+  let build: DurabilityProbeArtifact['build'] | undefined;
   let outcome: DurabilityProbeArtifact['outcome'] = 'failed';
   let failure: unknown;
   let artifact: DurabilityProbeArtifact | undefined;
   try {
+    build = {
+      gitSha: await gitSha(),
+      workerName: `kinu-dur-probe-${runId}`,
+      origin: undefined,
+      bucketName: `kinu-dur-probe-${runId}`,
+    };
     deployment = await deployEphemeral(runId, token);
+    build = { ...build, origin: deployment.origin };
     const origin = deployment.origin;
     console.log(`probe origin ${origin}`);
     await awaitOrigin(origin, token);
@@ -535,42 +605,59 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     evidence.P3 = { deletedAbsent: true, additionPresent: true, checkpoint };
     console.log("P3 whiteouts ok");
 
-    // P4 — supervision across restart.
-    // `node` is in the sandbox image; python3 is probed ABSENT there (AGENTS.md
-    // capability table), so a python server would fail before any restart.
-    const proc = await callParsed(origin, token, "/startProcess", {
-      command: `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${PORT})`, cwd: "/workspace",
+    // P7 — lifecycle honesty on a REAL container. The bad process exits on
+    // restart and the port token persists, so the next restoration has to prove
+    // a listener that is not there. It must NOT expose a dead URL or report
+    // ready; it must stay attached so the caller can repair it.
+    const FAILED_PORT = 18_081;
+    const failed = await callParsed(origin, token, "/startProcess", {
+      command: 'node -e "process.exit(1)"', cwd: "/workspace",
     }, ProcessStartResponseSchema);
-    const portBeforeRestart = await callParsed(
-      origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
-    );
-    await call(origin, token, "/exec", { command: "sleep 1" });
-    const serveBefore = await call(origin, token, "/exec", { command: `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}/` });
-    // Write the idle marker NOW: its survival through P5 is the keepAlive proof.
-    await call(origin, token, "/exec", { command: "date +%s > /tmp/idle-probe-marker" });
+    await callParsed(origin, token, "/notePortExposed", {
+      port: FAILED_PORT, name: "failed-lifecycle-probe",
+    }, PortTokenResponseSchema);
     await restartVerified(origin, token);
-    const procs = await callParsed(
-      origin, token, "/listProcesses", {}, SupervisedProcessResponsesSchema,
-    );
-    await call(origin, token, "/exec", { command: "sleep 1" });
-    const serveAfter = await call(origin, token, "/exec", { command: `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}/` });
-    const portAfterRestart = await callParsed(
-      origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
-    );
-    if (portBeforeRestart.urlToken !== portAfterRestart.urlToken) {
-      throw new Error(`preview token changed across restart: ${portBeforeRestart.urlToken}/${portAfterRestart.urlToken}`);
+    const lifecycle = await callParsed(origin, token, "/state", {}, LifecycleStateSchema);
+    const failedListener = await call(origin, token, "/exec", {
+      command: `curl -sS -o /dev/null -m 2 -w '%{http_code}|%{exitcode}' --connect-timeout 1 http://127.0.0.1:${FAILED_PORT}/ 2>&1 || true`,
+    });
+    const specsRetained = lifecycle.supervised.some(row => row.processId === failed.processId)
+      && lifecycle.ports.some(row => row.port === FAILED_PORT);
+    const unready = lifecycle.unready;
+    if (lifecycle.ready || unready === undefined || unready === null || !unready.includes(failed.processId)
+      || !(failedListener.stdout ?? '').includes('|7') || !specsRetained) {
+      throw new Error(
+        `lifecycle failure was not honest: state=${JSON.stringify(lifecycle)} `
+        + `listener=${String(failedListener.stdout)}`,
+      );
     }
-    const restarted = procs.some(process => process.processId === proc.processId && process.restartable);
-    if (!(Number(serveBefore.stdout) > 0 && Number(serveAfter.stdout) > 0 && restarted)) {
-      throw new Error(`supervised process did not return: ${serveBefore.stdout}/${serveAfter.stdout}/${JSON.stringify(procs).slice(0, 200)}`);
-    }
-    evidence.P4 = {
-      processId: proc.processId,
-      httpBefore: serveBefore.stdout,
-      httpAfter: serveAfter.stdout,
-      urlToken: portAfterRestart.urlToken,
+    evidence.P7 = {
+      failedProcessId: failed.processId,
+      failedPort: FAILED_PORT,
+      ready: false,
+      unready,
+      listenerAbsent: true,
+      specsRetained: true,
     };
-    console.log("P4 supervision ok");
+    console.log("P7 lifecycle honesty ok");
+
+    // P5 must not classify a marker absent by construction as a replacement.
+    // Arm AND VERIFY it before idle, then corroborate its fate with Devbox's
+    // durable boot identity. Either signal alone is weaker.
+    const beforeIdle = await callParsed(origin, token, "/state", {}, IdleTickSchema);
+    if (beforeIdle.bootId === undefined || beforeIdle.bootId === null) {
+      throw new Error("P5 began without a durable boot identity");
+    }
+    const idleMarker = `idle-${Date.now()}`;
+    await call(origin, token, "/exec", {
+      command: `printf %s ${idleMarker} > /tmp/idle-probe-marker`,
+    });
+    const markerBeforeIdle = await call(origin, token, "/exec", {
+      command: `test "$(cat /tmp/idle-probe-marker)" = ${idleMarker} && echo armed || echo missing`,
+    });
+    if (!(markerBeforeIdle.stdout ?? "").includes("armed")) {
+      throw new Error(`P5 marker did not persist before idle: ${markerBeforeIdle.stdout}`);
+    }
 
     // P5 — the hold guarantee, as the platform actually permits it: the
     // heartbeat chain never lets the box sleep from OUR inactivity, and if the
@@ -602,18 +689,28 @@ export async function run(): Promise<DurabilityProbeArtifact> {
       throw new Error(`heartbeat chain died during idle: lastTick=${lastTick}; heartbeatRows=${heartbeatRows}`);
     }
     if (Date.now() - idleStartedAt < IDLE_MINUTES * 60_000) throw new Error("idle window did not elapse");
-    // (b) Replacement detector: /tmp is deliberately ephemeral. Fresh disk
-    // means the platform swapped the instance under a live tick chain.
-    const marker = await call(origin, token, "/exec", { command: "test -f /tmp/idle-probe-marker && echo alive || echo fresh-disk" });
-    const replaced = !(marker.stdout ?? "").includes("alive");
-    // (c) Continuity: the workspace bytes and the supervised server are back,
-    // whether or not the instance survived.
-    const wsAfterIdle = await call(origin, token, "/exec", { command: "cat /workspace/new-after-base.txt" });
+    // (b) Replacement detector: the armed marker and durable boot identity
+    // must agree. A missing marker that was never verified before idle proves
+    // nothing; a boot id alone can be absent while a stamp is still in flight.
+    const marker = await call(origin, token, "/exec", {
+      command: `test "$(cat /tmp/idle-probe-marker 2>/dev/null)" = ${idleMarker} && echo alive || echo fresh-disk`,
+    });
+    const replacedByMarker = !(marker.stdout ?? "").includes("alive");
+    const replacedByBoot = idleState.bootId !== beforeIdle.bootId;
+    if (replacedByMarker !== replacedByBoot) {
+      throw new Error(
+        `P5 replacement signals disagree: marker=${marker.stdout} before=${beforeIdle.bootId} after=${idleState.bootId}`,
+      );
+    }
+    const replaced = replacedByBoot;
+    // (c) Continuity: the workspace bytes are back, whether or not the instance
+    // survived. P4 is deliberately after this control, so no stale server claim
+    // can make P5 fail before the supervision phase exists.
+    const wsAfterIdle = await call(origin, token, "/exec", {
+      command: "cat /workspace/new-after-base.txt",
+    });
     if (!(wsAfterIdle.stdout ?? "").includes("added")) throw new Error("workspace lost across the idle window");
-    await call(origin, token, "/exec", { command: "sleep 1" });
-    const serveIdle = await call(origin, token, "/exec", { command: `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${PORT}/` });
-    if (!(Number(serveIdle.stdout) > 0)) throw new Error(`supervised process not serving after idle (replaced=${replaced}): ${serveIdle.stdout}`);
-    evidence.P5 = { idleMinutes: IDLE_MINUTES, chainAlive: true, instanceReplaced: replaced, workspaceIntact: true, supervisedServing: true };
+    evidence.P5 = { idleMinutes: IDLE_MINUTES, chainAlive: true, instanceReplaced: replaced, workspaceIntact: true };
     console.log(`P5 hold ok (chain alive; instance ${replaced ? "REPLACED by platform and healed" : "survived"})`);
 
     // P6 — the exact quiesce sequence, then one more wake.
@@ -625,6 +722,35 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     if (!(still.stdout ?? "").includes("added")) throw new Error("workspace lost after final cycle");
     evidence.P6 = { intactAfterFinalStop: true };
     console.log("P6 final SIGTERM cycle ok");
+
+    // P4 — supervision across a stop+wake. It is deliberately LAST: the SDK's
+    // P2 already proved a
+    // real restart with an ephemeral marker; this phase proves the distinct
+    // durable fact, that a recorded process comes back under its same id.
+    const proc = await callParsed(origin, token, "/startProcess", {
+      command: 'node -e "setInterval(() => {}, 1000)"', cwd: "/workspace",
+    }, ProcessStartResponseSchema);
+    const portBeforeRestart = await callParsed(
+      origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
+    );
+    await call(origin, token, "/stop");
+    await wake(origin, token);
+    const procs = await callParsed(
+      origin, token, "/listProcesses", {}, SupervisedProcessResponsesSchema,
+    );
+    const portAfterRestart = await callParsed(
+      origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
+    );
+    if (portBeforeRestart.urlToken !== portAfterRestart.urlToken) {
+      throw new Error(`preview token changed across restart: ${portBeforeRestart.urlToken}/${portAfterRestart.urlToken}`);
+    }
+    const restarted = procs.some(process => process.processId === proc.processId && process.restartable);
+    if (!restarted) throw new Error(`supervised process did not return: ${JSON.stringify(procs).slice(0, 200)}`);
+    evidence.P4 = {
+      processId: proc.processId,
+      urlToken: portAfterRestart.urlToken,
+    };
+    console.log("P4 supervision ok");
 
     outcome = 'green';
   } catch (error) {
@@ -640,9 +766,18 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     }
 
     let record: DurabilityProbeArtifact = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       command: 'bun scripts/sandbox-durability-probe.ts --run',
       runId,
+      build: build ?? {
+        // `gitSha()` runs before deployment, so this arm is unreachable in a
+        // normal run. It exists only to keep the artifact total if process setup
+        // itself failed before the driver began.
+        gitSha: "unavailable",
+        workerName: `kinu-dur-probe-${runId}`,
+        origin: undefined,
+        bucketName: `kinu-dur-probe-${runId}`,
+      },
       startedAt,
       finishedAt: new Date().toISOString(),
       baseMiB: BASE_MIB,

@@ -615,6 +615,91 @@ export const Stage1ReportSchema = v.looseObject({
 });
 export type Stage1Report = v.InferOutput<typeof Stage1ReportSchema>;
 
+/** Writable FUSE is a separate, stronger stage. It uses the image's pinned
+ * C/libfuse build; the earlier raw-Bun read-only stage remains its control. */
+export const Stage3ReportSchema = v.looseObject({
+  stage: v.literal('stage3'),
+  protocol: v.looseObject({
+    requested: v.literal('7.39'),
+    kernelHeader: v.nullable(v.looseObject({
+      libfuse: v.literal('3.17.1'),
+      kernel: v.looseObject({ major: v.literal(7), minor: v.number() }),
+      constants: v.looseObject({
+        directIoAllowMmap: v.literal(68_719_476_736),
+        openDirectIo: v.literal(1),
+      }),
+      headers: v.looseObject({
+        fuse_kernel_h: v.string(),
+        fuse_lowlevel_h: v.string(),
+        sourceSha256: v.string(),
+      }),
+    })),
+  }),
+  mutation: v.picklist([
+    'none',
+    'reply-before-log',
+    'fence-closes-request-loop',
+    'omit-msync',
+    'post-fence-contamination',
+    'intent-fsync-failure',
+    'result-fsync-failure',
+    'restart-truncation',
+    'skip-recovery',
+  ]),
+  mounted: v.boolean(),
+  directIoMmap: v.boolean(),
+  preStore: v.boolean(),
+  duringStore: v.boolean(),
+  postStore: v.boolean(),
+  forkedMapper: v.boolean(),
+  continuousDirtying: v.boolean(),
+  ordinaryWrites: v.boolean(),
+  continuousDirtyBeforeFenceClosed: v.boolean(),
+  continuousDirtyAfterFenceComplete: v.boolean(),
+  msyncCalled: v.boolean(),
+  controlFenceOk: v.boolean(),
+  fsyncOk: v.boolean(),
+  intentJournalDurable: v.boolean(),
+  resultJournalDurable: v.boolean(),
+  intentFsyncFailureRefused: v.boolean(),
+  resultFsyncFailureRefused: v.boolean(),
+  restartRemountOk: v.boolean(),
+  restartOpenedExistingBacking: v.boolean(),
+  restartRemountReadOk: v.boolean(),
+  restartTruncationRefused: v.boolean(),
+  restartDaemonKilled: v.boolean(),
+  restartDeadMountDetached: v.boolean(),
+  restartJournalReconciled: v.boolean(),
+  crashCutAfterIntent: v.boolean(),
+  journalPendingEmpty: v.boolean(),
+  recoveryAbortDurable: v.boolean(),
+  pendingEffectExcluded: v.boolean(),
+  fenceClosed: v.boolean(),
+  fenceDrained: v.boolean(),
+  postWriteAfterFenceCut: v.boolean(),
+  designatedWaiterResultAfterFenceCut: v.boolean(),
+  noWritesAdmittedWhileClosed: v.boolean(),
+  prefixReplayOk: v.boolean(),
+  prePrefixIncluded: v.boolean(),
+  excludedWritesAbsentFromPrefix: v.boolean(),
+  finalBackingAllWrites: v.boolean(),
+  requestLoopServedAfterFence: v.boolean(),
+  backingOrderOk: v.boolean(),
+  orderedLog: v.boolean(),
+  loggedBeforeReply: v.boolean(),
+  controlFenceObserved: v.boolean(),
+  postFenceBeforeCompletion: v.boolean(),
+  watchdogDeadlock: v.boolean(),
+  finalUnmountOk: v.boolean(),
+  daemonExitOk: v.boolean(),
+  cleanupPathsRemoved: v.boolean(),
+  mountResidueAbsent: v.boolean(),
+  pathResidueAbsent: v.boolean(),
+  reapBounded: v.boolean(),
+  linearizable: v.boolean(),
+});
+export type Stage3Report = v.InferOutput<typeof Stage3ReportSchema>;
+
 export const Stage2ReportSchema = v.looseObject({
   stage: v.literal('stage2'),
   attemptId: v.string(),
@@ -648,7 +733,8 @@ export type NoGoKind =
   | 'mount-refused'
   | 'runtime-crash'
   | 'openat2-unavailable'
-  | 'image-mismatch';
+  | 'image-mismatch'
+  | 'mmap-not-linearizable';
 
 export interface NoGoReason {
   readonly kind: NoGoKind;
@@ -697,6 +783,134 @@ export function classifyMaterialization(openat2: Openat2Report): ProbeVerdict {
     };
   }
   return { outcome: detections.length === 0 ? 'pass' : 'defect', noGo: [], detections };
+}
+
+/** This stage proves a daemon-owned control fence, not a FUSE syncfs request.
+ * Admission closure makes writes that arrive during the fence wait and log
+ * post-cut after reopening; prefix reconstruction proves none entered the cut. */
+export function classifyWritableMmap(stage3: Stage3Report | undefined): ProbeVerdict {
+  if (stage3 === undefined) {
+    return {
+      outcome: 'no_go',
+      noGo: [{ kind: 'mmap-not-linearizable', detail: 'writable mmap stage produced no evidence' }],
+      detections: [],
+    };
+  }
+  const required: ReadonlyArray<readonly [string, boolean]> = [
+    ['header-checked libfuse ABI', stage3.protocol.kernelHeader !== null],
+    ['mount', stage3.mounted],
+    ['DIRECT_IO_ALLOW_MMAP + MAP_SHARED', stage3.directIoMmap],
+    ['pre-fence MAP_SHARED store', stage3.preStore],
+    ['post-fence MAP_SHARED store', stage3.postStore],
+    ['msync', stage3.msyncCalled],
+    ['daemon-owned Unix control fence', stage3.controlFenceOk && stage3.controlFenceObserved],
+    ['admission closed and admitted writes drained', stage3.fenceClosed && stage3.fenceDrained],
+    ['write submitted after closure logs post-cut', stage3.postWriteAfterFenceCut],
+    ['designated blocked writer result follows the immutable cut', stage3.designatedWaiterResultAfterFenceCut],
+    ['immutable prefix replay from logged WRITE payloads', stage3.prefixReplayOk
+      && stage3.prePrefixIncluded && stage3.excludedWritesAbsentFromPrefix],
+    ['durable journal INTENT before mutation', stage3.intentJournalDurable],
+    ['durable journal RESULT after mutation', stage3.resultJournalDurable],
+    ['FUSE_FSYNC', stage3.fsyncOk],
+    ['forked MAP_SHARED mapper', stage3.forkedMapper],
+    ['continuous dirtying spans the cut', stage3.continuousDirtying
+      && stage3.continuousDirtyBeforeFenceClosed && stage3.continuousDirtyAfterFenceComplete],
+    ['concurrent ordinary writes', stage3.ordinaryWrites],
+    ['request loop served after admission reopened', stage3.requestLoopServedAfterFence],
+    ['no post-fence payload before completion or deadlock', !stage3.postFenceBeforeCompletion
+      && !stage3.watchdogDeadlock],
+    ['restart opened existing backing and remounted bytes', stage3.restartRemountOk
+      && stage3.restartOpenedExistingBacking && stage3.restartRemountReadOk
+      && stage3.restartDaemonKilled && stage3.restartDeadMountDetached
+      && stage3.restartJournalReconciled && stage3.crashCutAfterIntent
+      && stage3.journalPendingEmpty && stage3.recoveryAbortDurable
+      && stage3.pendingEffectExcluded && stage3.backingOrderOk && stage3.finalBackingAllWrites],
+    ['final unmount, daemon exit, and residue cleanup', stage3.finalUnmountOk
+      && stage3.daemonExitOk && stage3.reapBounded && stage3.cleanupPathsRemoved
+      && stage3.mountResidueAbsent && stage3.pathResidueAbsent],
+    ['probe conclusion', stage3.linearizable],
+  ];
+  const absent = required.filter(([, holds]) => !holds).map(([name]) => name);
+  if (stage3.mutation !== 'none') absent.push(`negative mutation ${stage3.mutation} did not run as the control`);
+  return absent.length === 0
+    ? { outcome: 'pass', noGo: [], detections: [] }
+    : {
+        outcome: 'no_go',
+        noGo: [{
+          kind: 'mmap-not-linearizable',
+          detail: `writable FUSE mmap/barrier evidence failed: ${absent.join(', ')}`,
+        }],
+        detections: [],
+      };
+}
+export type WritableMmapMutation = Exclude<Stage3Report['mutation'], 'none'>;
+
+/** Every mutation is a separate real C invocation. Its exit/report pair stays
+ * with the artifact so a control cannot be summarised into an uncheckable bit. */
+export interface WritableMmapControl {
+  readonly mutation: WritableMmapMutation;
+  readonly exitCode: number;
+  readonly report: Stage3Report;
+  readonly verdict: ProbeVerdict;
+}
+/** A control must expose the particular invariant it breaks. The mutation
+ * label alone is not evidence; otherwise a binary could report a generic
+ * failure without exercising the intended negative path. */
+export function mutationRefusalObserved(report: Stage3Report): boolean {
+  switch (report.mutation) {
+    case 'reply-before-log':
+      return !report.loggedBeforeReply;
+    case 'fence-closes-request-loop':
+      return !report.postStore;
+    case 'omit-msync':
+      return !report.msyncCalled;
+    case 'post-fence-contamination':
+      return !report.excludedWritesAbsentFromPrefix && !report.prefixReplayOk;
+    case 'intent-fsync-failure':
+      return !report.intentJournalDurable && report.intentFsyncFailureRefused;
+    case 'result-fsync-failure':
+      return !report.resultJournalDurable && report.resultFsyncFailureRefused;
+    case 'restart-truncation':
+      return !report.restartRemountReadOk && report.restartTruncationRefused;
+    case 'skip-recovery':
+      return !report.journalPendingEmpty && !report.recoveryAbortDurable && !report.pendingEffectExcluded;
+    case 'none':
+      return false;
+  }
+}
+
+
+export function classifyWritableMmapControls(
+  controls: readonly WritableMmapControl[] | undefined,
+): ProbeVerdict {
+  const expected: readonly WritableMmapMutation[] = [
+    'reply-before-log',
+    'fence-closes-request-loop',
+    'omit-msync',
+    'post-fence-contamination',
+    'intent-fsync-failure',
+    'result-fsync-failure',
+    'restart-truncation',
+    'skip-recovery',
+  ];
+  const failures: string[] = expected.filter((mutation) => {
+    const matches = controls?.filter((candidate) => candidate.mutation === mutation) ?? [];
+    const control = matches[0];
+    return matches.length !== 1 || control === undefined || control.exitCode !== 86
+      || control.report.mutation !== mutation || control.report.linearizable
+      || !mutationRefusalObserved(control.report) || control.verdict.outcome !== 'no_go';
+  });
+  if (controls?.length !== expected.length) failures.push('exactly-one-each');
+  return failures.length === 0
+    ? { outcome: 'pass', noGo: [], detections: [] }
+    : {
+        outcome: 'no_go',
+        noGo: [{
+          kind: 'mmap-not-linearizable',
+          detail: `writable negative controls missing or falsely passed: ${failures.join(', ')}`,
+        }],
+        detections: [],
+      };
 }
 
 export function classifyRun(
@@ -801,6 +1015,13 @@ export interface FuseProbeArtifact {
   /** Absent when deployment/runtime failed before the probe emitted one byte
    *  of evidence, or censored because the run's image identity mismatched.
    *  The artifact's verdict then names which. */
+  /** The custom image reference used for stage 3. It is an immutable digest,
+   * never a mutable registry tag. */
+  readonly writableImage?: string;
+  readonly writableMmap: ProbeVerdict;
+  readonly stage3?: Stage3Report;
+  /** The four real negative binary invocations and their paired C reports. */
+  readonly writableControls: readonly WritableMmapControl[];
   readonly stage1?: Stage1Report;
   readonly stage2?: Stage2Report;
   readonly failure?: string;

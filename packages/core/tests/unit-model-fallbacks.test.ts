@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   ModelCatalogSession, contextWindowForModel, resolvePromptModelProfile,
+  outputReserveTokens, stepContextLimit,
   type ModelInfo,
 } from '../src/index';
 
@@ -68,5 +69,60 @@ describe('ModelCatalogSession.pricing', () => {
     await Promise.resolve();
     expect(session.pricing()).toBeNull();
     expect(session.contextWindow()).toBe(262_144);
+  });
+});
+
+// KINU-045. Context admission reserves the resolved model's answer allowance,
+// so the catalog has to report one — and has to say nothing rather than guess
+// when it has not answered.
+describe('ModelCatalogSession.modelOutputLimit', () => {
+  test('the reported allowance is what admission reserves', async () => {
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'anthropic/claude-opus-4-7',
+      lookup: async () => ({
+        id: 'claude-opus-4-7', contextWindow: 1_000_000, modelOutputLimit: 128_000,
+      }),
+    });
+    session.info();
+    await Promise.resolve();
+
+    expect(session.modelOutputLimit()).toBe(128_000);
+    const limits = {
+      contextWindow: session.contextWindow(),
+      modelOutputLimit: session.modelOutputLimit(),
+    };
+    expect(outputReserveTokens(limits)).toBe(128_000);
+    expect(stepContextLimit(limits)).toBe(872_000);
+  });
+
+  test('an unanswered catalog reads as the whole window, so the split decides', async () => {
+    // The alternative would be a picked number in the catalog's mouth. Saying
+    // "the answer may take all of it" is the only honest reading, and
+    // outputReserveTokens then reserves half — more conservative than the flat
+    // 0.7 share this replaced, never less.
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
+      lookup: async () => null,
+    });
+    session.info();
+    await Promise.resolve();
+
+    expect(session.contextWindow()).toBe(262_144);
+    expect(session.modelOutputLimit()).toBe(262_144);
+    expect(stepContextLimit({
+      contextWindow: session.contextWindow(),
+      modelOutputLimit: session.modelOutputLimit(),
+    })).toBe(131_072);
+  });
+
+  test('a catalog that reports a window but no allowance still reserves the split', async () => {
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
+      lookup: async () => ({ id: '@cf/moonshotai/kimi-k2.6', contextWindow: 262_144 }),
+    });
+    session.info();
+    await Promise.resolve();
+
+    expect(session.modelOutputLimit()).toBe(262_144);
   });
 });

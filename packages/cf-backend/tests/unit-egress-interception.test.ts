@@ -9,6 +9,8 @@
 // a compile error and not a test failure; it is a silent no-op.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import * as v from 'valibot';
 import {
   EGRESS_PLACEHOLDER_PREFIX, type EgressSecretBinding,
 } from '@kinu.run/core';
@@ -23,6 +25,25 @@ import type { OutboundHandlerContext } from '@cloudflare/containers';
 import type { KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
+import {
+  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+} from '@kinu.run/core/obs';
+import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '../src/lib/http';
+// The gate's own resolver of the shipped SDK copy, loaded rather than repeated:
+// `bun run gate:egress-interception` and this test must read one copy, and two
+// copies of Containers are installed at two versions. `require` and not `import`
+// because the gate's module chain reaches `scripts/sources.ts`, whose `.ts`
+// import paths need `allowImportingTsExtensions`, which this package does not
+// set; a static import puts three TS5097 errors in this package's typecheck.
+// Narrowed at the boundary, the way cli-backend loads the pc-agent daemon.
+const egressGate = v.parse(
+  v.object({ boundContainers: v.function() }),
+  createRequire(import.meta.url)('../../../scripts/egress-interception'),
+);
+
+/** What the gate's resolver answers: the Containers module the deployed artifact
+ *  binds, and the version of the copy it belongs to. */
+const BoundContainers = v.object({ module: v.string(), version: v.string() });
 
 // `outbound.ts` imports `getAgentByName` from `agents`, whose module graph
 // reaches `cloudflare:email`. One shared mock, then dynamic imports — the same
@@ -33,7 +54,7 @@ mockAgentsSdk();
 const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface');
 const {
   CONTAINER_EVENT_HOST, CONTAINER_EVENT_PATH,
-  handleContainerEgress, parseEgressParams,
+  handleContainerEgress, handleContainerEvent, parseEgressParams,
 } = await import('../src/egress/outbound');
 
 const root = new URL('../', import.meta.url).pathname;
@@ -329,11 +350,10 @@ describe('the posture the whole design rests on', () => {
 
   test('the SDK still leaves HTTPS interception off by default', () => {
     // Re-measured so the comments asserting it cannot quietly rot. If upstream
-    // fixes the default this fails and the comments get updated.
-    const bundle = readFileSync(
-      `${root}../../node_modules/@cloudflare/containers/dist/lib/container.js`, 'utf8',
-    );
-    expect(bundle).toContain('interceptHttps = false');
+    // fixes the default this fails and the comments get updated. The copy read is
+    // the one the artifact binds, resolved by the gate rather than named here.
+    const shipped = v.parse(BoundContainers, egressGate.boundContainers());
+    expect(readFileSync(shipped.module, 'utf8')).toContain('interceptHttps = false');
   });
 });
 
@@ -359,5 +379,238 @@ describe('a stub is used, never copied', () => {
     expect(Object.keys({ ...stub })).toEqual([]);
     // ...while the stub itself answers, so the double is not merely broken.
     expect(stub.method()).toBe('value');
+  });
+});
+
+/** Capture what the diagnostic sink was told while `body` ran. */
+async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
+  const logger = createRecordingLogger();
+  const restore = setDiagnosticsSink(logger);
+  try { await body(); } finally { restore(); }
+  return logger.emitted;
+}
+
+/** An `Env` whose vault call throws, the way a Durable Object under load or
+ *  mid-eviction answers a cross-object RPC. */
+function throwingVaultEnv(thrown: { cause: unknown }): Env {
+  const view: Partial<Env> = {};
+  Object.assign(view, {
+    UserDO: {
+      idFromName: (name: string) => name,
+      get: () => jsrpcStub({ resolveEgressInjection: async () => { throw thrown.cause; } }),
+    },
+    CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
+  });
+  /* SAFETY: as `fakeEnv` above — `UserDO.idFromName`, `UserDO.get` and
+     `CREDENTIAL_ENCRYPTION_KEY` are the complete set the handler reads, and
+     every one of them is constructed by the Object.assign above. */
+  return view as Env;
+}
+
+/** An `Env` whose workspace object refuses the event RPC. `getAgentByName` is
+ *  mocked to `namespace.get(namespace.idFromName(name))`, so the namespace
+ *  double is the whole seam. */
+function throwingEventEnv(thrown: { cause: unknown }): Env {
+  const view: Partial<Env> = {};
+  Object.assign(view, {
+    OrchestratorAgent: {
+      idFromName: (name: string) => name,
+      get: () => jsrpcStub({ acceptContainerEvent: async () => { throw thrown.cause; } }),
+    },
+  });
+  /* SAFETY: `OrchestratorAgent.idFromName` and `.get` are the complete set
+     `handleContainerEvent` reaches before the RPC it is here to fail, and both
+     are constructed by the Object.assign above. */
+  return view as Env;
+}
+
+// KINU-055. Every request leaving a container says Kinu, and says it FIRST.
+// Before this, whatever the agent's HTTP client called itself was the only
+// identity an upstream ever saw, so a rate limit or a block aimed at Kinu
+// could not be aimed at all.
+describe('one User-Agent for everything a container sends', () => {
+  test('traffic with no placeholder carries the Kinu identity', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+    try {
+      await handleContainerEgress(
+        new Request('https://example.com/', { headers: { 'user-agent': 'curl/8.5.0' } }),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
+        PARAMS,
+      );
+      expect(upstream.seen[0]!.headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
+    } finally { upstream.restore(); }
+  });
+
+  test('the secret-bearing path carries the same identity — one policy, not two', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+    try {
+      await handleContainerEgress(
+        new Request('https://api.stripe.com/v1/charges', {
+          method: 'POST', headers: { authorization: `Bearer ${PLACEHOLDER}`, 'user-agent': 'curl/8.5.0' },
+        }),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
+        PARAMS,
+      );
+      expect(upstream.seen[0]!.headers.get('user-agent')).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
+    } finally { upstream.restore(); }
+  });
+
+  test('a container that sends no User-Agent still identifies as Kinu', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+    try {
+      await handleContainerEgress(
+        new Request('https://example.com/'),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
+        PARAMS,
+      );
+      expect(upstream.seen[0]!.headers.get('user-agent')).toBe(KINU_USER_AGENT);
+    } finally { upstream.restore(); }
+  });
+
+  test('the caller keeps its own tokens, behind ours, and cannot displace them', () => {
+    expect(kinuUserAgent('python-requests/2.32')).toBe(`${KINU_USER_AGENT} python-requests/2.32`);
+    expect(kinuUserAgent(null)).toBe(KINU_USER_AGENT);
+    expect(kinuUserAgent('   ')).toBe(KINU_USER_AGENT);
+    // A field value with a control character is not one. Dropped whole rather
+    // than repaired: a repaired identity is a different identity.
+    expect(kinuUserAgent('evil\u0000agent')).toBe(KINU_USER_AGENT);
+    // A second interception hop must not stack the token again.
+    expect(kinuUserAgent(`${KINU_USER_AGENT} curl/8.5.0`)).toBe(`${KINU_USER_AGENT} curl/8.5.0`);
+  });
+});
+
+// KINU-017 at this boundary. The workerd layer measures the wire
+// (`tests/workerd/egress-framing.test.ts`); what belongs here is that the
+// handler hands the runtime the body it was given, since that is the only
+// thing the runtime derives the framing from.
+describe('the forwarded body is the container\'s own, not a copy of it', () => {
+  test('the request that leaves carries the inbound body object itself', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+    try {
+      // `duplex` is absent from the Workers `RequestInit` type and required by
+      // the fetch specification for a stream body — the same intersection
+      // `reoriginateRequest` declares, so the test states the type instead of
+      // asserting past it.
+      const init: RequestInit & { duplex: 'half' } = {
+        method: 'POST',
+        body: new ReadableStream<Uint8Array>({
+          start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); controller.close(); },
+        }),
+        duplex: 'half',
+      };
+      const inbound = new Request('https://example.com/upload', init);
+      const body = inbound.body;
+      await handleContainerEgress(
+        inbound, fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+      );
+      expect(upstream.seen[0]!.body).toBe(body);
+    } finally { upstream.restore(); }
+  });
+
+  test('a bodyless request re-originates without one', () => {
+    const rebuilt = reoriginateRequest(
+      new Request('https://example.com/thing'),
+      'https://example.com/thing',
+      { headers: new Headers(), redirect: 'follow' },
+    );
+    expect(rebuilt.body).toBeNull();
+  });
+});
+
+// KINU-037. An outbound handler that THROWS returns no HTTP response at all,
+// so the container's client prints "Empty reply from server" and nothing says
+// whether the request was refused, delivered, or never attempted. Both halves
+// of this boundary now answer.
+describe('a throw at the boundary becomes a classified answer', () => {
+  test('an unreachable vault answers 503 and names the class, not the request', async () => {
+    let response: Response | undefined;
+    const emitted = await recordDiagnostics(async () => {
+      response = await handleContainerEgress(
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
+        throwingVaultEnv({ cause: new Error('durable object reset') }),
+        PARAMS,
+      );
+    });
+    expect(response?.status).toBe(503);
+    const body = await response!.text();
+    expect(body).toContain('unavailable');
+    expect(body).toContain('api.stripe.com');
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]!.event).toBe('egress.authority_unreachable');
+    expect(emitted[0]!.code).toBe('unavailable');
+    // The chain is retained, both what we were doing and what threw.
+    expect(emitted[0]!.cause).toContain('asking the owner vault');
+    expect(emitted[0]!.cause).toContain('durable object reset');
+  });
+
+  test('a deadline on the vault is 504, not 503 — the two imply different retries', async () => {
+    const timeout = new DOMException('The operation timed out', 'TimeoutError');
+    const response = await handleContainerEgress(
+      new Request('https://api.stripe.com/'), throwingVaultEnv({ cause: timeout }), PARAMS,
+    );
+    expect(response.status).toBe(504);
+  });
+
+  test('an upstream that cannot be reached answers 502 with the failure class', async () => {
+    const upstream = captureFetch(() => { throw new Error('connection refused'); });
+    let response: Response | undefined;
+    try {
+      const emitted = await recordDiagnostics(async () => {
+        response = await handleContainerEgress(
+          new Request('https://example.com/'),
+          fakeEnv(() => ({ kind: 'forward', substitutions: [] })),
+          PARAMS,
+        );
+      });
+      expect(response?.status).toBe(502);
+      expect(await response!.text()).toContain('example.com');
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]!.event).toBe('egress.upstream_failed');
+      expect(emitted[0]!.cause).toContain('connection refused');
+    } finally { upstream.restore(); }
+  });
+
+  test('an upstream failure quoting the substituted URL never records the secret', async () => {
+    // workerd's own fetch failure reads `Fetch API cannot load: <url>`, and by
+    // then the URL is the REVEALED one. Wrapping that error would have put the
+    // owner's credential in Workers Logs on every DNS failure.
+    const upstream = captureFetch(() => {
+      throw new Error(`Fetch API cannot load: https://api.stripe.com/v1/charges?key=${SECRET}`);
+    });
+    let response: Response | undefined;
+    try {
+      const emitted = await recordDiagnostics(async () => {
+        response = await handleContainerEgress(
+          new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
+          fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
+          PARAMS,
+        );
+      });
+      expect(response?.status).toBe(502);
+      expect(await response!.text()).not.toContain(SECRET);
+      expect(emitted[0]!.cause).not.toContain(SECRET);
+      // Scrubbed, not deleted: the placeholder the container already holds is
+      // what an operator correlates the failure with.
+      expect(emitted[0]!.cause).toContain(PLACEHOLDER);
+    } finally { upstream.restore(); }
+  });
+
+  test('the event channel answers when its workspace object refuses the RPC', async () => {
+    let response: Response | undefined;
+    const emitted = await recordDiagnostics(async () => {
+      response = await handleContainerEvent(
+        new Request(`https://${CONTAINER_EVENT_HOST}${CONTAINER_EVENT_PATH}`, {
+          method: 'POST', body: JSON.stringify({ kind: 'note' }),
+        }),
+        throwingEventEnv({ cause: new Error('object evicted mid-write') }),
+        PARAMS,
+      );
+    });
+    expect(response?.status).toBe(503);
+    // The container has to know the event is NOT recorded, or it drops it.
+    expect(await response!.text()).toContain('send it again');
+    expect(emitted[0]!.event).toBe('egress.event_channel_unreachable');
+    expect(emitted[0]!.cause).toContain('object evicted mid-write');
   });
 });

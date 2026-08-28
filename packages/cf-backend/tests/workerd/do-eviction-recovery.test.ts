@@ -149,3 +149,31 @@ describe('a durable submission accepted before the reset', () => {
     expect(answered).toContain('answered after recovery');
   });
 });
+
+
+describe('a retried durable submission', () => {
+  it('uses one submission row and one execution across reset when the key is stable', async () => {
+    const name = 'submission-key-retry';
+    const first = await probe(name).submit('start the work', 'evt-stable-1');
+    expect(first.accepted).toBe(true);
+
+    // The row exists before inference settles. Reset at the same window the
+    // drain path crosses: after durable acceptance, while the turn's fiber is
+    // still open.
+    expect((await untilFiberRow(name, FIBER_DEADLINE_MS)).length).toBeGreaterThan(0);
+    await abortAllDurableObjects();
+
+    // The retry is a delivery retry, not new work. The public receipt is the
+    // primary oracle: one idempotency key maps to one stable submission id.
+    const second = await probe(name).submit('start the work', 'evt-stable-1');
+    expect(second.submissionId).toBe(first.submissionId);
+
+    const statuses = await probe(name).submissionStatuses();
+    expect(statuses.filter((row) => row.idempotencyKey === 'evt-stable-1')).toHaveLength(1);
+
+    // The one admitted turn still recovers and completes; a second submission
+    // would show two keyed rows above before this transcript assertion can pass.
+    const answered = await untilTranscript(name, TURN_DEADLINE_MS, 'answered after recovery');
+    expect(answered).toContain('answered after recovery');
+  });
+});

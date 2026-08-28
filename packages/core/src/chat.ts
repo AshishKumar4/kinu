@@ -30,9 +30,11 @@ import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import { contextWindowForModel } from './context-window';
+import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
+import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { ExtensionHost } from './extension';
 import { mergeProviderOptions } from './strategy/effort';
-import { describeProviderError } from './providers/util';
+import { describeProviderError, toProviderError } from './providers/util';
 import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from './utils/json';
@@ -42,6 +44,14 @@ import { diagnostics, renderThrownChain, toKinuError } from './obs/index';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
+  /** Provider reasoning, as it streams — the ONE canonical provider-to-caller
+   *  reasoning delta in this tree. A surface that paints thinking while it
+   *  happens reads this; the step's settled reasoning text still arrives with
+   *  the step itself, so nothing durable depends on any frame landing.
+   *
+   *  Deliberately NOT counted as step output: a step that only thought is a
+   *  dead provider stream, and 'finish-step' below is what classifies it. */
+  | { type: 'reasoning-delta'; delta: string }
   /** `toolCallId` is the provider's own id for the call — the key that pairs
    *  this event with its 'tool-result'. Surfaces that report calls out of band
    *  (ACP's tool_call/tool_call_update) need it; name alone cannot pair
@@ -109,6 +119,14 @@ export interface ChatOptions {
    *  force-compaction flag (overflow recovery — the previous turn's request
    *  exceeded the window, so a stale plan replay is not enough). */
   transformTrigger?: 'auto' | 'force';
+  /**
+   * The resolved provider's own count of an assembled request
+   * (providers/input-tokens.ts), for exact admission before anything is
+   * submitted. Omitted = the provider publishes no count endpoint, and the turn
+   * is assembled exactly as it was before admission existed. Never a character
+   * estimate: see the module comment there for why an estimate cannot admit.
+   */
+  countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;
   signal?: AbortSignal;
   /** Extension seam (public API): registered extensions observe the turn
    *  (onTurnStart/onToolCall/onToolResult/onTurnEnd), rewrite the step messages
@@ -258,13 +276,23 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     responseMessages: readonly ModelMessage[];
     usage?: Usage;
   }
-  const pendingStepEvents: PendingStepEvent[] = [];
+  /** What ONE provider call of this turn ended with. */
+  interface CallOutcome {
+    /** The steps the SDK recorded for the call — its own on a natural finish,
+     *  the `onAbort` handover on a cut. */
+    readonly steps: readonly StepResult<ToolSet>[];
+    /** The messages the call generated, tool-call pairing already settled. Never
+     *  the input prefix: this is what the caller appends to durable history, and
+     *  what a continuation call is handed on top of the same prefix. */
+    readonly produced: ModelMessage[];
+    /** The mapped `finishReason` of the call's LAST step, absent when no step
+     *  reported one. {@link OUTPUT_LIMIT_REACHED} is what the continuation
+     *  below reads. */
+    readonly finishReason: string | undefined;
+    /** The caller cut the call. */
+    readonly interrupted: boolean;
+  }
   let stepCount = 0;
-  /** The turn's cumulative generated array as of the last finished step: every
-   *  assistant message and paired tool message this turn produced. The SDK
-   *  accumulates `step.response.messages` within the call and never includes
-   *  the input prefix, so that array is the turn's generated history. */
-  let responseSoFar: readonly ModelMessage[] = [];
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
   // sanitize → extension onTurnStart → awaited transformContext (compaction) →
@@ -272,7 +300,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // ordering cannot drift per backend.
   const contextWindow = opts.modelContext?.contextWindow
     ?? contextWindowForModel(opts.modelContext?.id ?? '');
-  const turnMessages = await assembleTurnMessages({
+  // An unreported answer allowance says nothing about how much of the window
+  // the answer may take, so the honest reading is the whole window and
+  // `outputReserveTokens` splits from there. A picked number here would put a
+  // fact in the catalog's mouth.
+  const modelOutputLimit = opts.modelContext?.modelOutputLimit ?? contextWindow;
+  const assembly: Parameters<typeof assembleTurnMessages>[0] = {
     system: opts.system,
     history: opts.history,
     attachments: opts.attachments,
@@ -282,7 +315,20 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     contextWindow,
     providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
-  });
+  };
+  // Exact pre-submission admission, when the caller resolved a provider that
+  // can answer what a request costs. The assembly owns the decision (one
+  // forced compaction, then a re-count, then a refusal) so neither backend
+  // holds a second copy of the policy; the tools that ride every request are
+  // part of what is counted, which is why they are handed over here.
+  if (opts.countInputTokens) {
+    assembly.admission = {
+      count: opts.countInputTokens,
+      tools,
+      limits: { contextWindow, modelOutputLimit },
+    };
+  }
+  const turnMessages = await assembleTurnMessages(assembly);
 
   // Provider prompt-cache plan: cache-eligible system + request-level cache
   // routing at turn assembly; marker strategies additionally re-roll the tail
@@ -299,245 +345,339 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
 
-  // streamText routes provider failures into the stream as an in-band error
-  // chunk instead of throwing — captured here and rethrown VERBATIM after the
-  // loop, so callers' failure handling (the overflow-recovery classifier)
-  // sees the provider's actual error text, never the opaque
-  // AI_NoOutputGeneratedError that awaiting result.response would raise.
-  let streamError: unknown;
-
   // The turn's constants for the per-step breakdown: the cache-eligible system
   // is the text that actually rides the request, and the merged ToolSet is the
   // schema payload that rides it every step.
   opts.meter?.openTurn({ system: cache.system, tools });
 
-  // The turn was cancelled from outside (the owner pressing stop, a supervisor)
-  // rather than failing. An aborted run NEVER settles `result.response` or
-  // `result.steps` — they resolve only on a natural finish — so this callback is
-  // the only place the SDK hands over the STEPS it did record (the tail's text
-  // fallbacks read them). The messages those steps produced are already held by
-  // `responseSoFar`, captured per step as each one finished.
-  let interrupted = false;
-  let recordedSteps: readonly StepResult<ToolSet>[] = [];
-
+  /** The turn's text, across every provider call the turn takes. */
   let allText = '';
 
-  // Dead-stream detection state: a step that finishes with no mapped finish
-  // reason ('other'/'unknown') AND produced nothing is a provider stream that
-  // died mid-request — the SDK records it as a normal empty step and ends the
-  // turn as if the model chose to stop (observed: a bench turn "completed"
-  // cleanly, hadError:false, after its second request returned a dead SSE).
-  let stepHadOutput = false;
-  let deadFinalStep = false;
+  /**
+   * ONE provider call: the SDK's own agentic loop over the messages it is
+   * handed, drained into {@link ChatEvent}s, ending in what the call produced.
+   *
+   * A CALL and a TURN are not the same thing, and that is why this is a closure
+   * rather than the function's straight line: an answer the provider cut at its
+   * output limit is continued by a second call, and both calls are one turn —
+   * one meter, one text, one step numbering, one durable history, one `done`.
+   *
+   * `stepOffset` keeps the step numbering the TURN's rather than the call's. The
+   * step pipeline's injection ledger captures its base coordinates at step 0
+   * (prompting/step-injections.ts) and replays recorded injections into the
+   * turn's response messages relative to them, so a second call restarting the
+   * SDK's own `stepNumber` at 0 would re-base those coordinates against the
+   * longer continuation input and misplace every steer message the turn had
+   * already taken.
+   */
+  const callModel = async function* (
+    request: readonly ModelMessage[],
+    stepOffset: number,
+  ): AsyncGenerator<ChatEvent, CallOutcome> {
+    // streamText routes provider failures into the stream as an in-band error
+    // chunk instead of throwing — captured here and rethrown VERBATIM after the
+    // loop, so callers' failure handling (the overflow-recovery classifier)
+    // sees the provider's actual error text, never the opaque
+    // AI_NoOutputGeneratedError that awaiting result.response would raise.
+    let streamError: unknown;
 
-  // The in-flight step's assistant content, as it streams.
-  //
-  // An abort ends the SDK's loop mid-step, and the SDK records only steps that
-  // FINISHED — so everything the model produced in the step the interrupt
-  // landed in is absent from `result.response`, including the tool call the
-  // caller has already been handed (and rendered, and recorded). Kept here so
-  // an interrupted turn's history says what the turn actually did. Cleared at
-  // every step boundary: from there the step is the SDK's to report.
-  let stepContent: Array<TextPart | ToolCallPart> = [];
+    // The call was cancelled from outside (the owner pressing stop, a
+    // supervisor) rather than failing. An aborted run NEVER settles
+    // `result.response` or `result.steps` — they resolve only on a natural
+    // finish — so this callback is the only place the SDK hands over the STEPS
+    // it did record (the text fallbacks read them). The messages those steps
+    // produced are already held by `responseSoFar`, captured per step as each
+    // one finished.
+    let interrupted = false;
+    let recordedSteps: readonly StepResult<ToolSet>[] = [];
 
-  const result = streamText({
-    model: opts.model,
-    system: cache.system,
-    // OURS, not the vendor's default: how many times the SDK may re-issue a
-    // request of its own accord is transport policy, so the count is one we
-    // set. See PROVIDER_SDK_RETRIES.
-    maxRetries: PROVIDER_SDK_RETRIES,
-    messages: cache.messages,
-    tools,
-    // NO STEP CAP. The agentic loop runs until the model stops calling tools;
-    // what bounds it lives entirely inside this file and the budget governor —
-    // see UNBOUNDED_STEPS.
-    stopWhen: opts.stopWhen ?? UNBOUNDED_STEPS,
-    abortSignal: opts.signal,
-    // The SDK's default onError is `console.error(error)`, which dumped the
-    // raw provider payload to the terminal alongside our own rendering of it.
-    // Capture instead: the error still reaches callers through the rethrow
-    // below, so there is exactly one place that decides how a failure reads.
-    onError: ({ error }) => { streamError = error; },
-    onAbort: ({ steps }) => {
-      // The caller's abort interrupts the TURN. This callback is the only
-      // terminal handover: an aborted run never settles `result.steps`, so
-      // the tail records the finished steps from here.
-      recordedSteps = steps;
-      interrupted = true;
-    },
-    providerOptions,
-    // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
-    // first, then step-boundary tool-output pruning against the window budget,
-    // then the dynamic-context weave, cache tail markers LAST onto the final
-    // array. The cf orchestrator's beforeStep runs the identical composition.
-    prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
-      composePrepareStep({
-        extensions,
-        cache: rollTail ? { strategy: cache.strategy } : null,
-        prune: { contextWindow },
-        budget: opts.budget,
-        dynamic: opts.dynamicContext,
-        meter: opts.meter,
-      }, { stepNumber, messages }),
-    onStepFinish: async (step) => {
-      stepCount++;
-      const usage = normalizeUsage(step.usage);
-      responseSoFar = [...step.response.messages];
-      const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
-      if (usageReported(usage)) event.usage = usage;
-      pendingStepEvents.push(event);
-      await opts.onStep?.(step);
-    },
-  });
-  // A call that never finishes a step — the provider failed before one, or the
-  // caller cut the call — makes the SDK REJECT its deferred accessors (`steps`,
-  // `finishReason`, `rawFinishReason`, `totalUsage`) when the stream ends. The
-  // turn reports all of those through the streamed error or the interrupt path
-  // and never reads the deferrals, and a rejection nobody reads is an unhandled
-  // one that crashes test files and pollutes DO logs. The zero-steps rejection
-  // is classified by type; a cut is classified by the state that caused it;
-  // anything else is recorded, because a deferred rejecting on a turn that
-  // finished naturally would be a defect here and must be visible.
-  const ignoreDeferred = (error: Error): void => {
-    if (NoOutputGeneratedError.isInstance(error)) return;
-    if (interrupted || (opts.signal?.aborted ?? false)) return;
-    diagnostics.failure(
-      'llm_call.deferred_rejected',
-      toKinuError({ doing: 'settle an unread stream accessor', cause: error, otherwise: 'io' }),
-    );
-  };
-  result.steps.then(undefined, ignoreDeferred);
-  result.finishReason.then(undefined, ignoreDeferred);
-  result.rawFinishReason.then(undefined, ignoreDeferred);
-  result.totalUsage.then(undefined, ignoreDeferred);
+    // Dead-stream detection state: a step that finishes with no mapped finish
+    // reason ('other'/'unknown') AND produced nothing is a provider stream that
+    // died mid-request — the SDK records it as a normal empty step and ends the
+    // turn as if the model chose to stop (observed: a bench turn "completed"
+    // cleanly, hadError:false, after its second request returned a dead SSE).
+    let stepHadOutput = false;
+    let deadFinalStep = false;
 
-  try {
-    // Drained to the SDK's own `abort` part rather than broken out of on
-    // `opts.signal.aborted`. Costs nothing — the abort check would sit AFTER
-    // this `await`, so both shapes wait for exactly one more chunk — and buys
-    // two things: `onAbort` is guaranteed to have run by the time the tail
-    // below reads `recordedSteps`, and a tool result that lands after the
-    // abort still reaches the surfaces and the turn's tool ledger instead of
-    // leaving the call rendered as never having returned.
-    for await (const chunk of result.fullStream) {
-      switch (chunk.type) {
-        case 'text-delta': {
-          const delta = chunk.text;
-          if (delta) {
-            stepHadOutput = true;
-            allText += delta;
-            stepContent.push({ type: 'text', text: delta });
-            yield { type: 'text-delta', delta };
+    /** The mapped finish reason of the last step that finished. What the
+     *  output-limit continuation reads, and what a caller records as how the
+     *  turn ended. */
+    let lastFinishReason: string | undefined;
+
+    // The in-flight step's assistant content, as it streams.
+    //
+    // An abort ends the SDK's loop mid-step, and the SDK records only steps that
+    // FINISHED — so everything the model produced in the step the interrupt
+    // landed in is absent from `result.response`, including the tool call the
+    // caller has already been handed (and rendered, and recorded). Kept here so
+    // an interrupted turn's history says what the turn actually did. Cleared at
+    // every step boundary: from there the step is the SDK's to report.
+    let stepContent: Array<TextPart | ToolCallPart> = [];
+
+    /** This call's cumulative generated array as of its last finished step. The
+     *  SDK accumulates `step.response.messages` within the call and never
+     *  includes the input prefix, so that array is what the call generated. */
+    let responseSoFar: readonly ModelMessage[] = [];
+    const pendingStepEvents: PendingStepEvent[] = [];
+
+    const result = streamText({
+      model: opts.model,
+      system: cache.system,
+      // OURS, not the vendor's default: how many times the SDK may re-issue a
+      // request of its own accord is transport policy, so the count is one we
+      // set. See PROVIDER_SDK_RETRIES.
+      maxRetries: PROVIDER_SDK_RETRIES,
+      messages: [...request],
+      tools,
+      // NO STEP CAP. The agentic loop runs until the model stops calling tools;
+      // what bounds it lives entirely inside this file and the budget governor —
+      // see UNBOUNDED_STEPS.
+      stopWhen: opts.stopWhen ?? UNBOUNDED_STEPS,
+      abortSignal: opts.signal,
+      // The SDK's default onError is `console.error(error)`, which dumped the
+      // raw provider payload to the terminal alongside our own rendering of it.
+      // Capture instead: the error still reaches callers through the rethrow
+      // below, so there is exactly one place that decides how a failure reads.
+      onError: ({ error }) => { streamError = error; },
+      onAbort: ({ steps }) => {
+        // The caller's abort interrupts the TURN. This callback is the only
+        // terminal handover: an aborted run never settles `result.steps`, so
+        // the tail records the finished steps from here.
+        recordedSteps = steps;
+        interrupted = true;
+      },
+      providerOptions,
+      // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
+      // first, then step-boundary tool-output pruning against the window budget,
+      // then the dynamic-context weave, cache tail markers LAST onto the final
+      // array. The cf orchestrator's beforeStep runs the identical composition.
+      prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
+        composePrepareStep({
+          extensions,
+          cache: rollTail ? { strategy: cache.strategy } : null,
+          prune: { contextWindow, modelOutputLimit },
+          budget: opts.budget,
+          dynamic: opts.dynamicContext,
+          destinationProviderId: opts.cache?.providerId,
+          meter: opts.meter,
+        }, { stepNumber: stepOffset + stepNumber, messages }),
+      onStepFinish: async (step) => {
+        stepCount++;
+        const usage = normalizeUsage(step.usage);
+        responseSoFar = [...step.response.messages];
+        const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
+        if (usageReported(usage)) event.usage = usage;
+        pendingStepEvents.push(event);
+        await opts.onStep?.(step);
+      },
+    });
+    // A call that never finishes a step — the provider failed before one, or the
+    // caller cut the call — makes the SDK REJECT its deferred accessors (`steps`,
+    // `finishReason`, `rawFinishReason`, `totalUsage`) when the stream ends. The
+    // turn reports all of those through the streamed error or the interrupt path
+    // and never reads the deferrals, and a rejection nobody reads is an unhandled
+    // one that crashes test files and pollutes DO logs. The zero-steps rejection
+    // is classified by type; a cut is classified by the state that caused it;
+    // anything else is recorded, because a deferred rejecting on a turn that
+    // finished naturally would be a defect here and must be visible.
+    const ignoreDeferred = (error: Error): void => {
+      if (NoOutputGeneratedError.isInstance(error)) return;
+      if (interrupted || (opts.signal?.aborted ?? false)) return;
+      diagnostics.failure(
+        'llm_call.deferred_rejected',
+        toKinuError({ doing: 'settle an unread stream accessor', cause: error, otherwise: 'io' }),
+      );
+    };
+    result.steps.then(undefined, ignoreDeferred);
+    result.finishReason.then(undefined, ignoreDeferred);
+    result.rawFinishReason.then(undefined, ignoreDeferred);
+    result.totalUsage.then(undefined, ignoreDeferred);
+
+    try {
+      // Drained to the SDK's own `abort` part rather than broken out of on
+      // `opts.signal.aborted`. Costs nothing — the abort check would sit AFTER
+      // this `await`, so both shapes wait for exactly one more chunk — and buys
+      // two things: `onAbort` is guaranteed to have run by the time the tail
+      // below reads `recordedSteps`, and a tool result that lands after the
+      // abort still reaches the surfaces and the turn's tool ledger instead of
+      // leaving the call rendered as never having returned.
+      for await (const chunk of result.fullStream) {
+        switch (chunk.type) {
+          case 'text-delta': {
+            const delta = chunk.text;
+            if (delta) {
+              stepHadOutput = true;
+              allText += delta;
+              stepContent.push({ type: 'text', text: delta });
+              yield { type: 'text-delta', delta };
+            }
+            break;
           }
-          break;
+          case 'reasoning-delta': {
+            const delta = chunk.text;
+            if (delta) yield { type: 'reasoning-delta', delta };
+            break;
+          }
+          case 'tool-call': {
+            stepHadOutput = true;
+            const args = parseToolArgs(chunk.input);
+            stepContent.push({
+              type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input,
+            });
+            await extensions?.emitToolCall({ toolName: chunk.toolName, args });
+            yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
+            break;
+          }
+          case 'tool-result': {
+            const raw = chunk.output;
+            // Full text, never a head slice: this string is the call's durable
+            // record (recordToolCall → the evolution signal) AND the identity the
+            // turn steering hashes. A clipped copy made two different outputs
+            // sharing a long preamble hash identical, and made cf and the CLI
+            // record different evolution evidence for the same call. Every
+            // display path bounds it at render.
+            const rendered = renderToolResult(raw);
+            const input = parseToolArgs(chunk.input);
+            await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: rendered, success: true });
+            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, success: true };
+            break;
+          }
+          case 'tool-error': {
+            // A tool threw: the error is the durable outcome the evolution signal
+            // reads. The extension seam sees the error text as the result (same as
+            // the cf afterToolCall), and the discriminator rides success/error.
+            const error = describeProviderError({ cause: chunk.error });
+            const input = parseToolArgs(chunk.input);
+            await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, success: false });
+            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, success: false, error };
+            break;
+          }
+          case 'finish-step': {
+            // A finished step with no mapped finish reason and no output is a
+            // provider stream that died (closed early, empty SSE, dropped route):
+            // the model never chose to stop. Reasoning-only steps count as dead
+            // too — a turn cannot proceed from thinking that never landed.
+            const reason = chunk.finishReason;
+            lastFinishReason = reason;
+            deadFinalStep = !stepHadOutput && reason === 'other';
+            stepHadOutput = false;
+            stepContent = [];
+            break;
+          }
+          case 'error': {
+            streamError = chunk.error;
+            break;
+          }
         }
-        case 'tool-call': {
-          stepHadOutput = true;
-          const args = parseToolArgs(chunk.input);
-          stepContent.push({
-            type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input,
-          });
-          await extensions?.emitToolCall({ toolName: chunk.toolName, args });
-          yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
-          break;
-        }
-        case 'tool-result': {
-          const raw = chunk.output;
-          // Full text, never a head slice: this string is the call's durable
-          // record (recordToolCall → the evolution signal) AND the identity the
-          // turn steering hashes. A clipped copy made two different outputs
-          // sharing a long preamble hash identical, and made cf and the CLI
-          // record different evolution evidence for the same call. Every
-          // display path bounds it at render.
-          const rendered = renderToolResult(raw);
-          const input = parseToolArgs(chunk.input);
-          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: rendered, success: true });
-          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, success: true };
-          break;
-        }
-        case 'tool-error': {
-          // A tool threw: the error is the durable outcome the evolution signal
-          // reads. The extension seam sees the error text as the result (same as
-          // the cf afterToolCall), and the discriminator rides success/error.
-          const error = describeProviderError(chunk.error);
-          const input = parseToolArgs(chunk.input);
-          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, success: false });
-          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, success: false, error };
-          break;
-        }
-        case 'finish-step': {
-          // A finished step with no mapped finish reason and no output is a
-          // provider stream that died (closed early, empty SSE, dropped route):
-          // the model never chose to stop. Reasoning-only steps count as dead
-          // too — a turn cannot proceed from thinking that never landed.
-          const reason = chunk.finishReason;
-          deadFinalStep = !stepHadOutput && reason === 'other';
-          stepHadOutput = false;
-          stepContent = [];
-          break;
-        }
-        case 'error': {
-          streamError = chunk.error;
-          break;
-        }
-      }
 
-      // Yield any step-finish events that fired via onStepFinish callback
-      while (pendingStepEvents.length > 0) {
-        const ev = pendingStepEvents.shift();
-        if (ev) yield { type: 'step-finish' as const, ...ev };
+        // Yield any step-finish events that fired via onStepFinish callback
+        while (pendingStepEvents.length > 0) {
+          const ev = pendingStepEvents.shift();
+          if (ev) yield { type: 'step-finish' as const, ...ev };
+        }
       }
+    } catch (err) {
+      // The signal is authoritative. A provider may throw its abort reason before
+      // the SDK invokes `onAbort`; waiting on the callback made explicit
+      // cancellation look like a provider failure. A cut falls through so the
+      // partial turn is yielded as `done`, then throws INTERRUPTED_TURN.
+      if (!opts.signal?.aborted) throw err;
+      interrupted = true;
     }
-  } catch (err) {
-    // The signal is authoritative. A provider may throw its abort reason before
-    // the SDK invokes `onAbort`; waiting on the callback made explicit
-    // cancellation look like a provider failure. A cut falls through so the
-    // partial turn is yielded as `done`, then throws INTERRUPTED_TURN.
-    if (!opts.signal?.aborted) throw err;
-    interrupted = true;
-  }
 
+    // A DEFINITIVE provider or transport failure crosses as a CLASSIFIED failure
+    // when the caller did not cancel the turn. It used to be rethrown verbatim,
+    // which meant an `APICallError` reached the CLI and the chat surface with its
+    // raw `responseBody` still attached and its own message saying only
+    // "AI_APICallError" — so the overflow-recovery classifier read nothing usable
+    // while the user read the endpoint's whole body. `toProviderError` puts the
+    // provider's own reason (and its status/code) in the message and keeps the
+    // raw failure on `cause`, where diagnostics can still reach it.
+    if (streamError !== undefined && !interrupted) {
+      throw toProviderError({ doing: 'calling the model', cause: streamError });
+    }
+    if (deadFinalStep && !interrupted) {
+      // Deliberately still a bare throw, unlike the interrupt: this turn was
+      // never cut. It ran to a natural end and what is being rejected is
+      // the RESULT, so there is no "work the cancellation discarded" to rescue —
+      // and the empty dead step would ride into the durable history with nothing
+      // established about what an empty assistant message does on replay.
+      throw new Error(
+        'Model stream ended without output: the provider stream terminated prematurely ' +
+        '(no finish reason, no content). The turn did not complete.',
+      );
+    }
 
-  // A DEFINITIVE provider or transport failure surfaces verbatim when the
-  // caller did not cancel the turn.
-  if (streamError !== undefined && !interrupted) {
-    throw streamError instanceof Error ? streamError : new Error(describeProviderError(streamError));
-  }
-  if (deadFinalStep && !interrupted) {
-    // Deliberately still a bare throw, unlike the interrupt: this turn was
-    // never cut. It ran to a natural end and what is being rejected is
-    // the RESULT, so there is no "work the cancellation discarded" to rescue —
-    // and the empty dead step would ride into the durable history with nothing
-    // established about what an empty assistant message does on replay.
-    throw new Error(
-      'Model stream ended without output: the provider stream terminated prematurely ' +
-      '(no finish reason, no content). The turn did not complete.',
-    );
-  }
+    // The call's steps, and the messages they produced. A CUT run — the caller's
+    // abort — leaves `result.response`/`result.steps` unsettled; they resolve only
+    // on a natural finish, and a cut before the first step never settles them at
+    // all. So a cut call reads what `onAbort` handed over.
+    //
+    // The MESSAGES need no such branch: `responseSoFar` is the cumulative array
+    // of the last step that finished, captured as it finished, and that is the
+    // whole call on either path. It is also, message for message, what the
+    // per-step durable rows hold — the history the caller persists and the
+    // durable record are one construction, so neither can say something the
+    // other does not.
+    const cut = interrupted;
+    const steps = cut ? recordedSteps : await result.steps;
+    const finished = [...responseSoFar];
+    // Then what the cut interrupted: the step the SDK will never report, and the
+    // pairing invariant over the whole call, so the caller persists a history a
+    // follow-up turn can be built from. Without it a tool call the caller has
+    // already recorded has no result anywhere, and `streamText` refuses to
+    // assemble EVERY later request from that history — including the
+    // continuation request below, whose prefix IS this array.
+    const produced = cut && stepContent.length > 0
+      ? [...finished, { role: 'assistant' as const, content: stepContent }]
+      : finished;
+    return {
+      steps,
+      produced: settleUnpairedToolCalls(produced) ?? produced,
+      finishReason: lastFinishReason,
+      interrupted,
+    };
+  };
 
-  // The turn's steps, and the messages they produced. A CUT run — the caller's
-  // abort — leaves `result.response`/`result.steps` unsettled; they resolve only
-  // on a natural finish, and a cut before the first step never settles them at
-  // all. So a cut turn reads what `onAbort` handed over.
+  const first = yield* callModel(cache.messages, 0);
+  let steps: readonly StepResult<ToolSet>[] = first.steps;
+  let responseMessages: ModelMessage[] = first.produced;
+  let interrupted = first.interrupted;
+
+  // THE OUTPUT-LIMIT CONTINUATION: exactly one.
   //
-  // The MESSAGES need no such branch: `responseSoFar` is the cumulative array
-  // of the last step that finished, captured as it finished, and that is the
-  // whole turn on either path. It is also, message for message, what the per-step
-  // durable rows hold — the history the caller persists and the durable record
-  // are one construction, so neither can say something the other does not.
-  const cut = interrupted;
-  const steps = cut ? recordedSteps : await result.steps;
-  const finished = [...responseSoFar];
-  // Then what the cut interrupted: the step the SDK will never report, and the
-  // pairing invariant over the whole turn, so the caller persists a history a
-  // follow-up turn can be built from. Without it a tool call the caller has
-  // already recorded has no result anywhere, and `streamText` refuses to
-  // assemble EVERY later request from that history.
-  const produced = cut && stepContent.length > 0
-    ? [...finished, { role: 'assistant' as const, content: stepContent }]
-    : finished;
-  const responseMessages = settleUnpairedToolCalls(produced) ?? produced;
+  // A step that ends at OUTPUT_LIMIT_REACHED is a model that had more to say and
+  // was not allowed to say it — after prose, and equally after a completed tool
+  // result, which is the case that used to publish a turn as finished with the
+  // work after the tool never done. The SDK's own loop does not continue it: it
+  // re-issues a request only while a step ended with tool calls whose outputs all
+  // landed, so a length finish with no pending call ends the loop, and the
+  // accumulated partial answer was accepted as the turn's.
+  //
+  // The continuation request is the SAME prefix plus what the turn has already
+  // produced — every assistant message and every tool result, in order. So the
+  // model reads its own truncated answer and the completed calls behind it as
+  // history and carries on, and NOTHING is replayed: a completed tool call
+  // arrives paired with its result, which is exactly what tells the SDK the call
+  // is finished rather than pending. (The trailing assistant text needs no
+  // whitespace treatment: `@ai-sdk/anthropic` already trims the final assistant
+  // text part of a prefilled block, and it is the one provider that refuses one.)
+  //
+  // Detection and dispatch are one continuation of this generator — no `yield`
+  // and no persistence boundary sits between them, so nothing can reset in
+  // between and there is no continuation state for anything to lose. What
+  // crosses to the caller is still one `done` with the whole turn in it.
+  //
+  // A SECOND output-limit finish is honest partial completion, not another
+  // request: the turn keeps everything it produced, and the last finish reason
+  // still says `length`, so the caller records a turn that ended at the
+  // provider's output limit rather than one that answered.
+  if (!interrupted && first.finishReason === OUTPUT_LIMIT_REACHED) {
+    const continued = yield* callModel([...cache.messages, ...first.produced], first.steps.length);
+    steps = [...steps, ...continued.steps];
+    responseMessages = [...responseMessages, ...continued.produced];
+    interrupted = continued.interrupted;
+  }
 
   // If the model produced no text (ended on a tool call), gather from steps
   if (!allText.trim()) {

@@ -32,6 +32,7 @@ import type { Usage } from '../usage';
 import type { HeadStep } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
 import { readSearchTree } from './search-tree';
+import { runName } from './fork-runs';
 import type { Page, PageRequest } from './page';
 
 /** Which store recorded this node, and therefore how much there is to show. */
@@ -194,7 +195,14 @@ function readRolloutTranscript(
   const node = nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return null;
 
-  const path = ancestorCrumbs(node, nodes, (row) => row.action);
+  // The first crumb is the RUN, so it wears the run's name. Its raw `action` is
+  // empty for every MCTS search (`mcts/engine.ts` records the root with
+  // `action: ''`), and a breadcrumb reading the column verbatim is what printed
+  // the literal `root` where the search's own name belongs.
+  const path = ancestorCrumbs(
+    node, nodes,
+    (row) => (row.parent_id === null ? runName(row.action, row.task) : row.action),
+  );
 
   return {
     origin: 'rollout',

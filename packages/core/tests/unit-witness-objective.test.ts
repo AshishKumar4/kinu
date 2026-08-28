@@ -69,6 +69,7 @@ function candidate(overrides: Partial<SwarmCandidate> = {}): SwarmCandidate {
     id: 'n1',
     artifact: 'answer',
     measured: { kind: 'measured', value: 5, detail: '5' },
+    pareto: null,
     unmeasurable: null,
     incomplete: null,
     score: 0.5,

@@ -100,6 +100,12 @@ export interface ShadowTrialDrain {
 }
 
 /** What a completed turn offers the promotion gate. */
+/** What a completed turn offered the promotion gate. Every value except
+ *  `'queued'` is a turn that contributed nothing — named, so a caller reporting
+ *  the gate's state never has to guess which, and so a durable effect that OWED
+ *  the queueing can tell a refusal from a failure. */
+export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'no_pending' | 'queue_full' | 'failed';
+
 export interface ShadowTrialTurn {
   readonly task: string;
   /** What the live turn actually answered — the trial's comparand. */
@@ -117,6 +123,17 @@ export interface ShadowTrialTurn {
  *  is gated by real outcomes (reviewTurn), not score thresholds. */
 export interface EvolutionConfig {
   enabled: boolean;
+  /**
+   * Commit a group of writes as ONE durable unit.
+   *
+   * The grading pass uses it: the verdict row, the cumulative craft scores, the
+   * tombstone that records both and the announcement are one fact. A synchronous
+   * run is already atomic inside a Durable Object, so the identity default is
+   * honest there; a backend whose process can be killed between two statements
+   * must supply a real transaction or a retry appends a second verdict and moves
+   * the EMA twice.
+   */
+  transaction?: (body: () => void) => void;
   lifetimeEvolutionInterval: number;
   lifetimeMCTSBudget: number;
   lifetimeMCTSBranches: number;
@@ -129,7 +146,11 @@ export interface EvolutionConfig {
   /** Record a completed turn as evidence the promotion gate may draw on — one
    *  row, no inference (evolution/control.ts `queueTurnShadowTrial`). Absent =
    *  this host queues none. */
-  shadowTrialQueue?: (turn: ShadowTrialTurn) => void;
+  /** `opts.id` is the stable row identity a caller that OWES this queueing
+   *  supplies, so a replay writes the same trial rather than a second one. */
+  shadowTrialQueue?: (
+    turn: ShadowTrialTurn, opts?: { readonly id?: string; readonly pendingVersion?: number },
+  ) => ShadowTrialQueueOutcome;
   /** Run the shadow trials a turn queued for the pending scaffold — the
    *  promotion gate's evidence, gathered on the cadence lane instead of on the
    *  user's turn (evolution/control.ts `runQueuedShadowTrials`). Absent = this

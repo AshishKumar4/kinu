@@ -70,7 +70,9 @@ import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
-import type { FloorBreach, MeasuredValue, PublicationState } from './objective';
+import type {
+  FloorBreach, MeasuredValue, ParetoAxis, ParetoEvidence, PublicationState,
+} from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
 
 /**
@@ -114,6 +116,12 @@ export type ChildOutcome =
     /** Null where the objective's own range admits no score for this value. */
     readonly score: number | null;
     readonly witnessFound?: boolean | null;
+  }
+  | {
+    readonly kind: 'pareto';
+    readonly axes: readonly ParetoAxis[];
+    readonly evidence: ParetoEvidence;
+    readonly detail: string;
   }
   | {
     /**
@@ -180,14 +188,30 @@ const FloorBreachSchema: v.GenericSchema<FloorBreach> = v.object({
 });
 
 /**
- * The durable gate over {@link SwarmNodeRecord}, bound to the type it mirrors.
+ * The schema version this engine stamps into every record envelope. A reader must be
+ * able to tell a row THIS engine wrote from one a FUTURE engine wrote: an unknown
+ * version refuses by name instead of being quietly reshaped into something it is not.
+ */
+export const RECORD_SCHEMA_VERSION = 1;
+
+/** A record AS IT IS STORED: the fields, plus the stamp naming the engine that wrote
+ *  them. There is no unstamped form — {@link recordSwarmNode} is the table's only
+ *  writer and it stamps every envelope. */
+type StoredSwarmNodeRecord = SwarmNodeRecord & { readonly v: typeof RECORD_SCHEMA_VERSION };
+
+/**
+ * The durable gate over {@link StoredSwarmNodeRecord}, bound to the type it mirrors.
  *
  * `v.GenericSchema<T>` rather than an inferred shape, for the reason
  * `mcts/search-store.ts` binds its own persisted config the same way: a row is read
  * back by code that has moved on since it was written, and a schema that merely
  * happens to match the type today is a schema that stops matching it silently.
+ *
+ * The stamp is IN the schema, so there is exactly one shape a stored row may have and
+ * no second schema to drift from this one.
  */
-const SwarmNodeRecordEntries = {
+const StoredSwarmNodeRecordSchema: v.GenericSchema<StoredSwarmNodeRecord> = v.object({
+  v: v.literal(RECORD_SCHEMA_VERSION),
   outcome: v.nullable(v.variant('kind', [
     v.object({
       kind: v.literal('unmeasurable'),
@@ -208,6 +232,15 @@ const SwarmNodeRecordEntries = {
       witnessFound: v.optional(v.nullable(v.boolean())),
     }),
     v.object({
+      kind: v.literal('pareto'),
+      axes: v.array(v.object({
+        id: v.string(),
+        direction: v.picklist(['minimise', 'maximise']),
+      })),
+      evidence: v.record(v.string(), v.number()),
+      detail: v.string(),
+    }),
+    v.object({
       kind: v.literal('judged'),
       score: v.number(),
       ensemble: v.number(),
@@ -217,23 +250,8 @@ const SwarmNodeRecordEntries = {
   conclusion: v.nullable(v.string()),
   aggregated: v.array(v.string()),
   tokens: v.nullable(v.number()),
-};
-
-const SwarmNodeRecordSchema: v.GenericSchema<SwarmNodeRecord> =
-  v.object(SwarmNodeRecordEntries);
-const SwarmNodeRecordV1Schema = v.object({
-  v: v.literal(1),
-  ...SwarmNodeRecordEntries,
 });
 const RecordVersionSchema = v.object({ v: v.number() });
-
-/**
- * The schema version this engine stamps into every record envelope, beside
- * {@link SwarmNodeRecordSchema}. A reader must be able to tell a row THIS engine
- * wrote from one a FUTURE engine wrote: an unknown version refuses by name instead
- * of being quietly reshaped into something it is not.
- */
-export const RECORD_SCHEMA_VERSION = 1;
 
 /** The DDL, once. No `reconcileColumns`: the table ships whole, so there is no
  *  post-release column for a workspace to be missing. */
@@ -291,7 +309,64 @@ export interface ReenteredSwarmNode {
   readonly produced: readonly ModelMessage[];
 }
 
-/** An interrupted search, re-entered: its identity, its lease, and its tree. */
+/**
+ * One node the search PAID FOR and holds no answer for: its spawn is durable, its
+ * tree row is not. The work a re-entry OWNS.
+ *
+ * THE TWO WRITES ARE NOT ONE. A node's existence becomes durable at
+ * `HeadJournal.insertSpawn`, before its model runs; its answer becomes durable at
+ * `swarm-scoring.ts`'s `recordSwarmNode` + `insertSearchNode`, which run only after
+ * the whole LEVEL's barrier has returned. An activation destroyed between them — the
+ * ordinary eviction — therefore leaves a node whose spawn the store remembers and
+ * whose answer nothing does.
+ *
+ * THAT WINDOW WAS THE DEFECT, in both directions at once. The tree row was the only
+ * evidence the accounting read, so a five-node search cut inside its only level
+ * counted ZERO expansions on re-entry, recreated the whole budget and expanded five
+ * MORE nodes under fresh ids — while the five it had already paid for were stamped
+ * `aborted` with prose claiming "the nodes after it are the continuation". Ten rows,
+ * five of them failures, for a search that asked for five nodes; and again per
+ * eviction.
+ *
+ * So a node in this state is neither retired nor re-created: it is RE-RUN under its
+ * own id, and it is COUNTED as the expansion it already was. Every field here is what
+ * re-running it needs and the tree cannot answer, read off the row its spawn wrote.
+ */
+export interface PendingSwarmNode {
+  readonly id: string;
+  /** Never null: a pending node is a child, and the query admits only children whose
+   *  parent the tree holds. */
+  readonly parentId: string;
+  readonly depth: number;
+  /** `head_journal.task` — what this node was asked, verbatim. */
+  readonly task: string;
+  /** `head_journal.rationale` — its brief, and under an explicit per-node assignment
+   *  the caller's own prompt. Empty where the row recorded none. */
+  readonly rationale: string;
+  /**
+   * THE SLOT THIS NODE WAS ORIGINALLY ASKED IN, and the level width it was told
+   * about — the pair every expansion prompt is built from (its diversity angle, and
+   * the sibling angles it is told to differ from).
+   *
+   * DERIVED FROM ITS PARENT'S CHILD SET rather than from the pending set, and the
+   * difference is the whole reason these are fields. A level's members are scored one
+   * at a time after the barrier, so an activation can die with three of five siblings
+   * recorded — and re-running the other two as "1 of 2" and "2 of 2" would hand them
+   * the first two siblings' angles and ask them a question neither was asked. Read
+   * this way, a node cut anywhere in its level is re-asked in exactly the words it
+   * was asked in.
+   *
+   * A parent expanded in MORE THAN ONE wave — `uct` re-widening a node it already
+   * expanded — has all of its children read as one level here, so a member of its
+   * second wave is re-asked at a later slot than it originally held. That is a
+   * different angle, not a lost one, and it is the one imprecision this recovery has.
+   */
+  readonly index: number;
+  readonly siblings: number;
+}
+
+/** An interrupted search, re-entered: its identity, its lease, its tree, and the work
+ *  it still owes. */
 export interface SwarmReentry {
   readonly rootId: string;
   /** The lease this re-entry claimed. Every ledger write of the resumed run is stamped
@@ -302,11 +377,11 @@ export interface SwarmReentry {
   readonly nodes: readonly ReenteredSwarmNode[];
   /** Ledger rows for the same task this re-entry retired. */
   readonly superseded: readonly string[];
-  /** Node rows the dead activation left `running`, settled through
-   *  `HeadJournal.abandonRunning` — the count, for the run's own disclosure. */
-  readonly abandoned: number;
-  /** The resolved profile the search STARTED under, off its ledger row. Null
-   *  for a run whose caller wired no catalog or that predates snapshots. */
+  /** Nodes this re-entry must RE-RUN under their own ids, level order then spawn
+   *  order — the unfinished work, and nothing else. */
+  readonly pending: readonly PendingSwarmNode[];
+  /** The resolved profile the search STARTED under, off its ledger row. Null for
+   *  a run whose caller wired no catalog to resolve one. */
   readonly profile: SwarmProfileSnapshot | null;
   /** The caller conversation frozen when the first attempt began. */
   readonly originContext: readonly ModelMessage[];
@@ -340,12 +415,22 @@ interface NodeRow {
  *     old one. A null claim means the row settled between the find and here — another
  *     activation got there first — and this returns null, so the caller starts a fresh
  *     search rather than expanding a tree somebody else just finished.
- *  4. SETTLE THE DEAD ATTEMPT'S NODES, through `HeadJournal.abandonRunning` scoped to
- *     this root. The EXISTING transition and no other: `head_journal.status` has
- *     exactly two terminal writers and a third would be the defect that one had only
- *     one. Those nodes stay re-expandable rows in `search_nodes` afterwards; what is
- *     settled is the claim that something is still executing them.
- *  5. READ THE TREE, with each node's record and its reconstructed turns.
+ *  4. READ THE TREE, with each node's record and its reconstructed turns.
+ *  5. CLAIM THE UNFINISHED WORK ({@link PendingSwarmNode}) rather than retiring it.
+ *
+ * STEP 5 REPLACED A TERMINAL WRITE, and that is this function's own defect closed.
+ * It used to call `HeadJournal.abandonRunning` here, scoped to the root, stamping
+ * every unreported row `aborted` with prose that said the nodes after it were the
+ * continuation — while the accounting, blind to those rows, went on to create that
+ * continuation out of fresh ids. Both halves were wrong and they compounded: a
+ * five-node search reported five failures and five new nodes per eviction.
+ *
+ * `abandonRunning` KEEPS ITS ONE MEANING, which is why nothing here writes a status
+ * at all: it says "nothing will ever continue this run", and the only caller that can
+ * honestly say so is the start-of-life reconciliation, for a root whose durable job
+ * the resume gate could not re-drive (`heads/reconcile.ts`). A re-entry is the exact
+ * opposite claim. The roster is not left lying in the meantime — `markInterrupted`
+ * has already moved those rows off `running`, and re-running one re-opens it.
  */
 export function reenterSwarm(deps: {
   readonly sql: SqlExecutor;
@@ -353,7 +438,6 @@ export function reenterSwarm(deps: {
   readonly journal: HeadJournal;
 }, input: {
   readonly task: string;
-  readonly reason: string;
   readonly now: number;
 }): SwarmReentry | null {
   const [newest, ...older] = deps.ledger.findRunningSwarms(input.task);
@@ -362,9 +446,6 @@ export function reenterSwarm(deps: {
   for (const stale of superseded) deps.ledger.supersede(stale, input.now);
   const epoch = deps.ledger.reclaim(newest.rootId);
   if (epoch === null) return null;
-  const abandoned = deps.journal.abandonRunning(
-    input.reason, { rootId: newest.rootId }, input.now,
-  );
   const rows = deps.sql<NodeRow>`
     SELECT id, parent_id, depth, observation FROM search_nodes
     WHERE root_id = ${newest.rootId} ORDER BY depth ASC, created_at ASC`;
@@ -392,13 +473,75 @@ export function reenterSwarm(deps: {
     // The STARTED-UNDER profile, read back off the claimed row. A re-drive
     // never resolves against today's catalog — this record is what the first
     // attempt froze before it detached, so the tree continues under the role,
-    // tier and preset it began with. Null for a row that predates profiles.
+    // tier and preset it began with. Null where the caller wired no catalog.
     profile: deps.ledger.readSwarmProfile(newest.rootId),
     originContext: deps.ledger.readSwarmOriginContext(newest.rootId) ?? [],
     nodes,
     superseded,
-    abandoned: abandoned.reduce((total, run) => total + run.abandoned, 0),
+    pending: pendingNodes(deps.sql, newest.rootId),
   };
+}
+
+/**
+ * The nodes this search spawned and holds no tree row for, level order then spawn
+ * order.
+ *
+ * `head_journal` IS the durable record of a node's existence — `insertSpawn` is the
+ * first write of the expansion — so this is the only query that can see the window
+ * between a spawn and its answer. The join is what keeps it honest in both
+ * directions: a node WITH a tree row is finished as far as the search is concerned
+ * (its record carries its outcome, `incomplete` included) and is not re-run, and a
+ * node whose PARENT the tree does not hold is not re-run either, because there is
+ * nothing to continue it from. The second case cannot arise from this engine —
+ * selection reads `search_nodes`, so a parent always has a row — and is excluded by
+ * the query rather than by a branch, so an older workspace's orphan settles with its
+ * root instead of stopping the run.
+ *
+ * ORDERED ON `rowid`, not on `spawned_at`. Insertion order IS the order the wave was
+ * spawned in, and it is the one ordering a re-open cannot disturb: re-running a node
+ * moves its `spawned_at` forward, so ordering on that column would reshuffle siblings
+ * on the second re-entry and hand them each other's diversity angles.
+ */
+function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNode[] {
+  // EVERY CHILD THIS SEARCH SPAWNED, recorded or not, because a pending node's slot
+  // is its position among its PARENT'S children and that cannot be read off the
+  // pending set alone. `recorded` is the join that says which of them the tree
+  // already holds — the ones that are finished with, and are not re-run.
+  const rows = sql<{
+    id: string; parent_id: string; depth: number;
+    task: string; rationale: string | null; recorded: number;
+  }>`
+    SELECT j.id, j.parent_id, j.depth, j.task, j.rationale,
+      (SELECT COUNT(*) FROM search_nodes s WHERE s.id = j.id) AS recorded
+    FROM head_journal j
+    WHERE j.root_id = ${rootId}
+      AND j.parent_id IN (SELECT id FROM search_nodes WHERE root_id = ${rootId})
+    ORDER BY j.depth ASC, j.rowid ASC`;
+  const levels = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const level = levels.get(row.parent_id);
+    if (level) level.push(row);
+    else levels.set(row.parent_id, [row]);
+  }
+  const pending: PendingSwarmNode[] = [];
+  for (const level of levels.values()) {
+    for (const [index, row] of level.entries()) {
+      if (row.recorded > 0) continue;
+      pending.push({
+        id: row.id,
+        parentId: row.parent_id,
+        depth: row.depth,
+        task: row.task,
+        rationale: row.rationale ?? '',
+        index,
+        siblings: level.length,
+      });
+    }
+  }
+  // Back into level-then-spawn order: the grouping above is by parent, and the run
+  // re-runs the shallowest wave first so a resumed child's parent is always a node
+  // this attempt has already rebuilt.
+  return pending.sort((left, right) => left.depth - right.depth);
 }
 
 /**
@@ -432,28 +575,18 @@ export function readStartedSwarmProfile(storage: {
   readonly execRaw: RawSqlExec;
 }, task: string): SwarmProfileSnapshot | null {
   initSearchTables(storage.execRaw, storage.sql);
-  initMctsSearchTable(storage.execRaw, storage.sql);
+  initMctsSearchTable(storage.execRaw);
   const ledger = new MctsSearchStore(storage.sql);
   const [newest] = ledger.findRunningSwarms(task);
   return newest ? ledger.readSwarmProfile(newest.rootId) : null;
 }
-
-/**
- * A stored record, or a throw naming the node.
- *
- * NOT a fabricated default, for `MctsSearchStore.findResumable`'s reason and one
- * stronger: this row is what the winner is ranked on and what the seal is read from, so
- * a run continued past an unreadable one would crown a candidate it never measured and
- * could publish under a floor it had breached. The throw reaches the job runner, which
- * fails the attempt with the cause intact and bounds the retries.
- */
 
 /** One reader per envelope version this build understands. A reader parses the WHOLE
  *  decoded envelope under its own schema, so a future arm added at v2 cannot be
  *  silently stripped down to the fields v1 happened to name. */
 const RECORD_READERS = {
   1(nodeId: string, decoded: JsonValue): SwarmNodeRecord {
-    const parsed = v.safeParse(SwarmNodeRecordV1Schema, decoded);
+    const parsed = v.safeParse(StoredSwarmNodeRecordSchema, decoded);
     if (!parsed.success) {
       throw new KinuError('io',
         `the durable record for node ${nodeId} of this search will not read back under its own `
@@ -466,36 +599,43 @@ const RECORD_READERS = {
   },
 } satisfies Record<number, (nodeId: string, decoded: JsonValue) => SwarmNodeRecord>;
 
+/**
+ * A stored record, or a throw naming the node.
+ *
+ * NOT a fabricated default, for `MctsSearchStore.findResumable`'s reason and one
+ * stronger: this row is what the winner is ranked on and what the seal is read from, so
+ * a run continued past an unreadable one would crown a candidate it never measured and
+ * could publish under a floor it had breached. The throw reaches the job runner, which
+ * fails the attempt with the cause intact and bounds the retries.
+ *
+ * A MISSING STAMP IS CORRUPTION, not an older shape: {@link recordSwarmNode} is the
+ * only writer this table has, and it stamps every envelope. So an unstamped row goes to
+ * the same reader as a stamped one, whose `v` literal names the absent stamp for what
+ * it is instead of guessing at a spelling nothing ever wrote.
+ */
 function parseRecord(nodeId: string, json: string): SwarmNodeRecord {
   const decoded = v.parse(JsonValueSchema, JSON.parse(json));
   const stamped = v.safeParse(RecordVersionSchema, decoded);
-  const version = stamped.success ? stamped.output.v : null;
-  if (version !== null) {
-    const reader = version === RECORD_SCHEMA_VERSION ? RECORD_READERS[1] : undefined;
-    // A row THIS build did not write is refused by NAME, not reshaped: continuing past
-    // one would rank candidates against measurements this build cannot see.
-    if (reader === undefined) {
-      throw new KinuError('io',
-        `the durable record for node ${nodeId} of this search carries schema version `
-        + `${String(version)}, which this build does not know: it was written by a newer engine, `
-        + 'and continuing would rank candidates against rows this build cannot read.');
-    }
-    return reader(nodeId, decoded);
-  }
-  // No stamp: the row predates stamping. Every unstamped row was written in the shape
-  // `RECORD_SCHEMA_VERSION` 1 names, which is what the schema checks — and an honest
-  // failure says exactly that, rather than claiming no older spelling ever existed.
-  const parsed = v.safeParse(SwarmNodeRecordSchema, decoded);
-  if (!parsed.success) {
+  // A row THIS build did not write is refused by NAME, not reshaped: continuing past
+  // one would rank candidates against measurements this build cannot see.
+  if (stamped.success && stamped.output.v !== RECORD_SCHEMA_VERSION) {
     throw new KinuError('io',
-      `the durable record for node ${nodeId} of this search will not read back, so the run `
-      + 'cannot be continued faithfully: '
-      + `${parsed.issues.map((issue) => issue.message).join('; ')}. The row predates schema `
-      + 'stamping, so it is corruption or an unknown older spelling, not a shape this build '
-      + 'can reconstruct — and continuing would rank candidates against a measurement '
-      + 'nobody can see.');
+      `the durable record for node ${nodeId} of this search carries schema version `
+      + `${String(stamped.output.v)}, which this build does not know: it was written by a newer `
+      + 'engine, and continuing would rank candidates against rows this build cannot read.');
   }
-  return parsed.output;
+  return RECORD_READERS[RECORD_SCHEMA_VERSION](nodeId, decoded);
+}
+
+export function readSwarmNodeRecords(
+  sql: SqlExecutor, rootId: string,
+): readonly { readonly nodeId: string; readonly record: SwarmNodeRecord }[] {
+  return sql<{ node_id: string; record_json: string }>`
+    SELECT node_id, record_json
+    FROM swarm_node_records
+    WHERE root_id = ${rootId}
+    ORDER BY node_id ASC`
+    .map((row) => ({ nodeId: row.node_id, record: parseRecord(row.node_id, row.record_json) }));
 }
 
 /**

@@ -73,6 +73,10 @@ function fakeClient(opts: FakeOptions = {}): Fake {
         return () => { state.approval = null; };
       },
       listModelProviders: async () => [],
+      listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
+      readInstructionApproval: async () => null,
+      approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
+      revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
     },
     connect: async () => {},
     subscribe: (listener: (e: AgentClientEvent) => void) => {
@@ -94,6 +98,10 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     status: async () => ({ name: 'test', purpose: 'test', model: null, reasoningEffort: null }),
     describeTools: async () => ({ builtIn: [], crafted: [] }),
     changelog: async () => ({ entries: [], unseenCount: 0 }),
+    refinements: async () => ({ requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no unresolved corrections — nothing is owed a refinement' } }),
+    decideRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
+    showRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
+    requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
     revertChangelogEntry: async () => ({ ok: false }),
     readMemory: async () => '',
     searchNodes: async () => [],

@@ -31,16 +31,28 @@ import {
   incidentRetryDelayMs,
   needsArming,
   PORT_TOKEN_ALPHABET,
+  admissionStep,
+  classifyRecovery,
+  ContainerStartOverrun,
+  openStartBudget,
+  runRestoreStep,
+  parseRecoveryRow,
   quiesceStep,
+  recoveryStep,
   restartPlan,
   withContainerStartDeadline,
+  type DevboxIncident,
+  type IncidentDisposition,
   type PortExposureSpec,
+  type RecoveryClass,
+  type RecoveryStage,
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
 import {
   assertChainId,
   baseObjectKey,
   chainBackupOptions,
+  CHAIN_EXCLUDES,
   deltaObjectKey,
   isChainId,
   layerIntegrityFailure,
@@ -48,10 +60,13 @@ import {
   normalizeChainState,
   isOverlayMounted,
   shouldCheckpoint,
+  type ChainLayer,
 } from '../src/snapshot-chain';
 import { isS3fsMounted } from '../src/r2fs';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+/** The generation a record retains as its restore fallback. */
+const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
 
 /** What the PRODUCTION image really reports. fuse-overlayfs publishes NO
  *  lowerdir/upperdir/workdir options; only kernel overlay does. */
@@ -173,39 +188,277 @@ describe('restart plan — processes serve ports, so processes go first', () => 
     { port: 3000, name: undefined, token: 'tok3000', createdAt: 4 },
   ];
 
-  test('every process start precedes every listener probe, which precedes exposure', () => {
-    const kinds = restartPlan(procs, ports).map(op => op.kind);
-    expect(kinds.lastIndexOf('start-process')).toBeLessThan(kinds.indexOf('await-port'));
-    expect(kinds.indexOf('await-port')).toBeLessThan(kinds.indexOf('expose-port'));
+  test('the plan is two phases, so no exposure can be reached before the starts', () => {
+    // The SHAPE is the guard. There is no op that exposes a port, so there is no
+    // way to write an executor that exposes one whose listener was never probed
+    // — which is exactly what the flat three-op list allowed.
+    const plan = restartPlan(procs, ports);
+    expect(Object.keys(plan).sort()).toEqual(['serve', 'start']);
+    expect(plan.start.map(spec => spec.processId)).toEqual(['p2', 'p1']);
   });
 
-  test('each port is probed immediately before it is exposed, in ascending order', () => {
-    const ops = restartPlan(procs, ports);
-    const pairs = ops
-      .filter(op => op.kind !== 'start-process')
-      .map(op => (op.kind === 'await-port' ? `probe:${op.port}` : `expose:${op.spec.port}`));
-    expect(pairs).toEqual(['probe:3000', 'expose:3000', 'probe:8080', 'expose:8080']);
+  test('ports are served in ascending order, so a restart is the same restart twice', () => {
+    expect(restartPlan(procs, ports).serve.map(spec => spec.port)).toEqual([3000, 8080]);
   });
 
   test('a port is re-exposed with its PERSISTED token, so its URL is unchanged', () => {
-    const exposed = restartPlan([], ports)
-      .filter((op): op is Extract<typeof op, { kind: 'expose-port' }> => op.kind === 'expose-port');
-    expect(exposed.map(op => op.spec.token)).toEqual(['tok3000', 'tok8080']);
+    expect(restartPlan([], ports).serve.map(spec => spec.token)).toEqual(['tok3000', 'tok8080']);
   });
 
   test('nothing registered means an empty plan, not a plan of no-ops', () => {
-    expect(restartPlan([], [])).toEqual([]);
+    expect(restartPlan([], [])).toEqual({ start: [], serve: [] });
   });
 
-  test('two specs for one port collapse to one probe and one exposure', () => {
+  test('two specs for one port collapse to one exposure', () => {
     const duplicated: readonly PortExposureSpec[] = [
       { port: 8080, name: 'first', token: 'a', createdAt: 1 },
       { port: 8080, name: 'second', token: 'b', createdAt: 2 },
     ];
-    const ops = restartPlan([], duplicated);
-    expect(ops).toHaveLength(2);
     // Last write wins, which matches the storage the specs came from.
-    expect(ops[1]).toEqual({ kind: 'expose-port', spec: duplicated[1] });
+    expect(restartPlan([], duplicated).serve).toEqual([duplicated[1]]);
+  });
+});
+
+// ── the recovery taxonomy ───────────────────────────────────────────────────
+
+/**
+ * A failure as `@cloudflare/sandbox` really presents one: the code is a GETTER
+ * on the class, not an own property, and none of its error classes is exported.
+ * A stand-in carrying the code as a plain field would pass a check the shipped
+ * SDK fails.
+ */
+class Coded extends Error {
+  constructor(readonly errorResponse: { readonly code: string; readonly message: string }) {
+    super(errorResponse.message);
+    this.name = 'SandboxError';
+  }
+
+  get code(): string {
+    return this.errorResponse.code;
+  }
+}
+
+const coded = (code: string, message = 'the container said so'): Coded =>
+  new Coded({ code, message });
+
+describe('classifying a lifecycle failure — the SDK\'s own codes, never its prose', () => {
+  const table: readonly [string, RecoveryClass][] = [
+    ['NO_SPACE', 'exhausted'],
+    ['FILE_TOO_LARGE', 'exhausted'],
+    ['TOO_MANY_FILES', 'exhausted'],
+    ['MISSING_CREDENTIALS', 'permanent'],
+    ['INVALID_MOUNT_CONFIG', 'permanent'],
+    ['COMMAND_NOT_FOUND', 'permanent'],
+    ['PERMISSION_DENIED', 'permanent'],
+    ['READ_ONLY', 'permanent'],
+    ['OPERATION_INTERRUPTED', 'stale-owner'],
+    ['SESSION_TERMINATED', 'stale-owner'],
+    ['RPC_TRANSPORT_ERROR', 'transient'],
+    ['CONTAINER_UNAVAILABLE', 'transient'],
+  ];
+
+  for (const [code, expected] of table) {
+    test(`${code} is ${expected}`, () => {
+      expect(classifyRecovery({ cause: coded(code) })).toBe(expected);
+    });
+  }
+
+  test('an overrun is its own class, read from the type and not from the sentence', () => {
+    expect(classifyRecovery({ cause: new ContainerStartOverrun('Devbox.attach', 25_000) }))
+      .toBe('abandoned');
+  });
+
+  test('THE CAUSE CHAIN is classified, because this package wraps its failures', () => {
+    // The snapshot chain rethrows a mount failure as its own sentence with the
+    // SDK's error as `cause`. A classifier that read only the outermost value
+    // would answer `unclassified` for every wrapped failure, which is the one
+    // generic policy this taxonomy exists to end.
+    const wrapped = new Error('chain abc is stored as lazy layers and could not be mounted', {
+      cause: coded('MISSING_CREDENTIALS'),
+    });
+    expect(classifyRecovery({ cause: wrapped })).toBe('permanent');
+  });
+
+  test('an outer classified failure wins over an inner one', () => {
+    const wrapped = new Error('abandoned', {
+      cause: new ContainerStartOverrun('Devbox.attach', 1),
+    });
+    // The overrun is the outer fact here only when it IS outermost; wrapped the
+    // other way round the inner one still answers, which is the chain walk.
+    expect(classifyRecovery({ cause: wrapped })).toBe('abandoned');
+  });
+
+  test('a message that merely MENTIONS a classified condition is not classified', () => {
+    // The whole reason the codes are the authority: an application error saying
+    // "no space left in the plan" is not NO_SPACE, and a taxonomy built on
+    // regexes would refuse a box over a sentence.
+    expect(classifyRecovery({ cause: new Error('no space left in the plan; connection reset') }))
+      .toBe('unclassified');
+  });
+
+  test('a code the table does not name is unclassified, not guessed', () => {
+    expect(classifyRecovery({ cause: coded('UNKNOWN_ERROR') })).toBe('unclassified');
+    expect(classifyRecovery({ cause: coded('S3FS_MOUNT_ERROR') })).toBe('unclassified');
+  });
+
+  test('a thrown value that is not an error at all is unclassified', () => {
+    expect(classifyRecovery({ cause: 'a string' })).toBe('unclassified');
+    expect(classifyRecovery({ cause: undefined })).toBe('unclassified');
+    expect(classifyRecovery({ cause: { code: 42 } })).toBe('unclassified');
+  });
+});
+
+describe('the ladder row is parsed strictly, and an unreadable one is not an absent one', () => {
+  const OWNER = 'a1b2c3d4-0000-4000-8000-00000000abcd';
+
+  test('no row means no attempt has failed', () => {
+    expect(parseRecoveryRow(undefined)).toEqual({ kind: 'absent' });
+  });
+
+  test('a claim with no stage round-trips, and so does each stage', () => {
+    expect(parseRecoveryRow({ owner: OWNER })).toEqual({ kind: 'row', row: { owner: OWNER } });
+    for (const stage of ['retry', 'replace'] as const) {
+      expect(parseRecoveryRow({ owner: OWNER, stage }))
+        .toEqual({ kind: 'row', row: { owner: OWNER, stage } });
+    }
+  });
+
+  test('anything else is malformed rather than absent', () => {
+    // Absent means "nothing has failed" and leads to a retry, so reading an
+    // unreadable row as absent would restart the ladder every time — and a box
+    // that restarts the ladder can destroy its container identity repeatedly.
+    const rejected = [
+      null, 'retry', 3, {}, [],
+      // No owner: a row nothing can be conditioned on.
+      { stage: 'retry' },
+      // A stage outside the vocabulary, and an owner of the wrong type.
+      { owner: OWNER, stage: 'refuse' }, { owner: OWNER, stage: 1 }, { owner: 7 },
+      // An unknown key: this row has exactly one builder, so a second shape is
+      // evidence of something else writing here.
+      { owner: OWNER, stage: 'retry', attempts: 4 },
+    ];
+    for (const stored of rejected) expect(parseRecoveryRow(stored)).toEqual({ kind: 'malformed' });
+  });
+});
+
+describe('admission claims the row, and refuses on evidence it cannot read', () => {
+  const OWNER = 'a1b2c3d4-0000-4000-8000-00000000abcd';
+
+  test('an absent row admits an attempt with no stage to preserve', () => {
+    expect(admissionStep({ kind: 'absent' })).toEqual({ admit: true, stage: undefined });
+  });
+
+  test('a readable row admits the attempt and hands it the stage to preserve', () => {
+    // THE RESET CASE. A container start, an eviction and a replacement all mint
+    // a new owner, and none of them may forget how far the ladder has gone.
+    expect(admissionStep({ kind: 'row', row: { owner: OWNER } }))
+      .toEqual({ admit: true, stage: undefined });
+    for (const stage of ['retry', 'replace'] as const) {
+      expect(admissionStep({ kind: 'row', row: { owner: OWNER, stage } }))
+        .toEqual({ admit: true, stage });
+    }
+  });
+
+  test('an unreadable row refuses the attempt and normalises to the terminal stage', () => {
+    // Refusing is the safe half: nothing is destroyed on evidence nobody can
+    // read. Normalising is the other half — a row left unreadable would refuse
+    // for ever, and a permanent brick is its own defect.
+    expect(admissionStep({ kind: 'malformed' })).toEqual({ admit: false, stage: 'replace' });
+  });
+});
+
+describe('recovery is one decision per failure, with no count and no timeout', () => {
+  const CLASSES: readonly RecoveryClass[] = [
+    'abandoned', 'stale-owner', 'exhausted', 'permanent', 'transient', 'unclassified',
+  ];
+  const STAGES: readonly (RecoveryStage | undefined)[] = [undefined, 'retry', 'replace'];
+
+  test('a superseded attempt is INERT for every class and every stage', () => {
+    // KINU-030/031: the stale continuation must not publish readiness, file a
+    // failure, re-arm a startup or destroy an identity it did not start on.
+    for (const failure of CLASSES) {
+      for (const stage of STAGES) {
+        expect(recoveryStep({ owned: false, failure, stage }))
+          .toEqual({ action: 'inert', stage });
+      }
+    }
+  });
+
+  test('exhaustion refuses, repeats nothing, destroys nothing and moves nothing', () => {
+    for (const stage of STAGES) {
+      expect(recoveryStep({ owned: true, failure: 'exhausted', stage }))
+        .toEqual({ action: 'refuse', stage });
+    }
+  });
+
+  test('permanent configuration refuses on the first failure', () => {
+    // Nothing a retry reaches changes it, so spending the ladder on it would
+    // only destroy a container over a mount option.
+    for (const stage of STAGES) {
+      expect(recoveryStep({ owned: true, failure: 'permanent', stage }))
+        .toEqual({ action: 'refuse', stage });
+    }
+  });
+
+  test('a stale owner retries and does NOT advance the container-fault ladder', () => {
+    // The identity it failed on is already gone, so it is no evidence against
+    // the one that replaced it.
+    for (const stage of STAGES) {
+      expect(recoveryStep({ owned: true, failure: 'stale-owner', stage }))
+        .toEqual({ action: 'retry', stage });
+    }
+  });
+
+  test('abandoned work enters at REPLACE, because destruction is its cancellation', () => {
+    // KINU-031: the work is `exec` calls inside the container, so no token can
+    // fence it. The identity has to go before anything attaches again.
+    for (const stage of [undefined, 'retry'] as const) {
+      expect(recoveryStep({ owned: true, failure: 'abandoned', stage }))
+        .toEqual({ action: 'replace', stage: 'replace' });
+    }
+  });
+
+  test('a failure at REPLACE is terminal AND KEEPS the stage, so nothing loops', () => {
+    // Both halves matter. Terminal stops a second destruction now; keeping the
+    // stage stops the next eviction from restarting a destructive ladder from
+    // scratch. Only a successful attach clears it.
+    for (const failure of CLASSES) {
+      expect(recoveryStep({ owned: true, failure, stage: 'replace' }))
+        .toEqual({ action: failure === 'stale-owner' ? 'retry' : 'refuse', stage: 'replace' });
+    }
+  });
+
+  for (const failure of ['transient', 'unclassified'] as const) {
+    test(`${failure} walks the ladder once: retry, replace, then refuse for ever`, () => {
+      // KINU-032: repeated failure of ONE identity ends by replacing it. The
+      // bound is the ladder's length, not a tuned retry count — each stage is a
+      // different action, so nothing harmful is repeated. And the walk does not
+      // wrap: a fourth failure is still a refusal.
+      const walk: string[] = [];
+      let stage: RecoveryStage | undefined;
+      for (let step = 0; step < 4; step += 1) {
+        const decision = recoveryStep({ owned: true, failure, stage });
+        walk.push(decision.action);
+        stage = decision.stage;
+      }
+      expect(walk).toEqual(['retry', 'replace', 'refuse', 'refuse']);
+    });
+  }
+
+  test('no decision ever deletes the row, and every written stage parses back', () => {
+    for (const failure of CLASSES) {
+      for (const stage of STAGES) {
+        const decision = recoveryStep({ owned: true, failure, stage });
+        expect(['retry', 'replace', 'refuse']).toContain(decision.action);
+        // A stage that was set is never unset by a failure: the delete belongs
+        // to success alone.
+        if (stage !== undefined) expect(decision.stage).not.toBeUndefined();
+        if (decision.stage !== undefined) {
+          expect(parseRecoveryRow({ owner: 'o', stage: decision.stage }))
+            .toEqual({ kind: 'row', row: { owner: 'o', stage: decision.stage } });
+        }
+      }
+    }
   });
 });
 
@@ -258,21 +511,17 @@ describe('incident retry schedule', () => {
 // ── the container-start budget ──────────────────────────────────────────────
 
 describe('readiness is per container, not per Durable Object', () => {
-  test('the reset happens in the one hook that fires per container start', () => {
-    // A Durable Object outlives the containers it drives. If a readiness flag
-    // survives a container recycle, the gate that exists to wait for the attach
-    // returns immediately and every operation runs against a blank disk while
-    // the object believes it is restored. Measured on a deployed probe.
-    //
-    // Pinned as source shape because the condition is a platform lifetime
-    // relationship that no unit harness can express: there is no way to recycle
-    // a container from a test. The rule is that `onStart` clears the flags.
+  test('the startup callback turns the lifecycle over before admitting a stopped container', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-    const hook = source.slice(source.indexOf('override onStart('));
-    const body = hook.slice(0, hook.indexOf('\n  }'));
-    expect(body).toContain('this.#ready = false;');
-    expect(body).toContain('this.#attachFailure = undefined;');
-    expect(body).toContain('this.#startup = undefined;');
+    const startup = source.slice(source.indexOf('async devboxStartup('));
+    const body = startup.slice(0, startup.indexOf('\n  }'));
+    expect(body).toContain('this.#invalidateGeneration();');
+    expect(body).toContain('await this.start(undefined, {');
+    const invalidate = source.slice(source.indexOf('#invalidateGeneration(): void {'));
+    const reset = invalidate.slice(0, invalidate.indexOf('\n  }'));
+    expect(reset).toContain('this.#generation += 1;');
+    expect(reset).toContain('this.#startup = undefined;');
+    expect(reset).toContain("this.#restoration = { phase: 'unstarted' };");
   });
 });
 
@@ -299,10 +548,20 @@ describe('every self-re-arming schedule needs a first link', () => {
   };
 
   test('onStart arms all three self-re-arming rows', () => {
-    const onStart = bodyOf('override onStart(');
+    const schedules = bodyOf('async #armContainerSchedules(');
     for (const callback of ['STARTUP_CALLBACK', 'CHECKPOINT_CALLBACK', 'HEARTBEAT_CALLBACK']) {
-      expect(onStart).toContain(`this.#arm(${callback}`);
+      expect(schedules).toContain(`this.#arm(${callback}`);
     }
+  });
+
+  test('onStart only arms schedule chains, under the start deadline', () => {
+    // Arming is the WHOLE body — no attach, no restore — and it rides the
+    // container-start budget because `onStart` runs inside
+    // `blockConcurrencyWhile`, whose platform cancel resets the object
+    // (scripts/do-init-gate.test.ts holds the routing from the other side).
+    const hook = bodyOf('override onStart(');
+    expect(hook).toContain('return withContainerStartDeadline(');
+    expect(hook).toContain('this.#armContainerSchedules()');
   });
 
   test('the incident row is armed on demand, not at start', () => {
@@ -331,14 +590,13 @@ describe('every self-re-arming schedule needs a first link', () => {
     // the other way the chain dies — a throw, which the alarm loop reduces to a
     // console line before deleting the row.
     //
-    // Both failures are now one wrapper's job, so the property is that nothing
-    // re-arms outside it. `#arm` has exactly four callers, and each is a
-    // different kind of first link: the container-start hook forges one per
-    // self-re-arming chain, the startup callback re-arms ITSELF on failure
-    // (it is also called straight from the readiness gate, where its throw has
-    // to reach the caller, so it cannot live behind the guard), the incident
-    // recorder starts the delivery chain on demand, and the guard maintains
-    // every chain thereafter.
+    // Both failures are now one wrapper's job, except a failed container
+    // admission: that callback must record its classified refusal and leave a
+    // startup successor before it returns. The remaining calls are first links:
+    // the container-start hook forges one per self-re-arming chain, the recovery
+    // ladder re-arms the startup for the ONE action that asks the same container
+    // again, the incident recorder starts delivery on demand, and the guard
+    // maintains every chain thereafter.
     for (const callback of ['devboxCheckpoint', 'devboxHeartbeat', 'devboxIncidents']) {
       const body = bodyOf(`async ${callback}(`);
       expect({ callback, guarded: body.includes('this.#scheduled(') }).toEqual({
@@ -351,11 +609,21 @@ describe('every self-re-arming schedule needs a first link', () => {
     const armSites = (body: string): number => [...body.matchAll(/this\.#arm\(/g)].length;
     expect({
       total: armSites(source),
-      onStart: armSites(bodyOf('override onStart(')),
-      startupRetry: armSites(bodyOf('async devboxStartup(')),
+      onStart: armSites(bodyOf('async #armContainerSchedules(')),
+      startupAdmission: armSites(bodyOf('async devboxStartup(')),
+      startupRetry: armSites(bodyOf('async #recover(')),
+      onKick: armSites(bodyOf('async kickStartup(')),
       onRecord: armSites(bodyOf('async #record(')),
       guard: armSites(bodyOf('async #scheduled(')),
-    }).toEqual({ total: 6, onStart: 3, startupRetry: 1, onRecord: 1, guard: 1 });
+    }).toEqual({
+      total: 8, onStart: 3, startupAdmission: 1, startupRetry: 1, onKick: 1, onRecord: 1, guard: 1,
+    });
+    // And the ONE re-arm is reachable only from the action that means "ask this
+    // same identity again". A refusal or a replacement that armed a startup
+    // would be the loop the ladder exists to end.
+    const recover = bodyOf('async #recover(');
+    expect(recover.slice(recover.indexOf("decision.action === 'retry'")))
+      .toContain('await this.#arm(STARTUP_CALLBACK');
     expect(bodyOf('async #scheduled(')).toContain('await this.#arm(callback, nextSeconds)');
     // And the guard re-arms after a throw as well as after a return, which is
     // the half the old pin could not express.
@@ -448,16 +716,106 @@ describe('arming must ignore the row being dispatched', () => {
   });
 });
 
+describe('an incident is written off only when the host says it LANDED', () => {
+  /** The ledger, as the class's storage presents it to `deliverIncidents`: the
+   *  rows a test reads back, and the four operations the delivery pass uses. */
+  interface Ledger {
+    readonly rows: Map<string, IncidentRow>;
+    readonly store: IncidentStore;
+  }
+
+  function ledger(): Ledger {
+    const rows = new Map<string, IncidentRow>();
+    return {
+      rows,
+      store: {
+        get: (key) => Promise.resolve(rows.get(key)),
+        put: (key, value) => {
+          rows.set(key, value);
+          return Promise.resolve();
+        },
+        delete: (key) => Promise.resolve(rows.delete(key)),
+        list: (options) => Promise.resolve(
+          new Map([...rows].filter(([key]) => key.startsWith(options.prefix))),
+        ),
+      },
+    };
+  }
+
+  const only = (rows: Map<string, IncidentRow>): IncidentRow | undefined =>
+    [...rows.values()][0];
+
+  test('an UNDELIVERED answer leaves the row pending, and the next pass lands it', async () => {
+    // THE DEFECT: a host that could not announce an incident still answered
+    // `queued`, this side stamped `deliveredAt`, and the box stopped retrying an
+    // incident nobody had seen — while the host's own ledger still held it as
+    // re-deliverable. Only a landed announcement may write the row off.
+    const { rows, store } = ledger();
+    await recordIncident(store, 'attach', 'the mount refused');
+    const answers: IncidentDisposition[] = ['undelivered', 'queued'];
+    const ordinals: number[] = [];
+    const answer = async (_incident: DevboxIncident, attempt: number): Promise<IncidentDisposition> => {
+      ordinals.push(attempt);
+      return answers.shift() ?? 'queued';
+    };
+
+    const retryIn = await deliverIncidents(store, answer);
+
+    // Pending, counted, and a retry scheduled.
+    expect(retryIn).not.toBeNull();
+    const pending = only(rows);
+    expect({
+      attempts: pending?.attempts,
+      delivered: pending?.deliveredAt,
+      rejected: pending?.rejectedAt,
+    }).toEqual({ attempts: 1, delivered: undefined, rejected: undefined });
+
+    const settled = await deliverIncidents(store, answer);
+
+    // The second pass announced it, so nothing is left to wake for.
+    expect(settled).toBeNull();
+    expect(only(rows)?.deliveredAt).toBeNumber();
+    // Each pass told the host which announcement it was making.
+    expect(ordinals).toEqual([1, 2]);
+  });
+
+  test('a THROWN handler is the same case, not a special one', async () => {
+    // The disposition's own contract says a throw is `undelivered`, so it takes
+    // that path rather than a copy of it.
+    const { rows, store } = ledger();
+    await recordIncident(store, 'checkpoint', 'the commit failed');
+    const retryIn = await deliverIncidents(store, () => {
+      throw new Error('the host was unreachable');
+    });
+    expect(retryIn).not.toBeNull();
+    expect({ attempts: only(rows)?.attempts, delivered: only(rows)?.deliveredAt })
+      .toEqual({ attempts: 1, delivered: undefined });
+  });
+
+  test('a REJECTED shape is recorded and never retried', async () => {
+    // A shape the host refuses is a defect in this package, not a transient, so
+    // repeating it could only produce the same refusal.
+    const { rows, store } = ledger();
+    await recordIncident(store, 'port', 'nothing listens');
+    const retryIn = await deliverIncidents(store, () => Promise.resolve('rejected'));
+    expect(retryIn).toBeNull();
+    expect(only(rows)?.rejectedAt).toBeNumber();
+    expect(only(rows)?.deliveredAt).toBeUndefined();
+  });
+});
+
 describe('the attach budget', () => {
   test('work that finishes inside the budget resolves normally', async () => {
-    expect(await withContainerStartDeadline('t', 25_000, () => Promise.resolve('ok'), () => {}))
-      .toBe('ok');
+    const done = await withContainerStartDeadline(
+      't', openStartBudget(25_000), () => Promise.resolve('ok'), () => {},
+    );
+    expect(done).toBe('ok');
   });
 
   test('work that overruns is abandoned, and its late failure is still reported', async () => {
     const late: string[] = [];
     const { promise: work, reject: failWork } = Promise.withResolvers<never>();
-    const run = withContainerStartDeadline('t', 0, () => work, failure => {
+    const run = withContainerStartDeadline('t', openStartBudget(0), () => work, failure => {
       late.push(describeThrown({ cause: failure.cause }));
     });
     await expect(run).rejects.toThrow(/exceeded its 0ms budget and was abandoned/);
@@ -472,10 +830,117 @@ describe('the attach budget', () => {
   test('a failure inside the budget propagates rather than becoming an overrun', async () => {
     const late: string[] = [];
     await expect(withContainerStartDeadline(
-      't', 25_000, () => Promise.reject(new Error('bad layer')),
+      't', openStartBudget(25_000), () => Promise.reject(new Error('bad layer')),
       failure => { late.push(describeThrown({ cause: failure.cause })); },
     )).rejects.toThrow('bad layer');
     expect(late).toEqual([]);
+    expect(classifyRecovery({ cause: new Error('bad layer') })).not.toBe('abandoned');
+  });
+
+  test('the remainder only ever falls', async () => {
+    // ONE CLOCK FOR THE WHOLE RESTORATION. Every phase after the attach used to
+    // run outside any budget, and the listener proof carried a window per port,
+    // so three silent ports added about ninety seconds and nothing bounded the
+    // sum.
+    const budget = openStartBudget(25_000);
+    const first = budget.remainingMs();
+    await Promise.resolve();
+    const second = budget.remainingMs();
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThanOrEqual(25_000);
+    expect(second).toBeLessThanOrEqual(first);
+  });
+
+  test('a spent budget answers zero rather than a negative remainder', () => {
+    // A step that clamps its own wait on this must never be handed a negative
+    // window, which would make `Date.now() + remaining` a deadline in the past
+    // for one caller and a wait forever for another.
+    expect(openStartBudget(0).remainingMs()).toBe(0);
+    expect(openStartBudget(-5).remainingMs()).toBe(0);
+  });
+
+  test('the allowance divides what is left by the work still declared', () => {
+    // NOT THE PORTS ALONE. Every step of the restoration is declared — each
+    // probe, each exposure and the boot stamp — so a port's probe cannot spend
+    // what its own exposure and the stamp still need. Nothing is reserved: the
+    // last step is welcome to the whole remainder.
+    const budget = openStartBudget(1_000);
+    budget.declare(4);
+    const first = budget.nextAllowanceMs();
+    expect(first).toBeGreaterThan(200);
+    expect(first).toBeLessThanOrEqual(250);
+    // Three declared steps left, so the next share is a third of the remainder
+    // rather than a quarter — a step that finished early leaves its share behind.
+    const second = budget.nextAllowanceMs();
+    expect(second).toBeGreaterThan(first);
+  });
+
+  test('the last declared step may have the whole remainder, and an undeclared one too', () => {
+    const budget = openStartBudget(1_000);
+    budget.declare(1);
+    expect(budget.nextAllowanceMs()).toBeGreaterThan(900);
+    // Past the declared work the divisor floors at one, so an extra step is
+    // bounded by the clock rather than by a division by zero.
+    expect(budget.nextAllowanceMs()).toBeGreaterThan(900);
+  });
+
+  test('a step that outruns its allowance REPORTS, and its late failure is still told', async () => {
+    // The post-attach policy, and the whole point of the split: a listener that
+    // never answers or a process that will not start must not look like an
+    // abandoned attach, because the container is fine and replacing it would
+    // destroy a healthy box over a slow app.
+    const late: string[] = [];
+    const { promise: work, reject: failWork } = Promise.withResolvers<never>();
+    const outcome = await runRestoreStep(0, () => work, (failure) => {
+      late.push(describeThrown({ cause: failure.cause }));
+    });
+    expect(outcome).toEqual({ kind: 'late' });
+    failWork(new Error('the server never bound'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(late).toEqual(['the server never bound']);
+  });
+
+  test('a step that finishes inside its allowance answers its value', async () => {
+    expect(await runRestoreStep(25_000, () => Promise.resolve(7), () => {}))
+      .toEqual({ kind: 'done', value: 7 });
+  });
+
+  test('a step that THROWS inside its allowance REPORTS the failure, never throws', async () => {
+    // The post-attach policy again: a walk that threw here would abandon the
+    // rest of the restoration over one dead spec, and the caller wants a reason
+    // it can put in `unready` rather than an exception.
+    const late: string[] = [];
+    const outcome = await runRestoreStep(
+      25_000, () => Promise.reject(new Error('the port is in use')),
+      (failure) => { late.push(describeThrown({ cause: failure.cause })); },
+    );
+    expect(outcome.kind).toBe('failed');
+    expect(describeThrown(outcome.kind === 'failed' ? outcome : { cause: undefined }))
+      .toBe('the port is in use');
+    // `onLate` is for work abandoned at the deadline, and this was not.
+    expect(late).toEqual([]);
+  });
+
+  test('the budget rejects with the overrun TYPE, which is what the taxonomy reads', async () => {
+    // The recovery for abandoned work is not a retry: the work is still running
+    // inside the container, where no token can reach it, so the identity is
+    // replaced instead. That decision is made from the class of the thrown
+    // value, so the class is the contract — a caller matching the sentence
+    // would silently stop recognising it the day the sentence is reworded.
+    let overrun: { readonly cause: unknown } | undefined;
+    try {
+      await withContainerStartDeadline(
+        'Devbox.attach', openStartBudget(0),
+        () => Promise.withResolvers<never>().promise, () => {},
+      );
+    } catch (error) {
+      overrun = { cause: error };
+    }
+    expect(overrun?.cause).toBeInstanceOf(ContainerStartOverrun);
+    expect(classifyRecovery(overrun ?? { cause: undefined })).toBe('abandoned');
+    expect(recoveryStep({ owned: true, failure: 'abandoned', stage: undefined }))
+      .toEqual({ action: 'replace', stage: 'replace' });
   });
 });
 
@@ -557,28 +1022,158 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
     // A sound row parses, and every field survives the parse.
     const sound = { mode: 'chain', rev: 2, base: { id: CHAIN_ID, bytes: 9 }, at: 5 };
     expect(normalizeChainState(sound)).toEqual({
-      mode: 'chain', rev: 2, base: { id: CHAIN_ID, bytes: 9 }, at: 5,
+      mode: 'chain', rev: 2, at: 5,
+      base: { id: CHAIN_ID, bytes: 9, digest: undefined, objectVersion: undefined },
       delta: undefined, changeVersion: undefined, upperMark: undefined, orphans: undefined,
-      lastFailure: undefined,
+      fallback: undefined, lastFailure: undefined,
     });
+    // A row written before layer identities existed parses with both absent,
+    // which reads as UNKNOWN rather than unsound: those rows are live, and
+    // refusing them would be the data loss the chain exists to prevent.
+    expect(normalizeChainState(sound)?.base.digest).toBeUndefined();
+    expect(normalizeChainState(sound)?.base.objectVersion).toBeUndefined();
+    // Identities that ARE there survive, and a digest that is not 64 lowercase
+    // hex characters takes the row down rather than being carried as something
+    // nothing can compare. The store's version is the store's own format, so it
+    // is asked only to be a non-empty string.
+    const digest = 'c'.repeat(64);
+    const objectVersion = 'e2f4c1a0-upload';
+    expect(normalizeChainState({
+      ...sound, base: { id: CHAIN_ID, bytes: 9, digest, objectVersion },
+    })?.base).toEqual({ id: CHAIN_ID, bytes: 9, digest, objectVersion });
+    expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, digest: 'C'.repeat(64) } }))
+      .toBeNull();
+    expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, digest: 'abc' } }))
+      .toBeNull();
+    expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, objectVersion: '' } }))
+      .toBeNull();
+    // A retained fallback survives it too, delta and all: a candidate the
+    // reader cannot check is a candidate a restore cannot use.
+    const withFallback = {
+      ...sound,
+      fallback: {
+        base: { id: FALLBACK_ID, bytes: 7, digest, objectVersion },
+        delta: { bytes: 3, digest, objectVersion },
+      },
+    };
+    expect(normalizeChainState(withFallback)?.fallback).toEqual({
+      base: { id: FALLBACK_ID, bytes: 7, digest, objectVersion },
+      delta: { bytes: 3, digest, objectVersion },
+    });
+    // And a fallback whose id is not a UUID takes the whole row down, for the
+    // same reason a bad `base` does: every object key is built from one.
+    expect(normalizeChainState({ ...sound, fallback: { base: { id: 'nope', bytes: 7 } } }))
+      .toBeNull();
   });
 });
 
 // ── integrity and the interval gate ─────────────────────────────────────────
 
 describe('integrity probe — each unsound shape names itself', () => {
+  /** A layer known only by its size, which is every row that predates the
+   *  content digest and the store version. */
+  const sized = (bytes: number | undefined): ChainLayer | undefined =>
+    (bytes === undefined ? undefined : { bytes, digest: undefined, objectVersion: undefined });
+
   test('the four ways a stored layer can be unusable', () => {
-    expect(layerIntegrityFailure({ declaredBytes: undefined, storedBytes: 1, label: 'base' }))
-      .toContain('declares no size');
-    expect(layerIntegrityFailure({ declaredBytes: 1, storedBytes: undefined, label: 'base' }))
-      .toContain('missing from the store');
-    expect(layerIntegrityFailure({ declaredBytes: 0, storedBytes: 0, label: 'delta' }))
-      .toContain('declares 0 bytes');
-    expect(layerIntegrityFailure({ declaredBytes: 10, storedBytes: 11, label: 'delta' }))
-      .toContain('11 bytes, state declares 10');
-    expect(layerIntegrityFailure({ declaredBytes: 10, storedBytes: 10, label: 'base' }))
-      .toBeNull();
+    const bySize = (declared: number | undefined, stored: number | undefined, label: string) =>
+      layerIntegrityFailure({ declared: sized(declared), stored: sized(stored), label });
+    expect(bySize(undefined, 1, 'base')).toContain('declares no size');
+    expect(bySize(1, undefined, 'base')).toContain('missing from the store');
+    expect(bySize(0, 0, 'delta')).toContain('declares 0 bytes');
+    expect(bySize(10, 11, 'delta')).toContain('11 bytes, state declares 10');
+    expect(bySize(10, 10, 'base')).toBeNull();
   });
+
+  test('KINU-N025: a matching size with a different digest is a DIFFERENT archive', () => {
+    // The gap a byte count cannot close: same length, different content, still a
+    // valid squashfs image. It mounts and serves the wrong workspace.
+    const digest = 'a'.repeat(64);
+    const other = 'b'.repeat(64);
+    const refusal = layerIntegrityFailure({
+      declared: { bytes: 4_096, digest, objectVersion: undefined },
+      stored: { bytes: 4_096, digest: other, objectVersion: undefined },
+      label: 'delta',
+    });
+    expect(refusal).toContain('different archive of the same length');
+    expect(refusal).toContain(other);
+    expect(refusal).toContain(digest);
+    // Agreement is sound, and so is a digest the store cannot answer for: R2
+    // reports one only for an object it was given a checksum for, and UNKNOWN
+    // must not read as unsound or every multipart archive would be refused.
+    expect(layerIntegrityFailure({
+      declared: { bytes: 4_096, digest, objectVersion: undefined },
+      stored: { bytes: 4_096, digest, objectVersion: undefined },
+      label: 'delta',
+    })).toBeNull();
+    expect(layerIntegrityFailure({
+      declared: { bytes: 4_096, digest, objectVersion: undefined },
+      stored: { bytes: 4_096, digest: undefined, objectVersion: undefined },
+      label: 'base',
+    })).toBeNull();
+    // A record written before digests existed is UNKNOWN in the other
+    // direction, and those rows are live: `Devbox.strategy` defaults to the
+    // chain and the product's sandbox class is deployed on it.
+    expect(layerIntegrityFailure({
+      declared: { bytes: 4_096, digest: undefined, objectVersion: undefined },
+      stored: { bytes: 4_096, digest: other, objectVersion: undefined },
+      label: 'base',
+    })).toBeNull();
+  });
+
+  test('KINU-N025: with no digest to compare, a different store version is a DIFFERENT '
+    + 'upload', () => {
+      // The multipart case, which no checksum can reach: the Workers multipart
+      // API takes none, so R2 reports no digest for a large archive. What it
+      // always reports is the version it minted for the upload that wrote the
+      // object, so that is what catches a replacement carrying identical length
+      // — even one whose own digest metadata was written to match.
+      const big = 512 * 1024 * 1024;
+      const refusal = layerIntegrityFailure({
+        declared: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
+        stored: { bytes: big, digest: undefined, objectVersion: 'upload-two' },
+        label: 'base',
+      });
+      expect(refusal).toContain('written by a different upload');
+      expect(refusal).toContain('upload-one');
+      expect(refusal).toContain('upload-two');
+      // The same object passes: same size, same version, no digest either side,
+      // which is exactly what a sound multipart archive looks like.
+      expect(layerIntegrityFailure({
+        declared: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
+        stored: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
+        label: 'base',
+      })).toBeNull();
+      // And a pre-version row is UNKNOWN, not unsound.
+      expect(layerIntegrityFailure({
+        declared: { bytes: 4_096, digest: undefined, objectVersion: undefined },
+        stored: { bytes: 4_096, digest: undefined, objectVersion: 'upload-two' },
+        label: 'base',
+      })).toBeNull();
+    });
+
+  test('KINU-N025: agreeing content outranks a new store version, because a re-upload '
+    + 'is not a replacement', () => {
+      // A version is minted per UPLOAD, not per content. This chain can re-put
+      // byte-identical bytes: a write under an excluded path moves the skip-gate
+      // fingerprint while the archive bytes stay the same, so a commit whose
+      // state write is then lost to a crash leaves the store one version ahead
+      // of the record with the SAME content. Refusing that would spend the
+      // fallback on a healthy object, so agreement on content wins and the
+      // version is only consulted when no digest can decide.
+      const digest = 'a'.repeat(64);
+      expect(layerIntegrityFailure({
+        declared: { bytes: 4_096, digest, objectVersion: 'upload-one' },
+        stored: { bytes: 4_096, digest, objectVersion: 'upload-two' },
+        label: 'delta',
+      })).toBeNull();
+      // Disagreeing content is still a refusal, whatever the versions say.
+      expect(layerIntegrityFailure({
+        declared: { bytes: 4_096, digest, objectVersion: 'upload-one' },
+        stored: { bytes: 4_096, digest: 'b'.repeat(64), objectVersion: 'upload-one' },
+        label: 'delta',
+      })).toContain('different archive of the same length');
+    });
 });
 
 describe('the checkpoint interval gate', () => {
@@ -599,15 +1194,26 @@ describe('the checkpoint interval gate', () => {
 });
 
 describe('archive options', () => {
-  test('derived trees never travel, and the archive outlives a long weekend', () => {
-    const options = chainBackupOptions(false);
+  test('derived trees never travel, git metadata always does, and the archive '
+    + 'outlives a long weekend', () => {
+    const options = chainBackupOptions(false, CHAIN_EXCLUDES);
     expect(options.dir).toBe('/workspace');
     expect(options.excludes).toContain('node_modules');
-    expect(options.excludes).toContain('.git');
+    // `.git` holds the only copy of an unpushed commit, and for a linked
+    // worktree the only thing that makes the tree a repository. It is not
+    // reproducible from a lockfile, which is the only test this list applies.
+    expect(options.excludes).not.toContain('.git');
     // The SDK's own default is three days and it is enforced at restore time,
     // so a shorter TTL is a box that refuses to come back after a break.
     expect(options.ttl).toBeGreaterThanOrEqual(7 * 24 * 60 * 60);
-    expect(chainBackupOptions(true).localBucket).toBe(true);
+    expect(chainBackupOptions(true, CHAIN_EXCLUDES).localBucket).toBe(true);
+  });
+
+  test('the excludes come from the caller, so both modes obey one policy', () => {
+    // This function used to spell CHAIN_EXCLUDES itself while the chain path
+    // asked the box for `archiveExcludes`, so a box that replaced the policy was
+    // obeyed in one mode and ignored in the other.
+    expect(chainBackupOptions(false, ['only-this']).excludes).toEqual(['only-this']);
   });
 });
 
@@ -686,8 +1292,10 @@ describe('the storage dispatch is exhaustive over the strategy union', () => {
 
 import { createCheckpointLane } from '../src/lifecycle';
 import {
+  deliverIncidents,
   INCIDENT_LEDGER_MAX_ROWS,
   reapDeliveredIncidents,
+  recordIncident,
   type IncidentRow,
   type IncidentStore,
 } from '../src/incidents';
@@ -709,6 +1317,21 @@ describe('the checkpoint lane — one strategy checkpoint at a time', () => {
     const [a, b] = await Promise.all([lane.run('tick', op), lane.run('tick', op)]);
     expect(calls).toBe(1);
     expect(a).toBe(b); // the same run, not two interleaved ones
+  });
+
+  test('reports busy from admission until a checkpoint settles', async () => {
+    const lane = createCheckpointLane();
+    const parked = Promise.withResolvers<void>();
+    const running = lane.run('tick', async () => {
+      await parked.promise;
+      return await ok();
+    });
+
+    expect(lane.busy()).toBe(true);
+    parked.resolve();
+    await running;
+    await Promise.resolve();
+    expect(lane.busy()).toBe(false);
   });
 
   test('a different kind QUEUES behind the running one; nothing interleaves', async () => {
@@ -819,11 +1442,11 @@ describe('ambient checkpoints belong to product boxes, never the bench fixture',
   );
 
   test('the schedule is armed and re-armed only behind the seam', () => {
-    const onStart = devboxSource.slice(
-      devboxSource.indexOf('override onStart('),
-      devboxSource.indexOf('\n  }', devboxSource.indexOf('override onStart(')),
+    const schedules = devboxSource.slice(
+      devboxSource.indexOf('async #armContainerSchedules('),
+      devboxSource.indexOf('\n  }', devboxSource.indexOf('async #armContainerSchedules(')),
     );
-    expect(onStart).toContain('if (this.ambientCheckpoints)');
+    expect(schedules).toContain('if (this.ambientCheckpoints)');
     const scheduled = devboxSource.slice(
       devboxSource.indexOf('async devboxCheckpoint('),
       devboxSource.indexOf('\n  }', devboxSource.indexOf('async devboxCheckpoint(')),
@@ -843,7 +1466,7 @@ describe('ambient checkpoints belong to product boxes, never the bench fixture',
     // overlapping journal sequences; the funnel makes that unrepresentable.
     const direct = [...devboxSource.matchAll(/#requireStorage\(\)\.checkpoint\(/g)].length;
     expect(direct).toBe(1);
-    expect(devboxSource).toContain('#lane.run(kind, () => this.#requireStorage().checkpoint(kind))');
+    expect(devboxSource).toContain('#lane.run(kind, async () => await this.#withStorageMutation(async () => {');
     for (const entry of ['async checkpointNow(', 'async quiesce(', 'async devboxCheckpoint(',
       'override async onActivityExpired(']) {
       const at = devboxSource.indexOf(entry);

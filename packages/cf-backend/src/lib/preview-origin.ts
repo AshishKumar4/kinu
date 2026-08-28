@@ -134,8 +134,16 @@ export function containPreviewResponse(response: Response): Response {
   });
 }
 
-/** `<port>-<sandbox-id>-<token>` — the SDK's preview hostname label. */
-const PREVIEW_HOST_LABEL = /^(\d{1,5})-[a-z0-9][a-z0-9-]*-[a-z0-9_]+$/i;
+/**
+ * `<port>-<sandbox-id>-<token>` — the SDK's preview hostname label.
+ *
+ * Grouped, and greedy in the middle deliberately: `extractSandboxRoute`
+ * (@cloudflare/sandbox/dist/index.js) splits at the FIRST hyphen for the port
+ * and the LAST for the token, which is exactly what a greedy `[a-z0-9-]*`
+ * reproduces — so a sandbox id containing hyphens, which every Kinu id does
+ * (`kinu-<workspace>`), segments the same way here as it did in the SDK.
+ */
+const PREVIEW_HOST_LABEL = /^(\d{1,5})-([a-z0-9][a-z0-9-]*)-([a-z0-9_]+)$/i;
 
 function validPort(value: string | undefined): boolean {
   const port = Number(value);
@@ -163,6 +171,32 @@ export function isPreviewUrl(value: string, configuredSuffix: string | null = br
   if (!label || label.includes('.')) return false;
   const sandbox = PREVIEW_HOST_LABEL.exec(label);
   return (sandbox !== null && validPort(sandbox[1])) || parseNimbusPreviewLabel(label) !== null;
+}
+
+/**
+ * The sandbox id a preview hostname routes to, or null when the hostname is not
+ * a well-formed preview label on the configured suffix.
+ *
+ * THE SAME ID `proxyToSandbox` RESOLVED, which is the whole requirement: a
+ * repair aimed at a different workspace's container would be worse than no
+ * repair at all. The SDK segments the label as this regex does, checks the id
+ * with `sanitizeSandboxId` — a pure validator that returns the id unchanged —
+ * and then calls `getSandbox(ns, id, { normalizeId: true })`, which lowercases.
+ * A caller that passes this id to `getSandbox` with the same option therefore
+ * addresses the object that answered the request. Hostnames are already
+ * lower-case, so the normalization is a no-op either way.
+ */
+export function previewSandboxIdOf(url: URL, env: PreviewHostEnv): string | null {
+  const suffix = previewHostSuffix(env);
+  if (!suffix) return null;
+  const host = url.hostname.toLowerCase();
+  const suffixWithDot = `.${suffix}`;
+  if (!host.endsWith(suffixWithDot)) return null;
+  const label = host.slice(0, -suffixWithDot.length);
+  if (label.includes('.')) return null;
+  const parsed = PREVIEW_HOST_LABEL.exec(label);
+  if (parsed === null || !validPort(parsed[1])) return null;
+  return parsed[2];
 }
 
 /**

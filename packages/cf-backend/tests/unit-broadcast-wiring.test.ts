@@ -168,3 +168,40 @@ describe('broadcast channels reach a consumer', () => {
     });
   }
 });
+
+/**
+ * `head_activity` is a socket frame, and a reader that misses one has to have a
+ * way back. `useNodeTranscript` provides it — a slow fallback re-read, armed
+ * only while the node is still working — but the arming is the CALLER's, and a
+ * caller that omits it gets the push and nothing under it. The branch chip
+ * omitted it, and it is the one reader that cannot recover by hand: the panel
+ * reader can click another node and re-key the fetch, a chip has one node.
+ *
+ * Source-level for the same reason as the scan above: the failure is an absent
+ * argument in a browser component, and the frame it depends on comes from a
+ * Durable Object.
+ */
+describe('every open node transcript can recover a missed head_activity frame', () => {
+  const READERS = sourceFiles('packages/cf-backend/src', ['.ts', '.tsx'])
+    .flatMap((file) => {
+      const text = readFileSync(file, 'utf8');
+      const calls: Array<{ file: string; argument: string }> = [];
+      for (let at = text.indexOf('useNodeTranscript('); at !== -1; at = text.indexOf('useNodeTranscript(', at + 1)) {
+        calls.push({ file: relative(REPO, file), argument: callArgument(text, text.indexOf('(', at)) });
+      }
+      // The hook's own declaration is `useNodeTranscript({ … }: { … })`, not a call.
+      return calls.filter((call) => !call.argument.includes(': {'));
+    });
+
+  test('the scan finds the readers at all', () => {
+    // Guards the guard: renaming the hook must fail here, not silently stop
+    // checking every caller of it.
+    expect(READERS.length).toBeGreaterThanOrEqual(2);
+    expect(READERS.map((r) => r.file)).toContain('packages/cf-backend/src/components/AlternateTakes.tsx');
+  });
+
+  test('each reader passes `running`, so the fallback clock can arm', () => {
+    const unarmed = READERS.filter((reader) => !/\brunning\s*:/.test(reader.argument)).map((r) => r.file);
+    expect(unarmed).toEqual([]);
+  });
+});

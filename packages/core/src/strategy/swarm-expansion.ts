@@ -39,6 +39,7 @@ import { normalizeUsage, type Usage } from '../usage';
 import { readProposalCode } from '../execution/code-fence';
 import { runNodeAgent, type NodeAgentDeps } from './node-agent';
 import type { SwarmBudget } from './swarm-budget';
+import type { BranchAssignment } from './swarm-level';
 
 /** The marker a node ends its answer with to request a branch. A line rather than a
  *  fence so the answer's own code fences cannot be mistaken for it. */
@@ -260,10 +261,15 @@ export function branchPrompt(input: {
    *  invited by `propose_branch` being on its surface instead — two invitations for
    *  one capability would teach the model a protocol the engine does not read. */
   readonly invite: boolean;
+  /** What this node was asked to do and what its siblings were asked, where somebody
+   *  wrote it. Null for a count-based wave — see {@link BranchAssignment}. */
+  readonly assignment: BranchAssignment | null;
 }): ExplorePrompt {
   const { resolved, index, branches } = input;
   const { context, advance } = resolved.config;
-  const angle = `\n\nYour angle: ${diversityAngle(index, branches)}.`;
+  // THE ANGLE SLOT: the brief whoever asked for this node wrote, or the engine's own
+  // canned angle where nobody wrote one. Never both — see {@link BranchAssignment}.
+  const angle = `\n\nYour angle: ${input.assignment?.brief ?? diversityAngle(index, branches)}.`;
   // Keyed off what this child ACTUALLY received rather than off an axis, because a
   // proposal may override inheritance per branch and the instruction has to match
   // the text above it.
@@ -286,8 +292,10 @@ export function branchPrompt(input: {
         : ''),
     craftedTools: [],
     // Unconditional, like the angle itself: every child is told what its siblings
-    // were sent, because the axis that claimed to hide them never did.
-    siblings: siblingAngles(index, branches),
+    // were sent, because the axis that claimed to hide them never did. The briefs
+    // where there are briefs, the canned angles where there are not — the same set
+    // the angle above was taken from, so the two halves cannot describe two levels.
+    siblings: input.assignment?.siblings ?? siblingAngles(index, branches),
     languages: input.languages,
   });
 }
@@ -529,6 +537,9 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   readonly aggregated: readonly FanInParent[];
   readonly ancestors: readonly TreeNode[];
   readonly prefix: readonly ModelMessage[];
+  /** What this node was asked to do, where somebody wrote it — the caller's per-node
+   *  `prompt` or the parent's per-branch `rationale`. Null for a count-based wave. */
+  readonly assignment: BranchAssignment | null;
   }): Promise<Expansion> {
   const {
     resolved, mode, languages, measured, baseline, verifier, carriedBest, agentNodes,
@@ -551,6 +562,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     // A thought node's whole request is one prompt, so its invitation is part of
     // it. An agent node is invited by the tool being present instead.
     invite: !agentNodes,
+    assignment: input.assignment,
   });
   if (!agentNodes) {
     const result = await generateText({

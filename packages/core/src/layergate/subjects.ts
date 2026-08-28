@@ -17,7 +17,7 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import { buildSystemPromptSync, type SystemPromptOptions } from '../prompt';
 import { compilePromptSurface } from '../prompting/surface';
-import { renderAgentsMdSection } from '../prompting/agents-md';
+import { admitAgentsMd, renderAgentsMdSection } from '../prompting/agents-md';
 import { renderActiveSkillsSection } from '../skills/render';
 import { resolveActiveSkills } from '../skills/loader';
 import {
@@ -82,6 +82,7 @@ export interface PipelineSubjects {
    *  both backends call, with the exact options they pass. */
   readonly buildSystemPromptSync: (opts: SystemPromptOptions) => string;
   readonly compilePromptSurface: typeof compilePromptSurface;
+  readonly admitAgentsMd: typeof admitAgentsMd;
   readonly renderAgentsMdSection: typeof renderAgentsMdSection;
   readonly renderActiveSkillsSection: typeof renderActiveSkillsSection;
   readonly resolveActiveSkills: typeof resolveActiveSkills;
@@ -177,6 +178,7 @@ export type SubjectName = keyof PipelineSubjects;
 export const SUBJECT_SOURCE = {
   buildSystemPromptSync: 'prompt.ts',
   compilePromptSurface: 'prompting/surface.ts',
+  admitAgentsMd: 'prompting/agents-md.ts',
   renderAgentsMdSection: 'prompting/agents-md.ts',
   renderActiveSkillsSection: 'skills/render.ts',
   resolveActiveSkills: 'skills/loader.ts',
@@ -259,6 +261,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
   return {
     buildSystemPromptSync: (opts) => buildSystemPromptSync(rt, opts),
     compilePromptSurface,
+    admitAgentsMd,
     renderAgentsMdSection,
     renderActiveSkillsSection,
     resolveActiveSkills,

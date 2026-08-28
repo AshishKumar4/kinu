@@ -6,8 +6,7 @@
  * turn loop never sees: the outcome-ensemble judges, the fast tier behind every
  * classification and title, the evolution engine's own reflection and GEPA,
  * exploration heads, MCTS rollout branches, compaction folds, an evolved
- * scaffold's own inference loop, a sandbox program's `llm.query`, and the memory
- * embedder. Every one of them used to discard the provider's usage report on the
+ * scaffold's own inference loop, and the memory embedder. Every one of them used to discard the provider's usage report on the
  * line that received it, so the panel's figure was the orchestrator's own turns
  * and said nothing about the rest — while looking like it said everything.
  *
@@ -53,7 +52,6 @@ export const SPEND_SOURCES = [
   'head',
   'mcts',
   'swarm',
-  'sandbox',
   'platform',
   'advisor',
 ] as const;
@@ -72,7 +70,6 @@ export const SPEND_SOURCE_LABEL = {
   head: 'Exploration heads',
   mcts: 'MCTS rollouts',
   swarm: 'Swarm expansions',
-  sandbox: 'Sandbox llm.query',
   platform: 'Platform AI',
   advisor: 'Advisor',
 } as const satisfies Readonly<Record<SpendSource, string>>;
@@ -91,7 +88,6 @@ export const SPEND_SOURCE_DETAIL = {
   swarm: 'the expansion candidates of a configured search, and the measurements that '
     + 'score them — distinct from `mcts` because a swarm names its own axes and is '
     + 'scored by the objective\'s verifier rather than by a judge',
-  sandbox: 'llm.query issued by a codemode or scaffold program',
   platform: 'Workers AI utility bindings: memory embeddings and HTML→markdown '
     + 'repair. Neither returns a usage field of any kind, so these are counted '
     + 'and never measured — which is what the coverage fraction below is made of',

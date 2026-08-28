@@ -120,7 +120,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
     // means for an idle agent.
     const abandoned = events.filter(
       (e): e is { type: 'evolution'; event: string; message: string } =>
-        e.type === 'evolution' && e.event === 'fork_runs_abandoned',
+        e.type === 'background' && e.event === 'fork_runs_abandoned',
     );
     expect(abandoned).toHaveLength(1);
     expect(abandoned[0]!.message).toContain(ROOT);
@@ -146,7 +146,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
 
     await session.recoverBackgroundJobs();
 
-    expect(events.filter((e) => e.type === 'evolution' && e.event === 'fork_runs_abandoned')).toEqual([]);
+    expect(events.filter((e) => e.type === 'background' && e.event === 'fork_runs_abandoned')).toEqual([]);
     await session.end();
   });
 });

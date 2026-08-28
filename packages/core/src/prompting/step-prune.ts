@@ -29,8 +29,57 @@
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
 import { renderThrownChain } from '../obs/index';
 
-/** Prune once the estimated step context exceeds this share of the window. */
-export const STEP_CONTEXT_BUDGET_RATIO = 0.7;
+/**
+ * The window one request occupies, and how much of it the answer may take.
+ *
+ * `modelOutputLimit` is the per-call configured output cap when the caller set
+ * one — the same number the provider is sent (llm.ts) — and otherwise the
+ * resolved model's catalog maximum (ModelCatalogSession.modelOutputLimit). It
+ * is a SHARE of `contextWindow`, not capacity beside it: a chat model's window
+ * holds the instruction and the answer together.
+ */
+export interface ModelWindow {
+  readonly contextWindow: number;
+  readonly modelOutputLimit: number;
+}
+
+/**
+ * Tokens held back for the answer.
+ *
+ * The reservation is the answer's own declared maximum, bounded by half the
+ * window. Half is not a tuned share: the instruction and the answer are the
+ * only two claimants on one window, and with nothing favouring either, half is
+ * the largest reservation that still guarantees the instruction equal room.
+ *
+ * The bound is load-bearing, not defensive. A published maximum can BE the
+ * whole window — models.dev reports 262144/262144 for
+ * moonshotai/kimi-k2.7-code and 500000/500000 for xai/grok-4.6 — and
+ * subtracting one of those verbatim admits no input at all, which in this
+ * module means `limit <= 0` and the pruning pass switching itself off. Maxima
+ * below half are facts and are reserved in full: 128000 of 1000000 for
+ * anthropic/claude-opus-4-7, 384000 of 1000000 for deepseek/deepseek-v4-pro.
+ */
+export function outputReserveTokens(limits: ModelWindow): number {
+  const window = Math.max(0, Math.floor(limits.contextWindow));
+  const answer = Math.max(0, Math.floor(limits.modelOutputLimit));
+  return Math.min(answer, Math.floor(window / 2));
+}
+
+/**
+ * How many tokens one step's request may occupy. This pass shrinks tool outputs
+ * toward it, and it is the ONE allocation every other producer of request-bound
+ * weight divides.
+ *
+ * Exported because tool DEFINITIONS are the part of a step's request this
+ * module cannot see: they are not messages, they ride every step of the turn,
+ * and for MCP a third party writes them. The admission that bounds a remote
+ * catalog (cf-backend/src/user/mcp.ts) subtracts the actor's own tool surface
+ * from THIS number rather than taking a second share of the window, so one
+ * allocation exists and moving it moves both.
+ */
+export function stepContextLimit(limits: ModelWindow): number {
+  return Math.max(0, Math.floor(limits.contextWindow)) - outputReserveTokens(limits);
+}
 
 /** Newest tool results kept untouched, by estimated token cost — mirrors the
  *  compaction ladder's RECENT_TOOL_RESULT_BUDGET_TOKENS. */
@@ -39,9 +88,7 @@ export const STEP_RECENT_TOOL_BUDGET_TOKENS = 40_000;
 /** Head snippet kept from a pruned output. */
 const PRUNED_OUTPUT_HEAD_CHARS = 2_000;
 
-export interface StepPruneBudget {
-  /** The resolved model's context window, in tokens. */
-  contextWindow: number;
+export interface StepPruneBudget extends ModelWindow {
   /**
    * Tokens the caller will add to `messages` AFTER this pass, and which the
    * request therefore carries even though they are not in the array being
@@ -68,7 +115,7 @@ export function pruneStepToolOutputs(
   messages: readonly ModelMessage[],
   budget: StepPruneBudget,
 ): ModelMessage[] | undefined {
-  const limit = Math.floor(budget.contextWindow * STEP_CONTEXT_BUDGET_RATIO);
+  const limit = stepContextLimit(budget);
   if (limit <= 0) return undefined;
 
   let total = budget.reservedTokens ?? 0;

@@ -48,6 +48,7 @@
 import { jsonSchema, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { HEAD_BUILTIN_TOOLS, keepBuiltins } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
+import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
 import { buildBuiltinTools } from '../tools/builtins';
 import type { BuiltinToolDeps } from '../tools/builtins';
@@ -66,7 +67,9 @@ import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
 import type { BranchContext, SwarmSettle } from './swarm';
 import type { BranchDecision } from './swarm-budget';
-import type { NodeIdentity, NodeIsolation, NodeWorkspaceProvisioner } from './node-workspace';
+import type {
+  NodeIdentity, NodeIsolation, NodeWorkspace, NodeWorkspaceProvisioner,
+} from './node-workspace';
 import type {
   CapturedReport, NodeArbiter, NodeLoopHost, NodeLoopResult, NodeRunSpec,
 } from './node-host';
@@ -230,10 +233,27 @@ export interface NodeAgentDeps {
   logger: Logger;
   signal?: AbortSignal;
   reportModelCall?: ModelCallSink;
+  publishHeadStream?: PublishHeadStream;
   mission?: MissionScope;
   /** The node's home provisioner. Absent is a host with no uid-0 view, and then
    *  the shared plane is REPORTED — see {@link nodeWorkspace}. */
   provisionHome?: NodeWorkspaceProvisioner;
+  /**
+   * The runtime a node's loop uses once its home exists — the SAME workspace,
+   * addressed as the node.
+   *
+   * Here rather than derived, because only the backend can rebuild the live
+   * primitives a credential changes: a shell that runs commands as the node's
+   * uid and a file plane that acts as it, over the filesystem it already holds.
+   * Core has the credential and no way to make either from it.
+   *
+   * Absent leaves {@link rt} in place, which is the honest state for a runtime
+   * with no provisioner at all: the node reports `shared-origin-plane` and runs
+   * exactly as the origin. Consulted ONLY for a loop that runs in this isolate;
+   * a hosted node's facet rebuilds its own runtime from the same workspace on
+   * the other side of the wire.
+   */
+  runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
   /**
    * Where this node's loop RUNS, when somewhere other than here.
    *
@@ -293,6 +313,9 @@ export interface NodeLoopDeps {
   mission?: MissionScope;
   /** Where each finished step lands WHILE the node still runs. */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
+  /** Where the node's output goes WHILE a step is still being produced —
+   *  transient frames, superseded by `reportStep`'s row (heads/head-stream.ts). */
+  reportDelta?: ReportHeadDelta;
   /** The search's arbiter, or null when no branch could be granted. */
   arbitrate: NodeArbiter | null;
   executeTool?: unknown;
@@ -703,6 +726,7 @@ export async function runNodeLoop(
   // `runHeadInference` reads presence to decide whether the behaviour exists.
   if (deps.mission !== undefined) inference.mission = deps.mission;
   if (deps.reportStep !== undefined) inference.reportStep = deps.reportStep;
+  if (deps.reportDelta !== undefined) inference.reportDelta = deps.reportDelta;
   if (deps.signal !== undefined) inference.signal = deps.signal;
 
   try {
@@ -815,9 +839,17 @@ export async function runNodeAgent(
   // that is a different claim from a node that ran and reported nothing.
   let run: NodeLoopResult;
   try {
-    run = deps.host === undefined
-      ? await runNodeLoop(spec, nodeLoopDeps(input, deps))
-      : await deps.host(spec, input.arbitrate);
+    // THE LOOP RUNS AS THE NODE. A home is uid/gid/mode on real inodes, so it
+    // means nothing until the shell and the file plane the loop actually uses
+    // are the node's own — which only the backend can build, hence the seam.
+    // Resolved inside the try, because a runtime that cannot be built is a node
+    // that produced no report and the row below owes that verdict either way.
+    if (deps.host !== undefined) {
+      run = await deps.host(spec, input.arbitrate);
+    } else {
+      const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home) : deps.rt;
+      run = await runNodeLoop(spec, nodeLoopDeps(input, deps, rt));
+    }
   } catch (cause) {
     const failure = toKinuError({
       doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable',
@@ -867,15 +899,23 @@ export async function runNodeAgent(
  * A host builds the same shape out of RPCs to the parent instead. Separated so
  * the two transports differ in this function alone.
  */
-function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps): NodeLoopDeps {
+function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, rt: AgentRuntime): NodeLoopDeps {
   const loop: NodeLoopDeps = {
-    rt: deps.rt,
+    rt,
     model: deps.model,
     logger: deps.logger,
     arbitrate: input.arbitrate,
     reportStep: (seq, step) => { deps.journal.appendStep(input.nodeId, seq, step); },
   };
   if (deps.signal !== undefined) loop.signal = deps.signal;
+  // The run-level channel, bound to THIS node's id — the same binding
+  // `reportStep` above makes for its durable rows.
+  const publish = deps.publishHeadStream;
+  if (publish !== undefined) {
+    loop.reportDelta = (kind, delta) => {
+      publish({ headId: input.nodeId, kind, delta });
+    };
+  }
   if (deps.mission !== undefined) loop.mission = deps.mission;
   if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;

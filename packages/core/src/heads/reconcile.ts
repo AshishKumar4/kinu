@@ -221,8 +221,22 @@ export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
  *     re-enterable, which is what it used to destroy.
  *  2. OFFER. The roots just marked go to the resume gate, which re-drives whatever
  *     durable work can continue them and returns the ones it CLAIMED.
- *  3. RETIRE THE REST. Only a run the gate refused is settled `aborted` and only
- *     that run reaches the agent as a card.
+ *  3. RETIRE THE REST. Every unfinished run the gate did not claim is settled
+ *     `aborted`, and only those runs reach the agent as a card.
+ *
+ * STEP 3 IS DRIVEN BY THE GATE'S ANSWER AND NOTHING ELSE. It used to be gated on
+ * step 1 having marked something — `if (interrupted.length === 0) return []` — which
+ * is a different question and left a hole the moment a swarm's re-entry stopped
+ * writing terminal rows of its own. A run marked `interrupted` by an EARLIER
+ * activation is not marked again by this one, so on the activation whose gate finally
+ * refuses it, step 1 finds nothing, the early return fires, and the rows stay
+ * `interrupted` for the life of the workspace: no report, no card, no terminal state.
+ * The ledger row beside them was already being closed on the gate's answer alone, so
+ * the two halves of one sweep disagreed about which activation was allowed to settle.
+ *
+ * A GATE THAT COULD NOT ANSWER PROTECTS EVERYTHING, stated once here instead of as a
+ * spare-list per caller: retiring on an unknown would destroy work a later activation
+ * could have continued.
  *
  * WHY IT IS NOT ONE STEP ANY MORE. It used to retire everything, unconditionally,
  * as the first thing an activation did — and it argued that a resume needed no
@@ -298,24 +312,25 @@ export async function reconcileInterruptedForks(deps: {
     ? await resumeOutcome(deps.resume, [...offeredRoots])
     : { kind: 'absent', claimed: new Set<string>() };
 
-  // THE LEDGER'S HALF of the same sweep: close every running swarm row the gate
-  // did not claim. A gate that threw answered nothing, so nothing closes here —
-  // retiring on an unknown would destroy work a later activation could have
-  // continued, which is why `gate-failed` reads as protected everywhere below.
-  if (deps.search && gateNeeded && outcome.kind !== 'gate-failed') {
+  // A GATE THAT COULD NOT ANSWER PROTECTS EVERYTHING, and both halves of the sweep
+  // stop here rather than each carrying its own spare-list: retiring on an unknown
+  // would destroy work a later activation could have continued.
+  if (outcome.kind === 'gate-failed') return [];
+
+  // THE LEDGER'S HALF of the same sweep: close every running swarm row the gate did
+  // not claim.
+  if (deps.search && gateNeeded) {
     const closed = deps.search.closeUnclaimed(outcome.claimed, startedAt);
     if (closed.length > 0) deps.logActivity?.('swarm_runs_closed', closed.join(', '));
   }
 
-  if (interrupted.length === 0) return [];
+  // THE JOURNAL'S HALF, on the SAME answer. Not gated on this activation having
+  // marked something: a run an earlier activation marked is not marked again, and
+  // that early return is what left those rows `interrupted` forever once a swarm's
+  // re-entry stopped writing terminal rows of its own.
   const runs = deps.journal.abandonRunning(
     FORK_INTERRUPTED_REASON,
-    {
-      spawnedBefore: startedAt,
-      exceptRoots: outcome.kind === 'answered' ? [...outcome.claimed]
-        : outcome.kind === 'gate-failed' ? interrupted.map((run) => run.rootId)
-        : [],
-    },
+    { spawnedBefore: startedAt, exceptRoots: [...outcome.claimed] },
     startedAt,
   );
   if (runs.length === 0) return runs;

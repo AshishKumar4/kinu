@@ -70,6 +70,62 @@ export function inboundEmailDropNotice(
   };
 }
 
+/**
+ * RFC 5322 §2.1.1: a line of a message, not counting the CRLF, is at most 998
+ * octets, and a receiver is not obliged to accept more. That is the whole
+ * budget for a header field including its name, so each bound below subtracts
+ * its own field name. Nothing here is a Kinu number.
+ */
+const RFC5322_LINE_OCTETS = 998;
+
+/** A msg-id per RFC 5322 §3.6.4: angle-bracketed, no whitespace inside, and
+ *  printable US-ASCII, which is all this application ever needs to recognise. */
+const MSG_ID = /^<[\x21-\x3D\x3F-\x7E]+>$/;
+
+/**
+ * One inbound Message-ID, or null when the sender's is unusable.
+ *
+ * Null rather than a repair: a truncated msg-id is a DIFFERENT identity, so it
+ * would thread the reply onto nothing while looking like it worked. Dropping
+ * it costs the In-Reply-To and keeps the subject-based threading every client
+ * falls back to.
+ */
+export function boundedMessageId(raw: string | null, fieldName = 'Message-ID'): string | null {
+  const id = raw?.trim() ?? '';
+  if (!MSG_ID.test(id)) return null;
+  return id.length + fieldName.length + 2 <= RFC5322_LINE_OCTETS ? id : null;
+}
+
+/**
+ * The References chain, bounded, with the thread's identity kept.
+ *
+ * A chain grows by one msg-id per reply and nothing in the protocol ever
+ * shortens it, so a long-lived thread eventually writes a header no receiver
+ * has to accept — and every id in it arrived from outside. Trimming is from
+ * the SECOND entry forward: RFC 5537 §3.4.4 states the rule this application
+ * follows — keep the first, keep the most recent — because the first id is
+ * what a reader threads the conversation under and the last ones are what it
+ * threads this message under. Dropping the tail instead would detach the reply
+ * from the message it answers, which is the one thing References exists for.
+ */
+export function boundedReferences(references: string | null, appended: string | null): string | null {
+  const chain = (references ?? '').split(/\s+/)
+    .filter((id) => MSG_ID.test(id));
+  const last = boundedMessageId(appended, 'References');
+  if (last && chain[chain.length - 1] !== last) chain.push(last);
+  if (chain.length === 0) return null;
+
+  const budget = RFC5322_LINE_OCTETS - 'References'.length - 2;
+  // Each entry after the first costs its own length plus the separating space.
+  let octets = chain.reduce((sum, id) => sum + id.length + 1, -1);
+  while (octets > budget && chain.length > 1) {
+    octets -= chain[1]!.length + 1;
+    chain.splice(1, 1);
+  }
+  // A single id longer than the whole budget cannot be represented at all.
+  return octets > budget ? null : chain.join(' ');
+}
+
 /** Threading envelope stored in the reply channel's holder_addr (JSON). */
 export interface EmailThreadAddr {
   /** Reply recipient — the inbound envelope sender. */
@@ -81,6 +137,24 @@ export interface EmailThreadAddr {
   message_id: string | null;
   /** Inbound References chain, extended with message_id on send. */
   references: string | null;
+}
+
+/**
+ * The thread one inbound message belongs to, bounded once, here.
+ *
+ * ONE builder, because the same identity is written to three places — the
+ * reply channel's `holder_addr`, the event payload the model reads, and the
+ * receipt that goes back immediately — and three constructions of it would
+ * drift the first time a bound moved.
+ */
+export function emailThreadAddr(msg: IncomingEmail): EmailThreadAddr {
+  return {
+    to: msg.from,
+    from: msg.to,
+    subject: msg.subject,
+    message_id: boundedMessageId(msg.message_id),
+    references: boundedReferences(msg.references, null),
+  };
 }
 
 export interface EmailIngressDeps {
@@ -116,6 +190,9 @@ export type EmailIngressResult =
       /** True when dedupe matched an earlier delivery of the same message. */
       duplicate: boolean;
       sender_class: 'owner' | 'allowlisted';
+      /** The bounded thread identity this delivery belongs to — what a reply
+       *  and the immediate receipt are both addressed with. */
+      thread: EmailThreadAddr;
     }
   | { admitted: false; reason: string };
 
@@ -148,14 +225,20 @@ export async function acceptInboundEmail(
   // this message and the brief alone is a fragment it cannot ask past.
   const bodyPath = await spillEventContent(deps.vfs, msg.body_text);
 
+  const thread = emailThreadAddr(msg);
   const payload: EmailPayload = {
     from: msg.from,
     to: msg.to,
     subject: msg.subject,
     body_text: msg.body_text,
-    message_id: msg.message_id,
-    in_reply_to: msg.in_reply_to,
-    references: msg.references,
+    // The bounded identity, not the sender's raw headers. An allowlisted
+    // sender writes these, they are stored, rendered into the turn's brief and
+    // put back on the wire on every reply, so the protocol's own limit is
+    // applied once — at the point of admission — rather than by whichever
+    // reader notices first.
+    message_id: thread.message_id,
+    in_reply_to: boundedMessageId(msg.in_reply_to, 'In-Reply-To'),
+    references: thread.references,
     attachments: msg.attachments,
     body_path: bodyPath || undefined,
   };
@@ -163,13 +246,7 @@ export async function acceptInboundEmail(
   const reply_channel_id = deps.replies.open({
     event_id: 'pending',           // bound to the real event id after publish
     kind: 'email_thread',
-    holder_addr: JSON.stringify({
-      to: msg.from,
-      from: msg.to,
-      subject: msg.subject,
-      message_id: msg.message_id,
-      references: msg.references,
-    } satisfies EmailThreadAddr),
+    holder_addr: JSON.stringify(thread),
     payload_policy: 'full',
   }, msg.now);
 
@@ -189,7 +266,7 @@ export async function acceptInboundEmail(
     }
   }
 
-  return { admitted: true, event_id: id, duplicate: !admitted, sender_class };
+  return { admitted: true, event_id: id, duplicate: !admitted, sender_class, thread };
 }
 
 // ── The allowlist ────────────────────────────────────────────────
@@ -245,6 +322,9 @@ export interface EmailAdmission {
   duplicate?: boolean;
   event_id?: string;
   reason?: string;
+  /** Present on an admitted delivery: the bounded thread the sender wrote to,
+   *  so the host can acknowledge on it without rebuilding the identity. */
+  thread?: EmailThreadAddr;
 }
 
 /**
@@ -287,7 +367,9 @@ export class EmailInbox {
     // Wake the agent for a turn, debounced — only on fresh admission (a
     // duplicate delivery is already bound or in flight).
     if (!result.duplicate) this.deps.onAdmitted();
-    return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
+    return {
+      admitted: true, duplicate: result.duplicate, event_id: result.event_id, thread: result.thread,
+    };
   }
 
   /** The live "I may be deaf right now" line for this turn's context. */

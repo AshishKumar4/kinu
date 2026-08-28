@@ -1,7 +1,4 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import * as v from 'valibot';
-
-import { CapturedCutSchema } from '../src/durability/contracts';
 import {
   auditCapture,
   captureFrozenCopy,
@@ -187,15 +184,19 @@ describe('mechanism one with a stability proof — honest, never sound by constr
     expect(audit.matchingCuts).toEqual([log.lastSeq]);
     expect(audit.uniquelyAnchored).toBe(true);
 
-    // Post-hoc anchoring is what makes an unclaimed scan publishable at all.
+    // Post-hoc anchoring is what makes an unclaimed scan publishable: the
+    // mechanism CLAIMS the unique anchor, and only then does publication run.
     const anchored: Capture = { ...result.capture, cut: audit.matchingCuts[0]!, generation: 0 };
-    const published = toCapturedCut(anchored, {
+    const published = toCapturedCut(log.entries, anchored, {
       captureId: 'cap-quiet',
       epoch: '1',
       baseRevision: '0',
       stableStageHandle: 'stage-q',
     });
-    expect(v.parse(CapturedCutSchema, published).cut).toBe(String(log.lastSeq));
+    expect(published.capturedCut.cut).toBe(String(log.lastSeq));
+    expect(() => toCapturedCut(log.entries, result.capture, {
+      captureId: 'cap-quiet', epoch: '1', baseRevision: '0', stableStageHandle: 'stage-q',
+    })).toThrow('unclaimed');
   });
 
   test('plain concurrent writes are detected: the proof refuses instead of guessing', async () => {

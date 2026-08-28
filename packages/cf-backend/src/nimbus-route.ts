@@ -1,10 +1,14 @@
 import { Nimbus } from '@nimbus-sh/sdk';
-import { SOUL_PATH, type ArchiveFileSource } from '@kinu.run/core';
+import {
+  SOUL_PATH, summarizeSoulBytes, workspacePath, NativeSinkPlan,
+  type ArchiveFileSource, type ForkFileSink, type ForkFileSource, type ForkNativeFilePort,
+} from '@kinu.run/core';
 import { createHash, createHmac } from 'node:crypto';
 import { previewHostSuffix } from './lib/preview-origin';
 import { timingSafeEqual } from './lib/crypto';
 import { buildNimbusPreviewHost, encodeBase32, parseNimbusPreviewLabel } from './lib/nimbus-preview-host';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
+import { reoriginateRequest } from './lib/http';
 
 const NIMBUS_SUBJECT = 'workspace';
 
@@ -67,14 +71,78 @@ export function createNimbusWorkspaceSandbox(env: Env, ownerUserId: string, work
   });
 }
 
+/** The owner-protected SOUL write: kernel-owned, read-only, whole content in
+ *  one argument. Bytes as well as text, so a fork publishes the exact frame it
+ *  received without decoding it first. */
 export async function writeNimbusWorkspaceSoul(
   env: Env,
   ownerUserId: string,
   workspaceName: string,
-  content: string,
+  content: string | Uint8Array,
 ): Promise<void> {
   await nimbusWorkspaceStub(env, ownerUserId, workspaceName)
     ._rpcWriteProtectedRootFile('/home/user', `/home/user/${SOUL_PATH}`, content);
+}
+
+/** The fork receiver's only direct Nimbus filesystem authority. It is kept
+ * outside the general sandbox file handle because range writes are staging-only. */
+export function createNimbusWorkspaceForkSink(
+  env: Env, ownerUserId: string, workspaceName: string, transferId: string,
+): ForkFileSink {
+  const stub = nimbusWorkspaceStub(env, ownerUserId, workspaceName);
+  const native: ForkNativeFilePort = {
+    async truncate(path, size) { await stub._rpcFsTruncate(workspacePath(path), size); },
+    async writeRange(path, offset, bytes) {
+      await stub._rpcFsWriteRange(workspacePath(path), offset, bytes);
+    },
+    // The staged temp read back for the whole-file digest. Ranged, and through
+    // the same typed read the source half streams with: the isolate that
+    // finishes a file need not be the one that wrote its first range, so the
+    // check has to come off the staging rather than out of memory.
+    async readRange(path, offset, length) {
+      const bytes = await stub._rpcFsReadRange(workspacePath(path), offset, length);
+      if (bytes === null) {
+        throw new Error(`fork staging lost ${JSON.stringify(path)} before it could be verified`);
+      }
+      return bytes;
+    },
+    async rename(from, to) { await stub._rpcRename(workspacePath(from), workspacePath(to)); },
+    async unlink(path) { await stub._rpcUnlink(workspacePath(path)); },
+  };
+  return new NativeSinkPlan(native, transferId, {
+    // Ordinary files publish by rename. SOUL cannot: the owner's protected
+    // write chowns the file to the kernel and takes whole content
+    // (`_rpcWriteProtectedRootFile`), and renaming a session-user temp over
+    // SOUL would publish the identity document without that ownership.
+    owns: (targetPath) => targetPath === SOUL_PATH,
+    // Published from the ONE frame SOUL arrived in — the same bytes the sink
+    // was handed, sent straight into the protected write. Nothing is staged on
+    // disk for it, and the mission is read from the head of those bytes rather
+    // than by decoding the document into a second whole copy.
+    async publish(_targetPath, bytes) {
+      await writeNimbusWorkspaceSoul(env, ownerUserId, workspaceName, bytes);
+      return { mission: summarizeSoulBytes(bytes) };
+    },
+  });
+}
+
+/** The source half of a hosted fork: the workspace plane's own walk, with each
+ * inherited file read one range at a time through the session's typed ranged
+ * read rather than materialized whole. */
+export function createNimbusWorkspaceForkSource(
+  env: Env, ownerUserId: string, workspaceName: string, plane: ForkFileSource,
+): ForkFileSource {
+  const stub = nimbusWorkspaceStub(env, ownerUserId, workspaceName);
+  return {
+    ...plane,
+    async readRange(path, offset, length) {
+      const bytes = await stub._rpcFsReadRange(workspacePath(path), offset, length);
+      if (bytes === null) {
+        throw new Error(`fork source lost ${JSON.stringify(path)} while streaming it`);
+      }
+      return bytes;
+    },
+  };
 }
 
 function previewSecrets(env: Env): string[] {
@@ -142,23 +210,26 @@ export async function handleNimbusPreviewHostRequest(request: Request, env: Env)
   const stub = env.NIMBUS_SESSION.get(env.NIMBUS_SESSION.idFromName(
     `${sessionId}:${NIMBUS_SUBJECT}:${sessionId}`,
   ));
-  const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
-  const init: RequestInit & { duplex?: 'half' } = {
-    method: request.method,
-    headers,
-    redirect: request.redirect,
-  };
-  if (hasBody) {
-    init.body = request.body;
-    init.duplex = 'half';
-  }
+  // One construction policy, shared with container egress: `request.body` is
+  // handed over unwrapped so a fixed-length upload stays fixed-length across
+  // the hop. The headers are the SANITIZED set — a preview is agent-controlled
+  // guest code, so the browser's Kinu session and every `x-kinu-*` header are
+  // already gone by here, and this must never become a path that puts them
+  // back.
   if (headers.get('upgrade')?.toLowerCase() === 'websocket') {
     const target = new URL(request.url);
     target.pathname = `/port/${port}${url.pathname}`;
     headers.set('x-nimbus-preview-capability', capability);
-    return stub.fetch(new Request(target, init));
+    return stub.fetch(reoriginateRequest(request, target.toString(), {
+      headers, redirect: request.redirect,
+    }));
   }
-  return stub._rpcRouteCapabilityPort(port, capability, new Request(request.url, init), url.pathname);
+  return stub._rpcRouteCapabilityPort(
+    port,
+    capability,
+    reoriginateRequest(request, request.url, { headers, redirect: request.redirect }),
+    url.pathname,
+  );
 }
 
 /** Adapt the Nimbus SDK's authoritative workspace root to the archive stream.

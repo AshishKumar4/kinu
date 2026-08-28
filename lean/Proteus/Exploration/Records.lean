@@ -576,6 +576,28 @@ theorem front_undominated (ds : List Direction) (ms : List VRow) (m : VRow)
   intro n hn
   simpa using h2 n hn
 
+/-- The frontier contains no dominated member. This is the public theorem for the
+    Pareto advance; `front_undominated` is its pointwise form. -/
+theorem frontier_nondominance (ds : List Direction) (ms : List VRow) :
+    ∀ m ∈ front ds ms, ∀ n ∈ ms, dominates n.values m.values ds = false := by
+  intro m hm n hn
+  exact front_undominated ds ms m hm n hn
+
+/-- The runner accepts a Pareto candidate only when its evidence has one value for
+    every declared axis and the objective has at least two axes. -/
+def acceptParetoAdvance (ds : List Direction) (candidate : VRow) : Option VRow :=
+  if 2 ≤ ds.length && candidate.values.length = ds.length then some candidate else none
+
+/-- Acceptance preserves the candidate's declared objective evidence exactly. -/
+theorem accepted_advance_preserves_objective_evidence
+    (ds : List Direction) (candidate accepted : VRow)
+    (h : acceptParetoAdvance ds candidate = some accepted) :
+    accepted.values = candidate.values := by
+  by_cases valid : 2 ≤ ds.length && candidate.values.length = ds.length
+  · simp [acceptParetoAdvance, valid] at h
+    exact congrArg VRow.values h.symm
+  · simp [acceptParetoAdvance, valid] at h
+
 /-- **The vector analogue of S2: the front never loses ground.**
 
     After a write, every previous front member either is STILL on the front or is

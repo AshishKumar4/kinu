@@ -14,9 +14,13 @@
  */
 
 import { normalizePath } from '@kinu.run/agent-utils';
-import { removeTreeWithVfsOps, type VfsNativeMutations } from '../vfs/mounts';
+import {
+  MOUNT_EXECUTORS, carryFileWithVfsOps, listWithVfsOps, readBoundedWithVfsOps,
+  removeTreeWithVfsOps, type VfsNativeMutations,
+} from '../vfs/mounts';
+import { inlineFileType } from './file-types';
 import type { VFS } from '../types/primitives';
-import { renderThrownChain } from '../obs/index';
+import { diagnostics, renderThrownChain } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 
 /** Just enough of the router to find one executor's files, and to ask that
@@ -87,13 +91,23 @@ export interface DirEntry {
   mtimeMs?: number;
 }
 
-export type ExecutorWriteResult = { ok: true } | { error: string };
 
-/** Read cap for the file viewer — past this the content is carried truncated.
- *  A `response` bound in the platform catalog's terms, applied after the whole
- *  file is already resident, so it protects the wire and not the isolate. The
- *  one constant in the tree that models peak resident bytes instead is
- *  `identity/archive.ts`'s page budget. */
+export type ExecutorWriteResult =
+  | { ok: true; revision?: number }
+  | { conflict: true; revision: number }
+  | { unsupported: true; error: string }
+  | { error: string };
+
+/**
+ * Byte bound for the file viewer's text preview — past this the content is
+ * carried truncated.
+ *
+ * A `response` bound in the platform catalog's terms, and now the READ bound as
+ * well: `readExecutorFile` asks the plane for this many bytes and decodes only
+ * those. It used to be applied after the whole file was already a resident
+ * JavaScript string, so previewing a large file cost the file plus a clipped
+ * copy of it, and this number protected only the wire.
+ */
 const MAX_VIEWABLE_BYTES = 512 * 1024;
 
 /** One Worker↔actor RPC payload of a chunked file transfer. A quarter of the
@@ -101,6 +115,16 @@ const MAX_VIEWABLE_BYTES = 512 * 1024;
  *  under it, with headroom for clone metadata, and small enough that one
  *  chunk never dominates isolate memory. */
 export const FILE_CHUNK_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
+
+/** Text preview payload. Optional fields preserve the RPC's established
+ * success/error shape; `revision` is present only when native CAS exists. */
+export interface ExecutorTextFile {
+  content?: string;
+  truncated?: boolean;
+  revision?: number;
+  readOnlyReason?: string;
+  error?: string;
+}
 
 /** Total bytes one file transfer may carry. The transfer's peak transient
  *  footprint is roughly twice its total (accumulated parts plus the assembled
@@ -125,6 +149,7 @@ export class ExecutorFileUpload {
     private readonly router: ExecutorFileLookup,
     private readonly executorId: string,
     private readonly path: string,
+    private readonly expectedRevision?: number,
   ) {}
 
   /** True once finalized or aborted — the holder must stop feeding it. */
@@ -155,7 +180,7 @@ export class ExecutorFileUpload {
       at += part.byteLength;
     }
     this.settled = true;
-    return writeExecutorFileOp(this.router, this.executorId, this.path, assembled);
+    return writeExecutorFileOp(this.router, this.executorId, this.path, assembled, this.expectedRevision);
   }
 
   abort(): void {
@@ -268,15 +293,61 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
 }
 
 /**
+ * Where a mount point's own tree starts.
+ *
+ * A mount is a faithful window on the machine's REAL absolute paths, so `/pc`
+ * strips to the device's `/` (`vfs/mounts.ts` routeOf). The device's consent
+ * boundary refuses that, and the first click on a connected machine's files
+ * answered `EACCES: '/' is outside the consented device directory
+ * '/home/kinu'`. The directory a person means by "open /pc" is the one they
+ * consented to, and the mounted plane already reports it: `homeDir()` IS the
+ * consented root the path guard measures against.
+ *
+ * Nothing widens. The same guard still decides the listing, every path under
+ * the mount stays the machine's own, and the reachable set only narrows —
+ * `/pc` stops naming a directory the owner never consented to.
+ *
+ * A plane that cannot say where it starts keeps the bare mount point, so the
+ * refusal the reader sees is the plane's own — a disconnected device states its
+ * absence rather than reporting whatever broke while asking it for a home.
+ */
+async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<string> {
+  const executor = MOUNT_EXECUTORS[dir];
+  if (executor === undefined) return dir;
+  const provider = router.getProvider(executor);
+  if (!provider) return dir;
+  // Deliberately ANY failure, and the reason is which error the reader ends up
+  // reading. A disconnected device cannot say where it starts either, and the
+  // refusal worth showing is the mount's own stated absence from the listing
+  // below — "no device connected" — not whatever the asking hit on the way.
+  // Recorded rather than swallowed: `dir` alone cannot tell a mount with no
+  // home from a plane that failed to answer, and only one of those is a fault.
+  // A caught binding rather than a rejection handler's parameter: the diagnostic
+  // needs the cause and nothing else, and `catch` narrows it without declaring
+  // an `unknown` parameter.
+  let home: string | null;
+  try {
+    home = await provider.homeDir();
+  } catch (cause) {
+    diagnostics.event('files.mount_home_unavailable',
+      { executor, mount: dir, error: renderThrownChain({ cause }) });
+    home = null;
+  }
+  return home !== null && home.startsWith('/') && home !== '/' ? `${dir}${home}` : dir;
+}
+
+/**
  * Typed directory listing — off the executor's own raw handle, so types and
  * sizes are the environment's real ones.
  *
  * `path` is an absolute directory in that environment's own paths, or empty
- * for "wherever this environment starts". Either way the answer carries the
- * ABSOLUTE directory that was listed, so the browser never has to invent one:
- * the shape this replaced returned entries for a literal `'.'` reported as
- * every environment's working directory, and "go up one level" computed from
- * that token landed on the filesystem root instead of the directory above.
+ * for "wherever this environment starts". A bare MOUNT POINT means the same
+ * thing for the machine behind it, so it resolves to that plane's own start
+ * (`mountLanding`). Either way the answer carries the ABSOLUTE directory that
+ * was listed, so the browser never has to invent one: the shape this replaced
+ * returned entries for a literal `'.'` reported as every environment's working
+ * directory, and "go up one level" computed from that token landed on the
+ * filesystem root instead of the directory above.
  */
 export async function getExecutorFiles(
   router: ExecutorFileLookup,
@@ -287,16 +358,18 @@ export async function getExecutorFiles(
   const vfs = provider?.files;
   if (!provider || !vfs) return { error: `Executor "${executorId}" has no file plane` };
   try {
-    const dir = path === '' ? await provider.homeDir() : normalizeDir(path);
-    const names = await vfs.readdir(dir);
-    const entries: DirEntry[] = [];
-    for (const name of names) {
-      // `stat` answers null for a path that is gone; anything it throws is the
-      // file plane itself failing, and a listing that reported every entry as a
-      // sizeless file would hide that behind a plausible directory.
-      const s = await vfs.stat(joinDir(dir, name));
-      entries.push({ name, type: s?.isDir ? 'dir' : 'file', size: s?.size, mtimeMs: s?.mtimeMs });
-    }
+    const dir = path === ''
+      ? await provider.homeDir()
+      : await mountLanding(router, normalizeDir(path));
+    const listed = await listWithVfsOps(vfs, dir);
+    // `stat` answers null for an entry that is gone, or that this plane could
+    // not stat — one child, not the directory. The shape this replaced statted
+    // every child one after another and let any single throw fail the whole
+    // listing, so one file disappearing mid-read told the reader their folder
+    // was unreachable.
+    const entries: DirEntry[] = listed.map(({ name, stat }) => ({
+      name, type: stat?.isDir ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
+    }));
     // The canonical home is always reachable by walking down from the root.
     // The workspace box enumerates directory ENTRIES, and on a fresh
     // workspace nothing above the home has any — so `/` listed only the
@@ -315,24 +388,43 @@ export async function getExecutorFiles(
   }
 }
 
-/** One file's text content for the viewer. Caps size and refuses binary. */
+/**
+ * One file's text, for the viewer — bounded before it is read, not after.
+ *
+ * A text read carries the backend's exact revision only when that backend also
+ * offers native compare-and-write. Size/mtime never grants edit authority:
+ * same-looking peer writes are still conflicts.
+ */
 export async function readExecutorFile(
   router: ExecutorFileLookup,
   executorId: string,
   path: string,
-): Promise<{ content?: string; truncated?: boolean; error?: string }> {
+): Promise<ExecutorTextFile> {
   if (!path) return { error: 'path required' };
   const vfs = executorFiles(router, executorId);
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
-  const target = path;
   try {
-    const stat = await vfs.stat(target);
+    const stat = await vfs.stat(path);
     if (stat?.isDir) return { error: 'path is a directory' };
-    const raw = await vfs.readFile(target, { encoding: 'utf8' });
-    const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
-    if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
-    if (text.length > MAX_VIEWABLE_BYTES) return { content: text.slice(0, MAX_VIEWABLE_BYTES), truncated: true };
-    return { content: text };
+    const inlineType = inlineFileType(path);
+    if (inlineType !== undefined) {
+      return { error: `${inlineType} is not text — this file is shown and downloaded as bytes` };
+    }
+    const window = stat === null ? MAX_VIEWABLE_BYTES : Math.min(stat.size, MAX_VIEWABLE_BYTES);
+    const bytes = await readBoundedWithVfsOps(vfs, path, window, stat?.size ?? null);
+    if (bytes.includes(0)) return { error: 'binary file — not previewable' };
+    const result: ExecutorTextFile = {
+      content: new TextDecoder().decode(bytes),
+    };
+    if (bytes.byteLength < (stat?.size ?? bytes.byteLength)) result.truncated = true;
+    if (!result.truncated) {
+      if (stat?.revision !== undefined && vfs.writeFileIfRevision !== undefined) {
+        result.revision = stat.revision;
+      } else {
+        result.readOnlyReason = 'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
+      }
+    }
+    return result;
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
   }
@@ -352,13 +444,31 @@ export async function writeExecutorFileOp(
   executorId: string,
   path: string,
   bytes: Uint8Array,
+  expectedRevision?: number,
 ): Promise<ExecutorWriteResult> {
   if (!path || path.endsWith('/')) return { error: 'file path required' };
   const vfs = executorFiles(router, executorId);
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  const conditional = vfs.writeFileIfRevision;
+  if (expectedRevision === undefined) {
+    try {
+      await vfs.writeFile(path, bytes);
+      return { ok: true };
+    } catch (err) {
+      return { error: renderThrownChain({ cause: err }) };
+    }
+  }
+  if (conditional === undefined) {
+    return {
+      unsupported: true,
+      error: 'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.',
+    };
+  }
   try {
-    await vfs.writeFile(path, bytes);
-    return { ok: true };
+    const result = await conditional(path, bytes, expectedRevision);
+    return result.ok
+      ? { ok: true, revision: result.revision }
+      : { conflict: true, revision: result.revision };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
   }
@@ -421,9 +531,12 @@ function nativeMutations(vfs: VFS): Partial<VfsNativeMutations> {
 
 /**
  * Rename one entry inside an executor's plane. Native where the plane renames
- * natively (the workspace does, without reading the bytes); a byte carry for
- * a file on a plane that cannot; a stated refusal for a directory there — a
- * tree copy wearing a rename's name is not a rename. Never overwrites.
+ * natively (the workspace does, without reading the bytes); a byte carry for a
+ * file on a plane that cannot, through the one carry the mount table also uses
+ * — the source is destroyed only once its copy is confirmed, and a carry that
+ * cannot finish removes the copy, so a failed rename never leaves the file
+ * under two names. A directory there is a stated refusal: a tree copy wearing
+ * a rename's name is not a rename. Never overwrites.
  */
 export async function renameExecutorPathOp(
   router: ExecutorFileLookup,
@@ -445,9 +558,7 @@ export async function renameExecutorPathOp(
     const stat = await vfs.stat(from);
     if (!stat) return { error: `no such file or directory: ${from}` };
     if (stat.isDir) return { error: 'this environment cannot rename a directory in place' };
-    const raw = await vfs.readFile(from);
-    await vfs.writeFile(to, raw);
-    await vfs.unlink(from);
+    await carryFileWithVfsOps({ files: vfs, path: from }, { files: vfs, path: to });
     return { ok: true };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };

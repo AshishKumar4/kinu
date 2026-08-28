@@ -97,9 +97,19 @@ It never exposes a partial Plan toolset.
 spot capacity: the platform can recycle it and return a blank disk. Devbox
 (`devbox/src/devbox.ts`) keeps startup cheap, attaches storage and processes
 before `ensureReady()` returns, records a failure before delivery, and retries
-delivery until accepted. `devbox/src/lifecycle.ts` holds the pure lifecycle
-rules (`quiesceStep`, `restartPlan`, `incidentRetryDelayMs`);
-`DEFAULT_DEVBOX_POLICY` is their timing override.
+delivery until accepted. Each startup attempt owns a lifecycle generation and
+re-checks it after every await, so a superseded attempt writes nothing.
+`ensureReady()` resolving means the work directory is attached; it does not mean
+every service came back. `DevboxReport.ready` means both, and `unready` gives the
+reason when it does not. A port is exposed only after its own listener answers.
+`devbox/src/lifecycle.ts` holds the pure lifecycle rules (`quiesceStep`,
+`restartPlan`, `incidentRetryDelayMs`, `classifyRecovery`, `recoveryStep`);
+`DEFAULT_DEVBOX_POLICY` is their timing override. A failed attach walks one
+bounded ladder — retry the identity, replace the identity, refuse — and
+exhaustion and permanent configuration refuse at once. One budget
+(`attachBudgetMs`) covers every restoration phase, and each listener proof takes
+the smaller of its own cap and a share of what is left, so silent ports cannot
+add a window each.
 
 `DevboxStorage` (`devbox/src/storage.ts`) has three `DevboxStrategyName`
 strategies. `snapshotChainStorage` mounts immutable squashfs plus cumulative

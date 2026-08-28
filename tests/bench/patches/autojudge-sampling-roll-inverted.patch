@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/evolution/control.ts b/packages/core/src/evolution/control.ts
-index 00869137..33866139 100644
 --- a/packages/core/src/evolution/control.ts
 +++ b/packages/core/src/evolution/control.ts
-@@ -201,7 +201,7 @@ export function queueTurnShadowTrial(
-     if (sampleRate <= 0) return 'not_sampled';
-     const pending = getPendingScaffold(control.sql);
-     if (!pending) return 'no_pending';
--    if (Math.random() >= sampleRate) return 'not_sampled';
-+    if (Math.random() <= sampleRate) return 'not_sampled';
-     return queueShadowTrial(control.sql, {
-       pendingVersion: pending.version,
-       // Passed WHOLE. runAutoShadowEval owns the evidence budget and applies it
+@@ -295,7 +295,7 @@ export function queueTurnShadowTrial(
+       if (sampleRate <= 0) return 'not_sampled';
+       const pending = getPendingScaffold(control.sql);
+       if (!pending) return 'no_pending';
+-      if (Math.random() >= sampleRate) return 'not_sampled';
++      if (Math.random() <= sampleRate) return 'not_sampled';
+       pendingVersion = pending.version;
+     }
+     const trial = {

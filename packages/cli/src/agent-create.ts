@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
 import {
@@ -211,7 +211,22 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
   const llmConfig = requireLLMConfig(input);
   mkdirSync(agentDir(name), { recursive: true });
-  const db = new Database(dbPath);
+
+  // Built under a PARTIAL name and published by the rename — the same shape
+  // `kinu import` restores an archive with (commands/export-import.ts).
+  //
+  // `agent.db` existing is what makes a directory a workspace: it is what the
+  // duplicate-name check above reads, and what the adoption scan
+  // (`listUnplacedLocalAgents`) requires before it will place one. So the rename
+  // is the ONLY visible transition, and everything before it is reversible —
+  // a failure removes the partial below, and a kill leaves behind a partial
+  // nothing reads, which the next create of this name clears. The empty
+  // directory is deliberately left: no reader treats a directory without an
+  // `agent.db` as a workspace, and every other path that creates one (import,
+  // adoption) leaves it the same way.
+  const partial = `${dbPath}.partial`;
+  discardPartialWorkspace(partial);
+  const db = new Database(partial, { create: true });
   try {
     db.exec('PRAGMA journal_mode = WAL');
     // A blank display name is the provisional state of an agent added without
@@ -238,9 +253,36 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
         throw new Error(`role "${input.role}" was refused: ${changed.kind === 'refused' ? changed.reason : changed.kind}`);
       }
     }
-  } finally {
+    // Everything this database holds has to be IN it before the rename that
+    // publishes it. A WAL-mode database keeps its writes in the `-wal` sidecar
+    // until a checkpoint, and `close()` cannot run one while the runtime built
+    // above still holds prepared statements — so without this the published
+    // file contains only its header page, and its first read fails SQLITE_IOERR_SHORT_READ.
+    db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  } catch (error) {
     db.close();
+    // Compensation is not allowed to swallow the failure it is compensating
+    // for, and it is not allowed to be swallowed either: a partial that cannot
+    // be removed is a name that will refuse to be created again.
+    try {
+      discardPartialWorkspace(partial);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `creating workspace "${name}" failed and its partial database at ${partial} could not be removed`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
+  db.close();
+  // THE PUBLICATION. Past this line the workspace is complete and openable, so
+  // a failure below is no longer a ghost: an agent.db with no ref in the config
+  // is exactly what adoption converges (`kinu list` offers it, and
+  // `adoptLegacyLocalAgent` places it into this project).
+  renameSync(partial, dbPath);
+  // The checkpointed (empty) sidecars belong to a name that no longer exists.
+  discardPartialWorkspace(partial);
 
   upsertAgentConfig({
     name,
@@ -349,6 +391,14 @@ export function renameLocalAgent(name: string, displayName: string): RenamedLoca
     db.close();
   }
   return { name, displayName: title };
+}
+
+/** Remove an unpublished workspace and the journal files SQLite keeps beside
+ *  it. Deliberately not tolerant of a failed removal: see its call site. */
+function discardPartialWorkspace(partial: string): void {
+  for (const path of [partial, `${partial}-wal`, `${partial}-shm`]) {
+    rmSync(path, { force: true });
+  }
 }
 
 /** An agent name is a directory under `~/.kinu`, so it is unique per machine.

@@ -293,4 +293,42 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(getPendingScaffold(rt.storage.sql)).toBeNull();
     expect(session.getShadowStatus().hasPending).toBe(false);
   });
+
+  test('a queued trial claims its tool calls under the TRIAL, not the ambient turn', async () => {
+    const { rt, session } = await setup('the default loop answered');
+    await installScaffold(rt, {
+      version: 1, status: 'current',
+      code: `async function* run(rt, task) { yield { type: 'chunk', data: 'CURRENT-SCAFFOLD' }; }`,
+    });
+    // The candidate reaches the REAL tool surface, which is the whole risk: a
+    // rollout that is re-driven after an interruption runs these calls again.
+    await installScaffold(rt, {
+      version: 2, status: 'pending',
+      code: `async function run({ task }) {
+        await host.callTool('memory', { action: 'search', query: 'anything' });
+        await host.emit({ type: 'text_delta', text: 'PENDING-SCAFFOLD' });
+      }`,
+    });
+    rt.judgeModel = markerJudge('PENDING-SCAFFOLD');
+    createAgentConfigStore(rt.storage.sql).setShadowSampleRate(1);
+
+    await session.send('queue one trial');
+    const queued = rt.storage.sql<{ id: string }>`SELECT id FROM scaffold_trial_queue`;
+    expect(queued).toHaveLength(1);
+    const trialId = queued[0]?.id ?? '';
+
+    await session.runDueEvolution();
+    await session.end();
+
+    // Keyed on the TRIAL, both halves of it: the call id is `<trial>#n` in
+    // dispatch order and the claim's turn id is the trial itself. Under the
+    // ambient id the same call was claimed against the last chat turn on a live
+    // drain and against the workspace run id on a replay — two claims for one
+    // call, so an interrupted trial ran the tool a second time.
+    const claims = rt.storage.sql<{ turn_id: string; normalized_call_id: string }>`
+      SELECT turn_id, normalized_call_id FROM tool_effect_claims
+      WHERE turn_id = ${trialId}`;
+    expect(claims).toHaveLength(1);
+    expect(claims[0]?.normalized_call_id).toBe(`${trialId}#0`);
+  }, 30_000);
 });

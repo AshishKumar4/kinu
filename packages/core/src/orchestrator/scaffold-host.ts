@@ -25,6 +25,7 @@ import { evidenceWindow } from '../prompts/evidence-window';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { decodeJsonValue } from '../utils/json';
+import { boundedInt } from '../utils/bounds';
 import { renderThrownChain } from '../obs/index';
 import type {
   ScaffoldHistoryEntry,
@@ -147,11 +148,6 @@ function safeJson<Value>(value: Value): string {
   }
 }
 
-function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
-  const n = value !== undefined && Number.isFinite(value) ? Math.floor(value) : fallback;
-  return Math.min(max, Math.max(min, n));
-}
-
 /**
  * `host.history` — read-only, budgeted, and the same on both backends. The
  * source is whatever that backend calls the model-visible message list (the
@@ -168,8 +164,8 @@ export function createScaffoldHistory(
   return async (query: ScaffoldHistoryQuery = {}) => {
     const messages = source();
     const total = messages.length;
-    const limit = clampInt(query.limit, SCAFFOLD_HISTORY_DEFAULT_LIMIT, 1, SCAFFOLD_HISTORY_MAX_LIMIT);
-    const maxChars = clampInt(
+    const limit = boundedInt(query.limit, SCAFFOLD_HISTORY_DEFAULT_LIMIT, 1, SCAFFOLD_HISTORY_MAX_LIMIT);
+    const maxChars = boundedInt(
       query.maxChars, SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS, 1, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
     );
     const requested = query.offset !== undefined && Number.isFinite(query.offset)
@@ -204,13 +200,36 @@ export function createScaffoldHistory(
   };
 }
 
-export function createScaffoldCallTool(tools: () => ToolSet): NonNullable<ScaffoldRunOptions['callTool']> {
+export function createScaffoldCallTool(
+  tools: () => ToolSet,
+  /**
+   * The RECOVERABLE identity this rollout runs under, when it has one.
+   *
+   * A queued shadow trial can be re-driven after an interruption, and its
+   * candidate reaches the live tool surface — so a wall-clock call id gave every
+   * replay fresh ids and the tool-effect claim could not tell a re-drive from a
+   * first run. Scoped, the ids are `<scope>#0`, `<scope>#1` … in dispatch order,
+   * which is what lets the claim dedupe them.
+   *
+   * Absent for a rollout with no durable identity (a live preview, a GEPA
+   * candidate): nothing will re-drive those, so there is nothing to dedupe
+   * against and inventing a scope would be a lie about recoverability.
+   *
+   * The ids line up only as far as the rollout is deterministic. A candidate
+   * whose model answers differently makes different calls, and the claim then
+   * sees genuinely different work — which is the honest reading, not a
+   * mis-dedupe.
+   */
+  callScope?: string,
+): NonNullable<ScaffoldRunOptions['callTool']> {
+  let seq = 0;
   return async (name, args) => {
     const t = tools()[name];
     if (!t?.execute) return { error: `tool not found: ${name}` };
     try {
       const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
-        messages: [], toolCallId: `scaffold-${Date.now()}`,
+        messages: [],
+        toolCallId: callScope === undefined ? `scaffold-${Date.now()}` : `${callScope}#${seq++}`,
       };
       const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
       if (!input.success) return { error: input.error.message };

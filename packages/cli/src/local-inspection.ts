@@ -75,6 +75,8 @@ import {
   listRecordCells,
   readRecordCell,
   type ExplorationRecord,
+  boundedInt,
+  RUN_TIMELINE_MAX,
   type Page,
   type RecordCellHandle,
   type RecordCellSummary,
@@ -263,9 +265,17 @@ export function readLocalMemory(name: string): string {
   });
 }
 
+/**
+ * `limit` is a user CLI flag (`--limit`, via `numberField`) and reaches a raw
+ * `LIMIT ?` on both branches below, so it is closed to a finite positive integer
+ * first: SQLite reads `LIMIT -1` as no limit and rejects a fraction or NaN as a
+ * datatype mismatch. Validity only — no ceiling is imposed, because this surface
+ * has never had one and a recall read the operator asked to widen should widen.
+ */
 export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
   const q = query.trim();
   if (!q) return [];
+  const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'memory_chunks')) return [];
     const cols = columnSet(db, 'memory_chunks');
@@ -274,7 +284,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
         db,
         `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY updated_at DESC LIMIT ?`,
         `%${q}%`,
-        limit,
+        window,
       ).map((row) => ({ path: row.path, text: row.text, score: row.score, startLine: row.start_line, endLine: row.end_line }));
     }
     if (cols.has('content')) {
@@ -282,7 +292,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
         db,
         `SELECT path, content FROM memory_chunks WHERE content LIKE ? LIMIT ?`,
         `%${q}%`,
-        limit,
+        window,
       ).map((row) => ({ path: row.path, text: row.content }));
     }
     return [];
@@ -319,7 +329,15 @@ export function listLocalRunEvents(
   ));
 }
 
+/**
+ * The LOCAL peer of core's `getRunTimeline`, and bounded the same way. `limit`
+ * is a user CLI flag (`kinu inspect timeline --limit`), and below it reaches
+ * three raw `LIMIT ?` binds plus a tail slice — so `--limit -1` read three whole
+ * tables and `--limit abc` bound NaN. Its default stays 100, which is what the
+ * command has always shown; only the ceiling is shared with the cloud peer.
+ */
 export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
+  const window = boundedInt(limit, 100, 1, RUN_TIMELINE_MAX);
   return withLocalDb(name, (db) => {
     const rows: JsonObject[] = [];
     // The durable run-event log of the most recent run — tool calls, steps and
@@ -328,7 +346,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
       const recorder = new RunEventRecorder(makeSql(db));
       const latest = listRuns(recorder, null, 1).items[0];
       if (latest) {
-        rows.push(...recorder.read(latest.runId, { limit }).map((e) => ({
+        rows.push(...recorder.read(latest.runId, { limit: window }).map((e) => ({
           id: `${e.runId}:${e.eventIndex}`,
           kind: `run:${e.type}`,
           runId: e.runId,
@@ -346,7 +364,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
          FROM agent_log
          ORDER BY received_at DESC
          LIMIT ?`,
-        limit,
+        window,
       ).map((row) => ({
         id: row.id,
         kind: row.kind,
@@ -363,7 +381,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
          FROM evolution_events
          ORDER BY created_at DESC
          LIMIT ?`,
-        limit,
+        window,
       ).map((row) => ({
         id: row.id,
         kind: `evolution:${row.type}`,
@@ -379,7 +397,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
          FROM search_nodes
          ORDER BY created_at DESC
          LIMIT ?`,
-        limit,
+        window,
       ).map((row) => ({
         id: row.id,
         kind: 'mcts',
@@ -389,7 +407,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         ts: row.created_at,
       })));
     }
-    return rows.sort((a, b) => timestampOf(b) - timestampOf(a)).slice(0, limit);
+    return rows.sort((a, b) => timestampOf(b) - timestampOf(a)).slice(0, window);
   });
 }
 

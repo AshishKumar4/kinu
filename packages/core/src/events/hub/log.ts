@@ -37,6 +37,7 @@ import {
   type TraceId, type TurnId,
 } from './types';
 import { dedupeKeyForDescriptor } from './dedupe';
+import { wakesADrain } from './drain';
 import { deriveFields } from './trust';
 import { applyVisibilityForStorage } from './visibility';
 import { ulid } from './ulid';
@@ -100,6 +101,7 @@ const WorkModeSchema = v.picklist(['plan', 'build']);
 const NullableString = v.nullable(v.string());
 const NullableNumber = v.nullable(v.number());
 const IdRowSchema = v.object({ id: v.string() });
+const TurnIdRowSchema = v.object({ turn_id: v.string() });
 const PayloadRowSchema = v.object({ payload: v.string() });
 const TraceRowSchema = v.object({ trace_id: v.string() });
 const CountRowSchema = v.object({ n: v.number() });
@@ -188,6 +190,9 @@ const SubordinateReportPayloadSchema = v.object({
   from_subordinate: v.string(),
   status: v.picklist(SUBORDINATE_REPORT_STATUSES),
   content: v.string(),
+  // Optional on the STORED shape: see SubordinateReportPayload. Ingress
+  // requires it, so nothing new is written without one.
+  sequence_id: v.optional(v.string()),
   task: v.optional(v.string()),
   content_path: v.optional(v.string()),
   kinu_mode: WorkModeSchema,
@@ -272,12 +277,8 @@ export class EventLog {
     //    "exactly once" — if a duplicate is racing, INSERT OR IGNORE wins
     //    and we read the original.
     if (dedupe_key !== null) {
-      const existing = this.sql.exec(
-        `SELECT id FROM agent_log WHERE dedupe_key = ?`, dedupe_key,
-      ).toArray().map((row) => v.parse(IdRowSchema, row));
-      if (existing.length > 0) {
-        return { id: existing[0].id, admitted: false };
-      }
+      const held = this.idForDedupeKey(dedupe_key);
+      if (held !== null) return { id: held, admitted: false };
     }
 
     this.sql.exec(
@@ -301,6 +302,21 @@ export class EventLog {
     );
 
     return { id: placeholderId, admitted: true };
+  }
+
+  /**
+   * The event already admitted under this idempotency key, if any.
+   *
+   * `publish` asks it to answer a duplicate with the original id, and an
+   * ingress whose sender REPLAYS asks it before doing any work of its own —
+   * a spill, a roster transition, a wake — so a replayed delivery is
+   * recognised as the one already held rather than acted on twice.
+   */
+  idForDedupeKey(key: string): EventId | null {
+    const rows = this.sql.exec(
+      `SELECT id FROM agent_log WHERE dedupe_key = ?`, key,
+    ).toArray().map((row) => v.parse(IdRowSchema, row));
+    return rows[0]?.id ?? null;
   }
 
   // ── pending ─────────────────────────────────────────────────────
@@ -377,6 +393,16 @@ export class EventLog {
 
   /** Deferred events whose revisit condition is satisfied. */
   private queryDeferred(ctx: { now: number; phase: 'idle' | 'merging' }): KinuEvent[] {
+    return this.deferredRows()
+      .filter(({ cond }) => revisitConditionMet(cond, ctx))
+      .map(({ event }) => event);
+  }
+
+  /** Every deferred row that still carries a readable revisit condition, paired
+   *  with it. One read for the two questions asked of deferred rows: which are
+   *  due now (`queryDeferred`), and when the next one becomes due
+   *  ({@link nextPendingDrainAt}). */
+  private deferredRows(): Array<{ event: KinuEvent; cond: RevisitCondition }> {
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
               payload_visibility, payload, received_at, schema_version,
@@ -389,8 +415,37 @@ export class EventLog {
       const payload = v.safeParse(JsonObjectSchema, parseJsonValue(row.payload));
       if (!payload.success) return [];
       const cond = v.safeParse(RevisitConditionSchema, payload.output.__defer_revisit);
-      return cond.success && revisitConditionMet(cond.output, ctx) ? [rowToEvent(row)] : [];
+      return cond.success ? [{ event: rowToEvent(row), cond: cond.output }] : [];
     });
+  }
+
+  /**
+   * The earliest moment a drain would have work to do, or null when it would
+   * have none. The DURABLE half of the reactor's wake.
+   *
+   * A pending row is a promise the workspace made to itself, and until this
+   * existed the only thing that kept that promise was an in-memory debounce
+   * timer: an event admitted seconds before an eviction, or re-pended by a
+   * compensating signal, sat in `agent_log` with nothing scheduled to look at
+   * it again. The activation reconcile could not see it either, because the
+   * wake fold it reads (`nextWakeAt`) knew only about triggers and the two
+   * outboxes. So the row waited for the next unrelated ingress — hours, or
+   * never.
+   *
+   * Derived, never stored. `now` for anything drainable this instant; otherwise
+   * the soonest deferred `at`, which is the only revisit condition that names a
+   * time. `after_phase`, `after_event` and `after_seconds` resolve against
+   * something other than the clock, so no wake can be derived from them and
+   * arming one would only busy-loop the alarm.
+   */
+  nextPendingDrainAt(now = Date.now()): number | null {
+    const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
+      .some(wakesADrain);
+    if (drainableNow) return now;
+    const scheduled = this.deferredRows()
+      .filter(({ event }) => wakesADrain(event))
+      .flatMap(({ cond }) => cond.kind === 'at' && cond.ts > now ? [cond.ts] : []);
+    return scheduled.length === 0 ? null : Math.min(...scheduled);
   }
 
   // ── markConsumed ────────────────────────────────────────────────
@@ -424,10 +479,53 @@ export class EventLog {
     );
   }
 
-  /** Re-pend unfinished synthetic drain deliveries whose recovery lease has
-   *  been stranded past the activation grace period. */
-  unbindStale(olderThanMs: number, now = Date.now()): EventId[] {
+  /**
+   * The synthetic drain turns whose recovery lease is still open.
+   *
+   * The same rows {@link unbindStale} would re-pend, read rather than reclaimed.
+   * An open lease means a turn was handed these events and has not closed them;
+   * that is either work nobody will answer (re-pend it) or a reply the turn
+   * already answered and never dispatched (finish it). Only the caller can tell
+   * which, because only the caller can see whether the turn produced a durable
+   * answer — so this reports, and the caller decides.
+   */
+  openDrainLeases(): TurnId[] {
+    return this.sql.exec(
+      `SELECT DISTINCT turn_id FROM agent_log
+       WHERE kind = 'event' AND turn_id LIKE 'evt-%' AND consumed_at IS NOT NULL`,
+    ).toArray().map((row) => v.parse(TurnIdRowSchema, row).turn_id);
+  }
+
+  /**
+   * Re-pend synthetic drain deliveries whose recovery lease is still open — a
+   * turn was handed these events and never closed the lease on them, so nobody
+   * is going to answer them and no later drain can see them.
+   *
+   * `olderThanMs` is REQUIRED, and it is a grace rather than a policy: a backend
+   * that cannot exclude the holder (a DO activation may be racing its own
+   * predecessor) reclaims only leases stranded that long, while a backend that
+   * holds an exclusive lease over the conversation states `0` and says at its
+   * call site why every open lease it can see is already dead. No default,
+   * because the two answers are opposite and a caller must pick one.
+   *
+   * `answered` names the drain turns that DID produce an answer and therefore
+   * owe a reply rather than a second asking. Re-pending one of those is the
+   * quiet data loss this sweep used to cause on its own: the sender was still
+   * waiting on a reply that already existed, and got a repeat of the question
+   * instead. The exclusion is a predicate and not an execution order on
+   * purpose — an ordering between this and the resume would have to hold on
+   * every path, and this holds whatever runs first.
+   */
+  unbindStale(
+    olderThanMs: number,
+    now = Date.now(),
+    answered: ReadonlySet<TurnId> = new Set(),
+  ): EventId[] {
     const cutoff = now - olderThanMs;
+    const keep = [...answered];
+    const exclusion = keep.length === 0
+      ? ''
+      : ` AND turn_id NOT IN (${keep.map(() => '?').join(', ')})`;
     const rows = this.sql.exec(
       `UPDATE agent_log
        SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
@@ -436,10 +534,11 @@ export class EventLog {
          WHERE kind = 'event'
            AND turn_id LIKE 'evt-%'
            AND consumed_at IS NOT NULL
-           AND consumed_at <= ?
+           AND consumed_at <= ?${exclusion}
        )
        RETURNING id`,
       cutoff,
+      ...keep,
     ).toArray().map((row) => v.parse(IdRowSchema, row));
     return rows.map((row) => row.id);
   }

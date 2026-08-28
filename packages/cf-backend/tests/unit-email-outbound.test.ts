@@ -14,8 +14,8 @@ import {
 } from '@kinu.run/core';
 import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import {
-  createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
-  threadingHeaders,
+  createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
+  sendInboundEmailReceipt, sendOwnerEmail, threadingHeaders,
 } from '../src/email/outbound';
 import { EmailOutbox } from '../src/email/outbox';
 import { sqlExec } from './helpers/user-do';
@@ -276,5 +276,112 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
       email: binding, emailDomain: 'agents.example.com',
       agentName: 'a', agentDisplayName: 'A', ownerEmail: 'o@e.com', outbox: freshOutbox(),
     }, { subject: 's', text: 't', key: 'k' })).toBe(false);
+  });
+});
+
+// KINU-054. Two halves of one finding: the sender got nothing until a turn
+// answered — which can be minutes, can be queued, and can be an empty answer
+// that sends no mail at all — and the threading headers the reply carried grew
+// without a bound.
+describe('the receipt an accepted message gets immediately', () => {
+  const THREAD = {
+    to: 'owner@example.com',
+    from: 'scout-a1b2c3@agents.example.com',
+    subject: 'Check the deploy',
+    message_id: '<abc@mail.example.com>',
+    references: '<root@mail.example.com>',
+  };
+
+  test('it threads onto the inbound message and marks itself auto-replied', async () => {
+    const { binding, sent } = fakeSendBinding();
+    const ok = await sendInboundEmailReceipt(
+      { email: binding, agentDisplayName: 'Scout', outbox: freshOutbox() }, THREAD, 'evt-1',
+    );
+    expect(ok).toBe(true);
+    expect(sent[0]).toMatchObject({
+      from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
+      to: 'owner@example.com',
+      subject: 'Re: Check the deploy',
+      headers: {
+        // RFC 3834. Without it a peer agent's own inbox would admit this and
+        // answer it, and two Kinus would talk until a rate window closed.
+        'Auto-Submitted': 'auto-replied',
+        'In-Reply-To': '<abc@mail.example.com>',
+        References: '<root@mail.example.com> <abc@mail.example.com>',
+      },
+    });
+    expect(sent[0].text).toContain('Scout has your message');
+  });
+
+  test('a redelivery of the same message sends exactly one receipt', async () => {
+    // The mail edge retries. The event id is stable across those retries
+    // because ingress dedupes on Message-ID, so the outbox key is stable too
+    // and the second call never reaches the binding.
+    const { binding, sent } = fakeSendBinding();
+    const outbox = freshOutbox();
+    const ctx = { email: binding, agentDisplayName: 'Scout', outbox };
+    expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-1')).toBe(true);
+    expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-1')).toBe(true);
+    expect(sent).toHaveLength(1);
+
+    // A genuinely different message is a different key and does send.
+    expect(await sendInboundEmailReceipt(ctx, THREAD, 'evt-2')).toBe(true);
+    expect(sent).toHaveLength(2);
+  });
+
+  test('no send_email binding is a quiet skip, not a failed delivery', async () => {
+    const { sent } = fakeSendBinding();
+    expect(await sendInboundEmailReceipt(
+      { email: undefined, agentDisplayName: 'Scout', outbox: freshOutbox() }, THREAD, 'evt-1',
+    )).toBe(false);
+    expect(sent).toHaveLength(0);
+  });
+
+  test('the reply this thread later gets is a second message, not a repeat of the receipt', async () => {
+    // Different outbox keys, so the receipt never suppresses the answer and
+    // the answer never re-sends the receipt.
+    const { binding, sent } = fakeSendBinding();
+    const outbox = freshOutbox();
+    await sendInboundEmailReceipt({ email: binding, agentDisplayName: 'Scout', outbox }, THREAD, 'evt-1');
+    const dispatcher = createEmailThreadDispatcher(() => ({
+      email: binding, agentDisplayName: 'Scout', outbox,
+    }));
+    const delivered = await dispatcher.dispatch({
+      id: 'chan-1',
+      event_id: 'evt-1',
+      kind: 'email_thread',
+      holder_addr: JSON.stringify(THREAD),
+      ttl_expires_at: 10_000,
+      payload_policy: 'full',
+      state: 'open',
+      reply_payload: null,
+      attempt_count: 0,
+      created_at: 1_000,
+      updated_at: 1_000,
+    }, 'Staging is green.');
+    expect(delivered).toEqual({ delivered: true });
+    expect(sent).toHaveLength(2);
+    expect(sent[1].text).toBe('Staging is green.');
+    expect(sent[0].headers?.['Message-ID']).not.toBe(sent[1].headers?.['Message-ID']);
+  });
+});
+
+describe('threading headers stay inside the line a receiver must accept', () => {
+  const REFERENCES_BUDGET = 998 - 'References'.length - 2;
+
+  test('a long inherited chain is trimmed from the middle, never from either end', () => {
+    const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
+    const headers = threadingHeaders({ message_id: '<answered@x>', references: chain.join(' ') });
+    expect(headers['In-Reply-To']).toBe('<answered@x>');
+
+    const kept = headers.References!.split(' ');
+    expect(headers.References!.length).toBeLessThanOrEqual(REFERENCES_BUDGET);
+    expect(kept[0]).toBe('<r000@x>');
+    expect(kept[kept.length - 1]).toBe('<answered@x>');
+    expect(kept).not.toContain('<r001@x>');
+  });
+
+  test('a Message-ID no line can carry threads on nothing rather than on a truncation', () => {
+    expect(threadingHeaders({ message_id: `<${'x'.repeat(1_200)}@x>`, references: '<a@x>' })).toEqual({});
   });
 });

@@ -870,7 +870,7 @@ describe('MCTS below-floor outcome classification', () => {
       llmResponses: { alpha: '{"score": 0.1}', beta: '{"score": 0.2}' },
     });
     initTables(bundle.rt);
-    initMctsSearchTable(bundle.rt.storage.execRaw, bundle.rt.storage.sql);
+    initMctsSearchTable(bundle.rt.storage.execRaw);
     return { ...bundle, store: new MctsSearchStore(makeSql(bundle.db)) };
   }
 

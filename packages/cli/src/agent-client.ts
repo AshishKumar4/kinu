@@ -12,7 +12,11 @@ import type {
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
   EvolutionConfigView,
+  EvolutionDebt, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView,
+  StagedSkillResult,
   ReasoningEffort, TierId, Usage, RunEvent, JsonObject, JsonValue,
+  AdmittedInstructionDecision,
+  InstructionSourceRow, InstructionSourceView, Page, PageRequest,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -65,6 +69,7 @@ export type AgentClientEvent =
   | { type: 'step-finish'; stepIndex: number }
   | { type: 'turn-end'; turn: AgentTurnResult }
   | { type: 'evolution'; event: string; message: string }
+  | { type: 'background'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent }
   /** One row of the durable run-event ledger, forwarded as it is written:
    *  delegation nudges, the context budget, refused mission budgets, and the
@@ -204,6 +209,19 @@ export interface AgentChangelogView {
   unseenCount: number;
 }
 
+/**
+ * Continual refinements as surfaces consume them: what has been refined, and
+ * the evolution debt that would open the next one.
+ *
+ * Both halves in one shape because they answer one question — `/refine` with no
+ * argument has to say what is owed as well as what happened, and a surface that
+ * had to make two calls could render a debt count against a stale list.
+ */
+export interface AgentRefinementView {
+  requests: RefinementRequestView[];
+  debt: EvolutionDebt;
+}
+
 export interface PendingDeviceConsent {
   consentId: string;
   deviceLabel: string;
@@ -246,6 +264,14 @@ export interface LocalSessionControls {
    *  runs in the DO, which has no synchronous path back to this process. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void;
   listModelProviders(): Promise<Array<{ id: string; available: boolean; unavailableReason?: string }>>;
+  /** Instruction-file trust for the working directory (KINU-N028). Local only
+   *  for the same reason the shell channel is: signed out there is no cloud
+   *  owner, and the honest authority is whoever is at this terminal. */
+  listInstructionApprovals(request?: PageRequest): Promise<Page<InstructionSourceRow>>;
+  /** One row, opened: reads THAT file's bytes and nothing else. */
+  readInstructionApproval(path: string): Promise<InstructionSourceView | null>;
+  approveInstruction(path: string, digest: string): Promise<AdmittedInstructionDecision>;
+  revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
 }
 
 export interface AgentClient {
@@ -316,6 +342,27 @@ export interface AgentClient {
   changelog(limit?: number): Promise<AgentChangelogView>;
   /** Revert one changelog entry by id through the real rollback paths. */
   revertChangelogEntry(id: string): Promise<ChangelogRevertResult>;
+  /** Continual refinements newest first, plus the debt that opens the next. */
+  refinements(limit?: number): Promise<AgentRefinementView>;
+  /**
+   * Open one refinement over a graded trajectory.
+   *
+   * Returns the DURABLE request. Nothing about the agent's behaviour has moved
+   * by the time this resolves: an explicit user preference may have reached the
+   * memory authority, and everything else is a proposal pending the evaluated
+   * lane that owns it.
+   */
+  requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView>;
+  /**
+   * Decide one staged edit as the owner.
+   *
+   * The only path by which a proposed skill becomes trusted instructions, and
+   * deliberately on the OWNER's client rather than on any tool surface.
+   */
+  decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult>;
+  /** The WHOLE staged file for one proposed edit, plus the digest a decision
+   *  must quote back. Never truncated: this is what an owner decides on. */
+  showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult>;
   readMemory(): Promise<string>;
   searchNodes(): Promise<AgentSearchNode[]>;
   listJobs(limit?: number): Promise<AgentJobSummary[]>;

@@ -28,6 +28,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { TimeoutError, type Browser, type Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery } from './gallery-harness';
+import { parseJsonValue, redactPayload } from '@kinu.run/core';
 
 /** One live-tail message, as the browser laid it out. */
 interface TailFrame {
@@ -96,11 +97,18 @@ interface Observed {
   /** The drive at its root: crumb text, row names, and the origin badges the
    *  mounted folders wear. */
   readonly filesRoot: { crumbs: string; entries: string[]; badges: string[] };
-  /** The same drive inside the /pc mount — the composite plane crossing. */
+  /** The drive after crossing into the /pc mount, which must land inside the
+   *  device's consented directory rather than on the device root. */
   readonly filesInMount: { crumbs: string; entries: string[] };
   readonly filesAfterUp: string;
-  /** The text preview's rendered content for a workspace file. */
+  /** File names the TREE pane carries — it used to carry only folders. */
+  readonly treeFileNames: string[];
+  /** Markdown opens rendered, through the app's one markdown renderer. */
+  readonly filesMarkdownRendered: { heading: string; showsSource: boolean };
+  /** The source the Source toggle shows for a workspace file. */
   readonly filesPreviewText: string;
+  /** The edit buffer a whole file opens with. */
+  readonly filesEditorSeedsFromTheFile: string;
   /** /home/user rows after renaming SOUL.md → CREDO.md, then after deleting
    *  AGENTS.md — both against the frame's stateful fixture. */
   readonly filesAfterRename: string[];
@@ -139,6 +147,9 @@ const DRAIN_ROW = 'd1';
  *  turn the provider rate-limited, one the operator stopped. */
 const RATE_LIMITED_NODE = 'lv008';
 const ABORTED_NODE = 'lv005';
+/** A node simply at work on the same run — the state a rate-limited node has to
+ *  be distinguishable FROM. */
+const RUNNING_NODE = 'lv003';
 
 async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
   return page.$$eval('[data-chat-row]', (rows) => {
@@ -316,30 +327,67 @@ async function run(): Promise<Observed> {
       badges: await files.$$eval('[data-files-entry] [data-mount-badge]', (els) => els.map((el) => el.textContent ?? '')),
     };
 
-    // Crossing into a mount is ordinary navigation.
+    // Crossing into a mount is ordinary navigation, and it lands INSIDE the
+    // device's consented directory. Landing on the mount point itself was the
+    // reported failure: `/pc` strips to the device's `/`, which its consent
+    // boundary refuses, so the first click answered EACCES.
     await files.click(rowSelector('pc'));
-    await waitForRow('home');
+    await waitForRow('quarterly-report.txt');
     await files.waitForFunction(
-      () => document.querySelectorAll('[data-files-crumb]').length === 2,
+      () => document.querySelectorAll('[data-files-crumb]').length === 4,
       { timeout: 20_000 },
     );
     const filesInMount = { crumbs: await crumbs(), entries: await rowNames() };
 
-    // The parent row goes UP ONE LEVEL — back to the root, not past it.
-    await files.waitForSelector('[data-files-up-row]');
-    await files.click('[data-files-up-row]');
+    // Back to the drive root through the crumb bar, then into the workspace's
+    // own tree for the parent row, preview, rename and delete.
+    await files.click('[data-files-crumb]');
     await waitForRow('sandbox');
-    const filesAfterUp = await crumbs();
-
-    // Into the workspace's own tree for preview, rename and delete.
     await files.click(rowSelector('home'));
     await waitForRow('user');
     await files.click(rowSelector('user'));
     await waitForRow('notes.md');
 
+    // The parent row goes UP ONE LEVEL — to /home, never straight to the root.
+    await files.waitForSelector('[data-files-up-row]');
+    await files.click('[data-files-up-row]');
+    await waitForRow('user');
+    const filesAfterUp = await crumbs();
+
+    // The tree carries FILES, not only folders — it used to drop every file
+    // entry when it recursed, so the sidebar could never reach one. Each level
+    // is expanded through its own caret.
+    await files.click(rowSelector('user'));
+    await waitForRow('notes.md');
+    await files.click('[data-files-tree-node="/home"] button');
+    await files.waitForSelector('[data-files-tree-node="/home/user"]', { timeout: 20_000 });
+    await files.click('[data-files-tree-node="/home/user"] button');
+    await files.waitForSelector('[data-files-tree-file]', { timeout: 20_000 });
+    const treeFileNames = await files.$$eval(
+      '[data-files-tree-file]', (els) => els.map((el) => el.getAttribute('title') ?? ''),
+    );
+
+    // Markdown opens RENDERED through the app's one markdown renderer, and the
+    // Source toggle shows the bytes it was rendered from.
     await files.click(rowSelector('notes.md'));
-    await files.waitForSelector('[data-files-preview] pre', { timeout: 20_000 });
-    const filesPreviewText = await files.$eval('[data-files-preview] pre', (el) => el.textContent ?? '');
+    await files.waitForSelector('[data-files-preview-body] h1', { timeout: 20_000 });
+    const filesMarkdownRendered = await files.$eval('[data-files-preview-body]', (el) => ({
+      heading: el.querySelector('h1')?.textContent ?? '',
+      showsSource: el.querySelector('pre') !== null,
+    }));
+    await files.click('[data-files-render-toggle]');
+    await files.waitForSelector('[data-files-preview-body] pre', { timeout: 20_000 });
+    const filesPreviewText = await files.$eval('[data-files-preview-body] pre', (el) => el.textContent ?? '');
+
+    // A whole file can be edited in place; a truncated read cannot, because
+    // writing that prefix back would delete the rest of the file.
+    await files.waitForSelector('[data-files-edit]', { timeout: 20_000 });
+    await files.click('[data-files-edit]');
+    await files.waitForSelector('[data-files-editor]', { timeout: 20_000 });
+    const filesEditorSeedsFromTheFile = await files.$eval(
+      '[data-files-editor]', (el) => el instanceof HTMLTextAreaElement ? el.value : '',
+    );
+
     await files.click('[aria-label="Close preview"]');
     await files.waitForFunction(
       () => document.querySelector('[data-files-preview]') === null,
@@ -416,7 +464,8 @@ async function run(): Promise<Observed> {
 
     return {
       tails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
-      filesRoot, filesInMount, filesAfterUp, filesPreviewText,
+      filesRoot, filesInMount, filesAfterUp, treeFileNames,
+      filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
       envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
       runNodes,
@@ -576,17 +625,32 @@ describe('the drive, browsing the one composite plane', () => {
     expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Sandbox']));
   });
 
-  test('crossing into /pc is ordinary navigation on the same plane', () => {
-    expect(observed.filesInMount.crumbs).toBe('//pc');
-    expect(observed.filesInMount.entries).toEqual(['home']);
+  test('crossing into /pc lands inside the consented device directory', () => {
+    // `/pc` strips to the DEVICE's `/`, which its consent boundary refuses, so
+    // the first click used to answer EACCES. The mount point lands on the
+    // directory the owner consented to instead.
+    expect(observed.filesInMount.crumbs).toBe('//pc/home/dev');
+    expect(observed.filesInMount.entries).toEqual(
+      expect.arrayContaining(['quarterly-report.txt', 'shot.png']),
+    );
   });
 
-  test('the parent row goes UP ONE LEVEL, not past the root', () => {
-    expect(observed.filesAfterUp).toBe('/');
+  test('the parent row goes UP ONE LEVEL, not straight to the root', () => {
+    expect(observed.filesAfterUp).toBe('//home');
   });
 
-  test('a text file previews its own content through the viewer RPC', () => {
+  test('the tree carries files, not only folders', () => {
+    expect(observed.treeFileNames).toEqual(expect.arrayContaining(['notes.md', 'AGENTS.md']));
+  });
+
+  test('Markdown opens rendered, and the Source toggle shows what it rendered', () => {
+    expect(observed.filesMarkdownRendered.heading).toBe('Checkout coupon regression');
+    expect(observed.filesMarkdownRendered.showsSource).toBe(false);
     expect(observed.filesPreviewText).toContain('Checkout coupon regression');
+  });
+
+  test('a whole file opens in an editor seeded from its own bytes', () => {
+    expect(observed.filesEditorSeedsFromTheFile).toContain('Checkout coupon regression');
   });
 
   test('rename and delete land on the plane and the listing says so', () => {
@@ -637,8 +701,13 @@ describe('a node the provider rate-limited, as the run list reads it', () => {
     expect(observed.runNodes[RATE_LIMITED_NODE]?.reasonText).toContain('Rate limited');
   });
 
-  test('its dot agrees with its line', () => {
+  test('its dot agrees with its line, and no longer collides with a working node', () => {
+    // Both halves matter. `warning` is the pacing tone — and while a RUNNING node
+    // wore it too, the one signal that the provider asked us to wait rather than
+    // that the node broke was invisible on the row. Working states wear the
+    // accent, here as everywhere else in the product.
     expect(observed.runNodes[RATE_LIMITED_NODE]?.dot).toBe('p-dot-warning');
+    expect(observed.runNodes[RUNNING_NODE]?.dot).toBe('p-dot-accent');
   });
 
   test('a turn that ended some other way is still a fault', () => {
@@ -1020,6 +1089,589 @@ describe('an additional agent, as an ordinary conversation', () => {
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Payments triage')
       ), { timeout: 15_000 });
       await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * KINU-071. The fixture mounts the exact ConversationStartBoundary used by both
+ * WorkspacePage columns over the real paged-scroll hook. Its first page is held
+ * by a fixture promise, then rejects once; Retry returns status:end. This is a
+ * browser test because the defect was which mutually-exclusive surface painted
+ * during that interleaving. Blind spot: the agent socket is not involved; its
+ * delivered-empty distinction is the startFrom("newest") input stated here.
+ */
+describe('an empty transcript waits for the history store to speak', () => {
+  test('held → skeleton; failed → Retry; status:end → authoritative empty', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 560, height: 800 });
+      await page.goto(`${origin}/gallery.html?frame=historyauthority`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-testid="conversation-skeleton"]');
+      expect((await page.content()).includes('Send the first message to start.')).toBe(false);
+
+      await page.click('[data-history-release]');
+      await page.waitForSelector('aria/Retry');
+      expect(await page.$eval('[data-history-authority]', (root) => root.textContent ?? ''))
+        .toContain('Could not load earlier messages.');
+      expect((await page.content()).includes('Send the first message to start.')).toBe(false);
+
+      await page.click('aria/Retry');
+      await page.waitForFunction(
+        () => document.querySelector('[data-history-authority]')?.textContent?.includes('Send the first message to start.') === true,
+        { timeout: 10_000 },
+      );
+      const final = await page.$eval('[data-history-probe]', (probe) => probe.textContent ?? '');
+      expect(final).toContain('"exhausted":true');
+      expect(await page.$('[data-testid="conversation-skeleton"]')).toBeNull();
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * KINU-046. This mounts the real WorkspacePage, Composer, useKinu and send
+ * latch. The gallery stub holds only the TRANSPORT promise and exposes how many
+ * times it was entered; the two clicks occur in ONE browser task, before React
+ * can render submitted/streaming state. A policy copy could only prove itself.
+ */
+describe('chat send admission at the actual WorkspacePage boundary', () => {
+  test('two same-task Send clicks enter the transport once', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      const textarea = await page.waitForSelector('[data-composer-root] textarea');
+      await textarea!.type('admit exactly one turn');
+      await page.evaluate(() => {
+        document.documentElement.dataset.galleryChatSends = '0';
+        document.documentElement.dataset.galleryChatHold = '1';
+        const send = document.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+        if (send === null) throw new Error('gallery WorkspacePage has no Send button');
+        // Same JavaScript task, which is the old failure window.
+        send.click();
+        send.click();
+      });
+      await page.waitForFunction(
+        () => document.documentElement.dataset.galleryChatSends === '1',
+        { timeout: 10_000 },
+      );
+      expect(await page.evaluate(() => document.documentElement.dataset.galleryChatSends)).toBe('1');
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * KINU-074. The gallery transport supplies only SDK-shaped terminal inputs:
+ * connectionError plus a matching 1008 CloseEvent, with snapshot deliberately
+ * held so the real WorkspacePage has no agentStatus. Real useKinu and
+ * WorkspacePage must render the terminal path instead of reconnecting.
+ */
+describe('terminal workspace denial at the actual WorkspacePage boundary', () => {
+  test('1008 names denial, preserves SDK reason, and never promises reconnect', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&terminal=denied`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Access to this workspace was denied') === true,
+        { timeout: 10_000 },
+      );
+      const text = await page.evaluate(() => document.body.innerText);
+      expect(text).toContain('Access to this workspace was denied');
+      expect(text).toContain('workspace access denied by fixture');
+      expect(text).toContain('Try again');
+      expect(text).toContain('Back to your workspaces');
+      expect(text).not.toContain('Reconnecting...');
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * KINU-060. The real FilesSurface opens a preview whose FIRST RPC is held by
+ * the fixture transport. A fixture mutation changes the listing's revision;
+ * actual Refresh causes FileViewer/useAsyncResource to start its new request,
+ * then the old request resolves. The current preview must stay current.
+ */
+describe('file preview request generation at the actual FilesSurface boundary', () => {
+  test('a stale preview response cannot reclaim a refreshed file', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=files&wide=1&deferpreview=1`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      const row = (name: string) => `[data-files-entry][title="${name}"]`;
+      await page.waitForSelector(row('home'));
+      await page.click(row('home'));
+      await page.waitForSelector(row('user'));
+      await page.click(row('user'));
+      await page.waitForSelector(row('notes.md'));
+      await page.click(row('notes.md'));
+      await page.waitForSelector('[data-files-preview-body] [class*="Loader"], [data-files-preview-body]');
+      await page.click('[data-files-fixture-mutate]');
+      await page.click('[aria-label="Refresh"]');
+      await page.waitForFunction(
+        () => document.querySelector('[data-files-preview-body]')?.textContent?.includes('Fresh after refresh') === true,
+        { timeout: 10_000 },
+      );
+      await page.click('[data-files-fixture-release]');
+      // The held first reply was old checkout content. Once it settles it must
+      // not overwrite the fresh resource identity selected by the listing.
+      const preview = await page.$eval('[data-files-preview-body]', (body) => body.textContent ?? '');
+      expect(preview).toContain('Fresh after refresh');
+      expect(preview).not.toContain('Checkout coupon regression');
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * KINU-060, remaining two authorities. The frames mount the shipped
+ * usePagedScroll and WorkspaceRosterProvider; controls only hold/release their
+ * network transport. Clear/reset and local rename are public transitions, not
+ * fixture copies of the generations they exercise.
+ */
+describe('history and roster request generations at actual hook boundaries', () => {
+  test('a held history page released after Clear cannot reseed the walk', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.goto(`${origin}/gallery.html?frame=historyauthority`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-testid="conversation-skeleton"]');
+      await page.click('[data-history-reset]');
+      await page.click('[data-history-release]');
+      await page.waitForFunction(() => {
+        const raw = document.querySelector('[data-history-probe]')?.textContent ?? '';
+        return raw.includes('"loading":false') && raw.includes('"error":null') && raw.includes('"exhausted":false');
+      }, { timeout: 10_000 });
+      expect(await page.$('[data-testid="conversation-skeleton"]')).not.toBeNull();
+      expect(await page.$('aria/Retry')).toBeNull();
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a held roster list released after local rename cannot undo the rename', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.goto(`${origin}/gallery.html?frame=rosterauthority`, { waitUntil: 'networkidle0' });
+      await page.click('[data-roster-local-rename]');
+      await page.waitForFunction(
+        () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
+        { timeout: 10_000 },
+      );
+      await page.click('[data-roster-release]');
+      // The old server row spells "Checkout coupon bug". Once released it must
+      // remain stale and cannot reclaim the public local transition.
+      await page.waitForFunction(
+        () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
+        { timeout: 10_000 },
+      );
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * KINU-073. User settings mounts the shipped page and its eight real
+ * useAsyncResource branches. Codex fails until the browser heals the fixture;
+ * gateways remain unresolved until a separate release. QualityView uses the
+ * same held/failing split through its Rpc prop. The assertions run while work
+ * is held, not only after final settlement. Blind spot: the sourced 30-second
+ * deadline is not slept through here; the explicit failure proves its visible
+ * terminal state and the held requests prove siblings do not wait for it.
+ */
+describe('independent settings and quality reads publish independently', () => {
+  test('one account card fails and retries while ready and held siblings remain visible', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1000, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-settings-resource="your ChatGPT connection"][data-resource-state="error"]');
+
+      expect(await page.$eval(
+        '[data-settings-resource="your profile"]',
+        (resource) => resource.getAttribute('data-resource-state'),
+      )).toBe('ready');
+      expect(await page.$eval('body', (body) => body.textContent ?? '')).toContain('owner@example.com');
+      expect(await page.$eval(
+        '[data-settings-resource="your AI gateways"]',
+        (resource) => resource.getAttribute('data-resource-state'),
+      )).toBe('loading');
+
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:settings-heal')));
+      await page.click('[data-settings-resource="your ChatGPT connection"] button');
+      await page.waitForSelector(
+        '[data-settings-resource="your ChatGPT connection"][data-resource-state="ready"]',
+        { timeout: 10_000 },
+      );
+      expect(await page.$eval(
+        '[data-settings-resource="your AI gateways"]',
+        (resource) => resource.getAttribute('data-resource-state'),
+      )).toBe('loading');
+
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:settings-release')));
+      await page.waitForSelector(
+        '[data-settings-resource="your AI gateways"][data-resource-state="ready"]',
+        { timeout: 10_000 },
+      );
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a failed replay branch retries while alignment remains held, then both render', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 900, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=qualitybranches`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-quality-branch="replay"] button');
+      expect(await page.$('[data-quality-branch="alignment"] [role="status"]')).not.toBeNull();
+
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:quality-heal')));
+      await page.click('[data-quality-branch="replay"] button');
+      await page.waitForFunction(
+        () => document.querySelector('[data-quality-branch="replay"]')?.textContent?.includes('Latest score') === true,
+        { timeout: 10_000 },
+      );
+      expect(await page.$('[data-quality-branch="alignment"] [role="status"]')).not.toBeNull();
+
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:quality-release')));
+      await page.waitForFunction(
+        () => document.querySelector('[data-quality-branch="alignment"]')?.textContent?.includes('K_align') === true,
+        { timeout: 10_000 },
+      );
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * N021. This drives the real DevicesCard revoke response, durable-list refresh
+ * and acknowledgement endpoint. Reload is the non-vacuity arm: the immediate
+ * count is process-local, while the warning itself must return from listDevices
+ * until the explicit DELETE succeeds.
+ */
+describe('a revoked device whose command may still run', () => {
+  test('shows the count immediately, survives reload without reconnect controls, and disappears only after acknowledgement', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1000, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[title="Revoke device"]');
+      page.once('dialog', (dialog) => { void dialog.accept(); });
+      await page.click('[title="Revoke device"]');
+      await page.waitForSelector('[data-device-incident="dev-1"]', { timeout: 10_000 });
+
+      const immediate = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
+      expect(immediate).toContain('A command could not be confirmed stopped when you revoked this device.');
+      expect(immediate).toContain('2 commands have no confirmed termination and may still run.');
+      expect(await page.$('[data-device-incident="dev-1"] [title="Rename this device"]')).toBeNull();
+      expect(await page.$('[data-device-incident="dev-1"] [title="Revoke device"]')).toBeNull();
+
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-device-incident="dev-1"]', { timeout: 10_000 });
+      const persisted = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
+      expect(persisted).toContain('A command could not be confirmed stopped when you revoked this device.');
+      expect(persisted).toContain('Commands may still run.');
+
+      await page.click('[data-device-incident="dev-1"] button');
+      await page.waitForFunction(
+        () => document.querySelector('[data-device-incident="dev-1"]') === null,
+        { timeout: 10_000 },
+      );
+      await page.close();
+    });
+  }, 240_000);
+});
+
+interface ContinuityProbe {
+  readonly draft: string;
+  readonly sends: number;
+  readonly files: string;
+  readonly tokenLength: number;
+}
+
+async function continuityProbe(page: Page): Promise<ContinuityProbe> {
+  return page.$eval('[data-continuity-probe]', (probe) => ({
+    draft: probe.getAttribute('data-draft') ?? '',
+    sends: Number(probe.getAttribute('data-sends') ?? 0),
+    files: probe.getAttribute('data-files') ?? '',
+    tokenLength: Number(probe.getAttribute('data-token-length') ?? 0),
+  }));
+}
+
+/**
+ * KINU-075/077/078/079. One shipped-component rig takes real browser keyboard,
+ * clipboard, layout and resource-load events. The clipboard's text+file case
+ * asserts non-prevention because synthetic ClipboardEvent does not execute the
+ * browser's native default insertion; HTML-only takes the component's manual
+ * insertion path and proves visible text. That boundary is the one blind spot.
+ */
+describe('composer and message continuity at browser boundaries', () => {
+  test('IME commit Enter and keyCode 229 never submit; the next Enter does; Shift+Enter remains a newline', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 760, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
+      const textarea = await page.waitForSelector('[data-composer-root] textarea');
+      await textarea!.focus();
+
+      await textarea!.evaluate((input) => {
+        input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '変換' }));
+        input.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Enter', bubbles: true, cancelable: true, isComposing: true,
+        }));
+      });
+      expect((await continuityProbe(page)).sends).toBe(0);
+
+      await textarea!.evaluate((input) => {
+        input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '変換' }));
+        const legacy = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        Object.defineProperty(legacy, 'keyCode', { value: 229 });
+        input.dispatchEvent(legacy);
+      });
+      expect((await continuityProbe(page)).sends).toBe(0);
+
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-sends') === '1',
+      );
+
+      await page.click('[data-continuity-reset]');
+      await textarea!.focus();
+      await page.keyboard.type('two lines');
+      await page.waitForFunction(
+        () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-draft') === 'two lines',
+        { timeout: 5_000 },
+      );
+      await page.keyboard.down('Shift');
+      await page.keyboard.press('Enter');
+      await page.keyboard.up('Shift');
+      await page.waitForFunction(
+        () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-draft')?.includes('\n') === true,
+        { timeout: 5_000 },
+      );
+      expect((await continuityProbe(page)).sends).toBe(0);
+      await page.close();
+    });
+  }, 240_000);
+
+  test('mixed clipboard strings survive beside deduplicated files; file-only is prevented', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 760, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
+      const textarea = await page.waitForSelector('[data-composer-root] textarea');
+
+      const paste = (kind: 'plain' | 'html' | 'file' | 'same-metadata') => textarea!.evaluate((input, flavor) => {
+        const data = new DataTransfer();
+        const file = new File(['abc'], 'notes.txt', {
+          type: 'text/plain', lastModified: 7,
+        });
+        data.items.add(file);
+        // Repeating the SAME object is the clipboard duplication the component
+        // removes. Two separate File objects with the same metadata are not
+        // identity-equal and must both survive.
+        if (flavor === 'same-metadata') {
+          data.items.add(new File(['xyz'], 'notes.txt', {
+            type: 'text/plain', lastModified: 7,
+          }));
+        } else {
+          data.items.add(file);
+        }
+        if (flavor === 'plain') data.items.add('notes.txt', 'text/plain');
+        if (flavor === 'html') data.items.add('<strong>Rich note</strong>', 'text/html');
+        input.focus();
+        const event = new ClipboardEvent('paste', {
+          clipboardData: data, bubbles: true, cancelable: true,
+        });
+        input.dispatchEvent(event);
+        return {
+          defaultPrevented: event.defaultPrevented,
+          plain: data.getData('text/plain'),
+          html: data.getData('text/html'),
+        };
+      }, kind);
+
+      await page.click('[data-continuity-reset]');
+      const plain = await paste('plain');
+      await page.waitForFunction(
+        () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-files') === 'notes.txt:3',
+      );
+      expect(plain).toEqual({ defaultPrevented: false, plain: 'notes.txt', html: '' });
+
+      await page.click('[data-continuity-reset]');
+      const html = await paste('html');
+      await page.waitForFunction(
+        () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-draft')?.includes('Rich note') === true,
+      );
+      expect(html.defaultPrevented).toBe(true);
+      expect(html.html).toContain('Rich note');
+      expect((await continuityProbe(page)).files).toBe('notes.txt:3');
+
+      await page.click('[data-continuity-reset]');
+      const fileOnly = await paste('file');
+      await page.waitForFunction(
+        () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-files') === 'notes.txt:3',
+      );
+      expect(fileOnly).toEqual({ defaultPrevented: true, plain: '', html: '' });
+      expect((await continuityProbe(page)).draft).toBe('');
+
+      await page.click('[data-continuity-reset]');
+      const sameMetadata = await paste('same-metadata');
+      await page.waitForFunction(
+        () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-files') === 'notes.txt:3|notes.txt:3',
+      );
+      expect(sameMetadata.defaultPrevented).toBe(true);
+      expect((await continuityProbe(page)).files).toBe('notes.txt:3|notes.txt:3');
+      await page.close();
+    });
+  }, 240_000);
+
+  test('long user and steer tokens stay inside bubbles at desktop and mobile widths', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
+      for (const viewport of [{ width: 1280, height: 1000 }, { width: 360, height: 800 }]) {
+        await page.setViewport(viewport);
+        const measured = await page.evaluate(() => {
+          const read = (selector: string) => {
+            const bubble = document.querySelector<HTMLElement>(`${selector} .p-user-bubble`);
+            return {
+              clientWidth: bubble?.clientWidth ?? 0,
+              scrollWidth: bubble?.scrollWidth ?? 0,
+            };
+          };
+          return {
+            user: read('[data-wrap-user]'),
+            steer: read('[data-wrap-steer]'),
+            tokenLength: Number(document.querySelector('[data-continuity-probe]')?.getAttribute('data-token-length') ?? 0),
+          };
+        });
+        expect(measured.tokenLength).toBeGreaterThan(500);
+        expect(measured.user.clientWidth).toBeGreaterThan(0);
+        expect(measured.user.scrollWidth).toBeLessThanOrEqual(measured.user.clientWidth);
+        expect(measured.steer.clientWidth).toBeGreaterThan(0);
+        expect(measured.steer.scrollWidth).toBeLessThanOrEqual(measured.steer.clientWidth);
+      }
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a failed Markdown image becomes a diagnostic with its raw link; a loaded image remains an image', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 760, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-image-failure] [data-markdown-image-error]');
+      await page.waitForFunction(() => {
+        const image = document.querySelector<HTMLImageElement>('[data-image-success] [data-markdown-image]');
+        return image?.complete === true && image.naturalWidth > 0;
+      });
+
+      const failed = await page.$eval('[data-image-failure] [data-markdown-image-error]', (note) => ({
+        role: note.getAttribute('role'),
+        text: note.textContent ?? '',
+        href: note.querySelector('a')?.getAttribute('href') ?? '',
+      }));
+      expect(failed.role).toBe('note');
+      expect(failed.text).toContain('Image failed to load: Checkout diagram');
+      expect(failed.href).toBe('/assets/missing-continuity-image.png');
+      expect(await page.$('[data-image-failure] img')).toBeNull();
+      expect(await page.$('[data-image-success] [data-markdown-image-error]')).toBeNull();
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * KINU-011. The generic tool preview renders a credential.
+ *
+ * WHY A BROWSER. The preview lives behind `ToolCallBlock`'s `expanded` state,
+ * which is local component state with no prop and no exported seam. There is no
+ * DOM implementation in this repository and adding one to render a component
+ * that ships to a real browser would measure the wrong thing. So the oracle is
+ * the rendered text after the click an operator makes.
+ *
+ * THE ORACLE, AND WHY IT NEEDS NO COPY OF THE FIXTURE. `redactPayload` is
+ * idempotent: applying it to already-redacted JSON changes nothing. So the
+ * rendered preview must be a FIXED POINT of the canonical policy. If the
+ * component grew its own weaker secret list, some credential-shaped field would
+ * survive rendering, the canonical policy would still mask it, and the fixed
+ * point would break. That is the "one list, two consumers" claim in
+ * `core/src/events/hub/visibility.ts`, asserted from the consumer end, with no
+ * second copy of the fixture and nothing to drift.
+ *
+ * Two non-vacuity guards go with it, because an empty preview is also a fixed
+ * point: the masked marker must be present, and the literal secret must appear
+ * nowhere in the document.
+ *
+ * BLIND SPOT, and it is the ledger's own residual. `redactPayload` is a
+ * FIELD-NAME heuristic. The `run` and `execute_tools` inputs do not go through
+ * it at all: they render as a code block, because pretty-printed JSON turns
+ * every quote and newline in a command into an escape sequence. A credential
+ * written inside a shell command is therefore still shown, and the last
+ * assertion here states that on purpose, so the gap is visible and cannot widen
+ * quietly into the structured path.
+ */
+describe('the tool preview redacts through the one canonical policy', () => {
+  test('structured input and output are a fixed point of redactPayload', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 1600 });
+      await page.goto(`${origin}/gallery.html?frame=toolrun&secrets=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-tool-state]');
+
+      // A group's own toggle mounts its members' toggles a render later, so the
+      // pass repeats until nothing is left collapsed.
+      for (let pass = 0; pass < 3; pass += 1) {
+        const collapsed = await page.$$('button[aria-expanded="false"]');
+        if (collapsed.length === 0) break;
+        for (const toggle of collapsed) await toggle.click();
+        await page.waitForFunction(() => document.querySelectorAll('pre').length > 0, { timeout: 8000 });
+      }
+
+      const rendered = await page.evaluate(() => ({
+        previews: [...document.querySelectorAll('pre')].map((node) => node.textContent ?? ''),
+        body: document.body.textContent ?? '',
+      }));
+      await page.close();
+
+      // Every preview that is JSON must already be what the canonical policy
+      // would produce. Non-JSON previews are the code-block path, covered below.
+      //
+      // Selected by SHAPE rather than by catching a parse error. A caught error
+      // returning a sentinel cannot tell "this preview is a code block" from
+      // "this preview is JSON and is corrupt", and the second is a defect that
+      // must fail rather than be skipped. `JSON.stringify(value, null, 2)` of an
+      // object or an array always opens with a brace or a bracket, so the shape
+      // is the selector and `parseJsonValue` is then required to succeed.
+      const structured = rendered.previews
+        .filter((text) => text.startsWith('{') || text.startsWith('['))
+        .map((text) => parseJsonValue(text));
+      expect(structured.length, 'no structured preview rendered, so the oracle read nothing')
+        .toBeGreaterThan(0);
+      for (const preview of structured) {
+        expect(redactPayload(preview), 'a rendered preview is not a fixed point of redactPayload')
+          .toEqual(preview);
+      }
+
+      // Non-vacuity: masking really happened, at both nesting depths.
+      expect(rendered.body).toContain('<redacted:authorization>');
+      expect(rendered.body).toContain('<redacted:apiKey>');
+      // Not a blanket mask: an ordinary sibling of a secret survives.
+      expect(rendered.body).toContain('visible');
+      // The value itself reaches no pixel of the structured path.
+      const secretsInStructured = structured
+        .filter((preview) => JSON.stringify(preview).includes('sk-live-REDACTME'));
+      expect(secretsInStructured, 'a credential value survived into a structured preview').toEqual([]);
+
+      // THE RESIDUAL, asserted rather than described. `run` renders its command
+      // as free text, so a credential inside the command is still shown. The day
+      // this stops being true, delete this assertion and the residual note in
+      // `docs/research/triage-ledger.md`.
+      expect(rendered.body, 'the free-text residual closed; update the ledger')
+        .toContain('curl -s https://api.stripe.example/v1/charges');
     });
   }, 240_000);
 });

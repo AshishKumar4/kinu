@@ -67,6 +67,8 @@ export const SCRATCH_PREFIXES = [
   'agent-core-',
   'capture-probe-',
   'devbox-digest-',
+  // The devbox bench-decision suite's control fixtures.
+  'devbox-control-',
   'fuse-probe-',
   'bench-external-',
   'cc-corpus-',
@@ -81,6 +83,9 @@ export const SCRATCH_PREFIXES = [
   'opencode',
   'mutation-gate-',
   'nimbus-probe-',
+  // The pc-agent supervisor suites: one coarse family entry, the same rule as
+  // `kinu-` — eleven exact spellings is the list that drifts.
+  'pc-agent-',
   // The anti-slop gates' oxlint fixture prefixes. Each gate mints under tmpdir() and
   // releases in its own finally, so the only survivor is a SIGKILLed run — exactly the
   // case this catalogue exists to make visible to preflight's count and --reclaim.
@@ -89,6 +94,7 @@ export const SCRATCH_PREFIXES = [
   'no-copy-rpc-stub-gate-',
   'no-swallow-gate-',
   'no-wait-until-gate-',
+  'typescript-escapes-gate-',
   'outcome-baseline-',
   'pi-worker-test-',
 ] as const;

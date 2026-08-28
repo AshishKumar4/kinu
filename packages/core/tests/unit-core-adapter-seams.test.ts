@@ -264,19 +264,29 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
   const recorded: CompletedTurn[] = [];
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw, sql);
+  const store = createCompletedTurnStore(sql);
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
-    sessionWindow: createCompletedTurnStore(sql),
+    sessionWindow: store,
     craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async (turn) => { recorded.push(turn); },
     runStoredTurnReview: async (rowId, turn) => { recorded.push(turn); void rowId; },
     onSessionComplete: async () => {},
     runDueShadowTrials: async () => {},
     recordRecovery: () => {},
-    // Nothing in these tests defers a review — every turn here has no
-    // conversational follow-up coming, so recordTurn reviews it immediately.
     deferTurnReview: () => 'queued',
-    runDeferredTurnReviews: async () => ({ reviewed: 0, refused: [] }),
+    // Every turn here has no conversational follow-up coming, so the recording
+    // writes its review obligation onto the turn row and this DRAIN is what runs
+    // it — the same claim-guarded path production takes. A double that returned
+    // an empty drain would make the recording look like it lost the review.
+    runDeferredTurnReviews: async () => {
+      const taken = store.takeQueuedReviews(8);
+      for (const row of taken.reviews) {
+        recorded.push(row.turn);
+        store.settleReview(row.id);
+      }
+      return { reviewed: taken.reviews.length, refused: taken.refused };
+    },
   };
   const broadcasts: BroadcastEvent[] = [];
   const enqueued: ProgrammaticTurn[] = [];

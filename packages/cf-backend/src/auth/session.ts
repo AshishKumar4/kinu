@@ -3,12 +3,17 @@
 // Primary path: app-owned OAuth/OIDC sessions in KV. Browser cookies are
 // opaque, HttpOnly session handles; KV stores only hashes.
 //
-// Local/staging dev: if `env.DEV_USER_EMAIL` is set, we synthesize an identity
-// from that email. Production must leave that variable unset.
+// Local/staging dev: `env.DEV_USER_EMAIL` names ONE identity a caller may act
+// as without signing in. It says which identity, never that anyone may have it
+// — see `authenticateRequest`. Production must leave that variable unset.
 
-import { DEVICE_CONNECT_PATH } from '@kinu.run/core';
-import { deriveUserId, verifySession } from './store';
+import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
+import {
+  SessionAuthorityUnavailableError, deriveUserId, verifySession, type AuthStoreEnv,
+} from './store';
 import type { KvStore } from '../lib/kv';
+import type { UserDO } from '../user/user-do';
+import type { OwnerCapabilityEnv } from '../user/workspace-capability';
 import type { AccessTokenScope } from '../cli/access-token-store';
 
 export const SESSION_COOKIE_NAME = '__Host-kinu_session';
@@ -46,8 +51,8 @@ export function isFreshAuthTime(authTimeMs: number | null | undefined, now = Dat
 }
 
 export class AuthError extends Error {
-  constructor(public readonly status: number, message: string) {
-    super(message);
+  constructor(public readonly status: number, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'AuthError';
   }
 }
@@ -62,10 +67,30 @@ export function readSessionToken(request: Request): string | null {
   return null;
 }
 
-export interface AuthEnv {
+export interface AuthEnv extends OwnerCapabilityEnv {
   AUTH_KV?: KvStore;
+  /** Where a session cookie's authority lives: the row that says the session
+   *  is still live sits in the signing-in user's own Durable Object. */
+  UserDO?: DurableObjectNamespace<UserDO>;
   DEV_USER_EMAIL?: string;
+  /** The shared secret a caller presents to act as `DEV_USER_EMAIL` on a
+   *  deployment that is not a developer's own machine. */
+  DEV_IDENTITY_SECRET?: string;
 }
+
+/**
+ * How a caller proves it may act as `DEV_USER_EMAIL`.
+ *
+ * A HEADER rather than a cookie, deliberately: a browser attaches cookies to
+ * every request to an origin, including ones another page caused, so a
+ * cookie-carried dev identity would be an ambient credential on the one
+ * deployment that has no real sign-in behind it. A header is never ambient.
+ */
+const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity';
+
+/** Hosts that can only be a developer's own machine. `[::1]` keeps its brackets
+ *  because `URL.hostname` does. */
+const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
 
 /** Resolve the caller identity for a request.
  *
@@ -76,26 +101,57 @@ export interface AuthEnv {
 export async function authenticateRequest(request: Request, env: AuthEnv): Promise<AuthIdentity> {
   const sessionToken = readSessionToken(request);
   if (sessionToken) {
-    if (!env.AUTH_KV) throw new AuthError(500, 'AUTH_KV binding is not configured');
-    const identity = await verifySession(env.AUTH_KV, sessionToken);
-    if (identity) return identity;
+    assertSessionBindings(env);
+    try {
+      const identity = await verifySession(env, sessionToken);
+      if (identity) return identity;
+    } catch (e) {
+      if (!(e instanceof SessionAuthorityUnavailableError)) throw e;
+      // Unreachable authority is not an expired cookie: 401 here would send a
+      // signed-in user into a sign-in the same outage cannot complete.
+      throw new AuthError(503, e.message, { cause: e });
+    }
     throw new AuthError(401, 'Kinu session expired. Sign in again.');
   }
 
+  // A synthesized identity is a signed-in user without a sign-in, so what
+  // enables it must be POSSESSION, never the absence of a cookie. Staging
+  // publishes `DEV_USER_EMAIL` on a public route: gated on absence, every
+  // unauthenticated request that reached it arrived as the eval service account
+  // holding ordinary user, workspace, MCP and feedback authority.
+  //
+  // Two ways to hold it, and no third. A developer's own machine is already
+  // the whole trust boundary, so localhost needs no secret and local dev is
+  // unchanged. Everywhere else the caller presents the shared secret, and a
+  // deployment that configures no secret grants nothing.
   if (env.DEV_USER_EMAIL) {
-    return {
-      userId: await deriveUserId(env.DEV_USER_EMAIL),
-      email: env.DEV_USER_EMAIL,
-      sub: 'dev',
-      provider: 'dev',
-      authTime: Date.now(),
-    };
+    const presented = request.headers.get(DEV_IDENTITY_HEADER);
+    const held = LOOPBACK_HOSTS.includes(new URL(request.url).hostname)
+      || (env.DEV_IDENTITY_SECRET !== undefined
+        && presented !== null
+        && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
+    if (held) {
+      return {
+        userId: await deriveUserId(env.DEV_USER_EMAIL),
+        email: env.DEV_USER_EMAIL,
+        sub: 'dev',
+        provider: 'dev',
+        authTime: Date.now(),
+      };
+    }
   }
 
   if (!env.AUTH_KV) {
     throw new AuthError(500, 'Browser auth is not configured (AUTH_KV binding missing)');
   }
   throw new AuthError(401, 'No Kinu session in request');
+}
+
+/** The bindings a cookie carries no authority without. Checked only on the
+ *  cookie path: the dev identity reaches neither. */
+function assertSessionBindings(env: AuthEnv): asserts env is AuthEnv & AuthStoreEnv {
+  if (!env.AUTH_KV) throw new AuthError(500, 'AUTH_KV binding is not configured');
+  if (!env.UserDO) throw new AuthError(500, 'UserDO binding is not configured');
 }
 
 /** Methods a site can be made to issue cross-site without reading the reply. */

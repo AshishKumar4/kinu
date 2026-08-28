@@ -3,7 +3,7 @@
  *
  * Three claims, each with its own way of being wrong:
  *
- *   1. The nine sections ARE GEPA targets — registered, seeded from the
+ *   1. The eleven sections ARE GEPA targets — registered, seeded from the
  *      incumbent, and constrained so a candidate that cannot ship is never
  *      scored.
  *   2. A winner lands PENDING and the live prompt does not move. The scaffold
@@ -31,6 +31,7 @@ import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initShadowTables } from '../src/scaffold/shadow';
 import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { initReplayTables } from '../src/evolution/replay';
+import { initRefinementTables } from '../src/evolution/refinement';
 import { initFactsTable, createFactsStore, type FactsStore } from '../src/memory/facts';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import { initAllTables } from '../src/identity/schema';
@@ -64,6 +65,7 @@ function setup(): Harness {
   initReplayTables(execRaw, rt.storage.sql);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
+  initRefinementTables(execRaw, rt.storage.sql);
   return { rt, facts: createFactsStore(rt.storage.sql) };
 }
 
@@ -88,10 +90,11 @@ const INCUMBENT = target.source;
 const SAME_SIZE = `${INCUMBENT.slice(0, -6)}ASKED.`;
 const LONGER = `${INCUMBENT}\nAn extra sentence that makes this candidate strictly longer than the incumbent.`;
 
-describe('the ten sections are the GEPA targets', () => {
-  test('all ten are registered, and nothing else is', () => {
-    // Every addressable section is optimizable; the role profile is the tenth.
-    expect(PROMPT_SECTION_TARGETS).toHaveLength(10);
+describe('the eleven sections are the GEPA targets', () => {
+  test('all eleven are registered, and nothing else is', () => {
+    // Every addressable section is optimizable; the role profile is the tenth,
+    // and the workspace-instructions rule the eleventh.
+    expect(PROMPT_SECTION_TARGETS).toHaveLength(11);
     expect(PROMPT_SECTION_TARGETS.map((s) => s.id).sort())
       .toEqual(PROMPT_SECTIONS.map((s) => s.id).sort());
   });

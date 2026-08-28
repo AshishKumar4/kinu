@@ -74,6 +74,18 @@ export function mergeConsentScope(existing: string | null | undefined, granted: 
     : granted;
 }
 
+/**
+ * Whether an allow at `granted` scope decides a request needing `required`.
+ * `full_filesystem` implies the base tier; the base tier does not imply it.
+ *
+ * One spelling, used by the stored-policy short-circuit and by the registry
+ * when an "always" grant settles the prompts it covers. Two spellings of this
+ * comparison is how one of them comes to allow slightly more than the other.
+ */
+export function consentScopeCovers(granted: DeviceConsentScope, required: DeviceConsentScope): boolean {
+  return required === DEVICE_CONSENT_SCOPE || granted === DEVICE_CONSENT_SCOPE_FULL_FS;
+}
+
 export interface DeviceActionSummary {
   method: string;
   command: string;
@@ -139,7 +151,25 @@ export const DEVICE_CONSENT_TIMEOUT_MS = 5 * 60_000;
 
 interface Waiting {
   readonly view: PendingDeviceConsent;
+  /** Every caller waiting on this one prompt. An identical re-ask joins the
+   *  list rather than raising a second card. */
+  readonly awaiting: ((decision: DeviceConsentDecision) => void)[];
   readonly settle: (decision: DeviceConsentDecision) => void;
+}
+
+/**
+ * A pending prompt has one capability context (device and workspace) and one
+ * action (method, command, and scope). A changed device label is presentation
+ * metadata for that same device, not a new question for the owner.
+ */
+function sameRequest(pending: DeviceConsentRequest, request: DeviceConsentRequest): boolean {
+  if (
+    pending.deviceId !== request.deviceId
+    || pending.workspaceName !== request.workspaceName
+  ) return false;
+  return pending.method === request.method
+    && pending.command === request.command
+    && pending.scope === request.scope;
 }
 
 /**
@@ -159,22 +189,43 @@ export class DeviceConsentRegistry {
     this.now = deps.now ?? Date.now;
   }
 
-  /** Raise a prompt and wait for it to settle. */
+  /** Raise a prompt and wait for it to settle. An identical prompt already
+   *  waiting is JOINED, not raised again: one card, one answer, and every
+   *  caller that asked settled by it. */
   request(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
+    const { promise, resolve } = Promise.withResolvers<DeviceConsentDecision>();
+    const already = this.pendingLike(req);
+    if (already) {
+      already.awaiting.push(resolve);
+      return promise;
+    }
     const consentId = this.deps.newId();
     const view: PendingDeviceConsent = { ...req, consentId, createdAt: this.now() };
-    this.deps.announce({ kind: 'raised', consent: view });
-    return new Promise<DeviceConsentDecision>((resolve) => {
-      const timer = setTimeout(() => {
-        if (!this.waiting.delete(consentId)) return;
-        this.deps.announce({ kind: 'settled', consentId });
-        resolve('timeout');
-      }, this.timeoutMs);
-      this.waiting.set(consentId, {
-        view,
-        settle: (decision) => { clearTimeout(timer); resolve(decision); },
-      });
+    const awaiting = [resolve];
+    const timer = setTimeout(() => {
+      if (!this.waiting.delete(consentId)) return;
+      this.deps.announce({ kind: 'settled', consentId });
+      for (const settle of awaiting) settle('timeout');
+    }, this.timeoutMs);
+    this.waiting.set(consentId, {
+      view,
+      awaiting,
+      settle: (decision) => {
+        clearTimeout(timer);
+        for (const settle of awaiting) settle(decision);
+      },
     });
+    // Announced only once the id can be answered: a surface that resolves
+    // synchronously on the notice was otherwise told the id is unknown.
+    this.deps.announce({ kind: 'raised', consent: view });
+    return promise;
+  }
+
+  private pendingLike(req: DeviceConsentRequest): Waiting | undefined {
+    for (const pending of this.waiting.values()) {
+      if (sameRequest(pending.view, req)) return pending;
+    }
+    return undefined;
   }
 
   /** The owner answered. False when the id is unknown — already settled, or
@@ -185,8 +236,33 @@ export class DeviceConsentRegistry {
     this.waiting.delete(consentId);
     this.deps.announce({ kind: 'settled', consentId });
     // Anything unrecognised is the weakest grant, never a stronger one.
-    pending.settle(decision === 'always' || decision === 'deny' ? decision : 'once');
+    const effective = decision === 'always' || decision === 'deny' ? decision : 'once';
+    pending.settle(effective);
+    if (effective === 'always') this.settleCoveredByGrant(pending.view);
     return true;
+  }
+
+  /**
+   * An "always" answer is a policy, and a policy decides more than the card it
+   * was given on. Every other prompt still waiting for the same device whose
+   * scope that grant covers is now answered, so leaving its card up asks the
+   * owner to decide again what they just decided forever — the duplicate they
+   * see. Those settle as `once`: the remembering is the one "always", never
+   * one per card.
+   */
+  private settleCoveredByGrant(granted: PendingDeviceConsent): void {
+    // The provisioning card names no machine and grants no device access.
+    if (!granted.deviceId) return;
+    // Iterated directly: deleting the CURRENT key mid-iteration is defined
+    // behaviour for a Map, and this loop deletes nothing else, so a snapshot
+    // copy would buy nothing.
+    for (const [consentId, pending] of this.waiting) {
+      if (pending.view.deviceId !== granted.deviceId) continue;
+      if (!consentScopeCovers(granted.scope, pending.view.scope)) continue;
+      this.waiting.delete(consentId);
+      this.deps.announce({ kind: 'settled', consentId });
+      pending.settle('once');
+    }
   }
 
   /** Everything still waiting — so a client that reloaded re-renders its cards. */

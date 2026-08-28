@@ -54,6 +54,9 @@ export type {
 } from './lifecycle';
 
 export {
+  archiveCommand,
+  archiveExcludeFile,
+  archiveSizeCommand,
   assertChainId,
   baseObjectKey,
   chainBackupOptions,
@@ -64,14 +67,17 @@ export {
   isChainId,
   layerIntegrityFailure,
   metadataObjectKey,
+  normalizeArchiveExclude,
   normalizeChainState,
   isOverlayMounted,
   REBASE_DELTA_RATIO,
   shouldRebase,
   shouldCheckpoint,
   snapshotChainStorage,
+  supersedeGeneration,
 } from './snapshot-chain';
 export type {
+  ChainGeneration,
   ChainState,
   ChangeStatus,
   SnapshotChainPorts,
@@ -88,6 +94,7 @@ export {
 export type { R2fsPorts } from './r2fs';
 
 export {
+  CAS_STORE_MOUNT,
   CAS_TREE_MOUNT,
   normalizeOverlayCasState,
   overlayCasStorage,
@@ -103,6 +110,7 @@ export type {
 } from './overlay-cas';
 
 export {
+  CandidateControlStateV1Schema,
   DURABILITY_AWAIT_POINTS,
   CapturedCutSchema,
   DURABILITY_OPERATION_KINDS,
@@ -119,6 +127,7 @@ export {
   UploadIntentSchema,
 } from './durability/contracts';
 export type {
+  CandidateControlStateV1,
   DurabilityAwaitPoint,
   CapturedCut,
   HeadPointerV1,
@@ -131,3 +140,31 @@ export type {
   RootEnvelopeV1,
   UploadIntent,
 } from './durability/contracts';
+
+export { candidateContainerStorage } from './candidates/container';
+export type { CandidateContainerFormat, CandidateContainerPorts } from './candidates/container';
+
+export {
+  BOUNDED_LAYERS_FORMAT,
+  MAX_LAYER_DEPTH,
+  build as buildBoundedLayers,
+  open as openBoundedLayers,
+} from './candidates/bounded-layers';
+export { MERKLE_PACK_FORMAT, buildMerklePack, openMerklePack } from './candidates/merkle-pack';
+
+export {
+  CandidatePublicationPlan,
+  FileCandidateObjectSink,
+  MemoryCandidateObjectSink,
+  StagedCandidateObject,
+  finalizeCandidatePayload,
+  planCandidatePublication,
+  stageCandidatePayload,
+} from './candidates/publication';
+export type {
+  CandidateObjectSink,
+  CandidatePayloadStore,
+  CandidatePublicationControl,
+  CandidatePublicationDraft,
+  PublishedCandidate,
+} from './candidates/publication';

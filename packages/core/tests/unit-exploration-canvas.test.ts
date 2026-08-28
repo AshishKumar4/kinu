@@ -34,6 +34,7 @@ import { makeSql, makeExecRaw } from './helpers';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initHeadsTables } from '../src/heads/schema';
+import { initSwarmNodeRecords, recordSwarmNode } from '../src/strategy/swarm-resume';
 import { readSearchTree } from '../src/read-models/search-tree';
 import { readForkRunParams } from '../src/read-models/fork-params';
 import {
@@ -45,8 +46,9 @@ function freshDb() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw, makeSql(db));
+  initMctsSearchTable(execRaw);
   initHeadsTables(execRaw, makeSql(db));
+  initSwarmNodeRecords(execRaw);
   return { db, sql: makeSql(db) };
 }
 
@@ -418,12 +420,47 @@ describe('readExplorationCanvas', () => {
   });
 });
 
+describe('Pareto canvas evidence', () => {
+  test('derives a stable nondominated frontier from durable vectors, not scalar tree values', () => {
+    const { db, sql } = freshDb();
+    seedSearch(db, { rootId: 'pareto', task: 'trade quality for cost', at: 1_000, nodes: 3 });
+    const axes = [
+      { id: 'quality', direction: 'maximise' as const },
+      { id: 'cost', direction: 'minimise' as const },
+    ];
+    for (const [nodeId, evidence] of [
+      ['pareto-b0', { quality: 0.9, cost: 10 }],
+      ['pareto-b1', { quality: 0.8, cost: 2 }],
+      ['pareto-b2', { quality: 0.7, cost: 12 }],
+    ] as const) {
+      recordSwarmNode(sql, {
+        rootId: 'pareto',
+        nodeId,
+        record: {
+          outcome: { kind: 'pareto', axes, evidence, detail: 'measured' },
+          conclusion: null,
+          aggregated: [],
+          tokens: null,
+        },
+        now: 1_000,
+      });
+    }
+    expect(readExplorationRun(sql, 'pareto')?.frontier).toEqual({
+      axes,
+      candidates: [
+        { nodeId: 'pareto-b0', evidence: { quality: 0.9, cost: 10 } },
+        { nodeId: 'pareto-b1', evidence: { quality: 0.8, cost: 2 } },
+      ],
+    });
+  });
+});
 /**
  * The permalink read: ONE run, composed exactly as the page composes it. The
  * drill-down opens a single run by id, and its dispatch parameters used to travel
  * only on the canvas page — so the surface with the most room to show the judge
  * clamp was the one surface that could not read it.
  */
+
 describe('readExplorationRun', () => {
   test('answers one run with every half the page would have given it', () => {
     const { db, sql } = freshDb();

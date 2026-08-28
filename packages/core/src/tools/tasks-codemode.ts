@@ -7,7 +7,7 @@
  * SAME TaskListStore instance — a script and a direct tool call see and
  * mutate the identical list, never a shadow copy.
  */
-import type { CodemodeProvider } from '../rlm';
+import type { CodemodeProvider } from './sandbox-contract';
 import * as v from 'valibot';
 import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
 import type { AgentConfigStore } from '../config/store';

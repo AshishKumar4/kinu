@@ -174,8 +174,8 @@ export class TurnContextBudget {
  * True when a tool call's arguments name a spill address — a read of a
  * clamped output, a spilled attachment, an event body, or a compaction
  * archive. The counter for "the drop-content-keep-the-path recipe is actually
- * being followed", including the `llm.query`-over-slices and fork-cites-spill
- * shapes: both reach the payload through its path.
+ * being followed", including the temporary-agent `context_ref` and
+ * fork-cites-spill shapes: both reach the payload through its path.
  *
  * A tool call's arguments are what the model sent as JSON, so serializing them
  * cannot fail. It is not guarded: arguments that will not serialize mean the

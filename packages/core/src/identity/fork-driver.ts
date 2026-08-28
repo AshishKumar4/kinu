@@ -16,9 +16,10 @@
  * That is the whole of the per-backend difference.
  */
 
-import type { VFS, SqlExecutor } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
-import { snapshotWorkspaceForFork, type ForkSnapshot } from './fork';
+import { forkPointExists } from './conversation-store';
+import type { SqlExecutor } from '../types/primitives';
+import type { ForkFileSource } from './fork-transfer';
 
 /**
  * A fork's name. Stricter than the general workspace-name rule (no dots): a
@@ -40,13 +41,16 @@ export interface ForkTransport {
    * a fork on a brittle pre-check is worse than a late error.
    */
   occupied(name: string): Promise<boolean>;
-  /** Land the snapshot in the named workspace and report its id. */
-  deliver(name: string, snapshot: ForkSnapshot): Promise<{ workspaceId: string }>;
+  /** Stream the source state into the named workspace and report where and at
+   *  which cut point it landed. */
+  deliver(name: string, source: { sql: SqlExecutor; vfs: ForkFileSource; untilMessageId: string }): Promise<{
+    workspaceId: string; forkPointMs: number;
+  }>;
 }
 
 export interface ForkDriverDeps {
   /** The workspace filesystem a fork inherits SOUL.md and memory/ from. */
-  readonly vfs: VFS;
+  readonly vfs: ForkFileSource;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
   transport: ForkTransport;
@@ -84,9 +88,9 @@ export async function forkWorkspace(
     throw new Error('agent busy, retry when current turn finishes');
   }
 
-  // Resolve the cut point FIRST, so an unknown message id costs nothing: the
-  // snapshot throws on a missing id, and it is the cheapest thing here.
-  const snapshot = await snapshotWorkspaceForFork(deps.sql, deps.vfs, untilMessageId);
+  if (!forkPointExists(deps.sql, untilMessageId)) {
+    throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
+  }
 
   const requestedName = opts?.name?.trim();
   const name = requestedName && requestedName.length > 0
@@ -99,6 +103,8 @@ export async function forkWorkspace(
     throw new Error(`agent name already exists: "${name}"`);
   }
 
-  const { workspaceId } = await deps.transport.deliver(name, snapshot);
-  return { workspaceId, name, forkPointMs: snapshot.cut.createdAtMs };
+  const { workspaceId, forkPointMs } = await deps.transport.deliver(name, {
+    sql: deps.sql, vfs: deps.vfs, untilMessageId,
+  });
+  return { workspaceId, name, forkPointMs };
 }

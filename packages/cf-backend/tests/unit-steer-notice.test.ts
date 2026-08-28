@@ -38,12 +38,10 @@ function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): s
     const deps: SteerActionsDeps = {
       steerChat: async () => 'mid-turn',
       abortChat: async () => [],
-      sendChat: () => {},
       draft: '',
       setDraft: () => {},
       hasAttachments,
       steerRuns,
-      messageIds: [],
     };
     const { notice } = useSteerActions(deps);
     seen = notice === null ? null : notice.text;

@@ -106,7 +106,7 @@ function actionDescription(input: { value: unknown }): string {
 const rosterEntry: SubordinateRosterEntry = {
   name: 'researcher',
   createdBy: 'orchestrator', status: 'idle', currentTask: null,
-  createdAt: 1000, dismissedAt: null,
+  createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null,
 };
 
 const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
@@ -115,12 +115,29 @@ const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHando
   phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
 });
 
+/** The temporary rung's port, stubbed at the width these tests read it: the
+ *  FULL surface wires it, so the advertised-vs-parsed field relation covers the
+ *  role target too. Its own behaviour is covered by unit-temporary-agents. */
+const temporaryPortStub = {
+  run: async () => ({
+    status: 'completed' as const,
+    agent: 'ask-auditor-x',
+    lifetime: 'task' as const,
+    role: 'auditor',
+    answer: 'answered',
+    transcript: 'kept' as const,
+    elapsed_ms: 1,
+  }),
+  settle: () => false,
+};
+
 function makeTeam(
   overrides: Partial<Pick<TeamToolDeps, 'assign' | 'message' | 'list'>> = {},
 ) {
   const calls: Call[] = [];
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
+    temporary: temporaryPortStub,
     snapshot: () => [rosterEntry],
     list: async () => [rosterEntry],
     create: async (input) => ({
@@ -128,7 +145,7 @@ function makeTeam(
       displayName: 'Researcher',
       subordinate: {
         name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general',
-        createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+        createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
       },
     }),
     rename: async (input) => {
@@ -147,6 +164,7 @@ function makeTeam(
       return { name: input.name ?? 'researcher', displayName: 'Researcher' };
     },
     assign: async (input) => { calls.push({ action: 'assign', input }); return { ok: true, name: input.name, ...handoff('queued', true) }; },
+    knows: async () => true,
     status: async (input) => { calls.push({ action: 'status', input }); return { roster: [rosterEntry] }; },
     message: async (input) => { calls.push({ action: 'message', input }); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
     dismiss: async (input) => {
@@ -328,16 +346,18 @@ describe('agents tool — the field contract', () => {
     expect(refusal.error).toContain(SWARM_PRESET_DOCTRINE.join(' '));
   });
 
-  test('the objective kinds this runner cannot measure are advertised as refused', () => {
-    // `measuredHalf` returns null for kind:"instanced" and kind:"vector", so a
-    // score:"verify" run over either is refused as unsupported — and advance:
-    // "pareto", their only consumer, is refused unconditionally by the same
-    // runner. The description called them "the two front shapes", which reads as
-    // an offer: the model builds the nested objective and loses the call.
+  test('the front objective kinds are advertised as pareto-only, not refused', () => {
+    // advance:"pareto" is implemented: instanced/vector evidence is measured per
+    // declared axis and the nondominated frontier advances the tree. The
+    // description must offer the real contract — front kinds pair with pareto,
+    // every axis must measure finite — and must not carry the old refusal, which
+    // would make the model scalarise a genuinely multi-axis objective.
     const objective = propertyDescription({ value: agentsTool({ fork: forkDeps() }).inputSchema }, 'objective');
-    expect(objective).toContain('both are refused today');
-    expect(objective).not.toContain('are the two front shapes');
-    // The two reachable kinds keep their instructions.
+    expect(objective).toContain('run only with advance:"pareto"');
+    expect(objective).toContain('{kind:"instanced", metric, unit, direction, scale, target, instances}');
+    expect(objective).toContain('{kind:"vector", components:[...]}');
+    expect(objective).not.toContain('both are refused today');
+    // The two scalar-shaped kinds keep their instructions.
     expect(objective).toContain('{kind:"scalar"');
     expect(objective).toContain('kind:"witness" is a checkable certificate');
   });

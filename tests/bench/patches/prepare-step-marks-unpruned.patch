@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/prepare-step.ts b/packages/core/src/prompting/prepare-step.ts
-index cf850f1..518354f 100644
+index 93b417edd..559cc7270 100644
 --- a/packages/core/src/prompting/prepare-step.ts
 +++ b/packages/core/src/prompting/prepare-step.ts
-@@ -102,7 +102,7 @@ export function composePrepareStep(
-   const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot());
-   const working = woven ?? shrunk;
+@@ -134,7 +134,7 @@ function finishPrepareStep(
+   const replayed = normalizeReplayForDestination(working, pipeline.destinationProviderId);
+   const destinationReady = replayed ?? working;
    const plan = pipeline.cache;
--  const messages = plan ? markCacheTail(working, plan.strategy) : working;
-+  const messages = plan ? markCacheTail(base, plan.strategy) : working;
+-  const messages = plan ? markCacheTail(destinationReady, plan.strategy) : destinationReady;
++  const messages = plan ? markCacheTail(base, plan.strategy) : destinationReady;
    // Measured on the FINAL array, and on every step — including the step that
    // changed nothing and returns undefined below, which is still a priced
    // request and still occupies the window.

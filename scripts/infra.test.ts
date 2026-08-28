@@ -14,10 +14,13 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
-  type Resource, SUPPLY, UNCAPTURED, UNOBSERVABLE, deriveInfrastructure, envFields, exclusiveTo,
-  readSites, requiredIn, supplyCensus, vectorizeGeometry,
+  type InfraEnvironment, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, UNOBSERVABLE,
+  deriveInfrastructure, envFields, exclusiveTo, readSites, requiredIn, supplyCensus,
+  vectorizeGeometry,
 } from './infra-manifest';
-import { type Row, audit, supplyDrift, unobservableDrift } from './infra-verify';
+import {
+  type Row, audit, supplyDrift, supplyRows, supplySummary, unobservableDrift,
+} from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { plan } from './infra-provision';
 import { isProductSource, readMatching } from './sources';
@@ -130,29 +133,138 @@ describe('the inventory is derived from the manifest, not written beside it', ()
   });
 });
 
-describe('the secret census is pinned to `Env`', () => {
+describe('the supply census is pinned to `Env`, one environment at a time', () => {
+  function environmentNamed(key: string): InfraEnvironment {
+    const found = infrastructure.environments.find((entry) => entry.key === key);
+    if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
+    return found;
+  }
+
+  const production = environmentNamed('production');
+  const staging = environmentNamed('staging');
+  const names = (fields: readonly { readonly name: string }[]): readonly string[] =>
+    fields.map((field) => field.name);
+
+  /** The same manifest with one environment's `vars` edited — the whole fixture
+   *  the union defect needs, because a per-environment census is exactly what a
+   *  one-environment omission is invisible to otherwise. */
+  function withVars(
+    edit: (environment: InfraEnvironment) => ReadonlyMap<string, string>,
+    only?: string,
+  ): Infrastructure {
+    return {
+      ...infrastructure,
+      environments: infrastructure.environments.map((environment) =>
+        only === undefined || environment.key === only
+          ? { ...environment, vars: new Map(edit(environment)) }
+          : environment),
+    };
+  }
+
   test('SUPPLY classifies exactly the values no binding and no var supplies', () => {
     expect(supplyDrift(infrastructure)).toEqual([]);
-    expect(supplyCensus(infrastructure).length).toBeGreaterThan(5);
+    expect(supplyCensus(production).length).toBeGreaterThan(5);
+    expect(supplyCensus(staging).length).toBeGreaterThan(5);
   });
 
-  test('an unclassified new field and a stale entry are both findings', () => {
-    const withExtra = {
-      ...infrastructure,
-      environments: infrastructure.environments.map((environment) => ({
-        ...environment,
-        // Drop a var that SUPPLY does not classify, so the census gains a name.
-        vars: new Map([...environment.vars].filter(([key]) => key !== 'EMAIL_DOMAIN')),
-      })),
-    };
-    const drift = supplyDrift(withExtra);
-    expect(drift.some((entry) => entry.startsWith('EMAIL_DOMAIN'))).toBe(true);
+  test('one environment does not answer for another', () => {
+    // The union defect, named in both directions so it is not one lucky
+    // asymmetry. EMAIL_DOMAIN is production's var and staging has none;
+    // DEV_USER_EMAIL is staging's and production must not have one.
+    expect(production.vars.has('EMAIL_DOMAIN')).toBe(true);
+    expect(staging.vars.has('EMAIL_DOMAIN')).toBe(false);
+    expect(names(supplyCensus(production))).not.toContain('EMAIL_DOMAIN');
+    expect(names(supplyCensus(staging))).toContain('EMAIL_DOMAIN');
+
+    expect(staging.vars.has('DEV_USER_EMAIL')).toBe(true);
+    expect(production.vars.has('DEV_USER_EMAIL')).toBe(false);
+    expect(names(supplyCensus(production))).toContain('DEV_USER_EMAIL');
+    expect(names(supplyCensus(staging))).not.toContain('DEV_USER_EMAIL');
+  });
+
+  test('a var dropped from ONE environment is a finding naming that environment', () => {
+    // The regression fixture for the union. CLI_PUBLIC_ORIGIN is declared by
+    // both environments, so a census that unions them first reports nothing
+    // when one of them loses it — which is how a deployment tier ships without
+    // a value every other tier has.
+    const dropped = (only?: string): Infrastructure => withVars(
+      (environment) => new Map([...environment.vars].filter(([key]) => key !== 'CLI_PUBLIC_ORIGIN')),
+      only,
+    );
+
+    const one = supplyDrift(dropped('staging'));
+    expect(one).toHaveLength(1);
+    expect(one[0]).toContain('CLI_PUBLIC_ORIGIN');
+    expect(one[0]).toContain('staging');
+    expect(one[0]).not.toContain('production');
+
+    // Both environments losing it names both, in one finding rather than two:
+    // it is one unclassified name.
+    const both = supplyDrift(dropped());
+    expect(both).toHaveLength(1);
+    expect(both[0]).toContain('production and staging');
+  });
+
+  test('a classified value that every environment supplies is a stale entry', () => {
+    const everywhere = withVars((environment) =>
+      new Map([...environment.vars, ['ANALYTICS_SQL_API_TOKEN', 'set-as-a-var']]));
+    const drift = supplyDrift(everywhere);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toStartWith('ANALYTICS_SQL_API_TOKEN');
+    expect(drift[0]).toContain('every environment');
+  });
+
+  test('ordinary config vars are checked, per environment, against that environment', () => {
+    // They used to be skipped outright: the loop `continue`d on every
+    // `config-var` entry while its own comment said they were checked against
+    // `vars`. Nothing checked them at all, in any environment.
+    const listed = { state: 'present', detail: 'fixture', names: [] } as const;
+    const verdictOf = (environment: InfraEnvironment, name: string): string | undefined =>
+      supplyRows(environment, listed).find((entry) => entry.name === name)?.verdict;
+
+    expect(verdictOf(production, 'EMAIL_DOMAIN')).toBe('present');
+    expect(verdictOf(staging, 'EMAIL_DOMAIN')).toBe('absent');
+    expect(verdictOf(staging, 'DEV_USER_EMAIL')).toBe('present');
+    expect(verdictOf(production, 'DEV_USER_EMAIL')).toBe('absent');
+    // A secret is never satisfied by a var: a plaintext secret in the config is
+    // a misconfiguration, not a pass.
+    expect(verdictOf(production, 'CREDENTIAL_ENCRYPTION_KEY')).toBe('absent');
+  });
+
+  test('a required value missing from one environment fails that environment by name', () => {
+    const held = (names: readonly string[]) => ({ state: 'present', detail: 'fixture', names } as const);
+    for (const environment of [production, staging]) {
+      const missing = audit(infrastructure, [], supplyRows(environment, held([])), []);
+      expect(missing.findings.some((entry) =>
+        entry.includes(`${environment.key}/CREDENTIAL_ENCRYPTION_KEY`))).toBe(true);
+
+      // The negative control for the same environment: set it, and the finding
+      // is gone rather than merely reworded.
+      const set = audit(infrastructure, [], supplyRows(environment, held(['CREDENTIAL_ENCRYPTION_KEY'])), []);
+      expect(set.findings.some((entry) =>
+        entry.includes(`${environment.key}/CREDENTIAL_ENCRYPTION_KEY`))).toBe(false);
+    }
+  });
+
+  test('the green path prints the set it measured, per environment', () => {
+    // A gate that says "ok" without naming what it looked at is a gate nobody
+    // can tell from a gate that looked at nothing.
+    const fields = envFields();
+    for (const environment of [production, staging]) {
+      const summary = supplySummary(environment, fields);
+      expect(summary).toStartWith(`${environment.key} supplies `);
+      expect(summary).toContain(`of ${String(fields.length)} \`Env\` fields`);
+      for (const field of supplyCensus(environment, fields)) {
+        expect(summary).toContain(field.name);
+      }
+    }
+    // And the two environments' governed sets genuinely differ, which is the
+    // property a union destroyed.
+    expect(supplySummary(staging, fields)).toContain('EMAIL_DOMAIN');
+    expect(supplySummary(production, fields)).not.toContain('EMAIL_DOMAIN');
   });
 
   test('OAuth secrets are required exactly where their client id var is set', () => {
-    const production = infrastructure.environments[0];
-    const staging = infrastructure.environments[1];
-    if (production === undefined || staging === undefined) throw new Error('fixture lost an environment');
     // Production configures the Cloudflare provider; staging configures none and
     // runs on DEV_USER_EMAIL. Demanding production's OAuth secrets of staging
     // would report a hole in a deployment shaped that way on purpose.
@@ -262,7 +374,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 
   test('an unreadable secret list fails rather than reading as "no secrets set"', () => {
     const unreadable = audit(infrastructure, clean, [{
-      environment: 'production', name: '(all)', verdict: 'unknown', required: true,
+      environment: 'production', name: '(all secrets)', verdict: 'unknown', required: true,
       detail: 'token expired',
     }], []);
     expect(unreadable.findings.length).toBe(1);

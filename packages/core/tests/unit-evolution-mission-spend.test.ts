@@ -166,6 +166,13 @@ describe('a deferred review carries its mission across processes', () => {
     // away because the mission happens to be out of money right now.
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
     expect(listTurnOutcomes(ws.rt.storage.sql)).toEqual([]);
+    // And nothing recorded the review as HAVING RUN. A governor declining is a
+    // decision, not a completion: a tombstone here would make activation
+    // recovery settle the row and the raised cap below would find nothing owed.
+    expect(ws.rt.storage.sql`SELECT key FROM effect_tombstones WHERE scope = 'turn_review'`)
+      .toEqual([]);
+    expect(ws.engine.sessionWindow.resetStaleClaims()).toBe(0);
+    expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
 
     // Raise the cap by declaring a roomier parent the label already nests under
     // — the same row now runs.

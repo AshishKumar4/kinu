@@ -5,9 +5,8 @@
  * The LLM's code runs in a codemode sandbox where each provider is a namespace:
  * `codemode.*` (crafted tools, spliced in as a `const tools = {…}` preamble by
  * PreambleCraftedExecutor so mid-turn saves are callable on the next step),
- * `llm.*` (recursive LM calls), `agents.*` (delegation), `web.*`, plus one
- * namespace per registered ExecutionRouter provider (`workspace`, `sandbox`,
- * `laptop`).
+ * `agents.*` (delegation), `web.*`, plus one namespace per registered
+ * ExecutionRouter provider (`workspace`, `sandbox`, `laptop`).
  *
  * Actors differ only in the fields of `ExecuteToolsOptions`: an orchestrator
  * adds its MCP providers, its delegation deps, and records the last-active
@@ -15,30 +14,27 @@
  * so `split_subheads` stays its only way to start anything.
  */
 
+import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import type { AgentsToolDeps, SqlExecutor } from "@kinu.run/core";
+import type { AgentsToolDeps, DeviceRequestChannel, SqlExecutor } from "@kinu.run/core";
 import {
-  createAgentsCodemodeProvider, createWebCodemodeProvider, createRLMProvider,
+  createAgentsCodemodeProvider, createWebCodemodeProvider,
   renderExecuteToolsDescription,
   CRAFTED_TOOL_ALIAS_NAMESPACE, craftedDispatcherEntry,
   type CraftedDispatcherEntry,
   type WebSearchProvider, type CodemodeProvider,
 } from "@kinu.run/core";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry";
-import type { AgentProviderRegistry } from "./providers/agent-registry";
 import type { CFRuntime } from "./runtime";
 
 export interface ExecuteToolsOptions {
   /** env.LOADER — the WorkerLoader every sandboxed execute runs inside. */
   loader: WorkerLoader;
-  /** The actor's runtime: craftStore (preamble source) + executionRouter
+  /** The actor's runtime: craftStore (preamble source) and executionRouter
    *  (the `workspace` / `sandbox` / `laptop` namespaces). */
   rt: Pick<CFRuntime, 'craftStore' | 'executionRouter'>;
   /** The actor's bound SQL — craft-score lookups for injectable-tool selection. */
   sql: SqlExecutor;
-  registry: AgentProviderRegistry;
-  /** The actor's configured model spec, read per call (llm.query default). */
-  modelSpec: () => string | null;
   webSearch: WebSearchProvider;
   /** The actor's delegation deps, read per call so a re-bound model or a fresh
    *  MCTS session lands without rebuilding the tool. Omitted by actors that
@@ -46,13 +42,50 @@ export interface ExecuteToolsOptions {
    *  sandbox — absent deps, the same containment as the top-level tool. */
   agents?: () => AgentsToolDeps;
   /** Providers beyond the shared set (the orchestrator's MCP namespaces).
-   *  Spliced between `llm` and `web` so provider order — and therefore the
+   *  Spliced between `agents` and `web` so provider order — and therefore the
    *  LLM-visible type description — is stable across actor kinds. */
   extraProviders?: () => CodemodeProvider[];
   /** Notified with the provider name whenever one of its tools ran. The
    *  orchestrator uses it to remember where work happened (file-manager /
    *  diff default); callers that don't care omit it. */
   onExecutorUsed?: (name: string) => void;
+  /**
+   * THIS `execute_tools` invocation's device-request ownership channel, or
+   * undefined when the call cannot detach (nothing armed a holder).
+   *
+   * Read per provider call, not once: the tool is constructed once per DO
+   * lifetime while the channel belongs to ONE invocation, and the owning job id
+   * inside it changes the moment that invocation detaches. A script's laptop
+   * execs then report their request identities exactly as top-level `run` does,
+   * so a detached `execute_tools` owns the device work it started.
+   */
+  deviceRequests?: () => DeviceRequestChannel | undefined;
+}
+
+/**
+ * The sandbox's own `exec` arguments, with this invocation's device-request
+ * ownership merged into the context slot.
+ *
+ * The sandbox marshals a script's call as JSON and the host dispatches it as
+ * `fn(...args)` (codemode's ToolDispatcher), so a function cannot cross that
+ * boundary and the context has to be added HERE, on the host side of the
+ * wrapper. MERGED rather than assigned: a script may have passed exec options
+ * of its own in that slot, and replacing them would change the call it made.
+ */
+function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | undefined): unknown[] {
+  if (!channel) return args;
+  const context = args[1];
+  // Anything else in the context slot is a call shape we did not predict, and
+  // the script's own argument outranks ownership reporting. `looseObject`
+  // admits exactly a plain object and keeps every member it carries.
+  const parsedContext = v.safeParse(v.looseObject({}), context);
+  if (context !== undefined && !parsedContext.success) return args;
+  const ownership = {
+    onDeviceRequest: (requestId: string) => { channel.report(requestId); },
+    deviceRequestOwner: () => channel.owningJobId,
+  };
+  const merged = parsedContext.success ? { ...parsedContext.output, ...ownership } : ownership;
+  return [args[0], merged, ...args.slice(2)];
 }
 
 /**
@@ -68,7 +101,7 @@ export interface ExecuteToolsOptions {
  * (worker-loader preamble vs `new Function`).
  */
 export function createExecuteToolsTool(options: ExecuteToolsOptions) {
-  const { loader, rt, sql, registry, modelSpec, webSearch } = options;
+  const { loader, rt, sql, webSearch } = options;
   if (!loader) throw new Error("CF runtime missing LOADER binding");
 
   const executor = new PreambleCraftedExecutor(loader, rt.craftStore, sql);
@@ -83,11 +116,8 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions) {
   }
 
   const craftedProvider = { name: CRAFTED_TOOL_ALIAS_NAMESPACE, tools: seededCraftedTools };
-  // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
-  // Sub-call has no llm.query in scope, so depth is bounded at 1.
-  const rlmProvider = createRLMProvider(registry, () => registry.normalizeSpecSync(modelSpec()));
   // `agents.*` — the delegation tool projected into the sandbox, so a workflow
-  // is a crafted tool scripting agents/llm/workspace rather than a new engine.
+  // is a crafted tool scripting agents/workspace rather than a new engine.
   // Ahead of extraProviders: this namespace's shape is fixed by the actor's
   // wired transports, while the MCP set behind it varies per user connection.
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
@@ -96,10 +126,17 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions) {
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
     const wrapped: typeof p.tools = {};
     for (const [name, entry] of Object.entries(p.tools)) {
+      // Ownership rides only `exec`, because `exec` is the only entry that mints
+      // a durable device-request identity (core execution/
+      // device-tunnel-executor.ts) — and it reads its context out of the SECOND
+      // positional argument, which is why the merge needs both facts.
+      const carriesOwnership = name === 'exec' && p.positionalArgs === true;
       wrapped[name] = {
         ...entry,
         execute: async (...args) => {
-          const result = await entry.execute(...args);
+          const result = await entry.execute(
+            ...(carriesOwnership ? withDeviceOwnership(args, options.deviceRequests?.()) : args),
+          );
           options.onExecutorUsed?.(p.name);
           return result;
         },
@@ -108,7 +145,7 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions) {
     return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
   });
 
-  const providers: Parameters<typeof createCodeTool>[0]["tools"] = [craftedProvider, rlmProvider];
+  const providers: Parameters<typeof createCodeTool>[0]["tools"] = [craftedProvider];
   if (agentsProvider) providers.push(agentsProvider);
   if (options.extraProviders) providers.push(...options.extraProviders());
   providers.push(webProvider, ...executorProviders);

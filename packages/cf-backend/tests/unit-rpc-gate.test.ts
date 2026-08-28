@@ -168,6 +168,18 @@ describe('rpc gate on scoped connections', () => {
     expect(AGENT_RPC_ACCESS.decidePlanReview).toBe('interactive');
   });
 
+  test('instruction-trust RPCs are interactive-only — a scoped token cannot grant system placement', () => {
+    // KINU-N028's whole point is that agent-written bytes cannot authorise
+    // themselves. Approving is what grants those bytes system placement, so
+    // classing it 'workspace.write' (or the listing 'workspace.read') would
+    // hand a CI token — or anything that reached one — the ability to promote a
+    // file the agent just wrote. The listing is interactive too because it
+    // carries file content previews.
+    expect(AGENT_RPC_ACCESS.approveInstruction).toBe('interactive');
+    expect(AGENT_RPC_ACCESS.revokeInstruction).toBe('interactive');
+    expect(AGENT_RPC_ACCESS.listInstructionApprovals).toBe('interactive');
+  });
+
   test('every interactive row is denied to scoped tokens', () => {
     for (const [method, access] of Object.entries(AGENT_RPC_ACCESS)) {
       if (access !== 'interactive') continue;

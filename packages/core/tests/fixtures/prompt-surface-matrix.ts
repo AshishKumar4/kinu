@@ -12,7 +12,8 @@
  * conditional at least once in each direction: the two plan-submission
  * spellings, both model-family overlays, each built-in role, the background
  * resume overlay, an offline laptop, a preview-capable executor, the empty
- * tool surface, and the delegation rungs one at a time.
+ * tool surface, the delegation rungs one at a time, and a workspace carrying
+ * instruction files in both trust tiers.
  *
  * `fixtures/prompt-golden.json` holds the last deliberate rendering of these
  * surfaces. Regenerate it only when a prompt change is the point
@@ -25,7 +26,8 @@ import type { SystemPromptOptions } from '../../src/prompt';
 import { BUILTIN_TOOLS } from '../../src/tools/registry';
 import { BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel } from '../../src/profiles';
 import type { PromptExecutorInfo } from '../../src/prompting/surface';
-import type { ParsedSkill } from '../../src/skills/types';
+import { skillIndexLine } from '../../src/skills/render';
+import type { ActiveSkill, SkillHeader, SkillsIndex } from '../../src/skills/types';
 
 const WORKSPACE: PromptExecutorInfo = {
   name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active',
@@ -43,7 +45,7 @@ const CUSTOM: PromptExecutorInfo = {
   name: 'gpu', kind: 'device', available: true, configured: true, active: true, status: 'active',
 };
 
-const SKILL: ParsedSkill = {
+const SKILL_HEADER: SkillHeader = {
   name: 'deploy-runbook',
   description: 'How this project deploys.',
   allowed_tools: [],
@@ -51,9 +53,26 @@ const SKILL: ParsedSkill = {
   auto_activate: false,
   disable_model_invocation: false,
   user_invocable: true,
-  body: 'Body of the deploy runbook.',
   ext: {},
   source: 'builtin',
+};
+
+/** The ambient index as the admission already decided to print it: this
+ *  fixture states the lines, because re-admitting a corpus here would test the
+ *  admission rather than the prompt's rendering of its answer. */
+const SKILLS_INDEX: SkillsIndex = {
+  lines: [skillIndexLine(SKILL_HEADER)],
+  omitted: 0,
+  tokens: 0,
+};
+
+/** The same skill, active, with the body this turn's allocation paid for. A
+ *  built-in body: its trust comes from where it ships, not from an approval. */
+const ACTIVE_SKILL: ActiveSkill = {
+  ...SKILL_HEADER,
+  trust: 'builtin',
+  bodyRef: { kind: 'builtin', text: 'Body of the deploy runbook.' },
+  body: 'Body of the deploy runbook.',
 };
 
 const ALL_TOOLS = [...BUILTIN_TOOLS];
@@ -87,13 +106,23 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       executors: [WORKSPACE, SANDBOX, LAPTOP],
       backend: 'cf',
       workMode: 'build',
-      rlmAvailable: true,
+      temporaryAsk: true,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
       currentDate: '2026-01-01',
       cwd: '/workspace',
-      agentsMd: [{ path: '/AGENTS.md', content: 'Root rules.' }],
-      availableSkills: [SKILL],
-      activeSkills: { active: [SKILL], reasons: [] },
+      // Both trust tiers on one surface, which is the real shape of a workspace
+      // the owner approved once and the agent has since written to: the approved
+      // file keeps system placement, the other only earns the block that governs
+      // it (its bytes ride a user message, not this prompt).
+      agentsMd: {
+        admitted: [
+          { path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' },
+          { path: '/workspace/AGENTS.md', content: 'Nearest rules.', trust: 'unverified' },
+        ],
+        referenced: [],
+      },
+      availableSkills: SKILLS_INDEX,
+      activeSkills: { active: [ACTIVE_SKILL], reasons: [] },
     },
   },
   {
@@ -103,7 +132,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       availableTools: ALL_TOOLS,
       executors: [WORKSPACE, SANDBOX, LAPTOP],
       backend: 'cli-local',
-      rlmAvailable: false,
+      temporaryAsk: true,
       model: { id: 'gpt-5-codex', provider: 'openai' },
       currentDate: '2026-01-01',
     },
@@ -196,7 +225,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: {
       availableTools: ['agents', 'execute_tools'],
       agentsActions: ['swarm'],
-      rlmAvailable: true,
+      temporaryAsk: true,
       registeredExecutors: [],
     },
   },
@@ -205,11 +234,20 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: { availableTools: ['report'], registeredExecutors: [] },
   },
   {
-    name: 'code-execution-without-rlm',
-    opts: { availableTools: ['execute_tools'], rlmAvailable: false, registeredExecutors: [] },
+    name: 'code-execution-without-temporary-ask',
+    opts: { availableTools: ['execute_tools'], temporaryAsk: false, registeredExecutors: [] },
   },
   {
-    name: 'code-execution-with-rlm',
-    opts: { availableTools: ['execute_tools'], rlmAvailable: true, registeredExecutors: [] },
+    name: 'code-execution-with-temporary-ask',
+    opts: { availableTools: ['execute_tools'], temporaryAsk: true, registeredExecutors: [] },
+  },
+  {
+    name: 'delegation-temporary-ask',
+    opts: {
+      availableTools: ['agents'],
+      agentsActions: ['ask', 'hire', 'list'],
+      temporaryAsk: true,
+      registeredExecutors: [],
+    },
   },
 ];

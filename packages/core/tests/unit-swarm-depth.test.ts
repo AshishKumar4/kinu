@@ -48,7 +48,7 @@ import {
 } from '../src/strategy/swarm';
 import { bestInCell, recordsFor, verifierDigestOf } from '../src/strategy/records';
 import { resolveVerifier } from '../src/strategy/verifier-registry';
-import type { Floor, Objective, ObjectiveIdentity } from '../src/strategy/objective';
+import type { Floor, Objective, ObjectiveIdentity, VectorObjective } from '../src/strategy/objective';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
@@ -1790,11 +1790,40 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     expect(result.error).toContain('refOps');
   }, 120_000);
 
-  test("advance:'pareto' refuses for its OWN cause, and it is not the archive's", async () => {
-    // One refusal per cause. The shared text — "reports a front or an archive, and both
-    // need a store this run has no writer for" — was true of neither by the end: the store
-    // landed, and `pareto` was never waiting on one. What it waits on is a MEASUREMENT with
-    // more than one axis, which this runner does not have.
+  test("advance:'pareto' keeps a durable nondominated vector frontier", async () => {
+    const scalar = objective();
+    if (scalar.kind !== 'scalar') throw new Error("the suite's objective is a scalar");
+    const front: VectorObjective = {
+      kind: 'vector',
+      components: [
+        { ...scalar, metric: 'oracle_calls' },
+        { ...scalar, metric: 'oracle_calls_again' },
+      ],
+    };
+    const call = resolveSwarm({
+      preset: 'custom',
+      label: 'pareto-suite',
+      task: 'reach the front',
+      objective: front,
+      config: treeConfig({ advance: { kind: 'pareto' }, carry: { kind: 'none' } }),
+      depth: 2,
+      branches: 2,
+    });
+    if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
+    expect(swarmValidity(call)).toBeNull();
+    const { rt } = createTestRuntime();
+    const result = await runSwarm(
+      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      call,
+    );
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+    expect(result.best).toBeNull();
+    expect(result.frontier?.length).toBe(4);
+    expect(result.frontier?.every((candidate) => candidate.pareto !== null)).toBe(true);
+  }, 60_000);
+
+  test("advance:'pareto' refuses an instanced measurement that omits an axis", async () => {
     const scalar = objective();
     if (scalar.kind !== 'scalar') throw new Error("the suite's objective is a scalar");
     const front: Objective = {
@@ -1809,31 +1838,23 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     };
     const call = resolveSwarm({
       preset: 'custom',
-      label: 'pareto-suite',
+      label: 'pareto-missing-axis',
       task: 'reach the front',
       objective: front,
-      config: treeConfig({ advance: { kind: 'pareto' }, carry: { kind: 'elites' } }),
+      config: treeConfig({ advance: { kind: 'pareto' }, carry: { kind: 'none' } }),
       depth: 1,
-      branches: 2,
+      branches: 1,
     });
     if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
-    // LEGAL, and that is the point: the front's own axes are declared, so what refuses
-    // below is the runner and not the composition.
-    expect(swarmValidity(call)).toBeNull();
-
     const { rt } = createTestRuntime();
-    const refusal = await runSwarm(
+    const result = await runSwarm(
       { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       call,
     );
-    expect('reason' in refusal).toBe(true);
-    if (!('reason' in refusal)) return;
-    expect(refusal.reason).toBe('unsupported');
-    expect(refusal.error).toContain('NON-DOMINATED');
-    expect(refusal.error).toContain('per-instance measurement path');
-    // The cause it no longer shares with the archive, and the archive it no longer names.
-    expect(refusal.error).not.toContain('front or an archive');
-    expect(refusal.error).not.toContain('no writer for');
+    expect('reason' in result).toBe(false);
+    if ('reason' in result) return;
+    expect(result.candidates[0]?.unmeasurable).toContain('omitted declared axis');
+    expect(result.frontier).toEqual([]);
   }, 60_000);
 });
 

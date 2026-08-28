@@ -22,9 +22,9 @@ import {
 
 /**
  * The ONE role authority for an agent: either a validated catalog id or the
- * freeform line a pre-catalog hire carries. Never both — {@link AgentConfigStore.setRoleSelection}
- * writes its side and blanks the other in one statement, so no reader can ever
- * see two current roles.
+ * freeform line a hire outside the catalog carries. Never both — {@link
+ * AgentConfigStore.setRoleSelection} writes the single row, so no reader can
+ * ever see two current roles.
  */
 export type RoleSelection =
   | { readonly kind: 'catalog'; readonly roleId: RoleId }
@@ -45,7 +45,7 @@ const RoleSelectionSchema = v.union([
   v.object({ kind: v.literal('legacy'), text: v.string() }),
 ]);
 /** Schema-parse a stored row. Null when absent or malformed — callers decide
- *  what an unreadable row means (the store backfills `general`). */
+ *  what an unreadable row means (the store reads it as `general`). */
 export function parseRoleSelectionRow(value: string | null): RoleSelection | null {
   if (value === null || value === '') return null;
   let raw: unknown;
@@ -137,6 +137,22 @@ export const AGENT_CONFIG_KEYS = {
   isolateGen: 'isolate_gen',
 } as const;
 
+/**
+ * The `agent_config` rows the shell-approval gate reads as live AUTHORIZATION
+ * rather than as preference — `ShellApprovalPolicy.mode()` and `.granted()`
+ * consult exactly these before deciding whether to ask the owner.
+ *
+ * Named as a set because one caller has to treat them as a class rather than as
+ * two keys: a fork copies `agent_config` wholesale, and a remembered "always"
+ * was granted against ONE workspace's history and one owner's reading of it.
+ * The mode belongs in the same set — inheriting `allow_all` inherits the same
+ * authority with the grants left implicit. A new key the gate learns to read
+ * belongs here the day it is added.
+ */
+export const SHELL_APPROVAL_AUTHORITY_KEYS: readonly string[] = [
+  AGENT_CONFIG_KEYS.shellApprovalMode,
+  AGENT_CONFIG_KEYS.shellApprovalGrants,
+];
 
 export interface AgentConfigStore {
   // ── Generic accessors ──
@@ -166,13 +182,13 @@ export interface AgentConfigStore {
   /** Persist the visible title and its ownership in one SQLite statement. */
   setDisplayNameOrigin(name: string, origin: 'user' | 'auto'): void;
   /** The agent's whole current role selection — the ONE role authority
-   *  (catalog id or legacy freeform line). Unset reads as the `general`
-   *  catalog role; a pre-profile `agent_stance` value migrates into it on
-   *  first read (research→researcher, build→implementer, audit→auditor).
-   *  The NEXT resolved turn reads it; a running step keeps its profile. */
+   *  (catalog id or freeform line). An absent or unreadable row reads as the
+   *  `general` catalog role and PERSISTS NOTHING: the row exists only once
+   *  {@link AgentConfigStore.setRoleSelection} has put one there. The NEXT
+   *  resolved turn reads it; a running step keeps its profile. */
   getRoleSelection(): RoleSelection;
   /** Replace the whole role selection: ONE row, schema-parsed on read.
-   *  A catalog selection REPLACES any legacy line and vice versa. */
+   *  A catalog selection REPLACES any freeform line and vice versa. */
   setRoleSelection(selection: RoleSelection): void;
   /** The tier a parent pinned at hire, or null when none was. Null derives
    *  from the role at the child's turn boundary. */
@@ -317,36 +333,18 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
   /**
    * The role selection lives in ONE `role_selection` row encoding the tagged
    * union (`{"kind":"catalog","roleId":…}` / `{"kind":"legacy","text":…}`),
-   * schema-parsed on every read. A row that predates this key is backfilled
-   * EXACTLY ONCE from the legacy `active_role_id`/`role_legacy_text`/stance
-   * rows, which are then deleted — no second copy survives the read.
+   * schema-parsed on every read.
+   *
+   * An absent or unreadable row IS the `general` catalog role and is not
+   * written back. A read that minted the row would make the default
+   * indistinguishable from a `general` an owner chose, and would put a write
+   * on the read path of every turn boundary for the answer it already has.
    */
-  const readRoleSelection = (): RoleSelection => {
-    const parsed = parseRoleSelectionRow(get(AGENT_CONFIG_KEYS.roleSelection));
-    if (parsed !== null) return parsed;
-    // One-time backfill from the pre-union rows, then they die.
-    const catalog = get('active_role_id');
-    const legacyText = get('role_legacy_text');
-    let migrated: RoleSelection | null = null;
-    if (catalog !== null && catalog !== '') migrated = { kind: 'catalog', roleId: isValidRoleId(catalog) ? catalog : 'general' };
-    else if (legacyText !== null && legacyText !== '') migrated = { kind: 'legacy', text: legacyText };
-    if (migrated === null) {
-      // Pre-profile stance maps onto the catalog role with the same intent.
-      const stance = get('agent_stance');
-      const mapped = stance === 'research' ? 'researcher'
-        : stance === 'build' ? 'implementer'
-        : stance === 'audit' ? 'auditor'
-        : stance === 'general' ? 'general'
-        : null;
-      migrated = { kind: 'catalog', roleId: mapped ?? 'general' };
-    }
-    void sql`INSERT INTO agent_config (key, value) VALUES (${AGENT_CONFIG_KEYS.roleSelection}, ${encodeRoleSelection(migrated)})
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
-    void sql`DELETE FROM agent_config WHERE key IN (${'active_role_id'}, ${'role_legacy_text'}, ${'agent_stance'})`;
-    return migrated;
-  };
+  const readRoleSelection = (): RoleSelection =>
+    parseRoleSelectionRow(get(AGENT_CONFIG_KEYS.roleSelection))
+      ?? { kind: 'catalog', roleId: 'general' };
   /** Read-modify-write of a monotone counter, returning the new value. Shared by
-   *  the two lifetime counters here — closed session windows, and isolate
+   *  the two lifetime counters here — closed turn windows, and isolate
    *  generations — because they differ only in their key and a byte-identical
    *  second copy is what `gate:duplication` exists to reject. An absent, empty or
    *  unparseable row reads as 0, so a first bump answers 1: the caller uses the
@@ -525,11 +523,6 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       if (Number.isFinite(ms) && ms > 0) set(AGENT_CONFIG_KEYS.changelogSeenAt, String(Math.floor(ms)));
     },
     countClosedTurnWindow() {
-      if (get(AGENT_CONFIG_KEYS.closedTurnWindows) === null) {
-        const legacy = get('closed_session_windows');
-        if (legacy !== null) set(AGENT_CONFIG_KEYS.closedTurnWindows, legacy);
-        void sql`DELETE FROM agent_config WHERE key = ${'closed_session_windows'}`;
-      }
       return increment(AGENT_CONFIG_KEYS.closedTurnWindows);
     },
     countIsolateGeneration() {

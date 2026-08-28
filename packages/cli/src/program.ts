@@ -43,7 +43,6 @@ import { exportCommand, importCommand } from './commands/export-import';
 import { tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
 import { printFailure, VERSION } from './display';
-import type { ProviderFailure } from './provider-guidance';
 
 /** Help groups, in the order the branded help renders them (first registration
  *  of a group fixes its position). */
@@ -479,12 +478,27 @@ export function buildProgram(): Command {
   return program;
 }
 
-/** Wrap async actions with consistent error handling. */
-function wrapAction(fn: (...args: any[]) => Promise<void>) {
-  return (...args: any[]) => {
-    fn(...args).catch((err: ProviderFailure) => {
-      printFailure(err);
-      process.exit(1);
-    });
+/** Wrap async actions with consistent error handling. The argument tuple stays
+ *  generic so each command keeps Commander's own arity and parameter checking;
+ *  widening it to `any[]` silently accepted a handler with the wrong signature.
+ *
+ *  The failure is caught by a `catch` BINDING rather than a `.catch` callback
+ *  parameter. Both give `printFailure` an `unknown` — `strict` implies
+ *  `useUnknownInCatchVariables` — but only the binding gets there without
+ *  declaring `unknown` as a parameter type, which is what the callback form
+ *  had to do and what KINU-069's gate refuses. Nothing is cast or suppressed.
+ *  The IIFE is `void`ed because Commander's action handler returns nothing: a
+ *  returned promise would be a floating one at every call site instead of one
+ *  here. */
+function wrapAction<Args extends readonly unknown[]>(fn: (...args: Args) => Promise<void>) {
+  return (...args: Args) => {
+    void (async () => {
+      try {
+        await fn(...args);
+      } catch (error) {
+        printFailure({ cause: error });
+        process.exit(1);
+      }
+    })();
   };
 }

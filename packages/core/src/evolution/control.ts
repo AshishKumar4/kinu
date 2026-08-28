@@ -43,7 +43,7 @@ import {
   decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
   purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
 } from '../scaffold/shadow';
-import type { ShadowTrialDrain, ShadowTrialTurn } from './types';
+import type { ShadowTrialDrain, ShadowTrialQueueOutcome, ShadowTrialTurn } from './types';
 import {
   DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
 } from '../scaffold/auto-judge';
@@ -57,14 +57,15 @@ import {
 } from './gepa/section-bridge';
 import {
   applyPromptSectionDecision, decidePromptSectionPromotion, firstPendingPromptSection,
-  getPendingPromptSection, incumbentSectionSource, recordPromptSectionTrial,
+  getPendingPromptSection, incumbentSectionSource, proposePromptSection, recordPromptSectionTrial,
+  type ProposeSectionRefusal,
 } from '../prompting/section-store';
 import type { PromptSection } from '../prompting/template';
 import {
   finishGepaRun, lastGepaRunPerTarget, makePersistingHook, startGepaRun,
 } from './gepa/persistence';
 import type { EvalInstance, MetricOutcome, ReflectionLM } from './gepa/types';
-import type { ScoreInterval } from '../utils/stats';
+import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
@@ -110,7 +111,12 @@ export interface ScaffoldControl {
    *  which a delegating candidate must be given or it answers a
    *  context-dependent task from the task text alone; empty for the one-shot
    *  operations (preview, GEPA rollout, replay), which have none. */
-  readonly surface: (task: string, context?: ScaffoldReplayContext) => ScaffoldSurface;
+  /** `callScope`, when the caller can be re-driven: it makes the rollout's tool
+   *  call ids reproducible so the effect claim can dedupe a replay. Omitted by
+   *  callers with no durable identity — a live preview, a GEPA candidate. */
+  readonly surface: (
+    task: string, context?: ScaffoldReplayContext, callScope?: string,
+  ) => ScaffoldSurface;
   /** The chat model — what a candidate loop and the reflection LM run on. */
   readonly model: () => LanguageModel | Promise<LanguageModel>;
   /**
@@ -202,11 +208,6 @@ export async function runScaffoldOnce(
   }));
 }
 
-/** What a completed turn offered the promotion gate. Every value except
- *  `'queued'` is a turn that contributed nothing — named, so a caller reporting
- *  the gate's state never has to guess which. */
-export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'no_pending' | 'queue_full' | 'failed';
-
 /**
  * The turn-bound half of the shadow loop — and ALL of it that a turn pays for:
  * sample this turn, and if it is in the sample, write ONE row recording the
@@ -229,18 +230,76 @@ export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'no_pending' | 
  * reached through the EvolutionEngine, which holds the one auto-evolution gate
  * (`queueShadowTrial` / `runDueShadowTrials`).
  */
+/**
+ * WHICH candidate this turn is sampled against, or null for a turn that is not
+ * sampled — the whole decision half of {@link queueTurnShadowTrial}, split out so
+ * a caller that owes the queueing can make it ONCE and record it.
+ *
+ * Both halves move: the rate is a coin flip, and the pending candidate is
+ * promoted and replaced. Re-asking on a replay therefore performs a DIFFERENT
+ * obligation than the one that was owed — a turn the first attempt declined gets
+ * enqueued, and a sampled one gets scored against a candidate that was not under
+ * trial when it ran. The version travels with the answer for that second reason.
+ */
+export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): number | null {
+  // An empty key is every unkeyed turn's key. Hashing it answers the same way for
+  // all of them — permanently in or permanently out of the evidence, depending on
+  // the rate — which is a stable BIAS, not a stable decision. Such a turn has no
+  // durable identity to record a trial under either, so it offers none.
+  if (turnKey === '') return null;
+  const sampleRate = control.config.getShadowSampleRate();
+  if (sampleRate <= 0) return null;
+  const pending = getPendingScaffold(control.sql);
+  if (!pending) return null;
+  if (sampleFraction(turnKey) >= sampleRate) return null;
+  return pending.version;
+}
+
+/**
+ * A stable fraction in [0, 1) for one turn — the coin flip, made reproducible.
+ *
+ * A caller that OWES this decision may be asked for it more than once: a
+ * duplicate callback rebuilds the whole declaration before the ledger recognises
+ * it. A fresh `Math.random()` there answers differently and the sequence claims a
+ * different set of rows than the one already on record. Derived from the turn's
+ * own id instead, the answer is the same every time it is asked, while remaining
+ * uniform across turns.
+ */
+function sampleFraction(turnKey: string): number {
+  // FNV-1a, 32-bit. Not a security hash — it needs to spread short, similar ids
+  // evenly, and it needs to be the same three lines on every backend.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < turnKey.length; i++) {
+    hash ^= turnKey.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash / 0x1_0000_0000;
+}
+
 export function queueTurnShadowTrial(
   control: ScaffoldControl,
   turn: ShadowTrialTurn,
+  /** The stable row identity for a caller that owes this queueing — see
+   *  `queueShadowTrial` — and the RECORDED plan a replaying caller made the first
+   *  time. Without the plan this call decides afresh, which is right for a live
+   *  caller and wrong for one replaying a recorded obligation. */
+  opts?: { readonly id?: string; readonly pendingVersion?: number },
 ): ShadowTrialQueueOutcome {
   try {
-    const sampleRate = control.config.getShadowSampleRate();
-    if (sampleRate <= 0) return 'not_sampled';
-    const pending = getPendingScaffold(control.sql);
-    if (!pending) return 'no_pending';
-    if (Math.random() >= sampleRate) return 'not_sampled';
-    return queueShadowTrial(control.sql, {
-      pendingVersion: pending.version,
+    // A RECORDED plan skips the policy entirely — that decision was made and
+    // written when the turn ended, and re-deciding here is what a replay must not
+    // do. Without one this is a live caller, and it decides now.
+    let pendingVersion = opts?.pendingVersion;
+    if (pendingVersion === undefined) {
+      const sampleRate = control.config.getShadowSampleRate();
+      if (sampleRate <= 0) return 'not_sampled';
+      const pending = getPendingScaffold(control.sql);
+      if (!pending) return 'no_pending';
+      if (Math.random() >= sampleRate) return 'not_sampled';
+      pendingVersion = pending.version;
+    }
+    const trial = {
+      pendingVersion,
       // Passed WHOLE. runAutoShadowEval owns the evidence budget and applies it
       // once, to the judge and the trial row together; a clamp here both
       // duplicates the policy and lies about it — windowing an already windowed
@@ -252,7 +311,11 @@ export function queueTurnShadowTrial(
       task: turn.task,
       currentOutput: turn.currentOutput,
       context: turn.context,
-    });
+    };
+    return queueShadowTrial(
+      control.sql,
+      opts?.id === undefined ? trial : { ...trial, id: opts.id },
+    );
   } catch (err) {
     diagnostics.failure(
       'evolution.shadow_trial_queue_failed',
@@ -295,7 +358,10 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
     for (const trial of batch) {
       if (processed >= MAX_QUEUED_SHADOW_TRIALS) break;
       processed++;
-      const surface = control.surface(trial.task, trial.context);
+      // Scoped on the QUEUE ROW: a re-drive after an interruption reproduces the
+      // same call ids, so the tool-effect claim recognises the rollout's external
+      // work instead of running it a second time.
+      const surface = control.surface(trial.task, trial.context, trial.id);
       let applied: 'promote' | 'rollback' | null = null;
       try {
         const result = await runAutoShadowEval({
@@ -308,6 +374,10 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
           history: surface.history,
           defaultInference: surface.defaultInference,
           config: { ...DEFAULT_AUTO_JUDGE_CONFIG, autoApply: control.config.getAutoPromoteScaffold() },
+          // The queue row's identity. It keys the evaluation AND gates the
+          // rollout: an interruption between the score and the delete below must
+          // not run the pending scaffold's tool calls a second time.
+          trialId: trial.id,
         });
         applied = result.applied ?? null;
         if (!result.skipped) trials++;
@@ -884,6 +954,89 @@ async function runPromptSectionTrials(
   result.action = applied.action;
   if (applied.vetoReason) result.vetoReason = applied.vetoReason;
   return result;
+}
+
+/** What a measured proposal did. `code` names the bar rather than numbering it,
+ *  for the same reason `ProposeSectionRefusal` does: a caller that must tell
+ *  anti-bloat from a safety veto cannot branch on prose. */
+export type MeasuredSectionProposal =
+  | {
+    readonly ok: true;
+    readonly sectionId: string;
+    readonly version: number;
+    readonly incumbentScore: ScoreInterval;
+    readonly candidateScore: ScoreInterval;
+  }
+  | {
+    readonly ok: false;
+    readonly sectionId: string;
+    readonly code: ProposeSectionRefusal | 'unknown_section' | 'degenerate_split';
+    readonly error: string;
+  };
+
+/**
+ * Hand ONE externally authored section candidate to the proposal gate, having
+ * first measured it.
+ *
+ * The sibling of `runPromptSectionGepaOptimization`, minus the search: GEPA
+ * writes its own candidates and this takes one it was given, but both owe the
+ * gate the same thing — a candidate and the incumbent scored on the SAME
+ * held-out labeled turns, so `proposePromptSection`'s size rule is deciding on
+ * measurement rather than on a proposer's confidence in itself.
+ *
+ * That is what makes an LLM-authored refinement unable to move the live prompt:
+ * a candidate nobody could score never becomes a proposal, and a candidate that
+ * becomes one lands PENDING and needs `advancePromptSectionLane`'s trials.
+ *
+ * A degenerate split is a REFUSAL and not a neutral score. Scoring a
+ * counterfactual about a failure against a ledger holding no failures would
+ * produce a number with nothing behind it, and the size rule would then trade
+ * real bytes for it.
+ */
+export async function proposeMeasuredPromptSection(
+  control: ScaffoldControl,
+  input: { sectionId: string; source: string; rationale: string; trials?: number },
+): Promise<MeasuredSectionProposal> {
+  const section = findPromptSectionTarget(input.sectionId);
+  if (!section) {
+    return {
+      ok: false, sectionId: input.sectionId, code: 'unknown_section',
+      error: `"${input.sectionId}" is not a registered prompt section`,
+    };
+  }
+  const split = buildOutcomeEvalSplit(control.sql, clampGepaEvalBudget(control.config.getGepaEvalBudget()));
+  if (split.degeneracy !== null) {
+    return {
+      ok: false, sectionId: section.id, code: 'degenerate_split',
+      error: describeSplitDegeneracy(split.degeneracy),
+    };
+  }
+
+  const incumbent = incumbentSectionSource(control.sql, section);
+  const metric = sectionMetric(control, section.id);
+  // The held-out half, exactly as the trials use it: a candidate measured on the
+  // turns whoever wrote it was shown has learned those turns.
+  const instances = split.val.slice(0, Math.max(1, input.trials ?? 3));
+  const scored = await Promise.all(instances.map(async (instance) => Promise.all([
+    metric(incumbent, instance),
+    metric(input.source, instance),
+  ])));
+  const incumbentScore = scoreInterval(scored.map(([current]) => current.score));
+  const candidateScore = scoreInterval(scored.map(([, candidate]) => candidate.score));
+
+  const proposal = proposePromptSection(control.sql, {
+    section,
+    source: input.source,
+    rationale: input.rationale,
+    incumbentScore,
+    candidateScore,
+  });
+  if (!proposal.ok) {
+    return { ok: false, sectionId: section.id, code: proposal.code, error: proposal.error };
+  }
+  return {
+    ok: true, sectionId: section.id, version: proposal.version, incumbentScore, candidateScore,
+  };
 }
 
 /**

@@ -24,6 +24,7 @@
 import type { ToolSet } from 'ai';
 import { buildBuiltinTools, type BuiltinToolDeps } from './builtins';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
+import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 
 // Named for the toolset rather than the actor because cf-backend's actor-agent.ts
 // already owns an `ActorToolDeps` — the actor PROFILE's deps (team / peers /
@@ -33,20 +34,27 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
    *  model + host-injected infra) and/or subordinate + peer transports. The
    *  tool is registered when ANY group is wired; actions gate per group. */
   agents?: AgentsToolDeps;
+  /** The durable once-only boundary for tools whose effects leave the process.
+   *  Required, not optional: an actor built without it would run every
+   *  `claimed` tool with no replay protection at all, which is the state this
+   *  seam exists to end. */
+  effectClaims: EffectClaimDeps;
 }
 
 /**
  * The builtin surface an actor is given: every tool `buildBuiltinTools` emits,
- * plus `agents` when this actor's deps wire any delegation group. Per-action
- * gating (fork / team / peers) lives in `createAgentsTool`, so an actor with
- * only `team` sees hire/ask/send and no swarm.
+ * plus `agents` when this actor's deps wire any delegation group — and every
+ * one of them behind its declared replay policy (tools/effect-claim.ts), which
+ * is why both backends assemble here and neither wraps tools of its own.
+ * Per-action gating (fork / team / peers) lives in `createAgentsTool`, so an
+ * actor with only `team` sees hire/ask/send and no swarm.
  */
 export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
   const tools = buildBuiltinTools(deps);
   if (deps.agents && (deps.agents.fork || deps.agents.team || deps.agents.peers)) {
     tools.agents = createAgentsTool(deps.agents);
   }
-  return tools;
+  return withEffectClaims(tools, deps.effectClaims);
 }
 
 // The delegation deps contracts (and the reserved peer-reply topic) live with

@@ -23,6 +23,15 @@ const BASE_CSP = [
   "frame-ancestors 'none'",
 ];
 
+/**
+ * The cache policy for anything derived from a signed-in identity: a shared
+ * cache must not hold it and a browser must not replay it from disk after a
+ * logout. One string, because a per-route header is a per-route omission —
+ * every authenticated JSON answer takes it at the `json()` boundary
+ * (`lib/http.ts`) and every authenticated document takes it here.
+ */
+export const PRIVATE_NO_STORE = 'private, no-store';
+
 const BASE_HEADERS = {
   'referrer-policy': 'strict-origin-when-cross-origin',
   'x-frame-options': 'DENY',
@@ -40,7 +49,7 @@ const PUBLIC_PAGE_CSP = [
 export function publicHtmlHeaders() {
   return {
     'content-type': 'text/html; charset=utf-8',
-    'cache-control': 'private, no-store',
+    'cache-control': PRIVATE_NO_STORE,
     ...BASE_HEADERS,
     'content-security-policy': PUBLIC_PAGE_CSP,
   };

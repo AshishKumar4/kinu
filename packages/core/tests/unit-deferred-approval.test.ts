@@ -36,7 +36,7 @@ function setup(opts: {
   noQueue?: boolean;
 } = {}) {
   const db = new Database(':memory:');
-  initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+  initDeferredApprovalsTable(makeExecRaw(db));
   const store = new DeferredApprovalStore(makeSql(db));
 
   const delivered: AgentSignal[] = [];
@@ -387,7 +387,7 @@ describe('the spent grant leaves an audit, not a row', () => {
 
   test('store.spend returns the consumed action, then null on any later call', () => {
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    initDeferredApprovalsTable(makeExecRaw(db));
     const store = new DeferredApprovalStore(makeSql(db));
     store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
     expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
@@ -398,16 +398,21 @@ describe('the spent grant leaves an audit, not a row', () => {
     expect(store.get('defer-s')).toBeNull();
   });
 
-  test('a legacy used row is purged at table init, never resurrected as queued', () => {
+  test('re-opening the workspace keeps parked and approved rows intact', () => {
+    // Table init is idempotent and touches no data: a night's parked actions
+    // survive every eviction and re-open between the ask and the answer.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
-    void makeSql(db)`INSERT INTO deferred_approvals (id, command, executor, reason, status, requested_at, decided_at)
-      VALUES ('defer-old', ${GATED}, 'workspace', 'gate', 'used', 1, 2)`;
+    initDeferredApprovalsTable(makeExecRaw(db));
+    const store = new DeferredApprovalStore(makeSql(db));
+    store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
+    store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 });
+    expect(store.decide('defer-blessed', 'approved', 3)?.status).toBe('approved');
 
-    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    initDeferredApprovalsTable(makeExecRaw(db));
     const reopened = new DeferredApprovalStore(makeSql(db));
-    expect(reopened.get('defer-old')).toBeNull();
-    expect(reopened.standing(GATED, 'workspace')).toBeNull();
+    expect(reopened.get('defer-parked')?.status).toBe('queued');
+    expect(reopened.get('defer-blessed')?.status).toBe('approved');
+    expect(reopened.standing(GATED, 'workspace')?.id).toBe('defer-parked');
   });
 });
 
@@ -454,7 +459,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // A Durable Object is evicted many times between the ask and the answer;
     // a parked action that lived in a promise map would be lost with it.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    initDeferredApprovalsTable(makeExecRaw(db));
     const first = new DeferredApprovalStore(makeSql(db));
     first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
 
@@ -469,7 +474,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // An undeliverable wake must not lose the owner's answer: the row is the
     // record, the signal is only the notification.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+    initDeferredApprovalsTable(makeExecRaw(db));
     const store = new DeferredApprovalStore(makeSql(db));
     store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
     const queue = new DeferredApprovalQueue({

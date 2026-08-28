@@ -1,7 +1,8 @@
 /**
  * Hub HTTP routes:
  *
- *   POST /api/workspaces/<name>/webhook/<trigger_id>   — public webhook delivery
+ *   POST /api/workspaces/<name>/webhook/<trigger_id>/v1-<token>
+ *                                                       — public webhook delivery
  *   GET  /api/workspaces/<name>/triggers                — list triggers (auth)
  *   POST /api/workspaces/<name>/triggers                — create trigger (auth + step-up)
  *   DELETE /api/workspaces/<name>/triggers/<id>         — revoke trigger (auth)
@@ -10,8 +11,12 @@
  *   PUT  /api/workspaces/<name>/email                   — set allowlist / notifications
  *                                                     (auth + step-up)
  *
- * The webhook route is the only one that DOES NOT require operator auth —
- * it has its own per-trigger HMAC / Bearer / mTLS gate.
+ * The delivery route is the only one that needs no operator auth, and it is NOT
+ * part of `handleHubRequest`: it is served before the auth gate by
+ * `handleWebhookDeliveryRequest`, whose first act is to verify the route
+ * capability the URL carries (see webhook-route.ts). Reaching a workspace and
+ * authenticating a payload are two different gates, and the per-trigger HMAC /
+ * Bearer / mTLS check is still the second one.
  *
  * All operator routes (triggers/events) require browser auth from the
  * auth middleware AND ownership verification (handled by server.ts).
@@ -23,13 +28,50 @@
 
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
-import { readWebhookBodyText } from './body';
-import { normalizeWebhookRateLimitPerMin } from '@kinu.run/core';
-import { err, json, safeJson } from '../lib/http';
+import { DEFAULT_RATE_LIMIT_PER_MIN, normalizeWebhookRateLimitPerMin } from '@kinu.run/core';
+import { err, json, readBounded, safeJson } from '../lib/http';
+import { ingressAdmitted, ingressDenied, peerIp } from '../lib/ingress-budget';
 import { isFreshAuthTime } from '../auth/session';
 import { decodeJsonWire } from '../lib/orchestrator-wire';
+import {
+  matchWebhookDeliveryPath, verifyWebhookRoute, webhookRouteSecret,
+  WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,
+} from './webhook-route';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+
+/**
+ * What a verified webhook delivery may cost this Worker before it knows
+ * anything about its sender. The route is public by design — the credential
+ * that would settle who is calling is the trigger's own secret, and that lives
+ * inside the workspace object the request is asking us to wake — so every bound
+ * below is spent against an anonymous caller.
+ *
+ * The body ceiling is a refusal rather than a truncation: the HMAC is computed
+ * over these exact bytes, so a clipped body is a signature failure, not a
+ * smaller delivery. A notification is the shape this carries; a payload
+ * transfer is what the Files routes are for.
+ *
+ * The knock budget is no longer what stands between an anonymous POST and a
+ * persistent Durable Object — the route capability in the URL is
+ * (`webhook-route.ts`), and it is checked before any of this. What the budget
+ * still buys is a bound on a URL that leaked: the capability names a workspace
+ * for as long as the trigger lives, and one sender should not be able to spend
+ * the object's whole minute at the edge. `lib/ingress-budget.ts` states that
+ * control's exact residuals.
+ *
+ * Neither number is invented here. The body ceiling is the 1 MiB frame ceiling
+ * this repo already reasons about for the DO rail (`terminal-route.ts`,
+ * `files-routes.ts`). The knock budget IS the per-trigger delivery rate the
+ * product already declares — `DEFAULT_RATE_LIMIT_PER_MIN`, enforced inside the
+ * object by `tryConsumeWebhookRateLimit` — because a sender that may deliver N
+ * times a minute has no reason to knock more often than N. Deriving it means a
+ * change to the product's rate limit moves the edge budget with it, instead of
+ * leaving a second number here to drift.
+ */
+const WEBHOOK_BODY_MAX_BYTES = 1024 * 1024;
+const WEBHOOK_KNOCKS_PER_WINDOW = DEFAULT_RATE_LIMIT_PER_MIN;
+const OVER_WEBHOOK_BODY_LIMIT = 'webhook body over the 1 MiB limit';
 
 const WebhookRequestSchema = v.object({
   label: v.optional(v.string()),
@@ -59,14 +101,6 @@ export async function handleHubRequest(
   const path = url.pathname;
   const method = request.method;
 
-  // ── Webhook ingress (public, per-trigger auth) ────────────────
-  const webhookMatch = path.match(new RegExp(`^/api/workspaces/${escapeRe(agentName)}/webhook/([^/]+)$`));
-  if (webhookMatch) {
-    if (method !== 'POST') return err(405, 'use POST');
-    const trigger_id = decodeURIComponent(webhookMatch[1]);
-    return await handleWebhookDelivery(request, env, agentName, trigger_id);
-  }
-
   // ── Triggers CRUD (auth + ownership already enforced upstream) ─
   const triggersBase = `/api/workspaces/${agentName}/triggers`;
   if (path === triggersBase || path.startsWith(triggersBase + '/')) {
@@ -84,6 +118,44 @@ export async function handleHubRequest(
   }
 
   return null;
+}
+
+// ── Public webhook delivery ──────────────────────────────────────
+
+/**
+ * The public delivery endpoint, and the only entry point for it.
+ *
+ * Order here is the security contract. The route capability in the URL is
+ * verified before the ingress budget is spent, before the body is read, before
+ * the Orchestrator namespace is addressed and before any RPC — so an
+ * unauthenticated caller cannot activate a Durable Object by naming one,
+ * whatever name it picks. Every refusal short of a wrong method answers the
+ * same unconditional 404, so the endpoint reports nothing about which workspace
+ * or trigger exists, nor about whether this deployment can sign routes at all.
+ *
+ * Returns null for a path that is not webhook delivery, leaving it to the rest
+ * of the route table.
+ */
+export async function handleWebhookDeliveryRequest(
+  request: Request,
+  env: Env,
+): Promise<Response | null> {
+  const match = matchWebhookDeliveryPath(new URL(request.url).pathname);
+  if (match === null) return null;
+  if (request.method !== 'POST') return err(405, 'use POST');
+  const secret = webhookRouteSecret(env);
+  if (secret === null || match.kind !== 'signed') return deliveryNotFound();
+  if (!(await verifyWebhookRoute(secret, match))) return deliveryNotFound();
+  return await handleWebhookDelivery(request, env, match);
+}
+
+/** One answer for every unroutable delivery: nothing read, nothing cached, and
+ *  no way to tell the causes apart. */
+function deliveryNotFound(): Response {
+  return new Response('Not found', {
+    status: 404,
+    headers: { 'cache-control': 'no-store' },
+  });
 }
 
 // ── Email ingress config handler ─────────────────────────────────
@@ -121,15 +193,40 @@ async function handleEmailConfigRoute(
   return err(405, 'GET or PUT');
 }
 
-// ── Webhook delivery handler ─────────────────────────────────────
+// ── Verified delivery ────────────────────────────────────────────
 
+/**
+ * Runs a delivery whose route capability this deployment minted.
+ *
+ * ORDER IS STILL THE PROPERTY. The capability settled which workspace and
+ * trigger the request may address, and it settled that both names are ones the
+ * product issues, so what is left is cost: budget, then bytes, then the object,
+ * each gate costing strictly less than the one after it, and the object last
+ * because waking it is the expensive, persistent thing.
+ */
 async function handleWebhookDelivery(
   request: Request,
   env: Env,
-  agentName: string,
-  trigger_id: string,
+  route: SignedWebhookRoute,
 ): Promise<Response> {
-  const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+  const kv = env.AUTH_KV;
+  if (kv && !(await ingressAdmitted(kv, 'webhook', peerIp(request), WEBHOOK_KNOCKS_PER_WINDOW))) {
+    return ingressDenied();
+  }
+
+  // `readBounded` owns BOTH halves of the bound — the declared-length
+  // pre-filter and the count of arriving bytes — so this route states the limit
+  // and reads the outcome, and there is one place either can change.
+  const bounded = await readBounded(request, WEBHOOK_BODY_MAX_BYTES);
+  if (bounded === 'too_large') return err(413, OVER_WEBHOOK_BODY_LIMIT);
+  if (bounded instanceof KinuError) {
+    diagnostics.failure('webhook.body_unreadable', bounded);
+    return err(400, 'could not read the request body');
+  }
+
+  const agent = await getAgentByName<Env, OrchestratorAgent>(
+    env.OrchestratorAgent, route.workspaceName,
+  );
   const parsedCf = v.safeParse(RequestCfSchema, request.cf);
 
   // The ingress needs an EventLog + ReplyChannelStore + TriggerRegistry view
@@ -137,10 +234,10 @@ async function handleWebhookDelivery(
   // ingress inside the agent's DO (where it has direct SQL access). This
   // keeps the hub's atomicity guarantees (publish in one txn).
   const result = await agent.acceptWebhookDelivery({
-    trigger_id,
+    trigger_id: route.triggerId,
     method: request.method,
     headers: extractHeaders(request),
-    body_text: await readWebhookBodyText(request),
+    body_text: new TextDecoder().decode(bounded),
     cf_mtls_verified: parsedCf.success && parsedCf.output.tlsClientAuth?.certVerified === 'SUCCESS',
     delivery_id: request.headers.get('idempotency-key')
       ?? request.headers.get('x-delivery-id')
@@ -186,6 +283,10 @@ async function handleTriggersRoute(
       if (!isFreshAuthTime(requestAuthTimeMs(request))) {
         return err(401, 'step-up auth required (re-login within 5 minutes)');
       }
+      // A trigger whose delivery URL cannot be signed is a row no delivery
+      // could ever reach, so an unconfigured deployment is reported here
+      // instead of writing one. Public delivery says none of this; it 404s.
+      if (webhookRouteSecret(env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
       const body = await safeJson(request, WebhookRequestSchema);
       if (!body || !body.label || !body.auth_mode) {
         return err(400, 'label and auth_mode required');
@@ -215,7 +316,11 @@ async function handleTriggersRoute(
   const idMatch = rest.match(/^\/([^/]+)$/);
   if (idMatch && method === 'DELETE') {
     const trigger_id = decodeURIComponent(idMatch[1]);
-    return json(await agent.cancelTrigger(trigger_id));
+    // `owner`: this route is below server.ts's auth, CSRF and workspace-ownership
+    // gates, so the caller has been shown to be the workspace's owner. The
+    // model's own `agent.cancelSchedule` reaches the same method as `self` and
+    // is refused an owner-created ingress.
+    return json(await agent.cancelTrigger(trigger_id, 'owner'));
   }
   return err(404, 'not found');
 }
@@ -235,10 +340,6 @@ async function handleEventsList(request: Request, env: Env, agentName: string): 
 }
 
 // ── helpers ──────────────────────────────────────────────────────
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 interface WebhookHeaders {
   [name: string]: string;

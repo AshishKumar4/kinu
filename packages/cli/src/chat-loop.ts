@@ -82,7 +82,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       await Promise.race([client.close(), cap.promise]);
     } catch (err) {
       console.log(WARN('\n  This session did not close cleanly — its last evolution window may not have flushed.'));
-      console.log(formatFailure(err));
+      console.log(formatFailure({ cause: err }));
     }
     console.log(DIM('\n  Goodbye.\n'));
     rl.close();
@@ -210,7 +210,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       await waitForTurnsToSettle();
     } catch (err) {
       turnStatus.clear();
-      console.log(`\n${formatFailure(err)}\n`);
+      console.log(`\n${formatFailure({ cause: err })}\n`);
     } finally {
       consentWatch?.stop();
       turnInFlight = false;
@@ -300,7 +300,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         const done = await applySlashOutcome(client, rl, outcome);
         if (done === 'exit') { await onExit(); return; }
       } catch (err) {
-        console.log(`\n${formatFailure(err)}\n`);
+        console.log(`\n${formatFailure({ cause: err })}\n`);
       }
       continue;
     }
@@ -531,11 +531,12 @@ function renderClientEvent(
       status.show(`step ${event.stepIndex}`);
       break;
     case 'evolution':
+    case 'background':
       printEvolutionEvent(event.event, event.message);
       break;
     case 'error':
       status.clear();
-      console.log(`\n${formatFailure(event.message)}\n`);
+      console.log(`\n${formatFailure({ cause: event.message })}\n`);
       break;
     case 'broadcast':
       if (isBranchStatusEvent(event.event)) {

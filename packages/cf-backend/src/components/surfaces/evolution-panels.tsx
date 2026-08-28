@@ -120,32 +120,58 @@ function ScoreWithInterval({ value, interval, className }: { value: number; inte
   );
 }
 
-// Both quality signals load together so the pane resolves once, rather than
-// flashing an empty state while the second call is still in flight.
+// The two quality signals load side by side and the pane still resolves once
+// in the ordinary case, but each publishes on its OWN branch: the alignment
+// ledger being unavailable no longer blanks the replay-eval curve, and vice
+// versa (KINU-073). Each RPC runs under the agents SDK's own call deadline —
+// the one request bound this surface already lives under — so a stalled read
+// settles as that branch's failure rather than holding the pane forever.
 export function QualityView({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(async () => {
-    const [rows, align, calibration] = await Promise.all([
-      rpc<ReplayEvalRow[]>("getReplayEvals", [50]),
+  const loadRows = useCallback(() => rpc<ReplayEvalRow[]>("getReplayEvals", [50]), [rpc]);
+  // One branch, not two: AlignmentPanel cannot say anything honest about the
+  // correction rate without the calibration note beside it.
+  const loadAlignment = useCallback(async () => {
+    const [align, calibration] = await Promise.all([
       rpc<AlignmentConvergence>("getAlignmentConvergence"),
       rpc<CalibrationReport>("getOutcomeCalibration"),
     ]);
-    return { rows, align, calibration };
+    return { align, calibration };
   }, [rpc]);
-  const { resource, reload } = useAsyncResource(load);
+  const rows = useAsyncResource(loadRows);
+  const alignment = useAsyncResource(loadAlignment);
 
-  const data = lastValue(resource);
-  if (data === null) {
-    if (resource.status === "error") return <LoadFailure what="the quality history" message={resource.message} onRetry={reload} />;
-    return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
-  }
-  const { rows, align, calibration } = data;
-  const hasAlignment = align.overall.turns > 0;
-  if (rows.length === 0 && !hasAlignment) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve, K_align, and latest aggregate appear here." />;
+
+  const loadedRows = lastValue(rows.resource);
+  const loadedAlignment = lastValue(alignment.resource);
+  const hasAlignment = loadedAlignment !== null && loadedAlignment.align.overall.turns > 0;
+  const bothEmpty = loadedRows !== null && loadedRows.length === 0
+    && loadedAlignment !== null && !hasAlignment;
+  if (bothEmpty) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve, K_align, and latest aggregate appear here." />;
 
   return (
     <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
-      {hasAlignment && <AlignmentPanel k={align} calibration={calibration} />}
-      {rows.length > 0 && <ReplayEvalPanel rows={rows} />}
+      <section data-quality-branch="alignment">
+        {alignment.resource.status === "loading" && (
+          <div className="flex justify-center py-4" role="status">
+            <Loader size="sm" /><span className="sr-only">Loading alignment history</span>
+          </div>
+        )}
+        {alignment.resource.status === "error" && (
+          <LoadFailure what="the alignment ledger" message={alignment.resource.message} onRetry={alignment.reload} />
+        )}
+        {hasAlignment && <AlignmentPanel k={loadedAlignment.align} calibration={loadedAlignment.calibration} />}
+      </section>
+      <section data-quality-branch="replay">
+        {rows.resource.status === "loading" && (
+          <div className="flex justify-center py-4" role="status">
+            <Loader size="sm" /><span className="sr-only">Loading replay-eval history</span>
+          </div>
+        )}
+        {rows.resource.status === "error" && (
+          <LoadFailure what="the replay-eval history" message={rows.resource.message} onRetry={rows.reload} />
+        )}
+        {loadedRows !== null && loadedRows.length > 0 && <ReplayEvalPanel rows={loadedRows} />}
+      </section>
     </div>
   );
 }

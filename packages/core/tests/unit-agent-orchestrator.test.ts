@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import { createTestSql } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
+import { RUN_END_REASONS } from '../src/orchestrator/turn-lifecycle';
 import { MissionGovernor } from '../src/mission-budget';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
@@ -129,7 +130,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   // The turn's review runs later, and often elsewhere: at the next user message,
   // or drained from a durable row by a different process. The governor's active
   // scope is gone by then, so the answer has to be carried by the turn.
-  test('the turn carries the mission scope active when it ended, and an unscoped turn carries none', () => {
+  test('the turn carries the mission scope active when it ended, and an unscoped turn carries none', async () => {
     const { engine, reviews } = fakeEngine();
     const { host } = fakeHost();
     const { sql, execRaw } = createTestSql();
@@ -141,6 +142,10 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     orch.recordTurn(aTurn(1, 'programmatic'), 'independent_task');
     orch.beginTurn(Date.now(), {});
     orch.recordTurn(aTurn(2, 'programmatic'), 'independent_task');
+    // The recording writes the OBLIGATION with the turn; the durable lane is what
+    // runs it. So the scope is asserted where it now has to survive to — through
+    // storage and out of a claim — rather than off an inline dispatch.
+    await orch.settleEvolution();
 
     // Absent, not `[]`, on the unscoped turn: a review must never be handed a
     // label, and an empty one is a label-shaped thing to reason about.
@@ -232,13 +237,14 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     let settled = false;
     const settle = orch.settleEvolution().then(() => { settled = true; });
     await Promise.resolve();
-    expect(reviewed).toBe(false);
-    expect(settled).toBe(false);          // joined, not abandoned at some bound
+    // JOINED, not abandoned at some bound: the pass is still pending while the
+    // review it claimed is still running.
+    expect(settled).toBe(false);
 
     gate.resolve();
     await settle;
     expect(reviewed).toBe(true);
-    expect(store.countQueuedReviews()).toBe(0);   // nothing was deferred
+    expect(store.countQueuedReviews()).toBe(0);   // and the obligation is discharged
   });
 
   test('the deferred review is re-driven at the next open, with the same inputs', async () => {
@@ -323,6 +329,120 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     expect(sessions).toEqual([]);
     expect(reviews).toEqual([]);
     expect(orch.sessionTurnIndex).toBe(0);           // nothing for a later host to evolve
+  });
+});
+
+describe('AgentOrchestrator.settleTurn — split into claimable parts', () => {
+  // The cloud backend claims the settle's sub-effects as separate durable rows,
+  // so it asks for the improvement-lane verdict WITHOUT running the settle.
+  // Two spellings of that verdict is the drift this pins: the CLI once queued
+  // shadow trials for turns that FAILED while the cloud spine did not.
+  test('the predicate and the settle’s returned verdict agree on every (status, mode)', async () => {
+    for (const kinuMode of ['build', 'plan'] as const) {
+      for (const status of RUN_END_REASONS) {
+        const { engine } = fakeEngine();
+        const { host } = fakeHost();
+        const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+        orch.beginTurn(Date.now(), { kinuMode });
+
+        const predicate = orch.improvementLanesOpen(status);
+        const settled = await orch.settleTurn({
+          status, turn: aTurn(0), continuity: 'conversation',
+        });
+
+        expect({ kinuMode, status, open: settled.improvementLanesOpen })
+          .toEqual({ kinuMode, status, open: predicate });
+        // And the rule itself, so an agreeing pair of WRONG answers still fails.
+        expect(predicate).toBe(status === 'completed' && kinuMode === 'build');
+      }
+    }
+  });
+
+  test('settleTurn fires the extension end, records the turn, and drains — in that order', async () => {
+    const { engine, store } = fakeEngine();
+    const { host, enqueued } = fakeHost();
+    const eventLog = newEventLog();
+    eventLog.publish({ descriptor: webhook('d1'), now: 1 });
+    const orch = new AgentOrchestrator({ host, engine, eventLog });
+    orch.beginTurn(Date.now(), {});
+
+    const order: string[] = [];
+    await orch.settleTurn({
+      status: 'completed',
+      turn: aTurn(0),
+      continuity: 'conversation',
+      onTurnEnd: () => {
+        // The extension sees the end BEFORE the recording the review reads.
+        order.push(`turn-end@window=${store.size()}`);
+      },
+    });
+
+    expect(order).toEqual(['turn-end@window=0']);
+    expect(store.size()).toBe(1);
+    expect(enqueued).toHaveLength(1);          // the webhook drained into a turn
+  });
+
+  // Only the `'error'` arm. A user pressing Stop did not make the agent fail,
+  // and stamping their turn as an error would feed the classifier a negative
+  // label nothing earned.
+  test('the recorded turn carries hadError only when the driver said error', async () => {
+    const recorded: Array<boolean> = [];
+    const predicted: Array<boolean> = [];
+    for (const status of RUN_END_REASONS) {
+      const { engine, store } = fakeEngine();
+      const { host } = fakeHost();
+      const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+      orch.beginTurn(Date.now(), {});
+      // Asked BEFORE the settle: a backend claiming the recording separately
+      // has to get the same answer without running it.
+      predicted.push(orch.recordedTurn(status, aTurn(0)).hadError);
+      await orch.settleTurn({ status, turn: aTurn(0), continuity: 'conversation' });
+      recorded.push(store.claim()!.turns[0]!.hadError);
+    }
+    expect(recorded).toEqual([false, false, true]);
+    expect(predicted).toEqual(recorded);
+  });
+
+  // A backend that owes the recording can run it again. The window append is
+  // keyed on the identity it passes, so the cadence — which counts window rows
+  // — is not advanced twice by one turn.
+  test('recordTurn under one id twice leaves one window row and one cadence tick', () => {
+    const { engine, store } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    orch.beginTurn(Date.now(), {});
+
+    orch.recordTurn(aTurn(0), 'conversation', { id: 'settle:msg-1' });
+    orch.recordTurn(aTurn(0), 'conversation', { id: 'settle:msg-1' });
+
+    expect(orch.sessionTurnIndex).toBe(1);
+    expect(store.claim()!.turns).toEqual([aTurn(0)]);
+  });
+
+  test('recordTurn with no id keeps minting rows — the CLI path is unchanged', () => {
+    const { engine } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    orch.beginTurn(Date.now(), {});
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.recordTurn(aTurn(0), 'conversation');
+    expect(orch.sessionTurnIndex).toBe(2);
+  });
+
+  // The drain is the third sub-effect a backend claims separately, so a replay
+  // of it must not re-deliver a batch already bound to a turn.
+  test('draining twice delivers one turn — pending selects only unbound rows', async () => {
+    const { engine } = fakeEngine();
+    const { host, enqueued } = fakeHost();
+    const eventLog = newEventLog();
+    eventLog.publish({ descriptor: webhook('d1'), now: 1 });
+    const orch = new AgentOrchestrator({ host, engine, eventLog });
+
+    await orch.drainPendingEvents();
+    await orch.drainPendingEvents();
+
+    expect(enqueued).toHaveLength(1);
+    expect(eventLog.pending()).toEqual([]);
   });
 });
 

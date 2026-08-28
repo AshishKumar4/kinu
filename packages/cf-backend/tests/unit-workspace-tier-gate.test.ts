@@ -108,6 +108,9 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.manage', name: 'userMcp_handleOAuthCallback', run: (u, c) => u.userMcp_handleOAuthCallback(c, 'https://app/api/user/mcp/callback') },
 
   { capability: 'device.rpc', name: 'deviceRpc', run: (u, c) => u.deviceRpc(c, 'exec', ['ls'], { agentName: WORKSPACE }) },
+  { capability: 'device.rpc', name: 'acknowledgeDeviceRequest', run: (u, c) => u.acknowledgeDeviceRequest(c, 'rpc-1') },
+  { capability: 'device.rpc', name: 'cancelDeviceRequestsForTurn', run: (u, c) => u.cancelDeviceRequestsForTurn(c, 'turn-1') },
+  { capability: 'device.rpc', name: 'cancelDeviceRequestsForBackgroundJob', run: (u, c) => u.cancelDeviceRequestsForBackgroundJob(c, 'job-1') },
   { capability: 'device.rpc', name: 'deviceRuntimeStatus', run: (u, c) => u.deviceRuntimeStatus(c) },
 
   { capability: 'device.consent', name: 'getDeviceFsConsent', run: (u, c) => u.getDeviceFsConsent(c, WORKSPACE) },
@@ -118,6 +121,8 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.manage', name: 'listDevices', run: (u, c) => u.listDevices(c) },
   { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'laptop') },
   { capability: 'device.manage', name: 'revokeDevice', run: (u, c) => u.revokeDevice(c, 'dev-1') },
+  { capability: 'device.manage', name: 'acknowledgeUnstoppedDevice', run: (u, c) => u.acknowledgeUnstoppedDevice(c, 'dev-1') },
+  { capability: 'device.rpc', name: 'transferDeviceRequestToBackgroundJob', run: (u, c) => u.transferDeviceRequestToBackgroundJob(c, 'rpc-1', 'job-1') },
   { capability: 'device.manage', name: 'renameDevice', run: (u, c) => u.renameDevice(c, 'dev-1', 'studio tower') },
   { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
   { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
@@ -130,6 +135,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.write', name: 'registerWorkspace', run: (u, c) => u.registerWorkspace(c, 'spawned') },
   { capability: 'workspaces.write', name: 'reserveWorkspace', run: (u, c) => u.reserveWorkspace(c, 'reserved') },
   { capability: 'workspaces.write', name: 'releaseWorkspaceReservation', run: (u, c) => u.releaseWorkspaceReservation(c, 'reserved', 1) },
+  { capability: 'workspaces.write', name: 'publishWorkspaceReservation', run: (u, c) => u.publishWorkspaceReservation(c, 'reserved', 1, null) },
   { capability: 'workspaces.write', name: 'touchWorkspace', run: (u, c) => u.touchWorkspace(c, WORKSPACE) },
   { capability: 'workspaces.write', name: 'removeWorkspace', run: (u, c) => u.removeWorkspace(c, OTHER_WORKSPACE, USER_ID) },
 
@@ -196,6 +202,13 @@ const GATED_CALLS: GatedCall[] = [
       userId: USER_ID, agentClass: 'orchestrator-agent', agentName: WORKSPACE, capability: 'agent.websocket',
     }),
   },
+  {
+    capability: 'auth_tokens',
+    name: 'registerBrowserSession',
+    run: (u, c) => u.registerBrowserSession(c, TOKEN_HASH, Date.now() + 60_000),
+  },
+  { capability: 'auth_tokens', name: 'verifyBrowserSession', run: (u, c) => u.verifyBrowserSession(c, TOKEN_HASH) },
+  { capability: 'auth_tokens', name: 'revokeBrowserSession', run: (u, c) => u.revokeBrowserSession(c, TOKEN_HASH) },
 
   { capability: 'codex_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
   { capability: 'codex_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },
@@ -232,6 +245,16 @@ async function setupWorkspaces(
   const harness = createTestUserDO(options);
   const fullToken = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
   const otherToken = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
+  // A connected socket must belong to a registered device row. The real hub
+  // cannot accept a slot whose row does not exist; the old fixture only
+  // attached the socket, so deviceRpc quite correctly read "no device
+  // connected" before it ever reached the sibling-consent assertion.
+  if (options.connectedDeviceId) {
+    harness.sql.exec(
+      `INSERT INTO user_devices (id, token_hash, label) VALUES (?, ?, ?)`,
+      options.connectedDeviceId, 'fixture-token-hash', 'fixture device',
+    );
+  }
   return Object.assign(harness, { fullToken, otherToken });
 }
 
@@ -497,6 +520,13 @@ describe('capability provisioning', () => {
 });
 
 describe('workspace name reservation', () => {
+  /** The roster rows as SQL sees them. A reservation is invisible to every
+   *  owner-visible read until it is published (KINU-027), so the listing cannot
+   *  answer whether a release left the row alone — only the row can. */
+  const rosterRows = (harness: TestUserDO): string[] => harness.db
+    .prepare<{ name: string }, []>(`SELECT name FROM user_workspaces ORDER BY name`)
+    .all().map((row) => row.name);
+
   test('a fork conflict leaves an archived roster row byte-for-byte unchanged', async () => {
     const harness = createTestUserDO();
     const owner = await testOwner();
@@ -524,9 +554,9 @@ describe('workspace name reservation', () => {
     const reserved = await harness.userDO.reserveWorkspace(owner, 'fork-reservation', 'Fork title');
 
     expect(await harness.userDO.releaseWorkspaceReservation(owner, 'fork-reservation', reserved.entry.createdAt + 1)).toBe(false);
-    expect((await harness.userDO.listWorkspaces(owner)).entries.map((row) => row.name)).toContain('fork-reservation');
+    expect(rosterRows(harness)).toEqual(['fork-reservation']);
     expect(await harness.userDO.releaseWorkspaceReservation(owner, 'fork-reservation', reserved.entry.createdAt)).toBe(true);
-    expect((await harness.userDO.listWorkspaces(owner)).entries.map((row) => row.name)).not.toContain('fork-reservation');
+    expect(rosterRows(harness)).toEqual([]);
     harness.close();
   });
 });

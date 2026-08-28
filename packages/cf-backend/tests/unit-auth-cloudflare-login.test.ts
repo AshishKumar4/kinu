@@ -42,6 +42,7 @@ function setupEnv() {
   const config = new Map<string, string>();
   const userDO = {
     async ensureProfile(_caller: UserCaller) {},
+    async registerBrowserSession(_caller: UserCaller, _tokenHash: string, _expiresAt: number) {},
     async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {
       credentials.push({ key, credential });
     },

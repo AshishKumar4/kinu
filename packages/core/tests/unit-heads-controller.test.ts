@@ -629,6 +629,21 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     expect(live.items.every((run) => run.rationale === '')).toBe(true);
   });
 
+  test('the recovery authority returns every running run, independent of roster page size', () => {
+    const { journal } = newJournal();
+    for (let index = 0; index < 105; index += 1) {
+      spawn(journal, `branch-${index}`, `branch-${index}-head`);
+    }
+
+    expect(journal.listLive(8)).toMatchObject({ total: 105 });
+    expect(journal.listRunningRuns()).toHaveLength(105);
+
+    journal.recordReport(fakeReport('branch-0-head'));
+    const remaining = journal.listRunningRuns();
+    expect(remaining).toHaveLength(104);
+    expect(remaining.some((run) => run.rootId === 'branch-0')).toBe(false);
+  });
+
   // The roster is read on every model step and the journal has no GC, so its
   // cost must be a function of the OPEN runs, not of everything ever spawned.
   // Pinned on the PLAN rather than on a stopwatch: the statement is captured

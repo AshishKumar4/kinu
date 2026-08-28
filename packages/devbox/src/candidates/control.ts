@@ -1,0 +1,522 @@
+/**
+ * The Durable Object side of candidate publication. It owns exactly one durable
+ * record — a head pointer and at most one operation — and resolves every
+ * envelope from the immutable object store by digest. Payload bytes never reach
+ * it, and no other component may advance a head.
+ */
+
+import * as v from 'valibot';
+
+import {
+  PublicationCompletionPending,
+  StaleParentRefused,
+  envelopeIdOf,
+  finalizeCandidatePayload,
+  requireEnvelopeAt,
+} from './publication';
+import type { CandidatePublicationControl, CandidatePublicationDraft } from './publication';
+import type { Sha256Hex } from '../cas/types';
+import { CandidateRunControlV1Schema, OperationRecordSchema } from '../durability/contracts';
+import type {
+  CandidateControlStateV1,
+  CandidateRunControlV1,
+  HeadPointerV1,
+  ImmutableObjectRef,
+  OperationRecord,
+  RootEnvelopeV1,
+} from '../durability/contracts';
+
+/** One durable read-modify-write of the control record. */
+export interface CandidateControlUpdate<T> {
+  /** The record to persist, or null to leave the stored record untouched. */
+  readonly next: CandidateControlStateV1 | null;
+  readonly result: T;
+}
+
+/**
+ * The durable control record. `update` must run `apply` and persist its record
+ * inside one transaction. `apply` is deliberately synchronous: a foreign await
+ * inside the transaction would widen the window another writer can commit in.
+ */
+export interface CandidateControlStore {
+  read(): Promise<CandidateControlStateV1>;
+  update<T>(apply: (current: CandidateControlStateV1) => CandidateControlUpdate<T>): Promise<T>;
+  clear(): Promise<void>;
+}
+
+/** Immutable envelopes, addressed only by the digest of their canonical bytes. */
+export interface CandidateEnvelopeStore {
+  write(envelope: RootEnvelopeV1, rootEnvelopeId: Sha256Hex): Promise<void>;
+  read(rootEnvelopeId: Sha256Hex): Promise<RootEnvelopeV1>;
+}
+
+type VerifyObject = (ref: ImmutableObjectRef) => Promise<void>;
+
+async function verifyEnvelopeClosure(envelope: RootEnvelopeV1, verifyObject: VerifyObject): Promise<void> {
+  await verifyObject(envelope.closureObject);
+  for (const ref of envelope.closure) await verifyObject(ref);
+}
+
+/** Raised when the durable record cannot serve the operation a caller named. */
+export class CandidateOperationRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CandidateOperationRefused';
+  }
+}
+
+type TransferringOperation = Extract<OperationRecord, { readonly phase: 'transferring' }>;
+type CommittedOperation = Extract<OperationRecord, { readonly phase: 'sealed' | 'completion-pending' }>;
+
+/** The coordinates a phase transition may never change. */
+function operationBase(record: OperationRecord) {
+  return {
+    operationId: record.operationId,
+    kind: record.kind,
+    epoch: record.epoch,
+    bootId: record.bootId,
+    baseRevision: record.baseRevision,
+    expectedParent: record.expectedParent,
+  };
+}
+
+/**
+ * The one head CAS rule, shared by finalization and sealed-reset recovery: the
+ * pointer and the completion-pending record are written by the same durable
+ * write, so a committed head is never observable as an uncommitted operation.
+ */
+function sealedCas(
+  current: CandidateControlStateV1,
+  operationId: string,
+  resultRootId: Sha256Hex,
+): CandidateControlUpdate<HeadPointerV1> {
+  const operation = current.operation;
+  if (operation === null || operation.operationId !== operationId) {
+    throw new CandidateOperationRefused(`candidate head CAS lost operation ${operationId}`);
+  }
+  if (operation.phase === 'completion-pending' || operation.phase === 'published') {
+    if (operation.resultRootId !== resultRootId || current.head === null || current.head.rootEnvelopeId !== resultRootId) {
+      throw new CandidateOperationRefused(`candidate operation ${operationId} already committed a different root`);
+    }
+    return { next: null, result: current.head };
+  }
+  if (operation.phase !== 'sealed' || operation.resultRootId !== resultRootId) {
+    throw new CandidateOperationRefused(`candidate head CAS lacks a sealed ${resultRootId} operation`);
+  }
+  const currentHead = current.head?.rootEnvelopeId ?? null;
+  if (currentHead !== resultRootId && currentHead !== operation.expectedParent) {
+    throw new StaleParentRefused(operation.expectedParent, currentHead);
+  }
+  const head: HeadPointerV1 = current.head !== null && currentHead === resultRootId
+    ? current.head
+    : { version: 1, rootEnvelopeId: resultRootId, lastOperationId: operationId };
+  return {
+    next: {
+      version: 1,
+      head,
+      operation: v.parse(OperationRecordSchema, {
+        ...operationBase(operation),
+        phase: 'completion-pending',
+        attemptId: operation.attemptId,
+        resultRootId,
+      }),
+    },
+    result: head,
+  };
+}
+
+/** The completion mark. A reset before it re-runs exactly this step. */
+function publishMark(
+  current: CandidateControlStateV1,
+  operationId: string,
+): CandidateControlUpdate<CandidateControlStateV1> {
+  const operation = current.operation;
+  if (operation === null || operation.operationId !== operationId) {
+    throw new CandidateOperationRefused(`candidate completion names no operation ${operationId}`);
+  }
+  if (operation.phase === 'published') return { next: null, result: current };
+  if (operation.phase !== 'completion-pending') {
+    throw new CandidateOperationRefused(`candidate operation cannot complete from ${operation.phase}`);
+  }
+  if (current.head === null || current.head.rootEnvelopeId !== operation.resultRootId) {
+    throw new CandidateOperationRefused('candidate completion head does not bind its sealed result');
+  }
+  const next: CandidateControlStateV1 = {
+    version: 1,
+    head: current.head,
+    operation: v.parse(OperationRecordSchema, {
+      ...operationBase(operation),
+      phase: 'published',
+      resultRootId: operation.resultRootId,
+    }),
+  };
+  return { next, result: next };
+}
+
+/** The terminal failure record. The first failure wins and the head is untouched. */
+function failMark(
+  current: CandidateControlStateV1,
+  operationId: string,
+  failureCode: string,
+): CandidateControlUpdate<CandidateControlStateV1> {
+  const operation = current.operation;
+  if (
+    operation === null
+    || operation.operationId !== operationId
+    || operation.phase === 'completion-pending'
+    || operation.phase === 'published'
+    || operation.phase === 'failed'
+  ) {
+    return { next: null, result: current };
+  }
+  const next: CandidateControlStateV1 = {
+    version: 1,
+    head: current.head,
+    operation: v.parse(OperationRecordSchema, { ...operationBase(operation), phase: 'failed', failureCode }),
+  };
+  return { next, result: next };
+}
+
+/**
+ * Finish an operation a reset interrupted after its payload sealed. The sealed
+ * envelope is immutable and digest-addressed, so recovery resumes the original
+ * expected-parent CAS instead of re-staging anything.
+ */
+async function recoverOperation(
+  active: CommittedOperation,
+  store: CandidateControlStore,
+  envelopes: CandidateEnvelopeStore,
+  verifyObject: VerifyObject,
+): Promise<CandidateControlStateV1> {
+  if (active.phase === 'sealed') {
+    const envelope = await envelopes.read(active.resultRootId);
+    if (envelope.parentRootId !== active.expectedParent) {
+      throw new CandidateOperationRefused(
+        `candidate sealed envelope ${active.resultRootId} names a different expected parent`,
+      );
+    }
+    try {
+      await verifyEnvelopeClosure(envelope, verifyObject);
+    } catch (error) {
+      await store.update((current) => failMark(current, active.operationId, 'closure-unavailable'));
+      throw error;
+    }
+    try {
+      await store.update((current) => sealedCas(current, active.operationId, active.resultRootId));
+    } catch (error) {
+      // Another writer published first. This result can never win, and leaving
+      // it sealed would wedge every later operation behind a dead recovery.
+      if (!(error instanceof StaleParentRefused)) throw error;
+      return await store.update((current) => failMark(current, active.operationId, 'stale-parent'));
+    }
+  }
+  return await store.update((current) => publishMark(current, active.operationId));
+}
+
+/**
+ * Re-drive an operation whose payload never sealed. A new container boot takes
+ * a fresh attempt and a higher epoch, which fences every receipt the previous
+ * boot may still be holding.
+ */
+async function redriveOperation(
+  active: OperationRecord,
+  bootId: string,
+  store: CandidateControlStore,
+): Promise<CandidateControlStateV1> {
+  return await store.update((current) => {
+    const operation = current.operation;
+    if (
+      operation === null
+      || operation.operationId !== active.operationId
+      || (operation.phase !== 'intent' && operation.phase !== 'transferring')
+      || (
+        active.phase === 'transferring'
+        && (operation.phase !== 'transferring' || operation.attemptId !== active.attemptId)
+      )
+    ) {
+      throw new CandidateOperationRefused(`candidate operation ${active.operationId} changed while re-driving`);
+    }
+    const next: CandidateControlStateV1 = {
+      version: 1,
+      head: current.head,
+      operation: v.parse(OperationRecordSchema, {
+        ...operationBase(operation),
+        epoch: String(BigInt(operation.epoch) + 1n),
+        bootId,
+        phase: 'transferring',
+        attemptId: crypto.randomUUID(),
+      }),
+    };
+    return { next, result: next };
+  });
+}
+
+/**
+ * Fence a runner that terminated before it sealed its transfer, so the next
+ * checkpoint receives a new attempt instead of rejoining that terminal process.
+ */
+export async function redriveCandidateOperation(input: {
+  readonly active: OperationRecord;
+  readonly store: CandidateControlStore;
+  readonly envelopes: CandidateEnvelopeStore;
+}): Promise<CandidateRunControlV1> {
+  if (input.active.phase !== 'transferring') {
+    throw new CandidateOperationRefused(`candidate operation ${input.active.operationId} is not transferring`);
+  }
+  return await runControl(
+    await redriveOperation(input.active, input.active.bootId, input.store),
+    input.envelopes,
+  );
+}
+
+/**
+ * Close an operation whose fenced journal manifest is already the published
+ * head. No new envelope exists: the current pointer remains authoritative.
+ */
+export async function settleCandidateNoChange(input: {
+  readonly active: TransferringOperation;
+  readonly store: CandidateControlStore;
+}): Promise<CandidateControlStateV1> {
+  return await input.store.update((current) => {
+    const operation = current.operation;
+    if (operation?.operationId === input.active.operationId && operation.phase === 'published') {
+      if (operation.resultRootId !== input.active.expectedParent) {
+        throw new CandidateOperationRefused(
+          `candidate no-change operation ${input.active.operationId} settled a different head`,
+        );
+      }
+      return { next: null, result: current };
+    }
+    if (
+      operation === null
+      || operation.operationId !== input.active.operationId
+      || operation.phase !== 'transferring'
+      || operation.attemptId !== input.active.attemptId
+    ) {
+      throw new CandidateOperationRefused(
+        `candidate no-change operation ${input.active.operationId} changed before settlement`,
+      );
+    }
+    if (input.active.expectedParent === null || current.head?.rootEnvelopeId !== input.active.expectedParent) {
+      throw new CandidateOperationRefused(
+        `candidate no-change operation ${input.active.operationId} no longer names the published head`,
+      );
+    }
+    const next: CandidateControlStateV1 = {
+      version: 1,
+      head: current.head,
+      operation: v.parse(OperationRecordSchema, {
+        ...operationBase(operation),
+        phase: 'published',
+        resultRootId: input.active.expectedParent,
+      }),
+    };
+    return { next, result: next };
+  });
+}
+
+async function freshOperation(
+  observed: CandidateControlStateV1,
+  kind: OperationRecord['kind'],
+  bootId: string,
+  store: CandidateControlStore,
+  envelopes: CandidateEnvelopeStore,
+): Promise<CandidateControlStateV1> {
+  const parent = observed.head === null ? null : await envelopes.read(observed.head.rootEnvelopeId);
+  const operation = v.parse(OperationRecordSchema, {
+    operationId: crypto.randomUUID(),
+    kind,
+    epoch: String(parent === null ? 0n : BigInt(parent.epoch) + 1n),
+    bootId,
+    baseRevision: parent === null ? '0' : parent.cut.cut,
+    expectedParent: observed.head?.rootEnvelopeId ?? null,
+    phase: 'transferring',
+    attemptId: crypto.randomUUID(),
+  });
+  return await store.update((current) => {
+    const busy = current.operation !== null
+      && current.operation.phase !== 'published'
+      && current.operation.phase !== 'failed';
+    if (busy || (current.head?.rootEnvelopeId ?? null) !== (observed.head?.rootEnvelopeId ?? null)) {
+      throw new CandidateOperationRefused('candidate control changed while beginning an operation');
+    }
+    const next: CandidateControlStateV1 = { version: 1, head: current.head, operation };
+    return { next, result: next };
+  });
+}
+
+async function runControl(
+  control: CandidateControlStateV1,
+  envelopes: CandidateEnvelopeStore,
+): Promise<CandidateRunControlV1> {
+  const pointer = control.head;
+  return v.parse(CandidateRunControlV1Schema, {
+    version: 1,
+    head: pointer === null ? null : { pointer, envelope: await envelopes.read(pointer.rootEnvelopeId) },
+    operation: control.operation,
+  });
+}
+
+/** The restore path: the durable pointer plus the exact envelope it names. */
+export async function candidateRunControl(
+  store: CandidateControlStore,
+  envelopes: CandidateEnvelopeStore,
+  verifyObject: VerifyObject,
+): Promise<CandidateRunControlV1> {
+  const control = await runControl(await store.read(), envelopes);
+  if (control.head !== null) await verifyEnvelopeClosure(control.head.envelope, verifyObject);
+  return control;
+}
+
+/**
+ * Begin the next operation. A prior operation is first driven to rest: one that
+ * sealed is published, one that never sealed is re-driven under this boot.
+ */
+export async function beginCandidateOperation(input: {
+  readonly kind: OperationRecord['kind'];
+  readonly bootId: string;
+  readonly store: CandidateControlStore;
+  readonly envelopes: CandidateEnvelopeStore;
+  readonly verifyObject: VerifyObject;
+}): Promise<CandidateRunControlV1> {
+  let control = await input.store.read();
+  const active = control.operation;
+  if (active !== null && active.phase !== 'published' && active.phase !== 'failed') {
+    // A container has one journal fence. Different checkpoint kinds join this
+    // transfer and re-run their own fence after it settles.
+    if (active.phase === 'intent' || active.phase === 'transferring') {
+      const redriven = active.phase === 'transferring' && active.bootId === input.bootId
+        ? control
+        : await redriveOperation(active, input.bootId, input.store);
+      return await runControl(redriven, input.envelopes);
+    }
+    control = await recoverOperation(active, input.store, input.envelopes, input.verifyObject);
+  }
+  return await runControl(
+    await freshOperation(control, input.kind, input.bootId, input.store, input.envelopes),
+    input.envelopes,
+  );
+}
+
+function controlPlane(input: {
+  readonly active: TransferringOperation;
+  readonly store: CandidateControlStore;
+  readonly envelopes: CandidateEnvelopeStore;
+  readonly verifyObject: VerifyObject;
+}): CandidatePublicationControl {
+  const active = input.active;
+  return {
+    recordOperation: async (record) => await input.store.update((current) => {
+      const operation = current.operation;
+      if (operation === null || operation.operationId !== active.operationId) {
+        throw new CandidateOperationRefused('candidate operation changed before recording a transition');
+      }
+      if (
+        record.operationId !== operation.operationId
+        || record.kind !== operation.kind
+        || record.epoch !== operation.epoch
+        || record.bootId !== operation.bootId
+        || record.baseRevision !== operation.baseRevision
+        || record.expectedParent !== operation.expectedParent
+      ) {
+        throw new CandidateOperationRefused('candidate finalization attempted to change its control identity');
+      }
+      if ((record.phase === 'sealed' || record.phase === 'completion-pending') && record.attemptId !== active.attemptId) {
+        throw new CandidateOperationRefused('candidate finalization attempted to change its attempt');
+      }
+      if (operation.phase === 'completion-pending' || operation.phase === 'published') {
+        // The CAS and the completion mark already own these transitions durably.
+        if (record.phase === 'intent' || record.phase === 'transferring' || record.phase === 'failed') {
+          throw new CandidateOperationRefused('candidate committed operation is immutable');
+        }
+        if (record.resultRootId !== operation.resultRootId) {
+          throw new CandidateOperationRefused('candidate committed operation names a different result root');
+        }
+        return { next: null, result: undefined };
+      }
+      const next: CandidateControlStateV1 = {
+        version: 1,
+        head: current.head,
+        operation: record,
+      };
+      return { next, result: undefined };
+    }),
+    writeEnvelope: async (envelope, rootEnvelopeId) =>
+      await input.envelopes.write(requireEnvelopeAt(envelope, rootEnvelopeId), rootEnvelopeId),
+    verifyObject: input.verifyObject,
+    compareAndSwapHead: async (envelope, expectedParentRootId) => {
+      if (expectedParentRootId !== active.expectedParent) {
+        throw new CandidateOperationRefused('candidate head CAS names a different expected parent');
+      }
+      return await input.store.update((current) => sealedCas(current, active.operationId, envelopeIdOf(envelope)));
+    },
+    markComplete: async (operationId) => {
+      await input.store.update((current) => publishMark(current, operationId));
+    },
+    markFailed: async (operationId, failureCode) => {
+      await input.store.update((current) => failMark(current, operationId, failureCode));
+    },
+  };
+}
+
+/**
+ * Seal and publish a staged draft against the begun operation. Replaying the
+ * same draft is idempotent; a draft naming any other operation is refused.
+ */
+export async function finalizeCandidateOperation(input: {
+  readonly draft: CandidatePublicationDraft;
+  readonly boxId: string;
+  readonly store: CandidateControlStore;
+  readonly envelopes: CandidateEnvelopeStore;
+  readonly verifyObject: VerifyObject;
+}): Promise<CandidateControlStateV1> {
+  const control = await input.store.read();
+  const active = control.operation;
+  if (active === null) throw new CandidateOperationRefused('candidate finalization has no begun operation');
+  if (input.draft.operationId !== active.operationId) {
+    throw new CandidateOperationRefused(
+      `candidate draft ${input.draft.operationId} is not active operation ${active.operationId}`,
+    );
+  }
+  if (active.phase === 'published') return control;
+  if (active.phase === 'failed') {
+    throw new CandidateOperationRefused(
+      `candidate operation ${active.operationId} failed with ${active.failureCode}`,
+    );
+  }
+  if (active.phase === 'sealed' || active.phase === 'completion-pending') {
+    return await recoverOperation(active, input.store, input.envelopes, input.verifyObject);
+  }
+  if (active.phase === 'intent') {
+    throw new CandidateOperationRefused(`candidate operation ${active.operationId} never began a transfer`);
+  }
+  const draft = input.draft;
+  if (
+    draft.attemptId !== active.attemptId
+    || draft.capturedCut.captureId !== active.operationId
+    || draft.capturedCut.epoch !== active.epoch
+    || draft.capturedCut.baseRevision !== active.baseRevision
+    || draft.expectedParentRootId !== active.expectedParent
+  ) {
+    throw new CandidateOperationRefused('candidate draft does not bind the begun control operation');
+  }
+  try {
+    await finalizeCandidatePayload(draft, {
+      operationId: active.operationId,
+      attemptId: active.attemptId,
+      boxId: input.boxId,
+      epoch: active.epoch,
+      bootId: active.bootId,
+      kind: active.kind,
+    }, controlPlane({
+      active,
+      store: input.store,
+      envelopes: input.envelopes,
+      verifyObject: input.verifyObject,
+    }));
+  } catch (error) {
+    // The head is durably committed; the next begin re-marks the pending completion.
+    if (!(error instanceof PublicationCompletionPending)) throw error;
+  }
+  return await input.store.read();
+}

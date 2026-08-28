@@ -8,9 +8,9 @@
  * consumer may quote. What stays in the runner is orchestration only — calling these in
  * order with the state the loop observed.
  */
-import { carrySuppression, floorMargin } from './objective';
+import { carrySuppression, floorMargin, paretoFront } from './objective';
 import type {
-  MeasuredObjective, PublicationState, PublishingCarry,
+  MeasuredObjective, ParetoAxis, PublicationState, PublishingCarry,
 } from './objective';
 import { usageTotal, type Usage } from '../usage';
 import type {
@@ -184,7 +184,8 @@ export async function settleRun(input: {
   readonly rootId: string;
   readonly maxDepth: number;
   readonly branches: number;
-  readonly policy: FrontierPolicy;
+  readonly policy: FrontierPolicy | 'pareto';
+  readonly paretoAxes: readonly ParetoAxis[] | null;
   readonly ctx: MeasurementContext | null;
   readonly verifier: ResolvedVerifier | null;
   readonly measured: MeasuredObjective | null;
@@ -218,7 +219,7 @@ export async function settleRun(input: {
   readonly runProfile: SwarmProfileSnapshot | null;
 }): Promise<SwarmResult> {
   const {
-    started, log, sql, resolved, rootId, maxDepth, branches, policy, ctx, verifier,
+    started, log, sql, resolved, rootId, maxDepth, branches, policy, paretoAxes, ctx, verifier,
     measured, baseline, identity, publishing, archive, publication, candidates, best,
     usage, judgeSamples, ensembles, spentBy, carriedIn, carriedBest, levelFanIn, reentry,
     aborted, missionSpent, lost, remainingBudget, expansionBudget, inheritedExpansions,
@@ -475,7 +476,7 @@ const report = settleReport({
     inheritedExpansions,
     remainingBudget: expansionBudget - inheritedExpansions,
     inheritedTokens,
-    abandonedNodes: reentry.abandoned,
+    resumedNodes: reentry.pending.length,
     superseded: reentry.superseded,
     // The lease IS the attempt counter: `reclaim` bumps it exactly once per re-entry,
     // and epoch 0 is the first attempt — so this run is the (epoch + 1)th.
@@ -486,11 +487,13 @@ const report = settleReport({
     missionSpent,
     lost,
     remainingBudget: budget.remaining,
-    frontierOpen: selectFrontierNode(sql, {
-      rootId, policy, maxDepth,
-      explorationWeight: resolved.config.explorationWeight
-        ?? DEFAULT_CONFIG.mcts.explorationWeight,
-    }) !== null,
+    frontierOpen: policy === 'pareto'
+      ? false
+      : selectFrontierNode(sql, {
+        rootId, policy, maxDepth,
+        explorationWeight: resolved.config.explorationWeight
+          ?? DEFAULT_CONFIG.mcts.explorationWeight,
+      }) !== null,
   }),
 });
 
@@ -522,6 +525,17 @@ const result: SwarmResult = {
   },
   best,
   candidates,
+  frontier: paretoAxes === null
+    ? null
+    : paretoFront(
+      paretoAxes,
+      candidates
+        .filter((candidate) => candidate.pareto !== null)
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .flatMap((candidate) => candidate.pareto === null
+          ? []
+          : [{ candidate, evidence: candidate.pareto }]),
+    ).map(({ candidate }) => candidate),
 };
 if (runProfile) Object.assign(result, { profile: runProfile });
 return result;

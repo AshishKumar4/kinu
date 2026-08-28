@@ -524,9 +524,9 @@ describe('timer ingress', () => {
       next_fire_at: timer.nextFireAt, last_fire_at: null, fire_count: 0,
     }]);
 
-    expect(cancelTrigger(t.registry, timer.id, NOW)).toEqual({ ok: true, changed: true });
+    expect(cancelTrigger(t.registry, timer.id, NOW, 'owner')).toEqual({ ok: true, changed: true });
     // Idempotent: cancelling twice is not an error, and reports no change.
-    expect(cancelTrigger(t.registry, timer.id, NOW)).toEqual({ ok: true, changed: false });
+    expect(cancelTrigger(t.registry, timer.id, NOW, 'owner')).toEqual({ ok: true, changed: false });
     expect(await t.fire(timer.nextFireAt!)).toEqual({ fired: 0 });
   });
 });

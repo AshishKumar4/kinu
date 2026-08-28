@@ -98,22 +98,47 @@ actors that work inside it.
     PARENT's file plane (`cf-backend/src/exploration.ts:273-283`). MCTS rollouts use
     the same facet class in a separate toolless mode and acquire no runtime.
 
-    Node isolation follows the workspace plane. `AgentsForkDeps.nodeHome`
-    carries the three host-owned members a private home needs;
-    `agentHomeNodeProvisioner` with `nodeAgentName` builds `/home/node-<id>`
-    with its own credential and `/tmp`
-    (`core/src/strategy/node-workspace.ts:104-144`). A LOCAL runtime whose
-    plane is its in-SQLite tree wires those members from
-    `WorkspaceBundle.privileged()` and provisions that private home. A runtime
-    bound to a physical directory wires none: a directory has no principal
-    registry to confine `/tmp` with, so every node shares the origin plane.
-    The hosted backend supplies none either, reaching its workspace by RPC to
-    a Nimbus Durable Object, where a filesystem call arriving without a pid
-    acts as the session user and `confinePrincipal` has no RPC form, so two of
-    the three members do not exist on that side. A node always reports the
-    isolation it actually got, `private-home` or `shared-origin-plane`;
-    nothing invents a boundary. `docs/EXPLORATION.md` is the spec for the six
-    axes, presets, report contract and isolation states.
+    Node isolation is one contract with two appliers.
+    `AgentsForkDeps.provisionNodeHome` hands over one
+    `NodeWorkspaceProvisioner` per swarm call, and `agentHomeLayout` is the one
+    table that says a node owns `/home/node-<id>` at `0o755` and
+    `/tmp/node-<id>` at `0o700` (`core/src/vfs/agent-home.ts`). A LOCAL runtime
+    whose plane is its in-SQLite tree applies that layout through the three
+    host-owned members from `WorkspaceBundle.privileged()`. The HOSTED backend
+    applies the same layout through the Nimbus session's own coreutils, run as
+    uid 0 (`cf-backend/src/node-home.ts`).
+
+    Both then credential BOTH planes, because a node reaches the tree with
+    commands and with file tools. A file plane pinned to the session user
+    refuses a node's writes inside its own home — measured `EACCES` — and
+    refuses nothing to a sibling. Locally the node gets `SqliteVFS.as(cred)`
+    and a second `Shell` over the SAME filesystem
+    (`WorkspaceBundle.asAgent`); on a hosted session it gets ONE fixed program
+    run as the node inside the same session (`nimbusSessionFiles(box, cred)`)
+    plus `withHostedNodeExecution`. `CLIRuntime.nodeRuntime` and a node
+    facet's `HostedNodeHome` are where each backend rebuilds that runtime.
+
+    The hosted program is the session's own `node`, driven by strict JSON: the
+    request rides one environment variable and the answer returns on stdout
+    with the substrate's own errno. So no path or payload is shell text, a
+    filename holding a newline or a quote round-trips exactly, and `stat`
+    answers `null` for `ENOENT` alone. Bytes cross in chunks bounded by the
+    catalogued per-RPC payload, not by a file-size cap: a read loops to EOF, a
+    write stages beside the target and renames onto it, and a failed write
+    leaves the old bytes untouched. It costs one session call per chunk plus
+    one to commit.
+
+    A hosted session cannot rewrite a bare `/tmp`: `confinePrincipal` is a
+    `SqliteVFS` method with no RPC. `TMPDIR` points at the node's own
+    directory, and a command hardcoding `/tmp/x` there writes the shared
+    `/tmp`. In this isolate the rewrite exists, so a bare `/tmp` write stays
+    private.
+
+    A runtime bound to a physical directory builds no provisioner: a directory
+    has no principal registry. A node always reports the isolation it actually
+    got, `private-home` or `shared-origin-plane`; nothing invents a boundary.
+    `docs/EXPLORATION.md` is the spec for the six axes, presets, report
+    contract and isolation states.
 
   - Subordinates (`agents`, `action: 'hire'`) are durable: a
     `SubordinateAgent` facet with its own SQL history and full turn loop,
@@ -136,8 +161,41 @@ actors that work inside it.
 - Fork = a new workspace. Forking copies SOUL.md, messages, and memory to
   a fresh workspace by a new name and records `fork_lineage`
   (`source_workspace_id/name`). `forkWorkspaceStorage`
-  (`core/src/identity/fork.ts:417`) does the copy; `deliverCloudFork`
-  (`cf-backend/src/user/workspace-fork.ts:34`) is the hosted entry point.
+  (`core/src/identity/fork.ts#forkWorkspaceStorage`) does the copy in one
+  process; `deliverCloudFork`
+  (`cf-backend/src/user/workspace-fork.ts#deliverCloudFork`) is the hosted
+  entry point.
+
+  On the hosted path the source and the target are two Durable Objects, and one
+  serialized RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`) while a
+  workspace's history is not. The snapshot therefore crosses as semantic frames:
+  a `begin` that declares what is coming, a bounded batch of rows of one
+  section, a bounded byte range of one inherited file, and a `commit`
+  (`core/src/identity/fork-transfer.ts#forkTransferFrames`). Each frame is one
+  `rawCopyFromFork` call straight to the target stub, and `ForkTransferReceiver`
+  stages it into the target's own storage. Neither side holds the whole
+  snapshot. No size of workspace is refused: a bigger workspace is more frames.
+
+  The transfer's state belongs to the target, not to the activation that
+  receives a frame. Which frame is next, the rolling digest of the frames that
+  arrived, what each section staged, the mission the inherited SOUL.md carried,
+  the file whose ranges are still arriving with how many of its bytes landed,
+  and whether the fork published are rows of the target's own `fork_transfer`
+  table (`core/src/identity/fork-staging.ts#ForkStagingState`). An isolate reset
+  between two frames therefore resumes instead of failing, and that holds inside
+  a file too: the next activation's sink adopts the staging at the counted
+  offset, and the whole-file digest is read back out of that staging one bounded
+  range at a time rather than folded in memory. No activation needs to have seen
+  every range of a file to verify it.
+
+  The target validates the protocol version, the transfer identity, the frame
+  order, each frame's own digest, the declared per-section counts and the
+  rolling digest. It publishes nothing until the commit. Before that there is no
+  lineage, no fork marker, no mission and no display name, and the roster row is
+  still `create_pending`, so no user route can reach the workspace. A frame
+  re-delivered after publication is answered with the fork that landed. A gap, a
+  reordering or a corrupt frame is refused, and a fresh `begin` restarts the
+  transfer.
 
 ## Surfaces (one noun everywhere)
 

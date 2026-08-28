@@ -5,7 +5,9 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  initRunEventTables, RunEventRecorder, USAGE_FIELDS, WORKSPACE_RUN_ID,
+  boundRunEventQuery, getRunEvents, initRunEventTables, RunEventRecorder,
+  RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
+  USAGE_FIELDS, WORKSPACE_RUN_ID,
   type RunEvent, type Usage,
 } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
@@ -15,6 +17,14 @@ function setup() {
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
   return { recorder: new RunEventRecorder(sql), sql };
+}
+
+/** One run with `count` events already in the log — the corpus a bound is
+ *  observed against, since a bound is only visible when it cuts. */
+function seededRun(count: number): RunEventRecorder {
+  const { recorder } = setup();
+  for (let i = 0; i < count; i++) recorder.emit('run-1', { type: 'error', message: `t${i}` });
+  return recorder;
 }
 
 describe('RunEventRecorder.emit', () => {
@@ -81,6 +91,100 @@ describe('RunEventRecorder.read', () => {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
     expect(recorder.read('run-1', { limit: 5 }).length).toBe(5);
+  });
+
+  // KINU-N019: the route clamped only the upper bound, so a negative `limit`
+  // reached SQLite as `LIMIT -1` — which means NO limit — and one request read,
+  // parsed and serialized a run's whole history.
+  //
+  // Two layers, two questions. `read` owns the log's invariant (only a finite
+  // positive integer may reach SQL) and applies it to every caller including the
+  // in-object folds. `boundRunEventQuery` owns the ceiling on what an untrusted
+  // caller may ASK for, and `getRunEvents` applies it at the boundary.
+  describe('read admits only a finite positive integer limit', () => {
+    test('a negative limit reads one row, never the whole run', () => {
+      const recorder = seededRun(40);
+      expect(recorder.read('run-1', { limit: -1 }).length).toBe(1);
+      expect(recorder.read('run-1', { limit: -9999 }).length).toBe(1);
+    });
+
+    test('a negative limit stays bounded with a type filter too', () => {
+      // The filtered path derives its fetch window from `limit`, so an unbounded
+      // limit made a negative fetch window there as well.
+      const recorder = seededRun(40);
+      expect(recorder.read('run-1', { limit: -1, types: ['error'] }).length).toBe(1);
+    });
+
+    test('zero raises to one row rather than reading an empty page', () => {
+      expect(seededRun(40).read('run-1', { limit: 0 }).length).toBe(1);
+    });
+
+    test('a non-finite limit means unstated and takes the default', () => {
+      const recorder = seededRun(400);
+      expect(recorder.read('run-1', { limit: Number.NaN }).length).toBe(RUN_EVENT_LIMIT_DEFAULT);
+      expect(recorder.read('run-1', { limit: Number.POSITIVE_INFINITY }).length)
+        .toBe(RUN_EVENT_LIMIT_DEFAULT);
+      expect(recorder.read('run-1', { limit: Number.NEGATIVE_INFINITY }).length)
+        .toBe(RUN_EVENT_LIMIT_DEFAULT);
+    });
+
+    test('a fractional limit truncates instead of failing the query', () => {
+      const recorder = seededRun(40);
+      expect(recorder.read('run-1', { limit: 2.7 }).length).toBe(2);
+      expect(recorder.read('run-1', { limit: 0.5 }).length).toBe(1);
+    });
+
+    test('an in-object window wider than the untrusted ceiling is honoured', () => {
+      // `getRunSummaries` folds a run's usage over 1000 events and prints the
+      // total as the workspace's spend. Narrowing it to the stranger's ceiling
+      // would be a truncated denominator presented as a settled figure.
+      const recorder = seededRun(RUN_EVENT_LIMIT_MAX + 120);
+      expect(recorder.read('run-1', { limit: 1000 }).length).toBe(RUN_EVENT_LIMIT_MAX + 120);
+    });
+
+    test('a non-finite or negative since reads from the start', () => {
+      const recorder = seededRun(5);
+      expect(recorder.read('run-1', { since: Number.NaN }).length).toBe(5);
+      expect(recorder.read('run-1', { since: -1 }).length).toBe(5);
+      expect(recorder.read('run-1', { since: 2.9 }).map((e) => e.eventIndex)).toEqual([2, 3, 4]);
+    });
+  });
+
+  describe('getRunEvents is the boundary every untrusted caller crosses', () => {
+    test('an oversized limit clamps to the untrusted ceiling', () => {
+      const recorder = seededRun(RUN_EVENT_LIMIT_MAX + 120);
+      expect(getRunEvents(recorder, 'run-1', { limit: 1e9 }).length).toBe(RUN_EVENT_LIMIT_MAX);
+      expect(getRunEvents(recorder, 'run-1', { limit: Number.MAX_SAFE_INTEGER }).length)
+        .toBe(RUN_EVENT_LIMIT_MAX);
+      // The same value the in-object fold is trusted with is capped here.
+      expect(getRunEvents(recorder, 'run-1', { limit: 1000 }).length).toBe(RUN_EVENT_LIMIT_MAX);
+    });
+
+    test('negative, non-finite and fractional limits stay bounded here too', () => {
+      const recorder = seededRun(400);
+      expect(getRunEvents(recorder, 'run-1', { limit: -1 }).length).toBe(1);
+      expect(getRunEvents(recorder, 'run-1', { limit: Number.NaN }).length)
+        .toBe(RUN_EVENT_LIMIT_DEFAULT);
+      expect(getRunEvents(recorder, 'run-1', { limit: 2.7 }).length).toBe(2);
+      expect(getRunEvents(recorder, 'run-1', { since: -3, limit: 3 }).map((e) => e.eventIndex))
+        .toEqual([0, 1, 2]);
+    });
+  });
+
+  describe('boundRunEventQuery is the one policy the boundary applies', () => {
+    test('it closes the bounds and leaves the rest of the query alone', () => {
+      expect(boundRunEventQuery({ limit: -1, since: -5, types: ['error'] }))
+        .toEqual({ limit: 1, since: 0, types: ['error'] });
+    });
+
+    test('an empty query states nothing and takes both defaults', () => {
+      expect(boundRunEventQuery()).toEqual({ since: 0, limit: RUN_EVENT_LIMIT_DEFAULT });
+    });
+
+    test('applying it twice changes nothing', () => {
+      const once = boundRunEventQuery({ limit: 1e9, since: Number.NaN });
+      expect(boundRunEventQuery(once)).toEqual(once);
+    });
   });
 
   test('run_end round-trips the terminal error text (the durable evidence trail)', () => {

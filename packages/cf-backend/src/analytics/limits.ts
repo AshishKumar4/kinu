@@ -17,14 +17,17 @@
  */
 
 /**
- * The five limits below are PRIVATE, and `assertWithinPlatformLimits` is what a
- * caller reaches instead.
+ * Four of the five limits below are PRIVATE, and `assertWithinPlatformLimits` is
+ * what a caller reaches instead.
  *
- * Nothing outside this file has any use for the numbers themselves: a schema does
- * not choose them, and a reader who wants to know whether a dataset fits asks the
- * guard rather than doing the arithmetic again. `MAX_WRITES_PER_INVOCATION` is the
- * exception and is exported, because a window is state rather than a check and
- * `writer.ts` has to size one.
+ * A schema does not choose them, and a reader who wants to know whether a dataset
+ * fits asks the guard rather than doing the arithmetic again. Two are exported,
+ * each because something outside a dataset check needs the NUMBER itself:
+ * `MAX_WRITES_PER_INVOCATION`, because a window is state rather than a check and
+ * `writer.ts` has to size one; and `MAX_BLOB_BYTES`, because the browser
+ * render-failure endpoint bounds its request body by it (see
+ * `client-error/contract.ts` for the derivation) and a second `16 * 1024` spelled
+ * there would be one platform fact recorded in two places.
  */
 
 /** Blobs accepted per data point. "Analytics Engine will accept up to twenty
@@ -43,8 +46,13 @@ const MAX_INDEXES = 1;
  *
  * KiB rather than KB: the platform writes "16 KB" and the enforcement is on
  * bytes, so the smaller reading of the two is the safe one to build to.
+ *
+ * Also the ceiling on one browser render-failure report, because `diagnostics`
+ * fans out to `console` AND to Analytics Engine: a record too large to fit one
+ * data point is one the sink cannot carry whole, and AE drops an oversized point
+ * silently.
  */
-const MAX_BLOB_BYTES = 16 * 1024;
+export const MAX_BLOB_BYTES = 16 * 1024;
 
 /** "Each index must not be more than 96 bytes." */
 const MAX_INDEX_BYTES = 96;

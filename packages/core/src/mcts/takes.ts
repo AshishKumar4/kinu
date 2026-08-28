@@ -15,9 +15,19 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { SearchNode } from '../types/mcts';
 import { recordTurnOutcome } from '../evolution/outcomes';
 import { reconcileColumns } from '../identity/columns';
+import {
+  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+} from '../identity/effect-tombstones';
+import { conversationTurnPair } from '../identity/conversation-store';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+
+/** One branch settlement's take set. A branch's terminal effect can be replayed
+ *  after the set persisted but before the disposition was recorded, and this
+ *  table has no natural conflict to catch that: every set id is a fresh
+ *  `take-${nanoid()}`. */
+const BRANCH_SCOPE = 'branch_take';
 
 /** Most candidates a take set carries (including the winner). Two near-tied
  *  alternatives are a meaningful choice; ten are noise. */
@@ -94,11 +104,23 @@ export function initAlternateTakesTable(execRaw: RawSqlExec, sql: SqlExecutor): 
     winner_node_id TEXT NOT NULL,
     chosen_node_id TEXT,
     candidates TEXT NOT NULL,
+    settlement_key TEXT,
     created_at INTEGER NOT NULL,
     picked_at INTEGER
   )`);
-  // Tables created before Steer-as-Branch lack the source column.
-  reconcileColumns(sql, execRaw, 'alternate_takes', { source: `TEXT NOT NULL DEFAULT 'mcts'` });
+  // Tables created before Steer-as-Branch lack the source column; tables created
+  // before branch settlement was keyed lack the settlement key.
+  reconcileColumns(sql, execRaw, 'alternate_takes', {
+    source: `TEXT NOT NULL DEFAULT 'mcts'`,
+    settlement_key: 'TEXT',
+  });
+  // UNIQUE so the invariant is the database's rather than the caller's: a
+  // replayed settlement that got past the tombstone read would fail here instead
+  // of adding a second set for one branch. SQLite treats NULLs as distinct, so
+  // every unkeyed set is unaffected.
+  execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_alternate_takes_settlement
+      ON alternate_takes(settlement_key)`);
+  initEffectTombstoneTable(execRaw);
 }
 
 /** Node ids on the path from `node` up to the root (inclusive of `node`). */
@@ -189,8 +211,25 @@ export function recordBranchTakeSet(
   input: {
     task: string; turnId: string; sessionId: string;
     liveText: string; branchText: string; now?: number;
+    /** The branch's durable identity, for a caller whose settlement can be
+     *  replayed. Every set id here is a fresh `take-${nanoid()}`, so without a
+     *  key a replay after the set persisted but before the disposition was
+     *  recorded inserts a SECOND set for one branch and broadcasts a different
+     *  take-set id. With one, the replay returns the set the first attempt
+     *  wrote. */
+    settlementKey?: string;
   },
 ): AlternateTakeSet | null {
+  const settlementKey = input.settlementKey ?? null;
+  if (settlementKey !== null) {
+    const stored = sql<RawTakeRow>`
+      SELECT * FROM alternate_takes WHERE settlement_key = ${settlementKey} LIMIT 1`[0];
+    if (stored) return toTakeSet(stored);
+    // The key is recorded but its row is gone. The set existed; re-minting one
+    // is exactly the duplicate the key exists to prevent.
+    if (effectAlreadyDone(sql, BRANCH_SCOPE, settlementKey)) return null;
+  }
+
   const liveText = input.liveText.trim();
   const branchText = input.branchText.trim();
   if (!liveText || !branchText || liveText === branchText) return null;
@@ -202,10 +241,15 @@ export function recordBranchTakeSet(
   ];
   const now = input.now ?? nowMs();
   void sql`INSERT INTO alternate_takes
-        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
+        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates,
+         settlement_key, created_at, picked_at)
       VALUES
         (${id}, ${input.turnId}, ${input.sessionId}, ${input.task.slice(0, 500)}, ${'branch'},
-         ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)}, ${now}, ${null})`;
+         ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)},
+         ${settlementKey}, ${now}, ${null})`;
+  // Same synchronous pass as the insert: the tombstone is what answers the
+  // replay once this row has been retired.
+  if (settlementKey !== null) recordEffectDone(sql, BRANCH_SCOPE, settlementKey, now);
   return {
     id, turnId: input.turnId, sessionId: input.sessionId, task: input.task.slice(0, 500),
     source: 'branch', winnerNodeId: candidates[0]!.nodeId, chosenNodeId: null,
@@ -221,23 +265,57 @@ export function recordBranchTakeSet(
  *  Returns how many sets were claimed. */
 export function claimAlternateTakesForTurn(
   sql: SqlExecutor,
-  input: { turnId: string; sessionId: string; startedAt: number },
+  input: {
+    turnId: string; sessionId: string; startedAt: number;
+    /** The takes this turn actually competed against, read when the turn settled.
+     *
+     *  Named rather than re-selected, because this call is REPLAYABLE: a retry
+     *  arriving after a later turn has captured its own unclaimed takes would
+     *  otherwise claim that turn's rows for this one. Absent keeps the live
+     *  behaviour — select whatever is unclaimed now — for a caller whose claim
+     *  nothing can replay. */
+    takeIds?: readonly string[];
+  },
 ): number {
   void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL AND created_at < ${input.startedAt}`;
-  const unclaimed = sql<{ id: string }>`
-    SELECT id FROM alternate_takes WHERE turn_id IS NULL`;
+  const unclaimed = input.takeIds === undefined
+    ? sql<{ id: string }>`SELECT id FROM alternate_takes WHERE turn_id IS NULL`
+    : input.takeIds.map((id) => ({ id }));
+  let claimed = 0;
   for (const row of unclaimed) {
+    // Guarded on STILL being unclaimed: a recorded id another turn already
+    // claimed is not this turn's to take back.
     void sql`UPDATE alternate_takes SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
-        WHERE id = ${row.id}`;
+        WHERE id = ${row.id} AND turn_id IS NULL`;
+    claimed += 1;
   }
-  return unclaimed.length;
+  return claimed;
+}
+
+/** The unclaimed takes as they stand right now — what a REPLAYABLE claim records
+ *  so its retry acts on the set the turn actually competed against. */
+export function unclaimedAlternateTakeIds(sql: SqlExecutor): string[] {
+  return sql<{ id: string }>`SELECT id FROM alternate_takes WHERE turn_id IS NULL`
+    .map((row) => row.id);
 }
 
 /** Drop unclaimed take sets when a turn settles without an id to claim them
  *  with (aborted, errored, or no assistant message) — they competed for an
  *  answer that no longer exists, so the next turn must not inherit them. */
-export function purgeUnclaimedAlternateTakes(sql: SqlExecutor): void {
-  void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL`;
+export function purgeUnclaimedAlternateTakes(
+  sql: SqlExecutor,
+  /** The takes this turn competed against. Named for the same reason the claim
+   *  names them: an unqualified purge on a replay deletes a LATER turn's
+   *  captures. */
+  takeIds?: readonly string[],
+): void {
+  if (takeIds === undefined) {
+    void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL`;
+    return;
+  }
+  for (const id of takeIds) {
+    void sql`DELETE FROM alternate_takes WHERE id = ${id} AND turn_id IS NULL`;
+  }
 }
 
 interface RawTakeRow {
@@ -301,17 +379,14 @@ export function recordTakePick(
       WHERE id = ${set.id}`;
 
   // The conversation context behind the ledger row — same lookup the
-  // explicit-thumbs path uses (messages mirror keyed by the turn id).
+  // explicit-thumbs path uses, through the canonical conversation store.
   let userMessage = set.task;
   let assistantResponse = '';
   if (set.turnId) {
-    const msg = sql<{ response: string; request: string | null }>`
-      SELECT m.content AS response, u.content AS request
-      FROM messages m LEFT JOIN messages u ON u.id = m.parent_id
-      WHERE m.id = ${set.turnId} LIMIT 1`[0];
-    if (msg) {
-      assistantResponse = msg.response;
-      if (msg.request) userMessage = msg.request;
+    const pair = conversationTurnPair(sql, set.turnId);
+    if (pair) {
+      assistantResponse = pair.response ?? '';
+      if (pair.request !== null) userMessage = pair.request;
     }
   }
 

@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createTestWorkspace } from './helpers';
 import {
   initAlternateTakesTable, recordBranchTakeSet, claimAlternateTakesForTurn,
-  latestAlternateTakeSet, recordTakePick, buildTakeContinuationPrompt,
+  latestAlternateTakeSet, listAlternateTakeSets, recordTakePick, buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
 import { HeadJournal } from '../src/heads/journal';
 import type { HeadRuntime, SpawnedHead } from '../src/heads/controller';
@@ -220,6 +220,56 @@ describe('alternate_takes schema migration', () => {
     expect(recordBranchTakeSet(sql, {
       task: 't', turnId: 'turn-1', sessionId: 'default', liveText: 'a', branchText: 'b',
     })).not.toBeNull();
+  });
+});
+
+// Every set id here is a fresh `take-${nanoid()}`, so the table has no natural
+// conflict to catch a settlement that ran twice: the second attempt would insert
+// a second set for one branch and broadcast a different take-set id.
+describe('recordBranchTakeSet — the settlement key', () => {
+  const args = (settlementKey?: string) => {
+    const base = {
+      task: 'use approach B instead', turnId: 'turn-9', sessionId: 'default',
+      liveText: 'A-style answer', branchText: 'B-style answer',
+    };
+    return settlementKey === undefined ? base : { ...base, settlementKey };
+  };
+
+  test('a replayed keyed settlement returns the SAME set and writes no second one', () => {
+    const { sql } = setup();
+    const first = recordBranchTakeSet(sql, args('branch:b-1'))!;
+    expect(first).not.toBeNull();
+
+    const replay = recordBranchTakeSet(sql, args('branch:b-1'))!;
+    expect(replay.id).toBe(first.id);
+    expect(replay.candidates).toEqual(first.candidates);
+    expect(listAlternateTakeSets(sql)).toHaveLength(1);
+  });
+
+  test('a replay after the set row was retired writes nothing', () => {
+    const { sql } = setup();
+    const first = recordBranchTakeSet(sql, args('branch:b-1'))!;
+    void sql`DELETE FROM alternate_takes WHERE id = ${first.id}`;
+
+    // The set existed and was consumed. Re-minting one is the duplicate the key
+    // exists to prevent.
+    expect(recordBranchTakeSet(sql, args('branch:b-1'))).toBeNull();
+    expect(listAlternateTakeSets(sql)).toEqual([]);
+  });
+
+  test('a different branch key still records its own set', () => {
+    const { sql } = setup();
+    recordBranchTakeSet(sql, args('branch:b-1'));
+    recordBranchTakeSet(sql, args('branch:b-2'));
+    expect(listAlternateTakeSets(sql)).toHaveLength(2);
+  });
+
+  test('unkeyed settlements are unchanged — two calls, two sets', () => {
+    const { sql } = setup();
+    const a = recordBranchTakeSet(sql, args())!;
+    const b = recordBranchTakeSet(sql, args())!;
+    expect(a.id).not.toBe(b.id);
+    expect(listAlternateTakeSets(sql)).toHaveLength(2);
   });
 });
 

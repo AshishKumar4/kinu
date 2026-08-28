@@ -2,7 +2,34 @@
 
 // Identity system
 export { initActorTables, initAllTables, migrateWorkspaceStorage, tableExists } from './identity/schema';
+// The once-only lifecycle of one settled response, and the per-effect ledger it
+// wraps. Backend-neutral: the Durable Object and the CLI drive the same state
+// machine over the same table and supply only effect bodies and a wake.
+export {
+  declareTerminalRoster,
+  type TerminalTurnFacts, type TerminalTurnParts,
+} from './orchestrator/terminal-roster';
+export {
+  TerminalTransitions, TERMINAL_TRANSITION_CALL_ID,
+  type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
+} from './orchestrator/terminal-transition';
+export {
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, terminalEffectKey,
+  terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
+  TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
+  TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
+  RunEndReasonSchema, ModelMessagesSchema, WorkModeSchema, TurnContinuitySchema,
+  type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
+  type TerminalEffectOutcome, type TerminalEffectStatus, type TerminalEffectPhase,
+  type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
+  type TerminalSequenceRun,
+} from './orchestrator/terminal-effects';
 export { reconcileColumns } from './identity/columns';
+// The durable record that a keyed piece of work already happened, kept after the
+// row that did it has been retired.
+export {
+  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+} from './identity/effect-tombstones';
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log';
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
@@ -18,6 +45,7 @@ export {
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
+  summarizeSoulBytes,
   writeSoul,
 } from './identity/soul';
 export { WORKSPACE_IDENTITY_DDL } from './identity/schema';
@@ -26,13 +54,34 @@ export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
 export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
 export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
+  ForkSnapshotSchema, ForkTargetWriter,
   type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
+  type ForkSnapshotHead, type ForkMessageRow, type ForkPaneRow,
+  type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
+  type ForkWriteTarget, type ForkStagedCounts,
 } from './identity/fork';
+export { ForkStagingState, type ForkStaging } from './identity/fork-staging';
 export {
-  reconcileSessionTree, sessionTreeAncestry, chatPaneAncestry,
+  FORK_TRANSFER_VERSION, FORK_FRAME_BYTES, FORK_ROW_SECTIONS, FORK_STREAM_SEED,
+  ForkFrameSchema, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
+  forkFramePreimage, foldForkStream,
+  type ForkFrame, type ForkBeginFrame, type ForkFileFrame, type ForkRowFrame,
+  type ForkRowSection, type ForkSectionCounts, type ForkFrameOutcome,
+  type UnsealedForkFrame,
+  type ForkFileSource, type ForkTransferSource,
+} from './identity/fork-transfer';
+export {
+  NativeSinkPlan,
+  type ForkFileSink, type ForkFileCommit, type ForkNativeFilePort,
+} from './identity/fork-sink';
+export {
+  sessionTreeAncestry, chatPaneAncestry, hasPaneStore, forkPointExists, normalizeImportedConversation,
+  answersForDrainTurns,
+  conversationCount, conversationTurnPair, conversationPageRows,
   SESSION_TREE_MAX_DEPTH, CHAT_SESSION_ID,
   type SessionTreeNode, type ChatPaneRow,
-} from './identity/session-tree';
+  type ConversationTurnPair, type ConversationPageRow,
+} from './identity/conversation-store';
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
 } from './identity/fork-driver';
@@ -73,7 +122,7 @@ export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
-  type ShadowTrialDrain, type ShadowTrialTurn,
+  type ShadowTrialDrain, type ShadowTrialQueueOutcome, type ShadowTrialTurn,
 } from './evolution/types';
 export {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
@@ -92,7 +141,7 @@ export {
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   describeSplitDegeneracy, CRITIC_PROSE,
-  recordLesson, listLessons, corroborateLessonsForTurn,
+  recordLesson, recordedTurnVerdict, listLessons, corroborateLessonsForTurn,
   isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
   isPureLookupCall, TURN_OUTCOME_SOURCES,
   recordOutcomeLabels, listOutcomeLabels, goldLabels,
@@ -326,11 +375,14 @@ export {
   type StepCachePlan,
   type StepDynamicContext,
   type StepPipeline,
+  type StepPrepareResult,
 } from './prompting/prepare-step';
 export {
   pruneStepToolOutputs,
-  STEP_CONTEXT_BUDGET_RATIO,
+  stepContextLimit,
+  outputReserveTokens,
   STEP_RECENT_TOOL_BUDGET_TOKENS,
+  type ModelWindow,
   type StepPruneBudget,
 } from './prompting/step-prune';
 export {
@@ -422,6 +474,8 @@ export {
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
+  replayPolicyFor,
+  type ReplayPolicy,
   AGENTS_TOOL_ACTIONS,
   TASKS_TOOL_ACTIONS,
   WEB_TOOL_ACTIONS,
@@ -457,6 +511,7 @@ export {
   craftedNamespaceCorrection,
   craftedToolDescription, craftedDispatcherEntry,
   type CraftedDispatcherEntry,
+  type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
@@ -476,9 +531,9 @@ export { createAgentsCodemodeProvider } from './tools/agents-codemode';
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
 // Subordinate roster, identity, admission and the orchestration policy over
 // them — platform-neutral, so a backend supplies only SubordinateRuntime.
+export { SubordinateRosterStore } from './subordinates/roster';
 export {
   SubordinateIdentityStore,
-  SubordinateRosterStore,
   admitSubordinateReport,
   admitSubordinateTask,
   createTeamToolDeps,
@@ -497,6 +552,22 @@ export {
   type SubordinateRuntime,
   type SubordinatesChangedEvent,
 } from './subordinates/support';
+// The temporary rung — one full child agent per question, in the ONE roster.
+export {
+  SUBORDINATE_LIFETIMES,
+  TEMPORARY_LIFETIME,
+  TASK_TURN_ENDINGS,
+  createTemporaryAgentPort,
+  renderTemporaryTaskBrief,
+  temporaryRunSettles,
+  terminalTaskReport,
+  type SubordinateLifetime,
+  type TemporaryAgentPort,
+  type TemporaryRunOutcome,
+  type TemporaryRunRefusal,
+  type TaskTurnEnding,
+  type TemporaryRunRequest,
+} from './subordinates/temporary';
 // The subordinate tree's depth cap — derived per child, never stated by one.
 export {
   DELEGATION_MAX_DEPTH,
@@ -526,10 +597,16 @@ export {
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './tools/actor-tools';
+// The durable once-only boundary in front of a tool whose effects leave the
+// process — applied inside `buildActorTools`, so both backends supply its deps
+// and neither wraps tools itself. See tools/effect-claim.ts.
+export {
+  initToolEffectClaimTable, claimToolEffect, settleToolEffect, releaseTurnEffectClaims,
+  withEffectClaims,
+  type EffectClaimDeps, type ToolEffectClaim, type ToolEffectKey,
+} from './tools/effect-claim';
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index';
-// Recursive Language Models — the llm.query codemode provider (both backends).
-export { createRLMProvider, type CodemodeProvider, type RLMModelResolver, type RLMOptions } from './rlm';
 // The release lane — codemode-only (release.* inside execute_tools). No
 // native tool: see tools/builtins.ts's header for why.
 export {
@@ -575,6 +652,10 @@ export {
   buildSystemPromptSync,
   currentDateForPrompt,
   FALLBACK_PURPOSE,
+  renderUnverifiedInstructions,
+  unverifiedInstructionsMessage,
+  WORKSPACE_INSTRUCTIONS_HEADER,
+  type UnverifiedInstructions,
   type SystemPromptOptions,
 } from './prompt';
 // The boundaries of an assembled request — shared by the renderers that write
@@ -624,8 +705,12 @@ export {
 export {
   renderAgentsMdSection,
   collectWorkspaceAgentsMd,
-  AGENTS_MD_MAX_CHARS,
+  admitAgentsMd,
   type AgentsMdFile,
+  type AgentsMdReference,
+  type AgentsMdSources,
+  type AgentsMdUnavailable,
+  type InstructionPlacement,
 } from './prompting/agents-md';
 export {
   acceptedMediaForModel,
@@ -728,7 +813,7 @@ export { estimateCost } from './mcts/cost';
 // Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
 export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
-  purgeUnclaimedAlternateTakes,
+  purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence,
   type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
@@ -741,7 +826,7 @@ export {
   newBranchId, isSteerBranchRunId, branchHeadId,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
-  type BranchSettleOutcome, type PendingBranch,
+  type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 // The user steer-drain — a message typed while a turn runs, spliced into its
 // next step. Not a signal: it persists verbatim, comes back on interrupt, and
@@ -755,9 +840,10 @@ export {
 // Where a steer sits in the transcript — the read side of the same drain, and
 // pure, so both backends place it identically.
 export {
-  buildTranscript, segmentBySteers,
+  buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
+  EMPTY_TRANSCRIPT_FOLD,
   type InlineSteer, type PlacedSteer, type Transcript, type TranscriptEntry,
-  type TranscriptPart, type TurnSegment,
+  type TranscriptFold, type TranscriptPart, type TurnSegment,
 } from './read-models/transcript';
 
 // Schemas
@@ -814,7 +900,7 @@ export {
   getCurrentScaffoldVersion,
   readScaffoldVersion,
   readShadowVerdict,
-  recordShadowEvaluation,
+  recordShadowEvaluation, scoredShadowTrial, trimTrialContext,
   decidePromotion,
   applyPromotionDecision,
   DEFAULT_SHADOW_CONFIG,
@@ -882,6 +968,10 @@ export {
   TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
   DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError, DEVICE_TOKEN_ROTATION,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
+  DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,
+  DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
+  type DeviceCancelResult,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
   type NimbusStartResult,
@@ -893,6 +983,7 @@ export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
+  AGENT_FS_CHUNK_BYTES,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index';
@@ -905,13 +996,13 @@ export {
   workspacePath, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 export {
-  agentHome, agentTmpRoot, agentCred, agentIdentity,
+  agentHome, agentTmpRoot, agentCred, agentIdentity, agentHomeLayout,
   provisionAgentHome, confineAgentTmp,
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
-  type AgentIdentity, type HomeRootVfs, type TmpConfiner,
+  type AgentDir, type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
 export type {
-  WorkspaceBundle, WorkspaceOptions, WorkspaceVFS,
+  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions, WorkspaceVFS,
 } from './vfs/nimbus-workspace';
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
@@ -919,8 +1010,10 @@ export {
 } from './vfs/errno';
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS,
+  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  readBoundedWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider,
+  type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,
 } from './vfs/mounts';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
@@ -972,7 +1065,7 @@ export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memor
 // Zero-LLM transcript search over the canonical `messages` table.
 // Backs the `memory` tool's `conversations` action on both backends.
 export {
-  ConversationSearchStore,
+  ConversationSearchStore, invalidateConversationSearchIndex,
   type ConversationSearchHit, type ConversationScrollMessage,
   type ConversationScrollResult, type ConversationSummary,
 } from './memory/conversation-search';
@@ -993,6 +1086,7 @@ export {
 // (Letta-style; ~50% test-time token reduction reported).
 export {
   runSleepTimeCompute, applySleepTimeUpdate,
+  SleepTimeUpdateSchema,
   type SleepTimeInput, type SleepTimeUpdate,
 } from './memory/sleep-time-compute';
 
@@ -1014,6 +1108,9 @@ export {
   RunEventSchema,
   recordModelOperations,
   RunEventRecorder,
+  boundRunEventQuery,
+  RUN_EVENT_LIMIT_DEFAULT,
+  RUN_EVENT_LIMIT_MAX,
   cacheHitRate,
   summarizeSteps,
   CACHE_HIT_EMA_ALPHA,
@@ -1039,6 +1136,7 @@ export {
   type SpendTally,
   type RunEventListener,
   type RunEventQuery,
+  type BoundedRunEventQuery,
 } from './events/index';
 
 // The one durable retry outbox — write-ahead intent, backoff, per-key
@@ -1142,6 +1240,16 @@ export {
   type PlatformQuantity,
 } from './platform-catalog';
 
+// The terminal chrome vocabulary — shared by the CLI's TUI and every surface
+// that depicts it (the landing page's terminal demo), so mocks cannot drift.
+export {
+  CHANGE_KIND_GLYPH,
+  TUI_ADVERTISED_PRESET_BINDINGS,
+  TUI_ADVERTISED_HINTS,
+  TUI_COMPOSER_PLACEHOLDER,
+  TUI_MARKS,
+} from './tui-presentation';
+
 // safety — approval gating for shell exec + digest-bound approvals
 export {
   reviewCommand,
@@ -1201,6 +1309,17 @@ export {
   argumentDigest,
   sha256Hex,
   stableStringify,
+  InstructionApprovalStore,
+  initInstructionApprovalsTable,
+  instructionDigest,
+  trustOfInstructionApprovals,
+  admitInstructionDecision,
+  type InstructionTrust,
+  type InstructionDecision,
+  type InstructionApproval,
+  type InstructionTrustResolver,
+  type VerifiedInstructionTrust,
+  type AdmittedInstructionDecision,
   DeviceConsentRegistry,
   DEVICE_CONSENT_SCOPE,
   DEVICE_CONSENT_SCOPE_FULL_FS,
@@ -1210,6 +1329,7 @@ export {
   DEVICE_PROVISION_METHOD,
   parseConsentScope,
   mergeConsentScope,
+  consentScopeCovers,
   deviceConsentScopeForMethod,
   summarizeDeviceAction,
   type DeviceConsentScope,
@@ -1250,6 +1370,8 @@ export {
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
   LiveHeadJournal, type AnnounceHeadActivity,
+  type HeadStreamFrame, type HeadStreamKind,
+  type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
@@ -1269,12 +1391,15 @@ export {
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
+  // Per-invocation device-request ownership: the tool reports each durable
+  // identity it issues, and the job that detaches the call takes them over.
+  DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership,
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
-  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
+  type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
 } from './jobs/index';
 
 // The agent's own task list — what the `tasks` tool writes and the Tasks
@@ -1311,11 +1436,12 @@ export {
 export {
   assembleTurnMessages, measureCompactionTrigger,
   type TurnContextInput, type CompactionTriggerReader, type MeasuredCompactionTrigger,
+  type TurnAdmission,
 } from './orchestrator/turn-context';
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
-  classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
+  classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, OUTPUT_LIMIT_REACHED, TURN_ENDED_MID_WORK,
   type CompactionTriggerState, type SettledTurn,
   type RunEndReason, type RunEndFacts,
 } from './orchestrator/turn-lifecycle';
@@ -1352,17 +1478,20 @@ export {
 // No LLM-facing tool and no codemode namespace — read/create/edit/delete are
 // ordinary workspace.readFile/writeFile/readdir/exec calls over the same VFS.
 export {
-  parseSkillFile, stringifySkillFile, validateSkillName,
-  discoverSkills, skillPath, BUILTIN_SKILLS,
-  resolveActiveSkills, extractExplicitInvocations,
-  renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
-  ACTIVE_SKILLS_MAX_CHARS, SKILLS_INDEX_MAX_CHARS,
+  parseSkillFile, stringifySkillFile, validateSkillName, skillNameProblem,
+  discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames, skillBodyChars,
+  BUILTIN_SKILLS, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
+  resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
+  renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
+  unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
   SkillError, SKILLS_DIR,
 } from './skills/index';
 export type {
-  ParsedSkill, SkillSource, ActiveSkillSet,
-  ActivationReason, SkillParseResult, SkillErrorCode,
-  SkillsVfs, DiscoverOpts, LoadActiveSkillsOpts,
+  SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
+  SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
+  SkillParseResult, SkillErrorCode,
+  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile,
+  LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
 // ── GEPA (Genetic-Pareto Prompt Evolution) ──
@@ -1377,15 +1506,35 @@ export type {
 // from the CLI at all; both backends now call these.
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, runQueuedShadowTrials,
+  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
   runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
-  advancePromptSectionLane,
+  advancePromptSectionLane, proposeMeasuredPromptSection,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
-  type ScaffoldVersionView, type ShadowStatus, type ShadowTrialQueueOutcome,
+  type ScaffoldVersionView, type ShadowStatus,
   type PromptSectionOptimizationResult, type PromptSectionTrialResult,
-  type PromptSectionLaneStep,
+  type PromptSectionLaneStep, type MeasuredSectionProposal,
 } from './evolution/control';
+// CONTINUAL REFINEMENT — `/refine` and the automatic evolution-debt trigger.
+// The refiner is the read-only temporary rung; every typed edit it proposes is
+// routed to the authority that already owns that artifact, and only those
+// authorities apply anything.
+export {
+  REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES,
+  REFINEMENT_STAGES, REFINEMENT_TRIGGERS, RefinementProposalSchema,
+  REFINEMENT_DECISIONS,
+  createRefinementStore, evolutionDebt, initRefinementTables, refinementRequestView,
+  refinementStagingPath,
+  advanceRefinementLane, decideRefinementRoute, showRefinementRoute, refinementDebt, refinementDebtRequest, requestRefinement,
+  type EvolutionDebt, type OpenRefinementInput, type RefinementDeps,
+  type RefinementDisposition, type RefinementEdit, type RefinementEditKind,
+  type RefinementLaneStep, type RefinementProposal, type RefinementRequest,
+  type RefinementRequestView, type RefinementRoute, type RefinementScope,
+  type RefinementStage, type RefinementStore, type RefinementTrigger,
+  type RefinementDecision, type RefinementDecisionInput, type RefinementDecisionResult,
+  type StagedSkillResult, type StagedSkillView,
+  type RequestRefinementInput, type SettleRefinementPatch,
+} from './evolution/index';
 export {
   runGepa, runScaffoldGepa, runSectionGepa,
   PROMPT_SECTION_TARGETS, findPromptSectionTarget,
@@ -1451,8 +1600,14 @@ export type {
 // backend-shaped — a backend supplies its transport and nothing else.
 export {
   classifyEvolutionType, getRunTimeline, runEventToSpan, safeJsonParse, toolKindFor,
+  RUN_TIMELINE_DEFAULT, RUN_TIMELINE_MAX,
 } from './read-models/timeline';
 export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline';
+
+// The one bound a caller-supplied row count passes through before it reaches
+// SQL. Exported because the CLI's local read models bind their own `LIMIT` and
+// need the same policy as their cloud peers.
+export { boundedInt } from './utils/bounds';
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs';
 export type { RunListEntry, RunSummary } from './read-models/runs';
 export { workspaceSpend } from './read-models/workspace-spend';
@@ -1519,11 +1674,19 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 export { buildPendingActions } from './read-models/pending-actions';
+export {
+  listInstructionApprovals, readInstructionSource, openInstructionSource,
+  previewInstruction, gatherApprovableInstructions, snapshotExistingInstructions,
+} from './read-models/instruction-approvals';
+export type {
+  InstructionSourceKind, InstructionSourceMeta, InstructionSourceRow,
+  InstructionSourceView,
+} from './read-models/instruction-approvals';
 export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status';
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page';
 export type { Page, PageRequest, SeekCursor } from './read-models/page';
 export {
-  mergeTranscript, uiMessageRow, uiMessageText, transcriptRole,
+  mergeTranscript, restoredRows, uiMessageRow, uiMessageText, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
@@ -1619,7 +1782,7 @@ export {
 } from './profiles';
 export type { ReasoningEffort } from './strategy/effort';
 export { REASONING_EFFORTS } from './strategy/effort';
-export type { NamedSwarmPreset } from './strategy/swarm';
+export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // Rendered from the preset table in the same module, so a surface reading this cannot
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';

@@ -122,10 +122,11 @@ export interface PromptSurfaceOptions {
    *  agentsActionsFor). Defaults to ALL actions when the `agents` tool is on
    *  the surface — the representative full surface — and to none otherwise. */
   agentsActions?: readonly AgentsToolAction[];
-  /** Whether the llm.query (RLM) codemode provider is wired for this actor —
-   *  cf always; cli only when a model resolver exists. Gates the prompt's
-   *  decomposition guidance so it is never advertised where it would throw. */
-  rlmAvailable?: boolean;
+  /** Whether this actor's `ask` can target a ROLE — the temporary rung, wired
+   *  wherever a backend has a child substrate. Gates the prompt's
+   *  decomposition guidance so a rung is never advertised where the action
+   *  would refuse it. */
+  temporaryAsk?: boolean;
   externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
   /** What the turn may do. Defaults to `build` — Auto, the absence of
@@ -147,7 +148,7 @@ export interface PromptSurfaceOptions {
 export interface PromptSurface {
   builtinTools: BuiltinToolName[];
   agentsActions: AgentsToolAction[];
-  rlmAvailable: boolean;
+  temporaryAsk: boolean;
   externalTools: PromptExternalToolInfo[];
   executors: PromptExecutorInfo[];
   selectableExecutors: PromptExecutorInfo[];
@@ -253,7 +254,7 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
   const builtinTools = uniqueBuiltinTools(opts.availableTools);
   return {
     builtinTools,
-    rlmAvailable: opts.rlmAvailable ?? false,
+    temporaryAsk: opts.temporaryAsk ?? false,
     agentsActions: uniqueAgentsActions(opts.agentsActions, builtinTools),
     externalTools: uniqueExternalTools(opts.externalTools),
     executors,

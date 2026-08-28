@@ -41,12 +41,13 @@
 import {
   JsonObjectSchema,
   asFetchFunction,
+  toolCallIdFor,
   type JsonObject,
 } from '@kinu.run/core';
 import { diagnostics, renderCauseChain, toKinuError, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
-import { repairSseCachedUsage } from './stream-usage-repair';
+import { createCachedUsageRepair } from './stream-usage-repair';
 
 const ChatCompletionRequestSchema = v.looseObject({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
@@ -66,13 +67,16 @@ const NativeOutputSchema = v.looseObject({
   usage: v.optional(JsonObjectSchema),
 });
 
-/** An OpenAI-shaped streamed chunk, as far as this adapter reads one: it needs
- *  to know whether a finish reason has already gone out, and nothing else. The
- *  payload itself is forwarded verbatim. */
+/** An OpenAI-shaped streamed chunk, as far as this adapter reads one: whether a
+ *  finish reason has already gone out, whether the frame has a live choice at
+ *  all, and the usage it reports. `choices` is REQUIRED — its presence is what
+ *  tells the two dialects apart — and an empty one is a usage report rather
+ *  than a delta. The payload itself is forwarded verbatim. */
 const ChunkSchema = v.looseObject({
   choices: v.array(v.looseObject({
     finish_reason: v.optional(v.nullable(v.string())),
   })),
+  usage: v.optional(JsonObjectSchema),
 });
 
 /** The Workers AI error envelope, in the two shapes `ai-api.ts` `_parseError`
@@ -142,7 +146,19 @@ export function createDirectWorkersAIFetch(binding: Ai): typeof globalThis.fetch
 }
 
 /** The binding takes the model separately and the rest of the OpenAI body as
- *  its inputs. */
+ *  its inputs.
+ *
+ *  The replayed transcript inside `messages` travels verbatim, tool-call ids
+ *  included. Their one requirement here is EQUALITY between an assistant
+ *  message's `tool_calls[].id` and the `tool_call_id` of the `tool` message
+ *  answering it, which is what the upstream pairs on, and forwarding preserves
+ *  it exactly. Re-keying them could not: the call sits at a position inside its
+ *  assistant message's array while its result is alone on a message of its own,
+ *  so a position-derived key would differ between the two sites and split a
+ *  pair that currently matches. Nothing between here and the wire re-encodes
+ *  the string either — the body is serialized as JSON, which carries any id
+ *  losslessly. Minting is where the id has to be made unique and portable
+ *  ({@link toolCallIdFor}), and that happens on the way out. */
 function bindingInputs(body: JsonObject, stream: boolean): JsonObject {
   const inputs: JsonObject = { ...body, stream };
   delete inputs.model;
@@ -238,14 +254,13 @@ async function sseResponse(
     // turn stops costing neurons.
     cancel: () => reader.cancel(),
   });
-  // The repair belongs on this path now: it exists because a Workers AI stream
-  // can report a smaller cached-token count on a later usage chunk than on an
-  // earlier one (see stream-usage-repair.ts), and this adapter forwards every
-  // usage chunk for the first time.
-  return repairSseCachedUsage(new Response(
+  // One pass over the bytes. The translation below already splits every line
+  // and parses every `data:` payload, so the cached-usage repair applies inside
+  // it as a rule rather than as a second transform doing the same work again.
+  return new Response(
     source.pipeThrough(openAIChunkTransform(model)),
     { headers: { 'content-type': 'text/event-stream' } },
-  ));
+  );
 }
 
 /**
@@ -253,10 +268,14 @@ async function sseResponse(
  * frames out.
  *
  * Two upstream dialects reach here, the same two the non-streamed path already
- * handles. A payload with `choices` is already an OpenAI chunk and is forwarded
- * verbatim, so reasoning fields, annotations and incremental tool-call deltas
- * survive untouched. A native payload carries `response`, `tool_calls` and
- * `usage`, and is translated.
+ * handles. A payload with a live choice is already an OpenAI chunk and is
+ * forwarded verbatim, so reasoning fields, annotations and incremental tool-call
+ * deltas survive untouched. Everything else is translated: a native payload
+ * carrying `response`, `tool_calls` and `usage`, and — from either dialect — a
+ * usage report with no live choice, which the platform spells `choices: []` and
+ * the native runtime spells with no `choices` at all. The two converge because
+ * such a frame carries nothing but the report, so both are absorbed rather than
+ * forwarded and the final usage leaves with the finish state, once.
  *
  * Framing is rebuilt rather than forwarded. Only `data:` lines carry anything
  * this transport needs, so comments and keep-alives are dropped and every
@@ -266,7 +285,11 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const id = `chatcmpl-${crypto.randomUUID()}`;
+  /** Minted once per RESPONSE — every frame carries it — so it is also the
+   *  scope that keeps a tool-call id unique across the responses of one turn. */
+  const toolCallScope = `call-${id}`;
   const created = Math.floor(Date.now() / 1000);
+  const repairCachedUsage = createCachedUsageRepair();
   let buffer = '';
   /** An assistant delta has gone out, so `role` has been announced. */
   let opened = false;
@@ -278,37 +301,41 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
   let closed = false;
   /** The stream has been errored, so nothing more may be enqueued on it. */
   let failed = false;
-  /** Usage from a NATIVE payload, which has nowhere else to go. Usage on an
-   *  OpenAI chunk was already forwarded with it, so it is never recorded here
-   *  and never reported twice. */
-  let nativeUsage: JsonObject | undefined;
+  /** The response's latest usage report, repaired, until a frame carries it to
+   *  the caller. A frame that reports usage itself clears it, so one report
+   *  never leaves twice and a later report supersedes an earlier one. */
+  let owedUsage: JsonObject | undefined;
 
-  const frame = (choice: JsonObject, usage?: JsonObject): Uint8Array => {
-    const chunk: JsonObject = {
-      id,
-      object: 'chat.completion.chunk',
-      created,
-      model,
-      choices: [choice],
-    };
+  const frame = (choices: JsonObject[], usage?: JsonObject): Uint8Array => {
+    const chunk: JsonObject = { id, object: 'chat.completion.chunk', created, model, choices };
     if (usage) chunk.usage = usage;
     return encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`);
   };
 
   const finalize = (controller: TransformStreamDefaultController<Uint8Array>): void => {
     if (closed) return;
+    // The final state leaves in exactly ONE frame. A finish reason that has not
+    // gone out yet takes the usage with it. When the upstream already announced
+    // one, the usage travels on a chunk with no choice, which is the OpenAI wire
+    // shape for a usage report: `choices[0]` is what carries a finish state, so
+    // this adds no second one, and `usage` is read off any chunk.
     if (!finished) {
       controller.enqueue(frame(
-        { index: 0, delta: {}, finish_reason: toolCalls > 0 ? 'tool_calls' : 'stop' },
-        nativeUsage,
+        [{ index: 0, delta: {}, finish_reason: toolCalls > 0 ? 'tool_calls' : 'stop' }],
+        owedUsage,
       ));
       finished = true;
+    } else if (owedUsage) {
+      controller.enqueue(frame([], owedUsage));
     }
+    owedUsage = undefined;
     controller.enqueue(encoder.encode('data: [DONE]\n\n'));
     closed = true;
   };
 
-  const onNative = (
+  /** The frames this adapter translates rather than forwards: a native delta,
+   *  and a usage report with no live choice in either dialect. */
+  const translate = (
     payload: JsonObject,
     controller: TransformStreamDefaultController<Uint8Array>,
   ): void => {
@@ -321,24 +348,24 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
       return;
     }
     const output = parsed.output;
-    if (output.usage) nativeUsage = output.usage;
+    if (output.usage) owedUsage = repairCachedUsage(output.usage) ?? output.usage;
     const text = output.response ?? '';
     if (text.length > 0) {
       const delta: JsonObject = opened ? { content: text } : { role: 'assistant', content: text };
       opened = true;
-      controller.enqueue(frame({ index: 0, delta, finish_reason: null }));
+      controller.enqueue(frame([{ index: 0, delta, finish_reason: null }]));
     }
     const calls = output.tool_calls ?? [];
     if (calls.length > 0) {
       const deltas = calls.map((call, offset) => ({
         index: toolCalls + offset,
-        id: call.id ?? `call-${String(toolCalls + offset + 1)}`,
+        id: toolCallIdFor({ scope: toolCallScope, native: call.id, index: toolCalls + offset }),
         type: 'function',
         function: { name: call.name, arguments: toolArguments(call.arguments) },
       }));
       toolCalls += calls.length;
       opened = true;
-      controller.enqueue(frame({ index: 0, delta: { tool_calls: deltas }, finish_reason: null }));
+      controller.enqueue(frame([{ index: 0, delta: { tool_calls: deltas }, finish_reason: null }]));
     }
   };
 
@@ -360,15 +387,26 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
       controller.error(new Error(`Workers AI ${model} streamed a data frame that is not a JSON object`));
       return;
     }
+    // Either the frame is not OpenAI-shaped, or it has no live choice — and a
+    // frame with no live choice is a usage report and nothing else, whichever
+    // dialect spelled it. One path for both: forwarding one would end the
+    // response a second time, and the AI SDK's own chunk schema requires
+    // `choices`, so the dialect that omits it cannot be forwarded at all.
     const chunk = v.safeParse(ChunkSchema, object.output);
-    if (!chunk.success) {
-      onNative(object.output, controller);
+    if (!chunk.success || chunk.output.choices.length === 0) {
+      translate(object.output, controller);
       return;
     }
     if (chunk.output.choices.some((choice) => (choice.finish_reason ?? null) !== null)) {
       finished = true;
     }
-    controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+    const usage = chunk.output.usage;
+    // This frame reports its own usage, so nothing is owed after it. Its bytes
+    // are rebuilt only when the cache repair has a maximum to restore.
+    const repaired = usage ? repairCachedUsage(usage) : undefined;
+    if (usage) owedUsage = undefined;
+    const outgoing = repaired ? JSON.stringify({ ...object.output, usage: repaired }) : payload;
+    controller.enqueue(encoder.encode(`data: ${outgoing}\n\n`));
   };
 
   const drain = (
@@ -402,15 +440,18 @@ function openAICompletion(raw: JsonObject, requestedModel: string): Response {
   if (Array.isArray(raw.choices)) return jsonResponse(raw);
 
   const output = v.parse(NativeOutputSchema, raw);
+  // Minted once per RESPONSE and used twice: as the completion's own id, and as
+  // the response-unique scope of every tool-call id below.
+  const responseId = `chatcmpl-${crypto.randomUUID()}`;
   const toolCalls = (output.tool_calls ?? []).map((call, index) => ({
-    id: call.id ?? `call-${String(index + 1)}`,
+    id: toolCallIdFor({ scope: `call-${responseId}`, native: call.id, index }),
     type: 'function',
     function: { name: call.name, arguments: toolArguments(call.arguments) },
   }));
   const message: JsonObject = { role: 'assistant', content: output.response ?? '' };
   if (toolCalls.length > 0) message.tool_calls = toolCalls;
   const completion: JsonObject = {
-    id: `chatcmpl-${crypto.randomUUID()}`,
+    id: responseId,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: requestedModel,

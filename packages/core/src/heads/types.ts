@@ -269,14 +269,14 @@ export interface HeadRunView {
 export interface SplitRequest {
   /** The merge prompt will receive this as overall framing. */
   readonly rationale: string;
-  readonly heads: Array<{
+  readonly heads: readonly {
     readonly task: string;
     readonly rationale: string;
     /** Per-head provider/model spec (e.g. `codex/gpt-5.5`). Heterogeneous
      *  models per head enable multi-agent debate / panel-of-experts. */
     readonly model?: string;
     readonly allowedTools?: readonly string[];
-  }>;
+  }[];
   readonly mergeStrategy?: MergeStrategy;
   readonly budget?: Partial<{
     maxDepth: number;

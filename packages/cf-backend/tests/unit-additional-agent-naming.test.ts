@@ -101,6 +101,8 @@ async function addedAgent(seed: {
     currentTask: null,
     createdAt: 1,
     dismissedAt: null,
+    lifetime: 'durable',
+    taskEventId: null,
   });
   const suggested: string[] = [];
   const model = titleModel(seed.title ?? 'Release Train');
@@ -126,18 +128,6 @@ async function displayedName(parent: ParentRosterReader, name: string): Promise<
     ?? '';
 }
 
-
-interface Deferred {
-  readonly promise: Promise<void>;
-  readonly resolve: () => void;
-}
-
-function deferred(): Deferred {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  if (!resolve) throw new Error('deferred resolver was not installed');
-  return { promise, resolve };
-}
 
 describe('an agent the owner added without naming it', () => {
   test('is born with no title, the general role and the workspace mission', async () => {
@@ -218,8 +208,8 @@ describe('an agent the owner added without naming it', () => {
       displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
       title: 'Callback Audit',
     });
-    const reachedParent = deferred();
-    const releaseParent = deferred();
+    const reachedParent = Promise.withResolvers<void>();
+    const releaseParent = Promise.withResolvers<void>();
     const recordTitle = parent.agent.recordSubordinateTitle.bind(parent.agent);
     Object.defineProperty(parent.agent, 'recordSubordinateTitle', {
       configurable: true,
@@ -245,8 +235,8 @@ describe('an agent the owner added without naming it', () => {
       displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
       title: 'Callback Audit',
     });
-    const reachedChild = deferred();
-    const releaseChild = deferred();
+    const reachedChild = Promise.withResolvers<void>();
+    const releaseChild = Promise.withResolvers<void>();
     const setNaming = child.agent.setSubordinateNaming.bind(child.agent);
     Object.defineProperty(child.agent, 'setSubordinateNaming', {
       configurable: true,

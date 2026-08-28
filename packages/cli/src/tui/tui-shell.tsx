@@ -5,6 +5,7 @@ import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { TUI_MARKS } from '@kinu.run/core';
 
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
 import { agentWorkspaceKey, groupAgentWorkspaces, type ListedAgent } from '../agent-list';
@@ -555,17 +556,22 @@ export function TuiShell(props: TuiShellProps) {
       flexDirection="row"
       style={{ width: '100%', height: '100%', backgroundColor: colors.background.canvas }}
     >
-      <box
-        key="workspace-sidebar"
-        style={{
-          width: sidebarPinned ? WORKSPACE_SIDEBAR_COLUMNS : 0,
-          overflow: 'hidden',
-          border: sidebarPinned ? ['right'] : false,
-          borderColor: colors.border.default,
-        }}
-      >
-        {sidebarPinned ? navigator : null}
-      </box>
+      {/* Mounted only while pinned: opentui draws a border whenever
+          `borderColor` is styled, even with `border: false`, so a resting
+          zero-width box still painted a two-column border sliver. */}
+      {sidebarPinned && (
+        <box
+          key="workspace-sidebar"
+          style={{
+            width: WORKSPACE_SIDEBAR_COLUMNS,
+            overflow: 'hidden',
+            border: ['right'],
+            borderColor: colors.border.default,
+          }}
+        >
+          {navigator}
+        </box>
+      )}
       <box key="scene-content" style={{ flexGrow: 1, minWidth: 0, height: '100%' }}>{props.children}</box>
       {layout === 'wide' && (
         <box
@@ -671,7 +677,7 @@ function NavigatorRow(props: {
           <span fg={colors.text.muted}>{row.expanded ? '▾ ' : '▸ '}</span>
           <strong fg={props.selected ? colors.text.strong : colors.text.primary}>{clipText(label, 14)}</strong>
           <span fg={colors.text.muted}> · {count}</span>
-          {running && <span fg={colors.intent.accent}> ●</span>}
+          {running && <span fg={colors.intent.accent}> {TUI_MARKS.activity.running}</span>}
         </text>
       </box>
     );
@@ -694,7 +700,7 @@ function NavigatorRow(props: {
         <text>
           {marker}
           <span fg={colors.text.muted}>{row.nested ? '  ' : ''}</span>
-          <span fg={agent.status === 'running' ? colors.intent.accent : colors.text.muted}>{agent.status === 'running' ? '● ' : '○ '}</span>
+          <span fg={agent.status === 'running' ? colors.intent.accent : colors.text.muted}>{agent.status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>
           <span fg={props.selected || props.active ? colors.text.strong : colors.text.primary}>{clipText(agentDisplayLabel(agent.label), 16)}</span>
         </text>
       </box>

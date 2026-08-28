@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store';
-import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
+import { asFetchFunction, JsonObjectSchema, type AuthResolution, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const savedConfigSchema = v.object({
@@ -58,6 +58,57 @@ describe('createFileCodexAuthStore', () => {
     expect(saved.providers?.openai?.apiKey).toBe('sk-openai');
     expect(saved.providers?.codex?.refreshToken).toBe('refresh-new');
     expect(saved.providers?.codex?.metadata?.accountId).toBe('acct_123');
+  });
+
+  // The refresh used to run OUTSIDE the lock: an async callback handed to the
+  // synchronous helper released the lock the moment it returned its pending
+  // Promise, so two callers submitted the same refresh token and raced their
+  // replacements into the file. One of the two rotations then held a token the
+  // provider had already invalidated.
+  test('two concurrent refreshes perform one rotation', async () => {
+    const dir = scratchDir('codex-auth-store');
+    const configPath = join(dir, 'config.json');
+    writeFileSync(configPath, `${JSON.stringify({
+      providers: {
+        codex: {
+          accessToken: jwt({ exp: Math.floor(Date.now() / 1000) - 60 }),
+          refreshToken: 'refresh-old',
+          metadata: { accountId: 'acct_123' },
+        },
+      },
+    }, null, 2)}\n`);
+
+    const submitted: string[] = [];
+    let second: Promise<AuthResolution | null> | undefined;
+    const store = createFileCodexAuthStore(configPath, {
+      fetch: asFetchFunction(async (_input, init) => {
+        // Yield before answering, so the refresh is genuinely mid-flight — the
+        // state in which the lock used to be gone already. The second caller
+        // starts HERE rather than at a guessed moment, so its first acquisition
+        // attempt lands inside this refresh: it is refused while the lock covers
+        // the callback, and it succeeds the moment the lock does not.
+        await Promise.resolve();
+        submitted.push(String(new URLSearchParams(String(init?.body)).get('refresh_token')));
+        second ??= store.getAuth();
+        return Response.json({
+          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+          refresh_token: `refresh-${String(submitted.length)}`,
+          expires_in: 3600,
+        });
+      }),
+    });
+
+    const first = await store.getAuth();
+    if (second === undefined) throw new Error('the refresh never reached the provider');
+    const waiter = await second;
+
+    // The provider saw the stored refresh token once, both callers carry what
+    // that one rotation produced, and the file agrees with both of them.
+    expect(submitted).toEqual(['refresh-old']);
+    expect(waiter?.headers.Authorization).toBe(first?.headers.Authorization);
+    const saved = v.parse(savedConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
+    expect(saved.providers?.codex?.refreshToken).toBe('refresh-1');
+    expect(lstatSync(`${configPath}.lock`, { throwIfNoEntry: false })).toBeUndefined();
   });
 
   test('exports the shared Codex credential key', () => {

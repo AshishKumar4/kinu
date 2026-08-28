@@ -31,17 +31,22 @@ import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { agentTitle } from "@/components/SubordinateTabs";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
 
 interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
 
 export interface AgentSurfaceProps {
-  agentStatus: AgentStatus | null;
+  /** The workspace snapshot every pane below is fed by. A tri-state rather
+   *  than a nullable status, because "still coming" and "came back broken"
+   *  are different things to draw and neither of them is "none". */
+  snapshot: AsyncResource<AgentStatus>;
   tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
+  /** Re-run the snapshot. The panes offer it when their read failed. */
+  onRetryLoad: () => void;
   rpc: Rpc;
 }
 
@@ -140,13 +145,25 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
   );
 }
 
-export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc }: AgentSurfaceProps) {
+export function AgentSurface(
+  { snapshot, tools, memory, memoryContent, onSearchMemory, onRetryLoad, rpc }: AgentSurfaceProps,
+) {
   const [memorySearch, setMemorySearch] = useState("");
   // "No world model" is a claim about what this agent has learned, so it may
   // only be made about a listing that actually came back.
   const loadFacts = useCallback(() => rpc<Fact[]>("getFacts", [100]), [rpc]);
   const { resource: factsResource, reload: reloadFacts } = useAsyncResource(loadFacts);
   const facts = lastValue(factsResource) ?? [];
+  const as = lastValue(snapshot);
+
+  /** What a pane shows while the snapshot has produced nothing for it: a
+   *  spinner for a read still coming, a retry for one that came back broken.
+   *  Neither carries the reason — the page banner gives it once, and a pane
+   *  repeating it is one outage said four times. Every pane below asks for
+   *  this instead of reporting "none" for a read that never arrived. */
+  const unloaded = (what: string) => snapshot.status === "error"
+    ? <LoadFailure what={what} onRetry={onRetryLoad} />
+    : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -186,7 +203,7 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
             ))}
           </div>
         </Section>
-      ) : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>}
+      ) : unloaded("this agent")}
 
       {/* Memory */}
       <Section id="memory" title="Memory" icon={<DatabaseIcon size={14} className="p-text-2" />}>
@@ -208,7 +225,9 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
               </div>
             </div>
           ) : !memorySearch ? (
-            <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" hint={EMPTY_HINTS.memory} />
+            as === null
+              ? unloaded("memory")
+              : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" hint={EMPTY_HINTS.memory} />
           ) : memory.length === 0 ? (
             <EmptyState icon={<MagnifyingGlassIcon size={28} />} title="No results" />
           ) : memory.map((entry, i) => (
@@ -250,9 +269,11 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
       <Section id="tools" title="Tools" icon={<PackageIcon size={14} className="p-text-2" />}
         badge={tools.length > 0 ? <Badge variant="secondary">{tools.length}</Badge> : undefined}>
         <div className="space-y-2">
-          {tools.length === 0 ? (
-            <EmptyState icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />
-          ) : tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)}
+          {tools.length > 0
+            ? tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)
+            : as === null
+              ? unloaded("tools")
+              : <EmptyState icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />}
         </div>
       </Section>
 

@@ -11,7 +11,9 @@ import {
   backgroundJobWakeTrigger,
   createAgentConfigStore,
   initWorkspaceSchema,
+  DELEGATION_MAX_DEPTH,
   REPORT_TOOL,
+  delegationExhausted,
   SUBORDINATE_REPORT_STATUSES,
   type HostedAgentRef,
   type LLMProviderConfig,
@@ -178,6 +180,98 @@ function reportingChildModel(content: string) {
     },
   });
   return { model, calls: () => calls };
+}
+
+/** A child that finishes its assigned turn with NO TEXT AT ALL.
+ *
+ *  The durable relay withholds this (`subordinateRelaysTurnEnd` requires
+ *  non-empty text), which for a temporary agent meant the caller's `ask` never
+ *  returned. A task child must report it as a non-answer instead. */
+function silentChildModel() {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => ({
+      content: [], finishReason: 'stop' as const, usage, warnings: [],
+    }),
+    doStream: async () => ({
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: 'stream-start', warnings: [] });
+          controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+          controller.close();
+        },
+      }),
+      response: { headers: {} },
+    }),
+  });
+}
+
+/** A child whose turn FAILS outright: the provider throws. */
+function failingChildModel() {
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => { throw new Error('provider is down'); },
+    doStream: async () => { throw new Error('provider is down'); },
+  });
+}
+
+/** A child that files a mid-task `progress` note through the report tool and
+ *  THEN reaches a terminal state.
+ *
+ *  This is the shape that hung an ask: the progress note sets "spoke this turn",
+ *  which is the DURABLE relay's suppression bit, while `temporaryRunSettles`
+ *  correctly refuses to treat it as the answer. A task child that filed one and
+ *  then answered had its terminal report suppressed and its caller waited
+ *  forever. `then` decides what happens after the note. */
+function progressThenChildModel(then: 'answer' | 'throw') {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  let calls = 0;
+  return new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => ({
+      content: [{ type: 'text', text: 'acknowledged' }],
+      finishReason: 'stop' as const, usage, warnings: [],
+    }),
+    doStream: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({
+                type: 'tool-call',
+                toolCallId: 'report-progress',
+                toolName: REPORT_TOOL,
+                input: JSON.stringify({ status: 'progress', content: 'reading the export' }),
+              });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      }
+      if (then === 'throw') throw new Error('provider is down');
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: '0' });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 'totals reconcile' });
+            controller.enqueue({ type: 'text-end', id: '0' });
+            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  });
 }
 
 async function seedAgent(state: string, name: string): Promise<string> {
@@ -530,6 +624,382 @@ describe('LocalAgentHost', () => {
     await team.dismiss({ name: 'temporary', requestedBy: 'user', keepHistory: false });
     expect(existsSync(dirname(temporaryPath))).toBe(false);
     await host.close();
+  });
+
+
+  /**
+   * THE TEMPORARY RUNG, END TO END ON THE REAL LOCAL SUBSTRATE.
+   *
+   * A role-targeted `ask` is not a bare model call and not a second execution
+   * path: it births a real local actor with its own SQLite database, its own
+   * `LocalAgentSession` and its own tool loop, drives it through the same
+   * `subordinate_task` admission a hire uses, takes its report through the same
+   * ingress, and then archives it in the SAME roster. Everything asserted here
+   * is a fact on disk or in that one roster.
+   */
+  test('a role-targeted ask runs a real local child, answers from the call, and archives it in the one roster', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const ANSWER = 'the callback URL was never registered';
+    const child = reportingChildModel(ANSWER);
+    const { host } = makeHost(state, child.model, [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    const team = await host.team('root');
+    const port = team.temporary;
+    // The port is wired wherever a local agent holds a roster — the rung is
+    // structural, not a per-session option.
+    expect(port).toBeDefined();
+
+    const outcome = await port!.run({
+      role: { kind: 'catalog', roleId: 'researcher' },
+      roleLabel: 'researcher',
+      task: 'Find the root cause and report it.',
+      mode: 'build',
+    });
+
+    // ONE stable shape, and the answer came back from THIS call rather than as
+    // an event on a later turn.
+    expect(outcome).toMatchObject({
+      status: 'completed',
+      lifetime: 'task',
+      role: 'researcher',
+      answer: ANSWER,
+      transcript: 'kept',
+    });
+    const agent = v.parse(v.object({ agent: v.string() }), outcome).agent;
+    expect(agent.startsWith('ask-researcher-')).toBe(true);
+
+    // It was a REAL actor: its own database exists under this root's children,
+    // and a release keeps it — that file IS the transcript the outcome claims.
+    const childDb = join(dirname(dbPath), 'subordinates', agent, 'agent.db');
+    expect(existsSync(childDb)).toBe(true);
+
+    // ONE roster. Released from the working set...
+    expect(await team.list()).toEqual([]);
+    // ...and archived in that same roster, carrying the lifetime that says which
+    // rung created it. No second table was consulted to learn any of this.
+    const archived = new Database(dbPath, { readonly: true });
+    const rows = archived.query<{
+      name: string; status: string; lifetime: string; task_event_id: string | null;
+    }, []>('SELECT name, status, lifetime, task_event_id FROM workspace_subordinates').all();
+    archived.close();
+    expect(rows).toEqual([
+      { name: agent, status: 'dismissed', lifetime: 'task', task_event_id: null },
+    ]);
+
+    await host.close();
+    // The child's answer was consumed by the waiting call, so it never became a
+    // `subordinate_report` event on the parent's rail — publishing it too would
+    // have billed a turn to read an answer already in hand.
+    const view = new Database(dbPath, { readonly: true });
+    const reports = view.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+    ).get()?.n ?? 0;
+    view.close();
+    expect(reports).toBe(0);
+  });
+
+  /** A hire is untouched by the rung above: it stays DURABLE in the same roster,
+   *  and its report still travels the event rail that wakes its parent. */
+  test('a hire in the same roster keeps lifetime durable and still reports onto the rail', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const child = reportingChildModel('root cause found');
+    const { host } = makeHost(state, child.model, [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    const reported = Promise.withResolvers<void>();
+    const parentTurnEnded = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => {
+      if (event.type === 'broadcast' && event.event.type === 'subordinate_event'
+        && event.event.status === 'completed') reported.resolve();
+      if (agent === 'root' && event.type === 'turn-end') parentTurnEnded.resolve();
+    });
+    const team = await host.team('root');
+    await team.spawn({
+      role: { kind: 'catalog', roleId: 'researcher' },
+      mission: 'Investigate the incident.',
+      mode: 'build',
+    });
+    const roster = await team.list();
+    expect(roster).toHaveLength(1);
+    expect(roster[0]?.lifetime).toBe('durable');
+    // The row names the assignment its report will cite — one correlation for
+    // both lifetimes.
+    expect(roster[0]?.taskEventId).toBeTruthy();
+
+    await reported.promise;
+    await parentTurnEnded.promise;
+    await host.close();
+    const view = new Database(dbPath, { readonly: true });
+    const reports = view.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+    ).get()?.n ?? 0;
+    view.close();
+    // A durable subordinate's answer IS its parent's event: exactly one, on the
+    // rail, unchanged by the temporary rung's existence.
+    expect(reports).toBe(1);
+  });
+
+  /**
+   * NO HANG, EXACTLY ONE RESULT — for every way a temporary child's turn can end.
+   *
+   * There is no deadline anywhere in this rung by ruling, so the ONLY thing that
+   * makes `run` return is the child reporting. These drive the two endings the
+   * durable relay policy withholds — a finished turn with nothing to say, and a
+   * turn that failed — on the real local substrate, and assert the call returns
+   * with exactly one report and no duplicate.
+   */
+  for (const [label, model] of [
+    ['finishes with nothing to say', silentChildModel()],
+    ['fails outright', failingChildModel()],
+  ] as const) {
+    test(`a temporary child that ${label} still answers its caller exactly once`, async () => {
+      const { state, project } = makeRoots();
+      const dbPath = await seedAgent(state, 'root');
+      const { host } = makeHost(state, model, [
+        { name: 'root', cwd: project, workspaceId: 'proj' },
+      ]);
+      const team = await host.team('root');
+      const outcome = await team.temporary!.run({
+        role: { kind: 'catalog', roleId: 'researcher' },
+        roleLabel: 'researcher',
+        task: 'Find the root cause.',
+        mode: 'build',
+      });
+
+      // It RETURNED — that is the guarantee. Classified, with the child's own
+      // account rather than a bare timeout.
+      expect(outcome).toMatchObject({ status: 'failed', lifetime: 'task', transcript: 'kept' });
+      const answer = v.parse(v.object({ answer: v.string(), agent: v.string() }), outcome);
+      expect(answer.answer.length).toBeGreaterThan(0);
+
+      // Released from the working set, archived in the SAME roster.
+      expect(await team.list()).toEqual([]);
+      await host.close();
+      const view = new Database(dbPath, { readonly: true });
+      const rows = view.query<{ name: string; status: string; lifetime: string }, []>(
+        'SELECT name, status, lifetime FROM workspace_subordinates',
+      ).all();
+      // EXACTLY ONE result: the waiting call consumed the report, so it never
+      // also became an event that would wake the parent for a second reading.
+      const reports = view.query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      ).get()?.n ?? 0;
+      view.close();
+      expect(rows).toEqual([{ name: answer.agent, status: 'dismissed', lifetime: 'task' }]);
+      expect(reports).toBe(0);
+    });
+  }
+
+  /**
+   * A PROGRESS NOTE MUST NOT CANCEL THE ANSWER.
+   *
+   * The mid-task `progress` report is invited behaviour, and it sets the DURABLE
+   * relay's "spoke this turn" bit — which is not the same question as "already
+   * answered". Suppressing the terminal report on it left the caller parked with
+   * no deadline to rescue it. Both endings after a note are covered: the child
+   * answers, and the child fails.
+   */
+  for (const [then, expected] of [
+    ['answer', 'completed'],
+    ['throw', 'failed'],
+  ] as const) {
+    test(`a temporary child that reports progress and then ${then}s still answers its caller`, async () => {
+      const { state, project } = makeRoots();
+      const dbPath = await seedAgent(state, 'root');
+      const { host } = makeHost(state, progressThenChildModel(then), [
+        { name: 'root', cwd: project, workspaceId: 'proj' },
+      ]);
+      const team = await host.team('root');
+      const outcome = await team.temporary!.run({
+        role: { kind: 'catalog', roleId: 'researcher' },
+        roleLabel: 'researcher',
+        task: 'Audit the ledger.',
+        mode: 'build',
+      });
+
+      // It RETURNED. Before the settling bit existed this call never resolved.
+      const settled = v.parse(v.object({ status: v.string(), agent: v.string() }), outcome);
+      expect(settled.status).toBe(expected);
+      // Released, in the one roster.
+      expect(await team.list()).toEqual([]);
+      await host.close();
+      const view = new Database(dbPath, { readonly: true });
+      const rows = view.query<{ status: string; lifetime: string }, []>(
+        'SELECT status, lifetime FROM workspace_subordinates',
+      ).all();
+      // The PROGRESS note is the one thing that legitimately reaches the rail:
+      // it is not the answer, so it wakes the parent like any mid-work note.
+      const reports = view.query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      ).get()?.n ?? 0;
+      view.close();
+      expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
+      expect(reports).toBe(1);
+    });
+  }
+
+  /**
+   * THE DEPTH CAP, STRUCTURALLY, ON THE LOCAL BACKEND.
+   *
+   * A role-targeted ask births a child through the same runtime a hire does, so
+   * it adds a level. The port was wired for every entry, so a depth-4 local actor
+   * advertised and ran it, seeded a depth-5 child, and that child got a port of
+   * its own — one call per level without bound, which is the failure
+   * `DELEGATION_MAX_DEPTH` exists to prevent. Absence is the containment, which
+   * is what the cloud backend's `teamProfile()` already did.
+   */
+  test('a local actor at the delegation cap is wired no temporary port at all', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const { host } = makeHost(state, streamingModel('ack'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    const team = await host.team('root');
+    // A root has the whole cap below it, so it HAS the rung.
+    expect(team.temporary).toBeDefined();
+
+    await team.create({
+      name: 'deep',
+      role: { kind: 'catalog', roleId: 'researcher' },
+      mission: 'Work at the cap.',
+    });
+    // Put the child AT the cap, the way its parent's seed would at depth 4.
+    const childPath = join(dirname(dbPath), 'subordinates', 'deep', 'agent.db');
+    const childDb = new Database(childPath);
+    childDb.run(
+      "INSERT INTO agent_config (key, value) VALUES ('subordinate.depth', ?)"
+      + ' ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      [String(DELEGATION_MAX_DEPTH)],
+    );
+    childDb.close();
+    await host.close();
+
+    const { host: reopened } = makeHost(state, streamingModel('ack'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    const capped = await reopened.team('root/deep');
+    expect(capped.delegation.depth).toBe(DELEGATION_MAX_DEPTH);
+    expect(delegationExhausted(capped.delegation)).toBe(true);
+    // ABSENT, not present-and-refusing: the rung is gone from this actor's
+    // schema, sandbox namespace and prompt because the port was never wired.
+    expect(capped.temporary).toBeUndefined();
+    await reopened.close();
+  });
+
+  /** The local relay records BOTH bits, which is what leaves a mere progress
+   *  note owing an answer while a settling report closes the question. Read from
+   *  source because the events are the runtime's to fire, not a test's — the
+   *  BEHAVIOUR either bit governs is driven above. */
+  test('the local relay separates "spoke" from "already answered"', () => {
+    const host = readFileSync(join(import.meta.dir, '..', 'src', 'agent-host', 'host.ts'), 'utf8');
+    // ONE report per ending, and no `error` branch beside the turn-end one: a
+    // failing turn fires both events, and two detached relays off them is how
+    // one question came to have two answers. The session declares the report now
+    // and this port only answers WHICH — so the collapse is structural rather
+    // than a bit the host has to remember to set.
+    expect(host).not.toContain("if (event.type === 'error') {");
+    expect(host).toContain('private parentRelayFor(child: HostEntry): LocalParentRelay {');
+    // Recorded before the send, so a second path on the same turn is suppressed
+    // even while the first is in flight.
+    expect(host).toContain('child.relay.settledRun = true;');
+    // A report-tool note settles only when the SHARED predicate says it does.
+    expect(host).toContain("child.relay.settledRun ||= temporaryRunSettles({ status, origin: 'report_tool' });");
+    // …and the decision gates on the settling bit, never on "spoke".
+    expect(host).toContain('if (state === null || state.settledRun) return null;');
+  });
+
+  /**
+   * EXACTLY ONE RESULT, AND ONLY ONE.
+   *
+   * A failing turn fires an `error` event and a `turn-end` event, and both are
+   * terminal endings a task child owes a report for — so the relay records that
+   * it spoke (`detachRelay`). What is observable from outside is the other half
+   * of the same guarantee: once the run has settled, the row is released, and a
+   * further report for that child is REFUSED rather than delivered as a second
+   * result for one question.
+   */
+  test('a settled temporary run refuses a second report for the same child', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const { host } = makeHost(state, failingChildModel(), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    const team = await host.team('root');
+    const outcome = await team.temporary!.run({
+      role: { kind: 'catalog', roleId: 'researcher' },
+      roleLabel: 'researcher',
+      task: 'Find the root cause.',
+      mode: 'build',
+    });
+    const agent = v.parse(v.object({ agent: v.string(), status: v.string() }), outcome);
+    expect(agent.status).toBe('failed');
+
+    // Released, so the child is no longer an addressable member of the roster —
+    // which is what makes a second report impossible rather than merely unwanted.
+    expect(await team.list()).toEqual([]);
+    await expect(team.assign({ name: agent.agent, task: 'again', mode: 'build' }))
+      .rejects.toThrow();
+
+    await host.close();
+    const view = new Database(dbPath, { readonly: true });
+    const reports = view.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+    ).get()?.n ?? 0;
+    view.close();
+    // The one result went to the waiting call and never also to the rail.
+    expect(reports).toBe(0);
+  });
+
+  /**
+   * THE WAITER-ABSENT LATE EVENT. A child that answers after its caller is gone
+   * must not be lost and must not leave a row behind: with no waiter the report
+   * takes the ordinary rail, and the roster releases the row on its way past.
+   */
+  test('a report with no waiter becomes one correlated event and releases the task row', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const CONTENT = 'late but correct';
+    const child = reportingChildModel(CONTENT);
+    const { host } = makeHost(state, child.model, [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    const team = await host.team('root');
+    // Birth a task-lifetime child and hand it work WITHOUT parking a waiter,
+    // which is exactly the state an evicted asking activation leaves.
+    await team.spawn({
+      name: 'ask-researcher-late',
+      role: { kind: 'catalog', roleId: 'researcher' },
+      mission: 'Find the root cause.',
+      mode: 'build',
+    });
+    const roster = new Database(dbPath);
+    roster.run("UPDATE workspace_subordinates SET lifetime='task' WHERE name='ask-researcher-late'");
+    roster.close();
+
+    const reported = Promise.withResolvers<void>();
+    host.subscribe((_agent, event) => {
+      if (event.type === 'broadcast' && event.event.type === 'subordinate_event'
+        && event.event.status === 'completed') reported.resolve();
+    });
+    await team.assign({ name: 'ask-researcher-late', task: 'Report it.', mode: 'build' });
+    await reported.promise;
+    await host.close();
+
+    const view = new Database(dbPath, { readonly: true });
+    const reports = view.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+    ).get()?.n ?? 0;
+    const rows = view.query<{ status: string; lifetime: string }, []>(
+      "SELECT status, lifetime FROM workspace_subordinates WHERE name='ask-researcher-late'",
+    ).all();
+    view.close();
+    // ONE event — not zero (it would be lost) and not two (a duplicate report).
+    expect(reports).toBe(1);
+    // And released by the roster's own report policy, not left listed forever.
+    expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
   });
 
   test("a subordinate's terminal report moves its parent's roster row off working", async () => {
@@ -913,12 +1383,16 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   }
 
-  /** Pending means: an event row nothing has bound to a turn yet. */
+  /** Pending means: an event row nothing has bound to a turn yet — the exact
+   *  condition `EventLog.pending()` selects on. Deliberately NOT
+   *  `consumed_at IS NULL`: that column is the recovery LEASE, and a turn that
+   *  answers a delivery closes its lease while keeping the binding, so reading
+   *  it here would count an answered event as pending again. */
   function pendingEventCount(dbPath: string): number {
     const db = new Database(dbPath, { readonly: true });
     try {
       return db.query<{ n: number }, []>(
-        `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND consumed_at IS NULL`,
+        `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND turn_id IS NULL`,
       ).get()?.n ?? 0;
     } finally {
       db.close();
@@ -964,6 +1438,62 @@ describe('LocalAgentHost — the driver lease', () => {
       expect(holderAt(dbPath)).toEqual({ pid: rivalPid, kind: 'interactive' });
     } finally {
       await host.close();
+    }
+  });
+
+  test('opening a workspace reclaims and delivers an event a dead process left bound to a turn it never ran', async () => {
+    // KINU-020, end to end: the previous process bound this webhook's row to a
+    // synthetic drain turn, acknowledged the delivery, and died before running
+    // it. The row is invisible to `pending()`, so nothing else can ever find it
+    // — opening the workspace under the driver lease is what hands it back.
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const before = makeHost(state, streamingModel('handled'), refs, { driverKind: 'daemon' });
+    try {
+      const admitted = await before.host.publishEvent('root', {
+        descriptor: {
+          ingress: 'webhook_bearer',
+          variant: 'webhook',
+          payload: {
+            webhook_id: 'hook-1',
+            http_method: 'POST',
+            http_headers: { 'content-type': 'application/json' },
+            body: { text: 'a build finished' },
+            delivery_id: 'delivery-1',
+          },
+          auth_outcome: 'verified',
+          webhook_id: 'hook-1',
+        },
+      });
+      expect(admitted.admitted).toBe(true);
+    } finally {
+      await before.host.close();
+    }
+    // What the dead process left: bound to its turn, lease still open.
+    const db = new Database(dbPath);
+    try {
+      db.query(`UPDATE agent_log SET turn_id = 'evt-dead', step_idx = 0, consumed_at = 5 WHERE kind = 'event'`).run();
+    } finally {
+      db.close();
+    }
+    expect(pendingEventCount(dbPath)).toBe(0);
+
+    const after = makeHost(state, streamingModel('handled after recovery'), refs, { driverKind: 'daemon' });
+    let turns = 0;
+    const unsubscribe = after.host.subscribe((_agent, event) => {
+      if (event.type === 'turn-start') turns += 1;
+    });
+    try {
+      // Opening it is the whole recovery: buildEntry reclaims under the lease
+      // and drains in the same bracket.
+      await after.host.acquire('root');
+      expect(turns).toBe(1);
+      expect(pendingEventCount(dbPath)).toBe(0);
+      expect(userMessages(dbPath).some((text) => text.includes('a build finished'))).toBe(true);
+    } finally {
+      unsubscribe();
+      await after.host.close();
     }
   });
 

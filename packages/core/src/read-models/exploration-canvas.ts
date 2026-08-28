@@ -31,6 +31,8 @@ import type { HeadRunView } from '../heads/types';
 import { listForkRuns, readForkRun, type ForkRunSummary } from './fork-runs';
 import { readForkRunParams, type ForkRunParams } from './fork-params';
 import { readSearchTree } from './search-tree';
+import { paretoFront, type ParetoAxis, type ParetoEvidence } from '../strategy/objective';
+import { readSwarmNodeRecords } from '../strategy/swarm-resume';
 import { mapPage, type Page, type SeekCursor } from './page';
 
 /** One run on the canvas, with everything the canvas draws for it. */
@@ -44,7 +46,18 @@ export interface ExplorationCanvasRun {
   readonly tree: readonly SearchNode[];
   /** This run's journalled nodes and their turns. Non-null exactly when
    *  {@link ForkRunSummary.hasNodeTranscripts}. */
+  /** Null unless the run durably recorded complete Pareto evidence. */
+  readonly frontier: ParetoFrontier | null;
   readonly head: HeadRunView | null;
+}
+
+/** Durable Pareto evidence, ordered by stable node id after nondominance filtering. */
+export interface ParetoFrontier {
+  readonly axes: readonly ParetoAxis[];
+  readonly candidates: readonly {
+    readonly nodeId: string;
+    readonly evidence: ParetoEvidence;
+  }[];
 }
 
 /** A page of the canvas. Thirty is what the bare `LIMIT` was, kept so the first
@@ -97,5 +110,31 @@ function composeRuns(
     // client could recover what the server never sent.
     tree: run.hasSearchTree ? readSearchTree(sql, run.id) : [],
     head: run.hasNodeTranscripts ? journal.readRun(run.id) : null,
+    frontier: readParetoFrontier(sql, run.id),
   }));
+}
+
+
+function readParetoFrontier(sql: SqlExecutor, rootId: string): ParetoFrontier | null {
+  const table = sql<{ readonly name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'swarm_node_records'`;
+  if (table.length === 0) return null;
+  const candidates = readSwarmNodeRecords(sql, rootId).flatMap(({ nodeId, record }) =>
+    record.outcome?.kind === 'pareto'
+      ? [{ nodeId, axes: record.outcome.axes, evidence: record.outcome.evidence }]
+      : []);
+  const axes = candidates[0]?.axes;
+  if (!axes) return null;
+  if (candidates.some((candidate) => JSON.stringify(candidate.axes) !== JSON.stringify(axes))) {
+    return null;
+  }
+  return {
+    axes,
+    candidates: paretoFront(
+      axes,
+      candidates
+        .sort((left, right) => left.nodeId.localeCompare(right.nodeId))
+        .map(({ nodeId, evidence }) => ({ nodeId, evidence })),
+    ),
+  };
 }

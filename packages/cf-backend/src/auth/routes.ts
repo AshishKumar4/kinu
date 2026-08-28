@@ -4,7 +4,7 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
   type OAuthProfile,
 } from './store';
-import { escapeHtml, json } from '../lib/http';
+import { escapeHtml, json, KINU_USER_AGENT } from '../lib/http';
 import { authDocument, loginDocument } from '../lib/public-pages';
 import { publicHtmlHeaders } from '../lib/security-headers';
 import {
@@ -262,11 +262,40 @@ async function processOAuthTokenResponse(
   return oauth.processGenericTokenEndpointResponse(as, client, response);
 }
 
+/**
+ * Sign out of THIS session.
+ *
+ * The revocation is what ends a session, so the cookie is cleared only after
+ * one lands. A failed revocation KEEPS the cookie. That cookie is the only
+ * handle that can still revoke this exact session, and clearing it would leave
+ * the session live with nothing able to reach it. The answer is then a 503 that
+ * says the session is still signed in, and a retry that can end it. Nothing
+ * here touches the user's other sessions.
+ */
 async function logout(request: Request, env: Env): Promise<Response> {
-  const token = readSessionToken(request);
-  if (token && env.AUTH_KV) await revokeSession(env.AUTH_KV, token);
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
+  const token = readSessionToken(request);
+
+  if (token) {
+    try {
+      await revokeSession(env, token);
+    } catch (e) {
+      diagnostics.failure('auth.session_revoke_failed', toKinuError({
+        doing: 'revoking a browser session on sign-out',
+        cause: e,
+        otherwise: 'unavailable',
+      }));
+      const retry = new URL('/logout', url.origin);
+      retry.searchParams.set('return_to', returnTo);
+      return html('Sign-out not confirmed', `
+        <p class="lede">Kinu could not reach the store that holds your sign-in, so this session is NOT signed out yet.</p>
+        <p class="muted">You are still signed in on this browser. Retry to end the session.</p>
+        <div class="actions"><a class="provider" href="${escapeHtml(retry.pathname + retry.search)}">Retry sign-out</a></div>
+      `, { status: 503 });
+    }
+  }
+
   const headers = new Headers({ 'cache-control': 'no-store' });
   headers.append('set-cookie', clearSessionCookie());
   return redirect(new URL(returnTo, url.origin).toString(), {
@@ -404,7 +433,7 @@ async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
   const headers = {
     accept: 'application/vnd.github+json',
     authorization: `Bearer ${accessToken}`,
-    'user-agent': 'Kinu',
+    'user-agent': KINU_USER_AGENT,
     'x-github-api-version': '2022-11-28',
   };
   const userRes = await fetch('https://api.github.com/user', { headers });

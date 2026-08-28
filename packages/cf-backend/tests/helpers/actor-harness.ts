@@ -17,18 +17,28 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import type { ToolSet } from 'ai';
+import type { UserCaller } from '../../src/user/workspace-capability';
+import type { UserDO } from '../../src/user/user-do';
+import { shadowTrialPlan, claimToolEffect } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
   type IngressDescriptor, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RunEndReason, type SqlExecRow, type SqlValue, type SubordinateRosterStore,
+  projectJsonValue,
   type BackgroundJobStore, type JsonValue,
-  type DeviceConsentDecision, type DeviceConsentRequest,
+  type DeviceConsentDecision, type DeviceConsentRequest, type DeviceStatus,
+  type WorkMode, DEFAULT_MERGE_STRATEGY, type JsonObject,
   type ShellApprovalRequest,
+  type FactsStore, type SleepTimeUpdate,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
+import {
+  TerminalEffectInterrupt,
+  type TerminalEffectName, type TerminalEffectPhase,
+} from '@kinu.run/core';
 
 mockAgentsSdk();
 
@@ -59,14 +69,40 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeOrch(): AgentOrchestrator { return this.orch; }
   /** The assembled runtime, for the conformance observer's `producer` plane. */
   observeRuntime(): AgentRuntime { return this.rt; }
+  /** The turn-start device-status refresh, AWAITED — the same entry point
+   *  `beforeTurn` calls, so a connected device becomes visible to the mount
+   *  table for a suite that has no turn to run. Production detaches the one at
+   *  runtime construction, which is why the timing has to be asked for. */
+  harnessRefreshDeviceStatus(): Promise<DeviceStatus> { return this.rt.deviceTransport.refreshStatus(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
+  /** The deployment secret a workspace signs its own delivery URL with —
+   *  configuration rather than state, and absent from the harness env because
+   *  most actors never mint one. Declared here so `createDurableWebhook` runs
+   *  as production runs it instead of refusing for want of a binding. */
+  declareWebhookRouteSecret(secret: string): void {
+    Object.assign(this.env, { WEBHOOK_ROUTE_SECRET: secret });
+  }
   protected override async profileInputs() {
     return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
   }
   /** A cold activation: the owner row persists in SQL, in-memory latches do
    *  not — the state every claimOwner RPC meets on a freshly-activated DO. */
   forgetActivationLatches(): void { this._scaffoldReady = false; }
+  /**
+   * A further activation, through the ACTOR's own `onStart` — the sweep, the
+   * wake reconcile, the stale-delivery unbind, exactly as the platform calls
+   * them on a cold start.
+   *
+   * `agent.onStart()` is NOT that entry point and looks like it is: the vendor
+   * chat base installs its own `onStart` ahead of this class's, and under the SDK
+   * mock that one throws inside `_setupProtocolHandlers` (no sockets here) and is
+   * swallowed as an unhandled rejection. A test that called it therefore
+   * activated NOTHING while reading as an activation — which is how a suite
+   * asserting the stale sweep could watch the row it seeded survive. Named here
+   * because `ensureActorSchema` below already has to reach past the same shadow.
+   */
+  activateActor(): void { super.onStart(); }
   /** The parent-side roster the facet gate consults. Exposed rather than
    *  wrapped: the production store IS the API a test seeds a subordinate
    *  through, and a hand-written INSERT would be a second copy of its
@@ -74,7 +110,36 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessRoster(): SubordinateRosterStore { return this.subordinateRoster; }
   /** One auto-GEPA cadence tick — the call a completed turn makes
    *  (`orchestrator.ts` `onTurnComplete`). */
-  tickAutoGepa(): void { this.maybeRunAutoGepa(); }
+  /**
+   * One cadence tick, under a named terminal tick — the durable identity the
+   * non-replayable lanes key their attempt and completion on.
+   *
+   * `pass` stands in for the two real lanes: they drive candidate scaffolds
+   * through the live tool surface, which a unit harness has none of, and what is
+   * under test is how many times a cut pass is allowed to run.
+   */
+  harnessOncePerTick(scope: string, tick: string, pass: () => Promise<void>): Promise<void> {
+    return this.oncePerTick(scope, tick, pass);
+  }
+
+  tickAutoGepa(): void { void this.maybeRunAutoGepa(); }
+
+  /** The sampling plan this turn's declaration would record. */
+  harnessShadowPlan(messageId: string): number | null {
+    return shadowTrialPlan(this.scaffoldControl, messageId);
+  }
+
+  /** A candidate under trial, so sampling has something to sample against. */
+  harnessDeclareShadowCandidate(): void {
+    this.config.setShadowSampleRate(0.5);
+    void this.sql`INSERT OR REPLACE INTO scaffold_versions
+      (version, written_at, rationale, status)
+      VALUES (1, ${Date.now()}, 'a harness candidate', 'pending')`;
+  }
+  /** The activation's wake-row reconcile, AWAITED. Production detaches it —
+   *  `onStart` runs inside the init gate and arming a row is I/O — so a test
+   *  that wants its outcome rather than its timing calls it here. */
+  reconcileWakeRow(): Promise<void> { return this.reconcileTimerRow(); }
   /** The cadence a tick reads, and the deliberate disable a tick must respect. */
   observeAutoGepaCadence(): number { return this.config.getAutoGepaEveryNTurns(); }
   setAutoGepaCadence(turns: number): void { this.config.setAutoGepaEveryNTurns(turns); }
@@ -107,16 +172,265 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  no-client recovery path, so a test drives what the platform drives. */
   harnessAlarmHousekeeping(): Promise<void> { return this._onAlarmHousekeeping(); }
 
+  /**
+   * The durable turn identity a turn opens on. Production sets it in
+   * `beforeTurn`, which needs a model; a suite that drives `onChatResponse`
+   * directly declares it, because it is the key the terminal transition claims
+   * against and an absent one means "unclaimed" rather than "first".
+   */
+  declareTurnCheckpoint(turnId: string): void {
+    this._turnCheckpoint = { turnId, sessionId: 'default' };
+    this.declareTurnEvolutionGate();
+  }
+
+  /**
+   * The other half of what a turn opening establishes: whether this session
+   * records evolution state at all.
+   *
+   * Production reads it in `beforeTurn`, and the settled response carries it
+   * into its recorded row so a recovering host cannot re-judge the turn. A
+   * suite driving `onChatResponse` with no turn to open declares it here;
+   * declaring a checkpoint already does.
+   */
+  declareTurnEvolutionGate(): void {
+    this._turnEvolutionEnabled = this.turnRecordsEvolution();
+  }
+
+  /**
+   * The user message this turn is running FOR, with the metadata production
+   * reads its work mode off.
+   *
+   * Stated rather than stubbed: `turnWorkMode()` narrows the last durable user
+   * message's metadata, so a suite that wants a Plan turn has to put one there —
+   * asserting the mode any other way would test the assertion.
+   */
+  harnessDrivingUserMessage(text: string, metadata?: JsonObject): void {
+    this.messages.push({
+      id: `u-msg-${this.messages.length}`,
+      role: 'user',
+      parts: [{ type: 'text', text }],
+      metadata,
+    });
+  }
+
+  /** Start the durable pieces of a turn the model-free harness does not drive. */
+  harnessBeginTurn(turnId: string): void {
+    this.declareTurnCheckpoint(turnId);
+    this.userSteer.beginTurn();
+  }
+
+  /** The persisted identity a fresh activation uses to stop old device work. */
+  harnessPersistActiveTurn(turnId: string): void {
+    this.ctx.storage.sql.exec(
+      'INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id',
+      turnId,
+    );
+  }
+
+  harnessClearTurnCheckpoint(): void { this._turnCheckpoint = null; }
+  harnessDurableTurnId(): string | null { return this.durableTurnId(); }
+
+  /** Rebuild the reset-lost steer drain from its SQL authority for one turn. */
+  harnessRestorePendingSteers(turnId: string): void {
+    this.userSteer.interrupt();
+    const pending = this.sql<{ id: string; text: string }>`
+      SELECT id, text FROM pending_steers WHERE turn_id = ${turnId} ORDER BY seq ASC`;
+    this.userSteer.restorePending(pending);
+  }
+
+  /** The terminal transition bracket, at the two entry points production uses.
+   *  Named rather than reached into, because a suite must claim and settle
+   *  through the same methods `onChatResponse` does or it is testing its own
+   *  fixture. A transition names the durable turn AND the response being
+   *  settled, so a Think auto-continuation gets its own sequence. */
+  harnessBeginTerminalTransition(turnId: string | null, messageId = 'a-1') {
+    return this.terminal.begin(turnId === null ? null : { turnId, messageId });
+  }
+
+  harnessEndTerminalTransition(turnId: string | null, messageId = 'a-1'): void {
+    this.terminal.end(turnId === null ? null : { turnId, messageId });
+  }
+
+  /** Rows of the effect-claim ledger for a terminal transition — a null result
+   *  is an interrupted sequence, no row at all is a released one. */
+  harnessTerminalClaims(): Array<{ turn_id: string; call_id: string; result_json: string | null }> {
+    // The TERMINAL TRANSITION rows only. The same table also holds tool claims
+    // and the keyed markers individual effects use for their own once-only
+    // boundaries, and a reader that returned all of them would make every
+    // assertion about the transition depend on what the effects wrote.
+    return this.sql<{ turn_id: string; call_id: string; result_json: string | null }>`
+      SELECT turn_id, normalized_call_id AS call_id, result_json
+      FROM tool_effect_claims WHERE normalized_call_id LIKE 'terminal:response:%'
+      ORDER BY turn_id, normalized_call_id`;
+  }
+
+  /** Every per-effect disposition row of one sequence, in declared order — the
+   *  oracle for "which effect actually happened". */
+  harnessTerminalEffects(turnId: string, messageId = 'a-1'): Array<{
+    effect_key: string; status: string; outcome: string | null; attempts: number;
+  }> {
+    return this.sql<{ effect_key: string; status: string; outcome: string | null; attempts: number }>`
+      SELECT effect_key, status, outcome, attempts FROM terminal_effects
+      WHERE sequence_id = ${this.terminal.sequenceId({ turnId, messageId })}
+      ORDER BY seq, effect_key`;
+  }
+
+  /** Arm a deterministic cut in the terminal sequence: the effect to stop at and
+   *  whether to stop before or after its side effect. */
+  harnessArmTerminalFault(
+    name: TerminalEffectName, phase: TerminalEffectPhase, scope?: string,
+  ): void {
+    this.terminalEffectFault = (atPhase, atName, atScope) => {
+      if (atName !== name || atPhase !== phase) return;
+      if (scope !== undefined && atScope !== scope) return;
+      throw new TerminalEffectInterrupt(atPhase, atName, atScope);
+    };
+  }
+
+  harnessDisarmTerminalFault(): void { this.terminalEffectFault = null; }
+
+  /** Move the ledger's clock past a pending row's backoff, so a replay is due.
+   *  The clock, not a sleep: the assertion is about the due-check, and a test
+   *  that waited five real seconds would be measuring the schedule. */
+  harnessAdvanceTerminalClock(ms: number): void { this._terminalClockSkewMs += ms; }
+
+  /** Turn off the between-turn compute lane this harness cannot run.
+   *
+   *  Its terminal effect now propagates failure so the row stays OWED until the
+   *  compute actually lands — which is the fix under test elsewhere, and which
+   *  here would leave every sequence permanently owed because there is no model
+   *  behind the harness at all. Disabled through the production config switch, so
+   *  what runs is the real "operator turned it off" path rather than a stub. */
+  harnessDisableSleepTimeCompute(): void { this.config.setSleepTimeComputeEnabled(false); }
+
+  /**
+   * Turn the lane back on with its ANSWER already recorded, so the effect runs
+   * for real without a model behind it.
+   *
+   * That is a production path, not a stub: the compute persists its update before
+   * applying it precisely so a replay applies the same answer, and `key` is the
+   * effect scope the terminal row carries. Seeding the row is therefore the same
+   * state a first attempt leaves, and what runs afterwards is the apply-and-
+   * tombstone boundary this exists to test.
+   */
+  harnessRecordSleepTimeAnswer(key: string, update: SleepTimeUpdate): void {
+    this.config.setSleepTimeComputeEnabled(true);
+    void this.sql`INSERT INTO sleep_time_updates (effect_key, update_json, created_at)
+      VALUES (${key}, ${JSON.stringify(update)}, ${Date.now()})
+      ON CONFLICT(effect_key) DO NOTHING`;
+  }
+
+  /** The world-model store, through its own API: a hand-written INSERT would be
+   *  a second copy of its confidence and provenance policy. */
+  harnessFacts(): FactsStore { return this.facts; }
+  /** The scaffold's tool bridge for one rollout — what a queued shadow trial's
+   *  candidate dispatches through, with the trial's own scope. */
+  harnessScaffoldCallTool(callScope?: string) {
+    return this.makeScaffoldCallTool(callScope);
+  }
+
+  /** Declare one steer branch as in flight, the way `steerAsBranch` does. The
+   *  handle never settles: what is under test is the CLAIM shape, and a branch
+   *  whose head never reports is exactly the case the durable journal path
+   *  exists for. A REJECTED handle would be an unhandled rejection the moment it
+   *  was created, before any effect ever read it. */
+  /** Record one branch head as having REPORTED, the way its own run does. The
+   *  journal is the authority a cold replay reads, so a settlement test needs a
+   *  head that reported rather than one that merely existed. */
+  harnessRecordBranchReport(id: string, task: string, summary: string): void {
+    this.headJournal.insertSpawn({
+      id, parentId: null, rootId: id, depth: 0, task, mode: 'build',
+      rationale: 'a steer branch', inheritedContext: [],
+      budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: DEFAULT_MERGE_STRATEGY,
+    });
+    this.headJournal.recordReport({
+      id, status: 'completed', summary,
+      evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+      toolCalls: [], stepCount: 1, usage: {}, wallClockMs: 1,
+    });
+  }
+
+  /** Forget the live handles, leaving only the durable journal — the state a
+   *  fresh activation meets, and the one the settlement key is for. */
+  harnessDropPendingBranches(): void { this._pendingBranches.length = 0; }
+
+  harnessDeclarePendingBranch(id: string, task: string): void {
+    this._pendingBranches.push({
+      id, task,
+      handle: new Promise(() => { /* the harness runs no branch heads */ }),
+    });
+  }
+
+  /** A branch whose head has ALREADY answered — the live path, which settles
+   *  through the handle rather than through the journal. What the settlement key
+   *  has to cover on both sides: an unkeyed live write and a keyed journal replay
+   *  are two take sets for one branch. */
+  harnessDeclareLiveBranch(id: string, task: string, summary: string): void {
+    this._pendingBranches.push({
+      id, task,
+      handle: Promise.resolve({
+        id, task,
+        result: Promise.resolve({
+          id, status: 'completed' as const, summary,
+          evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+          toolCalls: [], stepCount: 1, usage: {}, wallClockMs: 1,
+        }),
+        abort: async () => { await Promise.resolve(); },
+      }),
+    });
+  }
+
+  /** The most recent terminal sequence's own join — resolved once its
+   *  disposition is written. Awaited rather than approximated: the detached
+   *  effects each await real work, so a fixed number of ticks would assert
+   *  against whatever had happened by then rather than against the outcome. */
+  harnessTerminalReported(): Promise<void> { return this._terminalReported; }
+
+  /** How many terminal sequences this activation currently owns. The join
+   *  condition for an activation's own detached recovery: it acquires each
+   *  sequence it recovers and releases it through the close. */
+  harnessSequencesInFlight(): number { return this.terminal.inFlightCount; }
+
+  /** The activation pass that finishes what an interrupted terminal transition
+   *  still owed, AWAITED — production detaches it from `onStart`. */
+  harnessResumeTerminalTransitions(): Promise<void> {
+    return this.terminal.resumeAll();
+  }
+
+  /** The WHOLE activation delivery reconcile, AWAITED: the owed replies first,
+   *  then the interrupted transitions, then the stale sweep. Production detaches
+   *  it from `onStart`, so a suite that wants its outcome rather than its timing
+   *  calls it here. */
+  harnessReconcileEventDeliveries(): Promise<void> {
+    return this.reconcileEventDeliveries();
+  }
+
+  /** The budget-first interrupted-fiber prune, exactly as `onStart` runs it. */
+  harnessSweepUnrecoverableFibers(): void {
+    this.sweepUnrecoverableFiberRows();
+  }
+
   /** The recovery hook, for the one thing the scan hides: what it decided. */
   harnessRecoverFiber(ctx: FiberRecoveryContext): Promise<void | FiberRecoveryResult> {
     return this.onFiberRecovered(ctx);
   }
 
-  /** The settled turn's spine, driven exactly as both actor classes drive it.
-   *  The mode is not an argument: core derives it from the same beginTurn
-   *  metadata it derived the recording rule from. */
-  harnessSettleSpine(input: { status: RunEndReason; turn: CompletedTurn }): Promise<boolean> {
-    return this.settleTurnSpine(input);
+  /** The improvement lanes, driven through the CLAIMED effect production drives
+   *  them through — the compound spine that used to sit here has no production
+   *  caller left. Returns whether the lanes were open, which is the one verdict
+   *  the callers of the old method consumed. */
+  async harnessSettleSpine(
+    input: { status: RunEndReason; turn: CompletedTurn; workMode?: WorkMode },
+  ): Promise<boolean> {
+    const lanes = this.terminalEffectTable().improvement_lanes;
+    if (lanes === undefined) return false;
+    const outcome = await lanes.run({
+      status: input.status,
+      turn: projectJsonValue({ value: input.turn }),
+      workMode: input.workMode ?? this.turnWorkMode(),
+      advisor: projectJsonValue({ value: this.advisorSnapshotFor(input.turn) }),
+    }, input.turn.turnId ?? '');
+    return outcome.status === 'completed' && outcome.detail === undefined;
   }
 
   /** Switch the advisor on the way an owner does (durable config row) and
@@ -133,15 +447,74 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
+  /**
+   * Script the review model and run ONE turn review, the way the deferred review
+   * lane runs it.
+   *
+   * The classifier and the reflection are both `fastLlm` completions, so one
+   * scripted responder covers the whole review. Driven directly because the
+   * property under test is what a SECOND run of the same review appends — a
+   * retry after a refusal — and that is the engine's own boundary.
+   */
+  async harnessReviewTurn(turn: CompletedTurn, followup: string): Promise<void> {
+    Object.defineProperty(this.rt, 'fastLlm', {
+      configurable: true,
+      value: {
+        stream: async function* () { yield ''; },
+        complete: async (prompt: string) => prompt.includes('reflection')
+          ? 'the answer skipped the constraint the question named'
+          : '{"outcome":"corrected","confidence":0.9,"evidence":"the user restated it"}',
+      },
+    });
+    await this.engine.reviewTurn(turn, followup);
+  }
+
   /** Advisor rows on the audit stream — what a fed lane leaves behind. */
   harnessAdvisorNotes(): number {
     return this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM evolution_events
       WHERE type = 'advisor_note'`[0]?.n ?? 0;
   }
 
+  /**
+   * Drive the post-turn MCP warm lane, and give it its own capability gate as
+   * a real durable row rather than an override.
+   *
+   * The lane is `protected` on ActorAgent, like every other post-turn lane, so
+   * it gets the same kind of seam. What it reads is NOT stubbed: the token
+   * comes from an INSERT into `workspace_capability`, which is the table
+   * `workspaceCapabilityToken` actually selects from, and the hub comes from the
+   * `env.UserDO` binding the production path resolves. Nothing here asserts a
+   * type it has not established.
+   */
+  harnessWarmUserMcp(): void {
+    this.warmUserMcpInBackground();
+  }
+
+  /** Give this workspace the capability token every user-plane call is gated
+   *  on, the way a claim does: one row in the table the reader reads. */
+  harnessHoldsCapability(token: string): void {
+    void this.sql`INSERT OR REPLACE INTO workspace_capability (id, token) VALUES (1, ${token})`;
+  }
+
+  /** The pre-claim state: a workspace whose capability has not been issued. */
+  harnessHoldsNoCapability(): void {
+    void this.sql`DELETE FROM workspace_capability`;
+  }
+
   /** Join the durable lanes a completed turn detaches, so an assertion reads
    *  settled storage rather than racing a fire-and-forget fiber. */
   harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibers(); }
+
+  /** When the ledger would next wake, given the sequences a live activation
+   *  claims to be running. The re-arm's own input, read directly. */
+  harnessNextRetryAt(inFlight: ReadonlySet<string>): number | null {
+    return this.terminal.ledger.nextRetryAt(inFlight);
+  }
+
+  /** The ledger's name for one transition — the key the in-flight set holds. */
+  harnessSequenceId(turnId: string, messageId: string): string {
+    return this.terminal.sequenceId({ turnId, messageId });
+  }
 
   /** Durable fiber rows this activation would hand to recovery. */
   harnessOpenFiberRows(): { id: string; name: string }[] {
@@ -158,6 +531,26 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The row a dead activation left, in this actor's own storage. */
   harnessSeedOrphanFiber(name: string, snapshot: JsonValue): string {
     return seedOrphanFiberRow(this.ctx.storage, name, snapshot);
+  }
+  /**
+   * One ordinary tool call's claim, through core's own function — the row an
+   * external effect is admitted behind, and the row a turn-wide release drops.
+   *
+   * Claimed rather than settled: a claim with no result is what a turn that was
+   * still executing the call left behind, which is the state the release must
+   * not walk over.
+   */
+  harnessClaimTool(turnId: string, callId: string): void {
+    claimToolEffect(this.boundSql, { turnId, callId, digest: 'harness-tool-digest' });
+  }
+  /** One turn's TOOL claims, by call id — the terminal-transition rows beside
+   *  them are `harnessTerminalClaims`, and mixing the two would make every
+   *  assertion about the release depend on the sequence's own bookkeeping. */
+  harnessToolClaims(turnId: string): string[] {
+    return this.sql<{ call_id: string }>`
+      SELECT normalized_call_id AS call_id FROM tool_effect_claims
+      WHERE turn_id = ${turnId} AND normalized_call_id NOT LIKE 'terminal:response:%'
+      ORDER BY normalized_call_id`.map((row) => row.call_id);
   }
   /** A live turn, which no test can produce without a model. */
   declareTurnInFlight(inFlight: boolean): void { this._inFlight = inFlight; }
@@ -267,24 +660,28 @@ function makeCtx(db: Database): AgentContext {
  * binding outright where it needs to observe session lifecycle events.
  */
 function emptyWorkspaceSession() {
-  const files = new Map<string, string>();
+  // BYTES, not text. A file plane that cannot round-trip a byte is not one:
+  // storing the decoded string substituted U+FFFD for every sequence that is
+  // not valid UTF-8, so an upload of arbitrary bytes came back longer and
+  // different while every read still "worked".
+  const files = new Map<string, Uint8Array>();
   const directories = new Set(['/home', '/home/user']);
   const stub = {
     _rpcReady: async () => ({ ok: true as const, preinstalled: [] }),
     _rpcExists: async (path: string) => files.has(path) || directories.has(path),
     _rpcStat: async (path: string) => {
       const content = files.get(path);
-      if (content !== undefined) return { type: 'file', size: content.length, mtime: 0, mode: 0o644 };
+      if (content !== undefined) return { type: 'file', size: content.byteLength, mtime: 0, mode: 0o644 };
       return directories.has(path) ? { type: 'directory', size: 0, mtime: 0, mode: 0o755 } : null;
     },
-    _rpcReadFile: async (path: string) => files.get(path) ?? null,
-    _rpcReadFileBytes: async (path: string) => {
+    _rpcReadFile: async (path: string) => {
       const content = files.get(path);
-      return content === undefined ? null : new TextEncoder().encode(content);
+      return content === undefined ? null : new TextDecoder().decode(content);
     },
+    _rpcReadFileBytes: async (path: string) => files.get(path) ?? null,
     _rpcWriteFile: async (path: string, content: string | Uint8Array) => {
       const bytes = v.safeParse(v.instance(Uint8Array), content);
-      files.set(path, bytes.success ? new TextDecoder().decode(bytes.output) : v.parse(v.string(), content));
+      files.set(path, bytes.success ? bytes.output : new TextEncoder().encode(v.parse(v.string(), content)));
       const parts = path.split('/');
       for (let i = 2; i < parts.length; i++) directories.add(parts.slice(0, i).join('/'));
     },
@@ -321,7 +718,58 @@ function emptyWorkspaceSession() {
  * facet itself is still workerd-only, so this is the parent hop and nothing
  * else.
  */
-function makeEnv(parent?: HarnessOrchestratorAgent): Env {
+
+/** What the owner's UserDO was asked for, and what it answers with, when a test
+ *  supplies a recording binding instead of the refusing default. */
+export interface RecordedUserPlaneCalls {
+  warmConnections: UserCaller[];
+  /** Set to make `userMcp_warmConnections` reject, the way an unreachable
+   *  third-party server makes it. */
+  failWarm: Error | null;
+  /** The owner profile `getProfile` answers with. Null is a claimed workspace
+   *  whose owner carries no verified address, which the email trust gate
+   *  refuses on — a different refusal from an unauthorized sender. */
+  profile?: { email: string } | null;
+  /** Every display name this root committed through the owner's registry. */
+  titles: string[];
+}
+
+/**
+ * The world a harness actor is placed in, for a suite that drives the user
+ * plane FOR REAL rather than describing it.
+ *
+ * `userDO` is the owner's own Durable Object, bound at `env.UserDO` — so the
+ * device transport, the capability gate and the consent chokepoint the runtime
+ * builds are the production ones over real state. `workspace` is the actor's
+ * DO name, which IS `workspaceName()`: the key device consent and the exec
+ * planes are scoped by. Both must be set before the runtime is first read,
+ * which is why they are construction options rather than later mutations.
+ */
+export interface HarnessActorWorld {
+  userDO?: UserDO;
+  workspace?: string;
+  /** The owner claim written into `workspace_identity`. */
+  ownerUserId?: string;
+}
+
+/** The one read the instruction-trust authority performs against a parent. */
+interface HarnessInstructionAuthority {
+  getWorkspaceInstructionApprovals(): Promise<readonly never[]>;
+}
+
+/** The parent DO namespace an actor's env carries: what `idFromName`/`get`
+ *  answer. A harness passes a real parent agent or a deny-stub namespace. */
+interface HarnessParentNamespace {
+  idFromName(name: string): string;
+  get(id: string): HarnessOrchestratorAgent | HarnessInstructionAuthority;
+}
+
+function makeEnv(
+  parent?: HarnessOrchestratorAgent,
+  userPlane?: RecordedUserPlaneCalls,
+  world?: HarnessActorWorld,
+  parentNamespace?: HarnessParentNamespace,
+): Env {
   const bindings = {
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
     NIMBUS_SESSION: emptyWorkspaceSession(),
@@ -330,15 +778,51 @@ function makeEnv(parent?: HarnessOrchestratorAgent): Env {
     ...platformGatewayEnv(),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
-      get: () => new Proxy({}, {
-        get: (_t, prop) => {
-          if (prop === 'then') return undefined;
-          return async () => { throw new Error(`harness UserDO: ${String(prop)} is not reachable under bun`); };
-        },
-      }),
+      // Recording when a test asked for it, refusing otherwise. The refusing
+      // default is the point: a path that reaches the user plane without saying
+      // it would fails loudly rather than silently succeeding against a double.
+      // What a CLAIMED root's owner plane actually answers on a settled turn: the
+      // title registry, the owner profile and the MCP warm. The harness declares
+      // an owner and holds a capability, so refusing these would make every settle
+      // owe a title it can never land and file a failure for a connect nobody
+      // asked about. Everything else still refuses, which is what keeps a path
+      // that reaches the user plane unannounced from passing against a double.
+      //
+      // A suite that supplies a REAL UserDO gets that instead, whole: the point of
+      // `world.userDO` is to drive production code over production state.
+      get: () => {
+        if (world?.userDO !== undefined) return world.userDO;
+        const ownerPlane = {
+          getWorkspaceTitle: async (): Promise<null> => null,
+          setWorkspaceDisplayName: async (
+            _caller: UserCaller, _workspace: string, displayName: string,
+          ): Promise<{ applied: boolean }> => {
+            userPlane?.titles.push(displayName);
+            return { applied: true };
+          },
+          userMcp_warmConnections: async (caller: UserCaller): Promise<{ servers: number }> => {
+            userPlane?.warmConnections.push(caller);
+            if (userPlane?.failWarm) throw userPlane.failWarm;
+            return { servers: 1 };
+          },
+          getProfile: async (): Promise<{ email: string } | null> => userPlane?.profile ?? null,
+        };
+        return new Proxy(ownerPlane, {
+          get: (target, prop) => {
+            if (prop === 'then') return undefined;
+            if (prop in target) {
+              // SAFETY: the `prop in target` guard makes the key one of the owner plane's own members.
+              return target[prop as keyof typeof target];
+            }
+            return async () => { throw new Error(`harness UserDO: ${String(prop)} is not reachable under bun`); };
+          },
+        });
+      },
     },
   };
-  if (parent) {
+  if (parentNamespace) {
+    Object.assign(bindings, { OrchestratorAgent: parentNamespace });
+  } else if (parent) {
     Object.assign(bindings, {
       OrchestratorAgent: { idFromName: (n: string) => n, get: () => parent },
     });
@@ -355,8 +839,14 @@ function instantiate<T extends object>(
   Actor: new (ctx: AgentContext, env: Env) => T,
   db: Database,
   parent?: HarnessOrchestratorAgent,
+  userPlane?: RecordedUserPlaneCalls,
+  world?: HarnessActorWorld,
+  parentNamespace?: HarnessParentNamespace,
 ): ActorHarness<T> {
-  const agent = new Actor(makeCtx(db), makeEnv(parent));
+  const agent = new Actor(makeCtx(db), makeEnv(parent, userPlane, world, parentNamespace));
+  if (world?.workspace !== undefined) {
+    Object.defineProperty(agent, 'name', { value: world.workspace, configurable: true });
+  }
   return {
     agent,
     db,
@@ -379,21 +869,118 @@ function ensureActorSchema(
   }
 }
 
-/** A real OrchestratorAgent with a claimed owner, schema ensured. */
-export function orchestratorHarness(): ActorHarness<HarnessOrchestratorAgent> {
-  const harness = instantiate(HarnessOrchestratorAgent, new Database(':memory:'));
+/** A real OrchestratorAgent with a claimed owner, schema ensured.
+ *
+ *  `userPlane` opts into a RECORDING owner-UserDO binding. Without it the
+ *  binding refuses every method, which is what keeps a path that reaches the
+ *  user plane unannounced from passing against a double. `world` goes further:
+ *  it places the actor in a real owner's Durable Object under a real workspace
+ *  name, for suites that drive device consent and capability tokens rather
+ *  than describing them. */
+export function orchestratorHarness(
+  userPlane?: RecordedUserPlaneCalls,
+  world?: HarnessActorWorld,
+): ActorHarness<HarnessOrchestratorAgent> {
+  const harness = instantiate(HarnessOrchestratorAgent, new Database(':memory:'), undefined, userPlane, world);
   ensureActorSchema(harness.agent);
   harness.db.prepare(
-    "UPDATE workspace_identity SET owner_user_id = 'harness-owner' WHERE id = 'harness-actor'",
-  ).run();
+    'UPDATE workspace_identity SET owner_user_id = ? WHERE id = ?',
+  ).run(world?.ownerUserId ?? 'harness-owner', 'harness-actor');
+  // The capability a claimed workspace holds. Without it this root cannot reach
+  // its title registry, so every settle would owe an auto title forever — a
+  // property of the harness, not of the sequence under test.
+  harness.agent.harnessHoldsCapability('harness-capability');
   harness.agent.declareScaffoldPresent();
+  harness.agent.harnessDisableSleepTimeCompute();
+  return harness;
+}
+
+/**
+ * A FRESH activation over storage that survived — the eviction, as the platform
+ * performs it.
+ *
+ * A new actor instance on the same Database is exactly what an isolate reset
+ * leaves: every in-memory latch gone, every durable row intact. A test that
+ * re-drove the same instance would be measuring a second call, not a recovery,
+ * and every RAM-held guard would still be holding.
+ */
+export async function reactivateOrchestratorHarness(
+  db: Database,
+  userPlane?: RecordedUserPlaneCalls,
+  /** Armed BEFORE the activation's own reconcile runs, because that reconcile is
+   *  the recovery under test: a clock skew or fault applied afterwards would
+   *  arrive too late to affect it. */
+  opts?: {
+    readonly clockSkewMs?: number;
+    readonly fault?: [TerminalEffectName, TerminalEffectPhase];
+    /** The recorded sleep-time answer this activation replays with the lane ON.
+     *  Armed here for the same reason as the skew: the reconcile below IS the
+     *  replay, so a lane re-enabled after it arrives too late. */
+    readonly sleepTimeAnswer?: readonly [key: string, update: SleepTimeUpdate];
+  },
+): Promise<ActorHarness<HarnessOrchestratorAgent>> {
+  const harness = instantiate(HarnessOrchestratorAgent, db, undefined, userPlane);
+  // BEFORE `onStart`, because `onStart` is what starts the recovery under test:
+  // a skew or fault armed after it would arrive too late to affect the pass it
+  // is meant to steer.
+  if (opts?.clockSkewMs !== undefined) harness.agent.harnessAdvanceTerminalClock(opts.clockSkewMs);
+  if (opts?.fault) harness.agent.harnessArmTerminalFault(opts.fault[0], opts.fault[1]);
+  if (opts?.sleepTimeAnswer) {
+    harness.agent.harnessRecordSleepTimeAnswer(...opts.sleepTimeAnswer);
+  } else {
+    harness.agent.harnessDisableSleepTimeCompute();
+  }
+  ensureActorSchema(harness.agent);
+  harness.agent.declareScaffoldPresent();
+  // The activation's OWN reconcile, JOINED on its observable end state. `onStart`
+  // detaches it (it sends mail) and it ACQUIRES each sequence it recovers, so a
+  // suite that called a second reconcile would be turned away by the first's
+  // ownership and would read the rows as untouched. Waiting on the in-flight set
+  // waits on the thing that actually decides, and is bounded so a recovery that
+  // genuinely never finishes fails the test instead of hanging it.
+  // Unconditional laps first: the reconcile is DETACHED, so at the moment this
+  // returns from `onStart` it has not yet acquired anything and an in-flight
+  // check would read zero and let the suite assert into the middle of it.
+  for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
+  for (let tick = 0; tick < 200 && harness.agent.harnessSequencesInFlight() > 0; tick++) {
+    await joinHarnessFibers();
+  }
   return harness;
 }
 
 /** A real SubordinateAgent with a claimed owner and a seeded identity (what
  *  the parent's setSubordinateIdentity RPC installs), schema ensured. */
 export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
-  const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'));
+  // The parent namespace is part of the env the agent is BORN with: a stub that
+  // answers exactly the one instruction-trust authority read (no recorded
+  // approvals — the default-deny truth) and refuses everything else loudly.
+  const authority: HarnessInstructionAuthority = {
+    getWorkspaceInstructionApprovals: async () => [],
+  };
+  const denyStubParent: HarnessParentNamespace = {
+    idFromName: (name: string) => name,
+    get: () => new Proxy(authority, {
+      get: (target, prop) => {
+        if (prop === 'then') return undefined;
+        if (prop === 'getWorkspaceInstructionApprovals') return target.getWorkspaceInstructionApprovals;
+        return async () => {
+          throw new Error(`harness parent: ${String(prop)} is not reachable under bun`);
+        };
+      },
+    }),
+  };
+  const harness = instantiate(
+    HarnessSubordinateAgent, new Database(':memory:'), undefined, undefined, undefined, denyStubParent,
+  );
+  // A subordinate is a FACET: the SDK records who hired it, and the
+  // instruction-trust authority reads that lineage before every turn. The bare
+  // fixture hangs off a workspace root with NO recorded approvals — the
+  // default-deny truth — served by a stub that answers exactly that one
+  // authority read and refuses everything else loudly.
+  Object.defineProperty(harness.agent, 'parentPath', {
+    value: [{ className: 'OrchestratorAgent', name: 'harness-parent' }],
+    configurable: true,
+  });
   Object.defineProperty(harness.agent, 'messages', {
     value: [{ role: 'user', metadata: { kinuEvent: 'subordinate_task' } }],
     configurable: true,
@@ -454,6 +1041,9 @@ export async function hiredSubordinateHarness(
   const { roleId, role, ...seed } = identity;
   await harness.agent.setSubordinateIdentity({
     ...seed,
+    // Durable unless a scenario says otherwise: the harness stands in for a
+    // HIRE, and the temporary rung has its own tests.
+    lifetime: 'durable',
     role: roleId === undefined
       ? { kind: 'legacy', text: role }
       : { kind: 'catalog', roleId },

@@ -51,8 +51,34 @@ const stubClientNodeBuiltins = {
   },
 };
 
+/**
+ * Source maps for the WORKER build only.
+ *
+ * `upload_source_maps` in wrangler.jsonc is what makes Cloudflare remap a
+ * production stack trace, and the maps it uploads are the ones on disk: the
+ * deploy runs through this plugin's generated config, which sets `no_bundle`, so
+ * wrangler bundles nothing of its own and reads each module's
+ * `sourceMappingURL`. Without this hook there is no map to read and the flag is
+ * a silent no-op.
+ *
+ * The environment is named per worker (`kinu`, `kinu_staging` under
+ * `CLOUDFLARE_ENV=staging`), so it is selected the way the stub plugin above
+ * selects it — everything that is not `client`. Naming the worker environments
+ * instead would leave staging without maps the day the name changes.
+ *
+ * The client is deliberately excluded: its output is published static assets, so
+ * a map there is original TypeScript served from the public origin.
+ */
+const workerSourceMaps = {
+  name: "kinu:worker-source-maps",
+  configEnvironment(name: string) {
+    if (name === "client") return null;
+    return { build: { sourcemap: true } };
+  },
+};
+
 export default defineConfig({
-  plugins: [stubClientNodeBuiltins, agents(), react(), cloudflare(), tailwindcss()],
+  plugins: [stubClientNodeBuiltins, workerSourceMaps, agents(), react(), cloudflare(), tailwindcss()],
   // The fabric outbox is the one pre-bundled dep that imports a stubbed
   // builtin; excluded, it serves as source and the resolveId hook reaches it.
   // @plannotator/web-highlighter is the inverse: UMD-only (its `module` field

@@ -7,7 +7,7 @@
  * the identical store. remember/recall/forget appear only when a FactsStore
  * is wired — the same structural gate the native tool's action enum reads.
  */
-import type { CodemodeProvider } from '../rlm';
+import type { CodemodeProvider } from './sandbox-contract';
 import * as v from 'valibot';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool';

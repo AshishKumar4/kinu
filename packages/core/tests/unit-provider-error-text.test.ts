@@ -14,7 +14,10 @@ import { describe, test, expect, spyOn } from 'bun:test';
 import { APICallError, type LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { describeProviderError, runChat } from '../src/index';
+import {
+  describeProviderError, providerFailureFacts, toProviderError, runChat,
+} from '../src/index';
+import { KinuError } from '../src/obs/index';
 
 interface CircularProviderError {
   code: undefined;
@@ -59,26 +62,26 @@ async function rejectionOf(action: () => Promise<void>): Promise<Error> {
 
 describe('describeProviderError', () => {
   test('digs the message out of an OpenAI-shaped error object', () => {
-    expect(describeProviderError({
+    expect(describeProviderError({ cause: {
       message: 'Your account is not active.',
       type: 'invalid_request_error',
       code: 'billing_not_active',
-    })).toBe('Your account is not active. (billing_not_active)');
+    } })).toBe('Your account is not active. (billing_not_active)');
   });
 
   test('follows a nested error envelope', () => {
-    expect(describeProviderError({ error: { error: { message: 'upstream refused' } } }))
+    expect(describeProviderError({ cause: { error: { error: { message: 'upstream refused' } } } }))
       .toBe('upstream refused');
   });
 
   test('does not repeat a code the message already states', () => {
-    expect(describeProviderError({ message: 'rate_limit_exceeded on this key', code: 'rate_limit_exceeded' }))
+    expect(describeProviderError({ cause: { message: 'rate_limit_exceeded on this key', code: 'rate_limit_exceeded' } }))
       .toBe('rate_limit_exceeded on this key');
   });
 
   test('keeps an Error message, and names the error when it has none', () => {
-    expect(describeProviderError(new Error('boom'))).toBe('boom');
-    expect(describeProviderError(new TypeError(''))).toBe('TypeError');
+    expect(describeProviderError({ cause: new Error('boom') })).toBe('boom');
+    expect(describeProviderError({ cause: new TypeError('') })).toBe('TypeError');
   });
 
   test('keeps an AI SDK response body when its generic Error message carries no detail', () => {
@@ -89,19 +92,94 @@ describe('describeProviderError', () => {
       responseBody: '{"error":"models.dev provider was not found"}',
     });
 
-    expect(describeProviderError(error)).toContain('models.dev provider was not found');
+    expect(describeProviderError({ cause: error })).toContain('models.dev provider was not found');
   });
 
-  test('falls back to the JSON, never to [object Object]', () => {
-    expect(describeProviderError({ status: 402, body: 'nope' })).toBe('{"status":402,"body":"nope"}');
-    expect(describeProviderError({})).toBe('{}');
+  // KINU-043. This used to assert `'{"status":402,"body":"nope"}'` — the whole
+  // error object, stringified into the user's terminal. Whatever an SDK or a
+  // gateway attached rode out with it, and a gateway attaches the request it
+  // failed on. The keys are the diagnosis; the values are the leak.
+  test('names the fields of an unrecognised payload instead of stringifying it', () => {
+    expect(describeProviderError({ cause: { status: 402, body: 'nope' } }))
+      .toBe('unrecognised provider error (fields: status, body) (HTTP 402)');
+    expect(describeProviderError({ cause: { status: 402, body: 'nope' } })).not.toContain('nope');
+    expect(describeProviderError({ cause: {} })).toBe('unrecognised provider error (fields: no fields)');
+  });
+
+  test('a response body that is not JSON is dropped, never printed', () => {
+    const error = new APICallError({
+      message: 'AI_APICallError',
+      url: 'https://example.invalid/v1/chat/completions',
+      requestBodyValues: {},
+      statusCode: 500,
+      // What a gateway really answers when it fails before the model: an HTML
+      // page, or its own echo of the request — headers included.
+      responseBody: '<html><body>502 Bad Gateway — upstream POST body: {"api_key":"sk-live-9f3"}</body></html>',
+    });
+
+    const described = describeProviderError({ cause: error });
+    expect(described).toBe('AI_APICallError (HTTP 500)');
+    expect(described).not.toContain('sk-live');
+    expect(described).not.toContain('<html>');
+  });
+
+  test('an empty Error message falls through to the error name, and an empty body does not displace it', () => {
+    expect(describeProviderError({ cause: new TypeError('') })).toBe('TypeError');
+    const blank = new APICallError({
+      message: '',
+      url: 'https://example.invalid/v1/chat/completions',
+      requestBodyValues: {},
+      responseBody: '""',
+    });
+    expect(describeProviderError({ cause: blank })).toBe('AI_APICallError');
+  });
+
+  test('the stable identifiers survive, so nothing downstream has to re-read the prose', () => {
+    expect(providerFailureFacts({
+      cause: {
+        error: { message: 'Request too large', code: 'context_length_exceeded' },
+        status: 400,
+      },
+    })).toEqual({
+      message: 'Request too large',
+      providerCode: 'context_length_exceeded',
+      status: 400,
+    });
+    expect(providerFailureFacts({ cause: '  plain stream text  ' })).toEqual({ message: 'plain stream text' });
+    expect(providerFailureFacts({ cause: undefined })).toEqual({ message: 'unknown provider error' });
+  });
+
+  test('a status classifies the failure without reading a single word of it', () => {
+    const statusOnly = (statusCode: number): KinuError => toProviderError({
+      doing: 'calling the model',
+      cause: new APICallError({
+        message: 'AI_APICallError',
+        url: 'https://example.invalid/v1/chat/completions',
+        requestBodyValues: {},
+        statusCode,
+      }),
+    });
+    expect(statusOnly(401).code).toBe('denied');
+    expect(statusOnly(402).code).toBe('denied');
+    expect(statusOnly(404).code).toBe('missing');
+    expect(statusOnly(400).code).toBe('bad_input');
+    expect(statusOnly(429).code).toBe('unavailable');
+    expect(statusOnly(503).code).toBe('unavailable');
+    expect(statusOnly(418).code).toBe('unavailable');
+  });
+
+  test('an already-classified cause keeps its class, and the raw failure stays on cause', () => {
+    const cause = new KinuError('cancelled', 'the caller stopped the turn');
+    const failure = toProviderError({ doing: 'calling the model', cause });
+    expect(failure.code).toBe('cancelled');
+    expect(failure.cause).toBe(cause);
   });
 
   test('names the fields when JSON cannot serialize the payload', () => {
     const circular: CircularProviderError = { code: undefined };
     circular.self = circular;
 
-    const described = describeProviderError(circular);
+    const described = describeProviderError({ cause: circular });
 
     expect(described).toContain('self');
     expect(described).not.toContain('[object Object]');
@@ -122,11 +200,18 @@ describe('runChat provider failures', () => {
     expect(thrown.message).not.toContain('[object Object]');
   });
 
-  test('an Error payload is rethrown verbatim, so callers can still classify it', async () => {
+  // KINU-043. This used to assert `expect(thrown).toBe(cause)` — the provider's
+  // own object, rethrown untouched, which is how an APICallError reached the CLI
+  // and the chat surface with its raw responseBody still attached while its
+  // message said only "AI_APICallError". The reason now rides the message and
+  // the raw failure rides `cause`.
+  test('an Error payload crosses as a classified failure that still carries its text', async () => {
     const cause = new Error('context length exceeded');
     const thrown = await rejectionOf(() => runToCompletion(inBandErrorModel(cause)));
 
-    expect(thrown).toBe(cause);
+    expect(thrown).toBeInstanceOf(KinuError);
+    expect(thrown.message).toContain('context length exceeded');
+    expect(thrown.cause).toBe(cause);
   });
 
   test('does not dump the raw payload to the console', async () => {

@@ -4,6 +4,7 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
+import { TUI_ADVERTISED_HINTS, TUI_MARKS } from '@kinu.run/core';
 
 import {
   KEYMAP_PRESET_IDS,
@@ -24,7 +25,13 @@ import {
   type TuiThemeDefinition,
 } from '../src/tui/theme';
 import { createFileTuiPreferenceStore } from '../src/tui/preferences';
-import { tuiLayoutForWidth } from '../src/tui/tui-shell';
+import {
+  TuiProductProvider,
+  TuiShell,
+  agentSourceFromList,
+  tuiLayoutForWidth,
+  useAgentRoster,
+} from '../src/tui/tui-shell';
 
 const key = (name: string, modifiers: Partial<TuiKeyEvent> = {}): TuiKeyEvent => ({
   name,
@@ -93,6 +100,56 @@ describe('TUI product registries', () => {
     expect(resolve(registry, key('w', { alt: true }), EDITING)).toBe('workspace.toggle');
     expect(resolve(registry, key('tab'), EDITING)).not.toBe('queue.add');
     expect(resolve(registry, key('b', { ctrl: true }), EDITING)).not.toBe('conversation.branch');
+  });
+
+  test('the advertised hints resolve on the default keymap exactly as stated', () => {
+    // TUI_ADVERTISED_HINTS is what marketing surfaces (the landing page's
+    // terminal demo) print as the product's keybindings. The default preset
+    // must actually bind them, or the demo advertises keys that do nothing.
+    const registry = createKeybindingRegistry({ presetId: 'pi-omp' });
+    for (const { action, keys } of TUI_ADVERTISED_HINTS) {
+      expect(registry.hint(action)).toBe(keys);
+    }
+  });
+
+  test('navigator rows draw activity through the shared contract', async () => {
+    // TUI_MARKS.activity is the one activity vocabulary: the real navigator
+    // consumes it here, and the landing page's terminal demo imports the same
+    // constant, so the two surfaces cannot disagree about what running looks
+    // like. Connection marks stay the StatusBar's separate contract.
+    const source = agentSourceFromList(() => [
+      { name: 'worker', label: 'worker', mode: 'local', status: 'running', cwd: '/tmp/kinu-activity-probe' },
+      { name: 'resting', label: 'resting', mode: 'local', status: 'idle', cwd: '/tmp/kinu-activity-probe' },
+    ]);
+    function Probe() {
+      const roster = useAgentRoster(source);
+      return (
+        <TuiShell scene="chat" roster={roster} navigationOverlayOpen={false} onNavigationOverlayChange={() => {}}>
+          <text>scene</text>
+        </TuiShell>
+      );
+    }
+    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+      width: 120,
+      height: 20,
+      useThread: false,
+      maxFps: Number.POSITIVE_INFINITY,
+    });
+    const root = createRoot(renderer);
+    try {
+      root.render(<TuiProductProvider><Probe /></TuiProductProvider>);
+      for (let pass = 0; pass < 200; pass += 1) {
+        await renderOnce();
+        if (captureCharFrame().includes('resting')) break;
+        await Bun.sleep(10);
+      }
+      const frame = captureCharFrame();
+      expect(frame).toContain(`${TUI_MARKS.activity.running} worker`);
+      expect(frame).toContain(`${TUI_MARKS.activity.idle} resting`);
+    } finally {
+      root.render(<box />);
+      renderer.destroy();
+    }
   });
 
   test('every built-in theme meets contrast, and one that does not is refused', () => {

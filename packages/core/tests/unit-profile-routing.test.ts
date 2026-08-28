@@ -63,7 +63,7 @@ const FIXED_LANES = [
 
 /** The lanes that ride the TURN's own tier, because they carry its resolved
  *  profile with them. */
-const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm', 'sandbox'] as const;
+const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm'] as const;
 
 describe('exhaustive model routing', () => {
   test('every producer resolves, and only platform refuses', () => {

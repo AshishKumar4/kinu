@@ -118,11 +118,11 @@ import { pruneLowValueBranches } from '../mcts/pruning';
 import { selectFrontierNode } from '../mcts/frontier';
 import { diagnostics, type Logger } from '../obs/index';
 import { renderCauseChain, type Refusal } from '../obs/error';
-import { nanoid } from '../utils/nanoid';
 import { usageTotal, type Usage, addUsage } from '../usage';
 import type { NodeLoopHost } from './node-agent';
+import type { PublishHeadStream } from '../heads/head-stream';
 import { SwarmBudget } from './swarm-budget';
-import type { NodeWorkspaceProvisioner } from './node-workspace';
+import type { NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
 import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import type { ResolvedVerifier } from './verifier-registry';
@@ -141,12 +141,14 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSink } from '../events/model-call';
 import type { WorkMode } from '../prompting/surface';
 import {
-  buildNodeDeps, createRoot, initRunLedgers, prepareMeasurement, readCarryIn,
-  refuseContendedRun, regionRefusal, resolveNodeModel, resolveReentry,
-  seedResumedSearch, unavailable, unsupported,
+  buildNodeDeps, createRoot, initRunLedgers, prepareMeasurement, prepareParetoMeasurement,
+  readCarryIn, refuseContendedRun, regionRefusal, resolveNodeModel, resolveReentry,
+  seedResumedSearch, unavailable, unsupported, type PreparedParetoMeasurement,
 } from './swarm-setup';
+import { assignedRootGrant, planLevel, resumedWaves } from './swarm-level';
 import {
   answerProposal, awaitLevel, frontierPolicyOf, pathTo, reportVerdict,
+  selectParetoFrontierNode,
 } from './swarm-tree';
 import type { Expansion, LevelMember, TreeNode } from './swarm-tree';
 import { expandChild, sharedPrefix } from './swarm-expansion';
@@ -176,6 +178,10 @@ export interface SwarmRunDeps {
   /** Where this run's model calls are reported. Absent = unreported, which the spend
    *  coverage fraction states rather than hides. */
   readonly reportModelCall?: ModelCallSink;
+  /** Where a node's transient output frames go while a step is still being
+   *  produced. Absent = nothing watching; the node's durable steps are
+   *  unaffected either way (heads/head-stream.ts). */
+  readonly publishHeadStream?: PublishHeadStream;
   /**
    * Where this run's diagnostics land. Defaults to the process logger.
    *
@@ -225,6 +231,9 @@ export interface SwarmRunDeps {
    *  uid-0 view, and then every node reports `shared-origin-plane` rather than
    *  pretending otherwise. */
   readonly provisionHome?: NodeWorkspaceProvisioner;
+  /** How a node's own runtime is built once it has a home — see
+   *  {@link NodeAgentDeps.runtimeForWorkspace}. */
+  readonly runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
   /**
    * Where a TOOL-USING node's loop runs.
    *
@@ -324,42 +333,43 @@ export async function runSwarm(
   const branches = resolved.caps.branches?.value ?? 0;
   const maxDepth = resolved.caps.depth?.value ?? 0;
   const measures = resolved.config.score.kind === 'verify';
-  // The judge ensemble's request, or null for a run that scores by anything else. The
-  // number is on the axis VALUE — `samples` is tagged onto `score:'judge'` — so a
-  // judged run always states it and there is no default to inherit here.
+  const paretoAdvance = resolved.config.advance.kind === 'pareto';
   const judgeSamples = resolved.config.score.kind === 'judge' ? resolved.config.score.samples : null;
-  // The `carry` values whose whole purpose is publication. A run under one of them is
-  // part of a CUMULATIVE sequence: it reads what earlier runs reached and writes what it
-  // reached. `none` and `reflections` write nothing a later run reads, and seeding one
-  // from the store would make the axis a lie in the other direction.
-  const publishing = PUBLISHING_CARRIES.find(
-    (carry): carry is PublishingCarry => carry === resolved.config.carry.kind,
-  ) ?? null;
-  // THE ARCHIVE IN FORCE, or null. Derived once and passed, never re-read from the axis:
-  // the descriptor a candidate is binned into, the admission test that gates its write and
-  // the cell count the seal's disclosure reports are three facts about one archive, and
-  // three derivations of it are three things that can disagree. `key` is non-null under
-  // this arm by `regionRefusal`, so the pair is complete or absent together.
+  if (paretoAdvance && PUBLISHING_CARRIES.some((carry) => carry === resolved.config.carry.kind)) {
+    return unsupported('advance:"pareto" keeps its durable frontier in node evidence and cannot '
+      + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
+  }
+  const publishing = paretoAdvance
+    ? null
+    : PUBLISHING_CARRIES.find(
+      (carry): carry is PublishingCarry => carry === resolved.config.carry.kind,
+    ) ?? null;
   const archive = resolved.config.advance.kind === 'archive' && resolved.key !== null
     ? { key: resolved.key, novelty: resolved.config.advance.novelty }
     : null;
   const log = deps.logger ?? diagnostics;
 
   let measured: MeasuredObjective | null = null;
+  let pareto: PreparedParetoMeasurement | null = null;
   let verifier: ResolvedVerifier | null = null;
   let witnessVerifier: ResolvedVerifier | null = null;
   let ctx: MeasurementContext | null = null;
   let baseline: number | null = null;
   let publication: PublicationState = { kind: 'open' };
-  // What makes two runs comparable: the metric and the instrument, and nothing about
-  // the artifact under work. Null for a run that measured no objective — a judged or
-  // unscored run has no identity, so it has no records to read and none to write.
   let identity: ObjectiveIdentity | null = null;
 
   if (measures) {
-    const prepared = await prepareMeasurement({ rt: deps.rt, resolved, archive, log });
-    if ('reason' in prepared) return prepared;
-    ({ measured, verifier, witnessVerifier, ctx, baseline, identity } = prepared);
+    if (paretoAdvance) {
+      const prepared = await prepareParetoMeasurement({ rt: deps.rt, resolved });
+      if ('reason' in prepared) return prepared;
+      pareto = prepared;
+      ctx = prepared.ctx;
+      verifier = prepared.instruments[0]?.verifier ?? null;
+    } else {
+      const prepared = await prepareMeasurement({ rt: deps.rt, resolved, archive, log });
+      if ('reason' in prepared) return prepared;
+      ({ measured, verifier, witnessVerifier, ctx, baseline, identity } = prepared);
+    }
   }
 
   const { sql, journal, searchLedger } = initRunLedgers(deps.rt);
@@ -372,7 +382,7 @@ export async function runSwarm(
     carryKind: resolved.config.carry.kind,
     metric: measured?.metric ?? '',
     log,
-  })
+  });
   // Whether a node is an agent at all. `thought` is the degenerate point *The six axes*
   // names, and it takes the toolless path below unchanged; the other two run
   // `node-agent.ts`.
@@ -413,7 +423,7 @@ export async function runSwarm(
   });
   if (contendedRefusal) return contendedRefusal;
 
-  const { rootId, nodes } = await createRoot({
+  const { rootId, nodes, root } = await createRoot({
     sql, reentry, verifier, ctx, resolved,
     originContext: deps.originContext, measures, journal, agentNodes,
   });
@@ -475,6 +485,15 @@ export async function runSwarm(
    */
   const budget = new SwarmBudget(Math.max(0, expansionBudget - inheritedExpansions));
   /**
+   * THE CALLER'S OWN FIRST LEVEL, if they assigned one: the root's proposal, written
+   * by the caller and debited here (`swarm-level.ts`'s `assignedRootGrant`).
+   *
+   * The loop expands it through the grant path it already had, so nothing below this
+   * line knows the difference between a level a node proposed and one the caller did.
+   */
+  const assigned = assignedRootGrant({ resolved, reentry, budget });
+  if (assigned) root.granted = assigned;
+  /**
    * THE LEASE every ledger write of this run is stamped with: the epoch a re-entry
    * claimed, or zero for a first attempt.
    *
@@ -528,8 +547,10 @@ export async function runSwarm(
     rt: deps.rt, model: nodeModel, journal, logger: log,
     signal: deps.signal, reportModelCall: deps.reportModelCall,
     maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
-    provisionHome: deps.provisionHome, host: deps.host,
+    provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
+    host: deps.host,
     executeTool: deps.executeTool, webSearch: deps.webSearch,
+    publishHeadStream: deps.publishHeadStream,
   });
   // THE REPORT CONTRACT, wired exactly where an instrument exists. A judged run gets no
   // gate at all — an absent key, because a check that passed and a check that never
@@ -624,7 +645,11 @@ export async function runSwarm(
     return false;
   };
 
-  while (budget.remaining > 0 || reservedChildren()) {
+  /** The unfinished levels this re-entry owes, drained before anything is selected
+   *  (`swarm-level.ts`). Empty on a first attempt. */
+  const resumeWaves = resumedWaves(reentry);
+
+  while (resumeWaves.length > 0 || budget.remaining > 0 || reservedChildren()) {
     if (deps.signal?.aborted) {
       aborted = true;
       break;
@@ -637,18 +662,37 @@ export async function runSwarm(
       missionSpent = true;
       break;
     }
-    // A PAID GRANT IS EXPANDED FIRST, and that is not a bypass of the scheduler: the
-    // grant was arbitrated against the scheduler's own policies — this `advance` expands
-    // at a node, the depth cap admits the level, the budget could pay — and accepted.
-    // The node was told "children reserved". Letting selection postpone that
-    // indefinitely would make the verdict a lie, and letting the budget be spent
-    // elsewhere first would make it unpayable.
-    const owed = [...nodes.values()].find((node) => node.granted !== null);
-    const selected = owed ?? selectFrontierNode(sql, {
-      rootId, policy, maxDepth,
-      explorationWeight: resolved.config.explorationWeight
-        ?? DEFAULT_CONFIG.mcts.explorationWeight,
-    });
+    /**
+     * THE WAVE THIS ITERATION RUNS, and there are three sources in strict order.
+     *
+     * A RESUMED WAVE FIRST, and it is neither selected nor arbitrated nor charged: it
+     * was selected, arbitrated and paid for by the attempt that spawned it, its ids
+     * are already durable, and `inheritedExpansions` has already debited it from this
+     * attempt's budget. Draining it before selection is what keeps a re-entry from
+     * expanding anywhere else while it still owes an answer for a node it created.
+     *
+     * A PAID GRANT NEXT, and that is not a bypass of the scheduler: the grant was
+     * arbitrated against the scheduler's own policies — this `advance` expands at a
+     * node, the depth cap admits the level, the budget could pay — and accepted. The
+     * node was told "children reserved". Letting selection postpone that indefinitely
+     * would make the verdict a lie, and letting the budget be spent elsewhere first
+     * would make it unpayable.
+     *
+     * THEN SELECTION.
+     */
+    const resumed = resumeWaves.shift() ?? null;
+    const owed = resumed
+      ? null
+      : [...nodes.values()].find((node) => node.granted !== null);
+    const selected = resumed
+      ? { id: resumed.parentId }
+      : owed ?? (policy === 'pareto'
+        ? pareto === null ? null : selectParetoFrontierNode(nodes, maxDepth, pareto.axes)
+        : selectFrontierNode(sql, {
+          rootId, policy, maxDepth,
+          explorationWeight: resolved.config.explorationWeight
+            ?? DEFAULT_CONFIG.mcts.explorationWeight,
+        }));
     // Nothing selectable: the frontier is exhausted, or every open node sits at the
     // depth cap. A settled search rather than a failed one.
     if (!selected) break;
@@ -670,20 +714,30 @@ export async function runSwarm(
     // budget was debited there; a THOUGHT node is answered HERE, where selection
     // reached it, which is what makes a proposal an input to selection rather than a
     // bypass of it (*Arbitration*). Both go through one arbiter and one budget.
-    const grant = parent.granted ?? (() => {
+    //
+    // A RESUMED WAVE ASKS NOTHING OF THE ARBITER and leaves the parent's own state
+    // alone. Its width is what the dead attempt actually created, and a grant this
+    // parent may still be owed is owed by a LATER iteration — clearing it here would
+    // spend a debit on a wave that was already paid for.
+    const grant = resumed ? null : parent.granted ?? (() => {
       const decision = answerProposal({ log, node: parent, resolved, budget });
       return decision?.kind === 'granted' ? decision : null;
     })();
-    parent.proposal = null;
-    // Cleared because a tree selector may re-select an expanded node: `uct` re-widens,
-    // and a grant left in place would be spent twice off one debit.
-    parent.granted = null;
+    if (!resumed) {
+      parent.proposal = null;
+      // Cleared because a tree selector may re-select an expanded node: `uct` re-widens,
+      // and a grant left in place would be spent twice off one debit.
+      parent.granted = null;
+    }
 
+    // THE LEVEL'S WIDTH — what every member of it is told about its siblings.
+    //
     // Committed whether or not every call came back: a rejected generation may still
     // have been paid for, and a budget that only counted successes would let a failing
     // provider buy unbounded expansions. A granted width was already debited at
-    // arbitration, so charging it again here would bill the search twice.
-    const width = grant?.width ?? budget.take(branches);
+    // arbitration, so charging it again here would bill the search twice — and a
+    // resumed wave was debited by the attempt that created it.
+    const width = resumed ? resumed.siblings : grant?.width ?? budget.take(branches);
     // The budget is spent and nothing is owed: the wave this iteration would have run
     // has no room, and creating it free is the overspend conservation exists to refuse.
     if (width === 0) break;
@@ -710,6 +764,11 @@ export async function runSwarm(
     // measurement strictly sequential below, because every candidate is written to the
     // same path.
     //
+    // WHAT each child is asked is decided by `swarm-level.ts` and not here: a granted
+    // level, a caller-assigned one, a resumed one and a count-based one all reach this
+    // barrier as the same list of decided slots, so this loop expands and does not
+    // choose.
+    //
     // The executor's declared languages travel into the prompt for the reason
     // explore-prompt.ts states: a candidate fenced in a language nothing here can run
     // is unverifiable, so the question has to name what the measurement can execute.
@@ -719,17 +778,19 @@ export async function runSwarm(
     // of failure. Completion, explicit cancellation, or a definitive error is
     // what produces the `expanded` or `failed` value read below.
     const answers = await awaitLevel(
-      Array.from({ length: width }, (_unused, index): LevelMember => {
-        const branch = grant?.proposal.branches[index];
-        const id = grant?.nodeIds[index] ?? nanoid();
-        return {
-          id,
+      planLevel({ resolved, resumed, grant, width, parentDepth: parent.depth })
+        .map((slot): LevelMember => ({
+          id: slot.id,
           node: expandChild(expandCtx, {
-            parent, id,
-            index, width, atDepth: childDepth,
-            task: branch?.task ?? resolved.task,
-            rationale: branch?.rationale ?? `expansion ${String(index + 1)} of ${String(width)}`,
-            context: branch?.context ?? resolved.config.context,
+            parent,
+            id: slot.id,
+            index: slot.index,
+            width,
+            atDepth: childDepth,
+            task: slot.task,
+            rationale: slot.rationale,
+            context: slot.context,
+            assignment: slot.assignment,
             inherited: inheritedArtifact,
             // A WAVE FANS IN NOTHING. Its siblings are independent candidates, which is
             // what `expand:'sample'` is and what `expand:'aggregate'` still starts from:
@@ -737,8 +798,7 @@ export async function runSwarm(
             aggregated: [],
             ancestors, prefix,
           }),
-        };
-      }),
+        })),
     );
 
     const expansions: Expansion[] = [];
@@ -861,7 +921,7 @@ export async function runSwarm(
         ? []
         : expansions.filter((other) => other.id !== expansion.id);
       const scoringRefusal = await scoreExpansion({
-        expansion, siblings, measures, verifier, witnessVerifier, ctx, measured, baseline,
+        expansion, siblings, measures, verifier, witnessVerifier, pareto, ctx, measured, baseline,
         judgeSamples, resolved, rt: deps.rt, mode: deps.mode, languages, sql, rootId,
         candidates, spentBy, nodes, log, searchLedger, ledgerEpoch, rankDirection,
         state: scoringState,
@@ -915,8 +975,9 @@ export async function runSwarm(
     node.proposal = null;
   }
   return settleRun({
-    started, log, sql, resolved, rootId, maxDepth, branches, policy, ctx, verifier,
-    measured, baseline, identity, publishing, archive, publication, candidates, best,
+    started, log, sql, resolved, rootId, maxDepth, branches, policy,
+    paretoAxes: pareto?.axes ?? null, ctx, verifier, measured, baseline, identity,
+    publishing, archive, publication, candidates, best,
     usage, judgeSamples, ensembles, spentBy, carriedIn, carriedBest, levelFanIn, reentry,
     aborted, missionSpent, lost, remainingBudget: budget.remaining, expansionBudget,
     inheritedExpansions, inheritedTokens, ledgerEpoch, searchLedger, runProfile,

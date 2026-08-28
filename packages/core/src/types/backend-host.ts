@@ -113,6 +113,28 @@ export interface BackendHost {
    *  timer (eviction) only delays work that is durable elsewhere. */
   setTimer(fn: () => Promise<void>, ms: number): void;
 
+  /**
+   * Re-derive and arm the host's own durable wake, because the set of work that
+   * needs one just changed.
+   *
+   * The sibling of `setTimer`, and the difference is what survives the process.
+   * `setTimer` holds THIS activation open across the drain debounce; a pending
+   * reaction that outlives the activation needs something the platform will
+   * deliver with nobody watching. Every caller of `scheduleDrain` therefore
+   * reaches both: the fast path for the burst it is coalescing, and this for
+   * the promise the durable rows represent.
+   *
+   * No argument: the host owns the fold over every deadline it can be asked to
+   * wake for (triggers, outbox retries, pending reactions), so a caller that
+   * passed a time could only disagree with it.
+   *
+   * OMITTED — not stubbed — by a host whose next wake is its own next start.
+   * The CLI is that host: a `kinu` process has no alarm to arm, and its
+   * recovery is the startup drain of the same durable rows. An absent key says
+   * that; a no-op implementation would claim a guarantee it has not made.
+   */
+  reconcileDurableWake?(): void;
+
   /** Head spawner + merge LLM (HeadController's existing seam). CF:
    *  createCFHeadRuntime (Facet sub-agents). CLI: subprocess-backed. Required
    *  for full agents-fork parity. */

@@ -30,6 +30,63 @@ describe('createDeviceTunnelExecutor', () => {
     expect(t.calls).toEqual([{ method: 'exec', params: ['echo one; echo two'] }]);
   });
 
+  test('each exec reports its own durable identity to that call only', async () => {
+    const issued: Array<{ reported: string; sent: string | undefined }> = [];
+    const observed: string[] = [];
+    const t: DeviceTransport = {
+      status: () => ({ connected: true, registered: true, toolchain: null }),
+      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      rpc: async (_method, _params, opts) => {
+        issued.push({ reported: observed[observed.length - 1] ?? '', sent: opts?.requestId });
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      },
+    };
+    const provider = createDeviceTunnelExecutor(t);
+
+    await provider.tools.exec.execute('first', { onDeviceRequest: (id: string) => observed.push(id) });
+    await provider.tools.exec.execute('second', { onDeviceRequest: (id: string) => observed.push(id) });
+
+    // Two parallel-capable calls, two distinct identities, each reported to the
+    // caller that issued it — the handover unit is one request, not the turn.
+    expect(observed).toHaveLength(2);
+    expect(observed[0]).not.toBe(observed[1]);
+    expect(issued.map((call) => call.sent)).toEqual(observed);
+  });
+
+  test('each exec carries the owner that held the scope at the moment it was issued', async () => {
+    const issued: Array<{ requestId: string; backgroundJobId: string | undefined }> = [];
+    const reported: string[] = [];
+    const t: DeviceTransport = {
+      status: () => ({ connected: true, registered: true, toolchain: null }),
+      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      rpc: async (_method, _params, opts) => {
+        // Every device exec carries an identity, or nothing could cancel it.
+        if (opts?.requestId === undefined) throw new Error('exec reached the device with no identity');
+        issued.push({ requestId: opts.requestId, backgroundJobId: opts.backgroundJobId });
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      },
+    };
+    const provider = createDeviceTunnelExecutor(t);
+    // One scope whose owner changes under it, exactly as a detach does.
+    let owner: string | null = null;
+    const context = {
+      onDeviceRequest: (id: string) => reported.push(id),
+      deviceRequestOwner: () => owner,
+    };
+
+    await provider.tools.exec.execute('before detach', context);
+    owner = 'job-1';
+    await provider.tools.exec.execute('after detach', context);
+
+    // Before the detach there is no owner to record, so the request is the
+    // turn's and a transfer is what moves it. After, the call is the job's as it
+    // is issued, so nothing has to be handed over.
+    expect(issued.map((call) => call.backgroundJobId)).toEqual([undefined, 'job-1']);
+    // The identity is announced for EVERY call, owned or not: the holder decides
+    // what a report means, so this executor never branches on ownership.
+    expect(reported).toEqual(issued.map((call) => call.requestId));
+  });
+
   test('base consent cannot escape its subtree through native file tools', async () => {
     const t = transport(() => 'contents');
     const provider = createDeviceTunnelExecutor(t, {

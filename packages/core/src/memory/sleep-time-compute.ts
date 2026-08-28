@@ -42,6 +42,8 @@ export interface SleepTimeUpdate {
   decay: string[];
 }
 
+
+
 const PROMPT = (i: SleepTimeInput) => `You are a background memory-compression agent. Between user turns, you
 update the agent's persistent state so the next turn starts smarter.
 
@@ -73,7 +75,12 @@ JSON shape:
 }
 ${jsonObjectOnlyInstruction()}`;
 
-const SleepTimeUpdateSchema: v.GenericSchema<SleepTimeUpdate> = v.object({
+/** The model's answer, and equally what a caller that PERSISTED one reads back: a
+ *  stored update is a model output from an earlier activation, so it is parsed
+ *  rather than trusted — the whole point of storing it is that nobody re-derives
+ *  it. Exported for that second reader; a duplicate schema beside it would be a
+ *  second answer to what an update is. */
+export const SleepTimeUpdateSchema: v.GenericSchema<SleepTimeUpdate> = v.object({
   upserts: v.array(v.object({
     key: v.pipe(v.string(), v.minLength(1)),
     value: JsonValueSchema,

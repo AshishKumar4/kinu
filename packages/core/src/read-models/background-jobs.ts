@@ -4,9 +4,12 @@
  *
  * The lifecycle (detach → settle → wake → recover) is the BackgroundJobRunner's;
  * this is the layer above it: list, inspect, cancel, retry, dismiss, and the
- * stop-everything abort. Retry is the only one with real policy in it — it
+ * foreground abort. Retry is the only one with real policy in it — it
  * reconstructs a tool invocation from the stored input and re-detaches it,
  * which is agent behaviour, not transport.
+ *
+ * Cancelling detached work always takes a job id. The foreground abort
+ * (`cancelCurrentWork`) cannot reach a detached job at all — see its own note.
  *
  * `background_jobs` is a table `initWorkspaceSchema` creates, so a read that
  * fails is a broken workspace rather than an empty task list, and it says so
@@ -21,11 +24,12 @@ import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { resumableAgentsInput } from '../tools/agents-tool';
 import { renderThrownChain } from '../obs/index';
 
-/** The four things the control plane asks of a running job registry —
- *  BackgroundJobRunner's public surface, named at the width this plane uses. */
+/** The three things the control plane asks of a running job registry —
+ *  BackgroundJobRunner's public surface, named at the width this plane uses.
+ *  `cancelRunning` is deliberately absent: nothing here stops a job whose id it
+ *  was not given. */
 export interface BackgroundJobControl {
   cancel(jobId: string): Promise<boolean>;
-  cancelRunning(): string[];
   createRetry(sourceId: string, kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string | null;
   detach(jobId: string, kind: string, promise: Promise<JsonValue | undefined>): void;
 }
@@ -124,10 +128,17 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   return { ok: true, jobId: newId };
 }
 
+/** One device command Stop asked its durable owner to cancel. `unknown` is an
+ *  honest daemon result, not a success: the request may still be running. */
+export interface DeviceStopOutcome {
+  readonly outcome: 'terminated' | 'unknown' | 'failed';
+  readonly detail?: string;
+}
+
 export interface CancelWorkOutcome {
   ok: true;
-  cancelledJobs: string[];
   abortedTools: number;
+  deviceCommands: readonly DeviceStopOutcome[];
   /** Mid-turn steers the abort dropped, handed back verbatim. An interrupt
    *  means "stop", not "stop and then do what I typed" — but the surface
    *  already rendered these as sent, so they return to the composer instead of
@@ -136,23 +147,39 @@ export interface CancelWorkOutcome {
 }
 
 export interface CancelWorkDeps {
-  readonly jobRunner: Pick<BackgroundJobControl, 'cancelRunning'>;
   /** The foreground tool calls currently holding an abort handle. */
   readonly activeToolControllers: Set<AbortController>;
   readonly broadcast: (payload: string) => void;
   /** Drop the in-flight turn's pending user steers and return their texts —
    *  the backend's UserSteerDrain.interrupt(). Absent on surfaces with no
    *  steer drain. */
-  readonly interruptSteers?: () => string[];
+  readonly interruptSteers?: () => Promise<string[]>;
+  /** Cancel the device commands owned by this durable turn. Absent on hosts
+   *  with no device authority; the caller receives the daemon's actual outcome
+   *  for every command it did ask to stop. */
+  readonly stopDeviceCommands?: () => Promise<readonly DeviceStopOutcome[]>;
   /** Where a backend settles its own turn state once the abort is issued —
    *  clearing an in-flight flag, writing an activity line. Runs before the
    *  broadcast so a client that reacts to it reads settled state. */
   readonly onCancelled?: (outcome: Omit<CancelWorkOutcome, 'ok'>) => void;
 }
 
-/** Stop visible work: abort foreground tool calls and cancel detached jobs. */
-export function cancelCurrentWork(deps: CancelWorkDeps): CancelWorkOutcome {
-  const cancelledJobs = deps.jobRunner.cancelRunning();
+/**
+ * Stop the DISPLAYED turn: abort the foreground tool calls it is holding and
+ * drop its pending steers. Detached background jobs are deliberately untouched.
+ *
+ * This used to open with `jobRunner.cancelRunning()`, so pressing Stop on one
+ * conversation killed every job that had detached from any earlier turn — a
+ * two-hour search, a running release, a laptop command another turn started.
+ * Detaching is what a job does when it outlives its turn, so "the turn you can
+ * see is over" says nothing about it: the two lifetimes were joined only
+ * because both reached the same button.
+ *
+ * Stopping detached work now needs the job's own identity —
+ * {@link cancelBackgroundJob}, which the task roster's per-job control calls.
+ * That is the whole property: a caller who names no job stops no job.
+ */
+export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWorkOutcome> {
   let abortedTools = 0;
   for (const controller of deps.activeToolControllers) {
     if (!controller.signal.aborted) {
@@ -161,13 +188,18 @@ export function cancelCurrentWork(deps: CancelWorkDeps): CancelWorkOutcome {
     }
     deps.activeToolControllers.delete(controller);
   }
-  const returnedSteers = deps.interruptSteers?.() ?? [];
-  deps.onCancelled?.({ cancelledJobs, abortedTools, returnedSteers });
+  const returnedSteers = await deps.interruptSteers?.() ?? [];
+  // ONE awaited sweep before ONE frame. A foreground Stop that said "done"
+  // while its turn-owned laptop commands were still running was a split-brain
+  // result; device unavailability is an honest empty/failed outcome, never a
+  // reason to throw Stop or to sweep commands outside this turn.
+  const deviceCommands = await deps.stopDeviceCommands?.() ?? [];
+  deps.onCancelled?.({ abortedTools, deviceCommands, returnedSteers });
   deps.broadcast(JSON.stringify({
     type: 'work_cancelled',
-    cancelledJobs,
     abortedTools,
+    deviceCommands,
     timestamp: Date.now(),
   }));
-  return { ok: true, cancelledJobs, abortedTools, returnedSteers };
+  return { ok: true, abortedTools, deviceCommands, returnedSteers };
 }

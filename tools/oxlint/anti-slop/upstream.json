@@ -6,7 +6,7 @@
   "commitSubject": "Ignore agent tooling when installing anti-slop",
   "upstreamSourceRoot": "skills/install-anti-slop/assets/anti-slop",
   "upstreamTestRoot": "src/rules",
-  "$proteusComment": "Rules authored here, not vendored: they encode Proteus policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `proteusRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails.",
+  "$proteusComment": "Rules authored here, not vendored: they encode Proteus policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `proteusRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails. Both lists cover PLUGIN rules only. `typescript-escapes.gate.test.ts` is deliberately absent from them: it gates `.oxlintrc.json` policy for two oxlint BUILT-INS (typescript/no-explicit-any, typescript/ban-ts-comment), which have no rule file here to author or pin, and naming a built-in in proteusRules would claim authorship of upstream code and break the partition drift.test.ts asserts. It is listed under `vendored` as proteusOnly because every file in this directory must be declared.",
   "proteusRules": [
     "no-ambient-git-in-tests",
     "no-copy-rpc-stub",
@@ -254,6 +254,9 @@
       "proteusOnly": true
     },
     "rules/no-untyped-console.test.ts": {
+      "proteusOnly": true
+    },
+    "typescript-escapes.gate.test.ts": {
       "proteusOnly": true
     }
   }

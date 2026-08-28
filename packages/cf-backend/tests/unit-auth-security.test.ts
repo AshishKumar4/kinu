@@ -40,6 +40,29 @@ describe('auth and desktop security invariants', () => {
     expect(routes).not.toContain("if (url.pathname === '/cli/auth' && method === 'GET') {\n    return approveFromBrowser");
   });
 
+  test('the ambient session cookie cannot approve a device flow over JSON', async () => {
+    // The CLI module is dispatched ahead of server.ts's CSRF gate, so that
+    // bearer clients are never asked for an `Origin`. A cookie-authenticated
+    // JSON approval route living behind that dispatch was reachable from any
+    // same-site page holding a user code, and it minted an unrestricted token.
+    // Approval is the browser form's alone; this path must buy the cookie
+    // nothing.
+    const response = await handleCliRequest(
+      new Request('https://kinu.example.com/api/cli/auth/approve', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: '__Host-kinu_session=whatever',
+          origin: 'https://preview.kinu.example.com',
+        },
+        body: JSON.stringify({ userCode: 'ABCD-EFGH' }),
+      }),
+      PUBLIC_ROUTE_ENV,
+    );
+    expect(response?.status).toBe(401);
+    expect(source('src/cli/routes.ts')).not.toContain("path === '/auth/approve'");
+  });
+
   test('dashboard and PC install paths do not expose KINU_TOKEN setup commands', () => {
     const userRoutes = source('src/user/routes.ts');
     const cliRoutes = source('src/cli/routes.ts');
@@ -369,7 +392,7 @@ describe('auth and desktop security invariants', () => {
     expect(store).toContain('await kv.delete(key)');
   });
 
-  test('browser and CLI auth keep expiring state in KV and durable identity in the UserDO', () => {
+  test('browser and CLI auth keep expiring state in KV and every durable decision in the UserDO', () => {
     const wrangler = source('wrangler.jsonc');
     const session = source('src/auth/session.ts');
     const store = source('src/auth/store.ts');
@@ -381,12 +404,16 @@ describe('auth and desktop security invariants', () => {
     expect(wrangler).not.toContain('AUTH_DB');
     expect(wrangler).not.toContain('CLIAuthDO');
     expect(wrangler).not.toContain('AuthDO');
-    expect(session).toContain('verifySession(env.AUTH_KV');
+    expect(session).toContain('verifySession(env, sessionToken)');
     expect(cliRoutes).toContain('startCliAuth(env');
     expect(cliRoutes).not.toContain('authDO(env)');
+    // Whether a cookie is still live is the user's own Durable Object's answer,
+    // read on every request; unreachable is a 503, never a KV-only pass.
+    expect(store).toContain('verifyBrowserSession(caller, tokenHash)');
+    expect(session).toContain('new AuthError(503');
     // Nothing in KV is a source of truth: every write carries an expiry, and
     // the identity itself is addressed by derivation, not by a stored index.
-    expect(store).toContain('userDO.ensureProfile(');
+    expect(store).toContain('.ensureProfile(await ownerCaller(env), email');
     expect(store).not.toContain('kv.put(');
   });
 

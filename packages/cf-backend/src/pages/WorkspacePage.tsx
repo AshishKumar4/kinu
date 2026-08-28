@@ -8,10 +8,8 @@ import {
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
-import { convertFileListToFileUIParts } from "ai";
-import type { FileUIPart } from "ai";
 import {
-  buildTranscript, CLOUD_MAX_INLINE_ATTACHMENT_BYTES, DEVICE_PROVISION_METHOD,
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, DEVICE_PROVISION_METHOD,
   isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type {
@@ -20,10 +18,11 @@ import type {
 } from "@kinu.run/core";
 import { useKinu } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
-import { useChatHistory } from "@/hooks/use-chat-history";
+import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
@@ -35,13 +34,12 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { classifyProgrammaticTurn, messageSignalId } from "@/components/background-event";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
-import { HistoryBoundary } from "@/components/surfaces/shared";
+import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer } from "@/components/Composer";
-import { dataUrlRawBytes } from "@/components/AttachmentChip";
 import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@/lib/protocol";
 import { renderThrownChain } from "@kinu.run/core/obs";
 // The model picker reads /api/user/models (which unions the connected
@@ -245,6 +243,34 @@ export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss
   );
 }
 
+interface TerminalCloseState {
+  readonly code: number;
+  readonly reason: string;
+  readonly message: string;
+}
+
+/** One terminal socket outcome for both workspace and subordinate chat. A
+ * terminal close is not reconnecting; the SDK stopped redialling, so each pane
+ * gets the same reason and recovery/navigation choices. */
+function TerminalCloseBoundary({ close, onRetry }: {
+  close: TerminalCloseState;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
+      <WarningCircleIcon size={28} className="p-danger" />
+      <p className="text-sm p-text">
+        {close.code === 1008 ? "Access to this workspace was denied" : "This workspace is unavailable"}
+      </p>
+      <p className="p-meta p-text-3 max-w-sm break-words">{close.reason || close.message}</p>
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={onRetry} className="text-xs p-accent hover:underline">Try again</button>
+        <Link to="/" className="text-xs p-accent hover:underline">Back to your workspaces</Link>
+      </div>
+    </div>
+  );
+}
+
 /** A subordinate's task assignment or progress report, mirrored into the main
  *  chat as a centered marker that links to that subordinate's tab. */
 function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
@@ -394,7 +420,8 @@ function SubordinateChatColumn({
   // The same older-history walk the workspace column runs, over this facet's
   // own storage. A subordinate keeps its own conversation, and a helper that
   // worked for an hour has more of one than the SDK's hydration window holds.
-  const { history, transcript } = useChatHistory(state.rpc, state.messages, state.transcriptSeeded);
+  const { history, transcript, thread } = useChatThread(
+    state.rpc, state.messages, state.transcriptSeeded, state.steerRuns);
   const messagesRef = useGrowingScroll<HTMLDivElement>({
     grows: "up",
     content: transcript,
@@ -414,28 +441,28 @@ function SubordinateChatColumn({
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
 
+  // `sendChat` owns admission — one synchronous latch inside `useKinu`. A
+  // reactive `state.isStreaming` pre-check here is what let two presses in one
+  // tick both pass, so the composer is cleared only for the press that was
+  // actually admitted and a refused press leaves the draft alone.
   const send = useCallback(() => {
     const t = input.trim();
-    if (!t || state.isStreaming) return;
-    state.sendChat(t, [], effectiveMode);
+    if (!t) return;
+    if (!state.sendChat(t, [], effectiveMode)) return;
     setInput("");
   }, [input, state, effectiveMode, setInput]);
 
-  const messageIds = useMemo(() => transcript.map((msg) => msg.id), [transcript]);
-  const { notice: steerNotice, steer, stop, liveSteers } = useSteerActions({
-    steerChat: state.steerChat,
+  const { notice: steerNotice, steer, stop } = useSteerActions({
+    steerChat: (text) => state.steerChat(text, effectiveMode),
     abortChat: state.abortChat,
-    sendChat: (text) => state.sendChat(text, [], effectiveMode),
     draft: input,
     setDraft: ui.updateDraft,
     steerRuns: state.steerRuns,
-    messageIds,
   });
-  // Same rule as the workspace column: a steer sits inside the turn that read
-  // it, and only an unplaceable one trails.
-  const thread = useMemo(
-    () => buildTranscript(transcript, liveSteers), [transcript, liveSteers]);
 
+  if (state.terminalClose && !state.agentStatus) {
+    return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
+  }
   if (state.connectionStatus === "connecting" && !state.agentStatus) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -478,12 +505,20 @@ function SubordinateChatColumn({
               onRetry={history.loadMore}
             />
           )}
-          {thread.entries.length === 0 && !state.isStreaming && !history.loading && (
-            <div className="flex h-full flex-col items-center justify-center text-center">
-              <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
-              <p className="text-sm p-text-3">This agent's conversation starts here.</p>
-            </div>
-          )}
+          <ConversationStartBoundary
+            hasEntries={thread.entries.length > 0}
+            streaming={state.isStreaming}
+            error={history.error}
+            exhausted={history.exhausted}
+            onRetry={history.loadMore}
+            pending={<ConversationSkeleton />}
+            empty={
+              <div className="flex h-full flex-col items-center justify-center text-center">
+                <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
+                <p className="text-sm p-text-3">This agent's conversation starts here.</p>
+              </div>
+            }
+          />
           {thread.entries.map(({ message: msg, steers }, i) => (
             <MessageView
               key={msg.id}
@@ -650,14 +685,8 @@ export default function WorkspacePage() {
   // than not starting it: the store is asked, and "there is nothing here" is
   // then something the store said instead of something the socket failed to
   // say. That is the report — a workspace whose conversation was gone.
-  const { history, transcript } = useChatHistory(
-    state.rpc, state.messages, state.transcriptSeeded);
-
-  // Two clauses, both load-bearing. The connect frame settles the ordinary case
-  // whatever the transcript turns out to hold, including empty. It is NOT sent
-  // when a stream was already running at connect — that path goes through the
-  // resume handshake instead — and there the arriving messages are the proof.
-  const transcriptPending = !state.transcriptSeeded && transcript.length === 0;
+  const { history, transcript, thread } = useChatThread(
+    state.rpc, state.messages, state.transcriptSeeded, state.steerRuns);
 
   const messagesRef = useGrowingScroll<HTMLDivElement>({
     grows: "up",
@@ -671,32 +700,13 @@ export default function WorkspacePage() {
   });
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Pending chat attachments — fed by the attach button, paste, and drag-drop
-  // onto the chat column; rendered as removable chips above the input.
-  const [pendingAttachments, setPendingAttachments] = useState<FileUIPart[]>([]);
-  const [attachError, setAttachError] = useState<string | null>(null);
+  // onto the chat column; rendered as removable chips above the input. The hook
+  // owns the per-message AGGREGATE cap (all pending data-URL parts persist
+  // inside one DO message row, see core/cloud-wire) and spends it inside its
+  // reducer, so two additions started before either finished cannot both
+  // reserve the same remaining capacity.
+  const attachments = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
   const [dragOver, setDragOver] = useState(false);
-
-  const addFiles = useCallback(async (files: FileList | null | undefined) => {
-    if (!files || files.length === 0) return;
-    // CLOUD_MAX_INLINE_ATTACHMENT_BYTES is a per-message AGGREGATE: all pending
-    // data-URL parts persist inside one DO message row (see core/cloud-wire).
-    let budget = CLOUD_MAX_INLINE_ATTACHMENT_BYTES
-      - pendingAttachments.reduce((sum, p) => sum + dataUrlRawBytes(p.url), 0);
-    const accepted: File[] = [];
-    const rejected: string[] = [];
-    for (const f of Array.from(files)) {
-      if (f.size <= budget) { accepted.push(f); budget -= f.size; }
-      else rejected.push(f.name);
-    }
-    setAttachError(rejected.length > 0
-      ? `Chat attachments are capped at ${CLOUD_MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message. ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
-      : null);
-    if (accepted.length === 0) return;
-    const dt = new DataTransfer();
-    for (const f of accepted) dt.items.add(f);
-    const parts = await convertFileListToFileUIParts(dt.files);
-    setPendingAttachments((prev) => [...prev, ...parts]);
-  }, [pendingAttachments]);
 
   const onChatDragOver = useCallback((e: ReactDragEvent) => {
     if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
@@ -709,8 +719,8 @@ export default function WorkspacePage() {
     if (!e.dataTransfer.files.length) return;
     e.preventDefault();
     setDragOver(false);
-    void addFiles(e.dataTransfer.files);
-  }, [addFiles]);
+    attachments.add(e.dataTransfer.files);
+  }, [attachments]);
 
   // Auto-grow the chat input with its content (kumo InputArea has no resize
   // logic). The max-h-40 class clamps growth; beyond it the textarea scrolls
@@ -799,14 +809,17 @@ export default function WorkspacePage() {
     visiblePlan?.revision,
   ]);
 
+  // `sendChat` owns admission — one synchronous latch inside `useKinu`, so a
+  // reactive `state.isStreaming` pre-check here is exactly what let two presses
+  // in one tick both start a turn. The draft and its attachments are cleared
+  // only for the press that was admitted; a refused press keeps both.
   const handleSend = useCallback(() => {
     const t = chatInput.trim();
-    if ((!t && pendingAttachments.length === 0) || state.isStreaming) return;
-    state.sendChat(t, pendingAttachments, effectiveChatMode);
+    if (!t && attachments.parts.length === 0) return;
+    if (!state.sendChat(t, [...attachments.parts], effectiveChatMode)) return;
     setChatInput("");
-    setPendingAttachments([]);
-    setAttachError(null);
-  }, [chatInput, pendingAttachments, effectiveChatMode, state]);
+    attachments.clear();
+  }, [chatInput, attachments, effectiveChatMode, state]);
 
   // Steer-as-Branch: while the agent streams, the composer's split affordance
   // runs the draft as a parallel head (branchTurn) — the live turn continues;
@@ -830,25 +843,19 @@ export default function WorkspacePage() {
   /**
    * Steer and Stop — the composer's mid-turn pair, shared with the subordinate
    * column so both surfaces give the same account of where a message went.
+   *
+   * The thread the chat draws — every steer inside the turn that read it, and
+   * only an unplaceable one trailing — comes from `useChatThread` above, which
+   * owns that one rule for the live splice and the reloaded row alike.
    */
-  const messageIds = useMemo(() => state.messages.map((msg) => msg.id), [state.messages]);
-  const { notice: steerNotice, steer: handleSteer, stop: handleStop, liveSteers } = useSteerActions({
-    steerChat: state.steerChat,
+  const { notice: steerNotice, steer: handleSteer, stop: handleStop } = useSteerActions({
+    steerChat: (text) => state.steerChat(text, effectiveChatMode),
     abortChat: state.abortChat,
-    sendChat: (text) => state.sendChat(text, [], effectiveChatMode),
     draft: chatInput,
     setDraft: ui.updateDraft,
-    hasAttachments: pendingAttachments.length > 0,
+    hasAttachments: attachments.parts.length > 0,
     steerRuns: state.steerRuns,
-    messageIds,
   });
-
-  // The thread as it is drawn: every steer inside the turn the model read it
-  // in, and only the ones with nowhere to sit yet left under it. One rule for
-  // the live splice and the reloaded row, so the bubble does not move when the
-  // socket's copy is replaced by the stored one.
-  const thread = useMemo(
-    () => buildTranscript(transcript, liveSteers), [transcript, liveSteers]);
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
@@ -1000,6 +1007,9 @@ export default function WorkspacePage() {
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
     <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
   );
+  if (state.terminalClose && !state.agentStatus) {
+    return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
+  }
   if (!agentId) return null;
 
   const as = state.agentStatus;
@@ -1010,9 +1020,28 @@ export default function WorkspacePage() {
       {/* Non-destructive disconnect banner. The chat panel below stays
           mounted so the in-flight assistant turn is preserved through
           partysocket auto-reconnect. (STABILITY-AUDIT §A1.) */}
-      {state.connectionStatus === "disconnected" && (
+      {/* Mutually exclusive with the terminal state below by construction: the
+          spinner claims a reconnect is coming, which is only true while the SDK
+          is still attempting one. */}
+      {state.connectionStatus === "disconnected" && !state.terminalClose && (
         <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
+        </div>
+      )}
+      {/* The same classification for a workspace that WAS on screen and then
+          lost access: it says so and keeps both affordances, rather than
+          spinning forever over a session that cannot come back. */}
+      {state.terminalClose && (
+        <div className="flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 text-xs p-danger border-b p-border" style={{ background: "var(--c-danger-tint)" }}>
+          <WarningCircleIcon size={12} className="shrink-0" />
+          <span className="break-words">
+            {state.terminalClose.code === 1008
+              ? "Access to this workspace was denied."
+              : "This workspace is unavailable."}
+            {" "}{state.terminalClose.reason || state.terminalClose.message}
+          </span>
+          <button type="button" onClick={state.retryLoad} className="p-accent hover:underline">Try again</button>
+          <Link to="/" className="p-accent hover:underline">Back to your workspaces</Link>
         </div>
       )}
 
@@ -1112,10 +1141,15 @@ export default function WorkspacePage() {
             {/* One centred 780px reading measure. Every entry stays within it,
                 so prose remains readable while tables and activity rows gain space. */}
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto">
-              {transcriptPending && <ConversationSkeleton />}
-              {!transcriptPending && thread.entries.length === 0 && !state.isStreaming && (
-                <EmptyConversation mission={as?.purpose ?? ""} />
-              )}
+              <ConversationStartBoundary
+                hasEntries={thread.entries.length > 0}
+                streaming={state.isStreaming}
+                error={history.error}
+                exhausted={history.exhausted}
+                onRetry={history.loadMore}
+                pending={<ConversationSkeleton />}
+                empty={<EmptyConversation mission={as?.purpose ?? ""} />}
+              />
               {thread.entries.length > 0 && (
                 <HistoryBoundary
                   loading={history.loading} error={history.error}
@@ -1152,6 +1186,7 @@ export default function WorkspacePage() {
                   takes={run.turnId ? takesByTurn[run.turnId] : undefined}
                   rpc={state.rpc}
                   headActivity={state.headActivity}
+                  headDeltas={state.headDeltas}
                   onPick={onPickTake}
                   onDismiss={() => state.dismissBranchRun(run.branchId)}
                 />
@@ -1198,9 +1233,9 @@ export default function WorkspacePage() {
                 onBranch={handleBranch}
                 mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planAwaitingDecision }}
                 attachments={{
-                  parts: pendingAttachments,
-                  onAdd: (files) => { void addFiles(files); },
-                  onRemove: (i) => setPendingAttachments(prev => prev.filter((_, j) => j !== i)),
+                  parts: [...attachments.parts],
+                  onAdd: attachments.add,
+                  onRemove: attachments.remove,
                 }}
                 modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
                 notices={[
@@ -1211,7 +1246,7 @@ export default function WorkspacePage() {
                     text: "A new version was just deployed — this tab is running the old one.",
                     action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
                   }] : []),
-                  ...(attachError ? [{ id: "attach", tone: "warning" as const, text: attachError }] : []),
+                  ...(attachments.refusal ? [{ id: "attach", tone: "warning" as const, text: attachments.refusal }] : []),
                   // Each side read that failed, named. These are collected by
                   // reportSide and would otherwise be recorded and never shown,
                   // which is the "there is nothing" reading SIDE_SOURCES exists
@@ -1258,13 +1293,15 @@ export default function WorkspacePage() {
             onRefreshPorts={state.refreshExposedPorts}
             plan={visiblePlan}
             planRpc={subordinateReview?.rpc}
-            agentStatus={state.agentStatus}
+            snapshot={state.snapshot}
+            onRetryLoad={state.retryLoad}
             tools={state.tools}
             memory={state.memory}
             memoryContent={state.memoryContent}
             onSearchMemory={state.searchMemory}
             mctsTrees={state.mctsTrees}
             headActivity={state.headActivity}
+            headDeltas={state.headDeltas}
             isStreaming={state.isStreaming}
             executors={state.executors}
             executorOutputs={state.executorOutputs}
@@ -1315,7 +1352,15 @@ export default function WorkspacePage() {
           onClose={() => setShowClearConfirm(false)}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
-            <FilledButton danger onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</FilledButton>
+            {/* The walk is reset with the same press, not after it: a first
+                history page already in flight belongs to the conversation being
+                cleared, and without a new generation it landed afterwards and
+                put the cleared messages straight back on screen. */}
+            <FilledButton danger onClick={() => {
+              state.clearHistory();
+              history.reset();
+              setShowClearConfirm(false);
+            }}>Clear history</FilledButton>
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">

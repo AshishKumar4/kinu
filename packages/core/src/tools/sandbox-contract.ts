@@ -26,6 +26,33 @@
  * this module does not declare.
  */
 
+/** A provider's host-side result before the executor validates the VM boundary
+ *  as JSON. Domain objects are allowed here; functions and symbols are not. */
+export type CodemodeResult = object | string | number | boolean | null | undefined;
+
+/**
+ * A codemode sandbox provider: a named namespace of callable tools plus the
+ * TypeScript declaration the LLM sees. Both backends inject this same shape
+ * into execute_tools (the cf loader consumes `types`; the node factory treats
+ * it as optional).
+ *
+ * It lives HERE, beside the namespace constants, because that is what it is: a
+ * declaration of one model-visible namespace in the sandbox. It used to live in
+ * `rlm.ts` for no reason but chronology — the recursive-LM provider happened to
+ * be the first one written — so every provider in the tree imported its type
+ * from a module about something else, and deleting that module would have taken
+ * the sandbox's own contract with it.
+ */
+export interface CodemodeProvider {
+  name: string;
+  tools: Record<string, {
+    description: string;
+    execute: (...args: unknown[]) => Promise<CodemodeResult>;
+  }>;
+  types?: string;
+  positionalArgs?: boolean;
+}
+
 /** The namespace crafted tools are CALLABLE in, on every backend. */
 export const CRAFTED_TOOL_NAMESPACE = 'tools';
 

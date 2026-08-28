@@ -11,6 +11,8 @@ import { deflateSync } from 'node:zlib';
 import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../src/auth/session';
 import { routeFeedback, type FeedbackDeps } from '../src/feedback/submit';
+import { handleFeedbackRequest, type FeedbackEnv } from '../src/feedback/routes';
+import type { UserCaller } from '../src/user/workspace-capability';
 import type { FeedbackMarker } from '../src/analytics/feedback-marker';
 import {
   FEEDBACK_ENDPOINT,
@@ -64,6 +66,9 @@ interface Recorder {
   deleted: string[];
   rows: FeedbackRecord[];
   marks: FeedbackMarker[];
+  /** Every question put to the ownership authority, in order. Empty is a claim
+   *  in itself: a report that names no workspace must ask nothing. */
+  asked: { userId: string; workspace: string }[];
 }
 
 function recorder(options: {
@@ -71,11 +76,18 @@ function recorder(options: {
   rowError?: string;
   deleteThrows?: boolean;
   putThrows?: boolean;
+  /** The workspaces this reporter owns. Absent means every name they send is
+   *  theirs, so a test that is not about attribution reads as it did before the
+   *  gate existed; a test that IS about it names the registry it wants. */
+  owns?: readonly string[];
+  /** The authority could not answer at all. */
+  authorityDown?: string;
 } = {}): Recorder {
   const objects = new Map<string, Uint8Array>();
   const deleted: string[] = [];
   const rows: FeedbackRecord[] = [];
   const marks: FeedbackMarker[] = [];
+  const asked: { userId: string; workspace: string }[] = [];
   let minted = 0;
   const deps: FeedbackDeps = {
     store: options.bucket === false ? null : {
@@ -96,11 +108,21 @@ function recorder(options: {
       await Promise.resolve();
       return options.rowError === undefined ? { id: row.id } : { error: options.rowError };
     },
+    attributeWorkspace: async (userId, workspace) => {
+      asked.push({ userId, workspace });
+      await Promise.resolve();
+      if (options.authorityDown !== undefined) {
+        return { kind: 'unavailable', error: options.authorityDown };
+      }
+      return options.owns === undefined || options.owns.includes(workspace)
+        ? { kind: 'owned', workspace }
+        : { kind: 'refused' };
+    },
     mark: (marker) => { marks.push(marker); },
     newId: () => { minted += 1; return `id-${String(minted)}`; },
     now: () => 1_700_000_000_000,
   };
-  return { deps, objects, deleted, rows, marks };
+  return { deps, objects, deleted, rows, marks, asked };
 }
 
 /** What `POST /api/feedback` answers with, parsed rather than asserted. */
@@ -699,5 +721,231 @@ describe('the analytics marker', () => {
     expect(rec.marks[0]).toMatchObject({
       rejectReason: 'bad_content_type', hasScreenshot: false, screenshotBytes: 0,
     });
+  });
+});
+
+/**
+ * Who a report is ABOUT.
+ *
+ * The workspace field is a name the browser read off a URL, so it is a caller's
+ * string like any other. A report filed against somebody else's workspace is not
+ * an access breach — it grants nothing — it is a false row in the one record
+ * triage reads to decide whose problem this is, and an audit trail that says an
+ * account filed something it never filed.
+ *
+ * Every arm below asserts the two things that must be true of a refusal: nothing
+ * was STORED, and nothing was DISPATCHED — no object, no row, and a marker that
+ * says refused rather than accepted.
+ */
+describe('the workspace a report claims to be about', () => {
+  test('a workspace the reporter owns is accepted, and the row carries the authority’s answer', async () => {
+    const rec = recorder({ owns: ['checkout-fixes'] });
+    const response = await routeFeedback(submit({
+      note: 'the exploration tab is blank',
+      route: '/workspace/checkout-fixes',
+      workspace: 'checkout-fixes',
+    }), ME, rec.deps);
+
+    expect(response?.status).toBe(201);
+    expect(rec.asked).toEqual([{ userId: ME.userId, workspace: 'checkout-fixes' }]);
+    expect(rec.rows[0]?.workspace).toBe('checkout-fixes');
+    expect(rec.marks[0]).toMatchObject({ outcome: 'accepted', rejectReason: '' });
+  });
+
+  test('a workspace somebody else owns is refused, and nothing is stored or recorded', async () => {
+    const rec = recorder({ owns: ['checkout-fixes'] });
+    const response = await routeFeedback(submit({
+      note: 'filing this against a workspace that is not mine',
+      route: '/workspace/someone-elses',
+      workspace: 'someone-elses',
+      screenshot: pngPart(realPng()),
+    }), ME, rec.deps);
+
+    expect(response?.status).toBe(403);
+    expect((await replyOf(response!)).error).toMatch(/not one of yours/u);
+    expect(rec.rows).toEqual([]);
+    // The gate runs BEFORE the bytes are stored, so a refused report never pays
+    // for an object that would then have to be cleaned up.
+    expect(rec.objects.size).toBe(0);
+    expect(rec.deleted).toEqual([]);
+    expect(rec.marks).toHaveLength(1);
+    expect(rec.marks[0]).toMatchObject({
+      outcome: 'rejected',
+      rejectReason: 'unowned_workspace',
+      // The refusal still says a screenshot was carried, and how big it was.
+      hasScreenshot: true,
+    });
+  });
+
+  test('a refused attribution is answered before the screenshot is even read', async () => {
+    const rec = recorder({ owns: [], putThrows: true });
+    // The store would THROW if it were reached. It is not: the gate runs before
+    // the bytes, so this arm's answer is the attribution refusal rather than the
+    // 503 an unreachable bucket produces.
+    const response = await routeFeedback(submit({
+      note: 'x', route: '/workspace/theirs', workspace: 'theirs', screenshot: pngPart(realPng()),
+    }), ME, rec.deps);
+    expect(response?.status).toBe(403);
+    expect(rec.marks[0]?.rejectReason).toBe('unowned_workspace');
+  });
+
+  test('an authority that cannot answer is our outage, said as one, and the report is not filed', async () => {
+    const recording = createRecordingLogger();
+    setDiagnosticsSink(recording);
+    const rec = recorder({ authorityDown: 'the registry did not answer' });
+    const response = await routeFeedback(submit({
+      note: 'x', route: '/workspace/checkout-fixes', workspace: 'checkout-fixes',
+    }), ME, rec.deps);
+
+    // 503 and not 403: the reporter did nothing wrong, and the report is worth
+    // sending again in a moment.
+    expect(response?.status).toBe(503);
+    expect((await replyOf(response!)).error).toMatch(/could not be confirmed/u);
+    expect(rec.rows).toEqual([]);
+    expect(rec.objects.size).toBe(0);
+    expect(rec.marks[0]).toMatchObject({ outcome: 'rejected', rejectReason: 'workspace_unverified' });
+    // Recorded with the cause, because an outage nobody can see is an outage
+    // that reads as reporters getting their attribution wrong.
+    const failure = recording.emitted.find((line) => line.event === 'feedback.workspace_unverified');
+    expect(failure?.cause).toContain('the registry did not answer');
+  });
+
+  test('a report that names no workspace asks nothing and is filed as it always was', async () => {
+    const rec = recorder({ owns: [] });
+    const response = await routeFeedback(submit({ note: 'the sign-in page is broken', route: '/' }), ME, rec.deps);
+
+    expect(response?.status).toBe(201);
+    // The authority is not asked at all: general feedback is not a claim about
+    // anything, and a reporter with no workspaces can still file it.
+    expect(rec.asked).toEqual([]);
+    expect(rec.rows[0]?.workspace).toBeNull();
+    expect(rec.marks[0]).toMatchObject({ outcome: 'accepted', rejectReason: '' });
+  });
+
+  test('an empty workspace field is the same as no workspace field', async () => {
+    const rec = recorder({ owns: [] });
+    const response = await routeFeedback(submit({ note: 'x', route: '/', workspace: '   ' }), ME, rec.deps);
+    expect(response?.status).toBe(201);
+    expect(rec.asked).toEqual([]);
+    expect(rec.rows[0]?.workspace).toBeNull();
+  });
+});
+
+/**
+ * The seam itself: the adapter in `feedback/routes.ts` that turns the policy's
+ * question into a read of the reporter's own registry.
+ *
+ * Driven through `handleFeedbackRequest` rather than by exporting the adapter,
+ * because the thing worth holding is that a REQUEST reaches the registry and
+ * that a refusal never gets past it. The deployment here has no control plane,
+ * so an accepted attribution ends at the row write — which is exactly how this
+ * suite tells "got past the gate" from "was refused by it".
+ */
+interface RegistryStub {
+  hasWorkspace(caller: UserCaller, name: string): Promise<boolean>;
+}
+
+function registryEnv(options: { owns?: readonly string[]; throws?: string; secret?: boolean }) {
+  const asked: { caller: UserCaller; workspace: string }[] = [];
+  const ids: string[] = [];
+  const stub: RegistryStub = {
+    hasWorkspace: async (caller, name) => {
+      asked.push({ caller, workspace: name });
+      await Promise.resolve();
+      if (options.throws !== undefined) throw new Error(options.throws);
+      return options.owns?.includes(name) ?? false;
+    },
+  };
+  const env: Partial<FeedbackEnv> = {};
+  Object.assign(env, {
+    UserDO: {
+      idFromName(name: string) { ids.push(name); return name; },
+      get() { return stub; },
+    },
+  });
+  // A deployment without the root secret is a real state, and the one that
+  // proves an unanswerable question is answered as an outage.
+  if (options.secret !== false) env.CREDENTIAL_ENCRYPTION_KEY = 'test-root-secret';
+  // SAFETY: this function CONSTRUCTED every member the endpoint reads.
+  // `UserDO.idFromName` and `get().hasWorkspace` are the stub above;
+  // `CREDENTIAL_ENCRYPTION_KEY` is set on the line above unless the test is
+  // about its absence. `FEEDBACK_BUCKET` and `FEEDBACK_MARKERS` are optional and
+  // absent by construction — a note-only, analytics-free deployment — and the
+  // control-plane binding is absent by construction too, which is what makes
+  // `hasControlPlane` refuse the row write the assertions below rely on.
+  return { env: env as FeedbackEnv, asked, ids };
+}
+
+async function fileAgainst(env: FeedbackEnv, workspace: string): Promise<Response> {
+  const response = await handleFeedbackRequest(
+    submit({ note: 'x', route: `/workspace/${workspace}`, workspace }), env, ME);
+  if (response === null) throw new Error('the feedback endpoint did not answer its own path');
+  return response;
+}
+
+describe('asking the reporter’s own registry', () => {
+  test('a workspace in the registry gets past the gate, asked as the owner', async () => {
+    const { env, asked, ids } = registryEnv({ owns: ['checkout-fixes'] });
+    const response = await fileAgainst(env, 'checkout-fixes');
+
+    expect(asked.map((one) => one.workspace)).toEqual(['checkout-fixes']);
+    // The reporter's OWN registry: the namespace is addressed by their user id,
+    // so a name a stranger sends can only ever reach their own rows.
+    expect(ids).toEqual([ME.userId]);
+    // The OWNER capability and not a workspace token: `UserCaller` is one or the
+    // other, and which one it is decides what the registry will answer at all.
+    expect(Object.keys(asked[0]?.caller ?? {})).toEqual(['ownerToken']);
+    // Past the gate and into the commit point, which this deployment has no
+    // control plane for. Not a 403 and not a 503 is the claim.
+    expect(response.status).toBe(500);
+  });
+
+  test('a name the registry does not hold is refused, whoever else holds it', async () => {
+    const { env, asked } = registryEnv({ owns: ['checkout-fixes'] });
+    const absent = await fileAgainst(env, 'no-such-workspace');
+    // The read is scoped to the reporter's own registry, so "somebody else's"
+    // and "nobody's" are not two answers here — they are the same missing row,
+    // and the endpoint therefore enumerates nothing for a caller sending names.
+    const theirs = await fileAgainst(env, 'owned-by-another');
+    expect([absent.status, theirs.status]).toEqual([403, 403]);
+    expect(await replyOf(absent)).toEqual(await replyOf(theirs));
+    expect(asked.map((one) => one.workspace)).toEqual(['no-such-workspace', 'owned-by-another']);
+  });
+
+  test('a name the registry could never hold is refused without asking it', async () => {
+    const { env, asked } = registryEnv({ owns: ['checkout-fixes'] });
+    // Path traversal, spaces, and a name past the 64-character bound: none of
+    // these is a workspace name, and `hasWorkspace` THROWS on each. Asking would
+    // turn a caller's typo into something no caller can tell from an outage.
+    for (const name of ['../secrets', 'has spaces', 'w'.repeat(65), 'semi;colon']) {
+      expect((await fileAgainst(env, name)).status).toBe(403);
+    }
+    expect(asked).toEqual([]);
+  });
+
+  test('a registry that throws is an outage, not a refusal', async () => {
+    const { env } = registryEnv({ owns: ['checkout-fixes'], throws: 'the durable object is not there' });
+    const response = await fileAgainst(env, 'checkout-fixes');
+    expect(response.status).toBe(503);
+    expect((await replyOf(response)).error).toMatch(/could not be confirmed/u);
+  });
+
+  test('a deployment with no owner capability cannot ask, and says so', async () => {
+    const { env, asked } = registryEnv({ owns: ['checkout-fixes'], secret: false });
+    const response = await fileAgainst(env, 'checkout-fixes');
+    // The registry is never reached: there is no capability to ask with. That is
+    // our configuration, so it is a 503 and not the reporter's 403.
+    expect(response.status).toBe(503);
+    expect(asked).toEqual([]);
+  });
+
+  test('a report naming no workspace is answered without the registry at all', async () => {
+    const { env, asked, ids } = registryEnv({ owns: [] });
+    const response = await handleFeedbackRequest(
+      submit({ note: 'the sign-in page is broken', route: '/' }), env, ME);
+    // Past the gate, into the same absent control plane.
+    expect(response?.status).toBe(500);
+    expect(asked).toEqual([]);
+    expect(ids).toEqual([]);
   });
 });

@@ -22,11 +22,19 @@
  * container echoed it back. A lane deadline outranks every detach window above
  * it, so the 300s one-shot window could never fire and long work was killed
  * where it should have been handed to a background job.
+ *
+ * ── Cancellation reaches the process, not the wait ────────────────
+ * The process lane is also what makes an abort mean something. A background
+ * process has an ID, and an ID has `killProcess`, so a cancelled exec kills the
+ * command and waits for its exit code before it reports anything. What core used
+ * to do was race the signal against the wait and return, which told the agent
+ * "the command may still finish inside the container" — a turn moving on while
+ * an unwatched build kept writing to /workspace. See `SandboxHandle.exec`.
  */
 
+import type { Process } from "@cloudflare/sandbox";
 import { decodeJsonValue, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
 import type { KinuSandbox } from "./kinu-sandbox";
-
 
 async function jsonResultOrVoid<Result>(result: Promise<Result>) {
   const value = await result;
@@ -34,19 +42,14 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
 }
 
 /**
- * Run a command with no work deadline: as a background process, awaited to exit.
+ * Wait until this process HAS an exit code, and return it.
  *
- * `startProcess` returns in one request and the process then belongs to the
- * container rather than to this call, so nothing here holds a wall clock over
- * it. What remains bounded is only the OBSERVATION — `waitForExit` reads the
- * process log stream, and that stream idles out after 300s of silence. A silent
- * long-running process trips it while perfectly alive, so the answer is to look
- * again: nothing was killed, and the process's own exit is the only thing that
- * ends the wait. Work that would rather be observed than awaited has
- * `sandbox.startProcess` and the `process_done` container event.
+ * `waitForExit` reads the process log stream, and that stream idles out after
+ * 300s of silence. A silent long-running process trips it while perfectly alive,
+ * so the answer is to look again: nothing was killed, and the process's own exit
+ * is the only thing that ends the wait.
  */
-async function execWithoutDeadline(handle: KinuSandbox, command: string, cwd?: string) {
-  const started = await handle.startProcess(command, { cwd: cwd ?? WORKSPACE_BACKUP_DIR });
+async function observeExit(handle: KinuSandbox, started: Process): Promise<number> {
   let exitCode = started.exitCode;
   while (exitCode === undefined) {
     try {
@@ -55,7 +58,7 @@ async function execWithoutDeadline(handle: KinuSandbox, command: string, cwd?: s
       const status = await started.getStatus();
       // A process that has not finished is observed again; anything else is
       // settled and its exit code is read from the store.
-      if (status === 'starting' || status === 'running') continue;
+      if (status === "starting" || status === "running") continue;
       const settled = await handle.getProcess(started.id);
       if (settled?.exitCode === undefined) {
         throw new Error(`sandbox process ${started.id} ended without an exit code`, { cause });
@@ -63,9 +66,87 @@ async function execWithoutDeadline(handle: KinuSandbox, command: string, cwd?: s
       exitCode = settled.exitCode;
     }
   }
-  const logs = await handle.getProcessLogs(started.id);
-  return { stdout: logs.stdout, stderr: logs.stderr, exitCode };
+  return exitCode;
 }
+
+/**
+ * Run a command with no work deadline: as a background process, awaited to exit.
+ *
+ * `startProcess` returns in one request and the process then belongs to the
+ * container rather than to this call, so nothing here holds a wall clock over
+ * it. Work that would rather be observed than awaited has `sandbox.startProcess`
+ * and the `process_done` container event.
+ *
+ * An abort kills THAT process by id and then waits for its exit code, because an
+ * exit code is the only evidence that nothing of the command is still running.
+ * Both ways out are definitive and neither is a timer:
+ *
+ *   the kill lands — the exit observation completes, and the caller gets an
+ *   AbortError naming the process that is now gone;
+ *
+ *   the kill FAILS — the caller hears that instead, immediately, because a
+ *   process that could not be killed is still running and reporting
+ *   `cancelled` over it would be the defect this replaced.
+ */
+async function execWithoutDeadline(
+  handle: KinuSandbox,
+  command: string,
+  cwd?: string,
+  signal?: AbortSignal,
+) {
+  const started = await handle.startProcess(command, { cwd: cwd ?? WORKSPACE_BACKUP_DIR });
+  const observed = observeExit(handle, started);
+  let cancelling = false;
+  // The kill's outcome AS A PROMISE, so the wait below joins it instead of
+  // leaving it floating: resolved means the process is gone by our hand, and
+  // rejected means it is still there. It settles only if an abort asks for a
+  // kill, and asks once — a turn's signal is shared, and each exec in flight
+  // kills only its own process.
+  const { promise: killed, resolve, reject } = Promise.withResolvers<void>();
+  const kill = (): void => {
+    cancelling = true;
+    void handle.killProcess(started.id).then(resolve, reject);
+  };
+  if (signal?.aborted === true) kill();
+  else signal?.addEventListener("abort", kill, { once: true });
+  try {
+    // `killed` never settles without an abort, so in the ordinary case this is a
+    // plain wait for the exit code.
+    const exitCode = await Promise.race([observed, killed.then(() => observed)]);
+    // The race can only RESOLVE through `observed`, so an exit code here means
+    // the process is gone whatever the kill itself reported.
+    if (cancelling) {
+      throw new DOMException(
+        `sandbox exec cancelled — container process ${started.id} was killed`,
+        "AbortError",
+      );
+    }
+    const logs = await handle.getProcessLogs(started.id);
+    return { stdout: logs.stdout, stderr: logs.stderr, exitCode };
+  } finally {
+    signal?.removeEventListener("abort", kill);
+  }
+}
+
+/**
+ * WHERE THE CONFLICT QUEUE IS, AND WHY IT IS NOT HERE.
+ *
+ * This adapter used to hold one: a keyed FIFO ordering two writes to a path, an
+ * exposure against its own un-exposure, a token against the removal of its row.
+ * It ordered the wrong population. Each facet of a workspace — a head, a
+ * subordinate, an exploration branch — is a separate Durable Object with its own
+ * isolate and therefore its own copy of this adapter, and every one of them
+ * addresses the SAME container, because `sandboxId` is `kinu-<workspaceName>` for
+ * a facet and for its root alike. A queue built here orders one facet's calls and
+ * lets two facets interleave on the same path, which is the defect it was written
+ * to fix.
+ *
+ * So the claim lives in the object all of them reach: `Devbox` (see
+ * `createResourceLane` and the "one caller at a time, per resource" section in
+ * @kinu.run/devbox). Everything below calls ordinary methods and keeps no queue,
+ * no scope table and no copy of the method list — one authority, and it is the
+ * owner.
+ */
 
 /**
  * The SDK's response classes are serializable but intentionally do not carry
@@ -124,9 +205,10 @@ export function adaptCloudflareSandbox(
   };
   return {
     ensureReady: () => onContainer(() => Promise.resolve()),
-    // A deadline only when a caller ASKED for one; absent, the process lane.
+    // A deadline only when a caller ASKED for one; absent, the process lane,
+    // which is also the only lane an abort can kill.
     exec: (command, opts) => onContainer(() => (opts?.timeout === undefined
-      ? execWithoutDeadline(handle, command, opts?.cwd)
+      ? execWithoutDeadline(handle, command, opts?.cwd, opts?.signal)
       : handle.exec(command, opts))),
     readFile: (path, opts) => onContainer(() => handle.readFile(path, opts)),
     writeFile: (path, content, opts) =>
@@ -146,7 +228,8 @@ export function adaptCloudflareSandbox(
       }))),
     // The port manifest is this Durable Object's own durable rows. It touches no
     // container, so it neither needs egress nor may wait for an attach: the
-    // token has to be mintable BEFORE the exposure it names.
+    // token has to be mintable BEFORE the exposure it names. The owner puts it on
+    // the port's claim, which is where that ordering belongs.
     portToken: (port, name) => handle.portToken(port, name),
     notePortRemoved: (port) => handle.notePortRemoved(port).then(() => undefined),
   };

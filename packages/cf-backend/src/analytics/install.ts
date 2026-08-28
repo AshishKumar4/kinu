@@ -228,6 +228,13 @@ function agentRow(
     neurons: 0,
     usd: 0,
     priced: 0,
+    // Nor a delivery attempt. A diagnostic line reports one thing happening; the
+    // count belongs to a producer that retries the same unit of work, and that
+    // producer reaches Analytics through a typed writer. Structurally zero,
+    // rather than admitted to the sink's allowlist so an untyped field could set
+    // it — a stray `attempts` on an unrelated line would read as a first
+    // delivery in every aggregate over recovery.
+    attempts: 0,
   };
 }
 

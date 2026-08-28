@@ -373,6 +373,51 @@ remaining budget. Depth and width bound shape; conservation bounds spend.
 
 Implemented by `strategy/swarm-budget.ts` and `strategy/swarm-run.ts`.
 
+## Per-node assignments
+
+A caller states the first level in one of two ways. `nodes: [{ prompt, task }]`
+names each node. `branches: N` states a count and lets the engine vary the angle.
+Stating both is refused, because `nodes.length` IS the width. Every assigned
+`task` MUST be distinct.
+
+Each entry becomes one branch of a `BranchGrant`. `task` is the branch task and
+`prompt` is the branch rationale. `context` stays run-level, because it is what
+makes siblings comparable.
+
+A node receives exactly one brief. When a caller or a parent `propose_branch`
+wrote it, that brief occupies the angle slot and the engine sends no angle of its
+own beside it.
+
+Implemented by `tools/swarm-input.ts`, `strategy/swarm.ts` and
+`strategy/swarm-level.ts`.
+
+## One node, one row, across every re-entry
+
+A node becomes durable when its spawn is journalled, before its model runs. Its
+answer becomes durable after its whole level is scored. An activation that dies
+between the two leaves a node the store remembers and an answer nothing holds.
+
+A node in that state is unfinished work. A re-entry re-runs it under its own id,
+in the words its row recorded, at the slot it held. It is not retired and it is
+not replaced by a fresh sibling. The number of logical nodes a search holds is
+therefore decided by its caps alone, across any number of re-drives.
+
+Expansion accounting reads both durable records: tree rows, plus journalled
+spawns that have no tree row yet. A level cut before it scored is already
+expanded, and the budget MUST count it.
+
+A FORK's branches follow the same rule and the same table. A branch id is derived
+from its branch point and its slot, so a re-drive re-opens the row that id already
+has. A request for N branches therefore holds N rows through any number of resets,
+and the run compiles one merged answer whichever attempt settles it.
+
+`head_journal.status` has ONE terminal writer for a run nothing can continue: the
+start-of-life reconciliation, for a root whose durable job the resume gate
+refused. A re-entry writes no terminal row.
+
+Implemented by `strategy/swarm-resume.ts`, `strategy/swarm-level.ts`,
+`heads/journal.ts` and `heads/reconcile.ts`.
+
 ## The journal read model
 
 A transcript is a `HeadJournal` read model, never a second store. One root id
@@ -386,30 +431,66 @@ is an *Accepted and ignored* measurement.
 
 ## Isolation
 
-A host-provisioned node owns `/home/node-<id>` in one global view. Its uid/gid/mode
-boundary uses real inodes; commands use its uid, credential, and `/tmp`.
-`agentHomeNodeProvisioner` implements it. The substrate proof covers uid floor,
-uid-0-only `chown`, mode, and sibling `EACCES`: 15 tests, 0 fail, measured
-2026-08-19 in `packages/cf-backend/tests/unit-node-home-wiring.test.ts`.
+A host-provisioned node owns `/home/node-<id>` in one global view, mode `0o755`,
+and `/tmp/node-<id>`, mode `0o700`. Both are owned by the node's own uid.
+`agentHomeLayout` is the one table that says so, and each backend applies it:
+the local backend through its uid-0 `SqliteVFS` view, the hosted backend through
+the session's own coreutils run as uid 0.
 
-Local `agents.swarm` reports `private-home`. `AgentsForkDeps.nodeHome` supplies
-uid-0 view, `/tmp` principal registry, and uid-allocation SQL. `runSwarmAction`
-builds one provisioner per call; backends supply a host, never their own
-provisioner. Real dispatch plus absent-host coverage records 3 tests, 0 fail,
-measured 2026-08-19 in `packages/cli-backend/tests/swarm-node-home.test.ts`.
+Both backends report `private-home`. Both credential BOTH planes, and both are
+required. A node reaches the tree with commands and with file tools. A file plane
+pinned to the session user refuses a node's writes inside its own home — measured
+`EACCES` on `/home/node-aX9` — and cannot refuse a sibling's, because every
+pid-less filesystem call is the same identity. So the local backend gives a node
+`SqliteVFS.as(cred)` and a second `Shell` over the SAME filesystem
+(`WorkspaceBundle.asAgent`), and the hosted backend runs ONE fixed program as the
+node inside the same session (`nimbusSessionFiles(box, cred)` →
+`execution/nimbus-agent-files.ts`), with `withHostedNodeExecution` for its
+commands. `NodeAgentDeps.runtimeForWorkspace` is where a backend hands that
+runtime back; `runNodeAgent` uses it for a loop that runs in this isolate, and a
+hosted facet rebuilds the same thing from `HostedNodeHome`.
 
-The hosted backend reports `shared-origin-plane`: its filesystem sits behind
-Nimbus Durable Object RPC; no-pid calls use the session user, there is no uid-0
-`chown` view, and `SqliteVFS` `confinePrincipal` has no RPC. Report this state,
-never an invented directory.
+The hosted program is the session's own `node`, and the protocol is strict JSON:
+the request travels in one environment variable, the answer comes back on stdout
+carrying the substrate's OWN errno. Three consequences, each measured. No path or
+payload is ever shell text, so a filename holding a newline, a quote or a leading
+dash lists, reads, renames and deletes exactly — which `ls` cannot express. No
+error is matched as prose: `EACCES` arrives as `EACCES`. And `stat` answers
+`null` for `ENOENT` only, so a refusal never reads as an empty space.
 
-Grader and merge-back need the home, hence `0o755`, not `0o700`. One view
-preserves the user's repository. Exactly two isolation states exist; "partially
-isolated" cannot guide behaviour. Shared-plane runs grade reported candidates,
-never diffs with no concurrent-writer owner.
+Bytes are chunked, and the chunk is a WIRE bound rather than a file-size limit: a
+read loops until a zero-length read, a write stages into a temp beside the target
+and renames onto it, so a failure mid-write leaves the old target byte-exact and
+removes the temp. Cost, measured: a small file is one call to read and two to
+write; a file one chunk over the bound is three each.
+
+Substrate proof: 27 tests, 0 fail, measured 2026-08-27 in
+`packages/cf-backend/tests/unit-node-home-wiring.test.ts`. It covers the uid
+floor, uid-0-only `chown`, the mode, sibling `EACCES` through the shell AND
+through the file tools, byte-exact binary transfer, chunked transfer across the
+bound with its call count, atomic replacement under a failed commit, hostile
+names, refusal-versus-absence on `stat` and `exists`, the read window a grader
+needs, reset idempotence, and cleanup that removes bytes and keeps the uid row.
+Local dispatch plus absent-host coverage: 3 tests, 0 fail, measured 2026-08-19 in
+`packages/cli-backend/tests/swarm-node-home.test.ts`.
+
+One substrate limit, stated rather than papered over: a hosted session has no
+`confinePrincipal` — it is a `SqliteVFS` method with no RPC — so `TMPDIR` points
+at `/tmp/node-<id>` and a command that hardcodes `/tmp/x` there lands in the
+shared `/tmp`. In this isolate the rewrite exists, so a bare `/tmp` write is
+private.
+
+`shared-origin-plane` remains the honest state of a runtime with no provisioner:
+a harness runtime, or a plane bound to a physical directory, which has no
+principal registry. Grader and merge-back need the home, hence `0o755` and not
+`0o700`. One view preserves the user's repository. Exactly two isolation states
+exist; "partially isolated" cannot guide behaviour. Shared-plane runs grade
+reported candidates, never diffs with no concurrent-writer owner.
 
 Malformed credentials fall through to the session user, so the boundary returns
-the substrate credential type and spells absence as a value.
+the substrate credential type, and `NodeWorkspace` is a union: a provisioned node
+has a home, a scratch and a credential, and an unprovisioned one has none of the
+three.
 
 The storage-isolation proof covers toolless branches. A tooled node breaks its
 storage-acquisition hypothesis. `lean/Proteus/Exploration/Isolation.lean` proves

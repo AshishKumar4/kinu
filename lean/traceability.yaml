@@ -15,11 +15,11 @@ requirements:
       - Proteus.Agent.Lifecycle.steps_bounded_by_calls
       - Proteus.Agent.Lifecycle.maxSteps_invariant
     tsRefs:
-      - packages/cf-backend/src/orchestrator.ts:1795
-      - packages/cf-backend/src/orchestrator.ts:2085
-      - packages/cf-backend/src/orchestrator.ts:2096
-      - packages/core/src/orchestrator/agent-orchestrator.ts:86
-      - packages/core/src/chat.ts:77
+      - packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.reset
+      - packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep
+      - packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordToolCall
+      - packages/core/src/orchestrator/agent-orchestrator.ts#AgentOrchestrator.beginTurn
+      - packages/core/src/chat.ts#UNBOUNDED_STEPS
     remainingEvidence:
       - WP-F4 differential fixtures for the real hook counters and configured stop condition
   PR-AGENT-002:
@@ -33,9 +33,9 @@ requirements:
       - Proteus.Agent.TurnQueue.complete_increments
       - Proteus.Agent.TurnQueue.enqueue_increases_total
     tsRefs:
-      - packages/cli-backend/src/local-session.ts:244
-      - packages/cli-backend/src/local-session.ts:680
-      - packages/cli-backend/src/local-session.ts:844
+      - packages/cli-backend/src/local-session.ts#LocalAgentSession.enqueueTurn
+      - packages/cli-backend/src/local-session.ts#LocalAgentSession.pump
+      - packages/cli-backend/src/local-session.ts#LocalAgentSession.processTurn
     remainingEvidence:
       - The Cloudflare TurnQueue implementation is external to this repository and has no model refinement test
       - The local queue keeps its pumping flag set across a full drain rather than clearing it after one modeled item
@@ -48,8 +48,8 @@ requirements:
       - Proteus.Agent.FiberDurability.n_steps_remaining
       - Proteus.MCTS.StorageIsolation.budget_well_founded
     tsRefs:
-      - packages/core/src/mcts/engine.ts:83
-      - packages/core/src/mcts/engine.ts:232
+      - packages/core/src/mcts/engine.ts#runMCTS
+      - packages/core/src/types/mcts.ts#MCTSConfig.budget
     remainingEvidence:
       - WP-F4 termination and budget-consumption fixtures on the production loop
       - The production configuration uses JavaScript numbers rather than a universally quantified natural-number budget
@@ -60,8 +60,8 @@ requirements:
       - Proteus.Agent.FiberDurability.start_conserved
       - Proteus.Agent.FiberDurability.checkpoint_restore_roundtrip
     tsRefs:
-      - packages/core/src/mcts/engine.ts:74
-      - packages/cf-backend/src/runtime.ts:558
+      - packages/core/src/mcts/engine.ts#runMCTS
+      - packages/cf-backend/src/runtime.ts#createCFRuntime
     remainingEvidence:
       - Checkpoint field equality does not prove durable persistence or crash recovery
       - WP-F4 recovery fixtures against the SDK fiber snapshot and stash behavior
@@ -78,12 +78,11 @@ requirements:
       - Proteus.Evolution.Scaffold.rollback_nonexistent_is_none
       - Proteus.Evolution.Scaffold.append_increases_length
     tsRefs:
-      - packages/core/src/evolution/engine.ts:193
-      - packages/core/src/evolution/engine.ts:409
-      - packages/core/src/evolution/engine.ts:577
-      - packages/core/src/scaffold/rollback.ts:10
-      - packages/core/src/orchestrator/agent-orchestrator.ts:86
-      - packages/core/src/scaffold/modify.ts:109
+      - packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn
+      - packages/core/src/evolution/engine.ts#EvolutionEngine.maybeEvolveScaffold
+      - packages/core/src/orchestrator/agent-orchestrator.ts#AgentOrchestrator.sessionTurnIndex
+      - packages/core/src/scaffold/rollback.ts#rollbackScaffold
+      - packages/core/src/scaffold/modify.ts#modifyScaffold
     remainingEvidence:
       - The transition postconditions are hand-asserted and need WP-F4 differential lifecycle fixtures
       - The abstract totalBudget product has no direct production counterpart
@@ -106,13 +105,13 @@ requirements:
       - Proteus.Evolution.FullCraftLifecycle.below_threshold_filtered
       - Proteus.Evolution.FullCraftLifecycle.pipeline_preserves_nonempty
     tsRefs:
-      - packages/core/src/craft/consolidation.ts:28
-      - packages/agent-utils/src/stores/craft.ts:78
-      - packages/agent-utils/src/stores/craft.ts:99
-      - packages/agent-utils/src/stores/craft.ts:117
-      - packages/agent-utils/src/stores/craft.ts:132
-      - packages/core/src/evolution/engine.ts:702
-      - packages/core/src/craft/conflict.ts:40
+      - packages/core/src/craft/consolidation.ts#periodicCraftConsolidation
+      - packages/agent-utils/src/stores/craft.ts#CraftStore.ensureSchema
+      - packages/agent-utils/src/stores/craft.ts#CraftStore.create
+      - packages/agent-utils/src/stores/craft.ts#CraftStore.update
+      - packages/agent-utils/src/stores/craft.ts#CraftStore.delete
+      - packages/core/src/evolution/engine.ts#EvolutionEngine.runDeferredTurnReviews
+      - packages/core/src/craft/conflict.ts#checkConflictsBeforeAdding
     remainingEvidence:
       - The list models omit SQL persistence details, score decay, and the real craft retirement policy
       - Production extraction has conflict and misevolution vetoes plus create-versus-update behavior absent from the prepend-only model
@@ -124,7 +123,7 @@ requirements:
       - Proteus.Evolution.FullCraftLifecycle.ema_bounded
       - Proteus.Evolution.FullCraftLifecycle.ema_stays_bounded
     tsRefs:
-      - packages/core/src/craft/ema.ts:16
+      - packages/core/src/craft/ema.ts#emaUpdate
     remainingEvidence:
       - The TypeScript uses configurable floating-point arithmetic and unbounded observations rather than this fixed scaled-Nat model
       - WP-F4 differential fixtures after the production arithmetic is settled
@@ -143,14 +142,14 @@ requirements:
       - Proteus.Execution.Capabilities.subsumes_refl
       - Proteus.Execution.Capabilities.subsumes_trans
     tsRefs:
-      - packages/core/src/execution/types.ts:29
-      - packages/core/src/execution/router.ts:22
-      - packages/core/src/execution/inline.ts:207
-      - packages/core/src/execution/nimbus.ts:352
-      - packages/core/src/execution/sandbox.ts:477
-      - packages/core/src/execution/device-tunnel-executor.ts:156
+      - packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES
+      - packages/core/src/execution/router.ts#DefaultExecutionRouter
+      - packages/core/src/execution/inline.ts#createInlineExecutor
+      - packages/core/src/execution/nimbus.ts#createNimbusExecutor
+      - packages/core/src/execution/sandbox.ts#createSandboxExecutor
+      - packages/core/src/execution/device-tunnel-executor.ts#createDeviceTunnelExecutor
     remainingEvidence:
-      - WP-F3.6 must realign stale executor names and the false container-subsumes-Nimbus relation with the current provider set
+      - WP-F3.6 must realign stale executor names and the false container-subsumes-Nimbus relation with the current provider set; ExecutorKind models workspace, nimbus, container and ssh against a shipped workspace, nimbus, sandbox, laptop and parent, so it cannot be enrolled as a state mirror until the model moves
       - The production router filters availability but does not implement the modeled required-capability search
       - WP-F4 differential routing fixtures
   PR-EXEC-002:
@@ -164,9 +163,9 @@ requirements:
       - Proteus.Execution.ToolSystem.memory_save_uses_note
       - Proteus.Execution.ToolSystem.file_ops_use_codemode
     tsRefs:
-      - packages/core/src/tools/registry.ts:12
+      - packages/core/src/tools/registry.ts#BUILTIN_TOOLS
     remainingEvidence:
-      - The Lean five-tool vocabulary is stale relative to the current ten-tool registry and needs WP-F3.6 realignment
+      - The Lean five-tool vocabulary is stale relative to BUILTIN_TOOLS, which ships eight native tools out of eleven capabilities, and needs WP-F3.6 realignment; the two sets differ in both directions, so TopLevelTool cannot be enrolled as a state mirror until the model moves
       - Production has no action classifier implementing this abstract mapping
   PR-EXEC-003:
     statement: The abstract crafted-tool call list remains in the workspace namespace when a workspace call is appended.
@@ -175,8 +174,8 @@ requirements:
       - Proteus.Execution.ToolSystem.empty_is_isolated
       - Proteus.Execution.ToolSystem.append_workspace_preserves
     tsRefs:
-      - packages/core/src/execution/inline.ts:186
-      - packages/core/src/tools/builtins.ts:315
+      - packages/core/src/execution/inline.ts#createInlineExecutor
+      - packages/core/src/tools/builtins.ts#buildCraftedToolSetFromExecute
     remainingEvidence:
       - The workspace-only abstract call list omits the current workspace, codemode, and tools namespace contract
       - No refinement test currently connects the abstract call list to codemode provider dispatch
@@ -191,8 +190,8 @@ requirements:
       - Proteus.Safety.CapabilitySafety.spawnsubagent_not_grantable
       - Proteus.Safety.CapabilitySafety.networkfetch_not_grantable
     tsRefs:
-      - packages/core/src/types/primitives.ts:74
-      - packages/core/src/tools/builtins.ts:335
+      - packages/core/src/types/primitives.ts#VFS.exists
+      - packages/core/src/tools/builtins.ts#WebToolInput.action
     remainingEvidence:
       - These are constructor-shape witnesses rather than a proof of the deployed sandbox boundary
       - Production has no matching Op or grantableOps taxonomy and provider tools can have transitive effects
@@ -206,9 +205,8 @@ requirements:
       - Proteus.MCTS.Backpropagation.applyRewards_sum_invariant
       - Proteus.MCTS.Backpropagation.sum_invariant
     tsRefs:
-      - packages/core/src/mcts/backpropagation.ts:31
-      - packages/core/src/mcts/backpropagation.ts:49
-      - packages/core/src/mcts/schemas.ts:24
+      - packages/core/src/mcts/backpropagation.ts#backpropagate
+      - packages/core/src/mcts/schemas.ts#SEARCH_NODES_POST_RELEASE_COLUMNS
     remainingEvidence:
       - TypeScript and SQLite compute IEEE-754 REAL values rather than exact scaled integers
       - WP-F4 differential fixtures against the recursive SQL update
@@ -221,8 +219,7 @@ requirements:
       - Proteus.MCTS.Backpropagation.initial_in_range
       - Proteus.MCTS.Backpropagation.backprop_preserves_ids
     tsRefs:
-      - packages/core/src/mcts/backpropagation.ts:31
-      - packages/core/src/mcts/backpropagation.ts:49
+      - packages/core/src/mcts/backpropagation.ts#backpropagate
     remainingEvidence:
       - WP-F4 differential fixtures must connect these constructor-shape witnesses to the recursive SQLite update
   PR-MCTS-003:
@@ -232,9 +229,9 @@ requirements:
       - Proteus.MCTS.StorageIsolation.init_isolated
       - Proteus.MCTS.StorageIsolation.transition_preserves_isolation
     tsRefs:
-      - packages/cli-backend/src/branch-process.ts:28
-      - packages/cli-backend/src/branch-worker.ts:49
-      - packages/cf-backend/src/runtime.ts:584
+      - packages/cli-backend/src/branch-process.ts#createBranchSpawner
+      - packages/cli-backend/src/branch-worker.ts#dbPath
+      - packages/cf-backend/src/runtime.ts#createCFRuntime
     remainingEvidence:
       - Transition postconditions are hand-asserted rather than refined from branch spawning and storage code
       - The abstract Converge transition is identity while production convergence mutates node statuses and persistent memory
@@ -244,7 +241,7 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/mcts/uct.ts:33
+      - packages/core/src/mcts/uct.ts#selectNode
     remainingEvidence:
       - The current implementation selects a global open-node argmax rather than performing UCT root descent
       - The max-one visit clamps create plateaus and root self-parenting defeats a global self-antitonic claim
@@ -254,9 +251,9 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/mcts/convergence.ts:22
-      - packages/core/src/mcts/engine.ts:83
-      - packages/core/src/mcts/uct.ts:40
+      - packages/core/src/mcts/convergence.ts#converge
+      - packages/core/src/mcts/engine.ts#runMCTS
+      - packages/core/src/mcts/uct.ts#selectNode
     remainingEvidence:
       - A convergence claim requires a settled selection algorithm and a formal probabilistic model
   PR-STORE-001:
@@ -268,9 +265,9 @@ requirements:
       - Proteus.Storage.FTS5Search.search_bounded
       - Proteus.Storage.FTS5Search.fts5_scores_nonneg
     tsRefs:
-      - packages/agent-utils/src/memory/store.ts:117
-      - packages/agent-utils/src/memory/store.ts:153
-      - packages/agent-utils/src/memory/store.ts:175
+      - packages/agent-utils/src/memory/store.ts#MemoryStore.appendToFile
+      - packages/agent-utils/src/memory/store.ts#MemoryStore.indexFile
+      - packages/agent-utils/src/memory/store.ts#MemoryStore.search
     remainingEvidence:
       - The model does not encode SQLite tokenization, ranking, fallback-query, or score arithmetic behavior
       - Chunk identifiers, stale-chunk deletion, and content-table to FTS-table synchronization are not modeled
@@ -282,8 +279,8 @@ requirements:
     axioms:
       - Proteus.Storage.FTS5Search.fts5_indexed_findable
     tsRefs:
-      - packages/agent-utils/src/memory/store.ts:117
-      - packages/agent-utils/src/memory/store.ts:182
+      - packages/agent-utils/src/memory/store.ts#MemoryStore.indexFile
+      - packages/agent-utils/src/memory/store.ts#MemoryStore.search
     remainingEvidence:
       - No covering integration test exists because MemoryStore indexFile plus search is untested
   PR-STORE-003:
@@ -294,10 +291,9 @@ requirements:
       - Proteus.Storage.SqliteFSCorrectness.mkdir_idempotent
       - Proteus.Storage.SqliteFSCorrectness.writes_commute
     tsRefs:
-      - packages/core/src/vfs/nimbus-workspace.ts:72
-      - packages/core/src/vfs/nimbus-workspace.ts:76
-      - packages/core/src/vfs/nimbus-workspace.ts:88
-      - packages/core/tests/vfs-conformance.test.ts:1
+      - packages/core/src/vfs/nimbus-workspace.ts#WorkspaceVFS
+      - packages/core/src/vfs/nimbus-workspace.ts#workspaceVfs
+      - packages/core/tests/vfs-conformance.test.ts#cases
     remainingEvidence:
       - Production normalizes paths before writing, so distinct raw strings can alias and the model hypothesis needs a normalization correspondence
       - The conformance suite covers round trips per implementation but not repeated mkdir idempotence or concurrent multi-write serialization
@@ -309,9 +305,8 @@ requirements:
       - Proteus.Storage.SqliteFSCorrectness.chunkCount_drop
       - Proteus.Storage.SqliteFSCorrectness.chunk_reassembly
     tsRefs:
-      - packages/core/src/vfs/nimbus-workspace.ts:76
-      - packages/core/src/vfs/nimbus-workspace.ts:72
-      - packages/agent-utils/src/vfs/encoding.ts:4
+      - packages/core/src/vfs/nimbus-workspace.ts#WorkspaceVFS
+      - packages/agent-utils/src/vfs/encoding.ts#concatBuffers
     remainingEvidence:
       - No covering integration test writes a payload larger than the production chunk size
       - WP-F4 differential multi-chunk fixtures
@@ -326,10 +321,11 @@ requirements:
       - Proteus.Exploration.measurement_cannot_report_fault
       - Proteus.Exploration.adversary_is_declarable_and_refused
     tsRefs:
-      - packages/core/src/strategy/objective.ts:45
-      - packages/core/src/strategy/objective.ts:104
-      - packages/core/src/strategy/objective.ts:187
-      - packages/core/src/strategy/objective.ts:451
+      - packages/core/src/strategy/objective.ts#ObjectiveDirection
+      - packages/core/src/strategy/objective.ts#isBetter
+      - packages/core/src/strategy/objective.ts#Unmeasurable
+      - packages/core/src/strategy/objective.ts#VerifierSpec
+      - packages/core/src/strategy/objective.ts#Floor.kind
     remainingEvidence:
       - The model uses exact Int values while TypeScript and a SQLite REAL column compare IEEE-754 doubles
       - No differential fixture connects isBetter's three intended call sites to these constructor-shape witnesses
@@ -345,9 +341,9 @@ requirements:
       - Proteus.Exploration.fixed_majority_floor_has_more_room
       - Proteus.Exploration.c1_refuses_a_refuted_floor
     tsRefs:
-      - packages/core/src/strategy/objective.ts:187
-      - packages/core/src/strategy/objective.ts:238
-      - packages/core/src/strategy/objective.ts:256
+      - packages/core/src/strategy/objective.ts#floorMargin
+      - packages/core/src/strategy/objective.ts#Floor
+      - packages/core/src/strategy/objective.ts#FloorBreach
     remainingEvidence:
       - The model reasons on floorMargin's numerator only, so the division and its IEEE-754 behaviour are outside the proof
       - No runtime precondition yet implements C2 against the measured baseline
@@ -373,9 +369,9 @@ requirements:
       - Proteus.Exploration.Publication.every_surface_is_writable
       - Proteus.Exploration.Publication.every_surface_is_retro_writable
     tsRefs:
-      - packages/core/src/strategy/objective.ts:288
-      - packages/core/src/strategy/objective.ts:256
-      - packages/core/src/strategy/objective.ts:467
+      - packages/core/src/strategy/objective.ts#PUBLICATION_SURFACES
+      - packages/core/src/strategy/objective.ts#PublicationState
+      - packages/core/src/strategy/objective.ts#admitsPublication
     remainingEvidence:
       - The step function is a single sequential fold, so two runs racing on one objective's seal are not modelled and this is the model's largest gap
       - No records-store DDL or write path exists yet for the postconditions to refine
@@ -394,10 +390,10 @@ requirements:
       - Proteus.Exploration.Publication.retroPublish_requires_same_verifier
       - Proteus.Exploration.Publication.admissible_rederivation_admits
     tsRefs:
-      - packages/core/src/strategy/objective.ts:311
-      - packages/core/src/strategy/objective.ts:318
-      - packages/core/src/strategy/objective.ts:509
-      - packages/core/src/strategy/objective.ts:420
+      - packages/core/src/strategy/objective.ts#PublicationState
+      - packages/core/src/strategy/objective.ts#Floor
+      - packages/core/src/strategy/objective.ts#FloorRederivation
+      - packages/core/src/strategy/objective.ts#admitsPublication
     remainingEvidence:
       - Digest injectivity is a hypothesis on the theorems rather than a proved property of SHA-256
       - No implementation of FloorRederivation or of the retroactive re-evaluation path exists yet
@@ -420,8 +416,9 @@ requirements:
       - Proteus.Exploration.Publication.suppressedCells_monotone
       - Proteus.Exploration.Publication.suppression_quantities_are_independent
     tsRefs:
-      - packages/core/src/strategy/objective.ts:288
-      - packages/core/src/strategy/objective.ts:256
+      - packages/core/src/strategy/objective.ts#admitsPublication
+      - packages/core/src/strategy/objective.ts#carrySuppression
+      - packages/core/src/strategy/settle.ts#suppressedCellCount
     remainingEvidence:
       - The continuation rule survived the audit's surface finding verbatim, which is what the clause-level isolation was for
       - No engine code yet continues a run past a breach, and nothing yet computes the count of cells whose best was reached and not recorded
@@ -437,8 +434,8 @@ requirements:
       - Proteus.Exploration.Publication.halted_does_nothing
       - Proteus.Exploration.Publication.fault_freezes_the_run
     tsRefs:
-      - packages/core/src/strategy/objective.ts:172
-      - packages/core/src/strategy/objective.ts:104
+      - packages/core/src/strategy/objective.ts#VerifierFault
+      - packages/core/src/strategy/objective.ts#Unmeasurable
     remainingEvidence:
       - Lean cannot see a catch that converts a thrown fault into an unmeasurable, which is where the production hazard lives
       - The harness path that must not absorb a throw is unwritten for the exploration surface
@@ -451,8 +448,8 @@ requirements:
       - Proteus.Exploration.Publication.no_unobserved_node_is_reachable
       - Proteus.Exploration.Publication.unobserved_node_is_representable
     tsRefs:
-      - packages/core/src/mcts/engine.ts:253
-      - packages/core/src/mcts/engine.ts:316
+      - packages/core/src/mcts/engine.ts#runMCTS
+      - packages/core/src/types/mcts.ts#SearchNode.observation
     remainingEvidence:
       - That the observation is the environment's reply rather than the node's own claim is a property of the TypeScript surface that Lean can only restate
       - No refinement connects the modelled record action to the engine's own recording step
@@ -469,9 +466,8 @@ requirements:
       - Proteus.Exploration.Publication.non_discriminating_run_publishes_nothing
       - Proteus.Exploration.Publication.discrimination_is_not_relevance
     tsRefs:
-      - packages/core/src/strategy/objective.ts:66
-      - packages/core/src/strategy/objective.ts:88
-      - packages/core/src/strategy/objective.ts:467
+      - packages/core/src/strategy/objective.ts#MeasuredValue
+      - packages/core/src/strategy/records.ts#recordExploration
     remainingEvidence:
       - S1's literal second conjunct, that the verifier COULD have failed, is counterfactual and remains unmodelled under PR-DISCRIM-003
       - An objective that varies and still measures the wrong quantity satisfies every theorem here, as discrimination_is_not_relevance states
@@ -486,8 +482,8 @@ requirements:
       - Proteus.Exploration.Publication.baseline_supplies_the_second_value
       - Proteus.Exploration.Publication.unmeasurable_does_not_discriminate
     tsRefs:
-      - packages/core/src/strategy/objective.ts:66
-      - packages/core/src/strategy/objective.ts:410
+      - packages/core/src/strategy/objective.ts#MeasuredValue
+      - packages/core/src/strategy/objective.ts#Measurement
     remainingEvidence:
       - These are findings against an unimplemented check, so nothing in the tree yet exhibits or fixes the defects
       - Whether the measured baseline is counted among the distinct candidates is a decision the spec has not taken explicitly
@@ -503,8 +499,8 @@ requirements:
       - Proteus.Exploration.Publication.the_three_withholdings_are_distinct
       - Proteus.Exploration.Publication.discriminating_run_succeeds
     tsRefs:
-      - packages/core/src/strategy/objective.ts:288
-      - packages/core/src/strategy/swarm.ts:217
+      - packages/core/src/strategy/settle.ts#settleReport
+      - packages/core/src/strategy/swarm.ts#SwarmSettleReport
     remainingEvidence:
       - The report shape is this model's construction; section 3.7 specifies the return contract but no code emits these outcomes
       - insufficientEvidence is a fourth outcome this model introduced and the spec does not yet name it
@@ -524,9 +520,9 @@ requirements:
       - Proteus.Exploration.Settle.settleOf_is_not_constant
       - Proteus.Exploration.Settle.every_settle_kind_is_reachable
     tsRefs:
-      - packages/core/src/strategy/swarm.ts:74
-      - packages/core/src/strategy/swarm.ts:230
-      - packages/core/src/strategy/swarm.ts:83
+      - packages/core/src/strategy/swarm.ts#settleOf
+      - packages/core/src/strategy/swarm.ts#SwarmSettle
+      - packages/core/src/strategy/swarm.ts#SwarmAdvanceSetting
     remainingEvidence:
       - Totality is definitional for a function on inductive types, so the fibre equivalences rather than totality carry the content
       - Nothing connects these fibres to the section 6.6 coverage fixture, which does not exist yet
@@ -549,9 +545,9 @@ requirements:
       - Proteus.Exploration.Archive.full_coverage_says_nothing_about_quality
       - Proteus.Exploration.Archive.collapsed_archive_reports_partial_coverage
     tsRefs:
-      - packages/core/src/strategy/objective.ts:467
-      - packages/core/src/strategy/swarm.ts:57
-      - packages/core/src/strategy/swarm.ts:167
+      - packages/core/src/strategy/archive.ts#ArchiveCell
+      - packages/core/src/strategy/archive.ts#archiveCellOf
+      - packages/core/src/strategy/settle.ts#measuredCellsFor
     remainingEvidence:
       - Descriptor extraction is unspecified, so the positive result rests on an antecedent only bucketOf discharges
       - The model certifies binning and says nothing about quality, which full_coverage_says_nothing_about_quality proves rather than promises
@@ -587,16 +583,16 @@ requirements:
       - Proteus.Exploration.Records.tie_does_not_displace
       - Proteus.Exploration.Records.eviction_can_destroy_the_population
     tsRefs:
-      - packages/core/src/strategy/objective.ts:451
-      - packages/core/src/strategy/objective.ts:467
-      - packages/core/src/strategy/objective.ts:395
+      - packages/core/src/strategy/records.ts#recordExploration
+      - packages/core/src/strategy/records.ts#bestInCell
+      - packages/core/src/strategy/objective.ts#isBetter
     remainingEvidence:
       - Writes are sequential, so two runs displacing one cell concurrently are not modelled and a store write is a read-modify-write
       - The model uses exact Int values while the store would keep a SQLite REAL
       - S2 constrains only a cell's best, and eviction_can_destroy_the_population shows a policy satisfying it while destroying the population carry:'elites' needs
       - No records-store table or write path exists yet
   PR-RECORDS-002:
-    statement: A vector objective admits no monotone best because Pareto domination has incomparable pairs, so the strongest available property is that no front member is lost except to a dominator.
+    statement: A vector objective admits no monotone best because Pareto domination has incomparable pairs. The frontier contains no dominated member, and an accepted advance retains the complete declared-axis evidence it was measured from.
     status: proved-in-abstract-model
     theorems:
       - Proteus.Exploration.Records.someStrictlyBetter_irrefl
@@ -605,16 +601,19 @@ requirements:
       - Proteus.Exploration.Records.single_component_is_argmax
       - Proteus.Exploration.Records.front_subset
       - Proteus.Exploration.Records.front_undominated
+      - Proteus.Exploration.Records.frontier_nondominance
+      - Proteus.Exploration.Records.accepted_advance_preserves_objective_evidence
       - Proteus.Exploration.Records.front_insert_no_loss
       - Proteus.Exploration.Records.front_can_shrink
     tsRefs:
-      - packages/core/src/strategy/objective.ts:395
-      - packages/core/src/strategy/objective.ts:420
-      - packages/core/src/strategy/swarm.ts:57
+      - packages/core/src/strategy/objective.ts#paretoObjectiveAxes
+      - packages/core/src/strategy/objective.ts#dominatesPareto
+      - packages/core/src/strategy/swarm-scoring.ts#measureParetoChild
+      - packages/core/src/strategy/swarm-tree.ts#selectParetoFrontierNode
+      - packages/core/src/strategy/settle.ts#settleRun
     remainingEvidence:
-      - Section 10.1 S2 quantifies over one direction and one isBetter, so it does not type-check against VectorObjective and the spec has not been amended
-      - The front property is strictly weaker than S2 and no code implements either
-      - ObjectiveIdentity and ExplorationRecord.value remain scalar-shaped after VectorObjective was added
+      - The Lean model uses exact Int values while runtime instruments report IEEE-754 values; the runtime rejects non-finite evidence before comparison.
+      - The model proves vector admission and frontier membership, not scheduler liveness or verifier correctness.
   PR-PROPOSAL-001:
     statement: An accepted branch proposal always lands within the depth cap, the remaining budget and the declared width range and never widens the search's resolved context policy, for every proposal including adversarial ones.
     status: proved-in-abstract-model
@@ -631,10 +630,10 @@ requirements:
       - Proteus.Exploration.Arbitration.every_refusal_is_reachable
       - Proteus.Exploration.Arbitration.an_adversarial_proposal_is_refused
     tsRefs:
-      - packages/core/src/strategy/swarm.ts:74
-      - packages/core/src/strategy/swarm.ts:927
-      - packages/core/src/strategy/swarm.ts:973
-      - packages/core/src/strategy/swarm.ts:1043
+      - packages/core/src/strategy/swarm.ts#arbitrateBranch
+      - packages/core/src/strategy/swarm.ts#BranchProposal
+      - packages/core/src/strategy/swarm.ts#BRANCH_PROPOSAL_WIDTH
+      - packages/core/src/strategy/swarm.ts#ResolvedSwarmCaps
     remainingEvidence:
       - That a tool which can only refuse is omitted from the assembled surface is a tool-assembly property Lean does not see and a containment test covers
       - The shipped arbiter (swarm.ts arbitrateBranch, debited in swarm-budget.ts) is a hand-written port of this definition rather than one refined from it, so fidelity rests on reading the two side by side
@@ -648,8 +647,8 @@ requirements:
       - Proteus.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
       - Proteus.Exploration.Isolation.agent_node_step_is_representable
     tsRefs:
-      - packages/cf-backend/src/exploration.ts:6
-      - packages/core/src/strategy/swarm.ts:19
+      - packages/cf-backend/src/exploration.ts#ExplorationAgent
+      - packages/core/src/strategy/swarm.ts#SWARM_UNITS
     remainingEvidence:
       - This requirement deliberately proves NO agent-node isolation property; unit:'trajectory' is blocked on per-node workspace isolation which does not exist
       - An agent-node region needs a new action with a fresh provably-disjoint storage id per node and its own preservation proof
@@ -659,8 +658,8 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/strategy/objective.ts:108
-      - packages/core/src/strategy/objective.ts:137
+      - packages/core/src/strategy/objective.ts#Unmeasurable
+      - packages/core/src/strategy/objective.ts#Verifier
     remainingEvidence:
       - A counterfactual about a verifier's behaviour on unseen inputs needs a semantics for the verifier, which the abstract model does not have
       - Section 3.8 B1 supplies an observable surrogate, modelled under PR-DISCRIM-001, and the two claims are not the same claim
@@ -669,8 +668,8 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/strategy/objective.ts:288
-      - packages/core/src/strategy/objective.ts:467
+      - packages/core/src/strategy/objective.ts#PublicationState
+      - packages/core/src/strategy/records.ts#recordExploration
     remainingEvidence:
       - A concurrent model, or a store-level conditional write on the seal, is required and neither exists
       - The records store is a read-modify-write surface, so this is where the gap would bite first
@@ -679,8 +678,8 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/strategy/objective.ts:351
-      - packages/core/src/strategy/swarm.ts:83
+      - packages/core/src/strategy/objective.ts#Floor.bestKnownHonest
+      - packages/core/src/strategy/swarm.ts#SwarmSettleReport
     remainingEvidence:
       - The claim needs a distribution over candidate quality and a discrimination parameter, neither of which the abstract model has
       - The useful half even unproved is that a run must report gain decay rather than imply the surface is exhausted, and nothing reports it yet
@@ -711,10 +710,10 @@ requirements:
       - Proteus.Exploration.RecordsStore.a_cleared_seal_records_again
       - Proteus.Exploration.RecordsStore.a_breach_seals_the_store
     tsRefs:
-      - packages/core/src/strategy/records.ts:429
-      - packages/core/src/strategy/records.ts:444
-      - packages/core/src/strategy/records.ts:466
-      - packages/core/src/strategy/objective.ts:711
+      - packages/core/src/strategy/records.ts#recordExploration
+      - packages/core/src/strategy/records.ts#bestInCell
+      - packages/core/src/strategy/records.ts#NO_LIMIT
+      - packages/core/src/strategy/objective.ts#InstancedObjective
     remainingEvidence:
       - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled and no strengthening of these theorems reaches it
       - The strictness of the comparison is proved NOT to be what makes the store monotone, so relaxing it needs a mutation test rather than a theorem here
@@ -745,10 +744,10 @@ requirements:
       - Proteus.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
       - Proteus.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
     tsRefs:
-      - packages/core/src/strategy/archive.ts:32
-      - packages/core/src/strategy/archive.ts:238
-      - packages/core/src/strategy/archive.ts:240
-      - packages/core/src/strategy/archive.ts:242
+      - packages/core/src/strategy/archive.ts#admitToArchive
+      - packages/core/src/strategy/archive.ts#noveltyDistance
+      - packages/core/src/strategy/archive.ts#ArchiveCell
+      - packages/core/src/strategy/records.ts#cellOccupants
     remainingEvidence:
       - archive.ts:32-39 states that the admission test bounds a cell's POPULATION; separated_cells_are_unboundedly_large refutes that, so the absence of an eviction rule is unjustified and the cell is unbounded in mutually-novel members
       - cellOccupants carries no LIMIT, so admission is a linear read of a cell this requirement proves unbounded, and that cost is recorded rather than modelled
@@ -789,10 +788,9 @@ requirements:
       - Proteus.Exploration.FanIn.an_orderable_set_applies_every_member
       - Proteus.Exploration.FanIn.the_offered_order_can_fail_rule_one
     tsRefs:
-      - packages/core/src/strategy/merge-back.ts:483
-      - packages/core/src/strategy/merge-back.ts:489
-      - packages/core/src/strategy/merge-back.ts:493
-      - packages/core/src/strategy/merge-back.ts:611
+      - packages/core/src/strategy/merge-back.ts#MergeOrder
+      - packages/core/src/strategy/merge-back.ts#dependencyOrder
+      - packages/core/src/strategy/merge-back.ts#mergeBack
     remainingEvidence:
       - The ordering is proved over declared edges only; whether a member's declaration matches the files it actually touches is outside the model
       - The sweep bound's general adequacy is not proved, only shown tight on the worst case, so a bound reduced below the member count would produce a false cycle refusal that no theorem here rules out
@@ -823,10 +821,11 @@ requirements:
       - Proteus.Exploration.Rebase.the_rebase_stops_at_the_stale_member
       - Proteus.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
     tsRefs:
-      - packages/core/src/strategy/merge-back.ts:180
-      - packages/core/src/strategy/merge-back.ts:196
-      - packages/core/src/strategy/merge-back.ts:746
-      - packages/core/src/strategy/merge-back.ts:793
+      - packages/core/src/strategy/merge-back.ts#MemberVerdict
+      - packages/core/src/strategy/merge-back.ts#memberDigestOf
+      - packages/core/src/strategy/merge-back.ts#baseDigestOf
+      - packages/core/src/strategy/merge-back.ts#gate
+      - packages/core/src/strategy/merge-back.ts#reverified
     remainingEvidence:
       - The digests are modelled as the argument tuples argumentDigest hashes, so every result reads up to a SHA-256 collision rather than ruling one out
       - Rule 4 is proved to have teeth but its precedence over rule 6 is not modelled, and the source records that the opposite order would leave this comparison as dead code
@@ -852,11 +851,11 @@ requirements:
       - Proteus.Storage.SnapshotChain.first_base_upper_bound
       - Proteus.Storage.SnapshotChain.unchanged_tick_uploads_nothing
     tsRefs:
-      - packages/devbox/src/snapshot-chain.ts:580
-      - packages/devbox/src/snapshot-chain.ts:314
-      - packages/devbox/src/snapshot-chain.ts:81
-      - packages/devbox/src/storage.ts:95
-      - packages/devbox/src/storage.ts:98
+      - packages/devbox/src/snapshot-chain.ts#SnapshotChainPorts
+      - packages/devbox/src/snapshot-chain.ts#baseObjectKey
+      - packages/devbox/src/snapshot-chain.ts#CHAIN_STORE_MOUNT
+      - packages/devbox/src/snapshot-chain.ts#CHAIN_EXCLUDES
+      - packages/devbox/src/storage.ts#CheckpointOutcome
     remainingEvidence:
       - The tick bound is c minus excluded bytes rather than O(p), so a box whose pending change is far smaller than its cumulative unexcluded changed-set pays that set on every commit; no theorem weakens it into a pending-shaped bound
       - Uploaded bytes are modelled as the upper directory's size while the real archive is squashfs-compressed, so the constant relating the two is the deployed bench's and not this model's
@@ -880,12 +879,12 @@ requirements:
       - Proteus.Storage.SnapshotChain.a_partial_sweep_is_re_runnable
       - Proteus.Storage.SnapshotChain.without_a_sweep_the_population_grows
     tsRefs:
-      - packages/devbox/src/snapshot-chain.ts:133
-      - packages/devbox/src/snapshot-chain.ts:117
-      - packages/devbox/src/snapshot-chain.ts:278
-      - packages/devbox/src/snapshot-chain.ts:876
-      - packages/devbox/src/snapshot-chain.ts:981
-      - packages/devbox/src/storage.ts:30
+      - packages/devbox/src/snapshot-chain.ts#REBASE_DELTA_RATIO
+      - packages/devbox/src/snapshot-chain.ts#shouldRebase
+      - packages/devbox/src/snapshot-chain.ts#supersedeGeneration
+      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
+      - packages/devbox/src/snapshot-chain.ts#CHAIN_EXCLUDES
+      - packages/devbox/src/storage.ts#CheckpointKind
     remainingEvidence:
       - The amortization is stated with the rebase predicate itself as its hypothesis, so it holds at a quiesce and is silent between two of them; a tick past the ratio provably still uploads the whole cumulative set, which makes the honest bound per-box-lifetime with a quiesce boundary rather than per-checkpoint
       - REBASE_DELTA_RATIO is derived from a break-even argument and not measured, so the k every theorem quantifies over has no production value behind it yet
@@ -927,14 +926,14 @@ requirements:
       - Proteus.Storage.OverlayCas.a_rename_stages_no_bytes
       - Proteus.Storage.OverlayCas.a_fresh_write_stages_its_bytes
     tsRefs:
-      - packages/devbox/src/overlay-cas.ts:128
-      - packages/devbox/src/cas/sync.ts:58
-      - packages/devbox/src/cas/sync.ts:128
-      - packages/devbox/src/cas/sync.ts:237
-      - packages/devbox/src/cas/journal.ts:97
-      - packages/devbox/src/cas/types.ts:142
-      - packages/devbox/src/object-store.ts:18
-      - packages/devbox/src/storage.ts:98
+      - packages/devbox/src/overlay-cas.ts#OverlayCasPorts
+      - packages/devbox/src/cas/sync.ts#StageBlobsOptions
+      - packages/devbox/src/cas/sync.ts#uploadChunks
+      - packages/devbox/src/cas/sync.ts#foldJournalIntoTree
+      - packages/devbox/src/cas/journal.ts#listJournalAfter
+      - packages/devbox/src/cas/types.ts#FilePartSchema
+      - packages/devbox/src/object-store.ts#SMALL_PUT_BYTES
+      - packages/devbox/src/storage.ts#CheckpointOutcome
     remainingEvidence:
       - The quiesce fold rewrites the manifest over every path and is linear in the tree, which is the one term in this design that is not sub-linear and is proved rather than excluded
       - Class-A operations are counted as staged blobs while the real count is the pending change divided by the eight-megabyte single-put ceiling, so the divisor is the deployed bench's constant
@@ -967,10 +966,10 @@ requirements:
       - Proteus.Storage.OverlayCas.a_quiesce_folds_and_advances
       - Proteus.Storage.OverlayCas.the_reversed_order_does_nothing
     tsRefs:
-      - packages/devbox/src/cas/sync.ts:128
-      - packages/devbox/src/cas/sync.ts:211
-      - packages/devbox/src/cas/journal.ts:119
-      - packages/devbox/src/storage.ts:30
+      - packages/devbox/src/cas/sync.ts#uploadChunks
+      - packages/devbox/src/cas/sync.ts#foldJournalIntoTree
+      - packages/devbox/src/cas/journal.ts#pendingBatches
+      - packages/devbox/src/storage.ts#CheckpointKind
     remainingEvidence:
       - A crash is modelled as stopping at a prefix of one sequential action list, so two writers racing on one prefix is outside the model exactly as it is in every other file of this corpus
       - The state is counters rather than named blobs, so the invariant is about how many effects reached each stage and not about which blob a particular journal entry names
@@ -992,9 +991,9 @@ requirements:
       - Proteus.Storage.OverlayCas.batch_trace_invariant
       - Proteus.Storage.OverlayCas.batch_crash_loss_le_writes_since_tick
     tsRefs:
-      - packages/devbox/src/snapshot-chain.ts:1207
-      - packages/devbox/src/devbox.ts:1371
-      - packages/devbox/src/cas/sync.ts:50
+      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
+      - packages/devbox/src/snapshot-chain.ts#shouldCheckpoint
+      - packages/devbox/src/cas/sync.ts#StageBlobsResult
     remainingEvidence:
       - Snapshot-chain's tick is modelled as one atomic pointer commit; overlay-cas is modelled separately as a durable per-batch prefix, so exact equality is claimed only for the chain and an upper bound for overlay-cas
       - The wall-clock width is checkpoint cadence plus one in-flight operation, a scheduling fact the counter models do not see
@@ -1055,17 +1054,16 @@ requirements:
       - Proteus.Storage.DurableRoot.root_set_race_witness
       - Proteus.Storage.DurableRoot.container_onstart_activation_memory_witness
     tsRefs:
-      - packages/devbox/src/durability/contracts.ts:17
-      - packages/devbox/src/durability/contracts.ts:24
-      - packages/devbox/src/durability/contracts.ts:35
-      - packages/devbox/src/durability/contracts.ts:58
-      - packages/devbox/src/durability/contracts.ts:101
-      - packages/devbox/src/durability/contracts.ts:119
-      - scripts/fixtures/storage-matrix/manifest.ts:43
-      - scripts/fixtures/storage-matrix/manifest.ts:44
-      - scripts/fixtures/storage-matrix/manifest.ts:50
+      - packages/devbox/src/durability/contracts.ts#ImmutableObjectRefSchema
+      - packages/devbox/src/durability/contracts.ts#ObjectReceiptSchema
+      - packages/devbox/src/durability/contracts.ts#CapturedCutSchema
+      - packages/devbox/src/durability/contracts.ts#HeadPointerV1Schema
+      - packages/devbox/src/durability/contracts.ts#RangeReadIntentSchema
+      - packages/devbox/src/durability/contracts.ts#OperationBaseEntries
+      - packages/devbox/src/durability/contracts.ts#DURABILITY_AWAIT_POINTS
+      - scripts/fixtures/storage-matrix/manifest.ts#STORAGE_FAULTS
     remainingEvidence:
       - The model is a single durable owner, so concurrent writers need a production conditional-write proof and fault test
       - Atomic R2 PUT, read-after-write, atomic SQL transaction, capture soundness, collision resistance and grant confinement remain explicit premises rather than kernel axioms
-      - The await-name register is copied from the frozen contract because the current traceability gate has no registered mirror for DURABILITY_AWAIT_POINTS
+      - The await-name register is copied from the frozen contract; the gate now holds AwaitPoint equal to DURABILITY_AWAIT_POINTS as a set, and nothing checks that the two orders agree
       - The model proves no unconditional deadline exists in its transition system, while deployment latency and provider limits require measured evidence

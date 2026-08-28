@@ -23,6 +23,8 @@ import type { EvalInstance } from './gepa/types';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { reconcileColumns } from '../identity/columns';
+import { hasPaneStore } from '../identity/conversation-store';
+import { uiMessageText } from '../utils/ui-message';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 import { RunEventRecorder } from '../events/recorder';
 import { nanoid } from '../utils/nanoid';
@@ -31,6 +33,7 @@ import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } fr
 import { tolerate } from '../obs/index';
 import { isFailingResultText } from '../execution/exec-result';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
+import { conversationTurnPair } from '../identity/conversation-store';
 import {
   ADVISOR_CLASS_LABEL, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema,
   type AdvisorNoteClass, type AdvisorSeverity,
@@ -403,6 +406,16 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
     execRaw(`INSERT OR IGNORE INTO lessons SELECT * FROM lessons_legacy`);
     execRaw(`DROP TABLE lessons_legacy`);
   }
+  // The generated pattern, held between the model call that produced it and the
+  // crafted tool it becomes. Same shape and same reason as `sleep_time_updates`:
+  // the answer is expensive and the application is not atomic with it, so a
+  // replay applies what was DECIDED rather than asking a model that may decide
+  // differently. Retired as soon as its tombstone lands.
+  execRaw(`CREATE TABLE IF NOT EXISTS pattern_extractions (
+    effect_key TEXT PRIMARY KEY,
+    answer     TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
   execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
   const lessonsDdl = tableDdl('lessons');
   if (lessonsDdl !== null && LESSON_SOURCES.some((source) => !lessonsDdl.includes(`'${source}'`))) {
@@ -615,12 +628,34 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
  *
  *  The filter is applied to the EFFECTIVE verdicts, so `limit` bounds the rows
  *  actually wanted without silently dropping the rare outcomes
- *  (`corrected`/`frustrated` — the only ones the optimizer learns from). */
+ *  (`corrected`/`frustrated` — the only ones the optimizer learns from).
+ *
+ *  A NEGATIVE `limit` is unbounded — the same sentinel
+ *  `selectEffectiveTurnOutcomes` already speaks internally. A caller that must
+ *  filter the rows itself before cutting them (evolution debt excludes the turns
+ *  a refinement already took) cannot use a window: the rows it wants may sit
+ *  behind any number of rows it does not.
+ *
+ *  `turnIds` narrows to a NAMED trajectory rather than a window: a refinement
+ *  reviews the turns its request captured, which may be older than any limit
+ *  would reach. Filtered here on the effective verdicts, exactly as
+ *  `hasNegativeOutcome` does, so the precedence rule stays in one place. */
 export function listTurnOutcomes(
   sql: SqlExecutor,
-  opts: { limit?: number; outcomes?: ReadonlyArray<TurnOutcome> } = {},
+  opts: {
+    limit?: number;
+    outcomes?: ReadonlyArray<TurnOutcome>;
+    turnIds?: ReadonlyArray<string>;
+  } = {},
 ): TurnOutcomeRow[] {
-  return selectEffectiveTurnOutcomes(sql, opts.limit ?? 50, opts.outcomes);
+  if (opts.turnIds === undefined) {
+    return selectEffectiveTurnOutcomes(sql, opts.limit ?? 50, opts.outcomes);
+  }
+  if (opts.turnIds.length === 0) return [];
+  const wanted = new Set(opts.turnIds);
+  return selectEffectiveTurnOutcomes(sql, undefined, opts.outcomes)
+    .filter((row) => row.turnId !== null && wanted.has(row.turnId))
+    .slice(0, opts.limit ?? wanted.size);
 }
 
 /** One effective-verdict read over the append-only ledger, shared by every
@@ -663,6 +698,31 @@ export function takePickOutcome(sql: SqlExecutor, turnId: string | null | undefi
     SELECT outcome FROM turn_outcomes
     WHERE turn_id = ${turnId} AND source = 'take_pick' LIMIT 1`;
   return rows[0]?.outcome ?? null;
+}
+
+/**
+ * The verdict a turn's review already RECORDED, for a retry resuming its
+ * suffix.
+ *
+ * A review is a chain of governed model calls, so a retry after a refusal
+ * re-classifies — and a classifier that answers differently the second time
+ * would run corroboration, import settlement, reflection and pattern extraction
+ * against a verdict the ledger does not hold. The recorded row is the verdict.
+ * Ranked exactly as {@link selectEffectiveTurnOutcomes} ranks it, so this reads
+ * the same answer the rest of the system does.
+ */
+export function recordedTurnVerdict(
+  sql: SqlExecutor, turnId: string | null | undefined,
+): { outcome: TurnOutcome; source: TurnOutcomeSource; confidence: number } | null {
+  if (!turnId) return null;
+  const rows = sql<{ outcome: TurnOutcome; source: TurnOutcomeSource; confidence: number }>`
+    SELECT outcome, source, confidence FROM turn_outcomes
+    WHERE turn_id = ${turnId}
+    ORDER BY CASE source WHEN 'explicit' THEN 0 WHEN 'take_pick' THEN 1
+             WHEN 'classifier' THEN 2 WHEN 'execution' THEN 3 ELSE 4 END ASC,
+             created_at DESC, id DESC
+    LIMIT 1`;
+  return rows[0] ?? null;
 }
 
 /** True when any of the given turn ids has an EFFECTIVE corrected/frustrated
@@ -803,12 +863,6 @@ export interface OutcomeEvalSplit {
   degeneracy: OutcomeSplitDegeneracy | null;
 }
 
-interface TurnMessageWindow {
-  userMessage: string;
-  startedAt: number;
-  endedAt: number;
-}
-
 /** Only the discriminant and the timestamp are read here: what a turn DID now
  *  comes from the step transcript, not from event names. */
 interface StoredRunEvent {
@@ -872,19 +926,18 @@ function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRec
  *  no tools" — the shape a blanket catch used to give it. */
 function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | undefined {
   if (!turnId) return undefined;
-  const window = sql<TurnMessageWindow>`
-    SELECT u.content AS userMessage, u.created_at AS startedAt, a.created_at AS endedAt
-    FROM messages a JOIN messages u ON u.id = a.parent_id
-    WHERE a.id = ${turnId} LIMIT 1`[0];
-  if (!window) return undefined;
+  // INNER-join semantics preserved: a turn with no user row behind it has no
+  // window and no evidence.
+  const pair = conversationTurnPair(sql, turnId);
+  if (!pair || pair.request === null || pair.startedAtMs === null) return undefined;
 
-  const from = new Date(window.startedAt).toISOString();
-  const to = new Date(window.endedAt).toISOString();
+  const from = new Date(pair.startedAtMs).toISOString();
+  const to = new Date(pair.endedAtMs).toISOString();
   const starts = sql<{ runId: string; payload: string }>`
     SELECT run_id AS runId, payload FROM run_events
     WHERE type = 'run_start' AND ts >= ${from} AND ts <= ${to}
     ORDER BY ts DESC LIMIT 20`;
-  const expectedUserMessage = window.userMessage.slice(0, 500);
+  const expectedUserMessage = pair.request.slice(0, 500);
   const runId = starts.find(({ payload }) => {
     const parsed = v.safeParse(ChatRunStartSchema, parseJsonValue(payload));
     return parsed.success && parsed.output.userMessage === expectedUserMessage;
@@ -935,6 +988,16 @@ interface RawAdvisorRow {
   turnId: string; userMessage: string; assistantResponse: string;
 }
 
+/** The pane arm selects the raw serialized UI message under the same column
+ *  names; its text parts are flattened here so both arms return one shape. */
+function flattenAdvisorTexts(row: RawAdvisorRow): RawAdvisorRow {
+  return {
+    ...row,
+    assistantResponse: uiMessageText(row.assistantResponse),
+    userMessage: uiMessageText(row.userMessage),
+  };
+}
+
 /**
  * Advisor notes that grade a turn nothing else graded, newest first.
  *
@@ -960,15 +1023,28 @@ interface RawAdvisorRow {
  */
 function advisorNegatives(sql: SqlExecutor, limit: number): AdvisorNegativeRow[] {
   if (limit <= 0) return [];
-  const rows = sql<RawAdvisorRow>`
-    SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
-           turn.id AS turnId, turn.content AS assistantResponse, ask.content AS userMessage
-    FROM evolution_events e
-    JOIN messages turn ON turn.id = json_extract(e.data, '$.turnId')
-    JOIN messages ask ON ask.id = turn.parent_id
-    WHERE e.type = ${ADVISOR_EVENT_TYPE}
-      AND NOT EXISTS (SELECT 1 FROM turn_outcomes o WHERE o.turn_id = turn.id)
-    ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`;
+  // The conversation comes from the canonical store: the pane's serialized UI
+  // rows where the backend keeps one, plain `messages` otherwise — the same
+  // authority every other conversational reader answers from.
+  const rows = hasPaneStore(sql)
+    ? sql<RawAdvisorRow>`
+        SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
+               turn.id AS turnId, turn.content AS assistantResponse, ask.content AS userMessage
+        FROM evolution_events e
+        JOIN assistant_messages turn ON turn.id = json_extract(e.data, '$.turnId')
+        JOIN assistant_messages ask ON ask.id = turn.parent_id
+        WHERE e.type = ${ADVISOR_EVENT_TYPE}
+          AND NOT EXISTS (SELECT 1 FROM turn_outcomes o WHERE o.turn_id = turn.id)
+        ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`.map(flattenAdvisorTexts)
+    : sql<RawAdvisorRow>`
+        SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
+               turn.id AS turnId, turn.content AS assistantResponse, ask.content AS userMessage
+        FROM evolution_events e
+        JOIN messages turn ON turn.id = json_extract(e.data, '$.turnId')
+        JOIN messages ask ON ask.id = turn.parent_id
+        WHERE e.type = ${ADVISOR_EVENT_TYPE}
+          AND NOT EXISTS (SELECT 1 FROM turn_outcomes o WHERE o.turn_id = turn.id)
+        ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`;
   return rows.map((row) => {
     const data = v.parse(AdvisorRowDataSchema, parseJsonValue(row.data));
     return {
@@ -1169,12 +1245,23 @@ export function recordLesson(sql: SqlExecutor, input: {
   source: LessonSource;
   status: LessonStatus;
   now?: number;
+  /**
+   * The STABLE identity of the work that produced this lesson, for a caller that
+   * owes it once.
+   *
+   * A fresh id makes every retry a new row: a reflection whose tombstone had not
+   * landed, or an import promoted twice across an interruption, each appended a
+   * second copy that later prompts then wove in. Keyed, the retry writes the row
+   * it already wrote. Absent for a caller with nothing to replay it.
+   */
+  key?: string;
 }): string {
-  const id = `lsn-${nanoid()}`;
+  const id = input.key === undefined ? `lsn-${nanoid()}` : `lsn-${input.key}`;
   const now = input.now ?? nowMs();
   void sql`INSERT INTO lessons (id, turn_ids, text, source, status, created_at, corroborated_at)
       VALUES (${id}, ${JSON.stringify(input.turnIds)}, ${input.text}, ${input.source},
-              ${input.status}, ${now}, ${input.status === 'corroborated' ? now : null})`;
+              ${input.status}, ${now}, ${input.status === 'corroborated' ? now : null})
+      ON CONFLICT(id) DO NOTHING`;
   return id;
 }
 

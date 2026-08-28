@@ -261,7 +261,7 @@ streamText({ model, prompt, ...effortFor('scaffold_mutation') });
 ```
 
 `chat`, `judge`, `mcts_judge`, `head_merge` use medium; `reflection`,
-`mcts_rollout`, `rlm_subcall`, `memory_compress` use low;
+`mcts_rollout`, `memory_compress` use low;
 `scaffold_mutation` uses high. Effort, not an output-token cap, is the
 cheapness lever on most paths.
 
@@ -271,7 +271,7 @@ cheapness lever on most paths.
 native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
 line 81 marks 8 native tools: `execute_tools`, `run`, `file`, `agents`,
 `memory`, `tasks`, `web`, `report`; `actorActiveTools()` narrows them per
-actor. `release`, `agent`, `llm` are codemode-only. `skills` is neither: a
+actor. `release` and `agent` are codemode-only. `skills` is neither: a
 SKILL.md is an ordinary `/workspace/skills/` path on the VFS that
 `workspace.*` already addresses. A dedicated surface would be a third path to
 the same bytes. See [TOOLS.md](./TOOLS.md) for the full list and the
@@ -289,8 +289,6 @@ Inside `execute_tools`, the LLM also sees:
 - `release.*`, `agent.*`: no native tool. The orchestrator gets both from
   `extraCodemodeProviders()` (`cf-backend/src/orchestrator.ts:798-803`); a
   subordinate returns only a report provider and gets neither.
-- `llm.query(text, opts?)`: Recursive Language Models. A sub-call has no
-  `llm.query`, so depth is 1 by construction.
 - Crafted tools: `tools.<name>(args)` literals injected into lexical scope by
   the preamble (`cf-backend/src/crafted-tool-registry.ts`).
 
@@ -393,7 +391,7 @@ Core owns these six turn parts. Check it before writing one in a backend.
 | What | Core owns | A backend supplies |
 |---|---|---|
 | The `model_call` event | `buildModelCallEvent(report, opts)` (`core/src/events/model-call-event.ts:43`) over a `ModelCallReport` (`core/src/events/model-call.ts:114`) | the sink that writes the row |
-| Turn settle | `AgentOrchestrator.settleTurn` (`core/src/orchestrator/agent-orchestrator.ts:640`) | the driver's verdict; cf calls it from `ActorAgent.settleTurnSpine` (`cf-backend/src/actor-agent.ts:1742`), the CLI from `cli-backend/src/local-session.ts:2353` |
+| Turn settle | `AgentOrchestrator.settleTurn` (`core/src/orchestrator/agent-orchestrator.ts`) | the driver's verdict; both backends now drive settlement through `TerminalTransitions.settle` (`core/src/orchestrator/terminal-transition.ts`), whose effect table records the turn |
 | Steer provenance | `STEER_METADATA_KEY` and `STEER_STEP_METADATA_KEY` (`core/src/orchestrator/user-steer.ts:175-180`) | nothing; both backends stamp the same two keys |
 | Auto-title | `planWorkspaceTitle` and `applyWorkspaceTitle` (`core/src/identity/naming.ts:192`, `:211`) | `ownMission()` and `persistAutoTitle()`; the CLI wraps them in `autoTitleLocalWorkspace` (`cli/src/local-agent-client.ts:168`) |
 | Provider snapshot cache | `ProviderListingCache` and `buildProviderCatalogSnapshot` (`core/src/profiles/provider-catalog.ts:106`, `:53`) | the sweep that lists providers |
@@ -402,25 +400,35 @@ Core owns these six turn parts. Check it before writing one in a backend.
 One `model_call` builder gives a spend census one row shape. One
 `DEFAULT_ROLE_ID` stops a hardcoded `'general'` drifting from its catalog.
 
-## Worked example: Recursive Language Models
+## Worked example: a temporary agent per question
 
-`packages/core/src/rlm.ts` is already built, 165 lines measured 2026-08-24:
+`agents({action:'ask', role, message})` adds a lifetime to the delegation
+ladder without adding a table, a loop or a facet builder:
 
-1. Build a `query(text, opts?)` codemode provider
-   (`createRLMProvider`, `core/src/rlm.ts:94`).
-2. Resolve models through the provider registry, including a per-call `model`
-   override.
-3. Register it beside crafted-tool and executor providers:
-   `cf-backend/src/execute-tools.ts:88` for cloud,
-   `cli-backend/src/local-session.ts:1158` for CLI. For an actor namespace,
-   return it from `extraCodemodeProviders()`.
-4. Teach the LLM through the prompt template, never a literal. The `llm.query`
-   paragraph is in `CODE_EXECUTION_SECTION`
-   (`core/src/prompting/section-templates.ts:210`) behind
-   `{{#if rlmAvailable}}`; `core/src/prompt.ts:233` renders it with the
-   backend-wired flag.
+1. Declare the rung once. `DELEGATION_RUNGS.temporary`
+   (`core/src/tools/registry.ts`) is the selection doctrine every surface
+   renders; `ASK_ROLE_FIELDS` and `AgentsActionInputVariant.excludes`
+   (`core/src/tools/agents-tool.ts`) make `agent` and `role` exclusive in the
+   advertised JSON Schema, the sandbox declaration and the dispatch.
+2. Reuse the child substrate. `createTemporaryAgentPort`
+   (`core/src/subordinates/temporary.ts`) drives the same `SubordinateRuntime` a
+   hire drives — spawn, assign, dismiss — so the child is a real actor with its
+   own window, tool loop and delegation surface until the depth cap. The three
+   modules split by layer: `roster.ts` is the store, `support.ts` the
+   orchestration policy over it, `temporary.ts` this rung.
+3. Book it in the ONE roster. `workspace_subordinates` gains `lifetime` and the
+   `task_event_id` of the open assignment; a task-lifetime row is listed while
+   it works and archived when it answers. No second table and no second read
+   model.
+4. Correlate through the event log. The assignment is a `subordinate_task`
+   event and the answer a `subordinate_report` citing it. A live waiter consumes
+   that report inline so the asking call returns it; with no waiter the report
+   stays an ordinary correlated event that wakes the parent.
+5. Teach the LLM through the prompt template, never a literal. The bullet is in
+   `CODE_EXECUTION_SECTION` and `DELEGATION_SECTION`, gated on
+   `PromptSurface.temporaryAsk`.
 
-The same template applies to any new tool LLM-authored code can call in the
+The same template applies to any new rung LLM-authored code can call in the
 codemode sandbox.
 
 ## What is wired today

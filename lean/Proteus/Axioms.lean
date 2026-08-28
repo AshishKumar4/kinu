@@ -386,6 +386,8 @@ import Proteus.Storage.DurableRoot
 #print axioms Proteus.Exploration.Records.single_component_is_argmax
 #print axioms Proteus.Exploration.Records.front_subset
 #print axioms Proteus.Exploration.Records.front_undominated
+#print axioms Proteus.Exploration.Records.frontier_nondominance
+#print axioms Proteus.Exploration.Records.accepted_advance_preserves_objective_evidence
 #print axioms Proteus.Exploration.Records.front_insert_no_loss
 #print axioms Proteus.Exploration.Records.front_can_shrink
 

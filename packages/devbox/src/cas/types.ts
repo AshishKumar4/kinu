@@ -25,11 +25,19 @@
  */
 import * as v from 'valibot';
 
+export const CAS_FORMAT_VERSION = 2;
+
 export type Sha256Hex = string;
-export type ChunkRef = {
+export type FileDataPart = {
+  kind: 'data';
   hash: Sha256Hex;
   size: number;
 };
+export type FileHolePart = {
+  kind: 'hole';
+  size: number;
+};
+export type FilePart = FileDataPart | FileHolePart;
 
 export type FileEntry = {
   kind: 'file';
@@ -39,7 +47,7 @@ export type FileEntry = {
   mtimeMs: number;
   size: number;
   hash: Sha256Hex;
-    chunks: readonly ChunkRef[];
+  parts: readonly FilePart[];
 };
 
 export type DirEntry = {
@@ -61,6 +69,15 @@ export type SymlinkEntry = {
     mtimeMs: number;
 };
 
+export type HardlinkEntry = {
+  kind: 'hardlink';
+  seq: number;
+  path: string;
+  target: string;
+  mode: number;
+  mtimeMs: number;
+};
+
 /** A tombstone. Survives replay as an upper-layer whiteout and a fold as a delete. */
 export type DeleteEntry = {
   kind: 'delete';
@@ -68,8 +85,8 @@ export type DeleteEntry = {
     path: string;
 };
 
-export type JournalEntry = FileEntry | DirEntry | SymlinkEntry | DeleteEntry;
-export type PresentEntry = FileEntry | DirEntry | SymlinkEntry;
+export type JournalEntry = FileEntry | DirEntry | SymlinkEntry | HardlinkEntry | DeleteEntry;
+export type PresentEntry = FileEntry | DirEntry | SymlinkEntry | HardlinkEntry;
 
 /**
  * Distributive on purpose: a bare `Omit` over a union collapses to the keys its
@@ -111,13 +128,17 @@ const PathSchema = v.pipe(
   v.string(),
   v.check(isCanonicalJournalPath, 'Expected a canonical relative journal path'),
 );
-/** A CHUNK's size. Integral because it is a byte count, and at least 1 because
- *  a zero-length chunk is meaningless — it would name a blob holding nothing.
- *  Deliberately a different bound from a FILE's size below, which may be 0. */
-const ChunkSchema = v.object({
+const PartSizeSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
+const DataPartSchema = v.object({
+  kind: v.literal('data'),
   hash: HashSchema,
-  size: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  size: PartSizeSchema,
 });
+const HolePartSchema = v.object({
+  kind: v.literal('hole'),
+  size: PartSizeSchema,
+});
+const FilePartSchema = v.union([DataPartSchema, HolePartSchema]);
 
 export const FileEntrySchema = v.object({
   kind: v.literal('file'),
@@ -128,7 +149,7 @@ export const FileEntrySchema = v.object({
   /** A FILE's size. Zero is ordinary: an empty file is a real file. */
   size: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   hash: HashSchema,
-  chunks: v.array(ChunkSchema),
+  parts: v.array(FilePartSchema),
 });
 export const DirEntrySchema = v.object({
   kind: v.literal('dir'),
@@ -146,23 +167,40 @@ export const SymlinkEntrySchema = v.object({
   mode: v.number(),
   mtimeMs: v.number(),
 });
+export const HardlinkEntrySchema = v.object({
+  kind: v.literal('hardlink'),
+  seq: SeqSchema,
+  path: PathSchema,
+  target: PathSchema,
+  mode: v.number(),
+  mtimeMs: v.number(),
+});
 export const DeleteEntrySchema = v.object({
   kind: v.literal('delete'),
   seq: SeqSchema,
   path: PathSchema,
 });
 export const PresentEntrySchema = v.union([
-  FileEntrySchema, DirEntrySchema, SymlinkEntrySchema,
+  FileEntrySchema, DirEntrySchema, SymlinkEntrySchema, HardlinkEntrySchema,
 ]);
 export const JournalEntrySchema = v.union([
-  FileEntrySchema, DirEntrySchema, SymlinkEntrySchema, DeleteEntrySchema,
+  FileEntrySchema, DirEntrySchema, SymlinkEntrySchema, HardlinkEntrySchema, DeleteEntrySchema,
 ]);
-export const JournalBatchSchema = v.array(JournalEntrySchema);
+export const ManifestSchema = v.strictObject({
+  version: v.literal(CAS_FORMAT_VERSION),
+  entries: v.array(PresentEntrySchema),
+});
+export const JournalBatchSchema = v.strictObject({
+  version: v.literal(CAS_FORMAT_VERSION),
+  entries: v.array(JournalEntrySchema),
+});
 
 /** The cursor. `foldedSeq` is REQUIRED: `advanceCursor` has always written it,
  *  so a cursor object without it was not written by this code. */
-export const CursorSchema = v.object({ foldedSeq: SeqSchema });
-
+export const CursorSchema = v.strictObject({
+  version: v.literal(CAS_FORMAT_VERSION),
+  foldedSeq: SeqSchema,
+});
 export interface StoreCounters {
   putCalls: number;
   getCalls: number;
@@ -262,11 +300,17 @@ export function treeKey(path: string): string {
 /**
  * Anything `JSON.stringify` can serialize without surprise. Local rather than
  * imported because the package's independence rule forbids reaching into the
- * product's core, and the shape is three lines.
+ * product's core, and the shape is four lines.
+ *
+ * A member may be `undefined` because an optional field is how these rows
+ * spell "absent" and `JSON.stringify` drops it; the top level may not, because
+ * `JSON.stringify(undefined)` is not JSON at all.
  */
-export type JsonSerializable = string | number | boolean | null
-  | readonly JsonSerializable[]
-  | { readonly [key: string]: JsonSerializable };
+type JsonValue = string | number | boolean | null | undefined
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+export type JsonSerializable = readonly JsonValue[] | { readonly [key: string]: JsonValue };
 
 export function encodeJson(value: JsonSerializable): Uint8Array {
   return new TextEncoder().encode(`${JSON.stringify(value)}\n`);

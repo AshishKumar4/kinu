@@ -61,6 +61,65 @@ describe('ConversationSearchStore.search', () => {
     expect(hits.length).toBe(2);
   });
 
+  // KINU-044: broadening ran only when the strict page came back EMPTY, so an
+  // underfull strict page stayed underfull and dropped the relevant partials.
+  test('an underfull strict page is filled with ranked partial matches', () => {
+    const { sql, store } = setup();
+    const strict = insert(sql, 's1', 'user', 'wrangler staging deploy succeeded');
+    const partialA = insert(sql, 's2', 'user', 'wrangler tail is noisy');
+    const partialB = insert(sql, 's3', 'user', 'staging database was reseeded');
+    insert(sql, 's4', 'user', 'unrelated kubernetes ingress question');
+
+    const hits = store.search('wrangler staging', 5);
+    // The strict all-term hit leads and is not displaced; the two single-term
+    // messages fill the page behind it; the term-free message stays out.
+    expect(hits[0]!.messageId).toBe(strict);
+    expect(hits.map((hit) => hit.messageId).slice(1).sort())
+      .toEqual([partialA, partialB].sort());
+    expect(hits.length).toBe(3);
+  });
+
+  test('fills to exactly the requested capacity and never past it', () => {
+    const { sql, store } = setup();
+    const strict = insert(sql, 's0', 'user', 'alpha beta together');
+    for (let i = 0; i < 8; i++) insert(sql, `p${i}`, 'user', `alpha only number ${i}`);
+
+    const hits = store.search('alpha beta', 3);
+    expect(hits.length).toBe(3);
+    expect(hits[0]!.messageId).toBe(strict);
+  });
+
+  test('a partial match already held as a strict hit is not repeated', () => {
+    const { sql, store } = setup();
+    insert(sql, 's1', 'user', 'redis eviction policy discussion');
+    insert(sql, 's2', 'user', 'redis cluster resharding notes');
+    insert(sql, 's3', 'user', 'eviction of the stale cache entries');
+
+    const ids = store.search('redis eviction', 10).map((hit) => hit.messageId);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.length).toBe(3);
+  });
+
+  test('the merged page is stable across repeated identical searches', () => {
+    const { sql, store } = setup();
+    insert(sql, 's1', 'user', 'gamma delta');
+    for (let i = 0; i < 4; i++) insert(sql, `t${i}`, 'user', 'gamma alone');
+
+    const first = store.search('gamma delta', 4).map((hit) => hit.messageId);
+    expect(store.search('gamma delta', 4).map((hit) => hit.messageId)).toEqual(first);
+    expect(store.search('gamma delta', 4).map((hit) => hit.messageId)).toEqual(first);
+  });
+
+  test('a full strict page is returned untouched', () => {
+    const { sql, store } = setup();
+    for (let i = 0; i < 4; i++) insert(sql, `s${i}`, 'user', `epsilon zeta pair ${i}`);
+    insert(sql, 'partial', 'user', 'epsilon on its own');
+
+    const hits = store.search('epsilon zeta', 2);
+    expect(hits.length).toBe(2);
+    expect(hits.every((hit) => hit.conversationId !== 'partial')).toBe(true);
+  });
+
   test('excludes internal mcts rows and clamps limit', () => {
     const { sql, store } = setup();
     insert(sql, 'mcts', 'assistant', 'topicword inside the mcts tree');
@@ -134,5 +193,29 @@ describe('ConversationSearchStore.browse', () => {
     expect(conversations[1]!.startedAt).toBe(1000);
     expect(conversations[1]!.lastActiveAt).toBe(2000);
     expect(conversations[1]!.preview).toBe('old kickoff question');
+  });
+
+  test('reads non-default previews from messages when pane owns default chat', () => {
+    const { sql, execRaw } = createTestSql();
+    initAllTables(execRaw, sql);
+    execRaw(`CREATE TABLE assistant_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL DEFAULT '',
+      parent_id TEXT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at DATETIME NOT NULL
+    )`);
+    void sql`INSERT INTO assistant_messages
+      (id, session_id, parent_id, role, content, created_at)
+      VALUES ('pane-user', '', NULL, 'user',
+        '{"id":"pane-user","role":"user","parts":[{"type":"text","text":"pane kickoff"}]}',
+        '1970-01-01 00:00:01.000')`;
+    insert(sql, 'peer-session', 'user', 'peer kickoff', 2_000);
+    const conversations = new ConversationSearchStore(sql).browse();
+    expect(conversations.find((row) => row.conversationId === 'default')?.preview)
+      .toBe('pane kickoff');
+    expect(conversations.find((row) => row.conversationId === 'peer-session')?.preview)
+      .toBe('peer kickoff');
   });
 });

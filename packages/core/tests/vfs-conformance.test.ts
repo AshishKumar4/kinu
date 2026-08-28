@@ -118,6 +118,14 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
       const p = quoted(command);
       if (command.startsWith('mkdir')) { fs.mkdir(p); return { exitCode: 0, stdout: '' }; }
       if (command.startsWith('test -e')) return { exitCode: 0, stdout: fs.exists(p) ? 'true' : 'false' };
+      if (command.startsWith('set -o pipefail; dd ')) {
+        const range = /skip=(\d+) count=(\d+)/.exec(command);
+        if (!range) return { exitCode: 1, stdout: '', stderr: 'range syntax missing' };
+        const bytes = fs.read(p)?.subarray(Number(range[1]), Number(range[1]) + Number(range[2]));
+        return bytes
+          ? { exitCode: 0, stdout: Buffer.from(bytes).toString('base64') }
+          : { exitCode: 1, stdout: '', stderr: 'ENOENT' };
+      }
       return { exitCode: 0, stdout: '' };
     },
     async exposePort(port, opts) {
@@ -171,6 +179,13 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
         const b = fs.read(p);
         if (b === null) throw Object.assign(new Error(`ENOENT: no such file '${p}'`), { code: 'ENOENT' });
         return { content: Buffer.from(b).toString('base64'), encoding: 'base64' };
+      }
+      if (method === 'readRange') {
+        const offset = v.parse(v.number(), params[1]);
+        const length = v.parse(v.number(), params[2]);
+        const b = fs.read(p);
+        if (b === null) throw Object.assign(new Error(`ENOENT: no such file '${p}'`), { code: 'ENOENT' });
+        return { content: Buffer.from(b.subarray(offset, offset + length)).toString('base64'), encoding: 'base64' };
       }
       if (method === 'writeFile') {
         const content = v.parse(v.string(), params[1]);
@@ -334,5 +349,39 @@ describe('device file view — the consented subtree is a boundary', () => {
     await vfs.writeFile('/home/me/proj/notes.md', 'ok');
     expect(await vfs.readFile('/home/me/proj/notes.md', { encoding: 'utf8' })).toBe('ok');
     expect(await rejectionCode(() => vfs.readdir('/home/me/proj'))).toBeUndefined();
+  });
+});
+
+describe('sandbox file view — bounded range reads', () => {
+  test('streams only the requested prefix through dd/base64', async () => {
+    const fs = new MemFs();
+    const all = new Uint8Array(512 * 1024 + 32).fill(0x61);
+    all[512 * 1024] = 0x00; // sentinel just beyond the admitted window
+    fs.write('/workspace/large.bin', all);
+
+    const bytes = await sandboxFiles(sandboxHandle(fs)).readRange('/workspace/large.bin', 0, 512 * 1024);
+
+    expect(bytes.byteLength).toBe(512 * 1024);
+    expect(bytes.includes(0)).toBe(false);
+  });
+});
+
+describe('device file view — bounded range reads', () => {
+  test('the laptop range stays within its consented device path and admitted window', async () => {
+    const fs = new MemFs();
+    const all = new Uint8Array(512 * 1024 + 32).fill(0x61);
+    all[512 * 1024] = 0x00;
+    fs.write('/home/me/proj/large.bin', all);
+    const calls: string[] = [];
+    const consent = { consentedRoot: () => '/home/me/proj', hasFullFilesystem: async () => false };
+    const vfs = deviceFiles(deviceTransport(fs, calls), consent);
+
+    const bytes = await vfs.readRange('/home/me/proj/large.bin', 0, 512 * 1024);
+
+    expect(bytes.byteLength).toBe(512 * 1024);
+    expect(bytes.includes(0)).toBe(false);
+    expect(calls).toEqual(['readRange']);
+    expect(await rejectionCode(() => vfs.readRange('/etc/passwd', 0, 1))).toBe('EACCES');
+    expect(calls).toEqual(['readRange']);
   });
 });

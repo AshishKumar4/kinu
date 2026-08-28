@@ -32,7 +32,12 @@ import {
   TURN_CONTEXT_HEADER,
   type PromptExecutorInfo,
 } from '../src/index';
-import type { ActiveSkillSet, ParsedSkill } from '../src/skills/types';
+import { admitActiveSkills } from '../src/skills/loader';
+import { skillPath } from '../src/skills/discover';
+import { estimateTokens } from '../src/llm';
+import type {
+  ActiveSkill, ActiveSkillSet, DiscoveredSkill, InstructionTrustResolver, SkillsVfs,
+} from '../src/index';
 import { createTestRuntime } from '@kinu.run/test-utils';
 
 const idleSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' };
@@ -43,11 +48,51 @@ const activeSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, co
 const connectedLaptop: PromptExecutorInfo = { name: 'laptop', available: true, configured: true, active: true, status: 'active' };
 const workspace: PromptExecutorInfo = { name: 'workspace', available: true, configured: true, active: true, status: 'active' };
 
-function skill(name: string): ParsedSkill {
+/** The owner's answer for every body these tests read. They are about what the
+ *  allocation pays for and how the result renders at system placement, so the
+ *  approval is stated once here instead of per call. */
+const APPROVED: InstructionTrustResolver = () => 'approved';
+
+/** One active skill whose body this turn's allocation already paid for.
+ *  `bodyRef` names where the bytes live and how many there are — the admission
+ *  prices a body from that alone, without opening the file. */
+function skill(name: string): ActiveSkill {
+  const body = `Body of ${name}`;
+  return { ...header(name, body.length), trust: 'approved', body };
+}
+
+/** The same skill before any body was read: what discovery returns. The
+ *  `bodyRef` arm stays narrowed so a test can name the path it expects to be
+ *  read — or proved never read. */
+function header(name: string, chars: number) {
   return {
     name, description: `${name} skill`, allowed_tools: [], keywords: [],
     auto_activate: false, disable_model_invocation: false, user_invocable: true,
-    body: `Body of ${name}`, ext: {}, source: 'vfs',
+    bodyRef: { kind: 'file', path: skillPath(name), chars } as const,
+    ext: {}, source: 'vfs',
+  } satisfies DiscoveredSkill;
+}
+
+/** A VFS that serves each skill as the PARSEABLE file discovery read — front
+ *  matter agreeing with the header, then the body — and counts the reads, so a
+ *  deferred body can be shown never to have been opened. `bodyRef.chars` stays
+ *  the body's own length, exactly as discovery records it. */
+function skillsVfsOf(bodies: Readonly<Record<string, string>>): SkillsVfs & { reads: string[] } {
+  const sourceOf = (path: string, body: string): string => {
+    const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
+    return `---\nname: ${name}\ndescription: ${name} skill\n---\n${body}`;
+  };
+  const reads: string[] = [];
+  return {
+    reads,
+    exists: async (path: string) => bodies[path] !== undefined,
+    readFile: async (path: string) => {
+      reads.push(path);
+      const body = bodies[path];
+      if (body === undefined) throw new Error(`no such skill file: ${path}`);
+      return sourceOf(path, body);
+    },
+    writeFile: async () => undefined,
   };
 }
 
@@ -1161,25 +1206,57 @@ function referenceFnv1a64(text: string): string {
 }
 
 describe('active-skill budget priority (activation precedence, stable render order)', () => {
-  test('an alphabetically-early giant skill cannot crowd out an earlier-activated one', () => {
-    const giant: ParsedSkill = { ...skill('aaa-giant'), body: 'G'.repeat(20_000) };
-    const invoked: ParsedSkill = { ...skill('zzz-invoked'), body: 'THE-INVOKED-BODY '.repeat(10) };
-    // Activation precedence: the explicitly-invoked skill came FIRST; the
-    // giant keyword skill activated after it.
-    const section = renderActiveSkillsSection({ active: [invoked, giant], reasons: [] });
-    // Budget follows precedence: the invoked skill keeps its full body and
-    // the giant absorbs the truncation…
+  // The decision moved: the renderer no longer truncates a body, because half a
+  // workflow instruction is not a workflow. `admitActiveSkills` decides which
+  // bodies this turn's allocation can pay for, spends in ACTIVATION priority
+  // order, and a body that misses the cut is never read at all — the block
+  // points at it instead. The renderer stays a pure projection in name order.
+  test('an alphabetically-early giant skill cannot crowd out an earlier-activated one', async () => {
+    const giantBody = 'G'.repeat(20_000);
+    const invokedBody = 'THE-INVOKED-BODY '.repeat(10);
+    const giant = header('aaa-giant', giantBody.length);
+    const invoked = header('zzz-invoked', invokedBody.length);
+    const vfs = skillsVfsOf({
+      [giant.bodyRef.path]: giantBody,
+      [invoked.bodyRef.path]: invokedBody,
+    });
+
+    // Activation precedence: the explicitly-invoked skill came FIRST; the giant
+    // keyword skill activated after it. The allocation pays for one of them.
+    const admitted = await admitActiveSkills({
+      vfs,
+      activated: [
+        { skill: invoked, reason: { kind: 'explicit', matched_token: 'zzz-invoked' } },
+        { skill: giant, reason: { kind: 'keyword', matched_keyword: 'deploy' } },
+      ],
+      admissionTokens: estimateTokens(invokedBody.length) + 1,
+      trust: APPROVED,
+    });
+
+    // Priority held: the invoked body was read, the giant's never was.
+    expect(vfs.reads).toEqual([invoked.bodyRef.path]);
+    const section = renderActiveSkillsSection(admitted, 'system');
     expect(section).toContain('THE-INVOKED-BODY');
-    expect(section).not.toContain('zzz-invoked"})'); // not truncated/omitted
-    expect(section).toContain('[truncated:');
-    // …while render order stays name-stable (giant block renders first).
-    expect(section.indexOf('### aaa-giant')).toBeLessThan(section.indexOf('### zzz-invoked'));
+    expect(section).not.toContain('GGGG');
+    // Nothing is lost silently: the deferred body is named, sized and pointed
+    // at — in the reference tier, because an unread body has no bytes for the
+    // owner to have approved.
+    const reference = renderActiveSkillsSection(admitted, 'unverified');
+    expect(reference).toContain('### aaa-giant');
+    expect(reference).toContain(`${giantBody.length} chars`);
+    expect(reference).toContain(`workspace.readFile("${giant.bodyRef.path}")`);
+    // …and the split is clean in both directions: no giant block at system
+    // placement, and the body the allocation paid for stays out of the
+    // reference block. (Name-stable render order is the next test, which has
+    // two blocks in one tier to order.)
+    expect(section).not.toContain('### aaa-giant');
+    expect(reference).not.toContain('THE-INVOKED-BODY');
   });
 
   test('without overflow, activation order still renders byte-identically', () => {
     const a = skill('alpha');
     const b = skill('beta');
-    expect(renderActiveSkillsSection({ active: [a, b], reasons: [] }))
-      .toBe(renderActiveSkillsSection({ active: [b, a], reasons: [] }));
+    expect(renderActiveSkillsSection({ active: [a, b], reasons: [] }, 'system'))
+      .toBe(renderActiveSkillsSection({ active: [b, a], reasons: [] }, 'system'));
   });
 });

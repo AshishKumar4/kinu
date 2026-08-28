@@ -15,7 +15,8 @@
  *    persisted history (copy-on-write per message).
  *  - BYTE-STABLE per part: same payload bytes → same VFS path → same
  *    replacement text, so the prompt-cache prefix invariant holds across
- *    turns. The VFS write is skipped when the file already exists.
+ *    turns. The write is skipped only when the path already holds those
+ *    exact bytes.
  *  - Per-part in-place replacement only — the message COUNT never changes,
  *    so index-anchored consumers (the ephemeral ledger's frozen block
  *    positions, compaction plan ranges) stay valid.
@@ -28,7 +29,7 @@ import type { VFS } from '../types/primitives';
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
-import { fnv1a64Bytes } from './volatile-context';
+import { sha256Hex } from '../safety/argument-digest';
 
 /** Media kinds an attachment can be — the input-modality vocabulary minus
  *  'text' (text is trivially accepted by every model). */
@@ -208,7 +209,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
   });
   return `[Pasted text (${bytes.length} bytes) saved to ${path} — read or slice it with your file tools ` +
-    `(oversize: slice + llm.query each slice, aggregate). The first ${head.length} chars follow.]\n\n${head}`;
+    `(oversize: hand ${path} to a temporary agent as \`context_ref\` on an agents ask). The first ${head.length} chars follow.]\n\n${head}`;
 }
 
 /** True when a natively-acceptable document is large enough that carrying it
@@ -288,25 +289,47 @@ async function storeAndReference(
   };
 }
 
-/** Content-addressed VFS write (skipped when the path already exists), the one
- *  offload every message-borne producer here shares. */
+/** The content-addressed VFS write every message-borne producer here shares.
+ *
+ *  The address is a cryptographic digest of the bytes, and reuse of an existing
+ *  object VERIFIES it: the path is a claim about content, and "the file exists"
+ *  is not that claim. A truncated write, a file the agent put there itself, or
+ *  (under the 64-bit non-cryptographic hash this used to address by) a genuine
+ *  collision all present as an existing path — and reusing one substitutes
+ *  somebody else's bytes for the attachment the model is being pointed at. */
 async function storeContentAddressed(
   bytes: Uint8Array,
   mediaType: string,
   policy: AttachmentPolicy,
 ): Promise<string> {
-  const path = `${ATTACHMENTS_DIR}/${fnv1a64Bytes(bytes)}.${extensionFor(mediaType)}`;
-  if (!(await policy.vfs.exists(path))) {
-    try {
-      await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
-    } catch (err) {
-      if (classify({ cause: err }) !== 'eexist') {
-        throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
-      }
+  const path = `${ATTACHMENTS_DIR}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
+  if (await holdsBytes(policy.vfs, path, bytes)) return path;
+  try {
+    await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
+  } catch (err) {
+    if (classify({ cause: err }) !== 'eexist') {
+      throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
     }
-    await policy.vfs.writeFile(path, bytes);
   }
+  await policy.vfs.writeFile(path, bytes);
   return path;
+}
+
+/** Whether `path` already holds exactly these bytes. Absent is not an error —
+ *  it is the ordinary first spill of a payload — but a path that exists and
+ *  does not hold them is not reusable, and the write below repairs it. */
+async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
+  if (!(await vfs.exists(path))) return false;
+  const stored = await vfs.readFile(path);
+  // Discriminated on the class rather than with a runtime `typeof`, which is
+  // how prompting/agents-md.ts already narrows the same `string | Uint8Array`
+  // return from this VFS contract.
+  const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);
+  if (existing.length !== bytes.length) return false;
+  for (let i = 0; i < bytes.length; i++) {
+    if (existing[i] !== bytes[i]) return false;
+  }
+  return true;
 }
 
 /** A part whose data is a remote URL carries no payload to store — reference

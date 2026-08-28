@@ -71,7 +71,6 @@ import {
   createCodexOAuthClient,
   decodeCodexAccountId,
   tokensToCredential,
-  mcpToolKey,
   type DeviceCodeStart,
   type DeviceCheckpointHint,
   type DeviceConsentRequest,
@@ -92,7 +91,6 @@ import {
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './schema';
-import { bindAgentSql } from '../runtime';
 import {
   CapabilityDeniedError,
   mintWorkspaceCapability,
@@ -105,6 +103,10 @@ import {
   type ResolvedCaller,
 } from './workspace-capability';
 import { DeviceSocketHub, deviceIdFromSocket } from './device-hub';
+import {
+  DeviceRequestLedger,
+  type ClaimedDeviceRequest, type DeviceCancelOutcome,
+} from './device-inflight';
 import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers';
 import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate';
 import { createCredentialCipher, type CredentialCipher } from './credential-envelope';
@@ -122,13 +124,14 @@ import { openAnalyticsWindow } from '../analytics/writer';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD, DEVICE_TOKEN_ROTATION,
-  deviceConsentScopeForMethod, mergeConsentScope, parseConsentScope, summarizeDeviceAction,
+  DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
+  consentScopeCovers, deviceConsentScopeForMethod, mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry,
 } from '@kinu.run/core';
 import {
-  validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
-  parseMcpHeaders, buildMcpHeaderTransportOpts,
+  validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
+  parseMcpHeaders, mcpCredentialTransport, describeMcpTool, isMcpTransportUnauthorized,
   type McpServerSummary, type McpTransport,
   type SerializableToolDescriptor,
 } from './mcp';
@@ -182,15 +185,41 @@ const WORKSPACE_LIST_LIMIT = 200;
  *  — every server uses this single per-user endpoint so callback routing
  *  is uniform regardless of which agent triggered the addition. */
 const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
-/** Warmup budget for restoring MCP connections at turn start. A single slow
- *  server must not block a turn — but a server that misses it is REPORTED to
- *  the turn rather than silently dropped from the tool surface.
+/** The OAuth client name this user's MCP plane registers under. It keys the
+ *  SDK's own storage (`/{clientName}/{serverId}/...`), so every construction
+ *  and every restore has to spell it the same way. */
+const USER_MCP_CLIENT_NAME = 'kinu-user-mcp';
+
+/** The sentence a taken MCP server name produces, written once. Both guards
+ *  refuse with it: the atomic claim in `claimMcpServerName`, and the UNIQUE
+ *  index where it exists. Two spellings of one refusal is how a UI comes to
+ *  show a different message than the API.
  *
- *  PENDING MEASUREMENT, with `cli-backend/src/mcp.ts`'s MCP_STARTUP_TIMEOUT_MS,
- *  which mirrors this one: what both bound is a third-party server's connect
- *  time, and neither backend records it. The report is what makes the miss safe;
- *  the number is not yet earned. */
-const MCP_WARMUP_TIMEOUT_MS = 5_000;
+ *  The MESSAGE rather than a built error, so neither caller needs an optional
+ *  cause: the claim has nothing to chain and the translation below has the
+ *  violation it caught. */
+function mcpNameTakenMessage(name: string): string {
+  return `An MCP server named '${name}' already exists.`;
+}
+
+/**
+ * Rethrow a failed name claim, renaming the `lower(name)` UNIQUE violation to
+ * that same sentence.
+ *
+ * ALWAYS THROWS, which is what `never` says and what lets this carry no
+ * `unknown` out. Anything that is not the violation is a real storage failure —
+ * including the claim's own refusal, which already carries the sentence — and is
+ * rethrown untouched: a blanket rename here would report a full disk as a
+ * duplicate name. Rethrowing rather than RETURNING the caught value is the whole
+ * of it; a function that hands `unknown` back to be thrown by its caller has
+ * only moved the boundary.
+ */
+function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never {
+  if (/UNIQUE constraint failed/i.test(renderThrownChain({ cause: input.cause }))) {
+    throw new Error(mcpNameTakenMessage(input.name), { cause: input.cause });
+  }
+  throw input.cause;
+}
 
 /** One configured MCP server that produced no tools for this turn. */
 export interface McpServerUnavailable {
@@ -205,7 +234,26 @@ export interface McpToolSurface {
   unavailable: McpServerUnavailable[];
 }
 
+/** The `user_mcp_servers` columns hydration needs: what to register, and
+ *  whether the row holds a sealed credential. `headers` stays SEALED here —
+ *  it is opened per request inside the transport closure, never carried. */
+interface McpHydrationRow extends SqlRow {
+  id: string;
+  name: string;
+  server_url: string;
+  transport: McpTransport;
+  headers: string | null;
+}
+
 interface SqlRow extends Record<string, SqlStorageValue> {}
+
+type DeviceCancellationOutcome = {
+  requestId: string;
+  outcome: DeviceCancelOutcome | 'failed';
+  detail?: string;
+};
+/** The request id a cancellation frame names, parsed off the outgoing params. */
+const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
 
 const DeviceHelloSchema = v.object({
   type: v.literal('HELLO'),
@@ -245,6 +293,18 @@ export interface WorkspaceList {
   entries: WorkspaceEntry[];
   total: number;
   nextCursor: string | null;
+}
+
+/** Thrown when a publish is asked to commit something that is not an open
+ *  reservation — a wrong timestamp, a name nothing reserved, or a name already
+ *  published. Its own class because a fork transfer treats it as its own
+ *  rollback trigger and not as a transport fault. Crosses the DO RPC boundary
+ *  as its message, the same way `CapabilityDeniedError` does. */
+export class WorkspaceReservationNotPendingError extends Error {
+  constructor(name: string, why: string) {
+    super(`Workspace "${name}" cannot be published: ${why}.`);
+    this.name = 'WorkspaceReservationNotPendingError';
+  }
 }
 
 /** Outcome of a compare-and-swap catalog write. A typed domain result rather
@@ -384,10 +444,24 @@ export class UserDO extends Agent<Env> {
    *  This one is per-user and stores its config in `user_mcp_servers`. */
   private _userMcp: MCPClientManager | null = null;
 
+  /** The one full reconciliation in flight. UserDO calls interleave at every
+   *  external await; joining this makes remove/register/restore/establish one
+   *  credential-safe sequence. Cleared after either settlement so the cause
+   *  reaches every joiner and a later caller can retry. */
+  private _hydratingUserMcp: Promise<void> | null = null;
 
+
+  /**
+   * Once per activation. Cancellation claims are activation-scoped by
+   * construction: the sweep that holds one lives in this isolate's memory, so
+   * every claim already in storage when an activation begins was abandoned by
+   * the activation that died. Releasing them here needs no lease clock and no
+   * elapsed guess — the activation boundary IS the expiry.
+   */
   private ensureInit(): void {
     if (this._initialized) return;
-    initUserTables(this.ctx.storage.sql, bindAgentSql(this));
+    initUserTables(this.ctx.storage.sql);
+    this._inflight.releaseAbandonedClaims();
     this._initialized = true;
   }
 
@@ -446,6 +520,19 @@ export class UserDO extends Agent<Env> {
     if (!this.workspaceRegistered(workspaceName)) {
       throw new Error(`Workspace ${workspaceName} is not in your registry.`);
     }
+    return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
+  }
+
+  /**
+   * The reconcile itself, from a presented hash to both sides agreeing.
+   *
+   * Split out of {@link ensureWorkspaceCapability} for
+   * {@link publishWorkspaceReservation}, which does its own admission check: a
+   * reservation is deliberately absent from the registry read that gates every
+   * other caller, so it cannot go through the same front door. One body, so the
+   * coalescing map and the re-mint rule cannot drift between the two.
+   */
+  private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
     if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) return;
 
     const inFlight = this._provisioning.get(workspaceName);
@@ -509,16 +596,21 @@ export class UserDO extends Agent<Env> {
 
   async listWorkspaces(caller: UserCaller, page?: WorkspaceListPageQuery): Promise<WorkspaceList> {
     await this.requireTier(caller, 'workspaces.read');
+    // The ordinary read IS the retry: a teardown a previous attempt could not
+    // finish gets another go here, before the listing that must not show it.
+    await this.resumePendingDeletions();
     const limit = clampRosterLimit(page?.limit);
     const cursor = decodeRosterCursor(page?.cursor);
     const rows = this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
       cursor
         ? `SELECT name, display_name, created_at, last_visited, archived_at
            FROM user_workspaces
-           WHERE archived_at IS NULL AND (last_visited < ? OR (last_visited = ? AND name > ?))
+           WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
+             AND (last_visited < ? OR (last_visited = ? AND name > ?))
            ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`
         : `SELECT name, display_name, created_at, last_visited, archived_at
-           FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`,
+           FROM user_workspaces WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
+           ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`,
       ...(cursor ? [cursor.v, cursor.v, cursor.n] : []),
     );
     const hasMore = rows.length > limit;
@@ -530,7 +622,8 @@ export class UserDO extends Agent<Env> {
       archivedAt: r.archived_at,
     }));
     const { n } = this.sqlx<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM user_workspaces WHERE archived_at IS NULL`,
+      `SELECT COUNT(*) AS n FROM user_workspaces
+       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
     )[0];
     const last = entries.at(-1);
     return { entries, total: n, nextCursor: hasMore && last ? encodeRosterCursor(last) : null };
@@ -543,16 +636,24 @@ export class UserDO extends Agent<Env> {
   async listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
     await this.requireTier(caller, 'workspaces.read');
     return this.sqlx<{ name: string; display_name: string; created_at: number }>(
-      `SELECT name, display_name, created_at FROM user_workspaces WHERE archived_at IS NULL ORDER BY last_visited DESC`,
+      `SELECT name, display_name, created_at FROM user_workspaces
+       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
+       ORDER BY last_visited DESC`,
     ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
   }
 
   /** Insert-or-resurrect a roster row. `existed` reports whether ANY row
    *  (archived included — a name conflict un-archives) was already there, so
-   *  a failed create can roll back ONLY rows it actually inserted. */
+   *  a failed create can roll back ONLY rows it actually inserted.
+   *
+   *  `create_pending = 0` is written rather than left to the column default:
+   *  this is the path whose workspace exists by the time the row does, so it is
+   *  published the moment it lands. The conflict branch deliberately does NOT
+   *  publish, so an open fork reservation keeps the name it is holding. */
   async registerWorkspace(caller: UserCaller, name: string, displayName?: string, purpose?: string): Promise<{ entry: WorkspaceEntry; existed: boolean }> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+    await this.requireNotDeleting(name);
     const now = Date.now();
     const explicit = displayName?.trim() ?? '';
     const existing = this.sqlx<{ display_name: string; name_origin: 'user' | 'auto' | null }>(
@@ -563,8 +664,8 @@ export class UserDO extends Agent<Env> {
     });
     const origin: 'user' | 'auto' = explicit !== '' ? 'user' : (existing?.name_origin ?? 'auto');
     this.sqlx(
-      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
+       VALUES (?, ?, ?, ?, ?, 0)
        ON CONFLICT(name) DO UPDATE SET
          display_name = excluded.display_name,
          name_origin  = excluded.name_origin,
@@ -577,9 +678,21 @@ export class UserDO extends Agent<Env> {
       existed: !!existing,
     };
   }
+  /**
+   * Hold a name for a fork transfer that has not happened yet.
+   *
+   * The row is inserted UNPUBLISHED (`create_pending = 1`) and is invisible to
+   * every owner-visible read until {@link publishWorkspaceReservation} commits
+   * it (KINU-027): a target being streamed into is not a workspace the owner
+   * has, and a roster that offered it would be offering a half-written one. The
+   * row exists anyway, because the name is what the reservation is FOR — the
+   * existence probe below is deliberately blind to the flag, so a pending
+   * reservation still refuses a second reservation of the same name.
+   */
   async reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+    await this.requireNotDeleting(name);
     const existing = this.sqlx<{
       name: string;
       display_name: string;
@@ -608,14 +721,63 @@ export class UserDO extends Agent<Env> {
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, slug: name });
     this.sqlx(
-      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
+       VALUES (?, ?, ?, ?, ?, 1)`,
       name, title, explicit !== '' ? 'user' : 'auto', now, now,
     );
     return {
       entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
       reserved: true,
     };
+  }
+
+  /**
+   * Commit a reservation: the transfer landed, so the name it has been holding
+   * becomes a workspace the owner has.
+   *
+   * The ONE place `create_pending` is cleared, which is what makes "absent"
+   * mean the same thing on every surface — there is no second way for a
+   * half-written fork target to become visible.
+   */
+  async publishWorkspaceReservation(
+    caller: UserCaller,
+    name: string,
+    createdAt: number,
+    capabilityHash: string | null,
+  ): Promise<void> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+    // Exactly the row `reserveWorkspace` inserted, still open. The timestamp is
+    // the identity: on the name alone, a transfer's late reply could publish a
+    // LATER reservation of the same name. `delete_pending` is excluded for the
+    // reason it is excluded from `releaseWorkspaceReservation` — a row whose
+    // teardown has started is not one anything may commit.
+    const reserved = v.safeParse(v.object({ create_pending: v.picklist([0, 1]) }), this.sqlx(
+      `SELECT create_pending FROM user_workspaces
+       WHERE name = ? AND created_at = ? AND delete_pending = 0`,
+      name, createdAt,
+    )[0]);
+    if (!reserved.success) {
+      throw new WorkspaceReservationNotPendingError(name, 'no reservation of that name is open under that timestamp');
+    }
+    if (reserved.output.create_pending === 0) {
+      throw new WorkspaceReservationNotPendingError(name, 'it is already published');
+    }
+    // Installing the capability is a cross-DO await, so it cannot sit inside the
+    // transaction: `transactionSync` commits when its SYNCHRONOUS body returns,
+    // and an async body would commit at its first await and take the atomicity
+    // with it. So the install happens first and the flip commits after it. That
+    // order is also the safe one — a failed install leaves the row unpublished,
+    // which is still invisible and still releasable, whereas publishing first
+    // would hand the owner a workspace holding no identity.
+    await this.reconcileWorkspaceCapability(name, capabilityHash);
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        `UPDATE user_workspaces SET create_pending = 0
+         WHERE name = ? AND created_at = ? AND create_pending = 1`,
+        name, createdAt,
+      );
+    });
   }
 
   /** Drop only the exact roster row a failed fork reservation inserted. This
@@ -625,8 +787,11 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     if (!Number.isFinite(createdAt)) return false;
+    // A marked row is not this reservation's to drop: it belongs to a teardown
+    // that has not finished, and dropping it would lose the only record that
+    // anything is still owed.
     const row = this.sqlx<{ created_at: number }>(
-      `SELECT created_at FROM user_workspaces WHERE name = ?`,
+      `SELECT created_at FROM user_workspaces WHERE name = ? AND delete_pending = 0`,
       name,
     )[0];
     if (!row || row.created_at !== createdAt) return false;
@@ -638,19 +803,49 @@ export class UserDO extends Agent<Env> {
   async touchWorkspace(caller: UserCaller, name: string): Promise<void> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
-    this.sqlx(`UPDATE user_workspaces SET last_visited = ? WHERE name = ?`, Date.now(), name);
+    // A workspace being torn down, or one a fork has not committed yet, is not
+    // one the owner can visit, so a touch finds nothing to touch — the same
+    // answer every ordinary read gives.
+    this.sqlx(
+      `UPDATE user_workspaces SET last_visited = ?
+       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`,
+      Date.now(), name,
+    );
   }
 
+  /**
+   * Delete one workspace: its Durable Object and every external plane it owns,
+   * then its registry row.
+   *
+   * The row is MARKED before any of that and removed only after all of it, so a
+   * teardown that fails mid-way leaves a record of the intent rather than a
+   * half-deleted workspace nobody is responsible for. A marked row is invisible
+   * to every ordinary read — it is not a workspace the owner has any more — but
+   * it is still there, which is what gives the cleanup an owner: the next read
+   * of this registry drives it again (`resumePendingDeletions`), and
+   * `destroyAgent` is idempotent, so a re-run over already-destroyed planes
+   * converges instead of failing.
+   */
   async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
-    // Tear down the agent's Durable Object (storage, alarm, sandbox) BEFORE
-    // dropping it from the registry — otherwise the DO's SQLite (conversation,
-    // model, scaffold, triggers) survives and a same-name recreate inherits
-    // stale state, and its alarm keeps firing. A real teardown failure is
-    // fail-closed: keeping the registry row prevents a same-name recreation
-    // from reconnecting to resources that were not actually destroyed.
+    this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    await this.tearDownWorkspace(name, ownerUserId);
+  }
+
+  /**
+   * The teardown itself, from a marked row to no row.
+   *
+   * Tear the agent's Durable Object down (storage, alarm, sandbox) BEFORE
+   * dropping it from the registry — otherwise the DO's SQLite (conversation,
+   * model, scaffold, triggers) survives and a same-name recreate inherits stale
+   * state, and its alarm keeps firing. A real teardown failure is fail-closed:
+   * the marked row stays, so a same-name recreation cannot reconnect to
+   * resources that were not actually destroyed, and the failure reaches the
+   * caller.
+   */
+  private async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent(ownerUserId);
@@ -663,6 +858,63 @@ export class UserDO extends Agent<Env> {
     // The workspace's identity dies with it, so a same-name recreate is issued
     // a fresh secret rather than inheriting this one's.
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
+  }
+
+  /**
+   * Finish any teardown a previous attempt left marked.
+   *
+   * Driven by the owner's own reads rather than by a wake of its own: this
+   * object has no timer, and the answer to "who retries this" is the next
+   * person to look at their workspace list. A cleanup that fails again keeps its
+   * marker and states why — the row is the retry, so nothing is lost by not
+   * throwing here, and a listing that failed because an unrelated workspace
+   * could not finish dying would be the worse answer.
+   */
+  private async resumePendingDeletions(): Promise<void> {
+    const pending = this.sqlx<{ name: string }>(
+      `SELECT name FROM user_workspaces WHERE delete_pending = 1`,
+    );
+    if (pending.length === 0) return;
+    const ownerUserId = this.ctx.id.name ?? '';
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
+      // Without the owner id this object cannot prove to the workspace that the
+      // destroy is authorized, and guessing is exactly what the check refuses.
+      diagnostics.failure('workspace.cleanup_unowned', toKinuError({
+        doing: 'resuming a pending workspace teardown',
+        cause: new Error('this user object has no user id to authorize the destroy with'),
+        otherwise: 'denied',
+      }), { pending: pending.length });
+      return;
+    }
+    for (const row of pending) {
+      try {
+        await this.tearDownWorkspace(row.name, ownerUserId);
+      } catch (err) {
+        diagnostics.failure('workspace.cleanup_retry_failed', toKinuError({
+          doing: 'finishing a workspace teardown a previous attempt left unfinished',
+          cause: err,
+          otherwise: 'io',
+        }), { workspace: row.name });
+      }
+    }
+  }
+
+  /**
+   * Refuse a name whose teardown has not finished.
+   *
+   * Creating is the one path that cannot read a marked row as absent. The row
+   * still owns a Durable Object and its planes, so a same-name recreate over it
+   * would hand the owner a workspace wired to resources the pending teardown is
+   * about to destroy. The retry runs first because the ordinary way to arrive
+   * here is an owner recreating a name they just deleted, whose teardown hit
+   * something transient: that owner gets their name back, not a dead end.
+   */
+  private async requireNotDeleting(name: string): Promise<void> {
+    const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
+    if (this.sqlx(marked, name).length === 0) return;
+    await this.resumePendingDeletions();
+    if (this.sqlx(marked, name).length === 0) return;
+    throw new Error(`Workspace "${name}" is still being deleted; its teardown has not finished.`);
   }
 
   /**
@@ -685,8 +937,12 @@ export class UserDO extends Agent<Env> {
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
       throw new Error(`Workspace "${resolved.workspace}" may only rename itself.`);
     }
+    // Both pending flags excluded as everywhere else: a workspace being torn
+    // down, or one a fork has not committed yet, has no title to commit, so the
+    // write reports the not-found answer.
     const current = this.sqlx<{ name_origin: 'user' | 'auto' | null }>(
-      `SELECT name_origin FROM user_workspaces WHERE name = ?`, name,
+      `SELECT name_origin FROM user_workspaces
+       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];
     if (!current) return { applied: false };
     if (origin === 'auto' && current.name_origin !== 'auto') return { applied: false };
@@ -703,7 +959,8 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.read');
     validateWorkspaceName(name);
     const row = this.sqlx<{ display_name: string; name_origin: 'user' | 'auto' | null }>(
-      `SELECT display_name, name_origin FROM user_workspaces WHERE name = ?`, name,
+      `SELECT display_name, name_origin FROM user_workspaces
+       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];
     if (!row) return null;
     return { displayName: row.display_name, nameOrigin: row.name_origin ?? 'user' };
@@ -718,7 +975,16 @@ export class UserDO extends Agent<Env> {
    *  and the ticket flows, whose own entry points are already gated. */
   private workspaceRegistered(name: string): boolean {
     validateWorkspaceName(name);
-    const row = this.sqlx(`SELECT 1 AS x FROM user_workspaces WHERE name = ? AND archived_at IS NULL`, name)[0];
+    // Both pending flags excluded for the same reason `archived_at` is: a
+    // workspace whose teardown has started, and one whose fork transfer has not
+    // committed, are not ones this owner can open — and this gate is what every
+    // open goes through, including `ensureWorkspaceCapability`'s admission.
+    const row = this.sqlx(
+      `SELECT 1 AS x FROM user_workspaces
+       WHERE name = ? AND archived_at IS NULL AND delete_pending = 0
+         AND create_pending = 0`,
+      name,
+    )[0];
     return !!row;
   }
 
@@ -734,6 +1000,47 @@ export class UserDO extends Agent<Env> {
       senderUserId, senderAgentName,
     )[0];
     return !!row;
+  }
+
+  // ── Browser sessions ───────────────────────────────────────────────
+  //
+  // The authority behind a session cookie. The cookie's KV record carries the
+  // identity as it stood at sign-in and the user id that routes here; whether
+  // the session is still LIVE is only this table's answer, because a KV delete
+  // takes up to a minute to reach every colo and a stolen cookie replayed at a
+  // lagging colo used to outlive logout by that window.
+
+  /** Publish a browser session as active. Called before the sign-in response
+   *  hands the browser its cookie, so no cookie is ever outstanding without
+   *  authority behind it. A hash already present is a real fault and throws:
+   *  the caller compensates rather than adopting a row it did not create. */
+  async registerBrowserSession(caller: UserCaller, tokenHash: string, expiresAt: number): Promise<void> {
+    await this.requireTier(caller, 'auth_tokens');
+    this.sqlx(
+      `INSERT INTO user_browser_sessions (token_hash, expires_at) VALUES (?, ?)`,
+      tokenHash, expiresAt,
+    );
+  }
+
+  /** Whether this cookie is still a live session. Expired rows are dropped in
+   *  the same transaction as the read, so a lapsed session reads as ABSENT and
+   *  expiry needs no sweeper, no alarm and no second lifecycle column. */
+  async verifyBrowserSession(caller: UserCaller, tokenHash: string): Promise<boolean> {
+    await this.requireTier(caller, 'auth_tokens');
+    return this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(`DELETE FROM user_browser_sessions WHERE expires_at <= ?`, Date.now());
+      return this.ctx.storage.sql.exec(
+        `SELECT 1 AS live FROM user_browser_sessions WHERE token_hash = ? LIMIT 1`, tokenHash,
+      ).toArray().length === 1;
+    });
+  }
+
+  /** Revoke exactly this session. The row's absence IS the revocation, so the
+   *  next request carrying that cookie is refused at whatever colo it reaches,
+   *  and the user's other sessions keep their own rows. */
+  async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
+    await this.requireTier(caller, 'auth_tokens');
+    this.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);
   }
 
 
@@ -959,6 +1266,11 @@ export class UserDO extends Agent<Env> {
   // DO-to-DO call.
   private readonly _devices = new DeviceSocketHub(this.ctx);
 
+  /** The durable record of commands running on the user's machines, and the
+   *  precedence protocol over it (see ./device-inflight.ts). This object owns
+   *  the sockets and the consent boundary; the ledger owns the table. */
+  private readonly _inflight = new DeviceRequestLedger(this.ctx.storage.sql);
+
   /** Intercept device-daemon WebSocket upgrades; everything else (agents-SDK
    *  routing, sub-agents) flows to the SDK untouched. */
   override async fetch(request: Request): Promise<Response> {
@@ -1172,6 +1484,12 @@ export class UserDO extends Agent<Env> {
     return this.sqlx<{ label: string }>(`SELECT label FROM user_devices WHERE id = ?`, deviceId)[0]?.label ?? 'your device';
   }
 
+  private isActiveDevice(deviceId: string): boolean {
+    return this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
+    )[0] !== undefined;
+  }
+
   /** Forward a JSON-RPC call to a connected device — the single consent
    *  chokepoint. Every agent call passes its name, so we can enforce the
    *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
@@ -1180,13 +1498,21 @@ export class UserDO extends Agent<Env> {
     caller: UserCaller,
     method: string,
     params: JsonValue[],
-    opts?: { deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint; timeoutMs?: number },
+    opts?: {
+      deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint;
+      timeoutMs?: number; requestId?: string; backgroundJobId?: string;
+    },
   ): Promise<string | undefined> {
     const resolved = await this.requireTier(caller, 'device.rpc');
+    // STOPPING work is never gated. Consent decides what may run on the
+    // machine, and a cancellation only ends a command the owner already let
+    // through — gating it would leave a live process waiting on a card nobody
+    // is there to answer, which is the failure the cancellation exists for.
+    const stopping = method === DEVICE_CANCEL_METHOD;
     const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
-    const consentAgent = resolved.kind === 'workspace'
+    const consentAgent = stopping ? undefined : (resolved.kind === 'workspace'
       ? (ownerRead ? undefined : resolved.workspace)
-      : opts?.agentName;
+      : opts?.agentName);
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
     if (!deviceId) {
       // A workspace operation that needs a machine raises one provisioning
@@ -1197,6 +1523,7 @@ export class UserDO extends Agent<Env> {
       }
       throw new Error(NO_DEVICE_CONNECTED);
     }
+    if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     if (consentAgent !== undefined) {
       // Consent is keyed on the PROVEN workspace, never the claimed name — an
       // agent cannot ride a sibling workspace's remembered grant. The three
@@ -1207,6 +1534,7 @@ export class UserDO extends Agent<Env> {
       );
       if (!consent.allowed) throw new Error(consent.reason);
     }
+    if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     const tunnel = this._devices.tunnel(deviceId);
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
     const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = {};
@@ -1221,9 +1549,227 @@ export class UserDO extends Agent<Env> {
       };
     }
     if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
+    if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
+
+    // Persist BEFORE the frame leaves UserDO. The request identity is the same
+    // one the daemon registers its owned process group under and the same one
+    // `execCancel` names; an insert after send would recreate the eviction gap
+    // as a small race. Only a PROVEN workspace command carries a durable turn
+    // identity, so owner-side/out-of-turn operations do not pretend to have
+    // turn authority they do not possess.
+    const requestId = opts?.requestId;
+    const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
+    if (durableExec) {
+      // A probe must never ACK the command's own id: a retry may carry a
+      // retained terminal result, and ACKing it before replay would delete it.
+      // This fresh canonical id names no command and only distinguishes a
+      // daemon that implements durable result acknowledgement before work.
+      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]);
+      // The probe is an await, so a revocation sweep can land inside it. Recheck
+      // admission before the row and the frame: a command admitted after that
+      // sweep claimed this device's requests would run with nothing left to
+      // cancel it and nothing counting it as unstopped.
+      if (!this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
+      // A command issued INSIDE an already-detached scope is the background
+      // job's from the start, which is why the owner is passed to the insert
+      // rather than handed over afterwards.
+      //
+      // An owner that does not NAME a job is refused rather than stored: a blank
+      // owner would leave a row that neither a turn sweep nor a job sweep can
+      // ever select, which is precisely the orphan this table exists to prevent.
+      const backgroundJobId = opts?.backgroundJobId ?? null;
+      if (backgroundJobId === '') {
+        throw new KinuError('bad_input', 'A background job id must name a job.');
+      }
+      this.ensureInit();
+      this._inflight.insert({
+        requestId,
+        deviceId,
+        workspace: resolved.workspace,
+        turnId: opts?.checkpoint?.turnId ?? null,
+        backgroundJobId,
+      });
+    }
     const result = await tunnel.rpc(method, params, rpcOptions);
+    // A tool aborting its own exec sends this frame straight through, so the
+    // answer must land in the same place a durable sweep would put it. First
+    // answer wins: it is the one that actually ended the process group, and a
+    // later sweep then reports it instead of killing a dead command again.
+    if (stopping) this.recordToolPathCancellation(params, result);
     return result === undefined ? undefined : JSON.stringify(result);
   }
+
+  /** Store the answer from a cancellation this UserDO merely forwarded, so the
+   *  durable authority holds ONE outcome per request whichever path stopped it.
+   *
+   *  An answer that does not NAME the request asked about is not this request's
+   *  answer, so it is neither stored nor returned: the caller is told the stop
+   *  was not confirmed, and the row stays live work for the next sweep. */
+  private recordToolPathCancellation(params: JsonValue[], result: JsonValue | undefined): void {
+    const requestId = v.safeParse(CancelledRequestIdSchema, params[0]);
+    if (!requestId.success) return;
+    const answer = parseDeviceCancelAnswer(requestId.output, result);
+    this.ensureInit();
+    this._inflight.settleUnclaimed(requestId.output, answer.cancelled);
+  }
+
+  /**
+   * Cloud-side acceptance of one exec result. The supervisor's normal result
+   * remains local and replayable until this RPC has the proven workspace row,
+   * then acknowledges the daemon before removing the durable row.
+   *
+   * A claimed row belongs to an in-flight cancellation, which owns the terminal
+   * outcome and sends its own acknowledgement. Completion racing cancellation
+   * therefore settles once, under whichever authority claimed the row first.
+   */
+  async acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
+    if (resolved.kind !== 'workspace' || requestId === '') return;
+    const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
+    if (!held) return;
+    const tunnel = this._devices.tunnel(held.deviceId);
+    if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
+    this._inflight.deleteAcknowledged({
+      requestId, workspace: resolved.workspace, deviceId: held.deviceId,
+    });
+  }
+
+  /**
+   * Stop every live device command of one durable turn after a fresh actor
+   * activation. The actor's in-memory AbortControllers died with that
+   * activation; these UserDO rows are the durable complement, inserted before
+   * their frames left the socket.
+   *
+   * Rows with no turn id are deliberately excluded. An operation issued outside
+   * a turn has no turn authority, so Stop must not widen into a workspace sweep.
+   */
+  async cancelDeviceRequestsForTurn(
+    caller: UserCaller,
+    turnId: string,
+  ): Promise<DeviceCancellationOutcome[]> {
+    // Claim ownership atomically BEFORE any device await. A snapshot-then-await
+    // sweep could still cancel a request a parallel detach moved to a background
+    // job in the meantime; the claim makes precedence one synchronous storage
+    // decision instead of a race.
+    return this.cancelClaimedDeviceRequests(caller, turnId,
+      (workspace) => this._inflight.claimTurnRequests(workspace, turnId));
+  }
+
+  /** One guard for both cancellation scopes: the device tier, the workspace
+   *  kind, and the refusal of an empty id are one policy, not two copies. */
+  private async cancelClaimedDeviceRequests(
+    caller: UserCaller,
+    scopeId: string,
+    claim: (workspace: string) => ClaimedDeviceRequest[],
+  ): Promise<DeviceCancellationOutcome[]> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
+    if (resolved.kind !== 'workspace' || scopeId === '') return [];
+    return this.cancelDeviceRequests(claim(resolved.workspace));
+  }
+
+  /**
+   * Move ONE live device request to the durable background job that now owns
+   * it. Ownership is per request because a single turn can hold several
+   * parallel device calls, and only the detaching call changes hands.
+   */
+  async transferDeviceRequestToBackgroundJob(
+    caller: UserCaller,
+    requestId: string,
+    jobId: string,
+  ): Promise<{ transferred: boolean }> {
+    const resolved = await this.requireTier(caller, 'device.rpc');
+    if (resolved.kind !== 'workspace' || requestId === '' || jobId === '') return { transferred: false };
+    return this._inflight.transferToBackgroundJob({
+      requestId, workspace: resolved.workspace, jobId,
+    });
+  }
+
+  /** Stop all live device work owned by one durable background job. */
+  async cancelDeviceRequestsForBackgroundJob(
+    caller: UserCaller,
+    jobId: string,
+  ): Promise<DeviceCancellationOutcome[]> {
+    return this.cancelClaimedDeviceRequests(caller, jobId,
+      (workspace) => this._inflight.claimBackgroundJobRequests(workspace, jobId));
+  }
+
+  /**
+   * Ask the device to stop each claimed request, and report what stopping it
+   * achieved. The ledger owns which row this sweep may still speak for; this
+   * loop owns the frames and what the caller is told.
+   */
+  private async cancelDeviceRequests(rows: ClaimedDeviceRequest[]): Promise<DeviceCancellationOutcome[]> {
+    const outcomes: DeviceCancellationOutcome[] = [];
+    for (const row of rows) {
+      // One read, taken BEFORE any frame, answers both questions that can have
+      // changed while an earlier row was awaiting: does this sweep still own the
+      // row, and has an answer landed since it was claimed? A tool aborting its
+      // own exec stores one through `deviceRpc`, so re-reading here is what stops
+      // this sweep killing a command that is already dead and contradicting the
+      // answer the abort reported.
+      const held = this._inflight.held(row.requestId, row.claim);
+      if (held === null) continue;
+      if (held.settled !== null) {
+        outcomes.push({ requestId: row.requestId, outcome: held.settled });
+        await this.cleanUpSettledDeviceRequest(row);
+        continue;
+      }
+      const tunnel = this._devices.tunnel(row.deviceId);
+      if (!tunnel) {
+        this._inflight.releaseClaim(row.requestId, row.claim);
+        outcomes.push({ requestId: row.requestId, outcome: 'failed', detail: NO_DEVICE_CONNECTED });
+        continue;
+      }
+      try {
+        const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
+          DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
+        )).cancelled;
+        // Durable BEFORE the acknowledgement, because the acknowledgement is the
+        // step that can fail. The guarded write is also this call's post-await
+        // ownership check: no row updated means the terminal authority took the
+        // claim mid-flight, and it - not this sweep - reports the request.
+        if (!this._inflight.settleHeld(row.requestId, row.claim, answer)) continue;
+        outcomes.push({ requestId: row.requestId, outcome: answer });
+        await this.cleanUpSettledDeviceRequest(row);
+      } catch (err) {
+        // The kill itself failed, so this request is still live work. The
+        // release doubles as the ownership check: releasing nothing means the
+        // terminal authority took or dropped the row mid-flight, and it - not
+        // this sweep - answers for the request.
+        if (!this._inflight.releaseClaim(row.requestId, row.claim)) continue;
+        outcomes.push({
+          requestId: row.requestId,
+          outcome: 'failed',
+          detail: renderThrownChain({ cause: err }),
+        });
+      }
+    }
+    return outcomes;
+  }
+
+  /**
+   * Release the daemon's retained supervisor for a settled request, then drop
+   * the row. Cleanup failure is not cancellation failure: the stored answer
+   * stays truthful, the claim goes back so the next sweep in this activation can
+   * retry, and the row stays untransferable because it is settled.
+   */
+  private async cleanUpSettledDeviceRequest(row: ClaimedDeviceRequest): Promise<void> {
+    const tunnel = this._devices.tunnel(row.deviceId);
+    try {
+      if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
+      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
+      this._inflight.deleteHeld(row.requestId, row.claim);
+    } catch (err) {
+      this._inflight.releaseClaim(row.requestId, row.claim);
+      diagnostics.failure('device.cancellation_ack_cleanup_failed', toKinuError({
+        doing: 'releasing the cancelled device command supervisor',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { device: row.deviceId, request: row.requestId });
+    }
+  }
+
 
   // ── Device consent (ask-once-then-remember) ──────────────────────────
 
@@ -1280,9 +1826,7 @@ export class UserDO extends Agent<Env> {
   ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
     const requiredScope = deviceConsentScopeForMethod(method);
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
-    const rememberedScopeCovers = requiredScope === DEVICE_CONSENT_SCOPE
-      || policy?.scope === DEVICE_CONSENT_SCOPE_FULL_FS;
-    if (policy?.policy === 'allow' && rememberedScopeCovers) return { allowed: true };
+    if (policy?.policy === 'allow' && consentScopeCovers(policy.scope, requiredScope)) return { allowed: true };
     if (policy?.policy === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     const action = summarizeDeviceAction(method, params);
     let decision: DeviceConsentDecision;
@@ -1319,12 +1863,14 @@ export class UserDO extends Agent<Env> {
    * ONE provisioning card on the same rail per-action consent rides — approve
    * surfaces the connect flow, deny ends the asking — and fail the call
    * either way: nothing executes until a daemon is actually linked.
-   * Deduped against prompts still waiting, so a retry loop cannot stack cards.
+   * A retry loop cannot stack cards: the registry joins an identical prompt
+   * already waiting instead of minting a second id (DeviceConsentRegistry.
+   * request). This used to check listPendingConsents here first, which is a
+   * check-then-act across two RPCs and races itself.
    */
   private async raiseProvisioningRequest(workspaceOrAgent: string): Promise<void> {
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
-      if ((await stub.listPendingConsents()).some((c) => c.method === DEVICE_PROVISION_METHOD)) return;
       await stub.awaitDeviceConsent({
         deviceId: '',
         deviceLabel: 'this computer',
@@ -1391,7 +1937,11 @@ export class UserDO extends Agent<Env> {
   /** Revoke a workspace's grant on a device (Account settings → Devices).
    *  The row is deleted rather than flipped to 'deny', so the next call asks
    *  again instead of reading as a standing refusal — and it takes effect on
-   *  that next call, because the chokepoint reads this table every time. */
+   *  that next call, because the chokepoint reads this table every time.
+   *
+   *  It is not a stop, and must not be read as one: consent decides what may
+   *  START, so a command already running keeps running and still returns its
+   *  result. `revokeDevice` is the authority that ENDS live commands. */
   async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
     const resolved = await this.requireTier(caller, 'device.consent');
     const target = resolved.kind === 'workspace' ? resolved.workspace : agentName;
@@ -1414,29 +1964,38 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  /** The user's devices for Account settings → Devices (live-connected flag from
-   *  the hibernatable-socket tags, plus the provenance of the newest accept and
-   *  whether a second socket ever took the slot — the two facts that make a
-   *  stolen `device.json` visible rather than silent). */
+  /**
+   * The user's devices for Account settings.
+   *
+   * Ordinary revoked rows stay hidden. A revoked row with `unstopped_at` remains
+   * visible only until its owner acknowledges the incident: hiding it on reload
+   * would make the durable warning/ack action vanish before anyone could read
+   * it. The explicit `revokedAt` tells the UI not to offer connect/rename
+   * controls for this incident row.
+   */
   async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
     lastIp: string | null; lastAgent: string | null; replacedAt: number | null;
+    revokedAt: number | null; unstoppedAt: number | null;
   }>> {
     await this.requireTier(caller, 'device.manage');
     return this.sqlx<{
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
       last_ip: string | null; last_agent: string | null; replaced_at: number | null;
+      revoked_at: number | null; unstopped_at: number | null;
     }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at,
-               last_ip, last_agent, replaced_at
+               last_ip, last_agent, replaced_at, revoked_at, unstopped_at
           FROM user_devices
-         WHERE revoked_at IS NULL ORDER BY created_at DESC`)
+         WHERE revoked_at IS NULL OR unstopped_at IS NOT NULL
+         ORDER BY created_at DESC`)
       .map((r) => ({
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
-        connected: this._devices.isConnected(r.id),
+        connected: r.revoked_at === null && this._devices.isConnected(r.id),
         createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
         lastIp: r.last_ip, lastAgent: r.last_agent, replacedAt: r.replaced_at,
+        revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at,
       }));
   }
 
@@ -1496,12 +2055,136 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** Revoke a device: drop its live socket + mark the row revoked. */
-  async revokeDevice(caller: UserCaller, deviceId: string): Promise<{ ok: boolean }> {
+  /**
+   * Revoke a device only after attempting to terminate each unsettled command.
+   *
+   * A close remains the backstop for a daemon that cannot answer, but it is not
+   * proof a process stopped. Every unconfirmed request is recorded on the
+   * owner-visible device row before its active row is removed: revocation makes
+   * the daemon unable to reconnect, so retaining an active row would leave
+   * nothing that could ever act on it.
+   */
+  async revokeDevice(
+    caller: UserCaller,
+    deviceId: string,
+  ): Promise<{ ok: boolean; unstoppedCommands: number }> {
     await this.requireTier(caller, 'device.manage');
+    // Revoking one device twice at once is one terminal act, not two. Without
+    // coalescing, two sweeps share the device row: whichever finishes last
+    // decides what the owner sees, so a confirmed sweep could erase the
+    // unconfirmed commands the other one just reported. Same reason as
+    // `_provisioning` above - a Durable Object serializes nothing across an
+    // outbound await.
+    const inFlight = this._revoking.get(deviceId);
+    if (inFlight) return inFlight;
+    const task = this.sweepAndRevokeDevice(deviceId);
+    this._revoking.set(deviceId, task);
+    try { return await task; } finally { this._revoking.delete(deviceId); }
+  }
+
+  private readonly _revoking = new Map<string, Promise<{ ok: boolean; unstoppedCommands: number }>>();
+
+  private async sweepAndRevokeDevice(
+    deviceId: string,
+  ): Promise<{ ok: boolean; unstoppedCommands: number }> {
+    const now = Date.now();
+    // Close admission before the first cancellation await. A device RPC that
+    // resumes after its consent await rechecks this durable state before send.
+    this.sqlx(
+      `UPDATE user_devices SET revoked_at = ?, connected_at = NULL
+        WHERE id = ? AND revoked_at IS NULL`,
+      now, deviceId,
+    );
+    // Revocation is the terminal device authority, so it TAKES the claim from
+    // any in-flight sweep rather than reading a list that a concurrent detach or
+    // sweep can change under its awaits. A displaced sweep keeps reporting the
+    // outcome it observed; its guarded cleanup simply finds the row already gone.
+    const rows = this._inflight.claimEveryRequestOf(deviceId);
+    // Pessimistic, and written BEFORE the first await below: an activation that
+    // dies mid-sweep leaves a revoked device the owner can SEE carries commands
+    // nobody confirmed, rather than a silent revoked row with live processes and
+    // a daemon that can never reconnect to be asked again. `now` is this sweep's
+    // provisional value, and only this sweep's own value is cleared on success.
+    if (rows.length > 0) {
+      this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
+    }
+    let unstoppedCommands = 0;
+    const tunnel = this._devices.tunnel(deviceId);
+    for (const row of rows) {
+      // A stored answer already says nothing runs under this request, so it is
+      // not an unstopped command however the socket behaves now. Its cleanup is
+      // owed, and revocation drops every row below in either case.
+      const settled = row.settled;
+      if (!tunnel) {
+        if (settled === null) unstoppedCommands += 1;
+        continue;
+      }
+      try {
+        if (settled === null) {
+          const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
+            DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
+          )).cancelled;
+          // Durable before the acknowledgement, so an activation that dies here
+          // leaves an answer rather than a row that reads as live work.
+          this._inflight.settleRevoked(row.requestId, answer);
+        }
+        try {
+          await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
+        } catch (err) {
+          // Kill confirmation is already truthful. This is only local replay
+          // cleanup; record it apart so a failed ACK never reads as a process
+          // that may still run.
+          diagnostics.failure('device.revocation_ack_cleanup_failed', toKinuError({
+            doing: 'releasing the cancelled device command supervisor on revocation',
+            cause: err,
+            otherwise: 'unavailable',
+          }), { device: deviceId, request: row.requestId });
+        }
+      } catch (err) {
+        unstoppedCommands += 1;
+        diagnostics.failure('device.revocation_cancel_unconfirmed', toKinuError({
+          doing: 'confirming device command termination before revocation',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { device: deviceId, request: row.requestId });
+      }
+    }
+    // One sweep per device runs at a time, so this decision is the whole truth
+    // about the commands THIS sweep swept. A later revoke of an already-revoked
+    // device sweeps nothing, wrote no provisional marker, and therefore may not
+    // retract the incident an earlier sweep recorded: its unconfirmed processes
+    // can never be asked about again, and only the owner may clear that.
+    if (unstoppedCommands > 0) {
+      this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
+    } else if (rows.length > 0) {
+      this.sqlx(`UPDATE user_devices SET unstopped_at = NULL WHERE id = ?`, deviceId);
+    }
+
+    this._inflight.deleteEveryRequestOf(deviceId);
     this._devices.close(deviceId, 'device revoked');
-    this.sqlx(`UPDATE user_devices SET revoked_at = ?, connected_at = NULL WHERE id = ?`, Date.now(), deviceId);
-    return { ok: true };
+    return { ok: true, unstoppedCommands };
+  }
+
+  /**
+   * The owner has read the revocation incident. Only that explicit decision, or
+   * deleting the device row, may clear it - reconnect cannot revive a revoked
+   * device and must never make an unconfirmed stop look confirmed.
+   *
+   * Refused while the device still has unsettled request rows: the sweep that
+   * wrote the warning has not finished deciding, so there is nothing to read
+   * yet. Clearing there would let an activation failure retire a warning about a
+   * process nobody has confirmed and nobody can ask about again.
+   */
+  async acknowledgeUnstoppedDevice(caller: UserCaller, deviceId: string): Promise<{ ok: boolean }> {
+    await this.requireTier(caller, 'device.manage');
+    if (this._inflight.hasRequestsFor(deviceId)) return { ok: false };
+    const cleared = this.sqlx<{ id: string }>(
+      `UPDATE user_devices SET unstopped_at = NULL
+        WHERE id = ? AND revoked_at IS NOT NULL AND unstopped_at IS NOT NULL
+        RETURNING id`,
+      deviceId,
+    );
+    return { ok: cleared.length === 1 };
   }
 
   // ── Releases ─────────────────────────────────────────────────
@@ -2381,7 +3064,7 @@ export class UserDO extends Agent<Env> {
   private userMcp(): MCPClientManager {
     if (this._userMcp) return this._userMcp;
     this.ensureInit();
-    this._userMcp = new MCPClientManager('kinu-user-mcp', '0.1.0', {
+    this._userMcp = new MCPClientManager(USER_MCP_CLIENT_NAME, '0.1.0', {
       storage: this.ctx.storage,
       // Override so EVERY server (regardless of when added) uses the same
       // per-user callback URL pattern. The SDK calls this for new connect()s
@@ -2391,29 +3074,173 @@ export class UserDO extends Agent<Env> {
       createAuthProvider: (callbackUrl: string): AgentMcpOAuthProvider =>
         new DurableObjectOAuthClientProvider(
           this.ctx.storage,
-          'kinu-user-mcp',
+          USER_MCP_CLIENT_NAME,
           callbackUrl,
         ),
     });
     return this._userMcp;
   }
 
+  /**
+   * THE ONE HYDRATION AUTHORITY for this user's MCP plane.
+   *
+   * `user_mcp_servers` is the truth. The SDK's `cf_agents_mcp_servers` rows and
+   * its live `mcpConnections` are derived from it, and every read path comes
+   * through here so there is one place that says what "hydrated" means. Three
+   * steps, and the ORDER is the substance:
+   *
+   *  1. An SDK row with no config row is removed. `userMcp_add` rolls back both
+   *     sides, but a rollback that itself throws and a `removeServer` that failed
+   *     during a delete both leave an SDK row behind — and that row keeps
+   *     reconnecting, keeps spending the user's credential and keeps appearing in
+   *     `listServers()` with nothing able to delete it. Two writable truths.
+   *  2. Every row holding a sealed credential is registered by US, carrying the
+   *     credential as a `fetch` closure rather than as data (see
+   *     `mcpCredentialTransport`). `registerServer` builds the connection
+   *     WITHOUT connecting and leaves it in CONNECTING, and
+   *     `restoreConnectionsFromStorage` skips a connection already in that
+   *     state (`agents/dist/client-zqKcsyFa.js:1541-1549`), so the SDK never
+   *     gets to connect a credentialed server from its own persisted options.
+   *     That is what closes the cold-start window: no unauthenticated first
+   *     request, and no reason for a credential to be persisted at all. The
+   *     same call rewrites `server_options`, which is how a row written by the
+   *     old plaintext path is scrubbed.
+   *  3. The SDK restores everything else — OAuth continuations, retry policy,
+   *     resumed sessions — and then the connections registered in step 2 are
+   *     established.
+   *
+   * Idempotent. A connection that already carries the closure is left alone, so
+   * a warm activation pays one `listServers()` scan.
+   */
+  private async hydrateUserMcp(): Promise<void> {
+    if (this._hydratingUserMcp) return this._hydratingUserMcp;
+    const hydration = this.hydrateUserMcpOnce();
+    this._hydratingUserMcp = hydration;
+    try {
+      await hydration;
+    } finally {
+      if (this._hydratingUserMcp === hydration) this._hydratingUserMcp = null;
+    }
+  }
+
+  /** One complete derived-plane reconciliation. Called only through
+   *  {@link hydrateUserMcp}, which coalesces concurrent callers. */
+  private async hydrateUserMcpOnce(): Promise<void> {
+    const mgr = this.userMcp();
+    const rows = this.sqlx<McpHydrationRow>(
+      `SELECT id, name, server_url, transport, headers FROM user_mcp_servers`,
+    );
+    const configured = new Set(rows.map((row) => row.id));
+    for (const stored of mgr.listServers()) {
+      if (configured.has(stored.id)) continue;
+      try { await mgr.removeServer(stored.id); }
+      catch (err) {
+        diagnostics.failure('mcp.orphan_server_removal_failed', toKinuError({
+          doing: 'removing an SDK MCP server row that no config row owns',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { serverId: stored.id });
+        throw err;
+      }
+    }
+
+    const registered: string[] = [];
+    for (const row of rows) {
+      if (row.headers === null) continue;
+      const live = mgr.mcpConnections[row.id]?.options.transport;
+      if (live && 'fetch' in live && live.fetch) continue;
+      await this.registerCredentialedMcpServer(row);
+      registered.push(row.id);
+    }
+
+    await mgr.restoreConnectionsFromStorage(USER_MCP_CLIENT_NAME);
+    for (const id of registered) await mgr.establishConnection(id);
+  }
+
+  /** Register one credentialed server with the credential as a closure.
+   *
+   *  A live connection is torn down FIRST. `createConnection` returns an
+   *  existing connection object untouched (`client-zqKcsyFa.js:1719-1720`), so
+   *  registering over one would rewrite the storage row and leave the wire
+   *  running on the old transport — the credential seam would silently not be
+   *  installed. Only the credential-acquiring transition reaches that branch; a
+   *  cold activation has no connection to close.
+   *
+   *  Any pending OAuth continuation on the SDK's row (callback URL, client id,
+   *  the authorize URL a user has not visited yet) is read before the teardown
+   *  and carried across, because this registration REPLACES that row. */
+  private async registerCredentialedMcpServer(row: McpHydrationRow): Promise<void> {
+    const mgr = this.userMcp();
+    const stored = mgr.listServers().find((server) => server.id === row.id);
+    const callbackUrl = stored?.callback_url ?? '';
+    if (mgr.mcpConnections[row.id]) {
+      try { await mgr.removeServer(row.id); }
+      catch (err) {
+        diagnostics.failure('mcp.credential_seam_teardown_failed', toKinuError({
+          doing: 'closing an MCP connection before installing its credential seam',
+          cause: err,
+          otherwise: 'unavailable',
+        }), { serverId: row.id });
+        throw err;
+      }
+    }
+    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
+      ...mcpCredentialTransport(row.server_url, () => this.openMcpHeaderMap(row.id)),
+      type: row.transport,
+    };
+    if (callbackUrl) {
+      const authProvider = new DurableObjectOAuthClientProvider(
+        this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+      );
+      authProvider.serverId = row.id;
+      if (stored?.client_id) authProvider.clientId = stored.client_id;
+      transport.authProvider = authProvider;
+    }
+    const options: Parameters<MCPClientManager['registerServer']>[1] = {
+      url: row.server_url, name: row.name, callbackUrl, transport,
+    };
+    if (stored?.client_id) options.clientId = stored.client_id;
+    if (stored?.auth_url) options.authUrl = stored.auth_url;
+    await mgr.registerServer(row.id, options);
+  }
+
+  /** This server's current custom headers, opened for ONE request.
+   *
+   *  Read from SQL on every call rather than captured: a rotated header is then
+   *  spent by the next request with no reconnect, and no decrypted copy is held
+   *  by the closure, the connection or the SDK. The closure captures the server
+   *  id and its origin — nothing else. */
+  private async openMcpHeaderMap(serverId: string): Promise<Record<string, string> | null> {
+    const row = this.sqlx<{ headers: string | null }>(
+      `SELECT headers FROM user_mcp_servers WHERE id = ?`, serverId,
+    )[0];
+    if (!row) return null;
+    return parseMcpHeaders(await this.openMcpHeaders(serverId, row.headers));
+  }
+
   /** Idempotent boot warmup. Called by the routes layer on first hit per
    *  process so MCP connections can re-establish in parallel with the user's
-   *  first orchestrator turn, not on its critical path. Fire-and-forget. */
+   *  first orchestrator turn, not on its critical path. Fire-and-forget.
+   *
+   *  Runs even with no configured server, and that is deliberate: the SDK's own
+   *  rows are what reconciliation removes, and "the user deleted their last
+   *  server while its removal failed" is exactly the case where a row is left
+   *  reconnecting to a third party with their credential. A count-first
+   *  short-circuit would make the one state that needs collecting the one state
+   *  nothing ever looks at. */
   async userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
     await this.requireTier(caller, 'mcp.manage');
     const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
-    if (!rows || rows.n === 0) return { servers: 0 };
-    try { await this.userMcp().restoreConnectionsFromStorage('kinu-user-mcp'); }
+    const servers = rows?.n ?? 0;
+    try { await this.hydrateUserMcp(); }
     catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
         doing: 'restoring the user MCP connections on warmup',
         cause: err,
         otherwise: 'unavailable',
-      }), { servers: rows.n });
+      }), { servers });
     }
-    return { servers: rows.n };
+    return { servers };
   }
 
   async userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
@@ -2425,13 +3252,12 @@ export class UserDO extends Agent<Env> {
       `SELECT id, name, server_url, transport, allowed_tools, created_at, updated_at
        FROM user_mcp_servers ORDER BY name`,
     );
-    // Touch the manager so the live view of connection state is hydrated.
-    // Cheap on cold start (storage scan); idempotent. A failure here is a
+    // Hydrate so the live view of connection state is real, and unconditionally
+    // — an orphaned SDK row outlives the last config row, and this is the
+    // management surface where that is settled. Idempotent. A failure here is a
     // storage failure, not a per-server connection failure — those surface as
     // the row's `status` — so it must not report every server disconnected.
-    if (rows.length > 0) {
-      await this.userMcp().restoreConnectionsFromStorage('kinu-user-mcp');
-    }
+    await this.hydrateUserMcp();
     const connections = this._userMcp?.mcpConnections ?? {};
     return rows.map((r): McpServerSummary => {
       const conn = connections[r.id];
@@ -2478,30 +3304,36 @@ export class UserDO extends Agent<Env> {
     if (!/^https?:\/\//.test(publicOrigin)) {
       throw new Error('publicOrigin must be a full https?:// origin.');
     }
-    this.requireFreeMcpServerName(cfg.name, null);
     const id = nanoid(8);
     const now = Date.now();
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
     const allowedJson = cfg.allowedTools ? JSON.stringify(cfg.allowedTools) : null;
-
-    this.sqlx(
-      `INSERT INTO user_mcp_servers
-         (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-      await this.sealMcpHeaders(id, headersJson), allowedJson, now, now,
-    );
+    // SEALED BEFORE THE ATOMIC BOUNDARY. Sealing is an await, and an await is
+    // what made the old SELECT-then-INSERT no check at all: two concurrent adds
+    // both passed the SELECT while the other was sealing. Every value the
+    // transaction writes is now in hand before it opens.
+    const sealedHeaders = await this.sealMcpHeaders(id, headersJson);
+    this.claimMcpServerName(cfg.name, id, () => {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO user_mcp_servers
+           (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
+        sealedHeaders, allowedJson, now, now,
+      );
+    });
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
     const authProvider = new DurableObjectOAuthClientProvider(
-      this.ctx.storage, 'kinu-user-mcp', callbackUrl,
+      this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
     );
     authProvider.serverId = id;
 
-    // Header passthrough for non-OAuth servers behind private/bearer auth.
-    // requestInit.headers is what survives hibernation and authenticates both
-    // transports; see buildMcpHeaderTransportOpts.
-    const headerOpts = buildMcpHeaderTransportOpts(cfg.headers ?? null) ?? {};
+    // The credential is a CLOSURE, never data the SDK can persist. See
+    // `mcpCredentialTransport`; the row's sealed headers are opened per request.
+    const credential = cfg.headers
+      ? mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id))
+      : {};
 
     let authUrl: string | null = null;
     try {
@@ -2511,7 +3343,7 @@ export class UserDO extends Agent<Env> {
         name: cfg.name,
         callbackUrl,
         transport: {
-          ...headerOpts,
+          ...credential,
           authProvider,
           type: cfg.transport ?? 'auto',
         },
@@ -2556,24 +3388,18 @@ export class UserDO extends Agent<Env> {
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
   }
 
-  /** Server names address the tools (`mcp_<server>_<tool>`), so two servers
-   *  sharing one name would mint colliding tool keys. The CLI gets this for
-   *  free — its config is an `mcpServers` object — so cf enforces it. */
-  private requireFreeMcpServerName(name: string, exceptId: string | null): void {
-    const taken = this.sqlx<{ id: string }>(
-      `SELECT id FROM user_mcp_servers WHERE lower(name) = lower(?)`, name,
-    ).some((row) => row.id !== exceptId);
-    if (taken) throw new Error(`An MCP server named '${name}' already exists.`);
-  }
-
-  /** Patch-update editable fields. `name` and `allowedTools` take effect
-   *  without reconnecting (a rename re-keys the tools on the next descriptor
-   *  fetch; allowedTools is enforced from SQL at descriptor/dispatch time). A
-   *  `headers` change re-registers the live connection — the SSE/HTTP
-   *  transport reads its auth headers at connect
-   *  time, so a rotated bearer only takes effect (and re-persists into the
-   *  SDK's snapshot) after a reconnect. `serverUrl` / `transport` changes still
-   *  require remove + re-add (the SDK doesn't support live re-targeting). */
+  /** Patch-update editable fields. Nothing here reconnects.
+   *
+   *  `name` and `allowedTools` take effect without one already (a rename
+   *  re-keys the tools on the next descriptor fetch; allowedTools is enforced
+   *  from SQL at descriptor/dispatch time), and a rotated `headers` value is
+   *  now spent by the NEXT REQUEST: the transport reads the sealed column
+   *  through a closure rather than at connect time (`mcpCredentialTransport`).
+   *  Hydration is still called, because a row that had no credential has no
+   *  closure on its live connection yet — that is the only transition that
+   *  needs a registration, and hydration is the one place that decides it.
+   *  `serverUrl` / `transport` changes still require remove + re-add (the SDK
+   *  doesn't support live re-targeting). */
   async userMcp_update<Patch>(caller: UserCaller, id: string, patch: Patch): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
@@ -2582,12 +3408,10 @@ export class UserDO extends Agent<Env> {
     const p = parsedPatch.output;
     const sets: string[] = [];
     const args: SqlStorageValue[] = [];
-    const parsedName = v.safeParse(v.string(), p.name);
-    if (parsedName.success) {
-      if (!parsedName.output.trim() || parsedName.output.length > 64) throw new Error('name must be 1..64 chars.');
-      this.requireFreeMcpServerName(parsedName.output.trim(), id);
-      sets.push('name = ?'); args.push(parsedName.output.trim());
-    }
+    // ONE name rule, shared with the add path — a rename must not accept a name
+    // an add would refuse, since both claim from the same canonical namespace.
+    const renamed = p.name === undefined ? null : validateMcpServerName(p.name);
+    if (renamed !== null) { sets.push('name = ?'); args.push(renamed); }
     if (p.allowedTools !== undefined) {
       const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
       if (!allowedTools.success) throw new Error('allowedTools must be string[] or null.');
@@ -2606,19 +3430,23 @@ export class UserDO extends Agent<Env> {
         sets.push('headers = ?'); args.push(await this.sealMcpHeaders(id, JSON.stringify(headers.output)));
       }
     }
+    // Everything above is validated and sealed, so nothing below awaits. The
+    // write is the last thing that happens and it happens atomically.
     if (sets.length === 0) return;
     const now = Date.now();
     sets.push('updated_at = ?'); args.push(now);
     args.push(id);
-    this.sqlx(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
+    const write = (): void => {
+      this.ctx.storage.sql.exec(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
+    };
+    if (renamed === null) write();
+    else this.claimMcpServerName(renamed, id, write);
 
-    // A headers patch must re-register the live transport (and the SDK's
-    // stored snapshot) — writing the SQL column alone never reaches the wire.
     if (p.headers !== undefined) {
-      try { await this.reregisterUserMcpServer(id); }
+      try { await this.hydrateUserMcp(); }
       catch (err) {
-        diagnostics.failure('mcp.header_rotation_reregister_failed', toKinuError({
-          doing: 'reregistering an MCP server after a header rotation',
+        diagnostics.failure('mcp.header_rotation_hydration_failed', toKinuError({
+          doing: 'hydrating an MCP server after a header change',
           cause: err,
           otherwise: 'unavailable',
         }), { serverId: id });
@@ -2626,62 +3454,71 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** Rebuild a server's live MCP connection from its current `user_mcp_servers`
-   *  row. The transport reads auth headers at connect time, so applying a
-   *  rotated bearer means tearing down the connection and re-establishing it
-   *  with freshly-built transport options (which also re-persists the new
-   *  headers into the SDK's `server_options` snapshot). Any OAuth callback URL
-   *  is preserved across the re-register. */
-  private async reregisterUserMcpServer(id: string): Promise<void> {
-    const row = this.sqlx<{ name: string; server_url: string; transport: McpTransport; headers: string | null }>(
-      `SELECT name, server_url, transport, headers FROM user_mcp_servers WHERE id = ?`, id,
-    )[0];
-    if (!row) return;
-    const mgr = this.userMcp();
-    const callbackUrl = mgr.listServers().find((s) => s.id === id)?.callback_url ?? '';
-    try { await mgr.removeServer(id); }
-    catch (err) {
-      diagnostics.failure('mcp.reregister_teardown_failed', toKinuError({
-        doing: 'tearing down an MCP connection before reregistering it',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { serverId: id });
+  /**
+   * Claim `name` for `serverId` and perform `write`, atomically.
+   *
+   * THE TRANSACTION IS THE CHECK, and it is the whole of it. `transactionSync`
+   * runs the read and the write with no await between them, so no second add or
+   * rename can interleave — which is exactly what a bare SELECT-then-INSERT
+   * could not promise here, because sealing a row's headers is an await and both
+   * callers passed the SELECT while the other was sealing.
+   *
+   * It holds WITHOUT the UNIQUE index, which is why a database carrying
+   * historical duplicates keeps working: the constraint could not be built over
+   * those rows (schema.ts), and nothing about a new write depends on it. The
+   * index, where it exists, refuses the same thing with the same sentence.
+   *
+   * `write` MUST NOT await. The type says so — a synchronous body is what
+   * `transactionSync` commits atomically; an async one would commit at its first
+   * await and take the check with it.
+   */
+  private claimMcpServerName(name: string, serverId: string, write: () => void): void {
+    this.ensureInit();
+    try {
+      this.ctx.storage.transactionSync(() => {
+        const taken = this.ctx.storage.sql.exec(
+          `SELECT 1 AS held FROM user_mcp_servers WHERE lower(name) = lower(?) AND id <> ? LIMIT 1`,
+          name, serverId,
+        ).toArray().length > 0;
+        if (taken) throw new Error(mcpNameTakenMessage(name));
+        write();
+      });
+    } catch (err) {
+      rethrowMcpNameCollision({ cause: err, name });
     }
-
-    const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(await this.openMcpHeaders(id, row.headers))) ?? {};
-    let authProvider: AgentMcpOAuthProvider | undefined;
-    if (callbackUrl) {
-      authProvider = new DurableObjectOAuthClientProvider(this.ctx.storage, 'kinu-user-mcp', callbackUrl);
-      authProvider.serverId = id;
-    }
-    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
-      ...headerOpts,
-      type: row.transport,
-    };
-    if (authProvider) transport.authProvider = authProvider;
-    await mgr.registerServer(id, {
-      url: row.server_url,
-      name: row.name,
-      callbackUrl,
-      transport,
-    });
-    // Awaited: the point of a re-register is that the rotated credential is live
-    // when the caller is told the update applied. `ctx.waitUntil` cannot hold this
-    // open (`do.wait_until.no_op`), so detaching it meant the header patch could
-    // report success against a connection that never came back.
-    await mgr.establishConnection(id);
   }
 
 
-  /** Serializable tool descriptors for every connected MCP server, filtered
-   *  by per-server `allowed_tools`. The orchestrator wraps each into an
-   *  AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`.
+  /**
+   * Serializable tool descriptors for every ALREADY-CONNECTED MCP server,
+   * filtered by per-server `allowed_tools`. The orchestrator wraps each into an
+   * AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`.
    *
-   *  `unavailable` names every configured server that produced no tools. A
-   *  server that compiles or fetches on boot misses the warmup budget below and
-   *  its tools are simply ABSENT from the turn — so without this the model
-   *  plans as if a capability the user gave it does not exist, and cannot
-   *  explain why. The bound stays; the silence does not. */
+   * THIS READ STARTS NO NETWORK WORK AND WAITS FOR NONE. It is on the turn's
+   * critical path, and it used to hydrate: `hydrateUserMcp` awaits
+   * `establishConnection`, which awaits `_connectWithRetry` (3 attempts, 500ms
+   * to 5s backoff) plus discovery with no bound at all
+   * (`agents/dist/client-zqKcsyFa.js:2046,2073`). The
+   * `waitForConnections({ timeout: 5_000 })` that followed could not bound what
+   * its prose claimed, because the unbounded await had already happened before
+   * the timer started. So the deadline is gone and so is the reason for one:
+   * this method reads the CURRENT connection snapshot and returns.
+   *
+   * Establishment belongs to `userMcp_warmConnections`, which runs off the turn
+   * (`user/routes.ts` first hit, under the WORKER's `ctx.waitUntil`), and to
+   * `userMcp_callTool`, which hydrates on explicit use. Neither is this.
+   *
+   * `unavailable` names every configured server whose tools are not on the
+   * surface, and the reason says WHY and WHEN they arrive. Without it the model
+   * plans as if a capability the user gave it does not exist and cannot explain
+   * why. The absence is a DEFERRAL, not a verdict: a tool set is fixed when a
+   * turn opens — the AI SDK's `prepareStep` result carries `activeTools` but no
+   * `tools` (`ai@6/dist/index.d.ts:986-1023`) and Think hands `streamText` one
+   * tool object for the whole turn (`@cloudflare/think/dist/think.js:2707,2728`)
+   * — so a connection that completes mid-turn is installed by the NEXT turn's
+   * read of this surface. No state carries it: the live connection is the state,
+   * and the orchestrator's cache invalidates on this surface's content hash.
+   */
   async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
     await this.requireTier(caller, 'mcp.tools');
     const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
@@ -2689,54 +3526,45 @@ export class UserDO extends Agent<Env> {
     );
     if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
 
-    // Ensure connections are restored. Don't await failures — partial
-    // descriptors are better than none.
-    try {
-      await this.userMcp().restoreConnectionsFromStorage('kinu-user-mcp');
-      // Cap at 5s so a single slow server can't block a turn indefinitely.
-      await this.userMcp().waitForConnections({ timeout: MCP_WARMUP_TIMEOUT_MS });
-    } catch (err) {
-      diagnostics.failure('mcp.descriptor_warmup_failed', toKinuError({
-        doing: 'warming the MCP connections that serve tool descriptors',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { servers: rows.length });
-    }
-
-    const out: SerializableToolDescriptor[] = [];
     const allowedById = new Map<string, ReadonlySet<string> | null>();
     for (const r of rows) {
       const allowed = parseAllowedTools(r.allowed_tools);
       allowedById.set(r.id, allowed ? new Set(allowed) : null);
     }
+
+    const out: SerializableToolDescriptor[] = [];
     const connections = this._userMcp?.mcpConnections ?? {};
     for (const [id, conn] of Object.entries(connections)) {
       const allowed = allowedById.get(id);
-      if (allowed === undefined) continue; // server was just deleted
+      if (allowed === undefined) continue; // deleted
       const meta = rows.find((r) => r.id === id);
       if (!meta) continue;
       for (const tool of conn.tools) {
         if (allowed && !allowed.has(tool.name)) continue;
-        const descriptor: SerializableToolDescriptor = {
-          serverId: id,
-          serverName: meta.name,
-          name: tool.name,
-          toolKey: mcpToolKey(meta.name, tool.name),
-          description: tool.description,
-          title: tool.title ?? tool.annotations?.title,
-          inputSchema: v.parse(JsonObjectSchema, tool.inputSchema),
-        };
-        if (tool.outputSchema) descriptor.outputSchema = v.parse(JsonObjectSchema, tool.outputSchema);
-        out.push(descriptor);
+        out.push(describeMcpTool({ id, name: meta.name }, tool));
       }
     }
-    const served = new Set(out.map((d) => d.serverId));
+    // Connection is a property of the SDK connection, NOT of emitted
+    // descriptors. A ready server can expose zero tools or have every tool
+    // filtered by `allowed_tools`; neither fact means it is still connecting.
+    const connected = new Set(
+      Object.entries(connections)
+        .filter(([, conn]) => mapConnectionStatus(conn.connectionState) === 'ready')
+        .map(([id]) => id),
+    );
     const unavailable = rows
-      .filter((r) => !served.has(r.id))
+      .filter((r) => !connected.has(r.id))
       .map((r) => ({
         server: r.name,
-        reason: `not connected within ${MCP_WARMUP_TIMEOUT_MS / 1000}s of this turn starting — its tools are absent`,
+        reason: `not connected when this turn opened, so its tools are absent from this turn. They are `
+          + `installed by the next turn once the connection completes — a turn's tool set is fixed `
+          + `when the turn opens.`,
       }));
+    // Sorted by the tool key, because this JSON is what the orchestrator's
+    // cache hashes: `Object.entries(connections)` order is whatever the SDK's
+    // map happens to hold, so an unsorted surface re-hashes — and rebuilds every
+    // tool closure — for a reason nobody changed.
+    out.sort((a, b) => (a.toolKey < b.toolKey ? -1 : a.toolKey > b.toolKey ? 1 : 0));
     return JSON.stringify({ descriptors: out, unavailable } satisfies McpToolSurface);
   }
 
@@ -2757,7 +3585,7 @@ export class UserDO extends Agent<Env> {
     const manager = this.userMcp();
     if (wasCold) {
       // Cold start: hydrate the manager before dispatching.
-      try { await manager.restoreConnectionsFromStorage('kinu-user-mcp'); }
+      try { await this.hydrateUserMcp(); }
       catch (err) { throw new Error(`MCP not ready: ${renderThrownChain({ cause: err })}`, { cause: err }); }
     }
     // Type-check the server membership inside our SQL so a stale orchestrator
@@ -2772,10 +3600,48 @@ export class UserDO extends Agent<Env> {
     }
     const parsedParams = v.safeParse(JsonObjectSchema, args);
     const params = parsedParams.success ? parsedParams.output : {};
-    const result = await manager.callTool({
-      serverId, name, arguments: params,
-    });
-    return JSON.stringify(decodeJsonValue({ value: result }));
+    try {
+      const result = await manager.callTool({ serverId, name, arguments: params });
+      return JSON.stringify(decodeJsonValue({ value: result }));
+    } catch (err) {
+      await this.convergeMcpAuthState({ serverId, cause: err });
+      throw err;
+    }
+  }
+
+  /**
+   * A dispatch that failed on AUTHORIZATION leaves the connection saying
+   * `ready`. Converge it to the state the UI already knows how to act on.
+   *
+   * A refresh that fails mid-session (an expired refresh token, a revoked
+   * grant) throws out of `callTool` and touches no connection state: the MCP
+   * SDK's own reauthorization path only runs inside connect and discovery. So
+   * the server kept reporting `ready` with a null `authUrl`, its tools stayed on
+   * the surface, and every call kept failing with nothing anywhere offering the
+   * user a way to reconnect.
+   *
+   * `discoverIfConnected` IS that path — it re-probes the live connection, and
+   * an unauthorized probe moves the connection to AUTHENTICATING and persists
+   * the authorize URL (`agents/dist/client-zqKcsyFa.js:763,2003`), which is
+   * exactly what `userMcp_list` renders as the reconnect link. Nothing is
+   * swallowed: the original failure is rethrown by the caller and reaches the
+   * model as the tool's error.
+   *
+   * WHICH failures qualify is `isMcpTransportUnauthorized`'s decision and it is
+   * typed: a tool whose own result or error text mentions a 401 gets nothing
+   * reconnected on its behalf.
+   */
+  private async convergeMcpAuthState(input: { serverId: string; cause: unknown }): Promise<void> {
+    if (!isMcpTransportUnauthorized(input)) return;
+    const { serverId } = input;
+    try { await this.userMcp().discoverIfConnected(serverId); }
+    catch (err) {
+      diagnostics.failure('mcp.auth_state_convergence_failed', toKinuError({
+        doing: 'reprobing an MCP connection that failed to authorize',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { serverId });
+    }
   }
 
   /** OAuth callback receiver. The routes layer matches the incoming

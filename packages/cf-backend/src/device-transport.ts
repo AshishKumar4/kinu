@@ -11,7 +11,7 @@
  * re-seeds the snapshot.
  */
 import {
-  NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
+  NO_DEVICE_CONNECTED, isDeviceNotConnectedError, nextDeviceRequestId,
   JsonValueSchema,
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
 } from '@kinu.run/core';
@@ -40,12 +40,20 @@ export interface DeviceHubClient {
     params: JsonValue[],
     opts?: DeviceRpcOptions,
   ): Promise<string | undefined>;
+  acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void>;
 }
 
 export interface DeviceRpcOptions {
   agentName?: string;
   checkpoint?: DeviceCheckpointHint;
   timeoutMs?: number;
+  /** The canonical identity to issue the call under, so the caller can cancel
+   *  it by that same id. Minted by core's protocol authority. */
+  requestId?: string;
+  /** The durable background job that owns this call as it is issued, so the
+   *  request is recorded as that job's rather than handed over afterwards.
+   *  Cloud-side only: it never rides the frame to the device. */
+  backgroundJobId?: string;
 }
 
 export interface HubDeviceTransportOpts {
@@ -117,11 +125,22 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           sessionId: meta.sessionId,
           dir: method === 'exec' ? cwd : null,
         } : undefined;
+        const requestId = method === 'exec' ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
         const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, checkpoint };
         if (rpcOpts?.timeoutMs !== undefined) deviceOptions.timeoutMs = rpcOpts.timeoutMs;
-        const rawResult = await hub.deviceRpc(
-          await opts.caller(), method, effectiveParams, deviceOptions,
-        );
+        if (requestId !== undefined) deviceOptions.requestId = requestId;
+        if (rpcOpts?.backgroundJobId !== undefined) {
+          deviceOptions.backgroundJobId = rpcOpts.backgroundJobId;
+        }
+        const caller = await opts.caller();
+        const rawResult = await hub.deviceRpc(caller, method, effectiveParams, deviceOptions);
+        // The actor has received the UserDO result at this point. A normal
+        // supervisor result remains replayable until this separate durable ACK
+        // succeeds; a reset between the two calls leaves the UserDO row and
+        // local result intact for reconciliation.
+        if (requestId !== undefined) {
+          await hub.acknowledgeDeviceRequest(caller, requestId);
+        }
         // A call getting through re-proves presence and nothing else: the
         // toolchain answer is the machine's, not this call's, so it is carried
         // forward rather than dropped. Overwriting it here would blank the row

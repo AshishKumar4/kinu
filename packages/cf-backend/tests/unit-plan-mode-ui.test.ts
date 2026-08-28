@@ -19,10 +19,14 @@ describe('Plan mode browser contract', () => {
     // Retry no longer COPIES the intent onto a fresh message — it re-runs the
     // turn the intent is already stamped on, so the stamp cannot drift from
     // the turn it governs. Copying was also how a retry appended a duplicate.
-    expect(hook).toContain('void regenerate()');
+    // (`return`, not `void`: retry now settles through the send-admission
+    // latch, so the caller can await the same turn it re-ran.)
+    expect(hook).toContain('return regenerate()');
     expect(hook).toContain('parsePlanReview(msg.plan)');
     expect(hook).toContain('"getActivePlanReview"');
-    expect(page).toContain('state.sendChat(t, pendingAttachments, effectiveChatMode)');
+    // The composer send: mode threaded AND admission-guarded — a refused send
+    // returns before any state mutation, which is what the latch is for.
+    expect(page).toContain('if (!state.sendChat(t, [...attachments.parts], effectiveChatMode)) return;');
     expect(page).toContain('planReviewAwaitingDecision(state.activePlan)');
     expect(page).toContain('locked: planAwaitingDecision');
     expect(composer).toContain('aria-label="Turn mode"');

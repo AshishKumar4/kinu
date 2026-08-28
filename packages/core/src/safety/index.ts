@@ -73,6 +73,20 @@ export {
 } from './argument-digest';
 
 export {
+  InstructionApprovalStore,
+  initInstructionApprovalsTable,
+  instructionDigest,
+  trustOfInstructionApprovals,
+  admitInstructionDecision,
+  type InstructionTrust,
+  type InstructionDecision,
+  type InstructionApproval,
+  type InstructionTrustResolver,
+  type VerifiedInstructionTrust,
+  type AdmittedInstructionDecision,
+} from './instruction-trust';
+
+export {
   DeviceConsentRegistry,
   DEVICE_CONSENT_SCOPE,
   DEVICE_CONSENT_SCOPE_FULL_FS,
@@ -82,6 +96,7 @@ export {
   DEVICE_PROVISION_METHOD,
   parseConsentScope,
   mergeConsentScope,
+  consentScopeCovers,
   deviceConsentScopeForMethod,
   summarizeDeviceAction,
   type DeviceConsentScope,

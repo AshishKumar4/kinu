@@ -2,7 +2,7 @@
 // over the user-level device hub. This is what beforeTurn refreshes so the
 // turn's context reflects a device that connected mid-session.
 import { describe, expect, test } from 'bun:test';
-import type { DeviceStatus, JsonValue } from '@kinu.run/core';
+import { nextDeviceRequestId, type DeviceStatus, type JsonValue } from '@kinu.run/core';
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
@@ -24,6 +24,7 @@ function fakeHub(status: () => DeviceStatus): DeviceHubClient & { rpcCalls: RpcC
       rpcCalls.push([method, params, opts, caller]);
       return JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0 });
     },
+    acknowledgeDeviceRequest: async () => {},
   };
 }
 
@@ -65,6 +66,7 @@ describe('createHubDeviceTransport', () => {
         return { connected: true, registered: true, toolchain: null };
       },
       deviceRpc: async () => 'unused',
+      acknowledgeDeviceRequest: async () => {},
     };
     const transport = createHubDeviceTransport({
       hub: () => hub, agentName: 'agent-1', cliCwd: () => null, now: clock.now,
@@ -99,6 +101,7 @@ describe('createHubDeviceTransport', () => {
     const failingHub: DeviceHubClient = {
       deviceRuntimeStatus: async () => NO_DEVICE,
       deviceRpc: async () => { throw new Error('no device connected'); },
+      acknowledgeDeviceRequest: async () => { throw new Error('no device connected'); },
     };
     const transport = createHubDeviceTransport({
       hub: () => (hubUp ? hub : failingHub),
@@ -110,7 +113,9 @@ describe('createHubDeviceTransport', () => {
 
     await transport.rpc('exec', ['echo hi']);
     expect(transport.status()).toEqual({ connected: true, registered: true, toolchain: null });
-    expect(hub.rpcCalls[0]).toEqual(['exec', ['echo hi'], { agentName: 'agent-1' }, FAKE_CALLER]);
+    expect(hub.rpcCalls[0]).toMatchObject([
+      'exec', ['echo hi'], { agentName: 'agent-1', requestId: expect.stringMatching(/^rpc-/) }, FAKE_CALLER,
+    ]);
 
     hubUp = false;
     await expect(transport.rpc('exec', ['echo hi'])).rejects.toThrow();
@@ -136,6 +141,28 @@ describe('createHubDeviceTransport', () => {
     // Re-seeding the snapshot from the call alone blanked the row the moment the
     // agent used the device, which is exactly when it needs the row.
     expect(transport.status().toolchain).toEqual(probed.toolchain);
+  });
+
+  test('the caller\'s request identity is forwarded, not dropped or replaced', async () => {
+    // This seam is the one that could quietly lose the id: it rewrites `exec`
+    // params for the CLI cwd and adds checkpoint hints. An id that does not
+    // reach the hub is a command nothing can cancel.
+    const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+    const transport = createHubDeviceTransport({
+      hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => '/home/me/project',
+    });
+    const requestId = nextDeviceRequestId();
+
+    await transport.rpc('exec', ['make'], { timeoutMs: 0, requestId });
+
+    const [method, params, opts] = requiredCall(hub.rpcCalls, 0);
+    expect(method).toBe('exec');
+    expect(String(params[0])).toContain('make');
+    expect(opts?.requestId).toBe(requestId);
+    // A call that needs no cancellation handle sends none, and the tunnel mints
+    // its own — one authority, not two.
+    await transport.rpc('readFile', ['/home/me/project/readme.md']);
+    expect(requiredCall(hub.rpcCalls, 1)[2]?.requestId).toBeUndefined();
   });
 
   test('mutating methods carry the pre-mutation checkpoint hint; reads do not', async () => {
@@ -196,6 +223,7 @@ describe('createHubDeviceTransport', () => {
     const denying: DeviceHubClient = {
       deviceRuntimeStatus: async () => denial(),
       deviceRpc: async () => denial(),
+      acknowledgeDeviceRequest: async () => denial(),
     };
     const transport = createHubDeviceTransport({
       hub: () => denying, caller, agentName: 'agent-1', cliCwd: () => null,

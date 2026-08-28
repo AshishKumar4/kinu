@@ -42,10 +42,59 @@
  * there, but `scripts/capability-parity.ts` reads tsconfig with `JSON.parse`.
  */
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
-import { defineConfig } from 'vitest/config';
+import { transform } from 'esbuild';
+import { defineConfig, type Plugin } from 'vitest/config';
+
+/**
+ * `@callable()` is a TC39 standard decorator, and Vite 8 transforms TypeScript
+ * with oxc, whose only decorator support is the LEGACY (pre-standard) form. On a
+ * decorated module oxc strips the types and emits the `@` unchanged, so the
+ * module reaches the runtime as `SyntaxError: Invalid or unexpected token`. That
+ * is why this layer hosted only undecorated probe classes and could not load a
+ * production Agent: not a charter decision, a transform gap. KINU-065.
+ *
+ * Turning on oxc's `decorator.legacy` would be worse than the gap. Legacy
+ * semantics hand the decorator the PROTOTYPE where the standard hands it the
+ * method function, and the SDK keys its callable registry by the method
+ * function. Every `@callable()` would register the wrong key and the whole
+ * browser RPC surface would silently disappear, which is the exact defect
+ * `tests/workerd/decorated-agent.test.ts` exists to catch.
+ *
+ * esbuild is used because it is what PRODUCTION uses: `wrangler deploy` bundles
+ * `wrangler.jsonc`'s `main` with esbuild. The rest of this file already refuses
+ * to measure a runtime we do not deploy; the transform is the same argument.
+ *
+ * Scoped to modules that really carry a decorator, so oxc keeps every file it
+ * already handles and this pass cannot become a second bundler by accident.
+ */
+const DECORATED_SOURCE = /^\s*@[A-Za-z_$][\w$]*\s*\(/mu;
+
+function standardDecorators(): Plugin {
+  return {
+    name: 'kinu:standard-decorators',
+    enforce: 'pre',
+    async transform(code, id) {
+      const path = id.split('?')[0];
+      if (!/\.tsx?$/u.test(path) || path.includes('/node_modules/')) return null;
+      if (!DECORATED_SOURCE.test(code)) return null;
+      const result = await transform(code, {
+        loader: path.endsWith('.tsx') ? 'tsx' : 'ts',
+        target: 'es2022',
+        jsx: 'automatic',
+        sourcefile: path,
+        sourcemap: true,
+        // Standard semantics, stated rather than inherited: this pass exists
+        // because the two decorator dialects disagree about what `target` is.
+        tsconfigRaw: { compilerOptions: { experimentalDecorators: false, useDefineForClassFields: true } },
+      });
+      return { code: result.code, map: result.map };
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [
+    standardDecorators(),
     cloudflareTest({
       main: './tests/workerd/worker.ts',
       miniflare: {
@@ -68,6 +117,13 @@ export default defineConfig({
           CAPPED_TURN_PROBE: { className: 'CappedTurnProbeDO', useSQLite: true },
           UNBOUNDED_TURN_PROBE: { className: 'UnboundedTurnProbeDO', useSQLite: true },
           SPEND_PROBE: { className: 'SpendProbeDO', useSQLite: true },
+          TERMINAL_EFFECT_PROBE: { className: 'TerminalEffectProbeDO', useSQLite: true },
+          FIBER_RECOVERY_PROBE: { className: 'FiberRecoveryProbeAgent', useSQLite: true },
+          FORK_SOURCE: { className: 'ForkSourceProbeDO', useSQLite: true },
+          FORK_TARGET: { className: 'ForkTargetProbeDO', useSQLite: true },
+          STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
+          SEND_ADMISSION_PROBE: { className: 'SendAdmissionProbeDO', useSQLite: true },
+          DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },
       },
     }),

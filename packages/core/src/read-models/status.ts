@@ -10,6 +10,7 @@
  */
 
 import type { AgentConfigStore } from '../config/store';
+import { conversationCount, conversationPageRows, type ConversationPageRow } from '../identity/conversation-store';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { readSoul, summarizeSoul } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
@@ -21,14 +22,8 @@ import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { transcriptRole, uiMessageRow, type StoredRowProjection } from '../utils/ui-message';
 import { JsonObjectSchema, parseJsonValue, type JsonObject } from '../utils/json';
-import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from './page';
+import { mapPage, type Page, type PageRequest } from './page';
 
-/** Widest transcript page a surface may ask for. */
-const MAX_HISTORY_LIMIT = 200;
-
-/** Page size when a caller does not care — one screenful of chat and then
- *  some, small enough that scrolling up stays responsive. */
-const DEFAULT_HISTORY_LIMIT = 100;
 
 /** One workspace identifier reaches a surface: `name`, the permanent slug it is
  *  addressed by. `workspace_identity.id` is deliberately NOT here — on the cloud
@@ -83,8 +78,7 @@ export interface ToolListEntry {
 }
 
 /** What the identity fold cannot read out of storage: who the caller is when
- *  `workspace_identity` has no row yet, and the transcript length before the
- *  first turn has been mirrored into `messages`. */
+ *  `workspace_identity` has no row yet. */
 export interface AgentStatusDeps {
   readonly sql: SqlExecutor;
   /** The workspace filesystem — SOUL.md is a file in it. */
@@ -92,7 +86,6 @@ export interface AgentStatusDeps {
   readonly config: AgentConfigStore;
   readonly name: string;
   readonly displayName: string;
-  readonly fallbackMessageCount: number;
 }
 
 
@@ -112,14 +105,11 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     SELECT name, created_at FROM workspace_identity LIMIT 1`;
   const scaffoldVersion = sql<{ v: number }>`
     SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
+  // Message count reflects the canonical conversation store — the workspace's
+  // default-chat authority, whichever table owns it.
+  const messageCount = conversationCount(sql);
   const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
   const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
-  // Message count reflects the persisted `messages` table, which is the
-  // authoritative turn history used for fork cut-points. For non-fork agents
-  // it is populated by the turn-settle mirror; for forks by
-  // forkWorkspaceStorage's copy.
-  const tableCount = sql<{ c: number }>`
-    SELECT COUNT(*) as c FROM messages WHERE session_id = 'default'`;
   return {
     name: identity[0]?.name ?? deps.name,
     displayName: deps.displayName,
@@ -128,8 +118,8 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     createdAt: identity[0]?.created_at ?? 0,
     scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
     searchNodeCount: searchNodes[0]?.c ?? 0,
+    messageCount,
     craftedToolCount: craftedTools[0]?.c ?? 0,
-    messageCount: tableCount[0]?.c ?? deps.fallbackMessageCount,
     model: config.getModel(),
     reasoningEffort: config.getReasoningEffort(),
     forkLineage: readForkLineage(sql),
@@ -139,137 +129,52 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
 /**
  * One page of the conversation, newest page first, each page oldest-first.
  *
- * `assistant_messages` is the richer transcript where a backend keeps one
- * (serialized UI messages, and the table the agents SDK's own session provider
- * writes); `messages` is the plain mirror every backend writes. Reading the
- * rich table first and falling back keeps one shape for both.
+ * The rows come from the canonical conversation store; this is the projection
+ * that turns a stored row into what a surface renders. A row the harness
+ * enqueued is reported as `system`, not as the operator's words — see
+ * {@link transcriptRole}: the pane-encoded rows carry the author stamp inside
+ * their serialized message, plain rows carry it in their `metadata` column —
+ * with the row id left as the fallback for rows written before either stamp
+ * existed.
  *
- * A row the harness enqueued is reported as `system`, not as the operator's
- * words — see {@link transcriptRole}. Both branches apply it: the rich table
- * carries the author stamp inside its serialized message, and the plain mirror
- * carries it in its `metadata` column — with the row id left as the fallback
- * for rows written before either stamp existed.
- *
- * ── Why the cursor is rowid and not created_at ───────────────────────────────
- * `assistant_messages.created_at` is `DATETIME DEFAULT CURRENT_TIMESTAMP` —
- * whole seconds — and a turn emits several messages inside one second. That is
- * already written down in `identity/session-tree.ts` as the reason a fork cut
- * cannot be a timestamp comparison, and it disqualifies `created_at` as a
- * pagination key for exactly the same reason: ties have no defined order, so
- * `ORDER BY created_at DESC LIMIT n` does not even have a defined MEMBERSHIP
- * when rows n and n+1 share a second. Paging on it would drop and repeat
- * messages at every page boundary without a single concurrent write.
- *
- * `rowid` is total, is the insertion order, and both tables have one (a `TEXT
- * PRIMARY KEY` does not make a table WITHOUT ROWID). `session-tree.ts` already
- * takes `ORDER BY rowid DESC LIMIT 1` as "the latest message", so this is the
- * order this schema was already being read in, now made explicit.
+ * The page is built over the RAW rows and only then mapped, because a row this
+ * projection drops must still count against the page and must still be able to
+ * be the cursor's anchor. Anchoring on the last SURVIVING entry instead would
+ * re-deliver every dropped row on the next page. Why the cursor is rowid and
+ * not created_at is written down once, in `identity/conversation-store.ts`.
  */
 export function getChatHistoryPage(
   sql: SqlExecutor,
   request: PageRequest = {},
 ): Page<ChatHistoryEntry> {
-  const limit = Math.max(1, Math.min(MAX_HISTORY_LIMIT, Math.floor(request.limit ?? DEFAULT_HISTORY_LIMIT)));
-  const after = request.cursor?.after ?? null;
-  const over = limit + 1;
-  try {
-    const from = after === null ? null : anchorRowid(sql`
-      SELECT rowid AS seek FROM assistant_messages WHERE id = ${after}`, after);
-    return chronological(seekPage(from === null
-      ? sql<TranscriptRow>`
-        SELECT id, role, content, created_at FROM assistant_messages
-        WHERE role IN ('user', 'assistant', 'system')
-        ORDER BY rowid DESC LIMIT ${over}`
-      : sql<TranscriptRow>`
-        SELECT id, role, content, created_at FROM assistant_messages
-        WHERE role IN ('user', 'assistant', 'system') AND rowid < ${from}
-        ORDER BY rowid DESC LIMIT ${over}`,
-      limit, rowId), (row) => uiMessageRow(row.content));
-  } catch (err) {
-    // A stale cursor is this read failing, not the rich table being absent.
-    // Falling through would answer the mirror's rows under a cursor minted
-    // against the transcript, which is a different sequence.
-    if (err instanceof StaleCursorError) throw err;
-    const from = after === null ? null : anchorRowid(sql`
-      SELECT rowid AS seek FROM messages WHERE id = ${after} AND session_id = ${'default'}`, after);
-    return chronological(seekPage(from === null
-      ? sql<TranscriptRow>`
-        SELECT id, role, content, metadata, created_at FROM messages
-        WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system')
-        ORDER BY rowid DESC LIMIT ${over}`
-      : sql<TranscriptRow>`
-        SELECT id, role, content, metadata, created_at FROM messages
-        WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system') AND rowid < ${from}
-        ORDER BY rowid DESC LIMIT ${over}`,
-      limit, rowId), mirrorRow);
-  }
-}
-
-interface TranscriptRow {
-  id: string;
-  role: string;
-  content: string;
-  /** The plain mirror's provenance column: what the writer stamped on the
-   *  row, as JSON. NULL on rows written before the stamp existed. */
-  metadata?: string | null;
-  created_at: string | number;
-}
-
-const rowId = (row: TranscriptRow): string => row.id;
-
-const MirrorStampSchema = v.optional(JsonObjectSchema);
-
-/**
- * The plain mirror's projection: its text is the content, and its provenance
- * is whatever the writer stated on the row. A NULL or unparseable stamp is
- * undefined — the row then reads through the id-prefix fallback inside
- * {@link transcriptRole}, the rule for everything written before stamps
- * existed.
- */
-function mirrorRow(row: TranscriptRow): StoredRowProjection {
-  if (!row.metadata) return { text: row.content };
-  const decoded = tolerate(() => parseJsonValue(row.metadata!), 'malformed-input');
-  const parsed = decoded === undefined ? undefined : v.safeParse(MirrorStampSchema, decoded);
-  return parsed?.success && parsed.output !== undefined
-    ? { text: row.content, metadata: parsed.output }
-    : { text: row.content };
-}
-
-/** The cursor's anchor as a rowid, or the refusal that keeps a vanished anchor
- *  from reading as an exhausted conversation. */
-function anchorRowid(found: { seek: number }[], after: string): number {
-  const seek = found[0]?.seek;
-  if (seek === undefined) throw new StaleCursorError('conversation', after);
-  return seek;
-}
-
-/**
- * A newest-first traversal page, turned into the oldest-first block the UI
- * prepends.
- *
- * The page is built over the RAW rows and only then mapped, because a row this
- * projection drops must still count against the page and must still be able to
- * be the cursor's anchor. Anchoring on the last SURVIVING entry instead would
- * re-deliver every dropped row on the next page.
- */
-function chronological(
-  page: Page<TranscriptRow>,
-  project: (row: TranscriptRow) => StoredRowProjection,
-): Page<ChatHistoryEntry> {
-  return mapPage(page, (rows) => rows.flatMap((row) => {
+  return mapPage(conversationPageRows(sql, request), (rows) => rows.flatMap((row) => {
     const role = normalizeUiRole(row.role);
     if (!role) return [];
-    // A row the harness enqueued reports as `system`, never as the operator's
-    // words. One place, because both the transcript and the mirror branch land
-    // here — and one rule, the same `turnAuthor` the chat pane renders from.
-    const { text, metadata } = project(row);
+    const { text, metadata } = projectStoredRow(row);
     const entry: ChatHistoryEntry = {
       id: row.id, role: transcriptRole(row.id, role, metadata),
-      content: text, createdAt: row.created_at,
+      content: text, createdAt: row.createdAt,
     };
     if (metadata !== undefined) entry.metadata = metadata;
     return [entry];
   }).reverse());
+}
+
+const MirrorStampSchema = v.optional(JsonObjectSchema);
+
+/** A stored row's display shape: its plain text and provenance from ONE parse.
+ *  Pane-encoded rows state provenance inside the serialized message; plain
+ *  rows state it in their column. A NULL or unparseable stamp leaves the id-
+ *  prefix fallback inside {@link transcriptRole} in charge — the rule for
+ *  everything written before stamps existed. */
+function projectStoredRow(row: ConversationPageRow): StoredRowProjection {
+  const projected = uiMessageRow(row.content);
+  if (projected.metadata !== undefined || !row.metadata) return projected;
+  const decoded = tolerate(() => parseJsonValue(row.metadata!), 'malformed-input');
+  const parsed = decoded === undefined ? undefined : v.safeParse(MirrorStampSchema, decoded);
+  return parsed?.success && parsed.output !== undefined
+    ? { text: projected.text, metadata: parsed.output }
+    : { text: projected.text };
 }
 
 /** The agent's tool inventory: the fixed builtins plus every crafted tool with

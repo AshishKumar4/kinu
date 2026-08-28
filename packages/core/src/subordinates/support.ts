@@ -16,21 +16,22 @@ import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SerializedMessage } from '../heads/types';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
-import { reconcileColumns } from '../identity/columns';
 import {
   DELEGATION_MAX_DEPTH,
   delegationBudgetAtDepth,
   type DelegationBudget,
 } from './depth';
+import { reconcileColumns } from '../identity/columns';
+import { SubordinateRosterStore } from './roster';
 import type { WorkMode } from '../prompting/surface';
 import type { AgentConfigStore, RoleSelection } from '../config/store';
 import type { TierId } from '../profiles/catalog';
 import type {
   SubordinateHandoff,
   SubordinateRosterEntry,
-  SubordinateStatus,
   TeamToolDeps,
 } from '../tools/agents-tool';
+import { SUBORDINATE_LIFETIMES, type SubordinateLifetime, type TemporaryAgentPort } from './temporary';
 import { renderThrownChain } from '../obs/index';
 
 export interface SubordinateLiveStatus {
@@ -89,6 +90,17 @@ export interface SubordinateIdentity {
   ownerUserId: string;
   /** Durable tree depth (1 = hired by the orchestrator); the cap's backbone. */
   depth: number;
+  /**
+   * How long this child is MEANT to live — immutable lineage, like `depth`, and
+   * here for the same kind of reason: it is a fact the child must KNOW about
+   * itself and must never be able to change.
+   *
+   * The child is the only party that sees its own turn end, and a `task` child
+   * owes its blocked caller exactly one report for every way that turn can end
+   * (`terminalTaskReport`). Reading it off this row is what makes that true after
+   * an eviction as well as on the first turn.
+   */
+  lifetime: SubordinateLifetime;
 }
 
 interface IdentityRow {
@@ -97,6 +109,7 @@ interface IdentityRow {
   parent_workspace: string;
   owner_user_id: string;
   depth: number;
+  lifetime: SubordinateLifetime;
 }
 
 const IdentityRowSchema = v.object({
@@ -105,6 +118,7 @@ const IdentityRowSchema = v.object({
   parent_workspace: v.string(),
   owner_user_id: v.string(),
   depth: v.number(),
+  lifetime: v.picklist(SUBORDINATE_LIFETIMES),
 });
 
 function parseIdentityRow<Input>(row: Input): IdentityRow | null {
@@ -119,15 +133,18 @@ function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
     parentWorkspace: row.parent_workspace,
     ownerUserId: row.owner_user_id,
     depth: row.depth,
+    lifetime: row.lifetime,
   };
 }
 
-function identitiesEqual(a: SubordinateIdentity, b: SubordinateIdentity): boolean {
-  return a.name === b.name
-    && a.mission === b.mission
-    && a.parentWorkspace === b.parentWorkspace
-    && a.ownerUserId === b.ownerUserId
-    && a.depth === b.depth;
+function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIdentity): boolean {
+  if (
+    stored.ownerUserId !== attempted.ownerUserId
+    || stored.parentWorkspace !== attempted.parentWorkspace
+  ) return false;
+  if (stored.name !== attempted.name || stored.mission !== attempted.mission) return false;
+  if (stored.lifetime !== attempted.lifetime) return false;
+  return stored.depth === attempted.depth;
 }
 
 /** Immutable facet identity. The parent may retry the exact seed after an RPC
@@ -147,13 +164,18 @@ export class SubordinateIdentityStore {
       mission          TEXT NOT NULL,
       parent_workspace TEXT NOT NULL,
       owner_user_id    TEXT NOT NULL,
-      depth            INTEGER NOT NULL DEFAULT 1
+      depth            INTEGER NOT NULL DEFAULT 1,
+      lifetime         TEXT NOT NULL DEFAULT 'durable'
     )`);
     // Every subordinate that existed before nesting was possible was hired by
     // the workspace orchestrator, so 1 is that row's TRUE depth rather than a
     // compatibility guess.
+    // Every subordinate that existed before the temporary rung was DURABLE, so
+    // that default is the row's true lifetime rather than a compatibility guess
+    // — the same argument the depth default carries above.
     reconcileColumns(this.tagged, (ddl) => { this.sql.exec(ddl); }, 'subordinate_identity', {
       depth: 'INTEGER NOT NULL DEFAULT 1',
+      lifetime: "TEXT NOT NULL DEFAULT 'durable'",
     });
   }
 
@@ -165,19 +187,20 @@ export class SubordinateIdentityStore {
     }
     this.sql.exec(
       `INSERT INTO subordinate_identity
-         (id, name, mission, parent_workspace, owner_user_id, depth)
-       VALUES (1, ?, ?, ?, ?, ?)`,
+         (id, name, mission, parent_workspace, owner_user_id, depth, lifetime)
+       VALUES (1, ?, ?, ?, ?, ?, ?)`,
       identity.name,
       identity.mission,
       identity.parentWorkspace,
       identity.ownerUserId,
       identity.depth,
+      identity.lifetime,
     );
   }
 
   read(): SubordinateIdentity | null {
     const rows = this.sql.exec(
-      `SELECT name, mission, parent_workspace, owner_user_id, depth
+      `SELECT name, mission, parent_workspace, owner_user_id, depth, lifetime
        FROM subordinate_identity WHERE id = 1`,
     ).toArray();
     if (rows.length === 0) return null;
@@ -244,162 +267,6 @@ export function subordinateDescriptorSource(config: AgentConfigStore): Subordina
   };
 }
 
-const ROSTER_COLUMNS = 'name, created_by, status, current_task, created_at, dismissed_at';
-const ROSTER_PROJECTION =
-  'name, created_by AS createdBy, status, current_task AS currentTask, '
-  + 'created_at AS createdAt, dismissed_at AS dismissedAt';
-
-/** Lifecycle and task facts only — the title and role a subordinate presents
- *  live in ITS agent_config ({@link SubordinateDescriptorSource}), never here. */
-const RosterEntrySchema: v.GenericSchema<SubordinateRosterEntry> = v.object({
-  name: v.string(),
-  createdBy: v.picklist(['orchestrator', 'user']),
-  status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
-  currentTask: v.nullable(v.string()),
-  createdAt: v.number(),
-  dismissedAt: v.nullable(v.number()),
-});
-
-function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
-  const parsed = v.safeParse(RosterEntrySchema, row);
-  if (!parsed.success) throw new Error('Stored subordinate roster row is malformed.');
-  return parsed.output;
-}
-
-/** Parent-DO product roster. All status policy lives here so tools, report
- * ingress, snapshots, and the future UI cannot drift. */
-export class SubordinateRosterStore {
-  constructor(private readonly sql: SqlExec) {}
-
-  ensureSchema(): void {
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_subordinates (
-      name          TEXT PRIMARY KEY,
-      created_by    TEXT NOT NULL CHECK (created_by IN ('orchestrator','user')),
-      status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
-      current_task  TEXT,
-      created_at    INTEGER NOT NULL,
-      dismissed_at INTEGER
-    )`);
-  }
-
-  create(entry: SubordinateRosterEntry): void {
-    this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`,
-      entry.name,
-      entry.createdBy,
-      entry.status,
-      entry.currentTask,
-      entry.createdAt,
-      entry.dismissedAt,
-    );
-  }
-
-  /** Exact upsert used only for compensating a failed facet operation. */
-  restore(entry: SubordinateRosterEntry): void {
-    this.sql.exec(
-      `INSERT INTO workspace_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(name) DO UPDATE SET
-         created_by = excluded.created_by,
-         status = excluded.status,
-         current_task = excluded.current_task,
-         created_at = excluded.created_at,
-         dismissed_at = excluded.dismissed_at`,
-      entry.name,
-      entry.createdBy,
-      entry.status,
-      entry.currentTask,
-      entry.createdAt,
-      entry.dismissedAt,
-    );
-  }
-
-  remove(name: string): void {
-    this.sql.exec(`DELETE FROM workspace_subordinates WHERE name = ?`, name);
-  }
-
-  get(name: string): SubordinateRosterEntry | null {
-    const rows = this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates WHERE name = ?`,
-      name,
-    ).toArray();
-    return rows.length === 0 ? null : parseStoredRosterRow(rows[0]);
-  }
-
-  requireExisting(name: string): SubordinateRosterEntry {
-    const entry = this.get(name);
-    if (!entry) throw new Error(`unknown subordinate "${name}"`);
-    return entry;
-  }
-
-  requireActive(name: string): SubordinateRosterEntry {
-    const entry = this.requireExisting(name);
-    if (entry.status === 'dismissed') throw new Error(`subordinate "${name}" is dismissed`);
-    return entry;
-  }
-
-  list(): SubordinateRosterEntry[] {
-    return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates
-       WHERE status != 'dismissed' ORDER BY created_at, name`,
-    ).toArray().map(parseStoredRosterRow);
-  }
-
-  listAll(): SubordinateRosterEntry[] {
-    return this.sql.exec(
-      `SELECT ${ROSTER_PROJECTION} FROM workspace_subordinates ORDER BY created_at, name`,
-    ).toArray().map(parseStoredRosterRow);
-  }
-
-  assign(name: string, task: string): void {
-    this.requireActive(name);
-    this.sql.exec(
-      `UPDATE workspace_subordinates
-       SET status = 'working', current_task = ?, dismissed_at = NULL
-       WHERE name = ?`,
-      task,
-      name,
-    );
-  }
-
-  resumeAfterMessage(name: string): void {
-    const entry = this.requireActive(name);
-    if (entry.status !== 'awaiting_input') return;
-    this.sql.exec(
-      `UPDATE workspace_subordinates SET status = 'working' WHERE name = ?`,
-      name,
-    );
-  }
-
-  applyReport(name: string, status: SubordinateReportStatus): void {
-    const entry = this.requireActive(name);
-    const rosterStatus: SubordinateStatus = status === 'completed'
-      ? 'idle'
-      : status === 'blocked'
-        ? 'awaiting_input'
-        : entry.currentTask
-          ? 'working'
-          : 'idle';
-    this.sql.exec(
-      `UPDATE workspace_subordinates
-       SET status = ?, current_task = CASE WHEN ? = 'completed' THEN NULL ELSE current_task END
-       WHERE name = ?`,
-      rosterStatus,
-      status,
-      name,
-    );
-  }
-
-  dismiss(name: string, now: number): void {
-    this.requireExisting(name);
-    this.sql.exec(
-      `UPDATE workspace_subordinates
-       SET status = 'dismissed', current_task = NULL, dismissed_at = COALESCE(dismissed_at, ?)
-       WHERE name = ?`,
-      now,
-      name,
-    );
-  }
-}
 
 function requiredText(value: string, field: string): string {
   const text = value.trim();
@@ -604,6 +471,10 @@ export function admitSubordinateReport(log: EventLog, input: {
   fromSubordinate: string;
   status: SubordinateReportStatus;
   content: string;
+  /** The sender's terminal sequence. Stated by the sender, never minted here:
+   *  it is the key this admission is idempotent on, and a key the receiving
+   *  side invented would be new on every replay. */
+  sequenceId: string;
   task?: string;
   contentPath?: string;
   mode: WorkMode;
@@ -616,6 +487,7 @@ export function admitSubordinateReport(log: EventLog, input: {
     from_subordinate: fromSubordinate,
     status: input.status,
     content,
+    sequence_id: requiredText(input.sequenceId, 'sequenceId'),
     kinu_mode: input.mode,
   };
   if (task) Object.assign(payload, { task });
@@ -645,6 +517,18 @@ export interface SubordinateRuntime {
     role: RoleSelection;
     tier?: TierId;
     mission: string;
+    /**
+     * How long this child is MEANT to live, seeded onto its own identity.
+     *
+     * The CHILD needs it, not just the roster, and that is the whole reason it
+     * rides the seed: only the child sees its own turn end, and a `task` child
+     * owes its caller exactly one report for EVERY way that turn can end
+     * (`terminalTaskReport`). A child that did not know its lifetime applied the
+     * durable relay policy, which withholds an empty or failed turn — and the
+     * caller of a temporary ask is blocked on that report, so withholding it was
+     * an ask that never returned.
+     */
+    lifetime: SubordinateLifetime;
   }): Promise<void>;
   assign(name: string, input: {
     body: string;
@@ -742,6 +626,7 @@ interface SubordinateStatusView {
   liveError?: string;
 }
 
+
 /** The one orchestration policy behind both the LLM agents tool and the future
  * user RPCs. Roster transitions happen before facet admission and are restored
  * exactly if admission fails. Broadcasts happen only after both sides settle. */
@@ -762,6 +647,19 @@ export function createTeamToolDeps(deps: {
   ownMission(): string;
   broadcast(event: SubordinatesChangedEvent): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
+  /**
+   * The temporary-agent port, built ONCE per actor by its composition root.
+   *
+   * Not a store this function turns into a port, and the reason is the waiter:
+   * the port holds the live `run` promises, and these deps are rebuilt per call
+   * (owner state resolves late), so building the port here would hand the report
+   * ingress a second one whose waiter map is empty — a run that could never be
+   * answered. Lifetime belongs to whoever outlives a turn, which is the actor.
+   *
+   * Absent leaves an actor with the two durable rungs and no role-targeted ask —
+   * structurally, in the schema, the sandbox namespace and the prompt alike.
+   */
+  temporary?: TemporaryAgentPort;
 }): TeamToolDeps {
   /** One roster refresh per settled operation — the ONLY payload is the
    *  lifecycle roster; task content travels on its own task event. */
@@ -824,6 +722,10 @@ export function createTeamToolDeps(deps: {
       nameOrigin,
       mission,
       role: selection,
+      // Every child this path creates is DURABLE. The task lifetime has ONE
+      // producer, `createTemporaryAgentPort`, so no caller of `hire` or `create`
+      // can seed a child that retires itself.
+      lifetime: 'durable',
     };
     if (input.tier !== undefined) seed.tier = input.tier;
     await deps.runtime.spawn(seed);
@@ -837,6 +739,11 @@ export function createTeamToolDeps(deps: {
         currentTask: ownerCreated ? null : mission,
         createdAt,
         dismissedAt: null,
+        // Every helper this path creates is DURABLE. The task lifetime has one
+        // producer — `createTemporaryAgentPort` — so no caller of `hire` or
+        // `create` can mint a row that retires itself.
+        lifetime: 'durable',
+        taskEventId: null,
       };
       deps.roster.create(subordinate);
       rosterCreated = true;
@@ -848,7 +755,11 @@ export function createTeamToolDeps(deps: {
           mode,
         };
         if (inheritedContext) Object.assign(assignment, { inheritedContext });
-        await deps.runtime.assign(name, assignment);
+        // The mission IS this row's first assignment, so the row names its event
+        // like any other. Without this a hire's opening turn was the one
+        // assignment whose report had nothing on the roster to cite.
+        const handoff = await deps.runtime.assign(name, assignment);
+        deps.roster.recordAssignmentEvent(name, handoff.eventId);
       }
     } catch (error) {
       await rollbackSpawn(error, deps.runtime, deps.roster, name, rosterCreated);
@@ -861,9 +772,8 @@ export function createTeamToolDeps(deps: {
     };
   };
 
-  return {
+  const team: TeamToolDeps = {
     delegation: deps.delegation,
-
     snapshot: () => deps.roster.list(),
     list: async () => deps.roster.list(),
 
@@ -921,10 +831,15 @@ export function createTeamToolDeps(deps: {
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
       }
+      // The row names the assignment its report will cite, for every lifetime:
+      // one correlation, written where the roster transition already is.
+      deps.roster.recordAssignmentEvent(input.name, handoff.eventId);
       changed();
       deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
       return { ok: true, name: input.name, ...handoff };
     },
+
+    knows: async (name) => deps.roster.get(name) !== null,
 
     status: async (input) => {
       if (input.name) return statusView(deps.runtime, deps.roster.requireExisting(input.name));
@@ -964,4 +879,10 @@ export function createTeamToolDeps(deps: {
       return { ok: true, name: input.name, historyKept: keepHistory };
     },
   };
+  // Attached only when the backend built one. Assigned rather than spread from a
+  // conditional empty object: an absent port has to be an ABSENT key, because
+  // every gate on this rung — the schema, the sandbox declaration, the prompt —
+  // reads its presence.
+  if (deps.temporary) Object.assign(team, { temporary: deps.temporary });
+  return team;
 }

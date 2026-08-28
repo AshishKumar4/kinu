@@ -7,5 +7,5 @@
     "types": ["bun", "@cloudflare/workers-types"]
   },
   "include": ["src", "tests", "bench"],
-  "exclude": ["tests/workspace-resolution.test.ts"]
+  "exclude": ["tests/workspace-resolution.test.ts", "tests/workerd"]
 }

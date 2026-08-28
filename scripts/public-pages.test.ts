@@ -18,6 +18,8 @@ const LANDING_WIDTHS = [
   ['1280', DESKTOP],
   ['1568', { width: 1568, height: 940 }],
   ['1920', { width: 1920, height: 1000 }],
+  ['2560', { width: 2560, height: 1200 }],
+  ['3840', { width: 3840, height: 1400 }],
 ] as const;
 const PUBLIC_FRAMES = ['login', 'install', 'approve'] as const;
 
@@ -505,7 +507,7 @@ beforeAll(async () => {
           ...document.querySelectorAll('#top a[href="/login"], #top a[href="#deploy"]'),
         ].map((element) => Math.round(element.getBoundingClientRect().height)));
       }
-      if (label === '1568' || label === '1920') {
+      if (label === '1568' || label === '1920' || label === '2560' || label === '3840') {
         facts.wideColumns[label] = await page.$eval(
           '[data-feature-strip]',
           (element) => Math.round(element.getBoundingClientRect().width),
@@ -717,9 +719,14 @@ describe('public pages are responsive', () => {
   });
 
   test('the wide landing keeps its intended measure', () => {
-    for (const [where, width] of Object.entries(facts.wideColumns)) {
-      expect(width, where).toBeGreaterThanOrEqual(1238);
-      expect(width, where).toBeLessThanOrEqual(1242);
+    // The shell is `clamp(82.5rem, 68vw, 120rem)`: the editorial 1320px column
+    // (1240 inside its 40px gutters) holds through 1920, then 2K/4K screens
+    // spend their real estate — 68vw at 2560, capped at 120rem for 4K — while
+    // copy blocks keep their own max-width.
+    const expected = { '1568': 1240, '1920': 1240, '2560': 1661, '3840': 1840 };
+    for (const [where, target] of Object.entries(expected)) {
+      const width = required(facts.wideColumns[where], `measured width @${where}`);
+      expect(Math.abs(width - target), `${where}: measured ${String(width)}`).toBeLessThanOrEqual(2);
     }
   });
 });
