@@ -1,11 +1,12 @@
-diff --git a/packages/core/src/execution/exec-result.ts b/packages/core/src/execution/exec-result.ts
-index 0b72103c..36db0b24 100644
---- a/packages/core/src/execution/exec-result.ts
-+++ b/packages/core/src/execution/exec-result.ts
-@@ -75,5 +75,5 @@ export function formatExecResult(result: ExecOutcome): string {
- export function parseStatLine(stdout: string): { size: number; mtimeMs: number; isDir: boolean } | null {
-   const m = stdout.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
-   if (!m) return null;
--  return { size: Number(m[1]), mtimeMs: Number(m[2]) * 1000, isDir: /directory/i.test(m[3]) };
-+  return { size: Number(m[2]), mtimeMs: Number(m[1]) * 1000, isDir: /directory/i.test(m[3]) };
- }
+diff --git a/packages/core/src/execution/nimbus.ts b/packages/core/src/execution/nimbus.ts
+--- a/packages/core/src/execution/nimbus.ts
++++ b/packages/core/src/execution/nimbus.ts
+@@ -850,7 +850,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
+       const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(workspacePath(path))}`);
+       if (!r.success || r.exitCode !== 0) return null;
+       const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
+-      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: kind.join(' ') === 'directory' };
++      return { size: Number(seconds), mtimeMs: Number(size) * 1_000, isDir: kind.join(' ') === 'directory' };
+     },
+     async unlink(path) { await box.files.delete(workspacePath(path)); },
+     async removeRecursive(path) { await box.files.delete(workspacePath(path), { recursive: true }); },

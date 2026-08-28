@@ -84,15 +84,6 @@ export const TURN_OUTCOME_SOURCES = [
   'explicit', 'classifier', 'session_end', 'take_pick', 'execution',
 ] as const;
 
-/** Who wins when one turn carries several observations. Higher rank = the
- *  verdict an operational consumer should see: a person's thumb beats a
- *  take pick, which beats the follow-up classifier, which beats the
- *  environment's verdict; the session-end rule is the weakest evidence.
- *  Recency decides only within one source. The SQL CASE in
- *  `selectEffectiveTurnOutcomes` encodes this same order — keep them in step. */
-export const TURN_OUTCOME_SOURCE_PRECEDENCE = [
-  'explicit', 'take_pick', 'classifier', 'execution', 'session_end',
-] as const;
 
 export type TurnOutcomeSource = (typeof TURN_OUTCOME_SOURCES)[number];
 

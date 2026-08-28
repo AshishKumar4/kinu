@@ -501,11 +501,6 @@ export function setDefaultModel(spec: string): void {
   updateConfigFile((config) => { config.model = normalized; });
 }
 
-export function setDefaultReasoningEffort(effort: ReasoningEffort): ReasoningEffort {
-  updateConfigFile((config) => { config.reasoningEffort = effort; });
-  return effort;
-}
-
 function writeConfigFileUnlocked(config: KinuConfig): void {
   ensureAgentHome();
   writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);

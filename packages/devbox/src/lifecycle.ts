@@ -1072,12 +1072,4 @@ export function incidentRetryDelayMs(attempt: number): number {
   return Math.min(5_000 * 2 ** Math.max(0, attempt), 300_000);
 }
 
-/** The container-start gate budget. `onStart` is awaited inside
- *  `ctx.blockConcurrencyWhile`, which the runtime cancels
- *  (`do.block_concurrency.cancel_ms` in the platform catalog) by RESETTING the
- *  Durable Object — measured live: "blockConcurrencyWhile() waited too long",
- *  probe run 2026-08-24. This budget is the established margin below that
- *  cancel: overrunning fails THIS container start — a retryable 503 — instead
- *  of resetting the object. */
-export const CONTAINER_START_BUDGET_MS = 25_000;
 
