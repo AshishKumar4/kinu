@@ -81,6 +81,7 @@ import {
 } from "@kinu.run/core";
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
+import { FacetActivation } from "./facet-activation";
 import { createHeadRuntime } from "./head-runtime";
 import {
   bindAgentSql, createCFRuntime,
@@ -144,6 +145,11 @@ export class ExplorationAgent extends Agent<Env> {
    *  logical `name` and its seeded identity are both set by the async
    *  `_cf_initAsFacet` AFTER this field initializes. */
   private readonly identity = new FacetIdentity(this.ctx.storage.sql);
+
+  /** What this facet was initialized to RUN, durably. The instance fields above
+   *  are the warm path; this is what makes an acked bootstrap survive an
+   *  eviction between the init RPC and the run RPC. */
+  private readonly activation = new FacetActivation(this.ctx.storage.sql);
 
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
@@ -506,6 +512,10 @@ export class ExplorationAgent extends Agent<Env> {
   /** Initialize this facet as a branching-heads worker. */
   @callable()
   async initHead(input: HeadInput): Promise<{ ok: true; id: HeadId }> {
+    // BEFORE the ack, so an acknowledged bootstrap is a durable one. The
+    // instance fields stay as the warm path; the row is what a cold activation
+    // reads.
+    this.activation.store({ kind: 'head', input });
     this.headInput = input;
     this.headAborted = false;
     this.headAbortReason = null;
@@ -530,8 +540,11 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async runAsHead(): Promise<HeadReport> {
     openAnalyticsWindow(this.env);
-    if (!this.headInput) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
-    const input = this.headInput;
+    // The stored row is the fallback, not the primary: a warm facet answers from
+    // its own field, and only a facet evicted between initHead and here pays the
+    // read. Absent from BOTH is a genuine protocol error and still throws.
+    const input = this.headInput ?? this.activation.headInput();
+    if (!input) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
     return await this.tracing.invocation('rpc', 'head.run', async (invocation, root) => {
       root.setAttribute('kinu.head_id', input.id);
       const capture = new HeadCapture();
@@ -571,6 +584,7 @@ export class ExplorationAgent extends Agent<Env> {
   /** Initialize this facet as one swarm node's host. */
   @callable()
   async initNode(spec: NodeRunSpec): Promise<{ ok: true; id: string }> {
+    this.activation.store({ kind: 'node', spec });
     this.nodeSpec = spec;
     return { ok: true, id: spec.headInput.id };
   }
@@ -592,8 +606,8 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async runAsNode(): Promise<NodeLoopResult> {
     openAnalyticsWindow(this.env);
-    if (!this.nodeSpec) throw new Error("ExplorationAgent.runAsNode() called before initNode()");
-    const spec = this.nodeSpec;
+    const spec = this.nodeSpec ?? this.activation.nodeSpec();
+    if (!spec) throw new Error("ExplorationAgent.runAsNode() called before initNode()");
     return await this.tracing.invocation('rpc', 'swarm.node', async (invocation, root) => {
       root.setAttribute('kinu.node_id', spec.headInput.id);
       const modelSpec = await this.facetModelSpec('swarm', spec.headInput.model);

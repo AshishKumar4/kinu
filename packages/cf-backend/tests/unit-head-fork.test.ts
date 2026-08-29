@@ -239,8 +239,12 @@ const HeadRuntimeProbeSchema = v.object({
   }),
 });
 
-function makeFacet(parentFiles: Record<string, string> = {}) {
-  const db = new Database(':memory:');
+/** A facet over its own fresh storage, or, with `existingDb`, a SECOND facet
+ *  instance over storage a first one already wrote. That second form is a COLD
+ *  ACTIVATION: no instance fields, the same durable rows, which is exactly what
+ *  the platform hands back after an eviction between two RPCs. */
+function makeFacet(parentFiles: Record<string, string> = {}, existingDb?: Database) {
+  const db = existingDb ?? new Database(':memory:');
   const parent = makeParentWorkspace(parentFiles);
   const nimbus = makeNimbusNamespace(parentFiles);
   const ctx = {
@@ -459,5 +463,43 @@ describe('a head forks its parent workspace', () => {
     await facet.initHead(headInput());
 
     await expect(facet.runAsHead()).rejects.toThrow('without a parent workspace');
+  });
+
+  test('a facet evicted between initHead and runAsHead activates from its stored row', async () => {
+    // `facet-spawn.ts` states the contract every bootstrap RPC owes: it persists,
+    // so a facet hibernating between spawn and run recovers. `setOwner` and
+    // `setSharedParent` honoured it through FacetIdentity; `initHead` kept its
+    // input on the instance alone, so an eviction in that window left an
+    // ACKNOWLEDGED bootstrap with nothing behind it and `runAsHead` threw
+    // "called before initHead()". The cost was not one head: `HeadController.run`
+    // awaits its heads together, so one such throw rejected the whole split,
+    // discarding siblings that had already spent their tokens.
+    const first = makeFacet();
+    await first.facet.setOwner('user-1', 'pwc_parent');
+    await first.facet.initHead(headInput());
+
+    // THE EVICTION: a second instance over the same durable storage. No instance
+    // fields, the same rows — which is exactly what the platform hands back.
+    const cold = makeFacet({}, first.db);
+
+    // Past the guard is the whole assertion. It still refuses, but for the
+    // reason the case above establishes for a head with no shared parent — not
+    // for a bootstrap it has no memory of.
+    await expect(cold.facet.runAsHead()).rejects.toThrow('without a parent workspace');
+  });
+
+  test('a stored activation that no longer matches its schema refuses by name', async () => {
+    // The row was written by an EARLIER activation, so a shape that has since
+    // changed is a real condition on this path rather than an impossible one. It
+    // has to fail here, naming the mismatch, instead of reaching the run loop
+    // with a half-formed work spec.
+    const first = makeFacet();
+    await first.facet.setOwner('user-1', 'pwc_parent');
+    await first.facet.initHead(headInput());
+    first.db.prepare(`UPDATE facet_activation SET payload = ? WHERE id = 1`)
+      .run(JSON.stringify({ kind: 'head', input: { id: 'head-1' } }));
+
+    const cold = makeFacet({}, first.db);
+    await expect(cold.facet.runAsHead()).rejects.toThrow('does not match the stored work spec');
   });
 });
