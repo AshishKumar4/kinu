@@ -474,7 +474,7 @@ export function initRunLedgers(rt: AgentRuntime): RunLedgers {
   // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
   // its structure and not one knob it ran under, and the judge clamp it computes and
   // discloses was persisted nowhere at all.
-  initMctsSearchTable(rt.storage.execRaw);
+  initMctsSearchTable(rt.storage.execRaw, sql);
   const searchLedger = new MctsSearchStore(sql);
   // The leaderboard *The records store* governs, initialised for the same reason the two
   // above are: a workspace that has never run a search has no `exploration_records`, and

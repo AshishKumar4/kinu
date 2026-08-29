@@ -50,6 +50,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { SignalDeliverer } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
+import { reconcileColumns } from '../identity/columns';
 import {
   formatApproval, gatedGrants, reviewCommand,
   type ApprovalGrant, type DeferredApprovalChannel, type ShellApprovalRequest,
@@ -135,7 +136,11 @@ function toAction(r: Row): DeferredApproval {
   };
 }
 
-export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
+const DEFERRED_APPROVAL_ADDED_COLUMNS = {
+  executor: "TEXT NOT NULL DEFAULT ''",
+} as const;
+
+export function initDeferredApprovalsTable(execRaw: RawSqlExec, sql: SqlExecutor): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
     id           TEXT PRIMARY KEY,
     command      TEXT NOT NULL,
@@ -145,6 +150,7 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
     requested_at INTEGER NOT NULL,
     decided_at   INTEGER
   )`);
+  reconcileColumns(sql, execRaw, 'deferred_approvals', DEFERRED_APPROVAL_ADDED_COLUMNS);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status ON deferred_approvals(status)`);
 }
 

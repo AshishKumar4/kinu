@@ -9,7 +9,7 @@ import type { WorkMode } from '../src/prompting/surface';
 function initTables(runtime: ReturnType<typeof createTestRuntime>['rt']): void {
   initSearchTables(runtime.storage.execRaw, runtime.storage.sql);
   initScaffoldTables(runtime.storage.execRaw, runtime.storage.sql);
-  initMctsSearchTable(runtime.storage.execRaw);
+  initMctsSearchTable(runtime.storage.execRaw, runtime.storage.sql);
 }
 
 describe('MCTS in Plan mode', () => {

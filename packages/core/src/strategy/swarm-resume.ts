@@ -575,7 +575,7 @@ export function readStartedSwarmProfile(storage: {
   readonly execRaw: RawSqlExec;
 }, task: string): SwarmProfileSnapshot | null {
   initSearchTables(storage.execRaw, storage.sql);
-  initMctsSearchTable(storage.execRaw);
+  initMctsSearchTable(storage.execRaw, storage.sql);
   const ledger = new MctsSearchStore(storage.sql);
   const [newest] = ledger.findRunningSwarms(task);
   return newest ? ledger.readSwarmProfile(newest.rootId) : null;

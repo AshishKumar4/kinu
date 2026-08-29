@@ -36,7 +36,7 @@ function setup(opts: {
   noQueue?: boolean;
 } = {}) {
   const db = new Database(':memory:');
-  initDeferredApprovalsTable(makeExecRaw(db));
+  initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
   const store = new DeferredApprovalStore(makeSql(db));
 
   const delivered: AgentSignal[] = [];
@@ -78,6 +78,30 @@ function setup(opts: {
   };
   return { queue, store, shell, executed, delivered, granted, audited, run };
 }
+
+describe('deferred approval schema repair', () => {
+  test('adds executor to queues created before approvals were executor-scoped', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE deferred_approvals (
+      id TEXT PRIMARY KEY,
+      command TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      requested_at INTEGER NOT NULL,
+      decided_at INTEGER
+    )`);
+    db.run(`INSERT INTO deferred_approvals
+      (id, command, reason, status, requested_at, decided_at)
+      VALUES (?, ?, ?, 'queued', ?, NULL)`, ['legacy', GATED, 'gate', 1]);
+
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
+
+    expect(db.query<{ executor: string }, []>(
+      `SELECT executor FROM deferred_approvals WHERE id = 'legacy'`,
+    ).get()).toEqual({ executor: '' });
+    db.close();
+  });
+});
 
 describe('a gated action nobody is there to approve', () => {
   test('is parked, and the model is told it did NOT run — in one line', async () => {
@@ -387,7 +411,7 @@ describe('the spent grant leaves an audit, not a row', () => {
 
   test('store.spend returns the consumed action, then null on any later call', () => {
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const store = new DeferredApprovalStore(makeSql(db));
     store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
     expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
@@ -402,13 +426,13 @@ describe('the spent grant leaves an audit, not a row', () => {
     // Table init is idempotent and touches no data: a night's parked actions
     // survive every eviction and re-open between the ask and the answer.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const store = new DeferredApprovalStore(makeSql(db));
     store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
     store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 });
     expect(store.decide('defer-blessed', 'approved', 3)?.status).toBe('approved');
 
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const reopened = new DeferredApprovalStore(makeSql(db));
     expect(reopened.get('defer-parked')?.status).toBe('queued');
     expect(reopened.get('defer-blessed')?.status).toBe('approved');
@@ -459,7 +483,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // A Durable Object is evicted many times between the ask and the answer;
     // a parked action that lived in a promise map would be lost with it.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const first = new DeferredApprovalStore(makeSql(db));
     first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
 
@@ -474,7 +498,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     // An undeliverable wake must not lose the owner's answer: the row is the
     // record, the signal is only the notification.
     const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initDeferredApprovalsTable(makeExecRaw(db), makeSql(db));
     const store = new DeferredApprovalStore(makeSql(db));
     store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
     const queue = new DeferredApprovalQueue({

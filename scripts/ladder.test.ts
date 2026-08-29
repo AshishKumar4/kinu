@@ -132,6 +132,7 @@ describe('the ladder measures something', () => {
     expect(claims('bun test scripts/bench*.test.ts', tracked).sort()).toEqual([
       'scripts/bench-corpus-gate.test.ts',
       'scripts/bench-devbox-decision.test.ts',
+      'scripts/bench-devbox-workerd.test.ts',
       'scripts/bench-external.test.ts',
       'scripts/bench-fuse-probe.test.ts',
       'scripts/bench-inference-proxy.test.ts',

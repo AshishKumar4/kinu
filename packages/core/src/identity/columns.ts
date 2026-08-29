@@ -20,7 +20,7 @@
  * match the shape its own DDL already declares.
  */
 
-import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 
 /**
  * Add the columns of `definitions` that `table` does not already have.
@@ -47,9 +47,32 @@ export function reconcileColumns(
   // Bound argument to the table-valued form: a tagged template binds its
   // interpolations, and this is a value, not an identifier. Verified on both
   // backends — bun:sqlite and Durable Object SQLite under workerd.
-  const present = new Set(
-    sql<{ name: string }>`SELECT name FROM pragma_table_info(${table})`.map((row) => row.name),
-  );
+  const present = sql<{ name: string }>`SELECT name FROM pragma_table_info(${table})`.map((row) => row.name);
+  addMissingColumns(new Set(present), execRaw, table, definitions);
+}
+
+/** The same reconciliation over Durable Object/Bun positional SQL.
+ *
+ * UserDO owns a `SqlExec`, not the tagged `SqlExecutor` the workspace actors
+ * expose. Keeping the policy here prevents a second ask-before-ALTER
+ * implementation in the backend while preserving parameter binding for the
+ * table-valued pragma query. */
+export function reconcileSqlExecColumns(
+  sql: SqlExec,
+  table: string,
+  definitions: Readonly<Record<string, string>>,
+): void {
+  const present = sql.exec('SELECT name FROM pragma_table_info(?)', table).toArray()
+    .map((row) => String(row.name));
+  addMissingColumns(new Set(present), (ddl) => { sql.exec(ddl); }, table, definitions);
+}
+
+function addMissingColumns(
+  present: ReadonlySet<string>,
+  execRaw: RawSqlExec,
+  table: string,
+  definitions: Readonly<Record<string, string>>,
+): void {
   if (present.size === 0) {
     throw new Error(`reconcileColumns: table ${table} does not exist — create it before reconciling its columns`);
   }

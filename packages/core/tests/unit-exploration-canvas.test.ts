@@ -46,7 +46,7 @@ function freshDb() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw, makeSql(db));
-  initMctsSearchTable(execRaw);
+  initMctsSearchTable(execRaw, makeSql(db));
   initHeadsTables(execRaw, makeSql(db));
   initSwarmNodeRecords(execRaw);
   return { db, sql: makeSql(db) };

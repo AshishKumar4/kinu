@@ -20,7 +20,7 @@
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { reconcileColumns } from '../identity/columns';
-import { USAGE_FIELDS, type Usage } from '../usage';
+import type { Usage } from '../usage';
 
 /**
  * Every {@link Usage} field's column in `head_journal`, keyed by the field it
@@ -59,10 +59,15 @@ export type StoredHeadUsage = { readonly [C in HeadUsageColumn]: number | null }
  * we priced — INTEGER affinity would round it. Every other field is a whole
  * token count.
  */
-const HEAD_USAGE_DDL: Readonly<Record<string, string>> = Object.fromEntries(
-  USAGE_FIELDS.map((field): [string, string] =>
-    [HEAD_USAGE_COLUMNS[field], field === 'neurons' ? 'REAL' : 'INTEGER']),
-);
+const HEAD_USAGE_DDL = {
+  token_input: 'INTEGER',
+  token_output: 'INTEGER',
+  token_cache_read: 'INTEGER',
+  token_cache_write: 'INTEGER',
+  token_cache_write_1h: 'INTEGER',
+  token_reasoning: 'INTEGER',
+  neurons: 'REAL',
+} as const satisfies Readonly<Record<HeadUsageColumn, string>>;
 
 /**
  * One row per head. Every usage column is NULLable and carries NO default on

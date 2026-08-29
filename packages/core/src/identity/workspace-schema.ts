@@ -253,7 +253,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // Gated actions parked on the owner while nobody was there to decide, and
   // their standing decisions. Durable because the wait is a night, not a
   // prompt window.
-  initDeferredApprovalsTable(execRaw);
+  initDeferredApprovalsTable(execRaw, sql);
   // Plan revisions and reviewer state outlive both the submitting turn and DO
   // eviction; the Outputs surface always reads this one authoritative stream.
   initPlanReviewTable(execRaw);
@@ -267,7 +267,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initTaskListTable(execRaw);
   // Durable tree-search checkpoints: an evicted search resumes here, and both search
   // engines record what they ran with here.
-  initMctsSearchTable(execRaw);
+  initMctsSearchTable(execRaw, sql);
   // Experience-import staging ledger, settled by the shared EvolutionEngine on
   // every root — not only where the `experience` tool happens to be wired.
   initImportedExperienceTable(execRaw, sql);

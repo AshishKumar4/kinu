@@ -51,6 +51,50 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
+  test('repairs UserDO tables created before workspace lifecycle and catalog CAS columns', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE user_workspaces (
+        name TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_visited INTEGER NOT NULL,
+        archived_at INTEGER
+      );
+      INSERT INTO user_workspaces
+        (name, display_name, created_at, last_visited, archived_at)
+      VALUES ('legacy', 'Legacy', 1, 1, NULL);
+      CREATE TABLE user_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO user_config (key, value, updated_at) VALUES ('default_model', 'workers-ai/example', 1);
+    `);
+
+    initUserTables(sqlExec(db));
+
+    expect(columns(db, 'user_workspaces')).toEqual([
+      'name', 'display_name', 'created_at', 'last_visited', 'archived_at',
+      'name_origin', 'delete_pending', 'create_pending',
+    ]);
+    expect(required(db.query<{
+      name_origin: string;
+      delete_pending: number;
+      create_pending: number;
+    }, []>(`SELECT name_origin, delete_pending, create_pending
+      FROM user_workspaces WHERE name = 'legacy'`).get())).toEqual({
+      name_origin: 'user',
+      delete_pending: 0,
+      create_pending: 0,
+    });
+    expect(columns(db, 'user_config')).toEqual(['key', 'value', 'updated_at', 'version']);
+    expect(required(db.query<{ version: number }, []>(
+      `SELECT version FROM user_config WHERE key = 'default_model'`,
+    ).get())).toEqual({ version: 0 });
+    db.close();
+  });
+
   test('peer-grant store: default deny, idempotent grant, revoke', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));

@@ -24,7 +24,7 @@ export {
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
   type TerminalSequenceRun,
 } from './orchestrator/terminal-effects';
-export { reconcileColumns } from './identity/columns';
+export { reconcileColumns, reconcileSqlExecColumns } from './identity/columns';
 // The durable record that a keyed piece of work already happened, kept after the
 // row that did it has been retired.
 export {

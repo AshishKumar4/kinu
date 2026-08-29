@@ -220,7 +220,7 @@ function seedInterruptedRun(input: {
   readonly roleId: string;
 }): string {
   const { sql, execRaw } = input.rt.storage;
-  initMctsSearchTable(execRaw);
+  initMctsSearchTable(execRaw, sql);
   initSearchTables(execRaw, sql);
   const rootId = `root-${input.roleId}`;
   new MctsSearchStore(sql).begin({
@@ -367,7 +367,7 @@ describe('a re-drive continues under the profile it started under', () => {
     // must make the same choice of row, or a preset from one row would drive a
     // tree re-entered from another.
     const { rt } = createTestRuntime();
-    initMctsSearchTable(rt.storage.execRaw);
+    initMctsSearchTable(rt.storage.execRaw, rt.storage.sql);
     expect(readStartedSwarmProfile(rt.storage, task)).toBeNull();
 
     seedInterruptedRun({ rt, task, roleId: 'auditor' });

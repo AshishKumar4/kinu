@@ -2,15 +2,16 @@
 // keyed by the stable Kinu userId the auth store derives from the email.
 // Idempotent — safe to call on every DO boot.
 //
-// EVERY COLUMN BELOW IS IN ITS CREATE, so there is nothing to reconcile and no
-// backfill to run. The FIRST column any of these tables gains after release
-// needs a `reconcileColumns` call added beside that CREATE, listing that column
-// and every later one forever — a DO created before it would otherwise break
-// with `no such column`. Until then the CREATE is the single description of the
-// shape, and a writer naming a column it lacks is a bug in one place.
+// EVERY COLUMN BELOW IS IN ITS CREATE. Columns added after release also stay in
+// the adjacent reconciliation object: CREATE TABLE IF NOT EXISTS is a no-op on
+// an older UserDO, while every reader immediately names the current columns.
+// This is shape repair, not a migration framework — no versions or data rewrites.
 
 import {
-  initExperienceLibraryTables, initReleaseTables, type SqlExec,
+  initExperienceLibraryTables,
+  initReleaseTables,
+  reconcileSqlExecColumns,
+  type SqlExec,
 } from '@kinu.run/core';
 import { initAccessTokenTable } from '../cli/access-token-store';
 import { initDeviceInflightTable } from './device-inflight';
@@ -19,6 +20,16 @@ import { initWorkspaceCapabilityTables } from './workspace-capability';
 
 /** The sole account profile-catalog row in user_config. */
 export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
+
+const USER_WORKSPACE_ADDED_COLUMNS = {
+  name_origin: "TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user'))",
+  delete_pending: 'INTEGER NOT NULL DEFAULT 0',
+  create_pending: 'INTEGER NOT NULL DEFAULT 0',
+} as const;
+
+const USER_CONFIG_ADDED_COLUMNS = {
+  version: 'INTEGER NOT NULL DEFAULT 0',
+} as const;
 
 export function initUserTables(sql: SqlExec): void {
   sql.exec(`
@@ -64,6 +75,7 @@ export function initUserTables(sql: SqlExec): void {
       create_pending INTEGER NOT NULL DEFAULT 0
     )
   `);
+  reconcileSqlExecColumns(sql, 'user_workspaces', USER_WORKSPACE_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_last_visited ON user_workspaces (last_visited DESC)`);
 
   // Per-workspace capability tokens + the taint registry — the caller boundary
@@ -115,6 +127,7 @@ export function initUserTables(sql: SqlExec): void {
       version    INTEGER NOT NULL DEFAULT 0
     )
   `);
+  reconcileSqlExecColumns(sql, 'user_config', USER_CONFIG_ADDED_COLUMNS);
 
   // In-flight Codex device-code state (deviceAuthId + userCode), one per
   // attempt. Cleared on successful poll or disconnect.

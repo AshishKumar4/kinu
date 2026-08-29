@@ -75,7 +75,7 @@ function ledgerOnly() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initSearchTables(makeExecRaw(db), sql);
-  initMctsSearchTable(makeExecRaw(db));
+  initMctsSearchTable(makeExecRaw(db), sql);
   return new MctsSearchStore(sql);
 }
 
@@ -175,7 +175,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
     initSearchTables(execRaw, sql);
-    initMctsSearchTable(execRaw);
+    initMctsSearchTable(execRaw, sql);
     const ledger = new MctsSearchStore(sql);
     ledger.begin({
       rootId: 'mid-level', task: TASK, engine: 'swarm', rootMsgId: null,
@@ -252,7 +252,7 @@ describe('harvesting a capped swarm', () => {
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
     initSearchTables(execRaw, sql);
-    initMctsSearchTable(execRaw);
+    initMctsSearchTable(execRaw, sql);
     initSwarmNodeRecords(execRaw);
     const ledger = new MctsSearchStore(sql);
     beganSwarm(ledger, 'harvest-root', 1_000);
@@ -390,7 +390,7 @@ describe('the durable record envelope is versioned', () => {
     const { rt } = createTestRuntime();
     const sql = rt.storage.sql;
     initSearchTables(rt.storage.execRaw, sql);
-    initMctsSearchTable(rt.storage.execRaw);
+    initMctsSearchTable(rt.storage.execRaw, sql);
     initSwarmNodeRecords(rt.storage.execRaw);
     const ledger = new MctsSearchStore(sql);
     const journal = new HeadJournal(sql);
@@ -1576,7 +1576,7 @@ describe('harvested witness verdict', () => {
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
     initSearchTables(execRaw, sql);
-    initMctsSearchTable(execRaw);
+    initMctsSearchTable(execRaw, sql);
     initSwarmNodeRecords(execRaw);
     const ledger = new MctsSearchStore(sql);
     beganSwarm(ledger, 'harvest-root', 1_000);

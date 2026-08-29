@@ -17,6 +17,13 @@
  */
 
 import { isProductSource, readMatching } from './sources';
+import {
+  identifierCalleeName,
+  literalText,
+  parse as parseSyntax,
+  type SyntaxNode,
+  walk,
+} from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -72,108 +79,169 @@ function columnsOf(source: string, table: string): string[] | null {
   return columns;
 }
 
-/**
- * A `reconcileColumns(sql, execRaw, 'table', columns)` call site. `columns` is
- * captured raw: it is an inline object literal at most sites and a named,
- * exported constant where the same list also feeds a second init path.
- */
-const RECONCILE_RE =
-  /reconcileColumns\([^,]+,\s*[^,]+,\s*'(\w+)',\s*(\{[\s\S]*?\}|\w+)\s*\)/g;
-
-/** `export const NAME = { col: 'TYPE', … }` — the named form's definition. */
-const COLUMN_CONST_RE =
-  /const\s+(\w+)\s*(?::[^=]+)?=\s*(\{[^}]*\})/g;
-
-/** Column names out of an object literal's keys. */
-function objectKeys(literal: string): string[] {
-  return [...literal.matchAll(/(\w+)\s*:/g)].flatMap((m) => m[1] === undefined ? [] : [m[1]]);
+/** Parsed TypeScript facts for one product source. The gate reads call nodes,
+ * not their formatting: multiline callbacks, trailing commas and type wrappers
+ * are all the same call in the AST. */
+interface SourceSyntax {
+  readonly file: string;
+  readonly source: string;
+  readonly root: SyntaxNode;
+  readonly constants: ReadonlyMap<string, SyntaxNode>;
 }
 
-/**
- * Every column named in a backfill call anywhere in the tracked sources.
- *
- * `reconcileColumns` changed shape once already — from
- * `(execRaw, table, ['col TYPE'])` to `(sql, execRaw, table, { col: 'TYPE' })` —
- * and the pattern here went on matching nothing, so this gate reported no drift
- * because it was reading no call sites rather than because there were none.
- * Hence `assertEveryCallSiteParsed`: the denominator is checked, not assumed.
- */
-function backfilledColumns(sources: Map<string, string>): Set<string> {
-  // Column lists named once and used by more than one init path, resolved
-  // across files because the constant is exported from the module that owns
-  // the table and imported by the unified initializer.
-  const byConstName = new Map<string, string[]>();
-  for (const source of sources.values()) {
-    for (const m of source.matchAll(COLUMN_CONST_RE)) {
-      if (m[1] !== undefined && m[2] !== undefined) byConstName.set(m[1], objectKeys(m[2]));
-    }
-  }
-
-  const named = new Set<string>();
-  for (const source of sources.values()) {
-    for (const m of source.matchAll(/ALTER TABLE\s+(?:\$\{table\}|(\w+))\s+ADD COLUMN\s+(\w+)/g)) {
-      if (m[1] !== undefined && m[2] !== undefined) named.add(`${m[1]}.${m[2]}`);
-    }
-    for (const m of source.matchAll(RECONCILE_RE)) {
-      const table = m[1];
-      const argument = m[2] ?? '';
-      const columns = argument.startsWith('{')
-        ? objectKeys(argument)
-        : byConstName.get(argument) ?? [];
-      for (const column of columns) named.add(`${table}.${column}`);
-    }
-    for (const m of source.matchAll(/ensureColumn\([^,]+,\s*'(\w+)',\s*'(\w+)'/g)) {
-      named.add(`${m[1]}.${m[2]}`);
-    }
-  }
-  return named;
+interface SyntaxIndex {
+  readonly files: ReadonlyMap<string, SourceSyntax>;
+  readonly constantsByName: ReadonlyMap<string, readonly { file: string; value: SyntaxNode }[]>;
 }
 
-/**
- * Every `reconcileColumns(` CALL in the tree must be one this gate could read,
- * and each must resolve to at least one column. A call it cannot parse — or one
- * whose named column list it cannot resolve — is a table whose backfill it
- * cannot see, which it would otherwise report as drift-free.
- *
- * The declaration in `identity/columns.ts` is excluded by name: it is the
- * definition, not a call.
- */
-function assertEveryCallSiteParsed(sources: Map<string, string>): void {
-  const byConstName = new Map<string, string[]>();
-  for (const source of sources.values()) {
-    for (const m of source.matchAll(COLUMN_CONST_RE)) {
-      if (m[1] !== undefined && m[2] !== undefined) byConstName.set(m[1], objectKeys(m[2]));
-    }
-  }
+export interface BackfillInspection {
+  readonly named: ReadonlySet<string>;
+  readonly reconcileCalls: number;
+}
 
-  const faults: string[] = [];
-  let callsSeen = 0;
+/** The child that wraps one raw AST member. Identity is stable inside one Oxc
+ * parse; a miss is a parser-contract failure and must never become an empty set. */
+function childFor(parent: SyntaxNode, raw: SyntaxNode['raw']): SyntaxNode {
+  const child = parent.children.find((candidate) => candidate.raw === raw);
+  if (child === undefined) throw new Error(`schema-drift lost the ${raw.type} child of ${parent.type}`);
+  return child;
+}
+
+/** Strip TypeScript-only wrappers while keeping the expression node Oxc parsed. */
+function unwrapExpression(node: SyntaxNode): SyntaxNode {
+  let current = node;
+  for (;;) {
+    const { raw } = current;
+    if (raw.type !== 'TSAsExpression' && raw.type !== 'TSSatisfiesExpression'
+      && raw.type !== 'TSNonNullExpression' && raw.type !== 'ParenthesizedExpression') return current;
+    current = childFor(current, raw.expression);
+  }
+}
+
+function argumentAt(call: SyntaxNode, index: number): SyntaxNode {
+  if (call.raw.type !== 'CallExpression') throw new Error('schema-drift expected a CallExpression');
+  const argument = call.raw.arguments[index];
+  if (argument === undefined || argument.type === 'SpreadElement') {
+    throw new Error(`schema-drift cannot read argument ${String(index + 1)} of this call`);
+  }
+  return childFor(call, argument);
+}
+
+function constantValue(node: SyntaxNode): { name: string; value: SyntaxNode } | null {
+  if (node.raw.type !== 'VariableDeclarator' || node.raw.id.type !== 'Identifier'
+    || node.raw.init === null) return null;
+  return { name: node.raw.id.name, value: childFor(node, node.raw.init) };
+}
+
+function syntaxIndex(sources: Map<string, string>): SyntaxIndex {
+  const files = new Map<string, SourceSyntax>();
+  const constantsByName = new Map<string, { file: string; value: SyntaxNode }[]>();
   for (const [file, source] of sources) {
-    const calls = (source.match(/(?<!function\s)\breconcileColumns\(/g) ?? []).length;
-    if (calls === 0) continue;
-    callsSeen += calls;
-    const matches = [...source.matchAll(RECONCILE_RE)];
-    if (matches.length !== calls) {
-      faults.push(`${file}: ${calls} call(s), ${matches.length} parsed — update RECONCILE_RE`);
-      continue;
-    }
-    for (const m of matches) {
-      const argument = m[2] ?? '';
-      const columns = argument.startsWith('{') ? objectKeys(argument) : byConstName.get(argument);
-      if (columns === undefined || columns.length === 0) {
-        faults.push(`${file}: reconcileColumns(… '${m[1]}', ${argument}) resolved to no columns`);
-      }
-    }
+    const rootNode = parseSyntax(file, source).root;
+    const constants = new Map<string, SyntaxNode>();
+    walk(rootNode, (node) => {
+      const found = constantValue(node);
+      if (found === null) return;
+      constants.set(found.name, found.value);
+      const definitions = constantsByName.get(found.name) ?? [];
+      definitions.push({ file, value: found.value });
+      constantsByName.set(found.name, definitions);
+    });
+    files.set(file, { file, source, root: rootNode, constants });
   }
-  if (callsSeen === 0) {
-    faults.push('no reconcileColumns call sites found at all — the gate examined nothing');
+  return { files, constantsByName };
+}
+
+function propertyName(property: SyntaxNode): string {
+  if (property.raw.type !== 'Property') {
+    throw new Error(`schema-drift expected an object Property, found ${property.type}`);
   }
-  if (faults.length > 0) {
+  const { key } = property.raw;
+  if (key.type === 'Identifier') return key.name;
+  const value = literalText(childFor(property, key));
+  if (value === undefined) throw new Error('schema-drift cannot resolve a computed column name');
+  return value;
+}
+
+function columnObject(
+  index: SyntaxIndex,
+  file: SourceSyntax,
+  expression: SyntaxNode,
+  resolving: ReadonlySet<string> = new Set(),
+): string[] {
+  const node = unwrapExpression(expression);
+  if (node.raw.type === 'Identifier') {
+    const name = node.raw.name;
+    const local = file.constants.get(name);
+    const candidates = local === undefined ? index.constantsByName.get(name) ?? [] : [{ file: file.file, value: local }];
+    const [candidate] = candidates;
+    if (candidate === undefined || candidates.length !== 1) {
+      throw new Error(
+        `${file.file}: column object ${name} has ${String(candidates.length)} resolvable definitions`,
+      );
+    }
+    const owner = index.files.get(candidate.file);
+    if (owner === undefined) throw new Error(`schema-drift lost the source that declares ${name}`);
+    const identity = `${candidate.file}#${name}`;
+    if (resolving.has(identity)) throw new Error(`${file.file}: column object ${name} is recursive`);
+    return columnObject(index, owner, candidate.value, new Set([...resolving, identity]));
+  }
+  if (node.raw.type !== 'ObjectExpression') {
     throw new Error(
-      'schema-drift cannot read every reconcileColumns call, so it would report ' +
-      `drift-free on tables it never examined.\n  ${faults.join('\n  ')}`,
+      `${file.file}:${String(node.start)} column declaration is ${node.type}, not an object or named object`,
     );
   }
+  const columns: string[] = [];
+  for (const rawProperty of node.raw.properties) {
+    const property = childFor(node, rawProperty);
+    if (rawProperty.type === 'Property') {
+      columns.push(propertyName(property));
+      continue;
+    }
+    if (rawProperty.type === 'SpreadElement') {
+      columns.push(...columnObject(index, file, childFor(property, rawProperty.argument), resolving));
+      continue;
+    }
+  }
+  return [...new Set(columns)];
+}
+
+/** Every backfill call the TypeScript AST can prove. SQL text still uses a SQL
+ * pattern because SQL is the domain being parsed there; TypeScript never does. */
+export function inspectBackfillCalls(sources: Map<string, string>): BackfillInspection {
+  const index = syntaxIndex(sources);
+  const named = new Set<string>();
+  let reconcileCalls = 0;
+  for (const file of index.files.values()) {
+    // Raw ALTER TABLE statements live inside SQL strings, where a SQL pattern is
+    // the relevant parser rather than a source-code formatting assumption.
+    for (const match of file.source.matchAll(/ALTER TABLE\s+(?:\$\{table\}|(\w+))\s+ADD COLUMN\s+(\w+)/g)) {
+      if (match[1] !== undefined && match[2] !== undefined) named.add(`${match[1]}.${match[2]}`);
+    }
+    walk(file.root, (node) => {
+      const callee = identifierCalleeName(node);
+      if (callee === 'reconcileColumns' || callee === 'reconcileSqlExecColumns') {
+        reconcileCalls += 1;
+        const tableIndex = callee === 'reconcileColumns' ? 2 : 1;
+        const columnsIndex = callee === 'reconcileColumns' ? 3 : 2;
+        const table = literalText(argumentAt(node, tableIndex));
+        if (table === undefined) throw new Error(`${file.file}: ${callee} table is not a string literal`);
+        const columns = columnObject(index, file, argumentAt(node, columnsIndex));
+        if (columns.length === 0) throw new Error(`${file.file}: ${callee}('${table}') names no columns`);
+        for (const column of columns) named.add(`${table}.${column}`);
+      }
+      if (callee === 'ensureColumn') {
+        const table = literalText(argumentAt(node, 1));
+        const column = literalText(argumentAt(node, 2));
+        if (table === undefined || column === undefined) {
+          throw new Error(`${file.file}: ensureColumn table/column must be string literals`);
+        }
+        named.add(`${table}.${column}`);
+      }
+    });
+  }
+  if (reconcileCalls === 0) throw new Error('schema-drift parsed no column reconciliation calls');
+  return { named, reconcileCalls };
 }
 
 export function findSchemaDrift(): Violation[] {
@@ -186,14 +254,13 @@ export function findSchemaDrift(): Violation[] {
   // largest DDL surface in the repo, in a gate reporting drift-free over it.
   const sources = readMatching(isProductSource);
 
-  assertEveryCallSiteParsed(sources);
-  const backfilled = backfilledColumns(sources);
+  const backfilled = inspectBackfillCalls(sources).named;
   const violations: Violation[] = [];
 
   for (const [file, source] of sources) {
     for (const m of source.matchAll(TABLE_RE)) {
       const table = m[1];
-      if (table === undefined || HANDLED_ELSEWHERE[table] === true) continue;
+      if (table === undefined || table in HANDLED_ELSEWHERE) continue;
       const now = columnsOf(source, table);
       if (now === null) continue;
 
