@@ -34,6 +34,7 @@ import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import { diversityAngle } from '../src/mcts/diversity';
+import { deriveStop } from '../src/strategy/settle';
 import type { SwarmRunDeps } from '../src/strategy/swarm-run';
 import type { NodeLoopResult, NodeRunSpec } from '../src/strategy/node-host';
 import type { HeadReport } from '../src/heads/types';
@@ -170,6 +171,10 @@ async function run(input: {
   readonly maxSteps?: number;
   /** A clock the caller declares instead of taking the derived envelope. */
   readonly maxWallClockMs?: number;
+  /** Which branch's host THROWS instead of reporting. A provider that died leaves
+   *  the search nothing at all, which is a different outcome from a node that ran
+   *  and reported an aborted status — the distinction this file exists for. */
+  readonly throwsAt?: 0 | 1;
 }) {
   const { rt } = createTestRuntime();
   const logger = createRecordingLogger();
@@ -193,7 +198,11 @@ async function run(input: {
     host: async (spec): Promise<NodeLoopResult> => {
       budgets.push(spec.headInput.budget.maxWallClockMs);
       steps.push(4); // spec carries no step cap any more; the fixture counts its own
-      const outcome = isBranch(spec, 0) ? input.branch0 : input.branch1;
+      const branchIndex = isBranch(spec, 0) ? 0 : 1;
+      if (input.throwsAt === branchIndex) {
+        throw new Error(`node ${spec.headInput.id}: the provider died mid-expansion`);
+      }
+      const outcome = branchIndex === 0 ? input.branch0 : input.branch1;
       return {
         report: headReport({
           id: spec.headInput.id,
@@ -349,4 +358,66 @@ describe('every node runs to the deadline its caller declared, and to none other
       });
     }
   }, 60_000);
+});
+
+/**
+ * WHAT THE RUN OWES A CALLER ABOUT A NODE IT LOST, which is a different debt from the
+ * one above. A node that ran and reported `aborted` is CARRIED: the run holds its
+ * candidate and says on that candidate what happened to it. A node whose host died
+ * leaves the run holding nothing, so it is COUNTED instead — and the count is what
+ * stops the run claiming it settled.
+ *
+ * The two halves were wired and neither was asserted: `lost` is computed in
+ * `swarm-run.ts` and handed to `deriveStop`, whose `lost > 0` arm downgrades `settled`
+ * to `budget`. A run that lost a node and still reported `settled` would tell its
+ * caller a narrower search was a complete one, and nothing here would have noticed.
+ */
+describe('a node the run LOST is counted, and the count denies the run a clean settle', () => {
+  // `lost` itself is deliberately NOT on the report — `swarm-run.ts:830-833` states
+  // that the caller-visible consequence is `stop`. So these two cases assert what a
+  // caller can actually see, and the unit case below pins the rule at the one seam
+  // where the count is visible.
+  test('a dead host leaves the level one candidate short and denies the settle', async () => {
+    const { result } = await run({
+      branch0: { status: 'completed', content: fenced(OPTIMAL), stepCount: 4 },
+      branch1: { status: 'completed', content: fenced(WASTEFUL), stepCount: 4 },
+      throwsAt: 1,
+    });
+    if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
+
+    // Counted, not carried: the width was two and the run holds one.
+    expect(result.report.expansions).toBe(1);
+    // A lost node denies the clean settle. Without this the caller reads `settled`
+    // and treats a half-width wave as the search it asked for.
+    expect(result.report.stop).toBe('budget');
+  }, 60_000);
+
+  test('an aborted node is carried, so the level keeps both candidates', async () => {
+    const { result } = await run({
+      branch0: { status: 'completed', content: fenced(OPTIMAL), stepCount: 4 },
+      branch1: { status: 'aborted', content: fenced(WASTEFUL), stepCount: 9 },
+    });
+    if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
+
+    // The contrast that makes the previous case mean something: this node also
+    // failed to finish, and the run still holds it with its reason attached.
+    expect(result.report.expansions).toBe(2);
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates.some((candidate) => candidate.incomplete !== null)).toBe(true);
+  }, 60_000);
+
+  test('deriveStop: only an untouched budget with a closed frontier earns `settled`', () => {
+    const settled = {
+      aborted: false, missionSpent: false, lost: 0, remainingBudget: 5, frontierOpen: false,
+    };
+    expect(deriveStop(settled)).toBe('settled');
+    // One lost node is enough, at any remaining budget.
+    expect(deriveStop({ ...settled, lost: 1 })).toBe('budget');
+    expect(deriveStop({ ...settled, missionSpent: true })).toBe('budget');
+    // Exhaustion counts only while the frontier still had somewhere to go.
+    expect(deriveStop({ ...settled, remainingBudget: 0, frontierOpen: true })).toBe('budget');
+    expect(deriveStop({ ...settled, remainingBudget: 0, frontierOpen: false })).toBe('settled');
+    // An abort outranks every other reason, including a lost node.
+    expect(deriveStop({ ...settled, aborted: true, lost: 3 })).toBe('aborted');
+  });
 });
