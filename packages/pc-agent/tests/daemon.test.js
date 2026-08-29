@@ -5,10 +5,27 @@
  * degraded mode when git is missing.
  */
 'use strict';
-const { describe, expect, spyOn, test } = require('bun:test');
+const { afterAll, describe, expect, spyOn, test } = require('bun:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+
+/**
+ * The daemon's in-flight root, isolated to this run, and set BEFORE the daemon
+ * module loads because it reads the variable once at import.
+ *
+ * Unset, it resolves to `~/.kinu/inflight` — a real directory in the running
+ * user's home. `handle()` treats an existing request directory as a request
+ * already supervised and replays its recorded state instead of running the
+ * command, so a literal request id turned every run after the first into a
+ * replay of the first: the command never executed, the frame still carried
+ * exit 0, and the assertions about its effects failed. The suite also left its
+ * ids behind in the user's home.
+ */
+const INFLIGHT_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-inflight-'));
+process.env.KINU_INFLIGHT_ROOT = INFLIGHT_ROOT;
+afterAll(() => { fs.rmSync(INFLIGHT_ROOT, { recursive: true, force: true }); });
+
 const {
   handle,
   createCheckpoints,
@@ -116,12 +133,12 @@ describe('daemon exec output bound', () => {
   test('a noisy command drains after the retained response is truncated', async () => {
     const ws = fakeWs();
     handle({
-      id: 'noisy',
+      id: 'rpc-noisyexec0-1',
       method: 'exec',
       params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000))"`],
     }, ws, {});
 
-    const result = (await ws.response('noisy')).result;
+    const result = (await ws.response('rpc-noisyexec0-1')).result;
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('[output truncated at 524288 bytes]');
     expect(Buffer.byteLength(result.stdout)).toBeLessThan(525_000);
@@ -195,10 +212,10 @@ describe('daemon checkpoint protocol', () => {
       const ws = fakeWs();
 
       handle({
-        id: 'r1', method: 'exec', params: [`echo CLOBBERED > ${work}/data.txt && rm -f ${work}/data.txt && echo gone > ${work}/extra.txt`],
+        id: 'rpc-checkprex0-1', method: 'exec', params: [`echo CLOBBERED > ${work}/data.txt && rm -f ${work}/data.txt && echo gone > ${work}/extra.txt`],
         checkpoint: { agent: 'cloud-agent', turnId: 'turn-1', sessionId: 'default', dir: work },
       }, ws, ctx);
-      const exec = await ws.response('r1');
+      const exec = await ws.response('rpc-checkprex0-1');
       expect(exec.result.exitCode).toBe(0);
       expect(fs.existsSync(path.join(work, 'data.txt'))).toBe(false);
       expect(fs.readFileSync(path.join(work, 'extra.txt'), 'utf8').trim()).toBe('gone');
@@ -276,8 +293,8 @@ describe('daemon checkpoint protocol', () => {
     const { work, ctx, cleanup } = setup();
     try {
       const ws = fakeWs();
-      handle({ id: 'e', method: 'exec', params: [`echo hi > ${work}/x.txt`] }, ws, ctx);
-      expect((await ws.response('e')).result.exitCode).toBe(0);
+      handle({ id: 'rpc-nosnapexe0-1', method: 'exec', params: [`echo hi > ${work}/x.txt`] }, ws, ctx);
+      expect((await ws.response('rpc-nosnapexe0-1')).result.exitCode).toBe(0);
       handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
       expect((await ws.response('l')).result).toEqual([]);
     } finally { cleanup(); }
@@ -289,10 +306,10 @@ describe('daemon checkpoint protocol', () => {
       const ws = fakeWs();
       // The mutation is never blocked by the unavailable engine.
       handle({
-        id: 'e', method: 'exec', params: [`echo ok > ${work}/y.txt`],
+        id: 'rpc-degexe1120-1', method: 'exec', params: [`echo ok > ${work}/y.txt`],
         checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: work },
       }, ws, ctx);
-      expect((await ws.response('e')).result.exitCode).toBe(0);
+      expect((await ws.response('rpc-degexe1120-1')).result.exitCode).toBe(0);
       expect(fs.readFileSync(path.join(work, 'y.txt'), 'utf8').trim()).toBe('ok');
 
       handle({ id: 's', method: 'checkpointStatus', params: [] }, ws, ctx);
