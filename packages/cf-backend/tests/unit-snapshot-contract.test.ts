@@ -20,6 +20,13 @@
  * return literal carries, read from the source of both. It is a subset check in
  * one direction only: a server may return more than any client reads yet, and a
  * field no client reads is dead weight rather than a broken contract.
+ *
+ * THE FIXTURE IS THE THIRD PARTY TO THE SAME CONTRACT, and it broke first. The
+ * gallery's stub agent answers `getWorkspaceSnapshot` for every browser frame,
+ * and when `branchRuns` joined the interface the stub kept its old shape — so
+ * `snap.branchRuns.map` read `undefined`, the render died, and four browser
+ * cases failed on a composer that never appeared. A server-only check cannot
+ * see that, so the stub is held to the same field set here.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
@@ -28,6 +35,7 @@ import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 
 const CLIENT = 'packages/cf-backend/src/hooks/use-kinu.ts';
 const SERVER = 'packages/cf-backend/src/orchestrator.ts';
+const GALLERY = 'packages/cf-backend/src/gallery.tsx';
 
 /** Property names of a named interface, as its own source declares them. */
 function interfaceFields(file: string, name: string): string[] {
@@ -67,12 +75,48 @@ function returnedKeys(file: string, method: string): string[] {
   return keys;
 }
 
+/** The keys of one property's object literal inside a named `const` object —
+ *  here, the gallery's canned answer for a single RPC method. */
+function stubbedKeys(file: string, container: string, method: string): string[] {
+  const parsed = parse(file, readFileSync(file, 'utf8'));
+  let keys: string[] | null = null;
+  walk(parsed.root, (node: SyntaxNode) => {
+    const raw = node.raw;
+    if (keys !== null) return;
+    if (raw.type !== 'VariableDeclarator') return;
+    if (raw.id.type !== 'Identifier' || raw.id.name !== container) return;
+    walk(node, (inner: SyntaxNode) => {
+      const innerRaw = inner.raw;
+      if (keys !== null) return;
+      if (innerRaw.type !== 'Property') return;
+      if (innerRaw.key.type !== 'Identifier' || innerRaw.key.name !== method) return;
+      if (innerRaw.value.type !== 'ObjectExpression') return;
+      keys = innerRaw.value.properties.flatMap((property) =>
+        property.type === 'Property' && property.key.type === 'Identifier' ? [property.key.name] : []);
+    });
+  });
+  if (keys === null) throw new Error(`${file}'s ${container} no longer stubs ${method} with an object literal`);
+  return keys;
+}
+
 describe('the workspace snapshot contract', () => {
   test('every field the client declares is returned by the server', () => {
     const declared = interfaceFields(CLIENT, 'WorkspaceSnapshot');
     const returned = returnedKeys(SERVER, 'getWorkspaceSnapshot');
 
     expect(declared.filter((field) => !returned.includes(field))).toEqual([]);
+  });
+
+  test('the gallery stub answers with every field the client reads unconditionally', () => {
+    const stubbed = stubbedKeys(GALLERY, 'AGENT_RPC_DATA', 'getWorkspaceSnapshot');
+
+    // Not the whole interface: the client guards some reads and the gallery
+    // deliberately leaves those absent to photograph an empty state. These are
+    // the fields `loadAllData` dereferences or replaces state from with no
+    // guard, so an absent one is a blank page rather than an empty frame.
+    for (const field of ['status', 'tools', 'executors', 'executorOutputs', 'pendingSteers', 'branchRuns']) {
+      expect(stubbed).toContain(field);
+    }
   });
 
   test('the durable authorities a reconnecting tab cannot learn any other way are on it', () => {
