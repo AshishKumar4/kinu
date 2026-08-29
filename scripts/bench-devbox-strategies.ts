@@ -398,9 +398,18 @@ const SEGMENTS_PER_WORKLOAD = 4;
  */
 const MIN_CHECKPOINT_INTERVAL_MS = 3_000;
 
-/** Groups a blocking exec cannot reach; backgrounded and polled instead. */
+/**
+ * Groups a blocking exec cannot reach; backgrounded and polled instead.
+ *
+ * `archive` earns its place by measurement, not by size: on an R2-backed plane
+ * every read it makes crosses the object store, so its duration tracks remote
+ * latency rather than the tree. It completed inside one request on the
+ * 2026-08-29 01:26 run and exceeded the 180 s call deadline twice on the
+ * 02:28 run over the same tree — a phase whose cost is set by a remote service
+ * cannot be held open in a single request, whatever the deadline is set to.
+ */
 const PROCESS_PHASES = new Set<string>([
-  'npmlike', 'gitlike', 'small1k', 'small10k', 'seq100',
+  'npmlike', 'gitlike', 'small1k', 'small10k', 'seq100', 'archive',
 ]);
 const PHASES = ['posix', 'seq1', 'seq10', 'rand', 'archive', 'small1k', 'npmlike'] as const;
 /** Change sizes for the checkpoint ladder, in KiB of freshly written bytes. */
