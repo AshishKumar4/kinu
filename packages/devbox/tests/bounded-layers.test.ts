@@ -55,6 +55,7 @@ import {
 } from '../src/candidates/bounded-layers';
 import type { BoundedLayers, BuiltLayers, EntryDoc } from '../src/candidates/bounded-layers';
 import {
+  MemoryCandidateObjectSink,
   StaleParentRefused,
   envelopeBytes,
   envelopeIdOf,
@@ -977,6 +978,184 @@ describe('bounded layers', () => {
     expect(() => view.stat('/d/f')).toThrow(/hostile path/);
     await expect(view.readRange('/d/f', 0, 4)).rejects.toThrow(/hostile path/);
     await expect(view.readRange('d/f', -1, 4)).rejects.toThrow(/offset/);
+  });
+
+
+  // ── hardening: cost, atomicity, recovery, refusal, and the bound ──────────
+
+  test('per-commit staging cost stays flat as the layer stack deepens', async () => {
+    class CountingSink {
+      stages = 0;
+      readonly inner = new MemoryCandidateObjectSink();
+      async stage(key: string, bytes: Uint8Array) {
+        this.stages++;
+        return this.inner.stage(key, bytes);
+      }
+    }
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const counts: number[] = [];
+    let parent: BoundedLayers | undefined;
+    for (let generation = 0; generation < 10; generation++) {
+      const sink = new CountingSink();
+      const built = await build(
+        audited(snap(fileE('log.txt', enc.encode(`generation ${generation}`), { ino })), generation),
+        parent,
+        sink,
+      );
+      counts.push(sink.stages);
+      parent = await publishAndOpen(built, store, publisher);
+    }
+    // One content chunk + one layer document + one root + one closure, on
+    // every commit — never one object per accumulated layer.
+    expect(counts[0]).toBe(4);
+    for (const count of counts) expect(count).toBe(counts[0]);
+  });
+
+  test('a reader attaching between the two durable writes sees exactly one whole generation', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const stateOf = (text: string) => snap(fileE('log.txt', enc.encode(text), { ino }));
+    const first = await build(audited(stateOf('first generation'), 0));
+    const parent = await publishAndOpen(first, store, publisher);
+
+    // Durable write #1: the new generation's objects land. Durable write #2:
+    // the head CAS. A container replacement attaching in between must open
+    // the old head and see EXACTLY the first generation — and, handed the new
+    // root's ref, EXACTLY the second. Never a blend, never blank.
+    const second = await build(audited(stateOf('a different second generation'), 1), parent);
+    await store.stage(second.plan);
+
+    const attachedOld = await store.openHead();
+    expect(attachedOld.stat('log.txt')).not.toBeNull();
+    expect(new TextDecoder().decode(await attachedOld.readRange('log.txt', 0, 64))).toBe('first generation');
+    const attachedNew = await open(second.view.rootRef, store.reader, IDENTITY);
+    expect(attachedNew.stat('log.txt')).not.toBeNull();
+    expect(new TextDecoder().decode(await attachedNew.readRange('log.txt', 0, 64))).toBe('a different second generation');
+    expect(resolvedText(attachedOld)).not.toBe(resolvedText(attachedNew));
+  });
+
+  test('a commit interrupted at each of its sub-steps re-drives idempotently', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    const base = await publishAndOpen(
+      await build(audited(snap(fileE('log.txt', enc.encode('generation zero'), { ino })), 0)),
+      store,
+      publisher,
+    );
+    const capture1 = audited(snap(fileE('log.txt', enc.encode('generation one'), { ino })), 1);
+    const reference = await build(capture1, base);
+    const referenceText = resolvedText(reference.view);
+    const referenceLayers = reference.view.layers.map((ref) => ref.key);
+    expect(reference.plan.dependencies.length).toBeGreaterThanOrEqual(1);
+
+    // Interrupt after 0..n staged objects: each dependency in turn, the root,
+    // and the fully staged-but-head-unmoved state. Then re-drive the commit.
+    const points: number[] = [0];
+    reference.plan.dependencies.forEach((_object, index) => points.push(index + 1));
+    points.push(reference.plan.dependencies.length + 1);
+    points.push(reference.plan.dependencies.length + 2);
+
+    for (const [pointIndex, stagedCount] of points.entries()) {
+      const attempt = await build(capture1, base);
+      const staged = [...attempt.plan.dependencies, attempt.plan.root, attempt.plan.closureObject];
+      const headBeforeAttempt = publisher.head === null ? null : publisher.head.pointer.rootEnvelopeId;
+      for (const object of staged.slice(0, stagedCount)) {
+        store.map.set(object.ref.key, await readStagedCandidateObjectForTest(object));
+      }
+      // The interrupted commit never moved the head on its own.
+      expect(publisher.head === null ? null : publisher.head.pointer.rootEnvelopeId).toBe(headBeforeAttempt);
+
+      const redo = await build(capture1, base);
+      const recovered = await publishAndOpen(redo, store, publisher);
+      expect(recovered.rootId).toBe(reference.view.rootId);
+      expect(recovered.layers.map((ref) => ref.key)).toEqual(referenceLayers);
+      expect(resolvedText(recovered)).toBe(referenceText);
+      // The index references nothing the store fails to hold: no orphaned
+      // layer survives under a committed root.
+      for (const ref of recovered.layers) expect(store.map.has(ref.key)).toBe(true);
+
+      // Re-finalizing the SAME plan after success leaves the head alone.
+      const headBeforeRecheck = publisher.head === null ? null : publisher.head.pointer.rootEnvelopeId;
+      await finalizePlan(redo.plan, publisher, `op-recheck-${pointIndex}`);
+      expect(publisher.head === null ? null : publisher.head.pointer.rootEnvelopeId).toBe(headBeforeRecheck);
+    }
+  });
+
+  test('an index naming an object the store does not hold refuses, naming the absent object', async () => {
+    const store = new MemStore();
+    const built = await build(audited(snap(fileE('f.bin', 'payload')), 0));
+    await store.commit(built.plan);
+
+    // A missing layer document: the wake refuses and names the absent object
+    // rather than resolving to a partial tree.
+    const layerRef = built.view.layers[0];
+    if (layerRef === undefined) throw new Error('base layer missing');
+    store.map.delete(layerRef.key);
+    await expect(open(built.view.rootRef, store.reader, IDENTITY)).rejects.toThrow(layerRef.key);
+
+    // A missing root object refuses the same way.
+    const rootOnly = new MemStore();
+    await expect(open(built.view.rootRef, rootOnly.reader, IDENTITY)).rejects.toThrow(objectKey(built.view.rootId));
+
+    // A missing content chunk refuses at read time, naming its object.
+    const chunkStore = new MemStore();
+    const chunkBuilt = await build(audited(snap(fileE('g.bin', 'chunk payload')), 0));
+    await chunkStore.commit(chunkBuilt.plan);
+    const chunkView = await chunkStore.openHead();
+    const entry = chunkView.entryAt('g.bin');
+    if (entry === undefined || entry.kind !== 'file') throw new Error('missing file entry');
+    const chunkPart = entry.chunks[0];
+    if (chunkPart === undefined || 'count' in chunkPart) throw new Error('expected one stored chunk');
+    chunkStore.map.delete(objectKey(chunkPart.hash));
+    await expect(chunkView.readRange('g.bin', 0, 13)).rejects.toThrow(objectKey(chunkPart.hash));
+  });
+
+  test('the bound: a full stack resolves with root-plus-layer reads; one layer more refuses', async () => {
+    const store = new MemStore();
+    const publisher = new HarnessPublicationStore();
+    const ino = nextIno++;
+    let parent: BoundedLayers | undefined;
+    let full: BoundedLayers | undefined;
+    for (let generation = 0; generation < MAX_LAYER_DEPTH; generation++) {
+      const built = await build(
+        audited(snap(fileE('log.txt', enc.encode(`generation ${generation}`), { ino })), generation),
+        parent,
+      );
+      full = await publishAndOpen(built, store, publisher);
+      parent = full;
+    }
+    if (full === undefined) throw new Error('chain did not build');
+    expect(full.layers).toHaveLength(MAX_LAYER_DEPTH);
+
+    // Opening the full stack crosses the wire exactly root + layers times.
+    store.resetCounters();
+    const opened = await store.openHead();
+    expect(store.gets).toBe(MAX_LAYER_DEPTH + 1);
+    // Resolution itself is served from the merged map: zero further reads.
+    store.resetCounters();
+    expect(opened.stat('log.txt')).not.toBeNull();
+    expect(opened.readdir('')).toEqual(['log.txt']);
+    expect(store.gets).toBe(0);
+
+    // Forge a root naming one MORE layer than the bound: the wake refuses.
+    const extraDelta = full.layers[1];
+    if (extraDelta === undefined) throw new Error('expected a delta layer to reuse');
+    const forgedLayers = [extraDelta, ...full.layers];
+    expect(forgedLayers).toHaveLength(MAX_LAYER_DEPTH + 1);
+    const forgedBytes = encodeCanonical({
+      v: 1, fmt: 'bounded-layers/v1', cut: full.cut, layers: forgedLayers,
+    });
+    store.map.set(objectKey(sha256Hex(forgedBytes)), forgedBytes);
+    const forgedRef = {
+      key: objectKey(sha256Hex(forgedBytes)),
+      byteLength: String(forgedBytes.byteLength),
+      sha256: sha256Hex(forgedBytes),
+    };
+    await expect(open(forgedRef, store.reader, IDENTITY)).rejects.toThrow(/above the bound/);
   });
 
   // ── the shared publication boundary ────────────────────────────────────────

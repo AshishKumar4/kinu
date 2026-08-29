@@ -36,6 +36,7 @@ import type {
   BuildOptions,
   MerklePackBuild,
   MerklePackReader,
+  MerklePackRoot,
   MerklePackView,
   PublishedMerkleParent,
 } from '../src/candidates/merkle-pack';
@@ -996,5 +997,304 @@ describe('merkle-pack/v1 publication adapter', () => {
         expiresAt: '99999999999999',
       }, store),
     ).rejects.toBeInstanceOf(StaleParentRefused);
+  });
+});
+
+// ── the attach contract ───────────────────────────────────────────────────────
+//
+// A deployed run lost the merkle-pack arm to `Devbox.attach exceeded its
+// 300000ms budget`. Attach (restoreMerkle) opens the published head and walks
+// the whole tree; every stat/readdir/readRange the walk issues crosses the
+// store as a digest-bearing intent. These tests pin the properties that decide
+// whether that walk stays bounded in the history behind the head and whether
+// it serves exactly what was committed.
+
+describe('merkle-pack/v1 attach', () => {
+  /** Build, stage into the shared store, open, and publish one generation.
+   *  `publication` may be shared across generations: a child that reuses
+   *  parent packs names them in its closure, so the publication store that
+   *  finalizes it must already hold them. */
+  async function commitGeneration(
+    store: MemStore,
+    parent: PublishedMerkleParent | null,
+    files: readonly NodeEntry[],
+    cut: string,
+    publication: FakePublicationStore = new FakePublicationStore(),
+  ): Promise<{ build: MerklePackBuild; view: MerklePackView; parent: PublishedMerkleParent }> {
+    const build = await buildMerklePack(audited(files, cut), parent === null ? {} : { parent });
+    await store.restore(build);
+    const view = await openMerklePack(build.root, store, RANGE_IDENTITY);
+    const published = await finalizePlan(build.plan, {
+      operationId: `attach-op-${cut}`,
+      attemptId: `attach-try-${cut}`,
+      boxId: 'box-merkle',
+      bootId: 'attach-boot',
+      expiresAt: '99999999999999',
+    }, publication);
+    return { build, view, parent: parentFromPublishedParent(view, publishedParentOf(published)) };
+  }
+
+  /** Counts one attach-shaped pass over `root`: open, then the same
+   *  readdir/stat/readRange walk restoreMerkle performs, in 512 KiB slices.
+   *  This is the store work a wake pays, not merely the lazy open. */
+  async function measureAttachWalk(
+    store: MemStore,
+    root: MerklePackRoot,
+  ): Promise<{ intents: number; fetchedBytes: number; indexBytes: number; namedPacks: number }> {
+    store.intents.length = 0;
+    store.rangeReads = 0;
+    store.fetchedBytes = 0;
+    const view = await openMerklePack(root, store, RANGE_IDENTITY);
+    const visit = async (path: string): Promise<void> => {
+      const entry = await view.stat(path);
+      if (entry === null) throw new Error(`attach walk lost ${path}`);
+      if (entry.kind === 'dir') {
+        for (const child of await view.readdir(path)) await visit(path === '' ? child : `${path}/${child}`);
+        return;
+      }
+      if (entry.kind !== 'file' || entry.size === undefined) return;
+      for (let at = 0; at < entry.size; at += 512 * 1024) {
+        await view.readRange(path, at, Math.min(512 * 1024, entry.size - at));
+      }
+    };
+    for (const child of await view.readdir('')) await visit(child);
+    const indexRef = view.referencedObjects().find((ref) => ref.key.startsWith('v1/merkle-pack/index/'));
+    return {
+      intents: store.intents.length,
+      fetchedBytes: store.fetchedBytes,
+      indexBytes: indexRef === undefined ? 0 : Number(indexRef.byteLength),
+      namedPacks: [...view.referencedKeys()].filter((key) => key.startsWith('v1/merkle-pack/pack/')).length,
+    };
+  }
+
+  test('opening the head through an 8-generation history stays bounded by the served tree', async () => {
+    const store = new MemStore();
+    let parent: PublishedMerkleParent | null = null;
+    const measured: { intents: number; fetchedBytes: number; indexBytes: number; namedPacks: number }[] = [];
+    let headRoot: MerklePackRoot | null = null;
+
+    // Every generation rewrites the same eight 24 KiB files under one
+    // directory, so the tree the head serves is constant while the store
+    // accumulates one pack set per generation. Open cost may depend on the
+    // tree but not on the number of packs or generations behind it.
+    for (let generation = 0; generation < 8; generation++) {
+      const files = [
+        dir('gen', 0o755, 899),
+        ...Array.from({ length: 8 }, (_, index) =>
+          file(`gen/data-${index}.bin`, dense(prng(24 * 1024, 40 + generation)), 0o644, 900 + index)),
+      ];
+      const committed = await commitGeneration(store, parent, files, String(4096 + generation));
+      measured.push(await measureAttachWalk(store, committed.build.root));
+      headRoot = committed.build.root;
+      parent = committed.parent;
+    }
+
+    const oldest = measured[0]!;
+    const newest = measured.at(-1)!;
+    // One intent per distinct extent the walk needs: manifest by value, then
+    // index + one fetch per node. Eight generations of packs sit in the
+    // store; none of them may enter the count, and the index must not absorb
+    // ancestor state generation over generation.
+    expect(newest.intents).toBeLessThanOrEqual(oldest.intents * 2);
+    expect(newest.indexBytes).toBeLessThan(oldest.indexBytes * 3);
+    expect(newest.namedPacks).toBeLessThanOrEqual(oldest.namedPacks * 2);
+    expect(newest.fetchedBytes).toBeLessThan(1 << 20);
+
+    // The head still serves the eighth generation's exact bytes.
+    const head = await openMerklePack(headRoot!, store, RANGE_IDENTITY);
+    expect(Buffer.from(await head.readRange('gen/data-0.bin', 0, 24 * 1024)))
+      .toEqual(Buffer.from(prng(24 * 1024, 40 + 7)));
+  });
+
+  test('the index names every pack the served tree needs, across four consecutive commits', async () => {
+    const store = new MemStore();
+    const publication = new FakePublicationStore();
+    let parent: PublishedMerkleParent | null = null;
+    const payloads = [prng(64 * 1024, 50), prng(64 * 1024, 51)];
+    const churn = [0, 1, 0, 1];
+    const keep = prng(32 * 1024, 52);
+
+    // keep.txt is written once and never again: its chunks live in the FIRST
+    // generation's packs, so every later generation's index must name a pack
+    // an EARLIER commit staged — its closure reaches backward. churn.bin is
+    // replaced wholesale each commit (A,B,A,B), so reuse also crosses
+    // non-adjacent generations. The parent handoff (parentFromPublishedParent
+    // over referencedObjects) is exactly the step that refused with "index
+    // extent is outside its declared pack" when an index listed only the
+    // packs its own build staged.
+    for (let commit = 0; commit < 4; commit++) {
+      const files = [
+        file('keep.txt', dense(keep), 0o644, 950),
+        file('churn.bin', dense(payloads[churn[commit]!]!), 0o644, 951),
+      ];
+      const { view, parent: next } = await commitGeneration(store, parent, files, String(4096 + commit), publication);
+      expect(Buffer.from(await view.readRange('keep.txt', 0, keep.byteLength))).toEqual(Buffer.from(keep));
+      expect(Buffer.from(await view.readRange('churn.bin', 0, payloads[churn[commit]!].byteLength)))
+        .toEqual(Buffer.from(payloads[churn[commit]!]));
+      parent = next;
+    }
+    // The pattern really accumulated: four roots, four indexes, and churn
+    // packs from both payload shapes are all present in the one store.
+    expect(store.objects.size).toBeGreaterThanOrEqual(8);
+  });
+
+  /** A degraded transport that answers blank bytes for absent objects. */
+  class BlankServingStore extends MemStore {
+    override async readRange(intent: RangeReadIntent): Promise<Uint8Array> {
+      const bytes = this.objects.get(intent.exactKey);
+      if (bytes === undefined) return new Uint8Array(Number(intent.byteLength));
+      return await super.readRange(intent);
+    }
+  }
+
+  test('a pack the index names but the store lacks refuses every read; blank answers refuse too', async () => {
+    const build = await buildMerklePack(audited([
+      dir('w'),
+      file('w/one.bin', dense(prng(48 * 1024, 54))),
+      file('w/two.bin', dense(prng(48 * 1024, 55))),
+    ]));
+
+    // 1. Plain absence: the open resolves the index (lazy by design), and the
+    //    first tree query refuses with the absent pack's key in the reason.
+    //    Nothing partial or blank is ever served; in production the same
+    //    refusal aborts the restore before the journal mounts.
+    const store = new MemStore();
+    await store.restore(build);
+    const packKey = build.staged.map((object) => object.ref.key)
+      .find((key) => key.startsWith('v1/merkle-pack/pack/'));
+    expect(packKey).toBeDefined();
+    store.objects.delete(packKey!);
+    const absentView = await openMerklePack(build.root, store, RANGE_IDENTITY);
+    await expect(absentView.stat('w/one.bin')).rejects.toThrow(packKey!);
+    await expect(absentView.readRange('w/one.bin', 0, 16)).rejects.toThrow(packKey!);
+    await expect(absentView.stat('')).rejects.toThrow(packKey!);
+
+    // 2. A lying transport that answers zeros for the same absence must ALSO
+    //    refuse: the authenticated range path holds bytes to their digest, so
+    //    blank bytes cannot become a blank tree.
+    const blankStore = new BlankServingStore();
+    await blankStore.restore(build);
+    blankStore.objects.delete(packKey!);
+    await expect((async () => {
+      const view = await openMerklePack(build.root, blankStore, RANGE_IDENTITY);
+      return await view.stat('w/one.bin');
+    })()).rejects.toThrow(packKey!);
+  });
+
+  test('a container replaced mid-commit and mid-attach serves exactly one committed generation', async () => {
+    const shared = prng(96 * 1024, 56);
+    const updated = prng(96 * 1024, 57);
+    const originalChurn = prng(8 * 1024, 58);
+    const stableIno = 960;
+    const churnIno = 961;
+
+    const first = await buildMerklePack(audited([
+      file('stable.txt', dense(shared), 0o644, stableIno),
+      file('churn.txt', dense(originalChurn), 0o644, churnIno),
+    ]));
+    const store = new MemStore();
+    const v1 = await publish(first, store);
+    const parent = await publishedParent(first, v1);
+
+    // The replacement arrives after the head was durable but during the
+    // attach: the previous generation's bytes are still in the store, and the
+    // replacement re-opens from the head. Each root must serve its own
+    // committed generation byte-exactly — never a blend, never a blank.
+    const second = await buildMerklePack(audited([
+      file('stable.txt', dense(shared), 0o644, stableIno),
+      file('churn.txt', dense(updated), 0o644, churnIno),
+    ], '4097'), { parent });
+    await store.restore(second);
+
+    const headView = await openMerklePack(second.root, store, RANGE_IDENTITY);
+    const oldView = await openMerklePack(first.root, store, RANGE_IDENTITY);
+    const headAgain = await openMerklePack(second.root, store, RANGE_IDENTITY);
+
+    expect(Buffer.from(await headView.readRange('churn.txt', 0, updated.byteLength)))
+      .toEqual(Buffer.from(updated));
+    expect(Buffer.from(await headAgain.readRange('churn.txt', 0, updated.byteLength)))
+      .toEqual(Buffer.from(updated));
+    // A partial range through the head is sliced by offset, not from zero.
+    expect(Buffer.from(await headView.readRange('churn.txt', 1024, 4096)))
+      .toEqual(Buffer.from(updated.subarray(1024, 5120)));
+    expect(Buffer.from(await oldView.readRange('churn.txt', 0, originalChurn.byteLength)))
+      .toEqual(Buffer.from(originalChurn));
+    expect(await headView.stat('churn.txt')).toMatchObject({ kind: 'file', size: updated.byteLength });
+    expect(await oldView.stat('churn.txt')).toMatchObject({ kind: 'file', size: originalChurn.byteLength });
+    // The untouched file is ONE committed fact: same inode identity through
+    // both roots, resolved from the same reused pack.
+    expect((await headView.stat('stable.txt'))?.ino).toBe((await oldView.stat('stable.txt'))?.ino);
+    expect(headView.capturedCut.cut).toBe('4097');
+    expect(oldView.capturedCut.cut).toBe('4096');
+  });
+
+  test('a commit that changes one small file moves bytes proportional to the change, not to the tree', async () => {
+    const store = new MemStore();
+    const big = prng(2 * 1024 * 1024, 59);
+    const neighbourB = prng(1024 * 1024, 60);
+
+    const base = await buildMerklePack(audited([
+      dir('big'),
+      file('big/a.bin', dense(big), 0o644, 970),
+      file('big/b.bin', dense(neighbourB), 0o644, 971),
+      file('big/c.bin', dense(prng(1024 * 1024, 61)), 0o644, 972),
+    ]));
+    await store.restore(base);
+    const baseView = await openMerklePack(base.root, store, RANGE_IDENTITY);
+    const parent = await publishedParent(base, baseView);
+
+    // One 8 KiB file changes; the ~4 MiB of neighbours do not.
+    const child = await buildMerklePack(audited([
+      dir('big'),
+      file('big/a.bin', dense(big), 0o644, 970),
+      file('big/b.bin', dense(neighbourB), 0o644, 971),
+      file('big/c.bin', dense(prng(8 * 1024, 62)), 0o644, 972),
+    ], '4097'), { parent });
+
+    // Pack bytes: only the two fresh chunks plus rewritten dir nodes move.
+    const freshPackBytes = child.staged
+      .filter((object) => object.ref.key.startsWith('v1/merkle-pack/pack/'))
+      .reduce((sum, object) => sum + Number(object.ref.byteLength), 0);
+    expect(freshPackBytes).toBeLessThan(64 * 1024);
+    expect(child.stats.chunkInstancesReused / child.stats.chunkInstances).toBeGreaterThan(0.99);
+    // Total moved (packs + the generation-wide index) stays a small fraction
+    // of the tree it did NOT rewrite.
+    expect(child.movedBytes).toBeLessThan(child.stats.logicalBytes / 4);
+    // And at the object boundary: no pack carrying the untouched megabyte
+    // files is staged again.
+    const stagedKeys = new Set(child.staged.map((object) => object.ref.key));
+    for (const object of base.staged) {
+      if (object.ref.key.startsWith('v1/merkle-pack/pack/')) {
+        expect(stagedKeys.has(object.ref.key)).toBe(false);
+      }
+    }
+  });
+  test('attach fetch granularity is one intent per packed chunk, not per restore slice', async () => {
+    const MIB = 1024 * 1024;
+    // 96 MiB in eight dense 12 MiB files: the LARGEST dense tree the codec
+    // publishes at all. A 400 MiB workspace — the scale the deployed r2fs arm
+    // attached in 990 s — produces a pack index of ~16.5 MB, and
+    // buildMerklePack REFUSES it (index is 16461981 bytes, above maxPackBytes
+    // 4194304). The refusal is the finding this test pins.
+    const files = [dir('work'), ...Array.from({ length: 8 }, (_, index) =>
+      file(`work/blob-${index}.bin`, dense(prng(12 * MIB, 70 + index)), 0o644, 980 + index))];
+    const build = await buildMerklePack(audited(files, '4110'));
+    const store = new MemStore();
+    await store.restore(build);
+
+    const measured = await measureAttachWalk(store, build.root);
+
+    // One intent per packed CDC chunk (target 4 KiB, max 16 KiB), NOT one per
+    // 512 KiB restore slice: ~24k chunk round-trips, ~85 slice round-trips.
+    // The chunk count is what bounds a wake, so granularity is pinned here.
+    expect(measured.intents).toBeGreaterThan(12_000);
+    expect(measured.intents).toBeLessThan(24_000);
+    // Bytes move at chunk granularity: byte-proportional, chunk-sized intents.
+    expect(measured.fetchedBytes).toBeGreaterThan(88 * MIB);
+    expect(measured.fetchedBytes).toBeLessThan(112 * MIB);
+    // Average intent size: chunk-scaled (4-16 KiB), never slice-scaled
+    // (512 KiB) — the restore never coalesces chunks into slices.
+    expect(measured.fetchedBytes / measured.intents).toBeGreaterThan(4 * 1024);
+    expect(measured.fetchedBytes / measured.intents).toBeLessThan(17 * 1024);
   });
 });

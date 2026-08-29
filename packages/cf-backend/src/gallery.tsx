@@ -479,16 +479,11 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     // 106-node search the `mcts` frame renders has to arrive through here.
     mcts: MCTS_ROWS,
     timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
-    // The snapshot is a CONTRACT, and this stub stands in for the server that
-    // honours it: `loadAllData` replaces branch and steer state from these
-    // fields wholesale, so a stub that omits them hands the client `undefined`
-    // where it declared an array. That is not a hypothetical — it rendered a
-    // blank page and cost four browser cases. Both empty here because the
-    // gallery's frames photograph a workspace with nothing queued; a frame that
-    // wants a chip supplies its own.
+    // Mirrors the server snapshot: `loadAllData` replaces this state wholesale,
+    // so an omitted field is `undefined` where an array is declared.
     pendingSteers: [], branchRuns: [],
-    // Both gated surfaces have content in the gallery, so the frames that
-    // photograph the tab strip keep showing them.
+    // Both gated surfaces have content in the gallery, so the tab-strip frames
+    // keep showing them.
     tabPresence: { releases: true, explorations: true },
     activePlan: null,
   },
