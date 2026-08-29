@@ -72,13 +72,6 @@ export function executorSortKey(name: string): number {
   return idx === -1 ? 99 : idx;
 }
 
-/** An environment row's name IS its executor's name: one environment, one
- *  filesystem, one exec plane. Kept as a function because the file browser
- *  calls it per row and used to need a real translation. */
-export function executorForMount(mountName: string): string {
-  return mountName;
-}
-
 export function isExecutorActive(exec: ExecutorInfo): boolean {
   return exec.active === true || exec.status === "active";
 }

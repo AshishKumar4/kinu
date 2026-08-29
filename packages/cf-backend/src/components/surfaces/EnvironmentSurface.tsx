@@ -31,7 +31,7 @@ import {
 import { EXECUTOR_MOUNTS, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@/lib/protocol";
 import {
-  executorDescription, executorForMount, executorLabel, isExecutorActive,
+  executorDescription, executorLabel, isExecutorActive,
   pickDefaultExecutor,
   type ExecutorInfo,
 } from "@/lib/executors";
@@ -106,12 +106,12 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   // Default selection: the environment the agent last actually worked in.
   const defaultMount = useMemo(() => {
     const preferred = pickDefaultExecutor(executors, lastActiveExecutor);
-    const match = mounts.find((m) => executorForMount(m.name) === preferred);
+    const match = mounts.find((m) => m.name === preferred);
     return match?.name ?? mounts.find((m) => m.live)?.name ?? mounts[0]?.name ?? null;
   }, [executors, lastActiveExecutor, mounts]);
   const selectedName = selected ?? defaultMount;
   const selectedMount = mounts.find((m) => m.name === selectedName) ?? null;
-  const selectedExec = selectedMount ? execByName.get(executorForMount(selectedMount.name)) : undefined;
+  const selectedExec = selectedMount ? execByName.get(selectedMount.name) : undefined;
 
   return (
     <div className="flex flex-col h-full -m-5">
@@ -129,7 +129,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
               <EnvironmentCard
                 key={m.name}
                 mount={m}
-                exec={execByName.get(executorForMount(m.name))}
+                exec={execByName.get(m.name)}
                 active={selectedName === m.name}
                 onSelect={() => setSelected(m.name)}
                 onOpenFiles={onOpenFiles}
@@ -153,7 +153,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border shrink-0">
             <TerminalIcon size={12} className="p-text-3" />
             <span className="text-[10px] p-text-3">Terminal ·</span>
-            <span className="text-[10px] p-text-3 font-mono">{executorLabel(executorForMount(selectedMount.name))}</span>
+            <span className="text-[10px] p-text-3 font-mono">{executorLabel(selectedMount.name)}</span>
           </div>
           <div className="flex-1 min-h-0">
             {selectedExec ? (
@@ -184,7 +184,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles }: {
   onSelect: () => void;
   onOpenFiles: (root: string) => void;
 }) {
-  const executor = executorForMount(mount.name);
+  const executor = mount.name;
   const status = statusOf(mount, exec);
   const filesRoot = filesRootFor(executor);
   // The device's own name where the user gave one; the generic label elsewhere.
@@ -255,7 +255,7 @@ function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInf
     <div className="h-full flex items-center justify-center p-6">
       <div className="max-w-md text-center space-y-3">
         <PlugIcon size={28} className="p-text-3 mx-auto" />
-        <div className="text-sm font-medium p-text">{executorLabel(executorForMount(mount.name))} isn't available here</div>
+        <div className="text-sm font-medium p-text">{executorLabel(mount.name)} isn't available here</div>
         <p className="text-xs p-text-2 leading-relaxed">
           {docs.text}{" "}
           <a href={docs.href} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>

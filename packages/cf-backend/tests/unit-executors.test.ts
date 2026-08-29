@@ -2,6 +2,8 @@
 // Prefers the sticky last-active executor only when it is already active, else
 // workspace. This keeps status/diff reads from waking idle remote executors.
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   EXECUTOR_LABELS, EXECUTOR_ORDER, executorLabel, pickDefaultExecutor, releaseSubstrate,
   type ExecutorInfo,
@@ -105,5 +107,27 @@ describe("executor labels name one environment each", () => {
       expect(Object.entries(EXECUTOR_LABELS).some(([key]) => key === name)).toBe(true);
       expect(executorLabel(name)).not.toBe(name);
     }
+  });
+});
+
+/**
+ * The Environment surface reads a mount row as its executor's name — one
+ * environment, one filesystem, one exec plane, so there is no translation
+ * layer to drift out of sync. What the card's Files action opens is DERIVED
+ * from the core mount table (EXECUTOR_MOUNTS), never restated beside it: a
+ * second table in the UI is the parallel system this module exists to
+ * prevent.
+ */
+describe("the environment surface names environments directly", () => {
+  const surface = readFileSync(
+    join(import.meta.dir, "..", "src", "components", "surfaces", "EnvironmentSurface.tsx"), "utf8",
+  );
+
+  test("no mount-to-executor translation layer survives in the surface", () => {
+    expect(surface).not.toContain("executorForMount");
+  });
+
+  test("file roots derive from the core mount table, not a UI copy", () => {
+    expect(surface).toContain("EXECUTOR_MOUNTS");
   });
 });

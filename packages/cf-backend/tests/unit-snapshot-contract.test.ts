@@ -30,6 +30,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { parse, walk, type SyntaxNode } from '../../../scripts/syntax';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 
@@ -99,6 +100,59 @@ function stubbedKeys(file: string, container: string, method: string): string[] 
   return keys;
 }
 
+/** A string-valued AST literal. An `ObjectExpression` element or call argument
+ *  may be any node kind and a `Literal` carries string, number, boolean, null or
+ *  a RegExp, so the shape is PARSED here rather than narrowed by hand: only the
+ *  string case names a live-refresh source. */
+const StringLiteralNode = v.object({ type: v.literal('Literal'), value: v.string() });
+
+/** The string a node carries when it is a string literal, else null. */
+function literalText(node: SyntaxNode['raw'] | null | undefined): string | null {
+  const parsed = v.safeParse(StringLiteralNode, node);
+  return parsed.success ? parsed.output.value : null;
+}
+
+/** The string literals a named function passes to `isSourceCurrent(...)`. */
+function guardedSources(file: string, fn: string): string[] {
+  const parsed = parse(file, readFileSync(file, 'utf8'));
+  const found = new Set<string>();
+  let seen = false;
+  walk(parsed.root, (node: SyntaxNode) => {
+    const raw = node.raw;
+    if (raw.type !== 'FunctionDeclaration') return;
+    if (raw.id === null || raw.id === undefined || raw.id.name !== fn) return;
+    seen = true;
+    walk(node, (inner: SyntaxNode) => {
+      const call = inner.raw;
+      if (call.type !== 'CallExpression') return;
+      if (call.callee.type !== 'Identifier' || call.callee.name !== 'isSourceCurrent') return;
+      const text = literalText(call.arguments[0]);
+      if (text !== null) found.add(text);
+    });
+  });
+  if (!seen) throw new Error(`${file} no longer declares function ${fn}`);
+  return [...found];
+}
+
+/** The elements of a named `readonly` string-array constant. */
+function arrayConstant(file: string, name: string): string[] {
+  const parsed = parse(file, readFileSync(file, 'utf8'));
+  let values: string[] | null = null;
+  walk(parsed.root, (node: SyntaxNode) => {
+    const raw = node.raw;
+    if (values !== null) return;
+    if (raw.type !== 'VariableDeclarator') return;
+    if (raw.id.type !== 'Identifier' || raw.id.name !== name) return;
+    if (raw.init === null || raw.init === undefined || raw.init.type !== 'ArrayExpression') return;
+    values = raw.init.elements.flatMap((element) => {
+      const text = literalText(element);
+      return text === null ? [] : [text];
+    });
+  });
+  if (values === null) throw new Error(`${file} no longer declares ${name} as an array literal`);
+  return values;
+}
+
 describe('the workspace snapshot contract', () => {
   test('every field the client declares is returned by the server', () => {
     const declared = interfaceFields(CLIENT, 'WorkspaceSnapshot');
@@ -107,16 +161,35 @@ describe('the workspace snapshot contract', () => {
     expect(declared.filter((field) => !returned.includes(field))).toEqual([]);
   });
 
-  test('the gallery stub answers with every field the client reads unconditionally', () => {
+  test('the gallery stub supplies each field a current snapshot reads', () => {
     const stubbed = stubbedKeys(GALLERY, 'AGENT_RPC_DATA', 'getWorkspaceSnapshot');
 
-    // Not the whole interface: the client guards some reads and the gallery
-    // deliberately leaves those absent to photograph an empty state. These are
-    // the fields `loadAllData` dereferences or replaces state from with no
-    // guard, so an absent one is a blank page rather than an empty frame.
-    for (const field of ['status', 'tools', 'executors', 'executorOutputs', 'pendingSteers', 'branchRuns']) {
+    // Snapshot-only fields have no granular source and always replace state.
+    const snapshotOnly = ['status', 'pendingSteers', 'branchRuns'];
+    // These fields have freshness guards, not presence guards. A current
+    // initial load still reads them, so the gallery must supply them.
+    const seeded = ['tools', 'executors', 'executorOutputs'];
+    for (const field of [...snapshotOnly, ...seeded]) {
       expect(stubbed).toContain(field);
     }
+  });
+
+  test('every seeded source guards its own write in loadAllData', () => {
+    // THE HALF THE SEAM TEST CANNOT REACH. `unit-live-refresh` proves
+    // `isSourceCurrent` answers correctly for a superseded source, but it
+    // supplies its own `read` callback, so it never exercises `loadAllData`'s
+    // call sites. Measured: every one of the five guards could be replaced with
+    // `true` and that suite still passed 22/0. So the application half is
+    // asserted here, by derivation, and a sixth seeded source added without a
+    // guard fails rather than silently overwriting a newer poll.
+    const seeded = arrayConstant(CLIENT, 'SNAPSHOT_SEEDED_SOURCES');
+    const guarded = guardedSources(CLIENT, 'loadAllData');
+
+    expect(seeded.length).toBeGreaterThan(0);
+    expect(seeded.filter((source) => !guarded.includes(source))).toEqual([]);
+    // And nothing guards on a source the snapshot never seeds: that guard would
+    // read `false` forever and the surface would never load at all.
+    expect(guarded.filter((source) => !seeded.includes(source))).toEqual([]);
   });
 
   test('the durable authorities a reconnecting tab cannot learn any other way are on it', () => {

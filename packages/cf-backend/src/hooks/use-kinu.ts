@@ -494,15 +494,22 @@ export type SnapshotLoad = "loaded" | "superseded" | { failed: string };
  * caller, and nothing else has to interpret a transport error.
  */
 export async function loadWorkspaceSnapshot(
-  read: (isCurrent: () => boolean) => Promise<void>,
+  read: (
+    isCurrent: () => boolean,
+    isSourceCurrent: (source: LiveRefreshSource) => boolean,
+  ) => Promise<void>,
   report: LiveRefreshReporter,
   admit: (requestKey: LiveRefreshSource) => () => boolean,
   seeded: readonly LiveRefreshSource[],
 ): Promise<SnapshotLoad> {
   const isCurrent = admit("snapshot");
-  const seededReads = seeded.map((source) => [source, admit(source)] as const);
+  const seededReads = new Map(
+    seeded.map((source) => [source, admit(source)] as const),
+  );
+  const isSourceCurrent = (source: LiveRefreshSource): boolean =>
+    seededReads.get(source)?.() ?? false;
   try {
-    await read(isCurrent);
+    await read(isCurrent, isSourceCurrent);
     if (!isCurrent()) return "superseded";
     report("snapshot", null);
     for (const [source, stillCurrent] of seededReads) if (stillCurrent()) report(source, null);
@@ -1356,20 +1363,27 @@ export function useKinu(target?: string | KinuActorAddress) {
   // the Exploration surface rebuilds from its own `getExplorationCanvas` when it
   // mounts, and that `useForkRunTree` fetches per run when it does not. Live
   // trees still arrive on the `mcts_update` broadcast.
-  async function loadAllData(isCurrent: () => boolean): Promise<void> {
+  async function loadAllData(
+    isCurrent: () => boolean,
+    isSourceCurrent: (source: LiveRefreshSource) => boolean,
+  ): Promise<void> {
     const snap = await rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", []);
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
-    setTools(mapToolDescriptions(snap.tools));
-    setMemoryContent(snap.memoryContent);
-    if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
-    setExecutors(snap.executors);
-    setLastActiveExecutor(snap.lastActiveExecutor);
-    const outputs = new Map<string, ExecutorOutput[]>();
-    for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
-    setExecutorOutputs(outputs);
-    setActivePlan(parsePlanReview(snap.activePlan));
-    setTabPresence(snap.tabPresence);
+    if (isSourceCurrent("tools")) setTools(mapToolDescriptions(snap.tools));
+    if (isSourceCurrent("memoryContent")) {
+      setMemoryContent(snap.memoryContent);
+      if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
+    }
+    if (isSourceCurrent("executors")) {
+      setExecutors(snap.executors);
+      setLastActiveExecutor(snap.lastActiveExecutor);
+      const outputs = new Map<string, ExecutorOutput[]>();
+      for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
+      setExecutorOutputs(outputs);
+    }
+    if (isSourceCurrent("plan")) setActivePlan(parsePlanReview(snap.activePlan));
+    if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
     // REPLACE, never merge. The durable rows are the authority for what is
     // queued and what is running, so a tab that reconnects after a deploy or a
     // corpse redial both LEARNS transitions it missed and DROPS chips for work

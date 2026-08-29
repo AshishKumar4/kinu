@@ -375,6 +375,40 @@ describe('loading the workspace snapshot', () => {
     expect(errors.errors.snapshot).toBeUndefined();
   });
 
+  test('a slow snapshot cannot replace data from a newer surface refresh', async () => {
+    const errors = reporter();
+    const admission = activeAdmission();
+    const snapshotRead = Promise.withResolvers<string>();
+    let memoryContent = 'before either read';
+
+    const loading = loadWorkspaceSnapshot(
+      async (
+        isCurrent,
+        isSourceCurrent: (source: LiveRefreshSource) => boolean,
+      ) => {
+        const value = await snapshotRead.promise;
+        if (!isCurrent()) return;
+        if (isSourceCurrent('memoryContent')) memoryContent = value;
+      },
+      errors.report,
+      (key) => admission.admit(TEST_ACTOR, key),
+      SEEDED,
+    );
+    await refreshLiveResource(
+      'memoryContent',
+      () => Promise.resolve('current memory'),
+      (value) => { memoryContent = value; },
+      errors.report,
+      admission.admit(TEST_ACTOR, 'memoryContent'),
+    );
+    expect(memoryContent).toBe('current memory');
+
+    snapshotRead.resolve('stale snapshot');
+
+    expect(await loading).toBe('loaded');
+    expect(memoryContent).toBe('current memory');
+  });
+
   test('a snapshot that failed after a newer one landed reports nothing', async () => {
     const errors = reporter();
     const admission = activeAdmission();
