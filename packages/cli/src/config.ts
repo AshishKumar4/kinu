@@ -506,10 +506,14 @@ function writeConfigFileUnlocked(config: KinuConfig): void {
   writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-export function saveConfigFile(config: KinuConfig): void {
-  withConfigLock(CONFIG_PATH, () => writeConfigFileUnlocked(config));
-}
-
+/**
+ * The ONE config writer. The mutator may edit the loaded config in place or
+ * return a replacement, so a whole-file overwrite is `updateConfigFile(() =>
+ * next)` under the same lock rather than a second exported entry point that
+ * skips the read. There used to be one, and nothing in production called it:
+ * every command here is read-modify-write, because a blind overwrite drops
+ * whatever another process wrote since this one loaded.
+ */
 export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): KinuConfig {
   return withConfigLock(CONFIG_PATH, () => {
     const config = loadConfigFile();

@@ -1199,7 +1199,7 @@ export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): Outcome
  *
  *  Corroboration lives ONLY in the row's status. Nothing is ever copied into
  *  MEMORY.md, and every reader that wants recent lessons reads them here
- *  (`renderRecentLessons`, `searchCorroboratedLessons`) — so a workspace reset
+ *  (`renderRecentLessons`, `listLessons`) — so a workspace reset
  *  can never hide a lesson its corroborated row still holds. */
 export const LESSON_SOURCES = [
   'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
@@ -1301,24 +1301,6 @@ export function renderRecentLessons(sql: SqlExecutor, limit = 5): string {
   return listLessons(sql, { status: 'corroborated', limit })
     .map((lesson) => lesson.text)
     .join('\n');
-}
-
-/**
- * Corroborated lessons whose text contains `query` (case-sensitive LIKE, so
- * callers quoting SQL wildcards get literal behavior), newest first — the
- * lessons half of any memory-search union over independent notes.
- */
-export function searchCorroboratedLessons(
-  sql: SqlExecutor,
-  query: string,
-  limit = 10,
-): LessonRow[] {
-  if (query.length === 0) return [];
-  const rows = sql<RawLessonRow>`
-    SELECT * FROM lessons
-    WHERE status = 'corroborated' AND text LIKE ${`%${query}%`}
-    ORDER BY created_at DESC LIMIT ${limit}`;
-  return rows.map(toLessonRow);
 }
 
 /** A real negative outcome landed on `turnId`: flip every provisional lesson

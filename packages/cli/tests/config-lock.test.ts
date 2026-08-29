@@ -93,8 +93,8 @@ describe('cross-process config read-modify-write', () => {
     try {
       const result = runIn(home, `
         const { lstatSync } = await import('node:fs');
-        const { saveConfigFile, updateConfigFile, loadConfigFile, CONFIG_PATH } = await import(${CONFIG_TS});
-        saveConfigFile({ origin: 'https://before.test' });
+        const { updateConfigFile, loadConfigFile, CONFIG_PATH } = await import(${CONFIG_TS});
+        updateConfigFile(() => ({ origin: 'https://before.test' }));
         try {
           updateConfigFile(() => { throw new Error('mutator blew up'); });
         } catch (error) {

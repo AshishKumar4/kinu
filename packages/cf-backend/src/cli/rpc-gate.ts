@@ -102,6 +102,7 @@ export const AGENT_RPC_ACCESS = {
   getReasoningEffort: 'workspace.read',
   getToolDescriptions: 'workspace.read',
   getWorkspaceSnapshot: 'workspace.read',
+  getWorkspaceTabPresence: 'workspace.read',
   listAgentTasks: 'workspace.read',
   listAgentViews: 'workspace.read',
   listBackgroundJobs: 'workspace.read',

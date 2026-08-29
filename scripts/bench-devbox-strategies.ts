@@ -1429,7 +1429,14 @@ async function measureArm(
   try {
     cold = await kickAndPoll(fixture, box, '/create', 'cold attach', ['empty', 'attached']);
   } catch (error) {
-    notes.push(`create failed: ${describeThrown({ cause: error })}`);
+    // Logged as well as noted. A create failure ends this arm and the run
+    // continues to the next one, so an operator watching the log otherwise sees
+    // the arm's banner followed by the NEXT arm's and no reason at all —
+    // overlay-cas failed here twice in a row and said why only inside the
+    // artifact.
+    const note = `create failed: ${describeThrown({ cause: error })}`;
+    log(`${strategy}: ${note}`);
+    notes.push(note);
     return result;
   }
   result.attachColdMs = cold.ms;

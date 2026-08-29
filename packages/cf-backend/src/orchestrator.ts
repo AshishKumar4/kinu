@@ -24,6 +24,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import type {
   ActivitySnapshot,
   SubordinateRosterEntry,
+  TabPresence,
   WorkspaceAgent,
 } from "./lib/protocol";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster";
@@ -3811,14 +3812,39 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
+  /**
+   * Whether the gated right-pane tabs have anything to show.
+   *
+   * Both facts come from the lane's OWN read path — the release board the
+   * Releases surface reads and the fork-run list the Exploration surface reads —
+   * asked at limit 1, because presence is a boolean and a full page here would
+   * be a second copy of a list this method never renders.
+   *
+   * The client called this and read `tabPresence` off the snapshot from the day
+   * the tabs were gated; neither existed on the server, so `tabPresence` arrived
+   * `undefined`, `surfaceHasContent` fell back to its "unknown is not empty"
+   * default, and BOTH gated tabs showed on a fresh workspace until the first
+   * live tick failed. A gate whose server half is missing is not a gate.
+   */
+  @callable() async getWorkspaceTabPresence(): Promise<TabPresence> {
+    // Same owner guard `listPendingActions` uses for the same cross-DO board
+    // read: without an owner there is no release lane to have content in.
+    const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
+    return {
+      releases: (board?.changes.length ?? 0) > 0,
+      explorations: listForkRuns(this.boundSql, null, 1).items.length > 0,
+    };
+  }
+
   @callable()
   async getWorkspaceSnapshot() {
-    const [status, tools, memoryContent, executors, activePlan] = await Promise.all([
+    const [status, tools, memoryContent, executors, activePlan, tabPresence] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),
       this.getMemoryContent(),
       this.getExecutors(),
       this.getActivePlanReview(),
+      this.getWorkspaceTabPresence(),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
@@ -3832,7 +3858,10 @@ export class OrchestratorAgent extends ActorAgent {
     const branchRuns = this.headJournal.listRunningRuns()
       .filter((run) => run.rootId.startsWith('branch-') && run.status === 'running')
       .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
-    return { status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan, pendingSteers: this.pendingSteerRuns(), branchRuns };
+    return {
+      status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
+      tabPresence, pendingSteers: this.pendingSteerRuns(), branchRuns,
+    };
   }
 
   @callable() async executeInExecutor(executorId: string, command: string) {

@@ -876,7 +876,7 @@ export class EvolutionEngine {
 
   /** Corroborate the provisional lessons tied to this turn. A row-status
    *  change only: the lesson stays in the ledger it was written to, and every
-   *  reader (`renderRecentLessons`, `searchCorroboratedLessons`, the
+   *  reader (`renderRecentLessons`, `listLessons`, the
    *  experience library) derives from that status — no copy goes to
    *  MEMORY.md, so nothing can hide a lesson its row still holds. */
   private async corroborateLessons(turnId?: string): Promise<void> {

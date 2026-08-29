@@ -16,7 +16,7 @@ import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import {
   recordTurnOutcome, recordOutcomeLabels, goldLabels, listLessons,
-  renderRecentLessons, searchCorroboratedLessons, listTurnOutcomes,
+  renderRecentLessons, listTurnOutcomes,
   realOutcomeScaffoldRates, hasNegativeOutcome, initTurnOutcomeTables,
 } from '../src/evolution/outcomes';
 import { calibrationUniverse } from '../src/evolution/calibration';
@@ -63,7 +63,8 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     // 1. The prompt view still carries the lesson.
     expect(renderRecentLessons(rt.storage.sql)).toContain(lessonText);
     // 2. Search still finds it.
-    expect(searchCorroboratedLessons(rt.storage.sql, 'cluster')).toHaveLength(1);
+    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+      .filter((lesson) => lesson.text.includes('cluster'))).toHaveLength(1);
     // 3. The session-reflection pass reads the same rows, not a heading parse.
     recordTurnOutcome(rt.storage.sql, {
       turnId: 'msg-1', outcome: 'corrected', confidence: 0.9, source: 'explicit',

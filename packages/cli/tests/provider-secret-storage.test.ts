@@ -27,7 +27,7 @@ function storedConfig(home: string): JsonObject {
 async function runStore(home: string, opts: { local: boolean; origin?: string }) {
   const runner = `
     const { storeProviderSecret } = await import('./packages/cli/src/commands/setup.ts');
-    const { loadConfigFile, saveConfigFile, updateConfigFile } = await import('./packages/cli/src/config.ts');
+    const { loadConfigFile, updateConfigFile } = await import('./packages/cli/src/config.ts');
     try {
       const where = await storeProviderSecret({
         local: ${opts.local},
@@ -35,7 +35,7 @@ async function runStore(home: string, opts: { local: boolean; origin?: string })
         credential: { kind: 'bearer', token: 'sk-or-secret' },
         storeLocally: () => {
           const config = loadConfigFile();
-          saveConfigFile({ ...config, providers: { ...(config.providers ?? {}), openrouter: { apiKey: 'sk-or-secret' } } });
+          updateConfigFile(() => ({ ...config, providers: { ...(config.providers ?? {}), openrouter: { apiKey: 'sk-or-secret' } } }));
         },
         clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
         model: 'openrouter/anthropic/claude-x',

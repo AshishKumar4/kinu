@@ -27,7 +27,7 @@ import {
   readWorkspaceDisplayName,
   readWorkspaceIdentityId,
   resolveLocalAgent,
-  saveConfigFile,
+  updateConfigFile,
   upsertAgentConfig,
   type KinuConfig,
 } from '../src/config';
@@ -62,12 +62,12 @@ beforeAll(() => {
 
 afterEach(() => {
   for (const name of workspaces.splice(0)) rmSync(agentDir(name), { recursive: true, force: true });
-  saveConfigFile({});
+  updateConfigFile(() => ({}));
 });
 
 afterAll(() => {
   for (const dir of projects.splice(0)) rmSync(dir, { recursive: true, force: true });
-  saveConfigFile(configBefore);
+  updateConfigFile(() => configBefore);
   if (daemonBefore === undefined) delete process.env.KINU_SKIP_DAEMON;
   else process.env.KINU_SKIP_DAEMON = daemonBefore;
 });

@@ -155,6 +155,14 @@ export interface WorkspaceSnapshot {
   /** Whether the gated right-pane tabs have content. On the snapshot so the
    *  strip is right from the first paint; re-read by the live cycle. */
   tabPresence: TabPresence;
+  /** The steers the server has ACKNOWLEDGED and not yet landed, from its
+   *  durable `pending_steers` rows. On the snapshot because a tab that
+   *  reconnects learns queued work no live broadcast will repeat. */
+  pendingSteers: InlineSteer[];
+  /** Branch runs still running, from the durable head journal. Same reason:
+   *  a branch that started or settled while this tab was gone is invisible to
+   *  a state fed only by broadcasts. */
+  branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
 }
 
 const PlanAnnotationTextPositionSchema = v.object({
@@ -1362,6 +1370,15 @@ export function useKinu(target?: string | KinuActorAddress) {
     setExecutorOutputs(outputs);
     setActivePlan(parsePlanReview(snap.activePlan));
     setTabPresence(snap.tabPresence);
+    // REPLACE, never merge. The durable rows are the authority for what is
+    // queued and what is running, so a tab that reconnects after a deploy or a
+    // corpse redial both LEARNS transitions it missed and DROPS chips for work
+    // that settled while it was away. A live broadcast that races this upserts
+    // by id afterwards, so the newer fact still wins.
+    setSteerRuns(snap.pendingSteers);
+    setBranchRuns(snap.branchRuns.map((run) => ({
+      branchId: run.branchId, task: run.task, status: run.status,
+    })));
     void refreshExposedPorts();
     void refreshPendingActions();
   }
