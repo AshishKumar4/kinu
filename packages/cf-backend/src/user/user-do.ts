@@ -1728,9 +1728,12 @@ export class UserDO extends Agent<Env> {
         // Durable BEFORE the acknowledgement, because the acknowledgement is the
         // step that can fail. The guarded write is also this call's post-await
         // ownership check: no row updated means the terminal authority took the
-        // claim mid-flight, and it - not this sweep - reports the request.
-        if (!this._inflight.settleHeld(row.requestId, row.claim, answer)) continue;
-        outcomes.push({ requestId: row.requestId, outcome: answer });
+        // claim mid-flight, and it - not this sweep - reports the request. What
+        // comes back is the answer that STANDS, which is this sweep's only when
+        // no answer landed while it was waiting.
+        const settled = this._inflight.settleHeld(row.requestId, row.claim, answer);
+        if (settled === null) continue;
+        outcomes.push({ requestId: row.requestId, outcome: settled });
         await this.cleanUpSettledDeviceRequest(row);
       } catch (err) {
         // The kill itself failed, so this request is still live work. The

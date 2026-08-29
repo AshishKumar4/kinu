@@ -106,9 +106,21 @@ function toApproval(row: Row): InstructionApproval {
   };
 }
 
-/** Resolve trust from the one workspace authority's rows. Facets use this
+/**
+ * Resolve trust from the one workspace authority's rows. Facets use this
  * snapshot rather than a private actor database, so every agent sharing the
- * workspace sees the same approvals and revocations. */
+ * workspace sees the same approvals and revocations.
+ *
+ * Both halves have to hold: a decision that names this path, AND a stored
+ * digest equal to the digest of the bytes about to be rendered. That
+ * conjunction is the whole invalidation story — nothing else has to notice that
+ * a file changed, so there is no sweep or watcher to forget to run.
+ *
+ * This is the ONLY implementation of that rule. `InstructionApprovalStore`
+ * feeds its own row through it rather than restating it, because a second copy
+ * of a trust conjunction is a place for a future guard to land on one side
+ * only.
+ */
 export function trustOfInstructionApprovals(
   rows: ReadonlyArray<InstructionApproval>,
   path: string,
@@ -142,18 +154,11 @@ export class InstructionApprovalStore {
     return rows[0] ? toApproval(rows[0]) : null;
   }
 
-  /**
-   * The trust these exact bytes have earned at this exact path.
-   *
-   * Both halves have to hold: a decision that names this path, AND a stored
-   * digest equal to the digest of the bytes about to be rendered. That
-   * conjunction is the whole invalidation story — nothing else has to notice
-   * that a file changed, so there is no sweep or watcher to forget to run.
-   */
+  /** The trust these exact bytes have earned at this exact path, decided by the
+   *  one rule in {@link trustOfInstructionApprovals}. */
   trustOf(path: string, content: string): VerifiedInstructionTrust {
     const row = this.get(path);
-    if (!row || row.digest !== instructionDigest(content)) return 'unverified';
-    return row.decision === 'revoked' ? 'unverified' : 'approved';
+    return trustOfInstructionApprovals(row === null ? [] : [row], path, content);
   }
 
   /** The owner approves these exact bytes at this exact path. Re-approving a

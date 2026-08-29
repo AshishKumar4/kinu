@@ -14,6 +14,7 @@ import {
   InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest,
   type InstructionSourceMeta, type InstructionSourceRow, type Page,
 } from '../src/index';
+import { gatherApprovableInstructions } from '../src/read-models/instruction-approvals';
 import { makeSql, makeExecRaw } from './helpers';
 
 const DOCTRINE = 'Run the checkout suite before claiming a fix.';
@@ -77,6 +78,55 @@ describe('listInstructionApprovals — metadata only', () => {
     const page = listInstructionApprovals({ sources: [], decisions: [] });
     expect(page.items).toEqual([]);
     expect(page.status).toBe('end');
+  });
+});
+
+describe('gatherApprovableInstructions — what the owner is allowed to not know about', () => {
+  const emptySkills = {
+    readdir: async () => [],
+    readFile: async () => '',
+    stat: async () => null,
+    exists: async () => false,
+    writeFile: async () => undefined,
+  };
+
+  test('an AGENTS.md too large to carry is still listed, with the size that excluded it', async () => {
+    const sources = await gatherApprovableInstructions({
+      agentsMd: {
+        admitted: [],
+        // The model IS told to open this path, so the owner must be able to see
+        // and revoke it. An agent that grows a file past the window would
+        // otherwise delete it from the owner's page by doing so.
+        referenced: [{ path: '/repo/huge/AGENTS.md', bytes: 900_000 }],
+      },
+      skillsVfs: emptySkills,
+      admissionTokens: 1_000,
+    });
+
+    expect(sources).toEqual([{
+      path: '/repo/huge/AGENTS.md',
+      kind: 'agents_md',
+      bytes: 900_000,
+      reason: 'too large for this model\'s window; left on disk for the agent to open',
+    }]);
+  });
+
+  test('all three AGENTS.md tiers reach the page, each with its own honest size', async () => {
+    const sources = await gatherApprovableInstructions({
+      agentsMd: {
+        admitted: [{ path: AGENTS, content: DOCTRINE, trust: 'approved' }],
+        referenced: [{ path: '/repo/big/AGENTS.md', bytes: 500_000 }],
+        unavailable: [{ path: '/repo/loop/AGENTS.md', reason: 'symlink cycle' }],
+      },
+      skillsVfs: emptySkills,
+      admissionTokens: 1_000,
+    });
+
+    expect(sources.map((source) => [source.path, source.bytes])).toEqual([
+      [AGENTS, DOCTRINE.length],
+      ['/repo/big/AGENTS.md', 500_000],
+      ['/repo/loop/AGENTS.md', 0],
+    ]);
   });
 });
 

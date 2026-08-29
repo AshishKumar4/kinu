@@ -244,6 +244,16 @@ export async function gatherApprovableInstructions(input: {
   const sources: InstructionSourceMeta[] = (input.agentsMd?.admitted ?? []).map((file) => ({
     path: file.path, kind: 'agents_md' as const, bytes: file.content.length,
   }));
+  // A file that WOULD be carried and simply did not fit the window. The model is
+  // told to open these by path, so an owner who cannot see them cannot revoke a
+  // path the agent is being pointed at — and an agent that grows an AGENTS.md
+  // past the budget would otherwise remove it from this page by doing so.
+  for (const reference of input.agentsMd?.referenced ?? []) {
+    sources.push({
+      path: reference.path, kind: 'agents_md', bytes: reference.bytes,
+      reason: 'too large for this model\'s window; left on disk for the agent to open',
+    });
+  }
   for (const entry of input.agentsMd?.unavailable ?? []) {
     sources.push({ path: entry.path, kind: 'agents_md', bytes: 0, reason: entry.reason });
   }

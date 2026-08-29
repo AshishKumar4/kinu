@@ -52,7 +52,7 @@ describe('a cancellation claim the activation died holding', () => {
 
     // And the claim the dead activation held speaks for nothing now.
     expect(await probe('abandoned-claim').held(request, claimed[0].claim)).toBeNull();
-    expect(await probe('abandoned-claim').settle(request, claimed[0].claim, 'terminated')).toBe(false);
+    expect(await probe('abandoned-claim').settle(request, claimed[0].claim, 'terminated')).toBeNull();
   });
 });
 
@@ -64,7 +64,7 @@ describe('the first stored answer', () => {
 
     // The kill was confirmed. The answer is stored BEFORE the acknowledgement,
     // because the acknowledgement is the step that can fail.
-    expect(await probe('first-writer').settle(request, claimed[0].claim, 'terminated')).toBe(true);
+    expect(await probe('first-writer').settle(request, claimed[0].claim, 'terminated')).toBe('terminated');
     // The acknowledgement fails, so the row stays with its answer.
     expect(await probe('first-writer').rows())
       .toEqual([{ requestId: request, claim: claimed[0].claim, settled: 'terminated' }]);
@@ -83,6 +83,35 @@ describe('the first stored answer', () => {
     // Cleanup, once the daemon can be reached again, is the only step left.
     await probe('first-writer').deleteHeld(request, later[0].claim);
     expect(await probe('first-writer').rows()).toEqual([]);
+  });
+});
+
+describe('an answer that lands while the sweep is still waiting on the device', () => {
+  it('is the answer reported, not the sweep\'s later guess', async () => {
+    const request = 'rpc-workerdprobe-4';
+    await probe('answer-race').admit(request, TURN);
+    const claimed = await probe('answer-race').claimTurn(TURN);
+    expect(claimed).toMatchObject([{ requestId: request, settled: null }]);
+
+    // The sweep read the row before sending its frame and saw no answer, so it
+    // is now awaiting the device. While it waits, the tool aborting its own exec
+    // stores the confirmed kill through the unclaimed path.
+    await probe('answer-race').settleUnclaimed(request, 'terminated');
+
+    // The sweep's own answer arrives late and is only a guess: the daemon holds
+    // no control entry for a command that is already dead. The confirmed kill
+    // must stand, and the sweep must report THAT — telling the owner a dead
+    // command merely 'may have' stopped is the defect this pins.
+    expect(await probe('answer-race').settle(request, claimed[0].claim, 'unknown'))
+      .toBe('terminated');
+    expect(await probe('answer-race').rows())
+      .toEqual([{ requestId: request, claim: claimed[0].claim, settled: 'terminated' }]);
+
+    await abortAllDurableObjects();
+
+    // The reset does not launder the guess back in.
+    expect(await probe('answer-race').claimTurn(TURN))
+      .toMatchObject([{ requestId: request, settled: 'terminated' }]);
   });
 });
 

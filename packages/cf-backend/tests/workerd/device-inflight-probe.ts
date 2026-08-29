@@ -134,11 +134,19 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
     return this.ledger.held(requestId, claim);
   }
 
-  /** Store an answer under a claim. `false` means the claim no longer held the
-   *  row, which is the whole precedence rule in one boolean. */
-  settle(requestId: string, claim: string, outcome: DeviceCancelOutcome): boolean {
+  /** Store an answer under a claim and report the answer that now STANDS.
+   *  `null` means the claim no longer held the row, which is the whole
+   *  precedence rule in one value. */
+  settle(requestId: string, claim: string, outcome: DeviceCancelOutcome): DeviceCancelOutcome | null {
     this.activate();
     return this.ledger.settleHeld(requestId, claim, outcome);
+  }
+
+  /** The tool path answering for its own aborted exec: no claim, and the first
+   *  stored answer wins. This is what lands while a sweep is mid-await. */
+  settleUnclaimed(requestId: string, outcome: DeviceCancelOutcome): void {
+    this.activate();
+    this.ledger.settleUnclaimed(requestId, outcome);
   }
 
   release(requestId: string, claim: string): boolean {

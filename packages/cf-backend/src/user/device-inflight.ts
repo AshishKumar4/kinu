@@ -73,6 +73,12 @@ const SweptRowSchema = v.object({
   cancel_outcome: StoredOutcomeSchema,
 });
 const OutcomeRowSchema = v.object({ cancel_outcome: StoredOutcomeSchema });
+/** The answer a settle statement just made authoritative. NOT nullable: the
+ *  write COALESCEs one in, so a NULL back would mean the row lost its answer,
+ *  which is a broken invariant rather than an absence to tolerate. */
+const SettledOutcomeRowSchema = v.object({
+  cancel_outcome: v.picklist(['terminated', 'unknown'] as const),
+});
 const DeviceRowSchema = v.object({ device_id: v.string() });
 const OwnershipRowSchema = v.object({
   background_job_id: v.nullable(v.string()),
@@ -222,16 +228,26 @@ export class DeviceRequestLedger {
 
   /**
    * Store a terminal answer under the claim it was obtained with, and report
-   * whether this claim still held the row. `false` means the terminal authority
-   * took the claim mid-flight, and IT — not this caller — answers for the
-   * request.
+   * the answer that now STANDS for the request. `null` means the terminal
+   * authority took the claim mid-flight, and IT — not this caller — answers.
+   *
+   * `COALESCE` is what makes "the first stored answer wins" hold across the
+   * device await this caller just returned from: a tool aborting its own exec
+   * stores `terminated` through `settleUnclaimed` while the sweep is still
+   * waiting, and the sweep's own later answer is `unknown` because the daemon
+   * no longer holds a control entry for a command that is already dead. Writing
+   * unconditionally replaced a confirmed kill with a guess, so the owner was
+   * told a dead command only "may have" stopped. Returning the stored answer
+   * rather than the caller's keeps one statement authoritative for both the
+   * write and what gets reported.
    */
-  settleHeld(requestId: string, claim: string, outcome: DeviceCancelOutcome): boolean {
-    return this.sql.exec(
-      `UPDATE device_inflight_requests SET cancel_outcome = ?
-        WHERE request_id = ? AND cancel_claim = ? RETURNING request_id`,
+  settleHeld(requestId: string, claim: string, outcome: DeviceCancelOutcome): DeviceCancelOutcome | null {
+    const row = this.sql.exec(
+      `UPDATE device_inflight_requests SET cancel_outcome = COALESCE(cancel_outcome, ?)
+        WHERE request_id = ? AND cancel_claim = ? RETURNING cancel_outcome`,
       outcome, requestId, claim,
-    ).toArray().length === 1;
+    ).toArray()[0];
+    return row === undefined ? null : v.parse(SettledOutcomeRowSchema, row).cancel_outcome;
   }
 
   /** Store an answer for a request revocation swept. Unguarded by design:
