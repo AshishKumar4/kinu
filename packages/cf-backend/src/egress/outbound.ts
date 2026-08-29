@@ -53,6 +53,7 @@ import * as v from 'valibot';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
 import {
   createScrubStream,
+  refusedHostname,
   scrubText,
   JsonValueSchema,
   type ContainerEventResult,
@@ -67,6 +68,7 @@ import type { EgressInjection, EgressInjectionResult } from '../user/egress-vaul
 import { kinuUserAgent, reoriginateRequest } from '../lib/http';
 import {
   classifyErrorCode, diagnostics, renderThrownChain, toKinuError, KinuError,
+  type Refusal,
 } from '@kinu.run/core/obs';
 
 /**
@@ -166,6 +168,11 @@ export async function handleContainerEgress(
     return refusal(503, 'Egress interception is not configured for this container yet.');
   }
   const url = new URL(request.url);
+  // Judged BEFORE the vault call: where a request may go is a transport fact
+  // that costs no round trip, and a private destination is refused whether or
+  // not the vault would have answered.
+  const destination = refusedHostname(url.hostname);
+  if (destination !== null) return destinationRefusal(url.hostname, destination);
   const facts: EgressRequestFacts = {
     host: url.hostname,
     url: request.url,
@@ -190,8 +197,15 @@ export async function handleContainerEgress(
     return authorityFailure({ cause, host: url.hostname });
   }
   if (resolved.kind === 'refuse') return refusal(resolved.status, resolved.reason);
-
   return forwardUpstream(request, url, resolved.substitutions);
+}
+
+/** Refusal shape for a refused destination: the classified payload on the
+ *  wire, the classification in diagnostics, host only in fields. */
+function destinationRefusal(host: string, payload: Refusal): Response {
+  const error = new KinuError('denied', payload.error);
+  diagnostics.failure('egress.private_destination', error, { host });
+  return Response.json(payload, { status: 403 });
 }
 
 /**
@@ -203,13 +217,11 @@ export async function handleContainerEgress(
  * runs through the same builder with an empty substitution set, where every
  * scrub is the identity and the response is returned untouched.
  *
- * `redirect: 'manual'` when a secret is attached is load-bearing, not tidiness.
- * The default follows redirects, which would replay the injected credential
- * against whatever host the upstream names — a redirect to an attacker's
- * origin would collect the secret with no further help. Handing the 3xx back
- * to the container instead means its next request is re-evaluated against the
- * binding's host like any other. Traffic carrying no secret keeps the redirect
- * mode the container asked for, because there is nothing to replay.
+ * Every redirect the container asked for is `manual`, not just the credentialed
+ * case. The runtime's own follower never re-enters this handler, so a hop it
+ * made would never be judged; handing every 3xx back means the container's
+ * next request re-enters here and is judged like the first. The one mode kept
+ * is `error`, which is the caller refusing redirects outright.
  */
 async function forwardUpstream(
   request: Request,
@@ -232,7 +244,7 @@ async function forwardUpstream(
   try {
     upstream = await fetch(reoriginateRequest(request, target, {
       headers,
-      redirect: substitutions.length === 0 ? request.redirect : 'manual',
+      redirect: request.redirect === 'error' ? 'error' : 'manual',
     }));
   } catch (cause) {
     return upstreamFailure({ cause, host: url.hostname, injected });

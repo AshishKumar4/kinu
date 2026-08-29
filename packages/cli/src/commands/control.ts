@@ -42,8 +42,6 @@ interface ControlOpts {
   json?: boolean;
 }
 
-const ModelSetResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
-const StoredModelSchema = v.object({ spec: v.nullable(v.string()) });
 const EffortSetResultSchema = v.object({ ok: v.literal(true), effort: v.picklist(['low', 'medium', 'high']) });
 const StoredEffortSchema = v.object({ effort: v.nullable(v.picklist(['low', 'medium', 'high'])) });
 const CancelTriggerSchema = v.object({ ok: v.literal(true), changed: v.boolean() });
@@ -54,31 +52,29 @@ const CancelJobSchema = v.object({ ok: v.boolean() });
 
 export async function modelCommand(name: string, spec: string | undefined, opts: ControlOpts): Promise<void> {
   const target = resolveAgentTarget(name);
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
-    if (spec) {
-      const catalog = await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
-      validateModelSelection(catalog, catalogSpec(catalog, spec), spec, name);
-    }
-    const result = spec
-      ? await callAgentRpc(auth.origin, auth.token, target.cloudName, 'setModel', ModelSetResultSchema, [spec])
-      : await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec', StoredModelSchema);
-    console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
-    return;
-  }
-
   let resolvedSpec = spec;
   if (spec) {
-    const configured = createConfiguredLocalModelResolver({
-      model: opts.model,
-      baseUrl: opts.baseUrl,
-      auth: opts.auth,
-      agentName: target.localName,
-    });
-    resolvedSpec = configured.resolver.normalizeSpecSync(spec);
-    const catalog = await loadModelCatalog(() => configured.resolver.listModels());
-    validateModelSelection(catalog, resolvedSpec, spec, name);
+    if (target.mode === 'cloud') {
+      const auth = requireAuthConfig();
+      const catalog = await loadModelCatalog(() => listCloudAvailableModels(auth.origin, auth.token));
+      resolvedSpec = catalogSpec(catalog, spec);
+      validateModelSelection(catalog, resolvedSpec, spec, name);
+    } else {
+      const configured = createConfiguredLocalModelResolver({
+        model: opts.model,
+        baseUrl: opts.baseUrl,
+        auth: opts.auth,
+        agentName: target.localName,
+      });
+      resolvedSpec = configured.resolver.normalizeSpecSync(spec);
+      const catalog = await loadModelCatalog(() => configured.resolver.listModels());
+      validateModelSelection(catalog, resolvedSpec, spec, name);
+    }
   }
+  // One setting, one authority. Fresh turns resolve the profile envelope and
+  // override the actor's stored model hint, so writing `setModel` on one agent
+  // reported success while changing no turn. Every model command edits the
+  // default tier that unresolved roles actually read.
   const envelope = resolvedSpec
     ? await updateDefaultTier({ model: resolvedSpec })
     : await loadActiveProfile();

@@ -198,8 +198,21 @@ const FIXTURE_CLASS_BY_STRATEGY = {
   'merkle-pack': 'MerklePackBox',
 } as const satisfies Record<Strategy, string>;
 const FIXTURE_COUNTER_CLASS = 'BenchOpCounter';
-/** The container classes whose image is the candidate Dockerfile build. */
-const CANDIDATE_CONTAINER_CLASSES: ReadonlySet<string> = new Set([
+/**
+ * The container classes whose image is the candidate Dockerfile build.
+ *
+ * `OverlayCasBox` belongs here because `CAS_RUNNER_PATH`
+ * (`packages/devbox/src/overlay-cas.ts`) resolves its runner at
+ * `/opt/kinu/overlay-cas-runner.bundle.mjs`, and that path exists ONLY inside
+ * this image — `candidateImageDockerfile` copies the bundle into it. Left out,
+ * the arm ran on the plain sandbox image and every cold attach refused with
+ * `Module not found "/opt/kinu/overlay-cas-runner.bundle.mjs"`: measured on the
+ * 2026-08-29 01:26 and 02:42 runs, and the reason the 2026-08-26 overlay-cas
+ * artifact was REFUSED. The image is built once per run regardless of which
+ * arms selected it, so naming a class here costs nothing it did not already pay.
+ */
+export const CANDIDATE_CONTAINER_CLASSES: ReadonlySet<string> = new Set([
+  'OverlayCasBox',
   'BoundedLayersBox',
   'MerklePackBox',
 ]);
@@ -1391,6 +1404,23 @@ export function isTransientContainerCreateError(error: string | undefined): bool
     .test(error ?? '');
 }
 
+/**
+ * One arm's result before anything is measured: every number absent, nothing
+ * proven. Shared with the run loop, which records exactly this shape plus the
+ * reason when an arm dies mid-measurement — a second copy of the literal there
+ * would drift from this one field by field.
+ */
+function unmeasuredArm(strategy: Strategy, box: string, notes: string[]): ArmResult {
+  return {
+    strategy, box, verifyPassed: false, verifyChecks: [],
+    attachColdMs: null, attachColdKind: '', attachWarmMs: null, attachWarmKind: '',
+    checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '',
+    phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
+    generationBeforeLadder: null, generationAfterLadder: null,
+    treeBytes: {}, ops: null, teardown: null, notes,
+  };
+}
+
 async function measureArm(
   fixture: Fixture,
   strategy: Strategy,
@@ -1402,14 +1432,7 @@ async function measureArm(
   const boxBase = `ab-${strategy}-${options.runId}`;
   let box = boxBase;
   const notes: string[] = [];
-  const result: ArmResult = {
-    strategy, box, verifyPassed: false, verifyChecks: [],
-    attachColdMs: null, attachColdKind: '', attachWarmMs: null, attachWarmKind: '',
-    checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '',
-    phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
-    generationBeforeLadder: null, generationAfterLadder: null,
-    treeBytes: {}, ops: null, teardown: null, notes,
-  };
+  const result = unmeasuredArm(strategy, box, notes);
   noteLiveBox(box);
   const teardown = async (): Promise<ArmResult> => {
     if (result.teardown === null) {
@@ -1658,7 +1681,25 @@ async function measureArm(
   log(`${strategy}: ops accounting and teardown`);
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-  await teardown();
+
+  // Everything below is CLEANUP, and a cleanup failure is not a measurement
+  // failure. The 2026-08-29 02:42 run lost a fully measured `bounded-layers`
+  // arm and never started `merkle-pack` because the release below timed out and
+  // threw out of here, 70 minutes in: the numbers were already collected and
+  // were discarded with the exception. So a step here records its reason and
+  // the arm still returns what it measured. Nothing is hidden by that —
+  // `teardownLiveArms` still sweeps the box and still reports under G8.
+  const cleanupStep = async (what: string, step: () => Promise<void>): Promise<void> => {
+    try {
+      await step();
+    } catch (error) {
+      const note = `${what} failed after the arm was measured: ${describeThrown({ cause: error })}`;
+      log(`${strategy}: ${note}`);
+      notes.push(note);
+    }
+  };
+
+  await cleanupStep('teardown', async () => { await teardown(); });
 
   // RELEASE THE CONTAINER before the next arm starts.
   //
@@ -1668,11 +1709,15 @@ async function measureArm(
   // second arm could never get an instance. One box per arm is required for
   // correctness, because mountBucket refuses a second mount of one binding at a
   // different prefix or readOnly value; the consequence is that each arm must
-  // hand its instance BACK rather than merely stop using it.
-  const released = await call(fixture, 'POST', `/stop?box=${box}`, StopReplySchema, {});
-  if (released.ok !== true) {
-    notes.push(`the box was not released after the arm: ${released.error ?? 'stop did not confirm'}`);
-  }
+  // hand its instance BACK rather than merely stop using it. A release that
+  // fails therefore costs the NEXT arm its instance, which that arm reports as
+  // its own create refusal — a localized, named failure instead of a dead run.
+  await cleanupStep('box release', async () => {
+    const released = await call(fixture, 'POST', `/stop?box=${box}`, StopReplySchema, {});
+    if (released.ok !== true) {
+      notes.push(`the box was not released after the arm: ${released.error ?? 'stop did not confirm'}`);
+    }
+  });
   return result;
 }
 
@@ -2361,7 +2406,20 @@ async function main(): Promise<number> {
     stop = started.stop;
     liveFixture = started.fixture;
     for (const strategy of options.arms) {
-      const arm = await measureArm(started.fixture, strategy, options, (box) => liveArmBoxes.add(box));
+      // Per arm, so one arm's death costs only that arm. A single `await` for
+      // the whole loop meant an exception anywhere took the arms measured after
+      // it as well as the one that threw, and the run reported a bare
+      // `TimeoutError` for all of them. An arm that dies is recorded with its
+      // reason and refused by admission on its own merits; the arms behind it
+      // still get measured.
+      let arm: ArmResult;
+      try {
+        arm = await measureArm(started.fixture, strategy, options, (box) => liveArmBoxes.add(box));
+      } catch (error) {
+        const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
+        log(`${strategy}: ${reason}`);
+        arm = unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, [reason]);
+      }
       arms.push(arm);
       for (const [name, count] of Object.entries(arm.ops?.calls ?? {})) {
         teardownManifest.counters[name] = (teardownManifest.counters[name] ?? 0) + count;

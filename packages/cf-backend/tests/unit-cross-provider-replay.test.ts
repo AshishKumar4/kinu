@@ -28,6 +28,8 @@ import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/ac
 /** What the SOURCE provider named this call — Anthropic's own grammar, which no
  *  other family mints, so its presence on a request is unambiguous. */
 const SOURCE_ID = 'toolu_01SourceMinted';
+const SOURCE_REASONING = 'I should look this up.';
+const SOURCE_REASONING_SIGNATURE = 'anthropic-source-signature';
 
 /** The provider handle a live streamText also passes. `beforeStep` forwards only
  *  `stepNumber` and `messages` to the shared pipeline, so this is supplied as
@@ -47,7 +49,14 @@ const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'what is the answer' },
   {
     role: 'assistant',
-    content: [{ type: 'tool-call', toolCallId: SOURCE_ID, toolName: 'look', input: { topic: 'life' } }],
+    content: [
+      {
+        type: 'reasoning',
+        text: SOURCE_REASONING,
+        providerOptions: { anthropic: { signature: SOURCE_REASONING_SIGNATURE } },
+      },
+      { type: 'tool-call', toolCallId: SOURCE_ID, toolName: 'look', input: { topic: 'life' } },
+    ],
   } satisfies AssistantModelMessage,
   {
     role: 'tool',
@@ -106,6 +115,22 @@ describe('a hosted step whose history came from another provider', () => {
     // And the id belongs to the request, not to the provider that is no longer
     // answering it.
     expect(carried.calls).not.toContain(SOURCE_ID);
+  });
+
+  test('converts source reasoning to portable text and removes its signature', async () => {
+    const { agent } = orchestratorHarness();
+
+    const messages = await stepMessages(agent, [...HISTORY]);
+    const assistant = messages.find((message) =>
+      message.role === 'assistant' && Array.isArray(message.content));
+    const content = assistant?.role === 'assistant' && Array.isArray(assistant.content)
+      ? assistant.content
+      : [];
+
+    expect(content.some((part) => part.type === 'text' && part.text === SOURCE_REASONING)).toBe(true);
+    expect(content.some((part) => part.type === 'reasoning')).toBe(false);
+    expect(JSON.stringify(messages)).not.toContain(SOURCE_REASONING_SIGNATURE);
+    expect(JSON.stringify(HISTORY)).toContain(SOURCE_REASONING_SIGNATURE);
   });
 
   test('pairs the same way on every step, so a re-issued request is stable', async () => {

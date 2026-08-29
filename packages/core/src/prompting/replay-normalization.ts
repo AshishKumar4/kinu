@@ -4,9 +4,10 @@
  * Durable history names what the SOURCE provider emitted. A replay request is a
  * new request to the DESTINATION provider, so source-native tool-call ids and
  * reasoning envelopes do not belong on that wire. Every currently registered
- * provider adapter accepts the portable id grammar in `tool-call-id.ts`; this
- * module therefore replaces every replayed call id with one destination-neutral
- * deterministic id and applies the same map to every result half.
+ * provider adapter accepts the portable id grammar in `tool-call-id.ts`.
+ * This module replaces every replayed call id with one destination-neutral
+ * deterministic id and applies the same map to every result half. It converts
+ * foreign reasoning to assistant text and removes the source metadata.
  *
  * This is request-only: history stays faithful to the source provider, while
  * the destination receives one self-consistent transcript. Re-running the
@@ -14,14 +15,21 @@
  * remain completed — nothing executes during this transformation.
  */
 
-import type { AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
+import type { AssistantContent, AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
 import { toolCallIdFor } from '../providers/tool-call-id';
+import * as v from 'valibot';
+
+const AnthropicReasoningOptionsSchema = v.object({
+  signature: v.optional(v.string()),
+  redactedData: v.optional(v.string()),
+});
 
 
 /**
- * Normalize persisted tool-call ids for the provider about to receive this
- * request. Provider adapters already drop foreign reasoning envelopes; this
- * module owns the paired-id invariant at the final request boundary.
+ * Normalize persisted tool-call ids and reasoning for the destination.
+ *
+ * Durable history stays unchanged. The returned request uses only content that
+ * the destination can replay.
  */
 export function normalizeReplayForDestination(
   messages: readonly ModelMessage[],
@@ -36,20 +44,38 @@ export function normalizeReplayForDestination(
   const ids = new Map<string, string>();
   let calls = 0;
   let changed = false;
+  const destinationIsAnthropic = destinationProviderId === 'anthropic';
 
   const normalized = messages.map((message): ModelMessage => {
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       let contentChanged = false;
-      const content = message.content.map((part) => {
+      const content: Exclude<AssistantContent, string> = [];
+      for (const part of message.content) {
+        if (part.type === 'reasoning') {
+          const anthropic = v.safeParse(
+            AnthropicReasoningOptionsSchema,
+            part.providerOptions?.anthropic,
+          );
+          const sourceIsAnthropic = anthropic.success
+            && (anthropic.output.signature !== undefined
+              || anthropic.output.redactedData !== undefined);
+          if (sourceIsAnthropic !== destinationIsAnthropic) {
+            contentChanged = true;
+            if (part.text) content.push({ type: 'text', text: part.text });
+            continue;
+          }
+        }
         if (part.type === 'tool-call') {
           const id = ids.get(part.toolCallId) ?? toolCallIdFor({ scope: 'kinu', index: calls++ });
           ids.set(part.toolCallId, id);
-          if (id === part.toolCallId) return part;
-          contentChanged = true;
-          return { ...part, toolCallId: id };
+          if (id !== part.toolCallId) {
+            contentChanged = true;
+            content.push({ ...part, toolCallId: id });
+            continue;
+          }
         }
-        return part;
-      });
+        content.push(part);
+      }
       if (!contentChanged) return message;
       changed = true;
       return { ...message, content } satisfies AssistantModelMessage;

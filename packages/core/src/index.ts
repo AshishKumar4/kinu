@@ -139,7 +139,7 @@ export {
 export {
   outcomeToFeedback, outcomeQuality, feedbackToQuality, isTrivialTurn,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
-  realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
+  realOutcomeScaffoldRates, blendRealOutcomeRates,
   describeSplitDegeneracy, CRITIC_PROSE,
   recordLesson, recordedTurnVerdict, listLessons, corroborateLessonsForTurn,
   isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
@@ -149,9 +149,10 @@ export {
   type OutcomeLabel, type OutcomeLabelRow,
   type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow, type ExecutionVerdict,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
-  type OutcomeSplitDegeneracy, type AdvisorNegativeRow,
+  type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes';
+export { buildOutcomeEvalSplit, type AdvisorNegativeRow } from './evolution/eval-split';
 // The step clock's knowledge channel — execution recoveries observed by the
 // turn's own failure ledger, injected for the rest of the episode.
 export {
@@ -1340,6 +1341,9 @@ export {
   type PendingDeviceConsent,
   type DeviceConsentNotice,
 } from './safety/index';
+export {
+  refusedHostname,
+} from './safety/egress-destination';
 
 // Utils
 export { nanoid } from './utils/nanoid';

@@ -12,8 +12,9 @@ import {
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
+import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import {
-  initTurnOutcomeTables, listTurnOutcomes, buildOutcomeEvalSplit, realOutcomeScaffoldRates,
+  initTurnOutcomeTables, listTurnOutcomes, realOutcomeScaffoldRates,
 } from '../src/evolution/outcomes';
 
 /** The PRODUCTION schema plus this module's own table: the eval split the pick

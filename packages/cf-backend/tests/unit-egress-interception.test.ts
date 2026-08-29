@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import {
-  EGRESS_PLACEHOLDER_PREFIX, type EgressSecretBinding,
+  EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding,
 } from '@kinu.run/core';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock
@@ -612,5 +612,109 @@ describe('a throw at the boundary becomes a classified answer', () => {
     expect(await response!.text()).toContain('send it again');
     expect(emitted[0]!.event).toBe('egress.event_channel_unreachable');
     expect(emitted[0]!.cause).toContain('object evicted mid-write');
+  });
+});
+
+// KINU-086 at the CF boundary. The JUDGMENT lives in core
+// (`safety/egress-destination.ts`, judged in core's own suite); what belongs
+// here is the ENFORCEMENT this adapter owns: the handler refuses private
+// destinations before the vault call, the refusal is the classified payload on
+// the wire, and every redirect hop is handed back so it re-enters the handler
+// and is judged like the first.
+describe('private destinations are refused at the one place requests leave', () => {
+  test.each([
+    ['RFC1918 10/8', 'http://10.0.0.5/'],
+    ['RFC1918 172.16/12', 'http://172.16.0.1/'],
+    ['RFC1918 192.168/16', 'http://192.168.1.1/'],
+    ['loopback 127/8', 'http://127.0.0.1/'],
+    ['CGNAT 100.64/10', 'http://100.64.0.1/'],
+    ['this-network 0.0.0.0/8', 'http://0.0.0.0/'],
+    ['metadata address', 'http://169.254.169.254/latest/meta-data/'],
+    ['link-local 169.254/16', 'http://169.254.0.1/'],
+    ['reserved name localhost', 'http://localhost:8080/'],
+    ['reserved domain .localhost', 'http://api.service.localhost/'],
+    ['reserved metadata names', 'http://metadata.google.internal/computeMetadata/v1/'],
+    ['IPv6 loopback', 'http://[::1]/'],
+    ['IPv6 link-local', 'http://[fe80::1]/'],
+    ['IPv6 ULA', 'http://[fd00::119:1]/'],
+    ['IPv6 mapped private', 'http://[::ffff:169.254.169.254]/'],
+  ])('%s is refused before the vault is asked', async (_label, target) => {
+    const upstream = captureFetch(() => new Response('should not happen'));
+    try {
+      const refusal = await handleContainerEgress(
+        new Request(target), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+      );
+      expect(refusal.status).toBe(403);
+      // The classified payload, on the wire in the shared shape.
+      expect(await refusal.json()).toMatchObject({ reason: 'denied' });
+      // The refused destination is never contacted, and its body never read.
+      expect(upstream.seen).toHaveLength(0);
+    } finally { upstream.restore(); }
+  });
+
+  test('the refusal is recorded with the classification and host only', async () => {
+    const emitted = await recordDiagnostics(async () => {
+      await handleContainerEgress(
+        new Request('http://169.254.169.254/latest/meta-data/'),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+      );
+    });
+    expect(emitted[0]!.event).toBe('egress.private_destination');
+    expect(emitted[0]!.code).toBe('denied');
+    // Host only — no path, no query in the diagnostic.
+    expect(emitted[0]!.fields).toEqual({ host: '169.254.169.254' });
+  });
+
+  test('the public control still succeeds end to end', async () => {
+    const upstream = captureFetch(() => new Response('ok'));
+    try {
+      const response = await handleContainerEgress(
+        new Request('https://example.com/'),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+      );
+      expect(response.status).toBe(200);
+      expect(upstream.seen).toHaveLength(1);
+    } finally { upstream.restore(); }
+  });
+
+  test('the classifier shares one judgment with core, at the CF boundary', () => {
+    // The handler refuses through the SAME function core's suite judges, so
+    // this boundary assertion pins the adapter seam, not a second copy.
+    expect(refusedHostname('[fe80::1]')).toMatchObject({ reason: 'denied' });
+    expect(refusedHostname('2606:4700:4700::1111')).toBeNull();
+  });
+});
+
+describe('every redirect hop is judged, not trusted', () => {
+  test('the runtime never follows: the 3xx is handed back for re-judgment', async () => {
+    const hop = captureFetch(() => new Response(null, {
+      status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+    }));
+    try {
+      const first = await handleContainerEgress(
+        new Request('https://public.example/start'),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+      );
+      expect(first.status).toBe(302);
+      // The request left with redirect manual, so the hop's next request is
+      // the CONTAINER's, and it re-enters the handler.
+      expect(hop.seen[0]!.redirect).toBe('manual');
+    } finally { hop.restore(); }
+  });
+
+  test('the redirected request re-enters the handler and is refused at the hop', async () => {
+    // Hop 1 passes (public), hands the 3xx back; hop 2 is the container's
+    // request to the private Location, and the guard refuses it before the
+    // vault call — the refused destination is never contacted.
+    const refused = captureFetch(() => new Response('should not happen'));
+    try {
+      const second = await handleContainerEgress(
+        new Request('http://169.254.169.254/latest/meta-data/'),
+        fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
+      );
+      expect(second.status).toBe(403);
+      expect(await second.json()).toMatchObject({ reason: 'denied' });
+      expect(refused.seen).toHaveLength(0);
+    } finally { refused.restore(); }
   });
 });

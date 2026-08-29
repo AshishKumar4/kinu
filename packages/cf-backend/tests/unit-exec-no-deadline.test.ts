@@ -26,18 +26,20 @@ import { createTestSql } from "@kinu.run/test-utils";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 
 // codemode reaches `cloudflare:workers` at load, so that specifier must be
-// stubbed before its module is evaluated — hence the one dynamic import. The
+// stubbed before its module is evaluated — hence the dynamic imports. The
 // exec-lane adapter needs no stub at all, which is the point of it living
 // outside `runtime.ts`.
-// `mock.module` is process-wide, so this stub is what a SIBLING suite loaded in
-// the same run also gets. It therefore has to carry every export the src graph
-// binds, not just the ones this file needs: `tracing` is bound at load by
-// cf-backend/src/obs/cf-tracer.ts, and omitting it turned a co-run with
-// unit-preview-origin.test.ts into a load-time
-// `SyntaxError: Export named 'tracing' not found`.
+//
+// `mock.module` is process-wide. Spread the preload's complete boundary stub
+// before replacing what this test needs; a hand list omitted `tracing`, and a
+// co-run with unit-preview-origin then failed at load with `Export named
+// 'tracing' not found`.
+const workersModule = await import("cloudflare:workers");
 mock.module("cloudflare:workers", () => ({
-  RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {},
-  tracing: {},
+  ...workersModule,
+  RpcTarget: class {},
+  WorkerEntrypoint: class {},
+  DurableObject: class {},
 }));
 
 const { PreambleCraftedExecutor } = await import("../src/crafted-tool-registry");

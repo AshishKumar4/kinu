@@ -32,7 +32,11 @@ afterEach(() => {
   for (const mock of servers.splice(0)) mock.close();
 });
 
-function startMockAgentServer(): MockAgentServer {
+function startMockAgentServer(options: {
+  holdTicketAt: number;
+  ticketGate: Promise<void>;
+  onTicketReleased(): void;
+} | Record<never, never> = {}): MockAgentServer {
   const frames: JsonObject[] = [];
   const ticketRequests: Array<{ name: string; auth: string | null }> = [];
   const connectUrls: URL[] = [];
@@ -50,6 +54,10 @@ function startMockAgentServer(): MockAgentServer {
           name: decodeURIComponent(ticketMatch[1]!),
           auth: req.headers.get('authorization'),
         });
+        if ('holdTicketAt' in options && ticketRequests.length === options.holdTicketAt) {
+          await options.ticketGate;
+          options.onTicketReleased();
+        }
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
       }
       if (/^\/api\/cli\/workspaces\/[^/]+\/rpc$/.test(url.pathname) && req.method === 'POST') {
@@ -698,6 +706,39 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
       'stream-resume probe',
     );
   }
+
+  test('closing during a rebind ticket request never opens a replacement socket', async () => {
+    const ticketGate = Promise.withResolvers<void>();
+    const ticketReturned = Promise.withResolvers<void>();
+    const mock = startMockAgentServer({
+      holdTicketAt: 2,
+      ticketGate: ticketGate.promise,
+      onTicketReleased: ticketReturned.resolve,
+    });
+    const client = newClient(mock);
+    const turn = client.send('keep this turn durable');
+    await waitFor(
+      () => mock.frames.some((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST)
+        ? true
+        : undefined,
+      'initial chat request',
+    );
+
+    mock.socket().close();
+    await waitFor(
+      () => mock.ticketRequests.length === 2 ? true : undefined,
+      'rebind ticket request',
+    );
+    await client.close();
+    ticketGate.resolve();
+    await ticketReturned.promise;
+
+    await expect(turn).resolves.toMatchObject({ hadError: true });
+    // The first URL is the original connection. Before the closed guards, the
+    // returned ticket created a second socket after `close()` had already
+    // cleared the client.
+    expect(mock.connectUrls).toHaveLength(1);
+  });
 
   test('mid-stream drop: the turn survives, the replay is not applied twice, one request total', async () => {
     const mock = startMockAgentServer();

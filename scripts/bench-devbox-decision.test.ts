@@ -25,6 +25,7 @@ import { refusalText } from './fixtures/storage-matrix/admission';
 import {
   addressArmRequest,
   benchmarkExitCode,
+  CANDIDATE_CONTAINER_CLASSES,
   devboxAdmission,
   fixtureConfigForArms,
   isTransientContainerCreateError,
@@ -479,9 +480,13 @@ describe('per-run fixture deployment', () => {
       expect(config.containers.map((container: { class_name: string }) => container.class_name)).toEqual(
         classes.filter((className: string) => className !== 'BenchOpCounter'),
       );
+      // DERIVED from the declaration, never a second copy of its membership: an
+      // arm added to the candidate set must not need this list edited to agree,
+      // because a stale copy here would pass while the deployed arm ran on an
+      // image with no runner in it.
       for (const container of config.containers) {
         expect(container.image).toBe(
-          container.class_name === 'BoundedLayersBox' || container.class_name === 'MerklePackBox'
+          CANDIDATE_CONTAINER_CLASSES.has(container.class_name)
             ? '/tmp/candidate.Dockerfile'
             : 'docker.io/cloudflare/sandbox:0.12.8',
         );

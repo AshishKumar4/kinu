@@ -292,6 +292,17 @@ describe('the agent surfaces cannot drift from their classes', () => {
     expect(missing.sort()).toEqual([]);
   });
 
+  test('the parent roster read reaches the subordinate snapshot across the sealed facet', () => {
+    // `subordinateView` calls this on a Facet stub, not on a local object. The
+    // seal denies every name absent from SUBORDINATE_RPC_SURFACE; the call then
+    // falls into its `Unavailable` recovery and every roster row loses its real
+    // display name and role. The type proves the method exists on the class. The
+    // two assertions below prove the parent calls it AND the sealed wire carries
+    // it — neither alone prevents the outage.
+    expect(source('actor-agent.ts')).toContain('.getSubordinateSnapshot()');
+    expect(SUBORDINATE_RPC_SURFACE).toContain('getSubordinateSnapshot');
+  });
+
   test('worker routes call only methods on the orchestrator surface', () => {
     const called = ['terminal-route.ts', 'files-routes.ts'].flatMap((file) =>
       [...source(file).matchAll(/\bagent\.([A-Za-z]\w*)\(/g)]

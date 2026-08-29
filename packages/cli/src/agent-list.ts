@@ -16,6 +16,10 @@ export interface ListedAgent {
   name: string;
   label: string;
   mode: AgentMode;
+  /** Why this local workspace's own title could not be read. The display label
+   *  carries the same text for the human; this field is the typed branch a
+   *  caller uses instead of parsing that label. */
+  readError?: string;
   localName?: string;
   cloudName?: string;
   /** Canonical project root this local agent is placed in; unplaced legacy
@@ -99,9 +103,9 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   return { projectRoot, workspaces: ordered, unplaced, remote };
 }
 
-function localDisplayLabel(dirName: string): string {
+function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'> {
   try {
-    return readWorkspaceDisplayName(agentDbPath(dirName)) ?? dirName;
+    return { label: readWorkspaceDisplayName(agentDbPath(dirName)) ?? dirName };
   } catch (error) {
     const reason = renderThrownChain({ cause: error });
     diagnostics.failure(
@@ -109,7 +113,7 @@ function localDisplayLabel(dirName: string): string {
       toKinuError({ doing: 'reading a local workspace title', cause: error, otherwise: 'io' }),
       { workspace: dirName },
     );
-    return `(unreadable: ${reason})`;
+    return { label: `(unreadable: ${reason})`, readError: reason };
   }
 }
 
@@ -121,7 +125,7 @@ function localDisplayLabel(dirName: string): string {
 function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
   return {
     name: configured?.name ?? dirName,
-    label: localDisplayLabel(dirName),
+    ...localDisplay(dirName),
     mode: 'local',
     localName: dirName,
     cloudName: configured?.cloudName,

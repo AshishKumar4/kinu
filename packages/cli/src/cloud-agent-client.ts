@@ -788,18 +788,26 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private async ensureOpen(): Promise<void> {
+    if (this.closed) throw new Error('Cloud workspace client is closed.');
     if (this.ws?.readyState === WebSocket.OPEN) return;
-    if (this.connectPromise) return await this.connectPromise;
+    if (this.connectPromise) {
+      await this.connectPromise;
+      if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
+      return;
+    }
     this.connectPromise = this.openSocket();
     try {
       await this.connectPromise;
+      if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
     } finally {
       this.connectPromise = null;
     }
   }
 
   private async openSocket(): Promise<void> {
+    if (this.closed) throw new Error('Cloud workspace client is closed.');
     const { ticket } = await createCloudAgentConnectTicket(this.origin, this.token, this.cloudName);
+    if (this.closed) throw new Error('Cloud workspace client closed while creating its connect ticket.');
     const actorPath = this.subordinateName
       ? `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`
         + `/sub/${SUBORDINATE_AGENT_SLUG}/${encodeURIComponent(this.subordinateName)}`
@@ -832,15 +840,24 @@ export class CloudAgentClient implements AgentClient {
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
-      ws.addEventListener('open', () => {
+      const settle = (outcome: () => void): void => {
         clearTimeout(timeout);
-        resolve();
+        outcome();
+      };
+      ws.addEventListener('open', () => {
+        settle(resolve);
       }, { once: true });
       ws.addEventListener('error', () => {
-        clearTimeout(timeout);
-        reject(new Error('Could not connect to cloud agent.'));
+        settle(() => reject(new Error('Could not connect to cloud agent.')));
+      }, { once: true });
+      ws.addEventListener('close', () => {
+        settle(() => reject(new Error('Cloud workspace connection closed before it opened.')));
       }, { once: true });
     });
+    if (this.closed) {
+      ws.close();
+      throw new Error('Cloud workspace client closed while connecting.');
+    }
   }
 
   private handleMessage(event: MessageEvent): void {

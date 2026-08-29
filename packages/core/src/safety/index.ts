@@ -108,3 +108,8 @@ export {
   type DeviceConsentNotice,
   type DeviceConsentRegistryDeps,
 } from './device-consent';
+
+export {
+  refusedHostname,
+} from './egress-destination';
+export type { Refusal } from '../obs/error';

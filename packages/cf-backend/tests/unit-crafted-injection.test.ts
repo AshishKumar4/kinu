@@ -11,8 +11,17 @@ import type { CraftedTool, CraftStore } from "@kinu.run/core";
 import { craftFailureMarker, craftedDispatcherEntry, initCraftQualityColumns } from "@kinu.run/core";
 import { createTestSql } from "@kinu.run/test-utils";
 
-// @cloudflare/codemode (the DWE import) needs the workerd-only module.
-mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));
+// @cloudflare/codemode (the DWE import) needs the workerd-only module. Spread
+// the preload's real boundary stub: `mock.module` is process-wide, so listing
+// only this test's three imports drops an export a sibling binds and makes its
+// result depend on file load order.
+const workersModule = await import("cloudflare:workers");
+mock.module("cloudflare:workers", () => ({
+  ...workersModule,
+  RpcTarget: class {},
+  WorkerEntrypoint: class {},
+  DurableObject: class {},
+}));
 const { selectInjectableCraftedTools, buildToolsPreamble, injectPreamble } = await import("../src/crafted-tool-registry");
 
 function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {

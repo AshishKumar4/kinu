@@ -274,10 +274,15 @@ describe('hosted workspace preview capabilities', () => {
   });
 
   test('the actual worker route supports Cirrus HMR and generic guest upgrades', async () => {
+    const workersModule = await import('cloudflare:workers');
     class WorkerEntrypoint {}
     class DurableObject {}
     class RpcTarget {}
-    mock.module('cloudflare:workers', () => ({ WorkerEntrypoint, DurableObject, RpcTarget }));
+    // Process-wide: retain every preload export a sibling's graph can bind,
+    // then replace only the three base classes this route fixture constructs.
+    mock.module('cloudflare:workers', () => ({
+      ...workersModule, WorkerEntrypoint, DurableObject, RpcTarget,
+    }));
 
     const serverSocket = { serializeAttachment() {} };
     const clientSocket = {};

@@ -602,12 +602,29 @@ export class LocalAgentHost {
       return entry;
     } catch (error) {
       this.entries.delete(input.key);
+      const cleanupErrors: Error[] = [];
       try {
         await session.end();
       } catch (cleanupError) {
+        cleanupErrors.push(new Error('ending the failed hosted session', { cause: cleanupError }));
+      }
+      // Released and forgotten before the caller closes `input.db`. Leaving the
+      // hold in this map poisons a retry: `driverHold` returns the old object,
+      // whose SQL executor closes over the failed entry's now-closed Database.
+      // It also leaves the interactive lease row owned by a host that never
+      // opened. Each caller owns the handle itself and closes it after this
+      // throws; this method owns the memoized object it created.
+      const hold = this.driverHolds.get(input.key);
+      try {
+        hold?.release();
+      } catch (cleanupError) {
+        cleanupErrors.push(new Error('releasing the failed hosted session driver lease', { cause: cleanupError }));
+      }
+      this.driverHolds.delete(input.key);
+      if (cleanupErrors.length > 0) {
         throw new AggregateError(
-          [error, cleanupError],
-          `opening hosted agent "${input.key}" failed and its session did not close`,
+          [new Error(`opening hosted agent "${input.key}"`, { cause: error }), ...cleanupErrors],
+          `opening hosted agent "${input.key}" failed and its session or driver lease did not close`,
           { cause: error },
         );
       }

@@ -33,7 +33,8 @@ import {
 } from '../src/index';
 import { initAllTables } from '../src/identity/schema';
 import { EvolutionEngine } from '../src/evolution/engine';
-import { buildOutcomeEvalSplit, initTurnOutcomeTables } from '../src/evolution/outcomes';
+import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
+import { initTurnOutcomeTables } from '../src/evolution/outcomes';
 import { buildChangelog } from '../src/evolution/changelog';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import { initPromptSectionTables, listPromptSectionVersions } from '../src/prompting/section-store';

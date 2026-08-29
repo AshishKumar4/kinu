@@ -1391,6 +1391,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       mission: string;
       model: string | null;
       activePlan: unknown;
+      /** The facet's own acknowledged-and-not-landed steers, from its durable
+       *  rows. Read here for the same reason the root reads them off its
+       *  snapshot: no live broadcast repeats a queue for a tab that was gone
+       *  when the steer was taken. */
+      pendingSteers: InlineSteer[];
     }>("getSubordinateSnapshot", []);
     if (!isCurrent()) return;
     setAgentStatus({
@@ -1407,6 +1412,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       forkLineage: null,
     });
     setActivePlan(parseActivePlanReview(snapshot.activePlan));
+    setSteerRuns(snapshot.pendingSteers);
   }
 
   const refreshSubordinates = useCallback(() => {

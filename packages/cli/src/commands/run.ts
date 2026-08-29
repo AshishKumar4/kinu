@@ -33,6 +33,7 @@ import {
 } from '../local-inspection';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { installTurnDiagnostics } from '../turn-log';
+import { loadActiveProfile, updateDefaultTier } from '../profiles';
 
 /** Transcript flags as Commander actually delivers them: `--no-transcript`
  *  arrives as `transcript: false` on the shared option key, not as
@@ -338,6 +339,17 @@ async function runRpc(
   }
 }
 
+/** `model` edits the canonical profile tier, independent of which transport
+ * carried the headless command. Per-agent `setModel` is only a bootstrap hint;
+ * fresh turn profile resolution overrides it. */
+async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
+  const spec = stringField(cmd, 'spec');
+  const envelope = spec
+    ? await updateDefaultTier({ model: spec })
+    : await loadActiveProfile();
+  return decodeJsonValue({ value: { spec: envelope.catalog.tiers.default.model } });
+}
+
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
   const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
     callAgentRpc(origin, token, name, method, JsonValueSchema, args);
@@ -350,10 +362,8 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('getAgentStatus');
     case 'tools':
       return rpc('getToolDescriptions');
-    case 'model': {
-      const spec = stringField(cmd, 'spec');
-      return spec ? rpc('setModel', [spec]) : rpc('getStoredModelSpec');
-    }
+    case 'model':
+      return runModelProfileCommand(cmd);
     case 'triggers':
       return rpc('listTriggers');
     case 'jobs':
@@ -433,10 +443,8 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return decodeJsonValue({ value: getLocalAgentState(name) });
     case 'tools':
       return decodeJsonValue({ value: await client.describeTools() });
-    case 'model': {
-      const spec = stringField(cmd, 'spec');
-      return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
-    }
+    case 'model':
+      return runModelProfileCommand(cmd);
     case 'triggers':
       return decodeJsonValue({ value: listLocalTriggers(name) });
     case 'jobs':

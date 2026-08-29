@@ -3755,7 +3755,7 @@ export class LocalAgentSession implements BackendHost {
         // wake failing — and the fiber is about to delete itself. Without this
         // the rows stay owed with nothing left to come back for them until the
         // whole session is restarted.
-        return this.terminal.armRecovery(transition, err);
+        return this.terminal.armRecovery(transition, { cause: err });
       });
   }
 

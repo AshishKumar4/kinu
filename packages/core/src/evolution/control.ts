@@ -47,8 +47,9 @@ import type { ShadowTrialDrain, ShadowTrialQueueOutcome, ShadowTrialTurn } from 
 import {
   DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
 } from '../scaffold/auto-judge';
+import { buildOutcomeEvalSplit } from './eval-split';
 import {
-  buildOutcomeEvalSplit, describeSplitDegeneracy, CRITIC_PROSE,
+  describeSplitDegeneracy, CRITIC_PROSE,
   type OutcomeEvalExpectation,
 } from './outcomes';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';

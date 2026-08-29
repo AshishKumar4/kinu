@@ -42,6 +42,23 @@ function KeyedWorkspace() {
   return <WorkspacePage key={agentId} />;
 }
 
+// The settings form belongs to ONE workspace, so a workspace change is a fresh
+// mount for the same reason it is above.
+//
+// Unkeyed, React reuses the instance across `/workspace/A/settings` →
+// `/workspace/B/settings` because the route pattern is the same and only the
+// param changed. Two pieces of state then survive the switch: the fetch-once
+// ref, so B's values are never loaded, and every pending edit, because
+// `hydrate` deliberately keeps what the user typed. The form then showed A's
+// approval mode, MCTS config and advisor settings while connected to B, and
+// Save wrote them into B's Durable Object. Keying resets the ref, the five
+// fields and anything later added beside them, which is why it is the key
+// rather than a reset for each.
+function KeyedSettings() {
+  const { agentId } = useParams();
+  return <SettingsPage key={agentId} />;
+}
+
 // Trigger management folded into the Supervise altitude's Automations block;
 // old /triggers deep links land there.
 function TriggersRedirect() {
@@ -77,7 +94,7 @@ export default function App() {
               </Suspense>
             </ErrorBoundary>
           } />
-          <Route path={APP_ROUTES.agentSettings} element={<ErrorBoundary label="agent-settings"><SettingsPage /></ErrorBoundary>} />
+          <Route path={APP_ROUTES.agentSettings} element={<ErrorBoundary label="agent-settings"><KeyedSettings /></ErrorBoundary>} />
           <Route path={APP_ROUTES.triggers} element={<TriggersRedirect />} />
         </Route>
       </Routes>

@@ -11,10 +11,11 @@ import {
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
   executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome,
-  realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
+  realOutcomeScaffoldRates, blendRealOutcomeRates,
   describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
 } from '../src/evolution/outcomes';
+import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';

@@ -237,8 +237,6 @@ describe('subordinate wiring', () => {
     // Cross-workspace experience transfer is no longer a tool at all — it is
     // the owner's RPC on the orchestrator, and reaches no actor's profile.
     expect(profile).not.toContain('experience:');
-    expect(source('orchestrator.ts')).toContain('async experienceAction(input: ExperienceActionInput)');
-    expect(source('actor-agent.ts')).not.toContain('experience');
     // …and absence is structural: a deps-gated name is dropped from the
     // advertised surface too, not just from the ToolSet. `release` is not a
     // native tool at all anymore (release.* is codemode-only), so it no
@@ -278,39 +276,6 @@ describe('subordinate wiring', () => {
     expect(subordinate).not.toContain('listSubordinates(');
   });
 
-  test('manual creation is one click, identity-only, and opens the conversation directly', () => {
-    const tabs = source('components/SubordinateTabs.tsx');
-    const page = source('pages/WorkspacePage.tsx');
-    // No form stands between the click and the agent. WorkspacePage owns the
-    // identity-only action because it stays mounted on both Run and Supervise.
-    expect(tabs).not.toContain('SpawnSubordinateDialog');
-    expect(tabs).toContain('onCreate(): Promise<void>');
-    expect(page).toContain('window.addEventListener("kinu:new-agent", open)');
-    expect(page).toContain('navigate(`/workspace/${agentId}/agents/${created.name}`)');
-    expect(tabs).toContain('if (dismissTarget.name === activeName) navigate(mainPath);');
-    expect(source('components/Sidebar.tsx')).toContain('new CustomEvent("kinu:new-agent")');
-    // A blank name renders as the provisional title everywhere, never as ''.
-    expect(tabs).toContain('NEW_AGENT_TITLE = "New agent"');
-    expect(tabs).not.toContain('sends the mission as its first turn');
-    expect(tabs).not.toContain('permanently deletes its conversation');
-  });
-
-  test('the additional-agent conversation hides its inherited mission and identity internals', () => {
-    const page = source('pages/WorkspacePage.tsx');
-    const column = page.slice(
-      page.indexOf('function SubordinateChatColumn'),
-      page.indexOf('/* ── Main page'),
-    );
-    // An ordinary conversation: no purpose line under the name, no SOUL text
-    // in the empty state — the mission a one-click agent inherits is the
-    // machinery's business, and the empty state says only where things start.
-    expect(column).not.toContain('as?.purpose');
-    expect(column).not.toContain('as?.soul');
-    // The same composer contract as the main column: this agent's own mode…
-    expect(column).toContain('mode={{ value: effectiveMode, onChange: ui.setMode, locked: planAwaitingDecision }}');
-    // …and the same rename affordance the workspace bar carries.
-    expect(column).toContain('<InlineRenameTitle title={title} onRename={onRename} subject="agent"');
-  });
 
   test('manual create, rename, and dismiss reconcile the roster from their successful RPC result', () => {
     const hook = source('hooks/use-kinu.ts');

@@ -497,15 +497,12 @@ const report = settleReport({
   }),
 });
 
-// THE LEDGER, SETTLED. The progress columns say what the run finished rather than
-// where it was checkpointed, because a swarm has no checkpoint: its budget unit is
-// one child, so the candidates it produced ARE its spent iterations and the budget
-// it never spent is what is left. `aborted` is a failed run here — the caller gets a
-// settle report either way, but a row that says `converged` about a run cut short
-// would make the surface claim a search settled that did not.
-searchLedger.checkpoint(
-  rootId, ledgerEpoch, candidates.length, budget.remaining, Date.now(),
-);
+// THE LEDGER, SETTLED. A swarm's progress is the tree it wrote, not the row's
+// MCTS checkpoint columns: `get`, `list` and every resume reader derive children
+// and remaining budget from that tree. Writing the same numbers here created a
+// second, unread record that could only disagree. `converge` / `fail` fence the
+// terminal status and update the row's time; no separate checkpoint belongs on
+// this path.
 if (aborted) searchLedger.fail(rootId, ledgerEpoch, Date.now());
 else searchLedger.converge(rootId, ledgerEpoch, Date.now());
 const result: SwarmResult = {

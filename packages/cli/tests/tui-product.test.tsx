@@ -22,6 +22,7 @@ import {
   parseCustomTheme,
   useTuiTheme,
   type ThemeAppearance,
+  type ThemeSelection,
   type TuiThemeDefinition,
 } from '../src/tui/theme';
 import { createFileTuiPreferenceStore } from '../src/tui/preferences';
@@ -174,6 +175,17 @@ describe('TUI product registries', () => {
     }
   });
 
+  test('a selection naming a theme that is gone paints the default instead of crashing', async () => {
+    // `tui.json` is hand-editable and its schema can only check that `themeId`
+    // is a non-empty string, so a deleted or renamed custom theme leaves a live
+    // selection pointing at nothing. That threw inside the provider's useMemo
+    // and took the whole TUI down at first render.
+    expect(await renderedThemeId('dark', { mode: 'theme', themeId: 'deleted-custom-theme' }))
+      .toBe('kinu-dark');
+    expect(await renderedThemeId('light', { mode: 'theme', themeId: 'deleted-custom-theme' }))
+      .toBe('kinu-light');
+  });
+
   test('custom themes reject malformed colors and unknown fields', () => {
     const valid = JSON.stringify({
       id: 'paper-custom',
@@ -208,7 +220,10 @@ describe('adaptive TUI shell', () => {
 /** The theme the provider hands its children for a system selection, read the
  *  way every TUI surface reads it — through `useTuiTheme` under a mounted
  *  provider, so the terminal-appearance resolution really runs. */
-async function renderedThemeId(appearance: ThemeAppearance): Promise<string> {
+async function renderedThemeId(
+  appearance: ThemeAppearance,
+  selection: ThemeSelection = { mode: 'system', darkThemeId: 'kinu-dark', lightThemeId: 'kinu-light' },
+): Promise<string> {
   const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
     width: 40,
     height: 4,
@@ -220,7 +235,7 @@ async function renderedThemeId(appearance: ThemeAppearance): Promise<string> {
     root.render(
       <TuiThemeProvider
         registry={createThemeRegistry(BUILTIN_TUI_THEMES)}
-        selection={{ mode: 'system', darkThemeId: 'kinu-dark', lightThemeId: 'kinu-light' }}
+        selection={selection}
         terminalAppearance={appearance}
         colorCapability="truecolor"
       >

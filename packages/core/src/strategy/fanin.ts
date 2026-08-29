@@ -104,6 +104,12 @@ export interface FanInMeasureInput {
   readonly artifact: string;
 }
 
+/** One level barrier needs the measurement plane but no artifact of its own:
+ * each parent carries its artifact, and the fan-in hands that exact answer to
+ * `measureChild` when it revalidates the member. */
+export type FanInAtLevelInput =
+  Omit<FanInMeasureInput, 'artifact'> & { readonly atDepth: number };
+
 /** What the runner hands the fan-in, stated once. Every field is a seam the RUNNER
  *  owns; every decision inside `createLevelFanIn` is one THIS module owns. */
 export interface LevelFanInDeps<N extends FanInNode, V extends { readonly id: string }> {
@@ -145,10 +151,9 @@ export interface FanInLedgerReport {
 }
 
 export interface LevelFanIn<V extends { readonly id: string }> {
-  fanInAtLevel(input: Omit<FanInMeasureInput, 'artifact'> & { readonly atDepth: number }): Promise<readonly V[]>;
-  seedLanded(ids: readonly string[]): void;
   /** Run one level barrier's fan-in, or return empty when there is nothing to do. */
-  fanInAtLevel(input: FanInMeasureInput & { readonly atDepth: number }): Promise<readonly V[]>;
+  fanInAtLevel(input: FanInAtLevelInput): Promise<readonly V[]>;
+  seedLanded(ids: readonly string[]): void;
   /** The ids already applied into the origin — what a settle merge must not re-offer. */
   landedIds(): readonly string[];
   /** What the fan-ins did, for the settle report. */
@@ -249,7 +254,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
   let fanInMerged = 0;
 
   const fanInAtLevel = async (
-    input: FanInMeasureInput & { readonly atDepth: number },
+    input: FanInAtLevelInput,
   ): Promise<readonly V[]> => {
     const { ctx: measureIn, verifier: instrument, atDepth } = input;
     // THE LEVEL, and what of it a fan-in can consume. A node this run already merged has

@@ -1,6 +1,7 @@
 import { SyntaxStyle } from '@opentui/core';
 import { createContext, createElement, useContext, useMemo, type ReactNode } from 'react';
 import * as v from 'valibot';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 export type ThemeAppearance = 'dark' | 'light';
 export type TerminalColorCapability = 'truecolor' | 'ansi256' | 'ansi16';
@@ -64,8 +65,11 @@ export interface ThemeRegistry {
   get(themeId: string): TuiThemeDefinition;
 }
 
+export const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark';
+export const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light';
+
 const KINU_DARK: TuiThemeDefinition = {
-  id: 'kinu-dark',
+  id: DEFAULT_DARK_TUI_THEME_ID,
   label: 'Kinu dark',
   appearance: 'dark',
   source: 'kinu',
@@ -105,7 +109,7 @@ const KINU_DARK: TuiThemeDefinition = {
 };
 
 const KINU_LIGHT: TuiThemeDefinition = {
-  id: 'kinu-light',
+  id: DEFAULT_LIGHT_TUI_THEME_ID,
   label: 'Kinu light',
   appearance: 'light',
   source: 'kinu',
@@ -345,13 +349,52 @@ export function createThemeRegistry(themes: readonly TuiThemeDefinition[]): Them
 
 const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
 
+/**
+ * The theme a selection names, or the appearance-appropriate default when it
+ * names one this registry does not have.
+ *
+ * `tui.json` is a file a person edits, and its schema can only check that
+ * `themeId` is a non-empty string — registry membership is not a fact the
+ * preference layer holds. So a custom theme that is deleted or renamed leaves a
+ * selection pointing at nothing, and `registry.get` throwing inside the
+ * provider's `useMemo` took the whole TUI down at first render with
+ * `Unknown TUI theme`. A stale id in a user's config is drift, not a
+ * programming error: it degrades to the default and is RECORDED, because
+ * falling back silently would leave someone wondering why their theme stopped
+ * applying.
+ */
+function themeOrDefault(
+  registry: ThemeRegistry,
+  themeId: string,
+  terminalAppearance: ThemeAppearance,
+): TuiThemeDefinition {
+  const known = registry.themes.find((candidate) => candidate.id === themeId);
+  if (known !== undefined) return known;
+  const fallback = registry.themes.find((candidate) => candidate.appearance === terminalAppearance)
+    ?? registry.themes[0];
+  if (fallback === undefined) throw new Error('the TUI theme registry is empty');
+  diagnostics.failure(
+    'tui.theme_absent',
+    toKinuError({
+      doing: `resolving the selected TUI theme ${themeId}`,
+      cause: new Error(`no theme with id ${themeId} is registered`),
+      otherwise: 'bad_input',
+    }),
+    { selected: themeId, applied: fallback.id },
+  );
+  return fallback;
+}
+
 function resolveThemeSelection(
   registry: ThemeRegistry,
   selection: ThemeSelection,
   terminalAppearance: ThemeAppearance,
 ): TuiThemeDefinition {
-  if (selection.mode === 'theme') return registry.get(selection.themeId);
-  const theme = registry.get(terminalAppearance === 'dark' ? selection.darkThemeId : selection.lightThemeId);
+  if (selection.mode === 'theme') {
+    return themeOrDefault(registry, selection.themeId, terminalAppearance);
+  }
+  const wanted = terminalAppearance === 'dark' ? selection.darkThemeId : selection.lightThemeId;
+  const theme = themeOrDefault(registry, wanted, terminalAppearance);
   if (theme.appearance !== terminalAppearance) {
     throw new Error(`System ${terminalAppearance} selection resolved ${theme.id}, which is ${theme.appearance}.`);
   }
@@ -472,7 +515,7 @@ export function TuiThemeProvider(props: {
   readonly children: ReactNode;
 }) {
   const registry = props.registry ?? DEFAULT_THEME_REGISTRY;
-  const selection = props.selection ?? { mode: 'theme', themeId: 'kinu-dark' };
+  const selection = props.selection ?? { mode: 'theme', themeId: DEFAULT_DARK_TUI_THEME_ID };
   const appearance = props.terminalAppearance ?? detectTerminalAppearance();
   const capability = props.colorCapability ?? detectTerminalColorCapability();
   const active = useMemo(() => {

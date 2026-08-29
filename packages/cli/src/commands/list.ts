@@ -6,6 +6,16 @@ import { agentDbPath, listAgentDirs, listLegacyAgentNames, loadConfigFile, resol
 import { printAgentList } from '../display';
 import { getLocalAgentInfo } from '../local-inspection';
 
+/** The workspace database's size, or undefined when there is no file there.
+ *  Asked rather than caught: `throwIfNoEntry: false` makes absence a value, so
+ *  a listing does not need a handler that cannot tell a missing file from an
+ *  unreadable one. Anything else — a permission error, a broken mount — still
+ *  throws, because a row reporting "size unknown" for that would be a listing
+ *  that lies quietly. */
+function databaseSize(name: string): number | undefined {
+  return statSync(agentDbPath(name), { throwIfNoEntry: false })?.size;
+}
+
 export async function listCommand(): Promise<void> {
   // This project's agents, then the ones no project claims yet, so listing
   // stays machine-wide while grouping stays honest about placement.
@@ -30,14 +40,14 @@ export async function listCommand(): Promise<void> {
     }
 
     const name = agent.localName ?? agent.name;
-    if (agent.label.startsWith('(unreadable:')) {
+    if (agent.readError !== undefined) {
       return {
         name,
         mode: agent.mode,
         purpose: agent.label,
         scaffoldVersion: 0,
         toolCount: 0,
-        dbSize: statSync(agentDbPath(name)).size,
+        dbSize: databaseSize(name),
       };
     }
     try {
@@ -51,7 +61,7 @@ export async function listCommand(): Promise<void> {
         purpose: info.purpose,
         scaffoldVersion: info.scaffoldVersion,
         toolCount: info.craftedToolCount,
-        dbSize: statSync(agentDbPath(name)).size,
+        dbSize: databaseSize(name),
       };
     } catch (caught) {
       // Handled, and said so: one unopenable workspace must not hide the other

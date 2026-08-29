@@ -30,7 +30,7 @@ import {
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { openWorkspaceCLI } from '../src/open';
-import type { SessionEvent } from '../src/local-session';
+import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
 import { leaseHolder } from './driver-lease-probe';
 
@@ -1398,6 +1398,38 @@ describe('LocalAgentHost — the driver lease', () => {
       db.close();
     }
   }
+
+  test('a failed first open releases and forgets its lease before a retry', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const { host } = makeHost(state, streamingModel('ack'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+    const flush = LocalAgentSession.prototype.flushPendingDrains;
+    let refuseFirst = true;
+    LocalAgentSession.prototype.flushPendingDrains = async function flushOnce() {
+      if (refuseFirst) {
+        refuseFirst = false;
+        throw new Error('injected first-open drain failure');
+      }
+      return flush.call(this);
+    };
+    try {
+      await expect(host.acquire('root')).rejects.toThrow('injected first-open drain failure');
+      // The failed entry acquired an interactive hold before recovery. It no
+      // longer exists, so nothing owns its conversation.
+      expect(holderAt(dbPath)).toBeNull();
+
+      // The same host retries against a fresh Database. Before the fix it
+      // reused the memoized hold over the handle the failed open closed and
+      // threw `Database has closed` here.
+      expect(await host.acquire('root')).toBeInstanceOf(LocalAgentSession);
+      expect(holderAt(dbPath)?.kind).toBe('interactive');
+    } finally {
+      LocalAgentSession.prototype.flushPendingDrains = flush;
+      await host.close();
+    }
+  });
 
   test('a daemon hands the lease back at the end of every pass, so nothing has to preempt it', async () => {
     const { state, project } = makeRoots();

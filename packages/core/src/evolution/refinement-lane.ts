@@ -36,8 +36,9 @@
 import * as v from 'valibot';
 
 import { proposeMeasuredPromptSection } from './control';
+import { buildOutcomeEvalSplit } from './eval-split';
 import {
-  buildOutcomeEvalSplit, describeSplitDegeneracy, listTurnOutcomes, type TurnOutcomeRow,
+  describeSplitDegeneracy, listTurnOutcomes, type TurnOutcomeRow,
 } from './outcomes';
 import {
   REFINEMENT_EDIT_KINDS, RefinementProposalSchema, createRefinementStore, evolutionDebt,
