@@ -29,7 +29,7 @@
  */
 
 import * as v from "valibot";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 
 /* ── timeout classification ─────────────────────────────────────────────────── */
 
@@ -209,6 +209,26 @@ let pageBuild: Promise<string | null> | null = null;
 export function pageDeployedBuildSha(): Promise<string | null> {
   pageBuild ??= fetchDeployedBuildSha();
   return pageBuild;
+}
+
+/**
+ * Prime the baseline the way {@link pageDeployedBuildSha}'s eager callers do,
+ * without letting a rejection die in a `void`.
+ *
+ * The read itself already folds every tolerable transport failure into
+ * "no signal" ({@link fetchDeployedBuildSha}); what can still reject is a
+ * non-transport defect — the memoised promise is shared, so the one
+ * rejection would otherwise surface as an unhandled rejection on every
+ * page that primed eagerly and again at whichever reader awaited it. Those
+ * are named on the shared diagnostics sink: there is no UI state to attach
+ * them to, and the two consumers re-read through the same memo.
+ */
+export function primePageDeployedBuildSha(): void {
+  pageDeployedBuildSha().catch((cause) => {
+    diagnostics.event('session_recovery.build_baseline_failed', {
+      reason: renderThrownChain({ cause }),
+    });
+  });
 }
 
 /** Skew needs BOTH ends identified: without a baseline (the health read failed

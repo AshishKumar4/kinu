@@ -2084,7 +2084,13 @@ export class OrchestratorAgent extends ActorAgent {
     // synchronous inside the init gate (it is one indexed UPDATE), the resume
     // sends mail and therefore cannot be, and the invariant must not depend on
     // which of the two happens to run first.
-    void this.reconcileEventDeliveries();
+    void this.reconcileEventDeliveries().catch((err) => {
+      diagnostics.failure('event.delivery_reconcile_failed', toKinuError({
+        doing: 'reconciling the event deliveries a dead activation left open',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
+    });
 
     try {
       const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;

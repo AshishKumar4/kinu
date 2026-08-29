@@ -820,7 +820,12 @@ export class CloudAgentClient implements AgentClient {
       dropped = true;
       if (this.ws === ws) this.ws = null;
       this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
-      void this.rebindInFlightTurns();
+      void this.rebindInFlightTurns().catch((cause) => {
+        this.failInFlight(new Error(
+          `Could not reconnect to resume this cloud turn: ${renderThrownChain({ cause })}`,
+          { cause },
+        ));
+      });
     };
     ws.addEventListener('close', onDrop);
     ws.addEventListener('error', onDrop);
@@ -978,14 +983,7 @@ export class CloudAgentClient implements AgentClient {
       turn.awaitingRebind = true;
       turn.resumeAcked = false;
     }
-    try {
-      await this.ensureOpen();
-    } catch (err) {
-      this.failInFlight(new Error(
-        `Could not reconnect to resume this cloud turn: ${renderThrownChain({ cause: err })}`,
-      ));
-      return;
-    }
+    await this.ensureOpen();
     this.requestStreamResume();
   }
 

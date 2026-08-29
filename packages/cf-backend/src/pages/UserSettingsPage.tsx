@@ -514,7 +514,13 @@ function DeviceRow({
           <button type="button" disabled={acknowledging}
             onClick={() => {
               setAcknowledging(true);
-              void onAcknowledge().finally(() => setAcknowledging(false));
+              void onAcknowledge().finally(() => setAcknowledging(false)).catch((cause) => {
+                // `onAcknowledge` reports its own failures into this row's
+                // `onError`; a rejection here is one that escaped that path —
+                // the request dying while `.finally` was still chained — and
+                // the row must not look acknowledged anyway.
+                onError(`Could not acknowledge the command warning: ${renderThrownChain({ cause })}`);
+              });
             }}
             className="p-btn-quiet shrink-0 px-2 py-1 disabled:opacity-50">
             {acknowledging ? "Acknowledging…" : "Acknowledge"}

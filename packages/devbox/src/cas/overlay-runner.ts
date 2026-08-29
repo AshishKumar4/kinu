@@ -22,6 +22,7 @@ import { pipeline } from 'node:stream/promises';
 import { dirname, join, relative, sep } from 'node:path';
 
 import { BeneathError, BeneathRoot } from '../native-openat2';
+import { describeThrown } from '../lifecycle';
 
 import {
   CAS_FORMAT_VERSION,
@@ -70,7 +71,9 @@ async function readScanCache(store: CasStore): Promise<ReadonlyMap<string, Upper
     raw = JSON.parse(new TextDecoder().decode(bytes));
   } catch (error) {
     // Recorded on stderr, never stdout: stdout carries the receipt.
-    console.error(`[overlay-cas-runner] scan cache is not JSON and was ignored: ${String(error)}`);
+    console.error(
+      `[overlay-cas-runner] scan cache is not JSON and was ignored: ${describeThrown({ cause: error })}`,
+    );
     return new Map();
   }
   const parsed = v.safeParse(ScanCacheSchema, raw);
@@ -160,11 +163,9 @@ async function* webStreamChunks(stream: ReadableStream<Uint8Array>): AsyncGenera
         await reader.cancel();
       } catch (cause) {
         // RECORDED, NOT RETHROWN. The caller's error is the answer, so this one
-        // must not replace it — but it is the only evidence that a producer was
-        // left holding a stream, so it is written down rather than dropped.
         console.error(
           '[devbox] a reader this consumer walked away from did not cancel: '
-          + (cause instanceof Error ? cause.message : String(cause)),
+          + describeThrown({ cause }),
         );
       }
     }
@@ -243,7 +244,7 @@ export class FileCasStore implements CasStore {
         // about it is the worst outcome.
         console.error(
           `[devbox] a failed put left ${temporary} behind: `
-          + (cause instanceof Error ? cause.message : String(cause)),
+          + describeThrown({ cause }),
         );
       }
       throw error;

@@ -116,7 +116,7 @@ import { CLIENT_ERROR_ENDPOINT } from "@/client-error/contract";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { APP_ROUTES } from "@/app-routes";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
-import { pageDeployedBuildSha } from "@/hooks/session-recovery";
+import { primePageDeployedBuildSha } from "@/hooks/session-recovery";
 import { MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
@@ -5081,7 +5081,7 @@ async function mount() {
   // gallery routes through a MemoryRouter that leaves the URL at `/`. A
   // replaceState is a no-op on the network and makes the two agree.
   else if (frame === "errorboundary") {
-    void pageDeployedBuildSha();
+    primePageDeployedBuildSha();
     history.replaceState(null, "", `/workspace/checkout-fixes${location.search}`);
     entries = ["/workspace/checkout-fixes"];
     node = (
@@ -5103,7 +5103,7 @@ async function mount() {
   // fallback, and the gate would be measuring the app instead of the fixture.
   // Nothing here reads the path, so there is nothing to gain by moving it.
   else if (frame === "lazyroute") {
-    void pageDeployedBuildSha();
+    primePageDeployedBuildSha();
     entries = ["/workspace/checkout-fixes"];
     node = (
       <Routes>

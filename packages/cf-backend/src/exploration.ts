@@ -698,7 +698,16 @@ export class ExplorationAgent extends Agent<Env> {
             reason: renderThrownChain({ cause }),
           });
         }
-      })();
+      })().catch((cause) => {
+        // The only statement this body runs outside the try is the IIFE's own
+        // exit, so a rejection here means the handler itself threw. Recorded at
+        // lane level: a broken sink must not masquerade as a dropped frame.
+        diagnostics.failure('head.stream_sink_failed', toKinuError({
+          doing: 'reporting that a head stream frame was dropped',
+          cause,
+          otherwise: 'unavailable',
+        }), { headId });
+      });
     };
   }
 

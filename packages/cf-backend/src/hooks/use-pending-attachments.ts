@@ -19,6 +19,7 @@
 import { useCallback, useMemo, useReducer } from "react";
 import { convertFileListToFileUIParts, type FileUIPart } from "ai";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
+import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 
 /** What one offer landed: the list as it now stands, and what did not fit. */
 export interface AttachmentAdmission {
@@ -122,6 +123,14 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
     for (const file of convertible) transfer.items.add(file);
     void convertFileListToFileUIParts(transfer.files).then((parts) => {
       dispatch({ kind: "offer", parts, oversized });
+    }).catch((cause) => {
+      // A file the browser cannot read is an offer that never lands, not an
+      // empty one: recording it keeps the drop from looking accepted while no
+      // part ever appears.
+      diagnostics.event('attachments.conversion_failed', {
+        names: convertible.map((file) => file.name).join(', '),
+        reason: renderThrownChain({ cause }),
+      });
     });
   }, [limitBytes]);
 

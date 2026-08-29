@@ -1008,10 +1008,11 @@ export function createCheckpointLane(): CheckpointLane {
           console.error(`[devbox] ${kind} checkpoint rejected: ${describeThrown({ cause })}`);
         },
       );
-      tail = settled;
-      void settled.then(() => {
+      const cleaned = settled.then(() => {
         if (inFlight[kind] === run) inFlight[kind] = undefined;
       });
+      // The next lane entry observes cleanup too; no detached promise remains.
+      tail = cleaned;
       return run;
     },
   };

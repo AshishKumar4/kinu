@@ -482,23 +482,18 @@ export function buildProgram(): Command {
  *  generic so each command keeps Commander's own arity and parameter checking;
  *  widening it to `any[]` silently accepted a handler with the wrong signature.
  *
- *  The failure is caught by a `catch` BINDING rather than a `.catch` callback
- *  parameter. Both give `printFailure` an `unknown` — `strict` implies
- *  `useUnknownInCatchVariables` — but only the binding gets there without
- *  declaring `unknown` as a parameter type, which is what the callback form
- *  had to do and what KINU-069's gate refuses. Nothing is cast or suppressed.
- *  The IIFE is `void`ed because Commander's action handler returns nothing: a
- *  returned promise would be a floating one at every call site instead of one
- *  here. */
+ * Commander's action handler returns nothing, so the IIFE is voided only after
+ * its rejection handler attaches. That preserves the existing boundary: an
+ * action that throws before returning a promise becomes a reported rejection
+ * rather than escaping through Commander.
+ */
 function wrapAction<Args extends readonly unknown[]>(fn: (...args: Args) => Promise<void>) {
   return (...args: Args) => {
     void (async () => {
-      try {
-        await fn(...args);
-      } catch (error) {
-        printFailure({ cause: error });
-        process.exit(1);
-      }
-    })();
+      await fn(...args);
+    })().catch((error) => {
+      printFailure({ cause: error });
+      process.exit(1);
+    });
   };
 }

@@ -778,6 +778,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // The schedule callback owns admission. Starting from a caller let the
       // caller cross the readiness gate before the callback attached storage.
       this.#invalidateGeneration();
+      let admissionRefusal: string | null = null;
       try {
         await this.start(undefined, {
           portToCheck: this.defaultPort,
@@ -791,11 +792,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // attempt to ask the platform again; no recovery ladder applies to an
         // identity that was never admitted.
         const failure = classifyRecovery({ cause: error });
-        const reason = `[${failure} → retry] ${describe({ cause: error })}`;
-        await this.#record('attach', reason);
+        admissionRefusal = `[${failure} → retry] ${describe({ cause: error })}`;
+        await this.#record('attach', admissionRefusal);
         await this.#arm(STARTUP_CALLBACK, this.policy.heartbeatSeconds);
-        return;
       }
+      // THE ADMITTED-NOTHING EXIT, keyed on the named outcome the catch
+      // classified: the container was never admitted, so there is no
+      // restoration to report and no ladder to climb — the incident record and
+      // the successor row are the whole answer, and every later caller
+      // re-enters through `ensureReady()` → this callback.
+      if (admissionRefusal !== null) return;
     }
     const generation = this.#generation;
     if (this.#restoration.phase === 'attached') return;

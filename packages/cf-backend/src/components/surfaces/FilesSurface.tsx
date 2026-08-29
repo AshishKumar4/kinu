@@ -492,7 +492,12 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
             revision={previewRevision}
             rawHref={rawUrl(preview, false)}
             downloadHref={rawUrl(preview, true)}
-            onSaved={() => { void reloadListing(); }}
+            // `reload` is the hook's sync runner: no promise comes back,
+            // because a failed re-read is settled into the resource's error
+            // tri-state — the banner this pane renders — rather than rejected
+            // to its caller. So there is nothing here to chain a handler onto
+            // and nothing a bare call can drop.
+            onSaved={() => { reloadListing(); }}
             onClose={() => setPreview(null)}
           />
         )}

@@ -52,8 +52,14 @@ export function raceAbort<T>(
 			aborting = true;
 			if (!terminate) { reject(abortError(message)); return; }
 			terminate().then(
-				(text) => reject(abortError(text)),
-				(err) => reject(abortError(`${message} — stopping the work failed: ${String(err)}`)),
+				(text) => {
+					reject(abortError(text));
+				},
+				(err) => {
+					const failure = new Error(`${message} — stopping the work failed`, { cause: err });
+					failure.name = "AbortError";
+					reject(failure);
+				},
 			);
 		};
 		signal.addEventListener("abort", onAbort, { once: true });

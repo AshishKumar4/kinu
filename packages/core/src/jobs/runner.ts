@@ -388,10 +388,11 @@ export class BackgroundJobRunner {
     // and the drain closes the transferred set in the same tick so no id falls
     // between the two (./device-ownership).
     const requestIds = ownership?.drain(jobId) ?? [];
+    let transferred = false;
     try {
       await this.deps.onDetached?.(jobId, requestIds);
       this.detach(jobId, kind, promise);
-      return true;
+      transferred = true;
     } catch (err) {
       // The job this named is about to be failed, so it must stop being the
       // owner a later request would be inserted under.
@@ -409,15 +410,16 @@ export class BackgroundJobRunner {
       // The live promise no longer has a fiber consuming it. Observe the abort
       // rejection so a handoff failure cannot create an unhandled rejection.
       void promise.catch((reason) => {
-        if (reason === err) return;
-        diagnostics.failure('jobs.detach_transfer_work_rejected', toKinuError({
-          doing: 'observe work after its external-work transfer failed',
-          cause: reason,
-          otherwise: 'unavailable',
-        }), { jobId });
+        if (reason !== err) {
+          diagnostics.failure('jobs.detach_transfer_work_rejected', toKinuError({
+            doing: 'observe work after its external-work transfer failed',
+            cause: reason,
+            otherwise: 'unavailable',
+          }), { jobId });
+        }
       });
-      return false;
     }
+    return transferred;
   }
 
   /** Keep a backgrounded promise alive in a durable fiber; on settle, record the

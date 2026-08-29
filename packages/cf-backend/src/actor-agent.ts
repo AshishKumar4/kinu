@@ -2605,7 +2605,11 @@ export abstract class ActorAgent extends Think<Env> {
         });
         diagnostics.failure('advisor.snapshot_failed', failure, { turnId: turn.turnId ?? '(none)' });
         checkpointed.reject(failure);
-        return;
+        // The caller owes a resumable review, not a finished one: a body that
+        // returned here would let the fiber retire as complete with no
+        // checkpoint on disk, so the same rejection the owed row already sees
+        // must reach the lane catch below, which records it as lane work.
+        throw failure;
       }
       // Adjacent to the stash: from this instant the lane is recoverable on its
       // own, which is exactly when a second one becomes a duplicate.
@@ -4991,16 +4995,16 @@ export abstract class ActorAgent extends Think<Env> {
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
       return tools;
     } catch (err) {
-      diagnostics.failure('mcp.surface_fetch_failed', toKinuError({
-        doing: 'fetching the user MCP tool descriptors from UserDO',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { userId });
+      // An unreadable catalog is not the same thing as an unconfigured one, and
+      // the only caller draws that line: `prepareTurn` catches this rethrow,
+      // records `mcp.tool_surface_failed` and proceeds on builtins alone. The
+      // failure travels WHOLE; the surface state here records what this turn
+      // will actually advertise — none of it, by name.
       this._mcpUnavailable = [{
         source: 'MCP catalog',
         reason: 'The descriptor read failed. No MCP tool is available for this turn.',
       }];
-      return {};
+      throw err;
     }
   }
 

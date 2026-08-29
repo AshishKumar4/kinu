@@ -21,6 +21,7 @@
 
 import { Component, type ReactNode, type ErrorInfo } from "react";
 import { reportRenderFailure } from "@/client-error/report";
+import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 
 interface Props {
   /** Human-readable label for the failing region — surfaced in the fallback. */
@@ -61,8 +62,15 @@ export class ErrorBoundary extends Component<Props, State> {
     // boundary's state before calling here — so a report that never lands
     // changes nothing the reader sees, and `reportRenderFailure` tolerates every
     // transport failure by name rather than raising a second error on a page
-    // that already has one.
-    void reportRenderFailure(error, info.componentStack ?? "");
+    void reportRenderFailure(error, info.componentStack ?? "").catch((cause) => {
+      // The only rejection left is a defect in the reporter itself (its fetch
+      // catch rethrows non-transport failures on purpose). Swallowing it here
+      // would be a silent drop inside the one handler whose job is to report,
+      // so it is recorded rather than raised onto a page that already has one.
+      diagnostics.event('client_error.reporter_failed', {
+        reason: renderThrownChain({ cause }),
+      });
+    });
   }
 
   reset = () => this.setState({ error: null });

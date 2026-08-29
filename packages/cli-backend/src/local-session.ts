@@ -3769,9 +3769,9 @@ export class LocalAgentSession implements BackendHost {
    * steady state, so every later turn would otherwise pay for a model round
    * trip just to be told there is nothing to do.
    *
-   * Never throws: the deterministic title has already landed by the time the
-   * model is asked to improve on it, so a failed suggestion leaves a named
-   * workspace and the owed row is finished either way.
+   * An Error from the optional suggestion is best-effort: the deterministic
+   * title already landed by then, so recording it leaves a named workspace and
+   * completes the owed row. A non-Error is not that named failure class.
    */
   private async applyAutoTitle(mission: string): Promise<void> {
     const state: WorkspaceTitleState = {
@@ -3790,16 +3790,14 @@ export class LocalAgentSession implements BackendHost {
         this.broadcast({ type: 'workspace_renamed', displayName: name });
         return true;
       },
-      // Only the SUGGESTION is absorbed. The deterministic title has already
-      // landed by the time the model is asked to improve on it, so a failed
-      // round trip leaves a named workspace and the row is finished either way.
-      // A failed PERSIST is the opposite fact — the workspace is still unnamed —
-      // and it travels out of here to the owed row, which is safe to replay
-      // because a title that DID land makes the plan a no-op.
+      // Only the suggestion is absorbed. The model SDK reports a failed call as
+      // an Error; anything else is outside this best-effort class and travels
+      // to the owed row instead of pretending to be "no usable title".
       suggest: async (text) => {
         try {
           return await this.suggestTitle(text);
         } catch (cause) {
+          if (!(cause instanceof Error)) throw cause;
           diagnostics.failure('agent.auto_title_suggestion_failed', toKinuError({
             doing: 'deriving a title from the mission', cause, otherwise: 'unavailable',
           }));
@@ -3822,9 +3820,9 @@ export class LocalAgentSession implements BackendHost {
     const profile = this.turnProfile ?? await this.profiles().resolvePreTurn();
     const resolution = resolveModelRoute('fast', profile);
     if (!resolution) return null;
-    // The prompt pair and the parse are core's; the only local part is which
-    // model answers. Not caught here — a failed title is non-fatal, and
-    // `applyAutoTitle` is where that policy is stated.
+    // The prompt pair and parse are core's; only the model is local. This does
+    // not catch: `applyAutoTitle` names and records the one best-effort Error
+    // class after the deterministic title has landed.
     return suggestWorkspaceTitle(
       (system, prompt) => this.localRouteLlm(resolution, system).complete(prompt),
       mission,
@@ -3872,7 +3870,7 @@ export class LocalAgentSession implements BackendHost {
           turnId: recorded.turn.turnId ?? '(none)',
         });
         checkpointed.reject(failure);
-        return;
+        throw failure;
       }
       if (laneKey !== null) recordEffectDone(this.rt.storage.sql, ADVISOR_LANE_SCOPE, laneKey);
       checkpointed.resolve();

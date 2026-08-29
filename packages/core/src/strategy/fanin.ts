@@ -389,6 +389,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
         return '';
       }
       const id = nanoid();
+      let expanded = false;
       try {
         vertices.push(await deps.expandChild({
           parent: primary,
@@ -410,6 +411,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
           ancestors: deps.ancestorPath(primary),
           prefix: deps.sharedPrefix ? await deps.sharedPrefix(primary) : [],
         }));
+        expanded = true;
       } catch (error) {
         // Named and counted exactly as a lost wave sibling is, so the report's `stop` can
         // still say the search ran narrower than it was configured to.
@@ -418,8 +420,8 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
           error: renderThrownChain({ cause: error }),
         });
         deps.countLost();
-        return '';
       }
+      if (!expanded) return '';
       // THE DAG'S EDGES, IN THE RECORD. `search_nodes` holds the selection edge and only
       // that, so this event is where the other k−1 are written down.
       log.event('swarm.aggregate_vertex', {

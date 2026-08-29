@@ -11,6 +11,7 @@ import {
 } from '../durability/contracts';
 import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR } from '../storage';
 import type { AttachOutcome, CheckpointKind, CheckpointOutcome, DevboxStorage } from '../storage';
+import { describeThrown } from '../lifecycle';
 
 export type CandidateContainerFormat = 'bounded-layers' | 'merkle-pack';
 
@@ -94,7 +95,7 @@ async function retireRunnerAttempt(
   } catch (cause) {
     console.error(
       `[devbox] terminal candidate runner ${processId} could not be cleared: `
-      + (cause instanceof Error ? cause.message : String(cause)),
+      + describeThrown({ cause }),
     );
   }
 }
@@ -358,7 +359,7 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
             } catch (cause) {
               console.error(
                 `[devbox] terminal candidate runner could not be redriven: `
-                + (cause instanceof Error ? cause.message : String(cause)),
+                + describeThrown({ cause }),
               );
             } finally {
               await retireRunnerAttempt(ports, paths.processId, paths.resultPath);
@@ -397,13 +398,13 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
           };
         }
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = describeThrown({ cause: error });
         try {
           await ports.recordFailure(reason);
         } catch (cause) {
           console.error(
             `[devbox] the failure of "${reason}" could not be recorded durably: `
-            + (cause instanceof Error ? cause.message : String(cause)),
+            + describeThrown({ cause }),
           );
         }
         return { kind: 'failed', reason, bytes: undefined, movedBytes: undefined };

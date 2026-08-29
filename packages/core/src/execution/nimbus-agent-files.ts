@@ -375,18 +375,23 @@ export function agentSessionFiles(
       return (await run({ op: 'list', path: workspacePath(path) }, 'read directory', path)).names ?? [];
     },
     async stat(path) {
+      let result: VfsEntryStat | null = null;
       try {
         const answer = await ask({ op: 'stat', path: workspacePath(path) });
-        const result: VfsEntryStat = {
+        result = {
           size: answer.size ?? 0,
           mtimeMs: answer.mtimeMs ?? 0,
           isDir: answer.dir === true,
         };
-        return result;
       } catch (cause) {
-        if (cause instanceof AgentFsRefusal && cause.code === 'ENOENT') return null;
-        return raise({ cause, doing: 'stat', path });
+        if (!(cause instanceof AgentFsRefusal && cause.code === 'ENOENT')) {
+          return raise({ cause, doing: 'stat', path });
+        }
+        // ENOENT is the VFS stat contract's one absence value; every other
+        // refusal retains its class and cause through `raise`.
+        result = null;
       }
+      return result;
     },
     async unlink(path) {
       await run({ op: 'unlink', path: workspacePath(path) }, 'unlink', path);
