@@ -174,31 +174,29 @@ export function autoTitleLocalWorkspace(
   const config = createAgentConfigStore(rt.storage.sql);
   if (source.trigger === 'legacy-heal' && config.getDisplayName() === '') return;
   void (async () => {
-    try {
-      await applyWorkspaceTitle({
-        slug: name,
-        displayName: config.getDisplayName(),
-        nameOrigin: config.getNameOrigin(),
-        mission: source.mission,
-      }, {
-        persist: (title) => {
-          if (config.getNameOrigin() === 'user') return false;
-          config.setDisplayNameOrigin(title, 'auto');
-          return true;
-        },
-        suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
-      });
-    } catch (error) {
-      // The naming model refusing, or the database refusing the write:
-      // `applyWorkspaceTitle` absorbs neither, and the deterministic title
-      // has landed by the time either can happen.
-      diagnostics.failure(
-        'workspace.title_save_failed',
-        toKinuError({ doing: 'saving the workspace title', cause: error, otherwise: 'io' }),
-        { workspace: name },
-      );
-    }
-  })();
+    await applyWorkspaceTitle({
+      slug: name,
+      displayName: config.getDisplayName(),
+      nameOrigin: config.getNameOrigin(),
+      mission: source.mission,
+    }, {
+      persist: (title) => {
+        if (config.getNameOrigin() === 'user') return false;
+        config.setDisplayNameOrigin(title, 'auto');
+        return true;
+      },
+      suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
+    });
+  })().catch((error: unknown) => {
+    // The naming model refusing, or the database refusing the write:
+    // `applyWorkspaceTitle` absorbs neither, and the deterministic title
+    // has landed by the time either can happen.
+    diagnostics.failure(
+      'workspace.title_save_failed',
+      toKinuError({ doing: 'saving the workspace title', cause: error, otherwise: 'io' }),
+      { workspace: name },
+    );
+  });
 }
 
 export interface LocalAgentClientDeps {

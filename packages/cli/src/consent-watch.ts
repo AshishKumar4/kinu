@@ -17,7 +17,7 @@ import type {
   PendingDeviceConsent,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 const CONSENT_POLL_MS = 750;
 
@@ -94,8 +94,20 @@ export function watchDeviceConsents(
     }
   };
 
-  const interval = setInterval(() => { void tick(); }, opts.pollMs ?? CONSENT_POLL_MS);
-  void tick();
+  const runTick = () => {
+    void tick().catch((error: unknown) => {
+      diagnostics.failure(
+        'consent.poll_failed',
+        toKinuError({
+          doing: 'polling pending device consents',
+          cause: error,
+          otherwise: 'io',
+        }),
+      );
+    });
+  };
+  const interval = setInterval(runTick, opts.pollMs ?? CONSENT_POLL_MS);
+  runTick();
   return {
     stop() {
       abort.abort();

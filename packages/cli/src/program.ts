@@ -491,7 +491,7 @@ function wrapAction<Args extends readonly unknown[]>(fn: (...args: Args) => Prom
   return (...args: Args) => {
     void (async () => {
       await fn(...args);
-    })().catch((error) => {
+    })().catch((error: unknown) => {
       printFailure({ cause: error });
       process.exit(1);
     });

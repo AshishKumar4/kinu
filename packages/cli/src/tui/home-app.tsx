@@ -164,7 +164,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         // Saying nothing would read as "you have no such cloud workspace".
         setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (cancelled) return;
         // A list that could not be refreshed must not read as the list itself.
         setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: err })}`);
@@ -211,7 +211,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         setModelPicker(null);
         setError(null);
       })
-      .catch((error) => setError(renderThrownChain({ cause: error })));
+      .catch((error: unknown) => setError(renderThrownChain({ cause: error })));
   }, []);
 
   const selectReasoningEffort = useCallback((effort: ReasoningEffort) => {
@@ -220,7 +220,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         setReasoningEffortState(effort);
         setError(null);
       })
-      .catch((error) => setError(renderThrownChain({ cause: error })));
+      .catch((error: unknown) => setError(renderThrownChain({ cause: error })));
   }, []);
 
   const moveReasoningEffort = useCallback((delta: number) => {
@@ -289,7 +289,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }
     if (actionId === 'model.open') {
       key.preventDefault();
-      void openModelPicker();
+      void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
       return;
     }
     if (actionId === 'home.exit') {
@@ -307,14 +307,14 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     if (direction !== 0) {
       key.preventDefault();
       if (focusArea === 'mode') setMode((current) => current === 'cloud' ? 'local' : 'cloud');
-      else if (focusArea === 'model') void openModelPicker();
+      else if (focusArea === 'model') void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
       else moveReasoningEffort(direction);
       return;
     }
     if (actionId !== 'home.activate') return;
     key.preventDefault();
     if (focusArea === 'mode') setMode((current) => current === 'cloud' ? 'local' : 'cloud');
-    else if (focusArea === 'model') void openModelPicker();
+    else if (focusArea === 'model') void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
     else if (focusArea === 'effort') moveReasoningEffort(1);
   });
 
@@ -424,7 +424,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
                 ...openTuiKeyBindings(keybindings, 'editor.newline'),
               ]}
               onContentChange={() => setDraft(textareaRef.current?.plainText ?? '')}
-              onSubmit={() => { void submit(); }}
+              onSubmit={() => {
+                void submit().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
+              }}
             />
           </box>
         )}
@@ -483,7 +485,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               }}
               onMouseDown={(event) => {
                 event.stopPropagation();
-                void openModelPicker();
+                void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
               }}
             >
               <text>

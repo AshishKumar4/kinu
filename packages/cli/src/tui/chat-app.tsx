@@ -430,7 +430,7 @@ function ChatScene({
         const previous = client;
         setClient(result.client);
         onClientChange?.(result.client);
-        void previous.close().catch((closeError) => {
+        void previous.close().catch((closeError: unknown) => {
           const reason = renderThrownChain({ cause: closeError });
           addMessage({ role: 'system', content: `The pre-fork session did not close cleanly: ${reason}` });
         });
@@ -529,7 +529,7 @@ function ChatScene({
       setClient(candidate);
       onClientChange?.(candidate);
       candidate = null;
-      void previous.close().catch((error) => {
+      void previous.close().catch((error: unknown) => {
         addMessage({
           role: 'system',
           content: errorLine(`The previous workspace did not close cleanly: ${renderThrownChain({ cause: error })}`),
@@ -592,7 +592,7 @@ function ChatScene({
     let cancelled = false;
     loadHubData(client, client.agentName)
       .then((fresh) => { if (!cancelled) setHub({ identity, data: fresh }); })
-      .catch((error) => {
+      .catch((error: unknown) => {
         diagnostics.failure(
           'tui.hub_refresh_failed',
           toKinuError({ doing: 'refreshing the agent hub', cause: error, otherwise: 'unavailable' }),
@@ -816,10 +816,10 @@ function ChatScene({
           addMessage({ role: 'system', content: effect.text });
           break;
         case 'send-queued':
-          void sendPrompt(effect.text);
+          void sendPrompt(effect.text).catch((error: unknown) => addError({ cause: error }));
           break;
         case 'send-branch':
-          void performBranch(effect.text);
+          void performBranch(effect.text).catch((error: unknown) => addError({ cause: error }));
           break;
       }
     }
@@ -960,7 +960,7 @@ function ChatScene({
             if (hintedTakesRef.current === set.id) return;
             hintedTakesRef.current = set.id;
             addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
-          }).catch((takesError) => {
+          }).catch((takesError: unknown) => {
             if (clientGenerationRef.current === generation) {
               addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
             } else {
@@ -1056,7 +1056,9 @@ function ChatScene({
         );
       }
     };
-    void connect();
+    void connect().catch((error: unknown) => {
+      addError({ cause: error });
+    });
     return () => {
       cancelled = true;
       unsubscribe();
@@ -1074,10 +1076,10 @@ function ChatScene({
         setStatus(next);
         setModelSpec((current) => current || (next.model ?? ''));
       })
-      .catch((error) => note(`Workspace status could not be read: ${renderThrownChain({ cause: error })}`));
+      .catch((error: unknown) => note(`Workspace status could not be read: ${renderThrownChain({ cause: error })}`));
     void client.listModels()
       .then((menu) => { if (!cancelled) setModelCatalog(menu.models); })
-      .catch((error) => note(`The model catalog could not be read: ${renderThrownChain({ cause: error })}`));
+      .catch((error: unknown) => note(`The model catalog could not be read: ${renderThrownChain({ cause: error })}`));
     return () => { cancelled = true; };
   }, [addMessage, client]);
 
@@ -1181,7 +1183,7 @@ function ChatScene({
         && activeSurface.view === 'agents' && onNewAgent !== undefined) {
         key.preventDefault();
         setActiveSurface(null);
-        void createNewAgent();
+        void createNewAgent().catch((error: unknown) => addError({ cause: error }));
         return;
       }
       if (actionId === 'modal.close') {
@@ -1221,7 +1223,7 @@ function ChatScene({
     }
     if (actionId === 'model.open') {
       key.preventDefault();
-      void openModelPicker();
+      void openModelPicker().catch((error: unknown) => addError({ cause: error }));
       return;
     }
     if (actionId === 'tier.cycle' || actionId === 'tier.cycle-reverse') {
@@ -1254,7 +1256,7 @@ function ChatScene({
       const next = efforts[(efforts.indexOf(current) + 1) % efforts.length]!;
       void profileMutations.setReasoningEffort(next)
         .then(() => setStatus((value) => value === null ? value : { ...value, reasoningEffort: next }))
-        .catch((cause) => addError({ cause }));
+        .catch((cause: unknown) => addError({ cause }));
       return;
     }
     if (actionId === 'conversation.branch') {
@@ -1292,7 +1294,7 @@ function ChatScene({
     const value = inputRef.current?.plainText ?? '';
     if (!value.trim()) return;
     setInputText('');
-    void handleSubmit(value);
+    void handleSubmit(value).catch((error: unknown) => addError({ cause: error }));
   }, [handleSubmit, setInputText]);
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
@@ -1342,7 +1344,9 @@ function ChatScene({
       navigationOverlayOpen={navigationOpen}
       onNavigationOverlayChange={setNavigationOpen}
       onNavigationFocusChange={handleNavigationFocusChange}
-      onAgentSelect={(agent) => { void switchWorkspace(agent); }}
+      onAgentSelect={(agent) => {
+        void switchWorkspace(agent).catch((error: unknown) => addError({ cause: error }));
+      }}
     >
     <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
       <StatusBar
@@ -1350,7 +1354,11 @@ function ChatScene({
         mode={client.mode}
         model={modelSpec}
         reasoningEffort={status?.reasoningEffort ?? 'medium'}
-        onModelSelect={() => { if (!overlayOpen) void openModelPicker(); }}
+        onModelSelect={() => {
+          if (!overlayOpen) {
+            void openModelPicker().catch((error: unknown) => addError({ cause: error }));
+          }
+        }}
         connected={ready}
         scaffoldVersion={status?.scaffoldVersion}
         toolCount={status?.toolCount}
@@ -1425,9 +1433,10 @@ function ChatScene({
           terminal={{ width, height }}
           onSelect={(setting) => {
             setActiveSurface(null);
-            if (setting.command === '/model') void openModelPicker();
-            else if (setting.command.endsWith(' ')) setInputText(setting.command);
-            else void handleSubmit(setting.command);
+            if (setting.command === '/model') {
+              void openModelPicker().catch((error: unknown) => addError({ cause: error }));
+            } else if (setting.command.endsWith(' ')) setInputText(setting.command);
+            else void handleSubmit(setting.command).catch((error: unknown) => addError({ cause: error }));
           }}
         />
       ) : hubView !== null && hubLive !== undefined ? (
@@ -1455,25 +1464,25 @@ function ChatScene({
           terminal={{ width, height }}
           loading={modelPicker.loading}
           error={modelPicker.error}
-          onSelect={(model) => { void selectModel(model); }}
+          onSelect={(model) => { void selectModel(model).catch((error: unknown) => addError({ cause: error })); }}
         />
       ) : changelogView ? (
         <ChangelogOverlay
           view={changelogView}
           terminal={{ width, height }}
-          onSelect={(entry) => { void revertChangelogEntry(entry); }}
+          onSelect={(entry) => { void revertChangelogEntry(entry).catch((error: unknown) => addError({ cause: error })); }}
         />
       ) : takesView ? (
         <TakesOverlay
           set={takesView}
           terminal={{ width, height }}
-          onSelect={(candidate) => { void pickTake(takesView, candidate); }}
+          onSelect={(candidate) => { void pickTake(takesView, candidate).catch((error: unknown) => addError({ cause: error })); }}
         />
       ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
         <WalkbackOverlay
           candidates={walkbackList}
           terminal={{ width, height }}
-          onSelect={(point) => { void performWalkback(point); }}
+          onSelect={(point) => { void performWalkback(point).catch((error: unknown) => addError({ cause: error })); }}
         />
       ) : (
         <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
@@ -1574,8 +1583,14 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     process.exit(0);
   };
 
-  globalExit = () => { void cleanup(); };
-  process.on('SIGINT', () => { void cleanup(); });
+  const exit = () => {
+    void cleanup().catch((error: unknown) => {
+      console.error(`\n  The TUI could not shut down cleanly: ${renderThrownChain({ cause: error })}`);
+      process.exit(1);
+    });
+  };
+  globalExit = exit;
+  process.on('SIGINT', exit);
 
   root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 
