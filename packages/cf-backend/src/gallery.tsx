@@ -2572,11 +2572,16 @@ function ChatHistoryFrame() {
 function HistoryAuthorityFrame() {
   const [hold] = useState(() => Promise.withResolvers<void>());
   const failFirst = useRef(true);
+  const requests = useRef(0);
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
     fetchPage: useCallback(async () => {
+      const request = ++requests.current;
       await hold.promise;
-      if (failFirst.current) {
+      // StrictMode can retire one held walk and start its replacement. Only
+      // the latest request consumes the planned failure; the stale request's
+      // result is ignored by the hook's generation fence.
+      if (request === requests.current && failFirst.current) {
         failFirst.current = false;
         throw new Error("fixture could not read the first history page");
       }

@@ -83,6 +83,10 @@ export function walkStart(
   return delivered ? "newest" : null;
 }
 
+interface PageLoadOperation {
+  promise: Promise<void> | null;
+}
+
 export function usePagedScroll<Item>({
   grows, fetchPage, startFrom,
 }: PagedScrollOptions<Item>): PagedScroll<Item> {
@@ -95,10 +99,11 @@ export function usePagedScroll<Item>({
   // one frame, and every one of them would read the same not-yet-committed
   // `false` and start its own duplicate request.
   const inFlight = useRef(false);
-  // The component owns its one active page task through settlement. Keeping the
-  // promise here makes the synchronous scroll/retry API an action trigger, not
-  // a detached async boundary; the in-flight latch still rejects overlap.
-  const loadTask = useRef<Promise<void> | null>(null);
+  // Every abandoned generation stays strongly owned until it settles. This
+  // matters under React StrictMode: effect cleanup retires the first walk while
+  // its request can still be pending, then the replay starts a new walk.
+  const nextTaskId = useRef(0);
+  const loadTasks = useRef(new Map<number, PageLoadOperation>());
   const cursor = useRef<SeekCursor | null>(null);
   // Which walk a reply belongs to. Only the current walk may publish, so a
   // page fetched before a reset can neither append to the new list nor move its
@@ -111,6 +116,7 @@ export function usePagedScroll<Item>({
   // the same generation invalidation for an explicitly abandoned walk.
   useEffect(() => () => {
     walk.current += 1;
+    inFlight.current = false;
   }, []);
 
   const loadMore = useCallback(() => {
@@ -120,8 +126,10 @@ export function usePagedScroll<Item>({
     const generation = walk.current;
     inFlight.current = true;
     setLoading(true);
-    let task: Promise<void> | null = null;
-    task = (async () => {
+    const taskId = ++nextTaskId.current;
+    const owner: PageLoadOperation = { promise: null };
+    loadTasks.current.set(taskId, owner);
+    owner.promise = (async () => {
       try {
         const page = await latest.current.fetchPage(from === "newest" ? undefined : from);
         if (generation !== walk.current) return;
@@ -133,14 +141,13 @@ export function usePagedScroll<Item>({
         if (generation !== walk.current) return;
         setError(describeError(err));
       } finally {
-        if (loadTask.current === task) loadTask.current = null;
+        if (loadTasks.current.get(taskId) === owner) loadTasks.current.delete(taskId);
         if (generation === walk.current) {
           inFlight.current = false;
           setLoading(false);
         }
       }
     })();
-    loadTask.current = task;
   }, [grows, exhausted]);
 
   const reset = useCallback(() => {

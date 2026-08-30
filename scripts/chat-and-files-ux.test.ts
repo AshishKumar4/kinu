@@ -1111,7 +1111,12 @@ describe('an empty transcript waits for the history store to speak', () => {
       expect((await page.content()).includes('Send the first message to start.')).toBe(false);
 
       await page.click('[data-history-release]');
-      await page.waitForSelector('aria/Retry');
+      try {
+        await page.waitForSelector('aria/Retry');
+      } catch (cause) {
+        const state = await page.$eval('[data-history-authority]', (root) => root.textContent ?? '');
+        throw new Error(`History authority never exposed Retry: ${state}`, { cause });
+      }
       expect(await page.$eval('[data-history-authority]', (root) => root.textContent ?? ''))
         .toContain('Could not load earlier messages.');
       expect((await page.content()).includes('Send the first message to start.')).toBe(false);
