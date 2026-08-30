@@ -130,7 +130,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
       if (!copyChord || event.type !== "keydown") return true;
       const selection = term.getSelection();
       if (!selection) return true;
-      navigator.clipboard.writeText(selection).catch((cause) => {
+      navigator.clipboard.writeText(selection).catch((cause: unknown) => {
         // The pane's failure line is the reader: the header advertises the
         // chord, so a refused clipboard write must not vanish.
         setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
@@ -165,22 +165,19 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   useEffect(() => {
     if (state !== "connected") return;
     const beat = setInterval(() => {
-      void fetch(
+      fetch(
         `/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive`
         + `?executor=${encodeURIComponent(executor)}`,
         { method: "POST", credentials: "same-origin" },
-      ).then(
-        // The parse happens here, at the boundary: a refused beat and a failed
-        // fetch both become a message, so the handler below takes one.
-        (response) => response.ok
-          ? null
-          : `the container refused the terminal's keepalive (${response.status})`,
-        describeError,
-      ).then((message) => {
+      ).then((response) => {
         // A missed beat costs at most one idle cycle of lease, so it is not
         // fatal — but it is shown rather than discarded, because the reason
         // (container gone, attach failed) arrives here before the socket says so.
-        if (message !== null) setFailure(message);
+        if (!response.ok) {
+          setFailure(`the container refused the terminal's keepalive (${response.status})`);
+        }
+      }).catch((cause: unknown) => {
+        setFailure(describeError(cause));
       });
     }, KEEPALIVE_MS);
     return () => clearInterval(beat);
@@ -211,8 +208,12 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
         <span>·</span>
         <span>{state === "connected" ? "interactive shell" : state}</span>
         {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        <button type="button" onClick={() => {
-          restart().catch((cause) => { setFailure(renderThrownChain({ cause })); });
+        <button type="button" onClick={async () => {
+          try {
+            await restart();
+          } catch (cause) {
+            setFailure(renderThrownChain({ cause }));
+          }
         }}
           className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"
           title="Destroy this shell and open a new one. The only way back from a shell that exited.">
@@ -294,16 +295,25 @@ function LineTerminal(
           // `describeError` IS the parse: the rejection becomes a message at
           // the boundary, and the handler below takes that message rather than
           // an unparsed value. `undefined` is the success arm.
-          void Promise.resolve(run(cmd)).then(() => undefined, describeError).then((message) => {
-            if (termRef.current !== term) return;
-            running.current = false;
-            if (message === undefined) return;
-            // A rejected exec produces no output row, so nothing else would
-            // ever clear the marker or reprint the prompt.
-            clearBusy(term, busy);
-            term.write(`\x1b[31m${message}\x1b[0m\r\n`);
-            promptLine(term);
-          });
+          Promise.resolve(run(cmd))
+            .then(() => undefined, describeError)
+            .then((message) => {
+              if (termRef.current !== term) return;
+              running.current = false;
+              if (message === undefined) return;
+              // A rejected exec produces no output row, so nothing else would
+              // ever clear the marker or reprint the prompt.
+              clearBusy(term, busy);
+              term.write(`\x1b[31m${message}\x1b[0m\r\n`);
+              promptLine(term);
+            })
+            .catch((cause: unknown) => {
+              if (termRef.current !== term) return;
+              running.current = false;
+              clearBusy(term, busy);
+              term.write(`\x1b[31m${describeError(cause)}\x1b[0m\r\n`);
+              promptLine(term);
+            });
         } else if (code === 0x7f || code === 0x08) {
           if (lineBuffer.current.length > 0) {
             lineBuffer.current = lineBuffer.current.slice(0, -1);

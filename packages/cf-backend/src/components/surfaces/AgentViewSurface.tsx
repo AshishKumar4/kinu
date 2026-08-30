@@ -300,14 +300,24 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
     }
   }, [rpc, slug, loadData]);
 
-  useEffect(() => { setLoading(true); void load(); }, [load]);
+  useEffect(() => {
+    setLoading(true);
+    load().catch((cause: unknown) => {
+      setError(renderThrownChain({ cause }));
+      setLoading(false);
+    });
+  }, [load]);
 
   useEffect(() => {
     const every = spec?.refreshMs;
     if (!every) return;
     const timer = setInterval(() => {
       const current = specRef.current;
-      if (current) void loadData(current);
+      if (current) {
+        loadData(current).catch((cause: unknown) => {
+          setError(renderThrownChain({ cause }));
+        });
+      }
     }, every);
     return () => clearInterval(timer);
   }, [spec?.refreshMs, loadData]);
@@ -339,7 +349,14 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
         )}
         <button
           type="button"
-          onClick={() => { void load(); }}
+          onClick={async () => {
+            try {
+              await load();
+            } catch (cause) {
+              setError(renderThrownChain({ cause }));
+              setLoading(false);
+            }
+          }}
           className="p-btn-ghost inline-flex items-center gap-1 px-2 py-1 text-xs cursor-pointer"
         >
           <ArrowClockwiseIcon size={12} />Refresh

@@ -142,7 +142,7 @@ export function SubordinateTabs({
                 setDismissError(null);
                 try {
                   await onDismiss(dismissTarget.name);
-                  if (dismissTarget.name === activeName) navigate(mainPath);
+                  if (dismissTarget.name === activeName) await navigate(mainPath);
                   setDismissTarget(null);
                 } catch (cause) {
                   setDismissError(renderThrownChain({ cause: cause }));

@@ -163,7 +163,7 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
   /** Row-operation runner: every rejection lands in the notice banner. */
   const run = useCallback((op: () => Promise<void>) => {
     setNotice(null);
-    void op().then(undefined, (error: Error) => setNotice(renderThrownChain({ cause: error })));
+    void op().then(undefined, (error: unknown) => setNotice(renderThrownChain({ cause: error })));
   }, []);
 
   const rawUrl = useCallback((full: string, download: boolean) =>

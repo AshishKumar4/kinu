@@ -27,6 +27,8 @@ import { flushSync } from 'react-dom';
 import { KinuLogo } from '@/components/ui/KinuLogo';
 import { MessageView } from '@/components/MessageView';
 
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+
 import {
   CURSOR_ENTER_AT, DEMO_ANNOTATION, DEMO_CUES, DEMO_END,
   captureFrames, cueCountAt, cursorAt, discreteAt,
@@ -210,7 +212,11 @@ export function BugFixDemo(): ReactElement {
   // The plan surface is its own chunk (marked, katex, dompurify); fetch it as
   // soon as the demo mounts so the plan beat never waits on the network.
   useEffect(() => {
-    void import('./BugFixPlanPanel');
+    import('./BugFixPlanPanel').catch((cause: unknown) => {
+      diagnostics.failure('landing.bugfix_plan_preload_failed', toKinuError({
+        doing: 'preload the bug-fix plan demo', cause, otherwise: 'io',
+      }));
+    });
   }, []);
 
   useEffect(() => {
