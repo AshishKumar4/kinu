@@ -1,7 +1,6 @@
-// The secret scan's own gate. Its failure mode was silent: the ignore file was
-// never read, so every "false positive" instruction in the error message was
-// wrong, and one pattern quietly skipped every test file. Both are properties
-// of the pure functions below, so both are now asserted.
+// The secret scan's own gate. Every source byte is governed: deliberate
+// secret-shaped fixtures assemble their values at runtime, and no suppression
+// file or test-path exemption exists.
 //
 // Every fixture is CONCATENATED rather than written out. This file is scanned
 // by the very patterns it exercises, so a literal fixture here would be a
@@ -9,19 +8,16 @@
 // file) are the two holes the rewrite exists to close. Splitting the literal
 // keeps the string identical at runtime and absent from the source.
 import { describe, test, expect } from 'bun:test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   MAX_HISTORY_BLOB_BYTES,
   PATTERNS,
   REMOVED_CREDENTIAL_BLOB,
   adjudicateHistory,
-  applyIgnores,
   enumerateHistoricalReachability,
-  parseIgnoreFile,
   scanHistory,
   scanText,
-  suppresses,
 } from './secret-scan';
 import { isTextSource, trackedFiles } from './sources';
 import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
@@ -30,7 +26,6 @@ const REPO_ROOT = join(import.meta.dir, '..');
 
 const AWS_KEY = `AKIA${'ABCDEFGHIJKLMNOP'}`;
 const OTHER_AWS_KEY = `AKIA${'ZZZZZZZZZZZZZZZZ'}`;
-const UNRELATED_AWS_KEY = `AKIA${'QQQQQQQQQQQQQQQQ'}`;
 const PRIVATE_KEY = `-----BEGIN RSA ${'PRIVATE KEY'}-----`;
 const BARE_PRIVATE_KEY = `-----BEGIN ${'PRIVATE KEY'}-----`;
 const JWT = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9${'.'}eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkoifQ.sig`;
@@ -119,59 +114,13 @@ describe('the patterns catch what they are for', () => {
   });
 });
 
-describe('parseIgnoreFile', () => {
-  test('reads path + literal, skipping blanks and comments', () => {
-    expect(parseIgnoreFile('# note\n\n  a/b.ts  SOME-LITERAL  \n')).toEqual([
-      { path: 'a/b.ts', literal: 'SOME-LITERAL', line: 3 },
-    ]);
-  });
 
-  test('keeps a literal that contains spaces', () => {
-    const literal = `password = ${'"actual-value"'}`;
-    expect(parseIgnoreFile(`a/b.ts ${literal}`)[0]!.literal).toBe(literal);
-  });
-
-  // The old format. It parsed as "ignore this file" and suppressed nothing.
-  test('refuses a bare path rather than accepting it as a no-op', () => {
-    expect(() => parseIgnoreFile('.env.example\n')).toThrow(/expected "<path> <literal>"/);
-  });
-});
-
-describe('suppression is exact', () => {
-  const entry = { path: 'a/b.ts', literal: AWS_KEY, line: 1 };
-  const finding = (over: Partial<{ file: string; match: string }> = {}) => ({
-    pattern: 'aws-access-key', file: 'a/b.ts', line: 9,
-    match: AWS_KEY, text: 'x', ...over,
-  });
-
-  test('suppresses only its own file and its own literal', () => {
-    expect(suppresses(entry, finding())).toBe(true);
-    expect(suppresses(entry, finding({ file: 'other/b.ts' }))).toBe(false);
-    expect(suppresses(entry, finding({ match: UNRELATED_AWS_KEY }))).toBe(false);
-  });
-
-  test('survives the fixture moving lines, since it names no line', () => {
-    expect(suppresses(entry, finding())).toBe(true);
-    expect(suppresses(entry, { ...finding(), line: 4210 })).toBe(true);
-  });
-
-  test('a stale entry is reported, not silently tolerated', () => {
-    const stale = { path: 'gone.ts', literal: AWS_KEY, line: 2 };
-    const out = applyIgnores([finding()], [entry, stale]);
-    expect(out.findings).toEqual([]);
-    expect(out.unused).toEqual([stale]);
-  });
-});
-
-// The bug this whole file exists for: the shipped ignore file must actually
-// suppress the shipped fixture. Reading both is the only way to know.
-test('the committed .secretscanignore suppresses the redactor fixture it names', () => {
-  const entries = parseIgnoreFile(readFileSync(join(REPO_ROOT, '.secretscanignore'), 'utf8'));
-  expect(entries.length).toBeGreaterThan(0);
+// Runtime assembly keeps real-shaped redactor input out of public source. The
+// scanner therefore needs no committed suppression file.
+test('the committed redactor fixture needs no source suppression', () => {
+  expect(existsSync(join(REPO_ROOT, '.secretscanignore'))).toBe(false);
   const fixture = 'packages/cli/tests/debug.test.ts';
-  const raw = scanText(fixture, readFileSync(join(REPO_ROOT, fixture), 'utf8'));
-  expect(raw.map((f) => f.pattern)).toContain('aws-access-key');
-  expect(applyIgnores(raw, entries).findings).toEqual([]);
+  expect(scanText(fixture, readFileSync(join(REPO_ROOT, fixture), 'utf8'))).toEqual([]);
 });
 
 // This file is tracked, so the scan reads it. If a fixture above were ever

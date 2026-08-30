@@ -8,7 +8,6 @@
 // inspection keeps a removed credential from becoming a forgotten credential:
 // it walks every locally stored ref and scans each reachable text blob exactly
 // once. Neither report writes a matched value to stdout or stderr.
-import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   bytesToText,
@@ -23,7 +22,6 @@ import {
 export type { HistoryObject, HistoryRefClass } from './sources';
 
 const REPO_ROOT = join(import.meta.dir, '..');
-const IGNORE_FILE = '.secretscanignore';
 
 export interface SecretPattern {
   id: string;
@@ -157,33 +155,6 @@ export interface Finding {
   text: string;
 }
 
-/** One sanctioned false positive: an exact literal in an exact file.
- *
- *  Deliberately NOT line numbers (any edit above would silently move the
- *  suppression onto a different line) and NOT bare paths (which would blind the
- *  scan to a whole file — the mistake that made the JWT pattern skip every test
- *  file). Moving the fixture is fine; changing it re-arms the scan. */
-export interface IgnoreEntry {
-  path: string;
-  literal: string;
-  line: number;
-}
-
-export function parseIgnoreFile(text: string): IgnoreEntry[] {
-  const entries: IgnoreEntry[] = [];
-  text.split('\n').forEach((raw, i) => {
-    const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const at = trimmed.search(/\s/);
-    // A one-field line is the old bare-path format. Refusing it loudly is the
-    // point: it used to parse as "ignore this file" and actually do nothing.
-    if (at === -1) {
-      throw new Error(`${IGNORE_FILE}:${i + 1}: expected "<path> <literal>"`);
-    }
-    entries.push({ path: trimmed.slice(0, at), literal: trimmed.slice(at).trim(), line: i + 1 });
-  });
-  return entries;
-}
 
 export function scanText(file: string, text: string, patterns: readonly SecretPattern[] = PATTERNS): Finding[] {
   const findings: Finding[] = [];
@@ -218,28 +189,6 @@ export function countDetections(
   return counts;
 }
 
-/** An entry suppresses a finding when it names the same file and its literal
- *  appears in the matched text. */
-export function suppresses(entry: IgnoreEntry, finding: Finding): boolean {
-  return entry.path === finding.file && finding.match.includes(entry.literal);
-}
-
-export interface ScanOutcome {
-  findings: Finding[];
-  /** Entries that suppressed nothing. A suppression nobody needs is a hole
-   *  nobody is watching, so it fails the scan rather than lingering. */
-  unused: IgnoreEntry[];
-}
-
-export function applyIgnores(findings: readonly Finding[], entries: readonly IgnoreEntry[]): ScanOutcome {
-  const used = new Set<IgnoreEntry>();
-  const kept = findings.filter((f) => {
-    const hit = entries.find((e) => suppresses(e, f));
-    if (hit) used.add(hit);
-    return !hit;
-  });
-  return { findings: kept, unused: entries.filter((e) => !used.has(e)) };
-}
 
 export const MAX_HISTORY_BLOB_BYTES = 1024 * 1024;
 export const REMOVED_CREDENTIAL_BLOB = 'c9e579c076abdaa62188445f7cebce17895062be';
@@ -703,21 +652,19 @@ export async function scanHistory(options: {
   return { ...adjudicateHistory(raw, options.adjudications), stats };
 }
 
-export interface LiveScanResult extends ScanOutcome {
+export interface LiveScanResult {
+  findings: Finding[];
   corpusSize: number;
 }
 
-/** The existing live/index scan stays independent from historical reachability.
- * `readMatching` reads a missing tracked working-tree file from its index blob,
- * while untracked additions remain live working-tree material. */
+/** The live/index scan has no suppression plane. Deliberate fixtures assemble
+ * their secret-shaped bytes at runtime, so every source byte stays governed. */
 export function scanLiveIndex(): LiveScanResult {
-  const ignorePath = join(REPO_ROOT, IGNORE_FILE);
-  const entries = existsSync(ignorePath) ? parseIgnoreFile(readFileSync(ignorePath, 'utf8')) : [];
   const self = relative(REPO_ROOT, import.meta.path);
-  const corpus = readMatching((file) => isTextSource(file) && file !== IGNORE_FILE && file !== self);
-  const raw: Finding[] = [];
-  for (const [file, text] of corpus) raw.push(...scanText(file, text));
-  return { ...applyIgnores(raw, entries), corpusSize: corpus.size };
+  const corpus = readMatching((file) => isTextSource(file) && file !== self);
+  const findings: Finding[] = [];
+  for (const [file, text] of corpus) findings.push(...scanText(file, text));
+  return { findings, corpusSize: corpus.size };
 }
 
 function printablePath(path: string): string {
@@ -728,20 +675,13 @@ function reportLive(result: LiveScanResult): boolean {
   for (const finding of result.findings) {
     console.error(`::error::detector=${finding.pattern} path=${printablePath(finding.file)} ref=live-index`);
   }
-  for (const entry of result.unused) {
-    console.error(`::error::stale-ignore path=${printablePath(entry.path)} ref=live-index`);
-  }
   if (result.findings.length > 0) {
     console.error(`Secret live/index scan FAILED — ${result.findings.length} finding(s).`);
-    console.error(`Add a deliberate fixture as an exact ${IGNORE_FILE} path + literal; the scanner will not echo a matched value.`);
-  }
-  if (result.unused.length > 0) {
-    console.error(`${result.unused.length} stale ${IGNORE_FILE} entr(ies) — delete them.`);
-  }
-  if (result.findings.length === 0 && result.unused.length === 0) {
+    console.error('Deliberate fixtures must assemble secret-shaped bytes at runtime; source suppressions are not supported.');
+  } else {
     console.log(`Secret live/index scan passed — ${PATTERNS.length} patterns over ${result.corpusSize} tracked or untracked text files.`);
   }
-  return result.findings.length > 0 || result.unused.length > 0;
+  return result.findings.length > 0;
 }
 
 function reportHistory(result: HistoryScanOutcome): boolean {

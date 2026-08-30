@@ -90,7 +90,7 @@ describe("CLI config safety", () => {
 });
 
 const CLOUD_ORIGIN = "https://kinu.example.com";
-const CLOUD_TOKEN = "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz";
+const CLOUD_TOKEN = ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join("");
 
 describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   test("derives the worker AI proxy endpoint with the platform default model", () => {

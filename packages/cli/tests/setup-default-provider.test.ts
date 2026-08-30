@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 const CLOUD_ORIGIN = 'https://kinu.example.com';
-const CLOUD_TOKEN = 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz';
+const CLOUD_TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 
 /** A signed-in machine that had been pinned to a paid BYO provider. */
 function signedInHome(extra: JsonObject = {}): string {

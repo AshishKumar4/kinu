@@ -15,7 +15,7 @@ import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, sqlExec,
 } from './helpers/user-do';
 
-const SECRET = 'sk_live_0123456789abcdefghij';
+const SECRET = ['sk_live_', '0123456789abcdefghij'].join('');
 
 async function vault(): Promise<EgressVaultDeps & { db: Database }> {
   const db = new Database(':memory:');

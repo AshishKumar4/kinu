@@ -66,7 +66,7 @@ function ctx(params: OutboundHandlerContext['params']): OutboundHandlerContext {
 }
 const read = (path: string): string => readFileSync(`${root}${path}`, 'utf8');
 
-const SECRET = 'sk_live_abcdefghij0123456789';
+const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');
 const PLACEHOLDER = `${EGRESS_PLACEHOLDER_PREFIX}${'Q'.repeat(43)}`;
 const BINDING: EgressSecretBinding = {
   id: 'stripe', label: 'Stripe', host: 'api.stripe.com', placeholder: PLACEHOLDER,

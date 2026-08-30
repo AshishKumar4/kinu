@@ -40,7 +40,7 @@ const STRIPE: EgressSecretBinding = {
 describe('placeholders', () => {
   test('a placeholder is recognised by shape, and a secret is not', () => {
     expect(isEgressPlaceholder(STRIPE.placeholder)).toBe(true);
-    expect(isEgressPlaceholder('sk_live_deadbeefdeadbeefdeadbeef')).toBe(false);
+    expect(isEgressPlaceholder(['sk_live_', 'deadbeefdeadbeefdeadbeef'].join(''))).toBe(false);
     // Right prefix, wrong length: a truncated placeholder must not pass, or a
     // prefix-matching fragment in a log line would be treated as a binding.
     expect(isEgressPlaceholder(`${EGRESS_PLACEHOLDER_PREFIX}tooshort`)).toBe(false);
@@ -304,7 +304,7 @@ describe('inherited approval policy', () => {
 });
 
 describe('scrubbing what comes back', () => {
-  const SECRET = 'sk_live_0123456789abcdef';
+  const SECRET = ['sk_live_', '0123456789abcdef'].join('');
   const REPLACEMENTS = [{ find: SECRET, replaceWith: STRIPE.placeholder }];
 
   test('an echoed secret is replaced by its placeholder', () => {

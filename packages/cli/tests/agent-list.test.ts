@@ -81,7 +81,7 @@ describe('CLI cloud agent registry sync', () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: 'https://kinu.test',
-      accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
+      accessToken: ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join(''),
       agents: {
         stale: {
           name: 'stale',
@@ -106,7 +106,7 @@ describe('CLI cloud agent registry sync', () => {
     const script = `
       globalThis.fetch = async (input, init) => {
         if (String(input) !== 'https://kinu.test/api/cli/workspaces') throw new Error(String(input));
-        if (new Headers(init?.headers).get('authorization') !== 'Bearer ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz') {
+        if (new Headers(init?.headers).get('authorization') !== ['Bearer ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('')) {
           throw new Error('missing auth');
         }
         return Response.json([
@@ -156,7 +156,7 @@ describe('CLI cloud agent registry sync', () => {
     writeFileSync(join(home, 'shopbot', 'agent.db'), '');
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: 'https://kinu.test',
-      accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
+      accessToken: ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join(''),
       agents: {
         shopbot: {
           name: 'shopbot',
