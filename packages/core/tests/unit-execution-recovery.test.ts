@@ -245,44 +245,46 @@ describe('the loop, through the production seams', () => {
     const before = await step(0);
     expect(JSON.stringify(before?.messages ?? [])).not.toContain('Proven by execution');
 
-    grindThenRecover(orch);
+    await grindThenRecover(orch);
     const after = await step(1);
     const rendered = JSON.stringify(after?.messages ?? []);
     expect(rendered).toContain('Proven by execution');
     expect(rendered).toContain('bun test');
   });
 
-  test('the same finding twice in one episode is one row and one run-event entry per turn', () => {
+  test('the same finding twice in one episode is one row and one run-event entry per turn', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
-    grindThenRecover(orch);
-    grindThenRecover(orch);
+    // Sequential by contract: both calls drive the same streak counter on one
+    // orchestrator, so the second grind must start after the first recovered.
+    await grindThenRecover(orch);
+    await grindThenRecover(orch);
     expect(listRecoveryFindings(rt.storage.sql)).toHaveLength(1);
     // Both observations are real streaks; the run event counts both.
     expect(orch.recoverySnapshot()?.recoveries).toHaveLength(2);
   });
 
-  test('with auto-evolution off, nothing is recorded at all — the bench arm measures the loop\'s absence', () => {
+  test('with auto-evolution off, nothing is recorded at all — the bench arm measures the loop\'s absence', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt, { enabled: false });
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
-    grindThenRecover(orch);
+    await grindThenRecover(orch);
     expect(listRecoveryFindings(rt.storage.sql)).toEqual([]);
     expect(orch.recoverySnapshot()).toBeNull();
   });
 
-  test('the turn boundary clears the run record but never the ledger', () => {
+  test('the turn boundary clears the run record but never the ledger', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
-    grindThenRecover(orch);
+    await grindThenRecover(orch);
     orch.beginTurn(Date.now());
     expect(orch.recoverySnapshot()).toBeNull();
     expect(listRecoveryFindings(rt.storage.sql)).toHaveLength(1);
