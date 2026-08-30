@@ -196,11 +196,18 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
 
   const changeAnnotations = useCallback(async (next: Annotation[]) => {
     if (decisionInFlight.current) return;
+    // The save rejecting is an outcome this view reports, and the plan moving
+    // under an in-flight save is a separate, expected fact — the panel the
+    // failure belonged to is gone. Both are decided after the handler, so a
+    // superseded revision cannot read the same as a save that never failed.
+    let thrown: { readonly cause: unknown } | undefined;
     try {
       await save(next);
     } catch (cause) {
-      if (activePlanKey.current !== planKey) return;
-      setError(renderThrownChain({ cause }));
+      thrown = { cause };
+    }
+    if (thrown !== undefined && activePlanKey.current === planKey) {
+      setError(renderThrownChain({ cause: thrown.cause }));
       if (annotationSaves.pending() === 0) setSaving(false);
     }
   }, [annotationSaves, planKey, save]);

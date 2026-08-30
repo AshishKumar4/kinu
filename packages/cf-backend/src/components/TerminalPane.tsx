@@ -333,17 +333,25 @@ function LineTerminal(
           commandOperation.current = owner;
           owner.promise = (async () => {
             try {
+              // A command that FAILS is an outcome, not a lost failure: its error
+              // belongs on the terminal row. The rejection is therefore held as a
+              // value, and the two fences — a reset generation, a rebuilt terminal
+              // — are decided once below, on the same footing for a command that
+              // failed and one that did not, instead of as a return out of the
+              // handler that reads identically for a stale row and a failed one.
+              let thrown: { readonly cause: unknown } | undefined;
               try {
                 await run(cmd);
-                if (!lineState.finishCommand(generation)) return;
-                if (termRef.current !== term) return;
               } catch (cause) {
-                if (!lineState.finishCommand(generation)) return;
-                if (termRef.current !== term) return;
+                thrown = { cause };
+              }
+              if (!lineState.finishCommand(generation)) return;
+              if (termRef.current !== term) return;
+              if (thrown !== undefined) {
                 // A rejected exec produces no output row, so nothing else would
                 // ever clear the marker or reprint the prompt.
                 clearBusy(term, lineState);
-                term.write(`\x1b[31m${describeError(cause)}\x1b[0m\r\n`);
+                term.write(`\x1b[31m${describeError(thrown.cause)}\x1b[0m\r\n`);
                 promptLine(term);
               }
             } catch (cause) {
