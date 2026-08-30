@@ -122,7 +122,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.oncePerTick(scope, tick, pass);
   }
 
-  tickAutoGepa(): void { void this.maybeRunAutoGepa(); }
+  async tickAutoGepa(): Promise<void> { await this.maybeRunAutoGepa(); }
 
   /** The sampling plan this turn's declaration would record. */
   harnessShadowPlan(messageId: string): number | null {

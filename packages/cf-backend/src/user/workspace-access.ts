@@ -40,9 +40,12 @@ export async function handleCreateWorkspaceRequest(
     role: body.role,
   };
   try {
-    const entry = await createCloudWorkspaceForUser(env, userId, userDO, await ownerCaller(env), input, {
-      waitUntil: (promise) => ctx?.waitUntil(promise),
-    });
+    const createOptions = ctx === undefined
+      ? {}
+      : { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise) };
+    const entry = await createCloudWorkspaceForUser(
+      env, userId, userDO, await ownerCaller(env), input, createOptions,
+    );
     return json(entry, { status: 201 });
   } catch (e) {
     const message = renderThrownChain({ cause: e });
@@ -66,7 +69,7 @@ export function notifyWorkspacesCredentialsChanged(
     const workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
     await Promise.allSettled(workspaces
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
-  })().catch((e) => {
+  })().catch((e: unknown) => {
     diagnostics.failure('workspace.credential_fanout_failed', toKinuError({
       doing: 'notifying the user\'s workspaces of a credential change',
       cause: e,

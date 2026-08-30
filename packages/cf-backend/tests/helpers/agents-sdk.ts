@@ -4,6 +4,15 @@ import type { AgentContext, FiberRecoveryContext } from 'agents';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '../../src/user/mcp';
 
+type ModuleMockFactory = Parameters<typeof mock.module>[1];
+
+function registerSynchronousMock(id: string, factory: ModuleMockFactory): void {
+  const completion = mock.module(id, factory);
+  if (completion !== undefined) {
+    throw new Error(`mock.module(${id}) must register synchronously`);
+  }
+}
+
 /** Fiber ids, monotonic per process so a test can read them in creation order.
  *  The real SDK uses `nanoid()`; only uniqueness is contractual. */
 let harnessFiberSeq = 0;
@@ -147,7 +156,7 @@ export function recordedRetainedHookErrors(): readonly { fiberId: string; error:
  * Call it before importing the module under test.
  */
 export function mockAgentsSdk(): void {
-  mock.module('agents', () => ({
+  registerSynchronousMock('agents', () => ({
     /** Base-class token. Used as a `subAgent` class key, and as the real base
      *  for DO classes a test instantiates directly (UserDO) — hence the ctx/env
      *  assignment the real Agent constructor also performs. */
@@ -605,8 +614,8 @@ export function mockAgentsSdk(): void {
   // live connections — because that state is a second truth beside
   // `user_mcp_servers`, and the reconciliation and credential-seam contracts are
   // statements about it (see `recordedMcpServers`).
-  mock.module('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
-  mock.module('agents/mcp/do-oauth-client-provider', () => ({
+  registerSynchronousMock('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
+  registerSynchronousMock('agents/mcp/do-oauth-client-provider', () => ({
     DurableObjectOAuthClientProvider: class { serverId = ''; },
   }));
   // The DO layer reaches the runtime + codemode module graph (a head builds a
@@ -628,7 +637,7 @@ export function mockAgentsSdk(): void {
   // substitute. Nesting comes from the call stack, with a span held open until an
   // async body SETTLES, exactly as workerd holds it, so the recorded `parent` is
   // the one the runtime would nest under.
-  mock.module('cloudflare:workers', () => ({
+  registerSynchronousMock('cloudflare:workers', () => ({
     RpcTarget: class {},
     WorkerEntrypoint: class {},
     WorkflowEntrypoint: class {},

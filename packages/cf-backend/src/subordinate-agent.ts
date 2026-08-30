@@ -481,7 +481,7 @@ export class SubordinateAgent extends ActorAgent {
     // exactly as a root does, and without this an interrupted one waited on an
     // alarm that a failed schedule never wrote.
     void this.terminal.resumeAll()
-      .catch((err) => diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
+      .catch((err: unknown) => diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
         doing: 'finishing what interrupted terminal transitions still owed',
         cause: err,
         otherwise: 'unavailable',
