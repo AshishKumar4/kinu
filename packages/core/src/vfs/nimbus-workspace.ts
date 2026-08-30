@@ -318,7 +318,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   // The failure still reaches every caller that awaits `booting`; this states it
   // once, because a workspace that fails to boot before any file call is made
   // would otherwise leave no trace at all.
-  booting.catch((error) => {
+  booting.catch((error: unknown) => {
     diagnostics.failure(
       'workspace.boot_failed',
       toKinuError({ doing: 'boot the Nimbus workspace', cause: error, otherwise: 'unavailable' }),

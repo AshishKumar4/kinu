@@ -281,11 +281,11 @@ describe('runAutoShadowEval', () => {
     });
     await Promise.resolve();
     let settled = false;
-    void evalPromise.then(() => { settled = true; });
+    const settledPromise = evalPromise.then(() => { settled = true; });
     expect(settled).toBe(false);          // still running with the executor gated
 
     gate.resolve();
-    const result = await evalPromise;
+    const [result] = await Promise.all([evalPromise, settledPromise]);
     expect(executorReleased).toBe(true);
     expect(result.skipped).toBe(false);
   });

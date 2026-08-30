@@ -31,6 +31,11 @@ const CodexRequestBodySchema = v.object({
   store: v.optional(v.boolean()),
   input: v.optional(v.array(v.object({ role: v.optional(v.string()) }))),
 });
+const CodexFailureSurfaceSchema = v.object({
+  message: v.optional(v.string()),
+  responseBody: v.optional(v.string()),
+});
+
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
@@ -281,8 +286,12 @@ describe('Codex provider contract', () => {
 
     const failure = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 }).then(
       () => '',
-      (rejection: { message?: string; responseBody?: string }) =>
-        `${rejection.message ?? ''}\n${rejection.responseBody ?? ''}`,
+      (rejection: unknown) => {
+        const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
+        return surface.success
+          ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
+          : String(rejection);
+      },
     );
     expect(failure).toContain('Your ChatGPT login is no longer valid');
     expect(failure).toContain('kinu setup');
@@ -299,8 +308,12 @@ describe('Codex provider contract', () => {
     const model = createCodexProvider().createModel('gpt-5.5', deps);
     const failure = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 }).then(
       () => '',
-      (rejection: { message?: string; responseBody?: string }) =>
-        `${rejection.message ?? ''}\n${rejection.responseBody ?? ''}`,
+      (rejection: unknown) => {
+        const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
+        return surface.success
+          ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
+          : String(rejection);
+      },
     );
     expect(failure).toContain('Your ChatGPT login is no longer valid');
     // The bare upstream word is what the owner was shown for the Cloudflare
@@ -330,7 +343,10 @@ describe('Codex OAuth client', () => {
     )));
     const attempt = client.refresh('codex-refresh-revoked');
     await expect(attempt).rejects.toBeInstanceOf(CodexOAuthTokenError);
-    await attempt.catch((err: CodexOAuthTokenError) => {
+    await attempt.catch((err: unknown) => {
+      if (!(err instanceof CodexOAuthTokenError)) {
+        throw new Error(`expected CodexOAuthTokenError, got ${String(err)}`);
+      }
       expect(err.oauthError).toBe('invalid_grant');
       // The message must never quote the credential it failed on.
       expect(err.message).not.toContain('codex-refresh-revoked');
@@ -342,7 +358,10 @@ describe('Codex OAuth client', () => {
       new Response('upstream exploded', { status: 502 })));
     const attempt = client.refresh('codex-refresh');
     await expect(attempt).rejects.toBeInstanceOf(CodexOAuthTokenError);
-    await attempt.catch((err: CodexOAuthTokenError) => {
+    await attempt.catch((err: unknown) => {
+      if (!(err instanceof CodexOAuthTokenError)) {
+        throw new Error(`expected CodexOAuthTokenError, got ${String(err)}`);
+      }
       expect(err.oauthError).toBe('unknown');
     });
   });

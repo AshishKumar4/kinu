@@ -100,10 +100,10 @@ function fakeHost(opts?: { activeTurn?: boolean }) {
 
 /** What a live turn actually absorbed, read back through the seam the backend
  *  reads: one step boundary, then settle. */
-function absorb(orch: AgentOrchestrator): readonly AgentSignal[] {
+async function absorb(orch: AgentOrchestrator): Promise<readonly AgentSignal[]> {
   const prepareStep = orch.turnExtension.prepareStep;
   if (!prepareStep) throw new Error('Expected orchestrator prepareStep extension');
-  prepareStep({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
+  await prepareStep({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
   return orch.signals.settle({ completed: true }).absorbed;
 }
 const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTurn => ({
@@ -589,7 +589,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(enqueued).toHaveLength(0);
     // A second drain finds nothing: consumed events never double-deliver.
     await orch.drainPendingEvents();
-    const injected = absorb(orch);
+    const injected = await absorb(orch);
     expect(injected).toHaveLength(1);
     // Mid-turn rendering: the live turn is told to fold the events in, not stop.
     expect(injected[0]!.stepText).toContain('arrived while you were working');
@@ -626,7 +626,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const { host, enqueued, broadcasts } = fakeHost({ activeTurn: false });
     const orch = new AgentOrchestrator({ host, engine, eventLog: log });
     await orch.drainPendingEvents();
-    expect(absorb(orch)).toHaveLength(0);
+    expect(await absorb(orch)).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]!.metadata?.kinuEvent).toBe('event_drain');
     // Same card, same moment: the queued path is not a silent one. The turn
@@ -739,8 +739,8 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
 describe('AgentOrchestrator — the in-episode evolution clock', () => {
   /** Drive one settled `execute_tools` call through the orchestrator's own
    *  per-turn extension, which is the seam both backends register. */
-  function runBlock(orch: AgentOrchestrator, code: string, failure?: string): void {
-    orch.turnExtension.onToolResult?.({
+  async function runBlock(orch: AgentOrchestrator, code: string, failure?: string): Promise<void> {
+    await orch.turnExtension.onToolResult?.({
       toolName: 'execute_tools',
       args: { code },
       result: failure ?? 'ok',
@@ -748,14 +748,14 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     });
   }
 
-  test('the turn extension is the seam — a crafted tool is scored mid-turn', () => {
+  test('the turn extension is the seam — a crafted tool is scored mid-turn', async () => {
     const { engine, crafted, observed } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     crafted.push('summarize');
     orch.beginTurn(Date.now());
 
-    runBlock(orch, 'return await tools.summarize(1)');
+    await runBlock(orch, 'return await tools.summarize(1)');
 
     expect(observed).toHaveLength(1);
     expect(observed[0]!.names).toEqual(['summarize']);
@@ -765,74 +765,74 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     });
   });
 
-  test('a stamped failure is scored against the tool through the same seam', () => {
+  test('a stamped failure is scored against the tool through the same seam', async () => {
     const { engine, crafted, observed } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     crafted.push('summarize');
     orch.beginTurn(Date.now());
 
-    runBlock(orch, 'return await tools.summarize(1)', '[crafted:summarize] boom');
+    await runBlock(orch, 'return await tools.summarize(1)', '[crafted:summarize] boom');
     expect(observed).toEqual([{ names: ['summarize'], quality: 0.1 }]);
     expect(orch.craft.snapshot()!.raised).toBe(1);
 
     // …and a failure that names nothing scores nothing.
-    runBlock(orch, 'return await tools.summarize(1)', 'TypeError: x is not a function');
+    await runBlock(orch, 'return await tools.summarize(1)', 'TypeError: x is not a function');
     expect(observed).toHaveLength(1);
   });
 
-  test('a tool that appeared during the turn is crafted, not pre-existing', () => {
+  test('a tool that appeared during the turn is crafted, not pre-existing', async () => {
     const { engine, crafted, observed } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     orch.beginTurn(Date.now());
 
     crafted.push('summarize');
-    runBlock(orch, 'await workspace.createTool("summarize","d","async()=>1"); return tools.summarize(1)');
+    await runBlock(orch, 'await workspace.createTool("summarize","d","async()=>1"); return tools.summarize(1)');
     // Created and called in one breath earns nothing…
     expect(observed).toEqual([]);
     expect(orch.craft.snapshot()!.crafted).toEqual(['summarize']);
 
     // …and the next block that reaches for it closes the loop.
-    runBlock(orch, 'return await tools.summarize(2)');
+    await runBlock(orch, 'return await tools.summarize(2)');
     expect(observed).toHaveLength(1);
     expect(orch.craft.snapshot()!.reused).toEqual(['summarize']);
   });
 
-  test('with auto-evolution off the in-episode clock records nothing', () => {
+  test('with auto-evolution off the in-episode clock records nothing', async () => {
     const { engine, crafted, observed } = fakeEngine({ enabled: false });
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     crafted.push('summarize');
     orch.beginTurn(Date.now());
 
-    runBlock(orch, 'return await tools.summarize(1)');
+    await runBlock(orch, 'return await tools.summarize(1)');
 
     expect(observed).toEqual([]);
     expect(orch.craft.snapshot()).toBeNull();
   });
 
-  test('beginTurn clears the previous turn\'s craft record', () => {
+  test('beginTurn clears the previous turn\'s craft record', async () => {
     const { engine, crafted } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     crafted.push('summarize');
     orch.beginTurn(Date.now());
-    runBlock(orch, 'return await tools.summarize(1)');
+    await runBlock(orch, 'return await tools.summarize(1)');
     expect(orch.craft.snapshot()).not.toBeNull();
 
     orch.beginTurn(Date.now());
     expect(orch.craft.snapshot()).toBeNull();
   });
 
-  test('turn steering still observes the same calls through the shared seam', () => {
+  test('turn steering still observes the same calls through the shared seam', async () => {
     const { engine } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
     orch.beginTurn(Date.now());
     for (let i = 0; i < 3; i++) {
-      orch.turnExtension.onToolCall?.({ toolName: 'run', args: { command: `x${i}` } });
-      orch.turnExtension.onToolResult?.({
+      await orch.turnExtension.onToolCall?.({ toolName: 'run', args: { command: `x${i}` } });
+      await orch.turnExtension.onToolResult?.({
         toolName: 'run', args: { command: `x${i}` }, result: `Error: no ${i}`, success: false,
       });
     }

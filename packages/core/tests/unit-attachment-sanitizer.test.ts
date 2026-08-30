@@ -372,7 +372,7 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
     const cause = Object.assign(new Error('parent directory does not exist'), { code: 'ENOENT' });
     const vfs = vfsWhoseMkdirThrows(cause);
     const err: unknown = await sanitizeAttachmentsForModel([pdfMessage()], { accepts: accepts(), vfs })
-      .then(() => null, (e) => e);
+      .then(() => null, (e: unknown) => e);
     if (!(err instanceof KinuError)) throw new Error(`expected a classified KinuError, got ${String(err)}`);
     expect(err.message).toBe('creating the attachments spill directory');
     expect(err.cause).toBe(cause);
