@@ -172,7 +172,7 @@ describe('kinu export / import', () => {
         .toEqual({ content: 'note 7 with "quotes"' });
       db.close();
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 

@@ -95,7 +95,7 @@ describe('where a provider secret is written', () => {
       // The model pointer still lands locally — it names a model, not a secret.
       expect(config.model).toBe('openrouter/anthropic/claude-x');
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -132,7 +132,7 @@ describe('when the account will not take it', () => {
       expect(res.stdout).toContain('--local');
       expect(JSON.stringify(storedConfig(home))).not.toContain('sk-or-secret');
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -153,7 +153,7 @@ describe('when the account will not take it', () => {
       // would mean the stale key is the one actually spent.
       expect(JSON.stringify(storedConfig(home))).not.toContain('sk-stale-local');
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });

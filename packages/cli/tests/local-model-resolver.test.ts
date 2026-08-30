@@ -122,7 +122,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
       });
       for (const request of requests) expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });

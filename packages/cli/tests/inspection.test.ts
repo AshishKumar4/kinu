@@ -421,7 +421,7 @@ describe("kinu events rendering", () => {
         KINU_ORIGIN: `http://localhost:${server.port}`,
       });
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   }
 

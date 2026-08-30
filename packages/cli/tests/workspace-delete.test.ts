@@ -73,7 +73,7 @@ describe('kinu workspace delete', () => {
       expect(config.agents.localbot).toMatchObject({ mode: 'local' });
       expect(config.aliases).toEqual({ local: 'localbot' });
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
