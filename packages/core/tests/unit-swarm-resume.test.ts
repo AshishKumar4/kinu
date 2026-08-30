@@ -1177,10 +1177,11 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const sql = rt.storage.sql;
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
-    void runSwarm(
+    const frozen = runSwarm(
       { rt, model: first.model, mode: 'build',  logger: createRecordingLogger() },
       resolved(),
     );
+    expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
     initBackgroundJobsTable(makeExecRaw(db), makeSql(db));
@@ -1220,10 +1221,11 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const ledger = new MctsSearchStore(sql);
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
-    void runSwarm(
+    const frozen = runSwarm(
       { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+    expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
     const agent = idleAgent();
@@ -1293,10 +1295,11 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const ledger = new MctsSearchStore(sql);
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
-    void runSwarm(
+    const frozen = runSwarm(
       { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+    expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(ledger.get(rootId)).toMatchObject({ status: 'running' });
@@ -1323,10 +1326,11 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const ledger = new MctsSearchStore(sql);
     const journal = new HeadJournal(sql);
     const first = nodeModel({ freezeFromStart: 3 });
-    void runSwarm(
+    const frozen = runSwarm(
       { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+    expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
     const agent = idleAgent();

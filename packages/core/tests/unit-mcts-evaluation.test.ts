@@ -674,12 +674,12 @@ describe('a judge call carries no elapsed deadline — the evaluator joins it', 
     // Still pending while the provider holds its answer back — no timer
     // dropped the sample out from under the ensemble.
     let settled = false;
-    void evaluation.then(() => { settled = true; });
+    const observed = evaluation.then((result) => { settled = true; return result; });
     expect(judge.calls()).toBe(1);
     expect(settled).toBe(false);
 
     gate.resolve();
-    const result = await evaluation;
+    const result = await observed;
     expect(result.judgeSamplesUsed).toBe(1);
     expect(result.score).toBeGreaterThan(0);   // the late answer WAS the score
   });

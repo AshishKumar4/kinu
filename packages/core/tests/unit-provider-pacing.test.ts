@@ -86,10 +86,11 @@ describe('request starts are paced against one provider', () => {
 
     const held = await pacer.admit(HOST);
     let admitted = false;
-    void pacer.admit(HOST).then(() => { admitted = true; });
+    const third = pacer.admit(HOST).then((release) => { admitted = true; return release; });
     await Promise.resolve();
     expect(admitted).toBe(false);
     held();
+    expect(await third).toBeInstanceOf(Function);
   });
 
   test('two hosts do not share a lane budget', async () => {
