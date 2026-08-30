@@ -91,20 +91,20 @@ function injected(messages: readonly ModelMessage[]): string[] {
 /** Distinct failures of one tool: a different call, answered differently, every
  *  time — so this exercises the failure streak and never the repeat detector. */
 let attempt = 0;
-function fail(orch: AgentOrchestrator, toolName: string, times = 1): void {
+async function fail(orch: AgentOrchestrator, toolName: string, times = 1): Promise<void> {
   for (let i = 0; i < times; i++) {
     attempt += 1;
-    orch.turnExtension.onToolResult!({
+    await orch.turnExtension.onToolResult!({
       toolName, args: { attempt }, result: `boom ${attempt}`, success: false,
     });
   }
 }
 
 /** The same call, answered the same way, `times` times. */
-function repeat(orch: AgentOrchestrator, toolName: string, args: JsonObject, times = 1): void {
+async function repeat(orch: AgentOrchestrator, toolName: string, args: JsonObject, times = 1): Promise<void> {
   for (let i = 0; i < times; i++) {
-    orch.turnExtension.onToolCall!({ toolName, args });
-    orch.turnExtension.onToolResult!({ toolName, args, result: 'the same output', success: true });
+    await orch.turnExtension.onToolCall!({ toolName, args });
+    await orch.turnExtension.onToolResult!({ toolName, args, result: 'the same output', success: true });
   }
 }
 
@@ -173,16 +173,16 @@ describe('isFailingToolResult', () => {
 });
 
 describe('repeated-failure trigger', () => {
-  test('three failures on one tool inject exactly one nudge, at the next step boundary', () => {
+  test('three failures on one tool inject exactly one nudge, at the next step boundary', async () => {
     const orch = newTurn();
     const base = followUp('build it');
     expect(step(orch, 0, base)).toEqual(base);
-    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER - 1);
+    await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER - 1);
     // Two failures is a correction, not a pattern — nothing yet.
     expect(injected(step(orch, 1, base))).toEqual([]);
     expect(lastSteer(orch)).toBeNull();
 
-    fail(orch, 'run');
+    await fail(orch, 'run');
     const nudged = step(orch, 2, base);
     expect(injected(nudged)).toHaveLength(1);
     const text = injected(nudged)[0]!;
@@ -198,49 +198,49 @@ describe('repeated-failure trigger', () => {
     expect(lastSteer(orch)).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
   });
 
-  test('the nudge holds its entry index across later steps and never repeats', () => {
+  test('the nudge holds its entry index across later steps and never repeats', async () => {
     const orch = newTurn();
     const base = followUp('q');
     step(orch, 0, base);
-    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
+    await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     const at1 = step(orch, 1, [...base, user('a1')]);
     expect(at1.slice(0, 4).map((message) => message.content)).toEqual(['earlier', 'handled', 'q', 'a1']);
     expect(at1[4]?.content).toContain(TURN_STEERING_HEADER);
     // Later steps rebuild from scratch: the nudge re-applies at its original
     // position (cache-prefix stability) and is not re-issued.
-    fail(orch, 'run', 5);
+    await fail(orch, 'run', 5);
     const at2 = step(orch, 2, [...base, user('a1'), user('a2')]);
     expect(injected(at2)).toHaveLength(1);
     expect(at2[4]!.content).toContain(TURN_STEERING_HEADER);
     expect(lastSteer(orch)?.step).toBe(1);
   });
 
-  test('a success on that tool clears its streak; failures of other tools do not', () => {
+  test('a success on that tool clears its streak; failures of other tools do not', async () => {
     const orch = newTurn();
-    fail(orch, 'run', 2);
-    orch.turnExtension.onToolResult!({ toolName: 'run', args: {}, result: 'ok', success: true });
-    fail(orch, 'run', 2);
+    await fail(orch, 'run', 2);
+    await orch.turnExtension.onToolResult!({ toolName: 'run', args: {}, result: 'ok', success: true });
+    await fail(orch, 'run', 2);
     // Two since the success — and a different tool's failures are its own
     // streak, not this one's.
-    fail(orch, 'web_fetch', 2);
+    await fail(orch, 'web_fetch', 2);
     expect(injected(step(orch, 1, [user('q')]))).toEqual([]);
     // …while a success on ANOTHER tool leaves the failing tool's streak alone:
     // interleaved reads must not launder a stuck approach.
-    orch.turnExtension.onToolResult!({ toolName: 'web_fetch', args: {}, result: 'page', success: true });
-    fail(orch, 'run');
+    await orch.turnExtension.onToolResult!({ toolName: 'web_fetch', args: {}, result: 'page', success: true });
+    await fail(orch, 'run');
     expect(injected(step(orch, 2, [user('q')]))).toHaveLength(1);
     expect(lastSteer(orch)?.tool).toBe('run');
   });
 });
 
 describe('repeated-call trigger', () => {
-  test('three identical calls answered identically are named as a loop', () => {
+  test('three identical calls answered identically are named as a loop', async () => {
     const orch = newTurn();
-    repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER - 1);
+    await repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER - 1);
     // Two is a retry — the harness stays quiet.
     expect(injected(step(orch, 1, [user('build it')]))).toEqual([]);
 
-    repeat(orch, 'run', { command: 'make' });
+    await repeat(orch, 'run', { command: 'make' });
     const steered = step(orch, 2, [user('build it')]);
     expect(injected(steered)).toHaveLength(1);
     const text = injected(steered)[0]!;
@@ -254,10 +254,10 @@ describe('repeated-call trigger', () => {
     });
   });
 
-  test('a repeat whose OUTPUT changed is not a repeat — the model learned something', () => {
+  test('a repeat whose OUTPUT changed is not a repeat — the model learned something', async () => {
     const orch = newTurn();
     for (let i = 0; i < 6; i++) {
-      orch.turnExtension.onToolResult!({
+      await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'make' }, result: `progress ${i}`, success: true,
       });
     }
@@ -265,14 +265,14 @@ describe('repeated-call trigger', () => {
     expect(lastSteer(orch)).toBeNull();
   });
 
-  test('two runs that differ only past a long shared preamble are not a repeat', () => {
+  test('two runs that differ only past a long shared preamble are not a repeat', async () => {
     // A pytest banner, a cargo preamble: identical for thousands of characters,
     // then the part that matters. Identity is the whole result, so the harness
     // must not claim these taught the model nothing.
     const orch = newTurn();
     const banner = 'platform linux -- pytest 8.2.0\n'.repeat(200);
     for (let i = 0; i < IDENTICAL_CALLS_BEFORE_STEER + 2; i++) {
-      orch.turnExtension.onToolResult!({
+      await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'pytest' }, result: `${banner}${i} failed`, success: true,
       });
     }
@@ -280,34 +280,34 @@ describe('repeated-call trigger', () => {
     expect(lastSteer(orch)).toBeNull();
   });
 
-  test('argument order is not an approach: {a,b} and {b,a} are one call', () => {
+  test('argument order is not an approach: {a,b} and {b,a} are one call', async () => {
     const orch = newTurn();
-    repeat(orch, 'run', { command: 'make', runtime: 'laptop' });
-    repeat(orch, 'run', { runtime: 'laptop', command: 'make' });
-    repeat(orch, 'run', { command: 'make', runtime: 'laptop' });
+    await repeat(orch, 'run', { command: 'make', runtime: 'laptop' });
+    await repeat(orch, 'run', { runtime: 'laptop', command: 'make' });
+    await repeat(orch, 'run', { command: 'make', runtime: 'laptop' });
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
-  test('different arguments are different work, however many calls', () => {
+  test('different arguments are different work, however many calls', async () => {
     const orch = newTurn();
     for (const command of ['ls', 'pwd', 'cat a', 'cat b', 'grep x']) {
-      repeat(orch, 'run', { command });
+      await repeat(orch, 'run', { command });
     }
     expect(injected(step(orch, 1, [user('q')]))).toEqual([]);
   });
 
-  test('a succeeding read re-run identically still counts — thrash is not only failure', () => {
+  test('a succeeding read re-run identically still counts — thrash is not only failure', async () => {
     const orch = newTurn();
-    repeat(orch, 'run', { command: 'cat gates.txt' }, IDENTICAL_CALLS_BEFORE_STEER);
+    await repeat(orch, 'run', { command: 'cat gates.txt' }, IDENTICAL_CALLS_BEFORE_STEER);
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
-  test('it outranks the failure streak, because it can name what is repeating', () => {
+  test('it outranks the failure streak, because it can name what is repeating', async () => {
     const orch = newTurn();
     for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) {
-      orch.turnExtension.onToolResult!({
+      await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'make' }, result: 'Error (exit 2): boom', success: true,
       });
     }
@@ -315,23 +315,23 @@ describe('repeated-call trigger', () => {
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
-  test('converted means the model did something ELSE, not that it delegated', () => {
+  test('converted means the model did something ELSE, not that it delegated', async () => {
     const orch = newTurn();
-    repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
+    await repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
     step(orch, 1, [user('q')]);
     expect(lastSteer(orch)?.converted).toBe(false);
 
     // Repeating it once more is not a conversion.
-    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'make' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'make' } });
     expect(lastSteer(orch)?.converted).toBe(false);
 
-    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'cat config.log' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'cat config.log' } });
     expect(lastSteer(orch)?.converted).toBe(true);
   });
 
-  test('the previous turn\'s repeats do not carry into the next one', () => {
+  test('the previous turn\'s repeats do not carry into the next one', async () => {
     const orch = newTurn();
-    repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
+    await repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
     step(orch, 1, [user('q')]);
     orch.beginTurn(Date.now());
     expect(lastSteer(orch)).toBeNull();
@@ -344,10 +344,10 @@ describe('repeated-call trigger', () => {
 // The identical-output detector cannot see any of those, which is exactly why
 // this trigger exists.
 describe('no-progress trigger', () => {
-  test('a turn that keeps succeeding and getting nowhere is told so', () => {
+  test('a turn that keeps succeeding and getting nowhere is told so', async () => {
     const orch = newTurn();
     // The first call is new ground; from then on the frontier never moves.
-    orch.turnExtension.onToolResult!({
+    await orch.turnExtension.onToolResult!({
       toolName: 'run', args: { command: 'git status' }, result: 'clean 0', success: true,
     });
     let steered: string[] = [];
@@ -355,7 +355,7 @@ describe('no-progress trigger', () => {
       steered = injected(step(orch, s, [user('ship it')]));
       // Nothing new happens between boundaries: the same command, a different
       // answer each time (so the repeat detector stays silent).
-      orch.turnExtension.onToolResult!({
+      await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
       if (s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER) expect(steered).toEqual([]);
@@ -371,13 +371,13 @@ describe('no-progress trigger', () => {
     });
   });
 
-  test('a turn making new calls is never steered by this trigger', () => {
+  test('a turn making new calls is never steered by this trigger', async () => {
     // Information-gathering is work. A trigger that fired on a long read-only
     // investigation would be spam, and the owner's rule is no spam. (Kept
     // under the long-turn threshold so THAT steer is not what is measured.)
     const orch = newTurn();
     for (let s = 1; s < LONG_TURN_STEPS_BEFORE_STEER; s++) {
-      orch.turnExtension.onToolResult!({
+      await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: `grep pattern${s} src/` }, result: 'no match', success: true,
       });
       expect(injected(step(orch, s, [user('q')]))).toEqual([]);
@@ -385,7 +385,7 @@ describe('no-progress trigger', () => {
     expect(lastSteer(orch)).toBeNull();
   });
 
-  test('a file touched for the first time is progress, and resets the stall', () => {
+  test('a file touched for the first time is progress, and resets the stall', async () => {
     // The half no tool-call signature can show: an `execute_tools` program is
     // ONE call, and what it did is only visible in the shared file ledger.
     // Two near-threshold stalls with one new file between them: twice the
@@ -393,33 +393,35 @@ describe('no-progress trigger', () => {
     const orch = newTurn();
     let boundary = 0;
     let answer = 0;
-    const idle = () => orch.turnExtension.onToolResult!({
-      toolName: 'run', args: { command: 'ls' }, result: `listing ${++answer}`, success: true,
-    });
-    const runStall = () => {
+    const idle = async () => {
+      await orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'ls' }, result: `listing ${++answer}`, success: true,
+      });
+    };
+    const runStall = async () => {
       for (let i = 0; i < STEPS_WITHOUT_PROGRESS_BEFORE_STEER - 1; i++) {
         expect(injected(step(orch, ++boundary, [user('q')]))).toEqual([]);
-        idle();
+        await idle();
       }
     };
 
-    idle();
-    runStall();
+    await idle();
+    await runStall();
     orch.acc.files.observeWhole('/src/server.ts', 'export const x = 1;\n');
-    runStall();
+    await runStall();
 
     expect(boundary).toBeGreaterThan(STEPS_WITHOUT_PROGRESS_BEFORE_STEER);
     expect(lastSteer(orch)).toBeNull();
   });
 
-  test('an edit that landed is progress; one that missed is not', () => {
+  test('an edit that landed is progress; one that missed is not', async () => {
     // `sed -i` exits 0 whether or not it matched — a failed edit is a step
     // that spent and moved nothing, and the ledger is what can tell.
     const orch = newTurn();
     const missed = newTurn();
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
       for (const o of [orch, missed]) {
-        o.turnExtension.onToolResult!({
+        await o.turnExtension.onToolResult!({
           toolName: 'execute_tools', args: { code: 'edit()' }, result: `attempt ${s}`, success: true,
         });
       }
@@ -436,25 +438,25 @@ describe('no-progress trigger', () => {
     expect(lastSteer(missed)?.trigger).toBe('no_progress');
   });
 
-  test('the identical-call steer still outranks it — it can name what repeats', () => {
+  test('the identical-call steer still outranks it — it can name what repeats', async () => {
     const orch = newTurn();
-    repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
+    await repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) step(orch, s, [user('q')]);
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
 
-  test('…and it outranks the long-turn steer, because it can say why', () => {
+  test('…and it outranks the long-turn steer, because it can say why', async () => {
     // Both would be true at once on a long circling turn. The one that names
     // the problem is worth more than the one that names the length — and it
     // gets there first, at half the step count.
     const orch = newTurn();
-    orch.turnExtension.onToolResult!({
+    await orch.turnExtension.onToolResult!({
       toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
     });
     let fired: string[] = [];
     for (let s = 1; s <= LONG_TURN_STEPS_BEFORE_STEER + 1 && fired.length === 0; s++) {
       fired = injected(step(orch, s, [user('q')]));
-      orch.turnExtension.onToolResult!({
+      await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
     }
@@ -462,31 +464,31 @@ describe('no-progress trigger', () => {
     expect(lastSteer(orch)!.step).toBeLessThan(LONG_TURN_STEPS_BEFORE_STEER);
   });
 
-  test('converted means the turn went somewhere it had not been', () => {
+  test('converted means the turn went somewhere it had not been', async () => {
     const orch = newTurn();
-    orch.turnExtension.onToolResult!({
+    await orch.turnExtension.onToolResult!({
       toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
     });
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
       step(orch, s, [user('q')]);
-      orch.turnExtension.onToolResult!({
+      await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
     }
     expect(lastSteer(orch)).toMatchObject({ trigger: 'no_progress', converted: false });
 
     // Re-covering the same ground is not a conversion…
-    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git status' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git status' } });
     expect(lastSteer(orch)?.converted).toBe(false);
 
     // …reaching for something the turn has not done is.
-    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git log -1' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git log -1' } });
     expect(lastSteer(orch)?.converted).toBe(true);
   });
 
-  test('a new turn starts with a clean stall counter', () => {
+  test('a new turn starts with a clean stall counter', async () => {
     const orch = newTurn();
-    orch.turnExtension.onToolResult!({
+    await orch.turnExtension.onToolResult!({
       toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
     });
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) step(orch, s, [user('q')]);
@@ -516,16 +518,16 @@ describe('long-turn trigger', () => {
     }
   });
 
-  test('a turn that already delegated is never nudged for length', () => {
+  test('a turn that already delegated is never nudged for length', async () => {
     const orch = newTurn();
-    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 5, [user('q')]))).toEqual([]);
     expect(lastSteer(orch)).toBeNull();
   });
 
-  test('one nudge per turn, whichever trigger fires first', () => {
+  test('one nudge per turn, whichever trigger fires first', async () => {
     const orch = newTurn();
-    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
+    await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
     // Long and undelegated as well — still one line in the conversation.
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 1, [user('q')]))).toHaveLength(1);
@@ -586,11 +588,11 @@ describe('turn-start trigger', () => {
     ]);
   });
 
-  test('a search after the hint converts it, and leaves the length steer nothing to say', () => {
+  test('a search after the hint converts it, and leaves the length steer nothing to say', async () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);
     expect(rows(orch)[0]?.converted).toBe(false);
-    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: true }]);
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER, [user(fresh)]))).toHaveLength(1);
   });
@@ -600,20 +602,20 @@ describe('turn-start trigger', () => {
   // production turn that delegated five times as `converted: false`. Every
   // delegation-conversion figure was under-reported by however much of the
   // surface the model reached through the sandbox.
-  test('a codemode agents.swarm converts the hint — the sandbox is not a different verb', () => {
+  test('a codemode agents.swarm converts the hint — the sandbox is not a different verb', async () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);
     expect(rows(orch)[0]?.converted).toBe(false);
-    orch.turnExtension.onToolCall!({
+    await orch.turnExtension.onToolCall!({
       toolName: 'execute_tools',
       args: { code: "const r = await agents.swarm({ preset: 'ideate', branches: 3 });" },
     });
     expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: true }]);
   });
 
-  test('the unprompted arm sees it too, so the autonomous denominator is not short either', () => {
+  test('the unprompted arm sees it too, so the autonomous denominator is not short either', async () => {
     const orch = newTurn();
-    orch.turnExtension.onToolCall!({
+    await orch.turnExtension.onToolCall!({
       toolName: 'execute_tools',
       args: { code: 'await agents.swarm({ objective })' },
     });
@@ -622,30 +624,30 @@ describe('turn-start trigger', () => {
 
   // The controls. Without these, the arms above would pass on a predicate that
   // called every sandbox program a delegation.
-  test('a sandbox program that delegates nowhere does not convert the hint', () => {
+  test('a sandbox program that delegates nowhere does not convert the hint', async () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);
-    orch.turnExtension.onToolCall!({
+    await orch.turnExtension.onToolCall!({
       toolName: 'execute_tools',
       args: { code: 'const files = await workspace.list("."); return files.length;' },
     });
     expect(rows(orch)).toEqual([{ trigger: 'turn_start_no_delegation', step: 0, converted: false }]);
   });
 
-  test('`agents` named in a comment or a string is not a call', () => {
+  test('`agents` named in a comment or a string is not a call', async () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);
-    orch.turnExtension.onToolCall!({
+    await orch.turnExtension.onToolCall!({
       toolName: 'execute_tools',
       args: { code: '// next time try agents.swarm({})\nreturn "agents.swarm(" + 1;' },
     });
     expect(rows(orch)[0]?.converted).toBe(false);
   });
 
-  test('a sandbox call with no code argument is no program, never a throw', () => {
+  test('a sandbox call with no code argument is no program, never a throw', async () => {
     const orch = newTurn();
     step(orch, 0, [user(fresh)]);
-    orch.turnExtension.onToolCall!({ toolName: 'execute_tools', args: {} });
+    await orch.turnExtension.onToolCall!({ toolName: 'execute_tools', args: {} });
     expect(rows(orch)[0]?.converted).toBe(false);
   });
 
@@ -693,10 +695,10 @@ describe('delegation opportunities — which hint reached which step, and what c
     expect(delegationRows(second)[0]!.opportunityId).not.toBe(row.opportunityId);
   });
 
-  test('a converted opportunity is distinguishable from an ignored one', () => {
+  test('a converted opportunity is distinguishable from an ignored one', async () => {
     const converted = newTurnWithRoles();
     step(converted, 0, [user(fresh)]);
-    converted.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await converted.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
 
     const ignored = newTurnWithRoles();
     step(ignored, 0, [user(fresh)]);
@@ -718,10 +720,10 @@ describe('delegation opportunities — which hint reached which step, and what c
     expect(rows[1]!.opportunityId).not.toBe(rows[0]!.opportunityId);
   });
 
-  test('an agents call on a turn no hint reached records the autonomous arm separately', () => {
+  test('an agents call on a turn no hint reached records the autonomous arm separately', async () => {
     const orch = newTurnWithRoles();
     expect(injected(step(orch, 0, followUp(fresh)))).toEqual([]);
-    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
 
     const rows = delegationRows(orch);
     expect(rows).toHaveLength(1);
@@ -731,7 +733,7 @@ describe('delegation opportunities — which hint reached which step, and what c
     expect(rows[0]!.roles).toEqual(roles);
     expect(rows[0]!.converted).toBe(true);
     // One occasion per turn even when the tool is reached for repeatedly.
-    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     expect(delegationRows(orch)).toHaveLength(1);
   });
 
@@ -775,14 +777,14 @@ describe('delegation opportunities — which hint reached which step, and what c
     expect(rows[1]!.roles).toEqual(['general', 'auditor']);
   });
 
-  test('an autonomous delegation stamps the roles live when the call landed', () => {
+  test('an autonomous delegation stamps the roles live when the call landed', async () => {
     // The unprompted arm reads at the same moment for the same reason: what the
     // agent could have chosen among is a fact about when it chose.
     let live: readonly string[] = ['general', 'researcher'];
     const orch = newTurn();
     orch.steering.observeRoles(() => live);
     step(orch, 0, followUp(fresh));
-    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
+    await orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'hire' } });
     live = [];
 
     const rows = delegationRows(orch);
@@ -862,22 +864,22 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
 });
 
 describe('conversion + turn boundaries', () => {
-  test('converted counts delegation AFTER the nudge, not before it', () => {
+  test('converted counts delegation AFTER the nudge, not before it', async () => {
     const before = newTurn();
-    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
-    fail(before, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
+    await before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await fail(before, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     step(before, 1, [user('q')]);
     expect(lastSteer(before)).toEqual({
       trigger: 'repeated_failure', step: 1, tool: 'run', converted: false,
     });
 
-    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
+    await before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'swarm' } });
     expect(lastSteer(before)?.converted).toBe(true);
   });
 
-  test('reset clears the streaks, the splice state and the record', () => {
+  test('reset clears the streaks, the splice state and the record', async () => {
     const orch = newTurn();
-    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
+    await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     step(orch, 1, [user('q')]);
     expect(lastSteer(orch)).not.toBeNull();
 
@@ -885,7 +887,7 @@ describe('conversion + turn boundaries', () => {
     expect(lastSteer(orch)).toBeNull();
     // The previous turn's failures do not carry into this one.
     expect(injected(step(orch, 0, followUp('next')))).toEqual([]);
-    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
+    await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(injected(step(orch, 1, followUp('next')))).toHaveLength(1);
   });
 });
