@@ -239,7 +239,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       // frame is not a second code path.
       void (async () => responder(call))().then(
         (result) => hub.current?.webSocketMessage(socket, JSON.stringify({ id: call.id, result })),
-        (err) => hub.current?.webSocketMessage(socket, JSON.stringify({
+        (err: unknown) => hub.current?.webSocketMessage(socket, JSON.stringify({
           id: call.id, error: err instanceof Error ? err.message : String(err),
         })),
       );

@@ -16,7 +16,7 @@ import { createTestSql } from "@kinu.run/test-utils";
 // only this test's three imports drops an export a sibling binds and makes its
 // result depend on file load order.
 const workersModule = await import("cloudflare:workers");
-mock.module("cloudflare:workers", () => ({
+await mock.module("cloudflare:workers", () => ({
   ...workersModule,
   RpcTarget: class {},
   WorkerEntrypoint: class {},

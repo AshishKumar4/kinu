@@ -238,8 +238,10 @@ describe('DeviceSocketHub toolchain probe', () => {
     expect(await probing).toBeNull();
 
     // Nothing durable was learned, so the next read asks again.
-    void hub.probeToolchain('dev-a', NOW + 1);
+    const reprobing = hub.probeToolchain('dev-a', NOW + 1);
     expect(ws.sent).toHaveLength(2);
+    answerLast(hub, ws, { error: 'EIO reading /usr/bin' });
+    expect(await reprobing).toBeNull();
   });
 
   test('an answer past its window is re-asked, not reused', async () => {
@@ -253,8 +255,10 @@ describe('DeviceSocketHub toolchain probe', () => {
     // answer is evidence for a bounded time and then stops being one.
     const later = NOW + DEVICE_TOOLCHAIN_TTL_MS;
     expect(hub.toolchain('dev-a', later)).toBeNull();
-    void hub.probeToolchain('dev-a', later);
+    const reprobing = hub.probeToolchain('dev-a', later);
     expect(ws.sent).toHaveLength(2);
+    answerLast(hub, ws, { result: { present: ['node'] } });
+    expect(await reprobing).not.toBeNull();
   });
 
   test('an answer never outlives the machine that gave it', async () => {

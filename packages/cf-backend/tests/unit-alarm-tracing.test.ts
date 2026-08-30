@@ -303,7 +303,7 @@ describe('a span marks a failure and changes nothing about it', () => {
     const rejected: Error[] = [];
     await tracer
       .span('run', { isolateGen: 1, selfPath: 'A:a' }, async () => { await Promise.resolve(); throw thrown; })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (!(error instanceof Error)) throw error;
         rejected.push(error);
       });
@@ -319,7 +319,7 @@ describe('a span marks a failure and changes nothing about it', () => {
       .span('thrown', { isolateGen: 1, selfPath: 'A:a' }, async () => {
         throw new Error(`upstream refused: ${secret}`);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (!(error instanceof Error)) throw error;
         absorbed.push(error);
       });

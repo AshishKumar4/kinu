@@ -33,13 +33,15 @@ import {
 
 // The actor harness replaces `agents`; load the installed artifact separately
 // after supplying only the Workers builtins its module declaration needs.
-mock.module('cloudflare:email', () => ({ EmailMessage: class {} }));
-mock.module('cloudflare:workers', () => ({ RpcTarget: class {}, exports: {} }));
-mock.module('partyserver', () => ({
-  Server: class {},
-  getServerByName: () => undefined,
-  routePartykitRequest: () => undefined,
-}));
+await Promise.all([
+  mock.module('cloudflare:email', () => ({ EmailMessage: class {} })),
+  mock.module('cloudflare:workers', () => ({ RpcTarget: class {}, exports: {} })),
+  mock.module('partyserver', () => ({
+    Server: class {},
+    getServerByName: () => undefined,
+    routePartykitRequest: () => undefined,
+  })),
+]);
 const installedAgentModule = [
   '../../../node_modules/agents/dist/index.js',
   'fiber-recovery-sql-probe',
