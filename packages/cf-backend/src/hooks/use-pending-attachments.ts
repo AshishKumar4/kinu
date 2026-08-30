@@ -152,6 +152,10 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
     const owner: ConversionTask = { promise: null };
     conversionTasks.current.set(taskId, owner);
     owner.promise = (async () => {
+      // The conversion's failure, held for the generation test below: a task
+      // whose hook unmounted mid-inflation has no notice left to land in, and
+      // that is not the handler's call to make.
+      let thrown: { cause: unknown } | null = null;
       try {
         const transfer = new DataTransfer();
         for (const file of convertible) transfer.items.add(file);
@@ -159,22 +163,23 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
         if (generation !== conversionGeneration.current) return;
         dispatch({ kind: "offer", parts, oversized });
       } catch (cause) {
-        if (generation !== conversionGeneration.current) return;
-        const names = convertible.map((file) => file.name).join(", ");
-        const reason = renderThrownChain({ cause });
-        let message = `Couldn't read ${names}: ${reason}`;
-        try {
-          diagnostics.event('attachments.conversion_failed', {
-            names,
-            reason,
-          });
-        } catch (diagnosticCause) {
-          message += ` Recording the conversion failure also failed: ${renderThrownChain({ cause: diagnosticCause })}`;
-        }
-        dispatch({ kind: "conversion_failed", oversized, message });
+        thrown = { cause };
       } finally {
         if (conversionTasks.current.get(taskId) === owner) conversionTasks.current.delete(taskId);
       }
+      if (thrown === null || generation !== conversionGeneration.current) return;
+      const names = convertible.map((file) => file.name).join(", ");
+      const reason = renderThrownChain(thrown);
+      let message = `Couldn't read ${names}: ${reason}`;
+      try {
+        diagnostics.event('attachments.conversion_failed', {
+          names,
+          reason,
+        });
+      } catch (diagnosticCause) {
+        message += ` Recording the conversion failure also failed: ${renderThrownChain({ cause: diagnosticCause })}`;
+      }
+      dispatch({ kind: "conversion_failed", oversized, message });
     })();
   }, [limitBytes]);
 

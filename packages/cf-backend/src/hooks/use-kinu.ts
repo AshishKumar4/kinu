@@ -1569,6 +1569,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     const generation = ++subordinateRefreshGeneration.current;
     let task: Promise<void> | null = null;
     task = (async () => {
+      // The roster's failure, tested against the generation after the handler: a
+      // later reconnect owns this surface now, and its own load is what says
+      // what the roster is.
+      let thrown: { cause: unknown } | null = null;
       try {
         const value = await rpc<unknown>("listSubordinates", []);
         if (generation !== subordinateRefreshGeneration.current) return;
@@ -1577,10 +1581,12 @@ export function useKinu(target?: string | KinuActorAddress) {
         setSubordinates(roster);
         setSourceError("roster", null);
       } catch (err) {
-        if (generation !== subordinateRefreshGeneration.current) return;
-        setSourceError("roster", errorMessage(err));
+        thrown = { cause: err };
       } finally {
         subordinateRefreshTasks.current.delete(generation);
+      }
+      if (thrown !== null && generation === subordinateRefreshGeneration.current) {
+        setSourceError("roster", errorMessage(thrown.cause));
       }
     })();
     subordinateRefreshTasks.current.set(generation, task);
@@ -1699,6 +1705,10 @@ export function useKinu(target?: string | KinuActorAddress) {
       return;
     }
     searchTimer.current = setTimeout(async () => {
+      // The search's failure, published only while this query is still the
+      // newest: a keystroke past it retired this sequence number, and the pane
+      // belongs to the prefix the user actually has.
+      let thrown: { cause: unknown } | null = null;
       try {
         const results = await rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]);
         if (seq !== searchSeq.current) return;
@@ -1710,8 +1720,10 @@ export function useKinu(target?: string | KinuActorAddress) {
           updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
         })));
       } catch (err) {
-        if (seq !== searchSeq.current) return;
-        setSourceError("memory", `Memory search failed: ${errorMessage(err)}`);
+        thrown = { cause: err };
+      }
+      if (thrown !== null && seq === searchSeq.current) {
+        setSourceError("memory", `Memory search failed: ${errorMessage(thrown.cause)}`);
       }
     }, MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);

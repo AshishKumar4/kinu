@@ -29,7 +29,7 @@
  */
 
 import * as v from "valibot";
-import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /* ── timeout classification ─────────────────────────────────────────────────── */
 
@@ -194,17 +194,30 @@ let pageBuild: Promise<string | null> | null = null;
 
 /** The memoized baseline's async boundary. The module retains this task from
  * creation through settlement, so both eager priming and later readers share
- * one named no-signal outcome for an unexpected health-read defect. */
+ * one settled answer, and the handler itself decides nothing — it holds what it
+ * caught, and the two ways to have no sha are told apart below it. */
 async function loadPageBuildSha(): Promise<string | null> {
+  let thrown: { cause: unknown } | null = null;
   try {
-    const build = await fetchDeployedBuildSha();
-    return build;
+    // The read's OWN answer, its absences included: a deployment that carries
+    // no stamp, and a transport failure {@link isTolerableHealthFailure} names
+    // as expected, are both a null this page is meant to see. Neither is a
+    // defect, and neither is reported as one.
+    return await fetchDeployedBuildSha();
   } catch (cause) {
-    diagnostics.event('session_recovery.build_baseline_failed', {
-      reason: renderThrownChain({ cause }),
-    });
-    return null;
+    thrown = { cause };
   }
+  // Only a defect reaches past the handler: the read rethrows precisely what it
+  // does not tolerate. It lands on the sink WITH a class, so a health read that
+  // broke is a recorded failure and not a page that merely looks unstamped —
+  // and the null below is then the one honest answer for two readers that can
+  // use nothing but a comparable sha.
+  diagnostics.failure('session_recovery.build_baseline_failed', toKinuError({
+    doing: "reading this page's deployed build sha",
+    cause: thrown.cause,
+    otherwise: 'unavailable',
+  }));
+  return null;
 }
 
 /**

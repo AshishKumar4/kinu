@@ -130,6 +130,10 @@ export function usePagedScroll<Item>({
     const owner: PageLoadOperation = { promise: null };
     loadTasks.current.set(taskId, owner);
     owner.promise = (async () => {
+      // The page's failure, decided after the handler: `reset` and unmount both
+      // retire this walk's generation, and a walk with no list left to fill has
+      // none left to fail into either.
+      let thrown: { cause: unknown } | null = null;
       try {
         const page = await latest.current.fetchPage(from === "newest" ? undefined : from);
         if (generation !== walk.current) return;
@@ -138,8 +142,7 @@ export function usePagedScroll<Item>({
         if (page.status === "end") setExhausted(true);
         else cursor.current = page.next;
       } catch (err) {
-        if (generation !== walk.current) return;
-        setError(describeError(err));
+        thrown = { cause: err };
       } finally {
         if (loadTasks.current.get(taskId) === owner) loadTasks.current.delete(taskId);
         if (generation === walk.current) {
@@ -147,6 +150,7 @@ export function usePagedScroll<Item>({
           setLoading(false);
         }
       }
+      if (thrown !== null && generation === walk.current) setError(describeError(thrown.cause));
     })();
   }, [grows, exhausted]);
 

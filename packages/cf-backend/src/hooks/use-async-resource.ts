@@ -99,18 +99,24 @@ export function useAsyncResource<T>(
     }));
     let task: Promise<void> | null = null;
     task = (async () => {
+      // The run's failure, held for a test the handler cannot make: which run is
+      // the newest is decided below, so a slow load that a retry superseded
+      // publishes nothing into the resource that replaced it.
+      let thrown: { cause: unknown } | null = null;
       try {
         const value = await load();
         if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
       } catch (error) {
-        if (id !== runId.current) return;
-        setState((previous) => ({
-          identity,
-          resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, error),
-        }));
+        thrown = { cause: error };
       } finally {
         activeRuns.current.delete(id);
       }
+      if (thrown === null || id !== runId.current) return;
+      const { cause } = thrown;
+      setState((previous) => ({
+        identity,
+        resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, cause),
+      }));
     })();
     activeRuns.current.set(id, task);
   }, [identity, load]);
