@@ -21,8 +21,12 @@ import { describe, expect, mock, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import {
+  BUILTIN_PROFILE_CATALOG,
   CRAFT_NEUTRAL_PRIOR,
   HeadCapture,
+  profileCatalogDigest,
+  resolveTurnProfile,
+  type ResolvedTurnProfile,
   type HeadId,
   type HeadInput,
   type HeadReport,
@@ -88,6 +92,25 @@ const { ExplorationAgent } = await import('../src/exploration');
 
 function nativeBindings(values: SqlValue[]): SQLQueryBindings[] {
   return values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+}
+
+function profileFixture(providerRevision: string): ResolvedTurnProfile {
+  return resolveTurnProfile({
+    envelope: {
+      authority: { kind: 'account', accountId: 'acct-1' },
+      version: 1,
+      digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
+      catalog: BUILTIN_PROFILE_CATALOG,
+    },
+    provider: {
+      revision: providerRevision,
+      availableModels: [BUILTIN_PROFILE_CATALOG.tiers.default.model],
+    },
+    roleId: 'general',
+    workMode: 'build',
+    availableTools: [],
+    activeSkills: [],
+  });
 }
 
 interface ParentCall { method: string; arg: unknown }
@@ -226,6 +249,7 @@ function makeParentWorkspace(files: Record<string, string>) {
 interface Facet {
   setOwner(userId: string, token: string | null): Promise<{ ok: true }>;
   setSharedParent(name: string): Promise<{ ok: true }>;
+  facetProfile(): Promise<ResolvedTurnProfile>;
   initHead(input: HeadInput): Promise<{ ok: true; id: HeadId }>;
   runAsHead(): Promise<HeadReport>;
   headRuntime(capture: HeadCapture): import('../src/runtime').CFRuntime;
@@ -243,10 +267,15 @@ const HeadRuntimeProbeSchema = v.object({
  *  instance over storage a first one already wrote. That second form is a COLD
  *  ACTIVATION: no instance fields, the same durable rows, which is exactly what
  *  the platform hands back after an eviction between two RPCs. */
-function makeFacet(parentFiles: Record<string, string> = {}, existingDb?: Database) {
+function makeFacet(
+  parentFiles: Record<string, string> = {},
+  existingDb?: Database,
+  parentProfiles: Readonly<Record<string, ResolvedTurnProfile>> = {},
+) {
   const db = existingDb ?? new Database(':memory:');
   const parent = makeParentWorkspace(parentFiles);
   const nimbus = makeNimbusNamespace(parentFiles);
+  const profileCalls: string[] = [];
   const ctx = {
     id: { toString: () => 'facet-id' },
     storage: {
@@ -274,7 +303,18 @@ function makeFacet(parentFiles: Record<string, string> = {}, existingDb?: Databa
     Sandbox: {},
     PREVIEW_HOST_SUFFIX: 'preview.test',
     ...platformGatewayEnv(),
-    OrchestratorAgent: { idFromName: (name: string) => name, get: () => parent.stub },
+    OrchestratorAgent: {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        ...parent.stub,
+        facetTurnProfile: async (): Promise<ResolvedTurnProfile> => {
+          profileCalls.push(name);
+          const profile = parentProfiles[name];
+          if (!profile) throw new Error(`no profile fixture for ${name}`);
+          return profile;
+        },
+      }),
+    },
     UserDO: { idFromName: (name: string) => name, get: () => ({}) },
   };
   const partialContext: Partial<AgentContext> = {};
@@ -298,10 +338,21 @@ function makeFacet(parentFiles: Record<string, string> = {}, existingDb?: Databa
     'headRuntime',
   )?.value;
   if (!v.is(v.function(), headRuntimeMember)) throw new Error('ExplorationAgent headRuntime seam is missing');
+  const facetProfileMember = Object.getOwnPropertyDescriptor(
+    ExplorationAgent.prototype,
+    'facetProfile',
+  )?.value;
+  if (!v.is(v.function(), facetProfileMember)) throw new Error('ExplorationAgent facetProfile seam is missing');
   Object.defineProperty(concrete, 'name', { value: 'head-1', configurable: true });
   const facet: Facet = {
     setOwner: concrete.setOwner.bind(concrete),
     setSharedParent: concrete.setSharedParent.bind(concrete),
+    facetProfile: (): Promise<ResolvedTurnProfile> => {
+      const profile = facetProfileMember.call(concrete);
+      if (!(profile instanceof Promise)) throw new Error('facetProfile returned a non-promise');
+      // SAFETY: the private seam's declared return is Promise<ResolvedTurnProfile>.
+      return profile as Promise<ResolvedTurnProfile>;
+    },
     initHead: concrete.initHead.bind(concrete),
     runAsHead: concrete.runAsHead.bind(concrete),
     headRuntime: (capture): ReturnType<Facet['headRuntime']> => {
@@ -312,7 +363,7 @@ function makeFacet(parentFiles: Record<string, string> = {}, existingDb?: Databa
       return runtime as ReturnType<Facet['headRuntime']>;
     },
   };
-  return { facet, parent, nimbus, db };
+  return { facet, parent, nimbus, db, profileCalls };
 }
 
 function headInput(): HeadInput {
@@ -455,6 +506,21 @@ describe('a head forks its parent workspace', () => {
     ]);
   });
 
+  test('a reseeded parent never reuses the former root profile', async () => {
+    const firstProfile = profileFixture('root-first');
+    const secondProfile = profileFixture('root-second');
+    const { facet, profileCalls } = makeFacet({}, undefined, {
+      'root-first': firstProfile,
+      'root-second': secondProfile,
+    });
+
+    await facet.setSharedParent('root-first');
+    expect(await facet.facetProfile()).toBe(firstProfile);
+
+    await facet.setSharedParent('root-second');
+    expect(await facet.facetProfile()).toBe(secondProfile);
+    expect(profileCalls).toEqual(['root-first', 'root-second']);
+  });
   test('an MCTS branch — seeded without a parent workspace — cannot fork at all', async () => {
     // spawnBranchFacet seeds setOwner and nothing else (unit-facet-spawn), so a
     // branch reaches this state and can never acquire the head runtime.

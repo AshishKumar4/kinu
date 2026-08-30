@@ -41,6 +41,7 @@ const { OrchestratorAgent } = await import('../src/orchestrator');
 const { SubordinateAgent } = await import('../src/subordinate-agent');
 const { ExplorationAgent } = await import('../src/exploration');
 const { Think } = await import('@cloudflare/think');
+const { EXPLORATION_RPC_SURFACE } = await import('../src/rpc-surface');
 const entry = await import('../src/server');
 
 /** The three classes `ctx.exports` must resolve for a facet to spawn: the
@@ -87,6 +88,12 @@ describe('actor substrate — facet feasibility contract', () => {
     }
     expect(orchestratorHarness().agent).toBeInstanceOf(OrchestratorAgent);
     expect(subordinateHarness().agent).toBeInstanceOf(SubordinateAgent);
+  });
+
+  test('ExplorationAgent stays a bare facet with the parent-bootstrap RPC', () => {
+    expect(Object.getPrototypeOf(ExplorationAgent).name).toBe('Agent');
+    expect(ExplorationAgent.prototype.setSharedParent).toBeDefined();
+    expect(EXPLORATION_RPC_SURFACE).toContain('setSharedParent');
   });
 
   test('facet classes are exported by exact name from the worker entry', () => {

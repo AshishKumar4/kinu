@@ -357,6 +357,7 @@ export class ExplorationAgent extends Agent<Env> {
   async setSharedParent(agentName: string): Promise<{ ok: true }> {
     if (!agentName) throw new Error('agentName required');
     this.identity.setParentWorkspace(agentName);
+    this._facetProfile = null;
     return { ok: true };
   }
 
