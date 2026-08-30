@@ -56,15 +56,18 @@ import {
   totalsFor, type DecisionVerdict, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import {
-  R2_OP_VOCABULARY, cleanupEvidenceFromReport, evaluateRun, findCredentialLeaks, refusalText,
-  requireAdmitted, type AdmissionVerdict, type ArmEvidence, type CleanupEvidence,
-  type StorageRunRecord,
+  R2_OP_VOCABULARY, cleanupEvidenceFromReport, evaluateRun, expectedCells, findCredentialLeaks,
+  refusalText, requireAdmitted, type AccountingEvidence, type AdmissionVerdict, type ArmEvidence,
+  type CellCompletion, type CleanupEvidence, type GateId, type RestoreClaim,
+  type RestoreEvidence, type RunProvenance, type StorageRunRecord,
 } from './fixtures/storage-matrix/admission';
+import type { MeasuredCell, StageId } from './fixtures/storage-matrix/protocol';
 import {
   checkCleanup, createManifest, replayTeardown, writeManifest,
   type CleanupReport, type DeleteOutcome,
 } from './fixtures/storage-matrix/cleanup';
 import { parseJsonc } from './jsonc';
+import { trackedFiles } from './sources';
 /**
  * instrument now follows: a payload that disagreed with its contract used to
  * become a silent `undefined` and take a later segment down with it.
@@ -94,6 +97,10 @@ interface StartupState {
   restoration?: 'unstarted' | 'attached' | 'unattached';
   unready?: string;
   lastAttach?: AttachOutcome;
+  /** The container generation that supplied this attach. The warm `/create`
+   * probe must report the SAME id as the preceding wake; an `attached` kind
+   * alone could describe a fresh restore that silently changed generations. */
+  bootId?: string;
   chain?: {
     base?: { id?: string };
     delta?: unknown;
@@ -117,6 +124,7 @@ const StateReplySchema: v.GenericSchema<StateReply> = v.looseObject({
     restoration: v.optional(v.picklist(['unstarted', 'attached', 'unattached'])),
     unready: v.optional(v.string()),
     lastAttach: v.optional(v.looseObject({ kind: v.string(), detail: v.string() })),
+    bootId: v.optional(v.string()),
     chain: v.optional(v.nullable(v.looseObject({
       base: v.optional(v.looseObject({ id: v.optional(v.string()) })),
       delta: v.optional(v.unknown()),
@@ -223,10 +231,27 @@ interface FixtureNames {
   readonly containerApps: readonly string[];
 }
 
+/**
+ * The digest of every input the candidate container image is built from.
+ *
+ * Recorded because these are what the arms actually RAN. A rebuilt runner
+ * bundle or a changed daemon source produces different numbers from the same
+ * commit, and a provenance row naming only the commit cannot tell the two runs
+ * apart.
+ */
+interface FixtureImageDigests {
+  readonly imageSha256: string;
+  readonly dockerfileSha256: string;
+  readonly candidateRunnerSha256: string;
+  readonly overlayRunnerSha256: string;
+  readonly journalDaemonSha256: string;
+}
+
 interface FixtureResources extends FixtureNames {
   readonly configPath: string;
   /** The exact per-run Wrangler config, retained while teardown owns its directory. */
   readonly config: string;
+  readonly digests: FixtureImageDigests;
   disposeConfig(): void;
 }
 
@@ -272,11 +297,19 @@ export function resourceNames(runId: string, arms: readonly Strategy[]): Fixture
  */
 function candidateImageDockerfile(): string {
   const recipe = readFileSync(JOURNAL_DAEMON_DOCKERFILE, 'utf8');
-  const base = `FROM ${SANDBOX_IMAGE}\n`;
-  if (!recipe.startsWith(base)) {
-    throw new Error(`journal daemon Dockerfile must start with ${base.trim()} to be re-used as a builder stage`);
+  // The checked-in daemon recipe deliberately stays readable as the versioned
+  // tag humans recognize. The GENERATED benchmark image does not: a tag is a
+  // mutable pointer, so the build starts from the manifest digest it resolved
+  // to before this staging run. Reusing the recipe after its one FROM line
+  // keeps libfuse flags and package steps owned by the daemon Dockerfile.
+  const recipeBase = `FROM ${SANDBOX_IMAGE_TAG}\n`;
+  const pinnedBase = `FROM ${SANDBOX_IMAGE}\n`;
+  if (!recipe.startsWith(recipeBase)) {
+    throw new Error(
+      `journal daemon Dockerfile must start with ${recipeBase.trim()} to be re-used as a builder stage`,
+    );
   }
-  return `${base.trimEnd()} AS journal-daemon\n${recipe.slice(base.length)}\n`
+  return `${pinnedBase.trimEnd()} AS journal-daemon\n${recipe.slice(recipeBase.length)}\n`
     + `FROM ${SANDBOX_IMAGE}\n`
     + 'COPY --from=journal-daemon /usr/local/bin/kinu-journal-daemon /usr/local/bin/kinu-journal-daemon\n'
     + 'COPY --from=journal-daemon /usr/local/lib /usr/local/lib\n'
@@ -320,7 +353,7 @@ export function fixtureConfigForArms(
       .filter((container) => deployedClasses.includes(container.class_name))
       .map((container) => CANDIDATE_CONTAINER_CLASSES.has(container.class_name)
         ? { ...container, image: dockerfilePath }
-        : container),
+        : { ...container, image: SANDBOX_IMAGE }),
     r2_buckets: config.r2_buckets.map((bucket) => bucket.bucket_name === 'kinu-devbox-bench'
       ? { ...bucket, bucket_name: names.bucket }
       : bucket),
@@ -357,7 +390,8 @@ export async function createFixtureResources(
     Bun.write(overlayBundlePath, overlayBundle),
   ]);
   copyFileSync(JOURNAL_DAEMON_SOURCE, join(dir, 'journal-daemon.c'));
-  writeFileSync(dockerfilePath, candidateImageDockerfile());
+  const dockerfile = candidateImageDockerfile();
+  writeFileSync(dockerfilePath, dockerfile);
   const config = fixtureConfigForArms(
     readFileSync(join(BENCH_DIR, 'wrangler.jsonc'), 'utf8'),
     names,
@@ -365,10 +399,22 @@ export async function createFixtureResources(
     dockerfilePath,
   );
   writeFileSync(configPath, config);
+  // DIGESTED FROM THE BYTES THAT WERE WRITTEN, not from the sources they came
+  // from: the bundles are built here, so only these bytes describe what the
+  // containers will actually load.
+  const digest = (bytes: string | Uint8Array): string =>
+    `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
   return {
     ...names,
     configPath,
     config,
+    digests: {
+      imageSha256: SANDBOX_IMAGE_DIGEST,
+      dockerfileSha256: digest(dockerfile),
+      candidateRunnerSha256: digest(new Uint8Array(await Bun.file(bundlePath).arrayBuffer())),
+      overlayRunnerSha256: digest(new Uint8Array(await Bun.file(overlayBundlePath).arrayBuffer())),
+      journalDaemonSha256: digest(readFileSync(JOURNAL_DAEMON_SOURCE, 'utf8')),
+    },
     disposeConfig: () => { rmSync(dir, { recursive: true, force: true }); },
   };
 }
@@ -379,8 +425,14 @@ const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
 const JOURNAL_DAEMON_DIR = join(REPO_ROOT, 'packages/devbox/bench/journal-daemon');
 const JOURNAL_DAEMON_SOURCE = join(JOURNAL_DAEMON_DIR, 'journal-daemon.c');
 const JOURNAL_DAEMON_DOCKERFILE = join(JOURNAL_DAEMON_DIR, 'Dockerfile');
-/** Pinned to the @cloudflare/sandbox version, exactly as the bench config is. */
-const SANDBOX_IMAGE = 'docker.io/cloudflare/sandbox:0.12.8';
+/** The mutable version tag written in the checked-in daemon recipe. */
+const SANDBOX_IMAGE_TAG = 'docker.io/cloudflare/sandbox:0.12.8';
+/** The manifest digest that tag resolved to on 2026-08-27. */
+export const SANDBOX_IMAGE_DIGEST = 'sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f';
+/** Every generated fixture config and generated candidate Dockerfile uses this
+ * immutable reference, so the image provenance row identifies the bytes that
+ * ran rather than a tag another publisher can repoint. */
+export const SANDBOX_IMAGE = `docker.io/cloudflare/sandbox@${SANDBOX_IMAGE_DIGEST}`;
 /**
  * The decisive experiment's arms, from the adopted research spec.
  *
@@ -440,7 +492,7 @@ const PROCESS_DEADLINE_MS = 1_500_000;
  * same routes. Nothing below this line knows which arm it is running, which is
  * what makes a three-way comparison the same experiment as a two-way one.
  */
-type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas' | 'bounded-layers' | 'merkle-pack';
+export type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas' | 'bounded-layers' | 'merkle-pack';
 const STRATEGIES: readonly Strategy[] = [
   'snapshot-chain',
   'r2fs',
@@ -466,7 +518,31 @@ interface FrozenControlArtifact {
   readonly arms: readonly {
     readonly strategy: string;
     readonly verifyPassed: boolean;
+    /** The per-check lifecycle rows. Absent in every artifact written before
+     *  this instrument recorded them. */
+    readonly verifyChecks?: readonly { readonly name: string; readonly pass: boolean }[];
+    /** The arm's own `/ops` tally. Absent, or present with no total, in an
+     *  artifact whose run never reconciled its accounting. */
+    readonly ops?: { readonly total?: number } | null;
   }[];
+  /** The C1–C7 cleanup evidence the run wrote. An admission boolean alone
+   * cannot reconstruct this: a frozen artifact must carry the raw cleanup
+   * contract the current instrument evaluates. */
+  readonly cleanup?: {
+    readonly attempted?: boolean;
+    readonly kept?: boolean;
+    readonly workerAbsent?: boolean;
+    readonly runtimeAbsent?: boolean;
+    readonly bucketAndMultipartEmpty?: boolean;
+    readonly boxDurableStateEmpty?: boolean;
+    readonly localSecretsProcessesAbsent?: boolean;
+    readonly countersReconciled?: boolean;
+    readonly replayIdempotent?: boolean;
+    readonly multipartResidue?: number;
+    readonly errors?: readonly string[];
+  };
+  /** The G0–G9 decision the run took. Absent in every pre-admission artifact. */
+  readonly admission?: { readonly admitted: boolean };
 }
 
 const FrozenControlArtifactSchema: v.GenericSchema<FrozenControlArtifact> = v.looseObject({
@@ -481,8 +557,52 @@ const FrozenControlArtifactSchema: v.GenericSchema<FrozenControlArtifact> = v.lo
   arms: v.array(v.looseObject({
     strategy: NonEmptyString,
     verifyPassed: v.boolean(),
+    verifyChecks: v.optional(v.array(v.looseObject({
+      name: NonEmptyString,
+      pass: v.boolean(),
+    }))),
+    ops: v.optional(v.nullable(v.looseObject({ total: v.optional(v.number()) }))),
   })),
+  cleanup: v.optional(v.looseObject({
+    attempted: v.optional(v.boolean()),
+    kept: v.optional(v.boolean()),
+    workerAbsent: v.optional(v.boolean()),
+    runtimeAbsent: v.optional(v.boolean()),
+    bucketAndMultipartEmpty: v.optional(v.boolean()),
+    boxDurableStateEmpty: v.optional(v.boolean()),
+    localSecretsProcessesAbsent: v.optional(v.boolean()),
+    countersReconciled: v.optional(v.boolean()),
+    replayIdempotent: v.optional(v.boolean()),
+    multipartResidue: v.optional(v.number()),
+    errors: v.optional(v.array(v.string())),
+  })),
+  admission: v.optional(v.looseObject({ admitted: v.boolean() })),
 });
+
+/**
+ * What a supplied control artifact PROVES, which is not what its
+ * `verifyPassed` boolean says.
+ *
+ * MEASURED DEFECT THIS REPAIRS. The status column read
+ * `control.verifyPassed ? 'VERIFIED' : '**REFUSED**'`, so any artifact
+ * carrying `verifyPassed: true` for the named arm printed as VERIFIED —
+ * including the 2026-08-26 artifacts, whose runs had no per-check lifecycle
+ * rows, no per-arm operation tally and no G0–G9 admission decision at all.
+ * That boolean was set by an instrument that did not test what this one tests,
+ * and printing VERIFIED beside it launders a legacy pass into current
+ * evidence.
+ *
+ * `legacy-contract` is therefore its own status and NEVER a pass: a missing
+ * contract cannot be satisfied retroactively, and no shim maps it onto
+ * VERIFIED.
+ */
+export type FrozenControlStatus = 'verified' | 'refused' | 'legacy-contract';
+
+export const FROZEN_CONTROL_LABEL = {
+  verified: 'VERIFIED',
+  refused: '**REFUSED**',
+  'legacy-contract': '**UNUSABLE (legacy contract)**',
+} as const satisfies Record<FrozenControlStatus, string>;
 
 export interface FrozenControl {
   readonly strategy: ControlStrategy;
@@ -495,6 +615,80 @@ export interface FrozenControl {
   readonly seed: string;
   readonly budgetMs: string;
   readonly verifyPassed: boolean;
+  readonly status: FrozenControlStatus;
+  /** Why the status is what it is, printed beside it. */
+  readonly statusDetail: string;
+}
+
+/** The status a frozen control artifact earned from the evidence it carries. */
+export interface FrozenControlJudgement {
+  readonly status: FrozenControlStatus;
+  readonly statusDetail: string;
+}
+
+export function frozenControlStatus(
+  arm: FrozenControlArtifact['arms'][number],
+  cleanup: FrozenControlArtifact['cleanup'],
+  admission: FrozenControlArtifact['admission'],
+): FrozenControlJudgement {
+  const missing: string[] = [];
+  if (arm.verifyChecks === undefined || arm.verifyChecks.length === 0) {
+    missing.push('per-check lifecycle rows');
+  }
+  if (arm.ops === undefined || arm.ops === null || arm.ops.total === undefined) {
+    missing.push('a per-arm operation tally');
+  }
+  const cleanupComplete = cleanup !== undefined
+    && cleanup.attempted !== undefined
+    && cleanup.kept !== undefined
+    && cleanup.workerAbsent !== undefined
+    && cleanup.runtimeAbsent !== undefined
+    && cleanup.bucketAndMultipartEmpty !== undefined
+    && cleanup.boxDurableStateEmpty !== undefined
+    && cleanup.localSecretsProcessesAbsent !== undefined
+    && cleanup.countersReconciled !== undefined
+    && cleanup.replayIdempotent !== undefined
+    && cleanup.multipartResidue !== undefined
+    && cleanup.errors !== undefined;
+  if (!cleanupComplete) missing.push('the complete C1–C7 cleanup evidence');
+  if (admission === undefined) missing.push('a G0–G9 admission decision');
+  if (missing.length > 0) {
+    return {
+      status: 'legacy-contract',
+      statusDetail: `predates the current contract: it carries no ${missing.join(', no ')}`,
+    };
+  }
+  const failed = (arm.verifyChecks ?? []).filter((check) => !check.pass).map((check) => check.name);
+  if (!arm.verifyPassed || failed.length > 0) {
+    return {
+      status: 'refused',
+      statusDetail: failed.length > 0
+        ? `its lifecycle proof failed: ${failed.slice(0, 3).join(', ')}`
+        : 'its run recorded a failed lifecycle proof',
+    };
+  }
+  if (
+    cleanup?.attempted !== true
+    || cleanup.kept !== false
+    || cleanup.workerAbsent !== true
+    || cleanup.runtimeAbsent !== true
+    || cleanup.bucketAndMultipartEmpty !== true
+    || cleanup.boxDurableStateEmpty !== true
+    || cleanup.localSecretsProcessesAbsent !== true
+    || cleanup.countersReconciled !== true
+    || cleanup.replayIdempotent !== true
+    || cleanup.multipartResidue !== 0
+    || (cleanup.errors?.length ?? 0) !== 0
+  ) {
+    return { status: 'refused', statusDetail: 'its C1–C7 cleanup contract did not complete cleanly' };
+  }
+  if (admission?.admitted !== true) {
+    return { status: 'refused', statusDetail: 'its run was not admitted by its own G0–G9 gates' };
+  }
+  return {
+    status: 'verified',
+    statusDetail: 'lifecycle, accounting, cleanup and admission all present and passing',
+  };
 }
 
 /** Decode one supplied historical artifact as context. The source artifact
@@ -526,6 +720,7 @@ export function parseFrozenControlArtifact(
     );
   }
   const arm = arms[0]!;
+  const judged = frozenControlStatus(arm, parsed.output.cleanup, parsed.output.admission);
   return {
     strategy,
     artifact: path,
@@ -537,6 +732,8 @@ export function parseFrozenControlArtifact(
     seed: parsed.output.meta.seed,
     budgetMs: parsed.output.meta['loop budget ms'],
     verifyPassed: arm.verifyPassed,
+    status: judged.status,
+    statusDetail: judged.statusDetail,
   };
 }
 
@@ -807,13 +1004,20 @@ function deleteFixtureResources(resources: FixtureResources): readonly string[] 
 async function deployFixture(
   token: string,
   resources: FixtureResources,
-): Promise<{ fixture: Fixture; stop: () => readonly string[] }> {
+): Promise<{ fixture: Fixture; workerVersion: string; stop: () => readonly string[] }> {
   const output = wrangler([
     'deploy', '--config', resources.configPath, '--var', `BENCH_TOKEN:${token}`,
   ]);
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
   if (origin === undefined) throw new Error(`deploy printed no workers.dev origin:\n${output.slice(-2500)}`);
-  log(`deployed ${origin}`);
+  // WHICH DEPLOYED CODE SERVED THE ARMS. Two runs from one commit can be served
+  // by different Worker versions — a `--var` change alone publishes a new one —
+  // and the version id is the only thing that distinguishes them.
+  const workerVersion = /Current Version ID:\s*([0-9a-f-]{8,})/i.exec(output)?.[1];
+  if (workerVersion === undefined) {
+    throw new Error(`deploy printed no Worker version id:\n${output.slice(-2500)}`);
+  }
+  log(`deployed ${origin} at version ${workerVersion}`);
 
   const unauth = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })
     .then((r) => r.status)
@@ -845,6 +1049,7 @@ async function deployFixture(
 
   return {
     fixture: { origin, token },
+    workerVersion,
     stop: () => deleteFixtureResources(resources),
   };
 }
@@ -883,6 +1088,298 @@ const HeadReplySchema: v.GenericSchema<HeadReply> = v.looseObject({
   size: v.optional(v.number()),
   error: v.optional(v.string()),
 });
+
+// ── the candidate lifecycle contract ───────────────────────────────────────
+//
+// MEASURED DEFECT THIS REPAIRS. The mount branch below used to read
+//
+//     if (strategy === 'r2fs' || strategy === 'overlay-cas' || mode === 'chain')
+//
+// so a candidate arm took the CHAIN's checks whenever the box happened to
+// report `mode: 'chain'`, and otherwise fell through to the extraction branch —
+// which asks only that `/workspace` is a plain directory and that
+// `ALLOW_EXTRACTION` is set. A container that never attached a candidate store
+// at all satisfies the second one completely. Both candidate arms could
+// therefore pass a lifecycle proof having proven nothing whatsoever about their
+// own strategy, and their latency rows would then be ranked.
+//
+// A candidate attachment is neither a chain nor an extraction, and the three
+// things it must prove have no counterpart in either:
+//
+//   the workload writes THROUGH a journal daemon's FUSE mount over the work
+//     directory, with the daemon alive and its control socket outside both the
+//     journal mount and the payload mount — or the capture reads through the
+//     mount it is capturing;
+//   the control envelope is the single immutable published head, addressed by
+//     its own digest, stamped with this arm's format and box, and living
+//     OUTSIDE the payload subtree a container replacement owns;
+//   the payload closure that envelope names is completely present, at the
+//     declared byte length of every object in it.
+
+interface CandidateEnvelopeFact {
+  key?: string;
+  rootEnvelopeId?: string;
+  sha256?: string;
+  format?: string;
+  boxId?: string;
+  generation?: string;
+  cut?: string;
+  closureCount?: number;
+}
+
+const CandidateEnvelopeFactSchema: v.GenericSchema<CandidateEnvelopeFact> = v.looseObject({
+  key: v.optional(v.string()),
+  rootEnvelopeId: v.optional(v.string()),
+  sha256: v.optional(v.string()),
+  format: v.optional(v.string()),
+  boxId: v.optional(v.string()),
+  generation: v.optional(v.string()),
+  cut: v.optional(v.string()),
+  closureCount: v.optional(v.number()),
+});
+
+interface CandidateClosureFact {
+  key?: string;
+  declaredBytes?: string;
+  storedBytes?: number | null;
+}
+
+const CandidateClosureFactSchema: v.GenericSchema<CandidateClosureFact> = v.looseObject({
+  key: v.optional(v.string()),
+  declaredBytes: v.optional(v.string()),
+  storedBytes: v.optional(v.nullable(v.number())),
+});
+
+interface CandidateStoreFact {
+  payloadPrefix?: string;
+  envelopePrefix?: string;
+  expectedBoxId?: string;
+  expectedFormat?: string;
+  envelopes?: CandidateEnvelopeFact[];
+  head?: CandidateEnvelopeFact | null;
+  forkedHeads?: string[];
+  closure?: CandidateClosureFact[];
+  unreadable?: string[];
+}
+
+interface CandidateContainerFact {
+  expectedWorkdirMount?: string;
+  expectedStoreMount?: string;
+  expectedJournalRoot?: string;
+  expectedJournalSocket?: string;
+  expectedJournalBinary?: string;
+  mounts?: string;
+  journalRootPresent?: boolean;
+  journalSocketPresent?: boolean;
+  journalDaemonCommand?: string;
+}
+
+export interface CandidateFactsReply {
+  ok?: boolean;
+  error?: string;
+  store?: CandidateStoreFact;
+  container?: CandidateContainerFact;
+}
+
+const CandidateFactsReplySchema: v.GenericSchema<CandidateFactsReply> = v.looseObject({
+  ok: v.optional(v.boolean()),
+  error: v.optional(v.string()),
+  store: v.optional(v.looseObject({
+    payloadPrefix: v.optional(v.string()),
+    envelopePrefix: v.optional(v.string()),
+    expectedBoxId: v.optional(v.string()),
+    expectedFormat: v.optional(v.string()),
+    envelopes: v.optional(v.array(CandidateEnvelopeFactSchema)),
+    head: v.optional(v.nullable(CandidateEnvelopeFactSchema)),
+    forkedHeads: v.optional(v.array(v.string())),
+    closure: v.optional(v.array(CandidateClosureFactSchema)),
+    unreadable: v.optional(v.array(v.string())),
+  })),
+  container: v.optional(v.looseObject({
+    expectedWorkdirMount: v.optional(v.string()),
+    expectedStoreMount: v.optional(v.string()),
+    expectedJournalRoot: v.optional(v.string()),
+    expectedJournalSocket: v.optional(v.string()),
+    expectedJournalBinary: v.optional(v.string()),
+    mounts: v.optional(v.string()),
+    journalRootPresent: v.optional(v.boolean()),
+    journalSocketPresent: v.optional(v.boolean()),
+    journalDaemonCommand: v.optional(v.string()),
+  })),
+});
+
+/** One mountpoint's row in `/proc/mounts`, whose fields are
+ *  `device mountpoint fstype options dump pass`. Naming that layout once is
+ *  what keeps a caller from indexing field 2 and calling it a filesystem. */
+function mountAt(mounts: string, mountpoint: string): { line: string; fstype: string } | null {
+  for (const raw of mounts.split('\n')) {
+    const line = raw.trim();
+    const fields = line.split(' ');
+    const fstype = fields[2];
+    if (fields[1] === mountpoint && fstype !== undefined) return { line, fstype };
+  }
+  return null;
+}
+
+/**
+ * One candidate arm's lifecycle rows, derived from the fixture's raw facts.
+ *
+ * Pure, and exported, so the contract is provable against hand-built facts:
+ * the red tests drive every direction of it without a deployment, which is the
+ * only way a fallthrough like the one above gets caught before a 70-minute run
+ * ranks an arm that measured nothing.
+ */
+export function candidateLifecycleChecks(
+  strategy: 'bounded-layers' | 'merkle-pack',
+  reply: CandidateFactsReply,
+): VerifyCheck[] {
+  const store = reply.store;
+  const container = reply.container;
+  if (reply.ok !== true || store === undefined || container === undefined) {
+    return [{
+      name: `the fixture answered the ${strategy} candidate contract`,
+      pass: false,
+      detail: reply.error ?? `ok=${String(reply.ok)} store=${store === undefined ? 'absent' : 'present'} `
+        + `container=${container === undefined ? 'absent' : 'present'}`,
+    }];
+  }
+
+  const checks: VerifyCheck[] = [];
+  const add = (name: string, pass: boolean, detail: string): void => {
+    checks.push({ name, pass, detail });
+  };
+
+  const workdirMountpoint = container.expectedWorkdirMount ?? '';
+  const storeMountpoint = container.expectedStoreMount ?? '';
+  const mounts = container.mounts ?? '';
+  const workdir = workdirMountpoint === '' ? null : mountAt(mounts, workdirMountpoint);
+  const storeMount = storeMountpoint === '' ? null : mountAt(mounts, storeMountpoint);
+
+  // A FUSE fstype is `fuse`, `fuse.<name>` or `fuseblk`. Prefix-matching the
+  // field rather than searching the whole line keeps an unrelated mount whose
+  // DEVICE name contains "fuse" from answering for the work directory.
+  add(
+    'the work directory is the journal daemon\'s FUSE mount',
+    workdir !== null && /^fuse(?:\.|blk$|$)/.test(workdir.fstype),
+    workdir === null
+      ? `${workdirMountpoint || '(no expected mountpoint)'} is not mounted`
+      : `${workdirMountpoint} -> ${workdir.fstype}`,
+  );
+
+  const daemonCommand = container.journalDaemonCommand ?? '';
+  const daemonBinary = container.expectedJournalBinary ?? '';
+  const journalRoot = container.expectedJournalRoot ?? '';
+  const journalSocket = container.expectedJournalSocket ?? '';
+  const daemonNames = [daemonBinary, journalRoot, workdirMountpoint, journalSocket];
+  add(
+    'the journal daemon is alive and serving this arm\'s root, mount and socket',
+    daemonBinary !== '' && daemonNames.every((part) => part !== '' && daemonCommand.includes(part)),
+    daemonCommand === ''
+      ? 'no journal daemon process is alive in the container'
+      : `argv is missing ${daemonNames.filter((part) => part === '' || !daemonCommand.includes(part)).join(', ') || 'nothing'}`,
+  );
+
+  add(
+    'the journal root is materialized beneath the mount',
+    container.journalRootPresent === true,
+    `${journalRoot || '(no expected root)'} -> ${container.journalRootPresent === true ? 'present' : 'absent'}`,
+  );
+
+  // OUTSIDE BOTH MOUNTS. The daemon's control socket and sealed stage are what
+  // a capture reads; holding them under the journal mount would make the
+  // capture read through the mount it captures, and under the store mount would
+  // publish them as payload.
+  const socketInsideMount = journalSocket !== ''
+    && [workdirMountpoint, storeMountpoint]
+      .filter((mount) => mount !== '')
+      .some((mount) => journalSocket === mount || journalSocket.startsWith(`${mount}/`));
+  add(
+    'the journal control socket is present outside both mounts',
+    container.journalSocketPresent === true && journalSocket !== '' && !socketInsideMount,
+    container.journalSocketPresent === true
+      ? socketInsideMount
+        ? `${journalSocket} is inside a mount this arm captures`
+        : `${journalSocket} is present outside both mounts`
+      : `${journalSocket || '(no expected socket)'} is not a socket`,
+  );
+
+  add(
+    'the payload store is an s3fs mount at the candidate prefix',
+    storeMount !== null && storeMount.fstype.includes('s3fs'),
+    storeMount === null
+      ? `${storeMountpoint || '(no expected mountpoint)'} is not mounted`
+      : `${storeMountpoint} -> ${storeMount.fstype}`,
+  );
+
+  const head = store.head ?? null;
+  const forked = store.forkedHeads ?? [];
+  const unreadable = store.unreadable ?? [];
+  add(
+    'the control envelope is the single published head',
+    head !== null && forked.length === 0 && unreadable.length === 0,
+    head === null
+      ? forked.length > 0
+        ? `${forked.length} envelopes share the newest generation: ${forked.join(', ')}`
+        : `no readable root envelope under ${store.envelopePrefix ?? '(no envelope prefix)'}`
+      : unreadable.length > 0
+        ? `head present but ${unreadable.length} envelope(s) are unreadable: ${unreadable.join('; ')}`
+        : `generation ${head.generation ?? '?'} at cut ${head.cut ?? '?'}`,
+  );
+
+  add(
+    'the control envelope is the immutable object its own key names',
+    head !== null && head.sha256 !== undefined && head.sha256 === head.rootEnvelopeId,
+    head === null
+      ? '(no head envelope)'
+      : `key names ${head.rootEnvelopeId ?? '?'}, bytes hash to ${head.sha256 ?? '?'}`,
+  );
+
+  add(
+    'the control envelope carries this arm\'s format and box',
+    head !== null
+      && head.format === store.expectedFormat && store.expectedFormat !== undefined
+      && head.boxId === store.expectedBoxId && store.expectedBoxId !== undefined,
+    head === null
+      ? '(no head envelope)'
+      : `format ${head.format ?? '?'} (want ${store.expectedFormat ?? '?'}), `
+        + `box ${head.boxId ?? '?'} (want ${store.expectedBoxId ?? '?'})`,
+  );
+
+  const envelopePrefix = store.envelopePrefix ?? '';
+  const payloadPrefix = store.payloadPrefix ?? '';
+  add(
+    'the control envelope prefix is outside the payload mount',
+    envelopePrefix !== '' && payloadPrefix !== ''
+      && !envelopePrefix.startsWith(payloadPrefix) && !payloadPrefix.startsWith(envelopePrefix),
+    `envelopes at ${envelopePrefix || '(none)'}, payload at ${payloadPrefix || '(none)'}`,
+  );
+
+  // NOT `length > 0` ALONE. An object the envelope declares at 4 MiB and the
+  // store holds at 0 B resolves, so an existence check would pass a closure
+  // that cannot be read back. Its objects must also sit below THIS arm's
+  // payload prefix; a complete closure borrowed from another arm is not this
+  // candidate's durable payload.
+  const closure = store.closure ?? [];
+  const absent = closure.filter((row) => row.storedBytes === null || row.storedBytes === undefined);
+  const short = closure.filter((row) =>
+    row.storedBytes !== null && row.storedBytes !== undefined
+    && Number(row.declaredBytes ?? '-1') !== row.storedBytes);
+  const outsidePayload = closure.filter((row) =>
+    payloadPrefix === '' || row.key === undefined || !row.key.startsWith(payloadPrefix));
+  add(
+    'the payload closure is completely present at its declared lengths',
+    head !== null && closure.length > 0 && absent.length === 0 && short.length === 0 && outsidePayload.length === 0,
+    head === null
+      ? '(no head envelope, so no closure to resolve)'
+      : closure.length === 0
+        ? 'the head envelope names no payload objects at all'
+        : `${closure.length} object(s): ${absent.length} absent, ${short.length} at the wrong length, `
+          + `${outsidePayload.length} outside this arm's payload prefix`
+          + `${absent.length + short.length + outsidePayload.length === 0 ? '' : ` (${[...absent, ...short, ...outsidePayload].map((row) => row.key ?? '?').slice(0, 4).join(', ')})`}`,
+  );
+
+  return checks;
+}
 
 const MAX_HTTPS_RESPONSE_BYTES = 1_048_576;
 
@@ -1180,15 +1677,21 @@ interface CheckpointRow {
   outcome: string;
 }
 
-interface ArmResult {
+export interface ArmResult {
   strategy: Strategy;
   box: string;
   verifyPassed: boolean;
   verifyChecks: VerifyCheck[];
   attachColdMs: number | null;
   attachColdKind: string;
+  /** Container generation the initial cold attach observed. */
+  attachColdBootId: string | null;
   attachWarmMs: number | null;
   attachWarmKind: string;
+  /** Generation the wake restored and the immediate second attach observed.
+   * Equal, non-empty values prove the warm probe did not hide a replacement. */
+  wakeBootId: string | null;
+  attachWarmBootId: string | null;
   checkpoints: CheckpointRow[];
   stopMs: number | null;
   wakeMs: number | null;
@@ -1413,7 +1916,8 @@ export function isTransientContainerCreateError(error: string | undefined): bool
 function unmeasuredArm(strategy: Strategy, box: string, notes: string[]): ArmResult {
   return {
     strategy, box, verifyPassed: false, verifyChecks: [],
-    attachColdMs: null, attachColdKind: '', attachWarmMs: null, attachWarmKind: '',
+    attachColdMs: null, attachColdKind: '', attachColdBootId: null,
+    attachWarmMs: null, attachWarmKind: '', wakeBootId: null, attachWarmBootId: null,
     checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '',
     phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
     generationBeforeLadder: null, generationAfterLadder: null,
@@ -1464,6 +1968,7 @@ async function measureArm(
   }
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
+  result.attachColdBootId = cold.state.state?.bootId ?? null;
   log(`${strategy}: install harness`);
   await installHarness(fixture, box);
 
@@ -1524,6 +2029,7 @@ async function measureArm(
   const woke = await kickAndPoll(fixture, box, '/wake', 'wake', ['attached']);
   result.wakeMs = woke.ms;
   result.wakeKind = woke.attach.kind;
+  result.wakeBootId = woke.state.state?.bootId ?? null;
   verify(
     'the wake attached durable bytes',
     result.wakeKind === 'attached',
@@ -1533,56 +2039,14 @@ async function measureArm(
   const afterWake = woke.state;
   const mode = afterWake.state?.chain?.mode;
   const mounts = await retryTransient('work-directory mount read', async () =>
-    await sh(fixture, box, 'cat /proc/mounts | grep -F /workspace || true'),
+    await sh(fixture, box, 'cat /proc/mounts'),
   );
-  const mountLine = (mounts.stdout ?? '').trim().split('\n')[0] ?? '';
-  if (strategy === 'r2fs' || strategy === 'overlay-cas' || mode === 'chain') {
-    const expected = strategy === 'r2fs' ? 's3fs' : 'overlay';
-    verify(
-      `/workspace is really a ${expected} mount`,
-      mountLine.includes(expected),
-      mountLine.length > 0 ? mountLine : '(no mount line)',
-    );
-    const writable = strategy === 'r2fs'
-      ? '/var/tmp/devbox/r2fs-cache'
-      : strategy === 'overlay-cas'
-        ? '/var/tmp/devbox/cas-upper'
-        : '/var/tmp/devbox/upper';
-    const exists = await retryTransient('writable-layer read', async () =>
-      await sh(fixture, box, `test -d ${writable} && echo yes || echo no`),
-    );
-    verify('the writable layer exists', (exists.stdout ?? '').trim() === 'yes', `${writable} -> ${(exists.stdout ?? '').trim()}`);
-    if (strategy === 'overlay-cas') {
-      const lower = await retryTransient('tree lower read', async () =>
-        await sh(fixture, box, 'test -d /var/tmp/devbox/cas-lower && grep -qs " /var/tmp/devbox/cas-lower " /proc/mounts && echo yes || echo no'),
-      );
-      verify(
-        'the tree lower is present and mounted at its lower path',
-        (lower.stdout ?? '').trim() === 'yes',
-        `/var/tmp/devbox/cas-lower -> ${(lower.stdout ?? '').trim()}`,
-      );
-    } else if (strategy !== 'r2fs') {
-      const lower = await retryTransient('base lower read', async () =>
-        await sh(fixture, box, 'test -d /var/tmp/devbox/lower-base && grep -qs " /var/tmp/devbox/lower-base " /proc/mounts && echo yes || echo no'),
-      );
-      verify(
-        'the base layer is present and mounted at its lower path',
-        (lower.stdout ?? '').trim() === 'yes',
-        `/var/tmp/devbox/lower-base -> ${(lower.stdout ?? '').trim()}`,
-      );
-    }
-  } else {
-    verify(
-      '/workspace is a plain directory, as extraction mode requires',
-      mountLine.length === 0,
-      mountLine.length === 0 ? `mode ${mode ?? 'none'}: no mount expected` : `mode ${mode ?? 'none'} but mounted: ${mountLine}`,
-    );
-    verify(
-      'extraction is permitted on this host',
-      afterWake.extractionAllowed === true,
-      `ALLOW_EXTRACTION=${afterWake.extractionAllowed === true ? '1' : '(unset)'}`,
-    );
-  }
+  const mountText = mounts.stdout ?? '';
+  // The row for the work directory itself, matched on the MOUNTPOINT field.
+  // The previous `grep -F /workspace` also matched a device name or an option
+  // containing that text, and took whichever line came first.
+  const workdirMount = mountAt(mountText, '/workspace');
+  const mountLine = workdirMount?.line ?? '';
 
   const survived = await retryTransient('marker read after wake', async () =>
     await sh(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
@@ -1607,18 +2071,81 @@ async function measureArm(
       found.error ?? `${key} -> ${found.exists === true ? `${found.size ?? 0}B` : 'missing'}`,
     );
   };
-  if (strategy === 'r2fs') {
+
+  // ONE BRANCH PER ARM, dispatched on the STRATEGY the driver asked for and
+  // never on a mode the box happened to report. Every arm's surface is proven
+  // against its own contract; there is no branch a strategy can fall into by
+  // resembling another one.
+  const writableLayer = async (path: string): Promise<void> => {
+    const exists = await retryTransient('writable-layer read', async () =>
+      await sh(fixture, box, `test -d ${path} && echo yes || echo no`),
+    );
+    verify('the writable layer exists', (exists.stdout ?? '').trim() === 'yes', `${path} -> ${(exists.stdout ?? '').trim()}`);
+  };
+  const lowerLayer = async (name: string, path: string): Promise<void> => {
+    const lower = await retryTransient(`${name} read`, async () =>
+      await sh(fixture, box, `test -d ${path} && grep -qs " ${path} " /proc/mounts && echo yes || echo no`),
+    );
+    verify(name, (lower.stdout ?? '').trim() === 'yes', `${path} -> ${(lower.stdout ?? '').trim()}`);
+  };
+
+  if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
+    const facts = await retryTransient('candidate lifecycle facts', async () =>
+      await call(fixture, 'GET', `/candidate?box=${box}`, CandidateFactsReplySchema),
+    );
+    for (const check of candidateLifecycleChecks(strategy, facts)) {
+      verify(check.name, check.pass, check.detail);
+    }
+  } else if (strategy === 'r2fs') {
+    verify(
+      '/workspace is really a s3fs mount',
+      workdirMount?.fstype.includes('s3fs') === true,
+      mountLine.length > 0 ? mountLine : '(no mount line)',
+    );
+    await writableLayer('/var/tmp/devbox/r2fs-cache');
     await head('the store holds the committed marker', afterWake.storePrefix === undefined
       ? undefined
       : `${afterWake.storePrefix}${markerFile}`);
   } else if (strategy === 'overlay-cas') {
+    verify(
+      '/workspace is really a overlay mount',
+      workdirMount?.fstype.includes('overlay') === true,
+      mountLine.length > 0 ? mountLine : '(no mount line)',
+    );
+    await writableLayer('/var/tmp/devbox/cas-upper');
+    await lowerLayer('the tree lower is present and mounted at its lower path', '/var/tmp/devbox/cas-lower');
     await head('the folded tree holds the committed marker', afterWake.storePrefix === undefined
       ? undefined
       : `${afterWake.storePrefix}tree/${markerFile}`);
     await head('the fold advanced the durable cursor', afterWake.storePrefix === undefined
       ? undefined
       : `${afterWake.storePrefix}cursor.json`);
+  } else if (mode === 'chain') {
+    verify(
+      '/workspace is really a overlay mount',
+      workdirMount?.fstype.includes('overlay') === true,
+      mountLine.length > 0 ? mountLine : '(no mount line)',
+    );
+    await writableLayer('/var/tmp/devbox/upper');
+    await lowerLayer('the base layer is present and mounted at its lower path', '/var/tmp/devbox/lower-base');
+    const chainId = afterWake.state?.chain?.base?.id;
+    await head(
+      'the delta object exists in the store with non-zero size',
+      chainId === undefined ? undefined : `backups/${chainId}/delta.sqsh`,
+    );
   } else {
+    // The chain in EXTRACTION mode, which is the only arm this branch can now
+    // hold: r2fs, overlay-cas and both candidates are dispatched above.
+    verify(
+      '/workspace is a plain directory, as extraction mode requires',
+      mountLine.length === 0,
+      mountLine.length === 0 ? `mode ${mode ?? 'none'}: no mount expected` : `mode ${mode ?? 'none'} but mounted: ${mountLine}`,
+    );
+    verify(
+      'extraction is permitted on this host',
+      afterWake.extractionAllowed === true,
+      `ALLOW_EXTRACTION=${afterWake.extractionAllowed === true ? '1' : '(unset)'}`,
+    );
     const chainId = afterWake.state?.chain?.base?.id;
     await head(
       mode === 'extract'
@@ -1677,6 +2204,7 @@ async function measureArm(
   const warm = await kickAndPoll(fixture, box, '/create', 'warm attach', ['attached']);
   result.attachWarmMs = warm.ms;
   result.attachWarmKind = warm.attach.kind;
+  result.attachWarmBootId = warm.state.state?.bootId ?? null;
 
   log(`${strategy}: ops accounting and teardown`);
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
@@ -1723,15 +2251,30 @@ async function measureArm(
 
 // ── report ──────────────────────────────────────────────────────────────────
 
-function metricSummary(arm: ArmResult, name: string): Summary | null {
-  const medians: number[] = [];
-
+/**
+ * One row per probe run that measured `name`: its median and its own wall time.
+ *
+ * The RAW repetitions, kept rather than summarized here, because two different
+ * consumers need different things from them — the report wants a central value
+ * and G9 wants the dispersion of the repetitions themselves. Deriving both from
+ * one collection is what stops the gate from judging a number the table never
+ * showed.
+ */
+function metricRows(arm: ArmResult, name: string): { p50: number; wallMs: number }[] {
+  const rows: { p50: number; wallMs: number }[] = [];
   for (const run of arm.phases) {
     for (const phase of run.phases) {
-      for (const metric of phase.metrics) if (metric.name === name) medians.push(metric.summary.p50);
+      for (const metric of phase.metrics) {
+        if (metric.name === name) rows.push({ p50: metric.summary.p50, wallMs: metric.wallMs });
+      }
     }
   }
-  return medians.length === 0 ? null : summarize(medians);
+  return rows;
+}
+
+function metricSummary(arm: ArmResult, name: string): Summary | null {
+  const rows = metricRows(arm, name);
+  return rows.length === 0 ? null : summarize(rows.map((row) => row.p50));
 }
 
 const num = (value: number | null, digits = 2): string => {
@@ -1749,7 +2292,7 @@ const HEADLINE = [
 
 /** The artifact's header, printed as-is above the tables. `INCOMPLETE` is how a
  *  run that stopped early says so rather than looking whole. */
-interface RunMeta {
+export interface RunMeta {
   date: string;
   worker: string;
   bucket: string;
@@ -1758,6 +2301,77 @@ interface RunMeta {
   'loop budget ms': string;
   'frozen controls provenance'?: string;
   INCOMPLETE?: string;
+}
+
+/**
+ * The pairs a ratio may be taken over, most specific first.
+ *
+ * A pair is used only when this run MEASURED both of its arms. The candidate
+ * pair leads because the two candidates are the live question: the three
+ * shipped strategies are mandatory historical controls (see
+ * `CONTROL_WITNESSES`) and can never be a production winner, so a run carrying
+ * the candidates is deciding between them rather than against a control.
+ */
+const DECISION_PAIRS = [
+  {
+    baseline: 'bounded-layers',
+    candidate: 'merkle-pack',
+    purpose: 'candidate comparison this experiment exists to decide',
+  },
+  {
+    baseline: 'snapshot-chain',
+    candidate: 'overlay-cas',
+    purpose: 'original O(p)-versus-O(c) question over the shipped arms',
+  },
+] as const satisfies readonly {
+  readonly baseline: Strategy;
+  readonly candidate: Strategy;
+  readonly purpose: string;
+}[];
+
+export type DecisionPair =
+  | {
+      readonly kind: 'pair';
+      readonly baseline: Strategy;
+      readonly candidate: Strategy;
+      readonly purpose: string;
+    }
+  | { readonly kind: 'absent'; readonly reason: string };
+
+/**
+ * The two arms a ratio may be taken over, derived from the arms this run
+ * MEASURED rather than named beside the table.
+ *
+ * MEASURED DEFECT THIS REPAIRS. The caller used to read
+ *
+ *     const candidate = STRATEGIES.find((id) => id === 'overlay-cas');
+ *     if (candidate !== undefined) { decide(ticks, 'snapshot-chain', candidate); }
+ *
+ * over a frozen five-element constant, so the guard was true on every run and
+ * the else-branch beside it was unreachable. A `--candidates-only` run — the
+ * only shape the final staging run has — therefore printed a decision rule
+ * whose ratio was taken over `snapshot-chain` and `overlay-cas`: two arms it
+ * never deployed, never measured, and could not have measured, because their
+ * durable-object bindings are absent from the generated fixture config.
+ */
+export function comparablePair(arms: readonly { readonly strategy: string }[]): DecisionPair {
+  const present = new Set(arms.map((arm) => arm.strategy));
+  for (const pair of DECISION_PAIRS) {
+    if (present.has(pair.baseline) && present.has(pair.candidate)) {
+      return {
+        kind: 'pair',
+        baseline: pair.baseline,
+        candidate: pair.candidate,
+        purpose: pair.purpose,
+      };
+    }
+  }
+  return {
+    kind: 'absent',
+    reason: `This run measured ${arms.length === 0 ? 'no arms' : arms.map((arm) => `\`${arm.strategy}\``).join(', ')}, `
+      + 'and no declared pair has both of its arms present: '
+      + `${DECISION_PAIRS.map((pair) => `\`${pair.baseline}\` vs \`${pair.candidate}\``).join(' or ')}.`,
+  };
 }
 
 export function renderFrozenControls(controls: readonly FrozenControl[]): string {
@@ -1770,11 +2384,11 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
     out.push('', 'Historical context is unavailable: no `--control <strategy>=<path>` was supplied.');
     return out.join('\n');
   }
-  out.push('', '| control | status | provenance | date | worker | bucket | image | seed | loop budget ms |');
-  out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  out.push('', '| control | status | why | provenance | date | worker | bucket | image | seed | loop budget ms |');
+  out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const control of controls) {
     out.push(
-      `| \`${control.strategy}\` | ${control.verifyPassed ? 'VERIFIED' : '**REFUSED**'} `
+      `| \`${control.strategy}\` | ${FROZEN_CONTROL_LABEL[control.status]} | ${control.statusDetail} `
       + `| \`${control.artifact}#sha256:${control.sha256}\` | ${control.date} `
       + `| ${control.worker ?? '—'} | ${control.bucket ?? '—'} | \`${control.image}\` `
       + `| ${control.seed} | ${control.budgetMs} |`,
@@ -1901,45 +2515,55 @@ function render(
 
     // The rule, applied to the rows above and to nothing else. Stated with its
     // thresholds so a reader can check the arithmetic rather than trust it.
-    const candidate = STRATEGIES.find((id) => id === 'overlay-cas');
-    if (candidate !== undefined) {
-      // ONLY LIFECYCLE-PROVEN ARMS REACH THE RULE. `decide` only sees ticks, so
-      // this gate prevents a blank-disk arm from supplying a plausible ratio.
-      const eligibleTicks = rankableTicks(arms, ticks);
-      const refused = arms.filter((arm) => !arm.verifyPassed).map((arm) => arm.strategy);
-      if (refused.length > 0) {
-        out.push(
-          `REFUSED FROM RANKING: ${refused.map((id) => `\`${id}\``).join(', ')} failed the lifecycle proof, so `
-          + 'their ticks measured a container\'s own blank disk and are excluded from the ratio '
-          + 'below. Their rows remain in the table above for diagnosis.',
-        );
-        out.push('');
-      }
-      const verdict: DecisionVerdict = decide(eligibleTicks, 'snapshot-chain', candidate);
-      out.push('#### Decision rule');
-      out.push('');
+    //
+    // ONLY LIFECYCLE-PROVEN ARMS REACH THE RULE. `decide` only sees ticks, so
+    // this gate prevents a blank-disk arm from supplying a plausible ratio.
+    const eligibleTicks = rankableTicks(arms, ticks);
+    const refused = arms.filter((arm) => !arm.verifyPassed).map((arm) => arm.strategy);
+    if (refused.length > 0) {
       out.push(
-        'ratio(w) = Σ ticks(`snapshot-chain`, w) / Σ ticks(`overlay-cas`, w). '
+        `REFUSED FROM RANKING: ${refused.map((id) => `\`${id}\``).join(', ')} failed the lifecycle proof, so `
+        + 'their ticks measured a container\'s own blank disk and are excluded from the ratio '
+        + 'below. Their rows remain in the table above for diagnosis.',
+      );
+      out.push('');
+    }
+    out.push('#### Decision rule');
+    out.push('');
+    const pair = comparablePair(arms);
+    if (pair.kind === 'absent') {
+      out.push(
+        `**NO RATIO IS DERIVABLE FROM THIS RUN.** ${pair.reason} A ratio needs a declared pair `
+        + 'whose BOTH arms this run measured; printing one over arms the run never requested '
+        + 'would report a rule about a comparison nobody performed.',
+      );
+      out.push('');
+    } else {
+      const verdict: DecisionVerdict = decide(eligibleTicks, pair.baseline, pair.candidate);
+      out.push(
+        `ratio(w) = Σ ticks(\`${pair.baseline}\`, w) / Σ ticks(\`${pair.candidate}\`, w), `
+        + `the ${pair.purpose}. `
         + 'ratio(git) ≥ 10 AND ratio(npm) ≥ 3 ⇒ the O(p) shape wins outright. '
-        + 'Both < 3 ⇒ O(c) tick cost is not the bottleneck and the chain stays. '
+        + `Both < 3 ⇒ O(c) tick cost is not the bottleneck and \`${pair.baseline}\` stays default. `
         + 'Between them the rule is deliberately undecided, and says so.',
       );
       out.push('');
       out.push(verdict.kind === 'inconclusive'
         ? `**INCONCLUSIVE.** ${verdict.reason}`
-        : `**${verdict.kind === 'o-p-wins' ? 'THE O(p) SHAPE WINS' : 'THE CHAIN STAYS DEFAULT'}.** ${verdict.detail}`);
+        : verdict.kind === 'o-p-wins'
+          ? `**THE O(p) SHAPE WINS: \`${pair.candidate}\`.** ${verdict.detail}`
+          : `**\`${pair.baseline}\` STAYS DEFAULT.** ${verdict.detail}`);
       out.push('');
       out.push(
         'The 10x and 3x bars are CHOSEN thresholds from the research that set them, not measured '
         + 'constants. This experiment measures the ratio; it does not confirm the bar.',
       );
       out.push('');
-    } else if (frozenControls.length > 0) {
-      out.push('#### Candidate comparison');
-      out.push('');
+    }
+    if (frozenControls.length > 0) {
       out.push(
-        'Only the current candidate rows may be compared. The frozen controls above remain visible '
-        + 'as verified or refused historical evidence and never enter a ratio, rank, or recommendation.',
+        'Only the current arms\' rows may be compared. The frozen controls above remain visible '
+        + 'as historical context and never enter a ratio, rank, or recommendation.',
       );
       out.push('');
     }
@@ -2061,9 +2685,8 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
       + 'treated as settled.';
   }
 
-  const key = 'small-stat-1k';
   const scored = ranked
-    .map((arm) => ({ arm, stat: metricSummary(arm, key)?.p50 ?? null }))
+    .map((arm) => ({ arm, stat: metricSummary(arm, DECIDING_METRIC)?.p50 ?? null }))
     .filter((row): row is { arm: ArmResult; stat: number } => row.stat !== null);
   if (scored.length < 2) {
     return 'Both arms completed the lifecycle proof but the deciding metric did not complete on both, so the arms '
@@ -2118,18 +2741,251 @@ export function devboxArmEvidence(
     producedMeasurements: arm.phases.length > 0 || arm.checkpoints.length > 0 || arm.decisiveTicks.length > 0,
   };
 }
-export function devboxAdmission(
-  arms: readonly ArmResult[],
-  meta: RunMeta,
-  token: string,
-  cleanup: CleanupEvidence,
-): AdmissionVerdict {
+
+/**
+ * The cold-attach ceiling the admission contract holds every arm to.
+ *
+ * NOT the fixture's abandonment budget, which `packages/devbox/bench/worker.ts`
+ * deliberately sets to 300 s so a slow attach is MEASURED instead of killed
+ * mid-restore. That is a measurement decision about when to give up; it is not
+ * a licence to admit a cold attach five minutes long. This is the contract's
+ * own number and raising it is not an option available to a run that missed it.
+ */
+export const COLD_ATTACH_CEILING_MS = 25_000;
+
+/** The staged stage this instrument declares. Its cells are the ones G6 must
+ *  see completed, and an empty declaration is what made G6 vacuous. */
+const DEVBOX_DECLARED_STAGES: readonly StageId[] = ['blank'];
+
+/** The metric a recommendation is derived from — metadata latency over many
+ *  small files — named once so the gate judges the same quantity the report
+ *  prints and `recommend` ranks. */
+export const DECIDING_METRIC = 'small-stat-1k';
+
+/** Repetitions a deciding cell needs before a dispersion claim exists at all.
+ *  `scoreCells` censors below two; naming it here lets the refusal say which
+ *  arm produced how many instead of only that a cell was censored. */
+const MIN_DECIDING_REPETITIONS = 2;
+
+/** Ladder rows one complete arm owes: a quiesce and a tick at every change
+ *  size. Derived from the ladder itself, so changing the ladder cannot leave a
+ *  completeness check asserting a stale count. */
+export const EXPECTED_LADDER_ROWS = CHANGE_SIZES_KIB.length * 2;
+
+/**
+ * The restore class each arm CLAIMS, preregistered before the run.
+ *
+ * A claim is not a result. `overlay-cas` claims `unbounded` because that is its
+ * preregistered red witness (`unbounded-pending-replay`), `bounded-layers`
+ * claims `bounded-k` because `MAX_LAYERS` bounds one resolution to eight
+ * consulted layers, `merkle-pack` claims `log-p` because a path resolves down
+ * a digest-linked node tree, `snapshot-chain` claims `bounded-k` because a
+ * restore replays base plus the deltas its rebase policy bounds, and `r2fs`
+ * claims `strict-o1` because its restore is a mount with no replay at all.
+ */
+const RESTORE_CLAIMS = {
+  'snapshot-chain': 'bounded-k',
+  r2fs: 'strict-o1',
+  'overlay-cas': 'unbounded',
+  'bounded-layers': 'bounded-k',
+  'merkle-pack': 'log-p',
+} as const satisfies Record<Strategy, RestoreClaim>;
+
+/**
+ * What produced the numbers, as digests rather than as a date.
+ *
+ * MEASURED DEFECT THIS REPAIRS. The provenance this driver wrote carried
+ * `git rev-parse HEAD` — which is identical for a clean tree and a tree with
+ * uncommitted driver changes — plus `startedAt`/`finishedAt` synthesized as
+ * `${meta.date}T00:00:00.000Z` and `...:01.000Z`: a one-second run that never
+ * happened, on a date with no time in it. `versions` held the IMAGE under the
+ * `@cloudflare/sandbox` key, so no dependency version was recorded either, and
+ * `containerFacts` was a sentence built from the worker name, which is never
+ * empty and therefore never refuses.
+ *
+ * Every field here is a G0 requirement, and each one identifies a different
+ * thing that changes what the numbers mean: the source, whether that source
+ * was actually the tree that ran, which deployed Worker version served the
+ * arms, when the run really happened, and the exact image, runner bundles and
+ * daemon source the containers were built from.
+ */
+export interface RunIdentity {
+  readonly commit: string;
+  /** sha256 over the tracked-file diff against HEAD, or `clean`. A dirty tree
+   *  is a different instrument from its commit and no revision can say so. */
+  readonly dirtyDigest: string;
+  /** The Worker version id the deploy published. */
+  readonly workerVersion: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly image: string;
+  /** OCI manifest digest for the exact sandbox image the generated config pins. */
+  readonly imageSha256: string;
+  readonly dockerfileSha256: string;
+  readonly candidateRunnerSha256: string;
+  readonly overlayRunnerSha256: string;
+  readonly journalDaemonSha256: string;
+}
+
+/** Commit plus the digest that distinguishes its dirty source tree. */
+export interface SourceRevision {
+  readonly commit: string;
+  readonly dirtyDigest: string;
+}
+
+/** The source revision AND whether the tree that ran was that revision. */
+export function sourceRevision(): SourceRevision {
+  const commit = execFileSync(
+    'git',
+    ['rev-parse', 'HEAD'],
+    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  ).trim();
+  // `git diff --binary HEAD` carries both staged and unstaged tracked changes,
+  // including mode and rename metadata. Untracked paths are not in a diff, so
+  // identify them from porcelain status, then enumerate their bytes through the
+  // repository's one authoritative corpus (`trackedFiles`). A private
+  // `git ls-files` here would make this driver govern a different source set
+  // from the project's own gates.
+  const diff = execFileSync('git', ['diff', '--binary', 'HEAD'], {
+    cwd: REPO_ROOT,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const status = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '-z'], {
+    cwd: REPO_ROOT,
+    maxBuffer: 64 * 1024 * 1024,
+  }).toString('utf8');
+  const untracked = new Set(
+    status.split('\0')
+      .filter((row) => row.startsWith('?? '))
+      .map((row) => row.slice(3)),
+  );
+  if (diff.length === 0 && untracked.size === 0) return { commit, dirtyDigest: 'clean' };
+
+  const hash = createHash('sha256').update(diff);
+  for (const path of trackedFiles()) {
+    if (!untracked.has(path)) continue;
+    hash.update('\0untracked\0').update(path).update('\0');
+    hash.update(readFileSync(join(REPO_ROOT, path))).update('\0');
+  }
+  return { commit, dirtyDigest: `sha256:${hash.digest('hex')}` };
+}
+
+/** Every identity field, keyed as the version row the artifact records. */
+function identityVersions(identity: RunIdentity) {
+  return {
+    source: identity.commit,
+    'source-tree': identity.dirtyDigest,
+    'worker-version': identity.workerVersion,
+    'container-image': identity.image,
+    'container-image-digest': identity.imageSha256,
+    'candidate-image-dockerfile': identity.dockerfileSha256,
+    'candidate-runner-bundle': identity.candidateRunnerSha256,
+    'overlay-cas-runner-bundle': identity.overlayRunnerSha256,
+    'journal-daemon-source': identity.journalDaemonSha256,
+  };
+}
+
+function devboxProvenance(identity: RunIdentity, meta: RunMeta): RunProvenance {
+  return {
+    runId: meta.worker,
+    commit: identity.commit,
+    startedAt: identity.startedAt,
+    finishedAt: identity.finishedAt,
+    seed: meta.seed,
+    image: identity.image,
+    versions: identityVersions(identity),
+    containerFacts: `fixture Worker ${meta.worker} at version ${identity.workerVersion} on ${identity.image} `
+      + `(${identity.imageSha256}), built from Dockerfile ${identity.dockerfileSha256} with candidate runner `
+      + `${identity.candidateRunnerSha256} and journal daemon source ${identity.journalDaemonSha256}`,
+  };
+}
+
+/** G0 reasons for an identity that cannot attribute the run. Each field is
+ *  required outright: a blank one is a refusal, never a default. */
+function identityProblems(identity: RunIdentity): string[] {
+  const problems: string[] = [];
+  for (const [name, value] of Object.entries(identityVersions(identity))) {
+    if (value.trim() === '') problems.push(`the run recorded no ${name}`);
+  }
+  const digests = {
+    'container-image-digest': identity.imageSha256,
+    'candidate-image-dockerfile': identity.dockerfileSha256,
+    'candidate-runner-bundle': identity.candidateRunnerSha256,
+    'overlay-cas-runner-bundle': identity.overlayRunnerSha256,
+    'journal-daemon-source': identity.journalDaemonSha256,
+  };
+  for (const [name, digest] of Object.entries(digests)) {
+    if (digest !== '' && !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+      problems.push(`${name} "${digest}" is not a sha256 digest`);
+    }
+  }
+  if (!identity.image.includes(`@${identity.imageSha256}`)) {
+    problems.push(`container image "${identity.image}" is not pinned to ${identity.imageSha256 || 'its recorded digest'}`);
+  }
+  if (identity.dirtyDigest !== 'clean' && !/^sha256:[0-9a-f]{64}$/.test(identity.dirtyDigest)) {
+    problems.push(`source-tree "${identity.dirtyDigest}" is neither \`clean\` nor a digest`);
+  }
+  if (identity.startedAt === identity.finishedAt) {
+    problems.push('the run started and finished at the same instant, so no run was timed');
+  }
+  return problems;
+}
+
+export interface DevboxAdmissionInput {
+  readonly arms: readonly ArmResult[];
+  /** The arms the operator ASKED for. Admission compares the measured set
+   *  against exactly this, so a run that silently lost an arm — or gained one
+   *  nobody requested — cannot look complete. */
+  readonly requested: readonly Strategy[];
+  readonly meta: RunMeta;
+  readonly identity: RunIdentity;
+  readonly token: string;
+  readonly cleanup: CleanupEvidence;
+}
+
+/**
+ * The cell one arm owes this instrument.
+ *
+ * A cold attach inside the ceiling, the whole checkpoint ladder, a wake that
+ * attached durable bytes, a second attach that observed the UNCHANGED
+ * generation, and its own operation tally. Anything less is an incomplete
+ * cell — never a faster one.
+ */
+function armCompletedTheCell(arm: ArmResult): boolean {
+  return arm.verifyPassed
+    && arm.attachColdMs !== null && arm.attachColdMs <= COLD_ATTACH_CEILING_MS
+    && arm.wakeKind === 'attached'
+    && arm.attachWarmKind === 'attached'
+    && arm.wakeBootId !== null
+    && arm.wakeBootId === arm.attachWarmBootId
+    && arm.checkpoints.length === EXPECTED_LADDER_ROWS
+    && arm.ops !== null;
+}
+
+/**
+ * The record this run puts in front of the shared gates.
+ *
+ * MEASURED DEFECT THIS REPAIRS. `restore`, `declaredStages`, `cells` and
+ * `deciding` were all `[]`. Every one of those gates then passed VACUOUSLY:
+ * `restoreProblems` iterates `record.restore`, `completenessProblems` compares
+ * against `expectedCells([])`, and `censorProblems` guards its only run-level
+ * check behind `scored.length > 0`. Three of the ten gates could not fail, and
+ * a run that measured nothing durable at all reported G5, G6 and G9 as held.
+ */
+function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
+  const armOf = (strategy: Strategy): ArmResult | undefined =>
+    input.arms.find((row) => row.strategy === strategy);
+
+  // ACCOUNTING IS PER-ARM AND COMPLETE, or absent. Summing the arms that
+  // happened to report a tally prices the arms that did not as if they cost
+  // nothing, and an under-reported cost column is worse than a missing one
+  // because nobody re-derives a number that already has a value.
   const calls: Record<string, number> = {};
   let classA = 0;
   let classB = 0;
   let classFree = 0;
   let total = 0;
-  for (const arm of arms) {
+  for (const arm of input.arms) {
     if (arm.ops === null) continue;
     classA += arm.ops.classA ?? 0;
     classB += arm.ops.classB ?? 0;
@@ -2137,23 +2993,41 @@ export function devboxAdmission(
     total += arm.ops.total ?? 0;
     for (const [name, count] of Object.entries(arm.ops.calls ?? {})) calls[name] = (calls[name] ?? 0) + count;
   }
-  const accounting = arms.some((arm) => arm.ops !== null)
-    ? { source: 'fixture /ops tallies summed over arms', calls, classA, classB, classFree, total }
+  const everyArmTallied = input.requested.length > 0
+    && input.requested.every((strategy) => armOf(strategy)?.ops != null);
+  const accounting: AccountingEvidence | null = everyArmTallied
+    ? { source: 'fixture /ops tallies summed over every requested arm', calls, classA, classB, classFree, total }
     : null;
-  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
-  const record: StorageRunRecord = {
+
+  const cells = expectedCells(DEVBOX_DECLARED_STAGES, null);
+  const cellComplete = input.requested.length > 0
+    && input.requested.every((strategy) => {
+      const arm = armOf(strategy);
+      return arm !== undefined && armCompletedTheCell(arm);
+    });
+
+  // ONE DECIDING ROW PER ARM PER CELL. The shared cell id carries no arm, so
+  // each arm's repetitions ride on their own row: pooling two arms' values into
+  // one row would make the CV measure the DIFFERENCE between the arms, which is
+  // the effect this experiment exists to find rather than noise to censor for.
+  const deciding: MeasuredCell[] = [];
+  for (const strategy of input.requested) {
+    const arm = armOf(strategy);
+    if (arm === undefined) continue;
+    const measured = metricRows(arm, DECIDING_METRIC);
+    for (const cell of cells) {
+      deciding.push({
+        id: cell,
+        values: measured.map((row) => row.p50),
+        wallMs: measured.length === 0 ? null : measured.reduce((sum, row) => sum + row.wallMs, 0),
+      });
+    }
+  }
+
+  return {
     schema: 'storage-matrix/run@1',
-    provenance: {
-      runId: meta.worker,
-      commit,
-      startedAt: `${meta.date}T00:00:00.000Z`,
-      finishedAt: `${meta.date}T00:00:01.000Z`,
-      seed: meta.seed,
-      image: meta.image,
-      versions: { '@cloudflare/sandbox': meta.image },
-      containerFacts: `fixture Worker ${meta.worker}; per-arm lifecycle rows are in the artifact`,
-    },
-    arms: arms.map(devboxArmEvidence),
+    provenance: devboxProvenance(input.identity, input.meta),
+    arms: input.arms.map(devboxArmEvidence),
     // This driver runs no fault-cut or security-cell instrumentation yet, so
     // every G3/G4 field carries its REFUSING default: missing evidence is a
     // refusal, never an implicit pass.
@@ -2167,23 +3041,186 @@ export function devboxAdmission(
       rollbackOrPhantomRoot: null,
     },
     security: {
-      credentialLeaks: findCredentialLeaks(JSON.stringify({ meta, arms }), [token]),
+      credentialLeaks: findCredentialLeaks(
+        JSON.stringify({ meta: input.meta, arms: input.arms }),
+        [input.token],
+      ),
       securityCellsComplete: false,
       prefixEscapes: 0,
       capabilityEscapesOrReplays: 0,
       staleWriterAccepted: false,
       hostileMetadataAccepted: false,
     },
-    restore: [],
-    declaredStages: [],
-    cells: [],
+    // ONE ROW PER REQUESTED ARM, and `work` stays null: this driver observes a
+    // wake, it does not COUNT the remote operations, replay units and cpu steps
+    // a `RestoreWork` row asserts. Filling those with zeroes would be the same
+    // vacuity in a different field, so the row says the restore was never
+    // counted and G5 refuses on that.
+    restore: input.requested.map((strategy): RestoreEvidence => ({
+      arm: strategy,
+      expected: true,
+      work: null,
+      claim: RESTORE_CLAIMS[strategy],
+      mechanicalBoundVerified: false,
+    })),
+    declaredStages: [...DEVBOX_DECLARED_STAGES],
+    cells: cells.map((cell): CellCompletion => ({ ...cell, completed: cellComplete })),
     confirmatoryPlan: null,
     accounting,
-    cleanup,
-    deciding: [],
-    decidingBudgetMs: Number(meta['loop budget ms']),
+    cleanup: input.cleanup,
+    deciding,
+    decidingBudgetMs: Number(input.meta['loop budget ms']),
   };
-  return evaluateRun(record);
+}
+
+/**
+ * This instrument's own requirements, per gate.
+ *
+ * The shared gates judge a RECORD. They cannot know that a devbox run must
+ * carry a tally for every arm it requested, that a cold attach has a contract
+ * ceiling of its own, or that the measured arm set must be exactly the
+ * requested one. Those reasons belong to the gate each one is about, so a
+ * refusal names the missing evidence rather than only a gate id.
+ */
+
+function devboxRequirements(input: DevboxAdmissionInput) {
+  const g0 = identityProblems(input.identity);
+  const g5: string[] = [];
+  const g6: string[] = [];
+  const g7: string[] = [];
+  const g9: string[] = [];
+
+  // EXACTLY THE REQUESTED SET, on all three gates: a restore class, a complete
+  // cell and a repetition count are each claims about the whole arm set, and
+  // none of them survives an arm that vanished or one that appeared.
+  const armSet: string[] = [];
+  if (input.requested.length === 0) {
+    armSet.push('the run requested no arms, so there is no expected arm set to complete');
+  }
+  for (const strategy of STRATEGIES) {
+    const requestedCount = input.requested.filter((arm) => arm === strategy).length;
+    const measuredCount = input.arms.filter((arm) => arm.strategy === strategy).length;
+    if (requestedCount > 1) {
+      armSet.push(`arm \`${strategy}\` was requested ${requestedCount} times; an expected arm set has no duplicates`);
+    }
+    if (measuredCount > requestedCount) {
+      armSet.push(
+        `arm \`${strategy}\` produced ${measuredCount} result rows but was requested ${requestedCount} time(s)`,
+      );
+    }
+  }
+  for (const strategy of input.requested) {
+    if (!input.arms.some((arm) => arm.strategy === strategy)) {
+      armSet.push(`arm \`${strategy}\` was requested but contributed no result row`);
+    }
+  }
+  for (const arm of input.arms) {
+    if (!input.requested.includes(arm.strategy)) {
+      armSet.push(`arm \`${arm.strategy}\` produced a result row without being requested`);
+    }
+  }
+  g5.push(...armSet);
+  g6.push(...armSet);
+  g9.push(...armSet);
+
+  for (const strategy of input.requested) {
+    const arm = input.arms.find((row) => row.strategy === strategy);
+    if (arm === undefined) continue;
+
+    // COLD AND UNCHANGED ATTACH EVIDENCE. A cell whose arm never cold-attached,
+    // or whose second attach did not find the generation already there, did not
+    // complete — whatever its latency rows say.
+    if (arm.attachColdMs === null) {
+      g6.push(`arm \`${strategy}\` recorded no cold attach, so its first attach was never timed`);
+    } else if (arm.attachColdMs > COLD_ATTACH_CEILING_MS) {
+      g6.push(
+        `arm \`${strategy}\` cold attach took ${arm.attachColdMs} ms, past the `
+        + `${COLD_ATTACH_CEILING_MS} ms admission ceiling`,
+      );
+    }
+    if (arm.attachColdKind !== 'attached' && arm.attachColdKind !== 'empty') {
+      g6.push(`arm \`${strategy}\` cold attach reported kind "${arm.attachColdKind || 'none'}"`);
+    }
+    if (arm.attachWarmKind !== 'attached') {
+      g6.push(
+        `arm \`${strategy}\` second attach did not observe the unchanged generation `
+        + `(kind "${arm.attachWarmKind || 'none'}")`,
+      );
+    }
+    if (arm.wakeBootId === null || arm.attachWarmBootId === null) {
+      g6.push(
+        `arm \`${strategy}\` did not record both wake and warm-attach generation ids, `
+        + 'so unchanged attach was not evidenced',
+      );
+    } else if (arm.wakeBootId !== arm.attachWarmBootId) {
+      g6.push(
+        `arm \`${strategy}\` warm attach changed generation from \`${arm.wakeBootId}\` `
+        + `to \`${arm.attachWarmBootId}\``,
+      );
+    }
+    if (arm.wakeKind !== 'attached') {
+      g6.push(`arm \`${strategy}\` wake did not attach durable bytes (kind "${arm.wakeKind || 'none'}")`);
+    }
+    if (arm.checkpoints.length !== EXPECTED_LADDER_ROWS) {
+      g6.push(
+        `arm \`${strategy}\` recorded ${arm.checkpoints.length} of ${EXPECTED_LADDER_ROWS} `
+        + 'ladder checkpoints',
+      );
+    }
+
+    // A TALLY PER ARM. `accounting` is one summed row, so an arm without a
+    // tally disappears into a total that still adds up.
+    if (arm.ops === null) {
+      g7.push(`arm \`${strategy}\` recorded no \`/ops\` tally, so its operations are unpriced`);
+    } else if (arm.ops.total === undefined) {
+      g7.push(`arm \`${strategy}\` reported a tally carrying no total`);
+    }
+
+    const repetitions = metricRows(arm, DECIDING_METRIC).length;
+    if (repetitions < MIN_DECIDING_REPETITIONS) {
+      g9.push(
+        `arm \`${strategy}\` measured the deciding metric \`${DECIDING_METRIC}\` ${repetitions} time(s); `
+        + `${MIN_DECIDING_REPETITIONS} repetitions are the fewest a dispersion claim can rest on`,
+      );
+    }
+  }
+
+  if (input.requested.length === 0) {
+    g5.push('the run recorded no restore evidence at all');
+  }
+  for (const strategy of input.requested) {
+    g5.push(
+      `arm \`${strategy}\` has no counted restore: this driver observes a wake but runs no `
+      + `restore-complexity instrumentation, so its \`${RESTORE_CLAIMS[strategy]}\` claim is unverified`,
+    );
+  }
+
+  return { G0: g0, G5: g5, G6: g6, G7: g7, G9: g9 };
+}
+
+/**
+ * Merge this instrument's requirements into the shared verdict.
+ *
+ * `admitted` is recomputed from the merged reasons rather than carried over, so
+ * a gate the shared record happened to satisfy cannot stay green while a devbox
+ * requirement it knows nothing about is unmet.
+ */
+function withDevboxRequirements(
+  verdict: AdmissionVerdict,
+  extra: Partial<Record<GateId, string[]>>,
+): AdmissionVerdict {
+  const gates = verdict.gates.map((row) => {
+    const added = extra[row.gate] ?? [];
+    return added.length === 0 ? row : { ...row, ok: false, reasons: [...row.reasons, ...added] };
+  });
+  return { admitted: gates.every((row) => row.ok), gates };
+}
+
+export function devboxAdmission(input: DevboxAdmissionInput): AdmissionVerdict {
+  return withDevboxRequirements(
+    evaluateRun(devboxRunRecord(input)),
+    devboxRequirements(input),
+  );
 }
 export function benchmarkExitCode(failure: string | null, admission: AdmissionVerdict): number {
   return failure === null && admission.admitted ? 0 : 1;
@@ -2249,6 +3286,10 @@ export function parseOptions(argv: readonly string[]): Options {
     }
     return arm;
   });
+  const duplicate = requestedArms.find((arm, index) => requestedArms.indexOf(arm) !== index);
+  if (duplicate !== undefined) {
+    throw new Error(`--arms repeats "${duplicate}"; each requested arm must appear exactly once`);
+  }
   if (candidatesOnly && argv.includes('--arms')) {
     throw new Error('--candidates-only selects bounded-layers and merkle-pack; do not also pass --arms');
   }
@@ -2299,6 +3340,13 @@ async function main(): Promise<number> {
     log('wrangler is not authenticated; nothing can be deployed');
     return 1;
   }
+
+  // Capture source identity BEFORE bundling or deploying it. A revision read
+  // after a long run could name edits made while the old source was already in
+  // the deployed Worker, which is worse than an absent identity because it
+  // attributes real numbers to the wrong driver.
+  const revision = sourceRevision();
+  const startedAt = new Date().toISOString();
 
 
   const resources = await createFixtureResources(options.runId, options.arms);
@@ -2400,10 +3448,12 @@ async function main(): Promise<number> {
     if (!workerStopped) resources.disposeConfig();
   });
 
+  let workerVersion = '';
   try {
     wrangler(['r2', 'bucket', 'create', resources.bucket]);
     const started = await deployFixture(token, resources);
     stop = started.stop;
+    workerVersion = started.workerVersion;
     liveFixture = started.fixture;
     for (const strategy of options.arms) {
       // Per arm, so one arm's death costs only that arm. A single `await` for
@@ -2443,7 +3493,7 @@ async function main(): Promise<number> {
     date: new Date().toISOString().slice(0, 10),
     worker: resources.worker,
     bucket: resources.bucket,
-    image: 'docker.io/cloudflare/sandbox:0.12.8',
+    image: SANDBOX_IMAGE,
     seed: String(options.seed),
     'loop budget ms': String(options.budgetMs),
   };
@@ -2471,11 +3521,27 @@ async function main(): Promise<number> {
         const fromReport = cleanupEvidenceFromReport(cleanupReport);
         return { ...fromReport, errors: [...fromReport.errors, ...cleanupErrors] };
       })();
-  const admission = devboxAdmission(arms, meta, token, cleanup);
+  const identity: RunIdentity = {
+    commit: revision.commit,
+    dirtyDigest: revision.dirtyDigest,
+    workerVersion,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    image: SANDBOX_IMAGE,
+    ...resources.digests,
+  };
+  const admission = devboxAdmission({
+    arms,
+    requested: options.arms,
+    meta,
+    identity,
+    token,
+    cleanup,
+  });
   mkdirSync(dirname(join(REPO_ROOT, options.out)), { recursive: true });
   writeFileSync(
     join(REPO_ROOT, options.out),
-    `${JSON.stringify({ meta, frozenControls, arms, admission }, null, 2)}\n`,
+    `${JSON.stringify({ meta, identity, frozenControls, arms, cleanup, admission }, null, 2)}\n`,
   );
   process.stdout.write(`${render(arms, meta, admission, frozenControls, options.candidatesOnly)}\n`);
   log(`artifact written to ${options.out}`);

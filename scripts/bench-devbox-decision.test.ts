@@ -26,8 +26,11 @@ import {
   addressArmRequest,
   benchmarkExitCode,
   CANDIDATE_CONTAINER_CLASSES,
+  candidateLifecycleChecks,
+  comparablePair,
   devboxAdmission,
   fixtureConfigForArms,
+  frozenControlStatus,
   isTransientContainerCreateError,
   parseFrozenControlArtifact,
   parseOptions,
@@ -35,9 +38,12 @@ import {
   rankableTicks,
   renderFrozenControls,
   resourceNames,
+  SANDBOX_IMAGE,
+  SANDBOX_IMAGE_DIGEST,
   startupPollVerdict,
   recommend,
   teardownLiveArms,
+  type CandidateFactsReply,
 } from './bench-devbox-strategies';
 const tick = (
   arm: string, workload: string, wallMs: number,
@@ -217,7 +223,8 @@ describe('the lifecycle-proof gate at the rule', () => {
       box: 'blank-arm',
       verifyPassed: false,
       verifyChecks: [{ name: 'wake restoration', pass: false, detail: 'blank disk' }],
-      attachColdMs: null, attachColdKind: '', attachWarmMs: null, attachWarmKind: '',
+      attachColdMs: null, attachColdKind: '', attachColdBootId: null,
+      attachWarmMs: null, attachWarmKind: '', wakeBootId: null, attachWarmBootId: null,
       checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '', phases: [], decisiveTicks: [
         tick('bounded-layers', 'git', 10),
       ],
@@ -231,10 +238,27 @@ describe('the lifecycle-proof gate at the rule', () => {
       localSecretsProcessesAbsent: true, countersReconciled: true,
       replayIdempotent: true, multipartResidue: 0, errors: [],
     };
-    const admission = devboxAdmission([arm], {
-      date: '2026-08-28', worker: 'blank-fixture', bucket: 'blank-bucket',
-      image: 'docker.io/cloudflare/sandbox:0.12.8', seed: '1', 'loop budget ms': '1',
-    }, 'test-token', cleanup);
+    const admission = devboxAdmission({
+      arms: [arm],
+      requested: ['bounded-layers'],
+      meta: {
+        date: '2026-08-28', worker: 'blank-fixture', bucket: 'blank-bucket',
+        image: SANDBOX_IMAGE, seed: '1', 'loop budget ms': '1',
+      },
+      identity: {
+        commit: '3a115f232', dirtyDigest: 'clean',
+        workerVersion: '0f0a1e2c-9a1b-4c3d-8e5f-6a7b8c9d0e1f',
+        startedAt: '2026-08-28T09:00:00.000Z', finishedAt: '2026-08-28T09:12:00.000Z',
+        image: SANDBOX_IMAGE,
+        imageSha256: SANDBOX_IMAGE_DIGEST,
+        dockerfileSha256: `sha256:${'a'.repeat(64)}`,
+        candidateRunnerSha256: `sha256:${'b'.repeat(64)}`,
+        overlayRunnerSha256: `sha256:${'c'.repeat(64)}`,
+        journalDaemonSha256: `sha256:${'d'.repeat(64)}`,
+      },
+      token: 'test-token',
+      cleanup,
+    });
 
     expect(admission.admitted).toBe(false);
     expect(refusalText(admission)).toContain('blank disk');
@@ -488,7 +512,7 @@ describe('per-run fixture deployment', () => {
         expect(container.image).toBe(
           CANDIDATE_CONTAINER_CLASSES.has(container.class_name)
             ? '/tmp/candidate.Dockerfile'
-            : 'docker.io/cloudflare/sandbox:0.12.8',
+            : SANDBOX_IMAGE,
         );
       }
     });
@@ -541,6 +565,9 @@ describe('candidate-only controls', () => {
     expect(parseOptions(['--candidates-only']).controls).toEqual([]);
     expect(() => parseOptions(['--candidates-only', '--arms', 'snapshot-chain'])).toThrow(
       '--candidates-only selects bounded-layers and merkle-pack',
+    );
+    expect(() => parseOptions(['--arms', 'bounded-layers,bounded-layers'])).toThrow(
+      '--arms repeats "bounded-layers"; each requested arm must appear exactly once',
     );
     expect(() => parseOptions(['--control', '--plan'])).toThrow(
       '--control requires <strategy>=<path>',
@@ -613,7 +640,11 @@ describe('candidate-only controls', () => {
     expect(report).toContain('control-worker');
     expect(report).toContain('control-bucket');
     expect(report).toContain('6000');
-    expect(report).toContain('REFUSED');
+    // NOT `VERIFIED`, and not `REFUSED` either: this artifact carries no
+    // per-check lifecycle rows, no per-arm tally and no admission decision, so
+    // its own boolean is not evidence about anything this instrument tests.
+    expect(report).toContain('UNUSABLE (legacy contract)');
+    expect(report).not.toContain('VERIFIED');
     expect(report).toContain('Candidate ranking uses only measurements from this run.');
   });
 
@@ -746,5 +777,476 @@ describe('long teardown transport', () => {
     release.resolve();
     await expect(teardown).resolves.toBeUndefined();
     expect(rejection).toEqual([]);
+  });
+});
+
+describe('the compared pair comes from the arms the run measured', () => {
+  test('a candidates-only run compares bounded-layers against merkle-pack', () => {
+    const pair = comparablePair([{ strategy: 'bounded-layers' }, { strategy: 'merkle-pack' }]);
+
+    expect(pair.kind).toBe('pair');
+    expect(pair.kind === 'pair' ? [pair.baseline, pair.candidate] : []).toEqual([
+      'bounded-layers', 'merkle-pack',
+    ]);
+  });
+
+  test('a run missing half of every declared pair yields no ratio at all', () => {
+    // THE SHAPE OF THE FINAL STAGING RUN BEFORE THIS REPAIR. `--candidates-only`
+    // deploys two arms; the report nonetheless printed a decision rule whose
+    // ratio was taken over `snapshot-chain` and `overlay-cas`, arms whose
+    // durable-object bindings the generated fixture config omits entirely. The
+    // guard was `STRATEGIES.find((id) => id === 'overlay-cas') !== undefined`
+    // over a frozen constant, so it was true on every run ever made.
+    const pair = comparablePair([{ strategy: 'bounded-layers' }]);
+
+    expect(pair.kind).toBe('absent');
+    expect(pair.kind === 'absent' ? pair.reason : '').toContain('`bounded-layers`');
+    expect(pair.kind === 'absent' ? pair.reason : '').toContain('no declared pair');
+  });
+
+  test('a shipped-arms run compares the chain against overlay-cas', () => {
+    const pair = comparablePair([
+      { strategy: 'snapshot-chain' }, { strategy: 'r2fs' }, { strategy: 'overlay-cas' },
+    ]);
+
+    expect(pair.kind === 'pair' ? [pair.baseline, pair.candidate] : []).toEqual([
+      'snapshot-chain', 'overlay-cas',
+    ]);
+  });
+
+  test('a run of no arms names no pair rather than a default one', () => {
+    expect(comparablePair([]).kind).toBe('absent');
+  });
+
+  test('an arm nobody paired with cannot borrow the other pair\'s baseline', () => {
+    // r2fs is in no declared pair. A rule that fell back to "whatever else ran"
+    // would produce a ratio over two arms the research never compared.
+    const pair = comparablePair([{ strategy: 'r2fs' }, { strategy: 'merkle-pack' }]);
+
+    expect(pair.kind).toBe('absent');
+  });
+});
+
+// ── the candidate lifecycle contract ───────────────────────────────────────
+//
+// Before this contract existed, a candidate arm took the chain's mount checks
+// whenever the box reported `mode: 'chain'`, and otherwise fell through to the
+// extraction branch, which asks only that `/workspace` is a plain directory and
+// that `ALLOW_EXTRACTION` is set. The first test below is that exact state: no
+// journal mount, no store mount, no envelope and no closure. It used to be a
+// PASS, and the arm's latency rows were then ranked.
+
+const CANDIDATE_BOX_ID = '0f1e2d3c4b5a69788796a5b4c3d2e1f0';
+const CANDIDATE_PAYLOAD_PREFIX = `boxes/${CANDIDATE_BOX_ID}/candidate/bounded-layers/`;
+const CANDIDATE_ENVELOPE_PREFIX = `boxes/${CANDIDATE_BOX_ID}/candidate-control/bounded-layers/envelopes/`;
+const CANDIDATE_ENVELOPE_ID = 'e'.repeat(64);
+const RUNTIME_DIR = '/var/tmp/devbox';
+const JOURNAL_STATE = `${RUNTIME_DIR}/candidate-journal/state`;
+const JOURNAL_SOCKET = `${JOURNAL_STATE}/control.sock`;
+const JOURNAL_ROOT = `${RUNTIME_DIR}/candidate-journal/root`;
+const JOURNAL_BINARY = '/usr/local/bin/kinu-journal-daemon';
+const STORE_MOUNT = `${RUNTIME_DIR}/candidate-r2`;
+
+const ATTACHED_MOUNTS = [
+  'overlay / overlay rw,relatime 0 0',
+  'proc /proc proc rw,nosuid,nodev,noexec 0 0',
+  `kinu-journal /workspace fuse.kinu-journal rw,nosuid,nodev 0 0`,
+  `s3fs ${STORE_MOUNT} fuse.s3fs rw,nosuid,nodev 0 0`,
+].join('\n');
+
+const DAEMON_ARGV = `${JOURNAL_BINARY} --root ${JOURNAL_ROOT} --mount /workspace `
+  + `--state ${JOURNAL_STATE} --socket ${JOURNAL_SOCKET}`;
+
+type CandidateStoreOverrides = NonNullable<CandidateFactsReply['store']>;
+type CandidateContainerOverrides = NonNullable<CandidateFactsReply['container']>;
+
+function candidateEnvelope(overrides: Partial<CandidateStoreOverrides['head']> = {}) {
+  return {
+    key: `${CANDIDATE_ENVELOPE_PREFIX}${CANDIDATE_ENVELOPE_ID}.json`,
+    rootEnvelopeId: CANDIDATE_ENVELOPE_ID,
+    sha256: CANDIDATE_ENVELOPE_ID,
+    format: 'bounded-layers/v1',
+    boxId: CANDIDATE_BOX_ID,
+    generation: '4',
+    cut: '117',
+    closureCount: 2,
+    ...overrides,
+  };
+}
+
+function candidateFacts(overrides: {
+  store?: Partial<CandidateStoreOverrides>;
+  container?: Partial<CandidateContainerOverrides>;
+  ok?: boolean;
+} = {}): CandidateFactsReply {
+  const head = candidateEnvelope();
+  return {
+    ok: overrides.ok ?? true,
+    store: {
+      payloadPrefix: CANDIDATE_PAYLOAD_PREFIX,
+      envelopePrefix: CANDIDATE_ENVELOPE_PREFIX,
+      expectedBoxId: CANDIDATE_BOX_ID,
+      expectedFormat: 'bounded-layers/v1',
+      envelopes: [head],
+      head,
+      forkedHeads: [],
+      closure: [
+        { key: `${CANDIDATE_PAYLOAD_PREFIX}roots/base.json`, declaredBytes: '4096', storedBytes: 4_096 },
+        { key: `${CANDIDATE_PAYLOAD_PREFIX}closures/c.json`, declaredBytes: '512', storedBytes: 512 },
+      ],
+      unreadable: [],
+      ...overrides.store,
+    },
+    container: {
+      expectedWorkdirMount: '/workspace',
+      expectedStoreMount: STORE_MOUNT,
+      expectedJournalRoot: JOURNAL_ROOT,
+      expectedJournalSocket: JOURNAL_SOCKET,
+      expectedJournalBinary: JOURNAL_BINARY,
+      mounts: ATTACHED_MOUNTS,
+      journalRootPresent: true,
+      journalSocketPresent: true,
+      journalDaemonCommand: DAEMON_ARGV,
+      ...overrides.container,
+    },
+  };
+}
+
+const failingChecks = (reply: CandidateFactsReply): string[] =>
+  candidateLifecycleChecks('bounded-layers', reply)
+    .filter((check) => !check.pass)
+    .map((check) => check.name);
+
+describe('the candidate lifecycle contract', () => {
+  test('a fully attached candidate passes every check', () => {
+    const checks = candidateLifecycleChecks('bounded-layers', candidateFacts());
+
+    expect(failingChecks(candidateFacts())).toEqual([]);
+    expect(checks.length).toBeGreaterThanOrEqual(9);
+  });
+
+  test('the extraction shape a candidate used to pass on fails on every clause', () => {
+    // A container that never attached a candidate store at all: no journal
+    // mount, no store mount, no daemon, no envelope, no closure. The old
+    // extraction branch asked only that /workspace was a plain directory.
+    const bare = candidateFacts({
+      store: { envelopes: [], head: null, closure: [] },
+      container: {
+        mounts: 'overlay / overlay rw,relatime 0 0',
+        journalRootPresent: false,
+        journalSocketPresent: false,
+        journalDaemonCommand: '',
+      },
+    });
+
+    expect(failingChecks(bare)).toEqual([
+      'the work directory is the journal daemon\'s FUSE mount',
+      'the journal daemon is alive and serving this arm\'s root, mount and socket',
+      'the journal root is materialized beneath the mount',
+      'the journal control socket is present outside both mounts',
+      'the payload store is an s3fs mount at the candidate prefix',
+      'the control envelope is the single published head',
+      'the control envelope is the immutable object its own key names',
+      'the control envelope carries this arm\'s format and box',
+      'the payload closure is completely present at its declared lengths',
+    ]);
+  });
+
+  test('an overlay work directory fails: a candidate arm is not a chain', () => {
+    // The other half of the fallthrough. `mode: 'chain'` sent a candidate into
+    // the chain's branch, which is satisfied by an overlay mount.
+    const overlay = candidateFacts({
+      container: {
+        mounts: [
+          'overlay / overlay rw,relatime 0 0',
+          'overlay /workspace overlay rw,lowerdir=/var/tmp/devbox/lower-base 0 0',
+          `s3fs ${STORE_MOUNT} fuse.s3fs rw 0 0`,
+        ].join('\n'),
+      },
+    });
+
+    expect(failingChecks(overlay)).toEqual(['the work directory is the journal daemon\'s FUSE mount']);
+  });
+
+  test('a FUSE mount with no daemon behind it fails', () => {
+    expect(failingChecks(candidateFacts({ container: { journalDaemonCommand: '' } }))).toContain(
+      'the journal daemon is alive and serving this arm\'s root, mount and socket',
+    );
+  });
+
+  test('a daemon serving another arm\'s root or socket fails', () => {
+    const otherRoot = candidateFacts({
+      container: {
+        journalDaemonCommand: `${JOURNAL_BINARY} --root /var/tmp/devbox/other/root --mount /workspace `
+          + `--state ${JOURNAL_STATE} --socket ${JOURNAL_SOCKET}`,
+      },
+    });
+
+    expect(failingChecks(otherRoot)).toContain(
+      'the journal daemon is alive and serving this arm\'s root, mount and socket',
+    );
+  });
+
+  test('a control socket inside a mount the arm captures fails', () => {
+    const inside = candidateFacts({
+      container: {
+        expectedJournalSocket: '/workspace/.journal/control.sock',
+        journalDaemonCommand: `${JOURNAL_BINARY} --root ${JOURNAL_ROOT} --mount /workspace `
+          + `--state /workspace/.journal --socket /workspace/.journal/control.sock`,
+      },
+    });
+
+    expect(failingChecks(inside)).toEqual([
+      'the journal control socket is present outside both mounts',
+    ]);
+  });
+
+  test('a forked head fails rather than picking one of two envelopes', () => {
+    const forked = candidateFacts({
+      store: {
+        head: null,
+        forkedHeads: [
+          `${CANDIDATE_ENVELOPE_PREFIX}${'a'.repeat(64)}.json`,
+          `${CANDIDATE_ENVELOPE_PREFIX}${'b'.repeat(64)}.json`,
+        ],
+        closure: [],
+      },
+    });
+    const checks = candidateLifecycleChecks('bounded-layers', forked);
+
+    expect(failingChecks(forked)).toContain('the control envelope is the single published head');
+    expect(
+      checks.find((check) => check.name === 'the control envelope is the single published head')?.detail,
+    ).toContain('share the newest generation');
+  });
+
+  test('an unreadable sibling envelope fails even when a head resolved', () => {
+    const partial = candidateFacts({
+      store: { unreadable: [`${CANDIDATE_ENVELOPE_PREFIX}${'c'.repeat(64)}.json is not JSON: bad token`] },
+    });
+
+    expect(failingChecks(partial)).toContain('the control envelope is the single published head');
+  });
+
+  test('an envelope whose bytes do not hash to its own key fails', () => {
+    const tampered = candidateFacts({ store: { head: candidateEnvelope({ sha256: 'f'.repeat(64) }) } });
+
+    expect(failingChecks(tampered)).toEqual([
+      'the control envelope is the immutable object its own key names',
+    ]);
+  });
+
+  test('an envelope from another format or another box fails', () => {
+    expect(failingChecks(candidateFacts({
+      store: { head: candidateEnvelope({ format: 'merkle-pack/v1' }) },
+    }))).toEqual(['the control envelope carries this arm\'s format and box']);
+
+    expect(failingChecks(candidateFacts({
+      store: { head: candidateEnvelope({ boxId: 'ffffffffffffffffffffffffffffffff' }) },
+    }))).toEqual(['the control envelope carries this arm\'s format and box']);
+  });
+
+  test('an envelope prefix inside the payload mount fails', () => {
+    const inside = candidateFacts({
+      store: { envelopePrefix: `${CANDIDATE_PAYLOAD_PREFIX}envelopes/` },
+    });
+
+    expect(failingChecks(inside)).toContain('the control envelope prefix is outside the payload mount');
+  });
+
+  test('a closure object absent from the store fails', () => {
+    const missing = candidateFacts({
+      store: {
+        closure: [
+          { key: `${CANDIDATE_PAYLOAD_PREFIX}roots/base.json`, declaredBytes: '4096', storedBytes: 4_096 },
+          { key: `${CANDIDATE_PAYLOAD_PREFIX}closures/c.json`, declaredBytes: '512', storedBytes: null },
+        ],
+      },
+    });
+    const checks = candidateLifecycleChecks('bounded-layers', missing);
+
+    expect(failingChecks(missing)).toEqual([
+      'the payload closure is completely present at its declared lengths',
+    ]);
+    expect(
+      checks.find((check) => check.name.startsWith('the payload closure'))?.detail,
+    ).toContain('1 absent');
+  });
+
+  test('a closure object present at the wrong length fails, not only an absent one', () => {
+    // PRESENCE IS NOT ENOUGH. A key the envelope declares at 4 KiB and the
+    // store holds at 0 B exists, so an existence check passes a closure that
+    // cannot be read back.
+    const short = candidateFacts({
+      store: {
+        closure: [
+          { key: `${CANDIDATE_PAYLOAD_PREFIX}roots/base.json`, declaredBytes: '4096', storedBytes: 0 },
+          { key: `${CANDIDATE_PAYLOAD_PREFIX}closures/c.json`, declaredBytes: '512', storedBytes: 512 },
+        ],
+      },
+    });
+    const checks = candidateLifecycleChecks('bounded-layers', short);
+
+    expect(failingChecks(short)).toEqual([
+      'the payload closure is completely present at its declared lengths',
+    ]);
+    expect(
+      checks.find((check) => check.name.startsWith('the payload closure'))?.detail,
+    ).toContain('1 at the wrong length');
+  });
+
+  test('a complete closure borrowed from another arm fails', () => {
+    // Existence and length are insufficient if an envelope can name another
+    // box's payload. The closure must be candidate-specific, below this arm's
+    // own payload prefix.
+    const borrowed = candidateFacts({
+      store: {
+        closure: [
+          { key: 'boxes/other/candidate/bounded-layers/roots/base.json', declaredBytes: '4096', storedBytes: 4_096 },
+          { key: 'boxes/other/candidate/bounded-layers/closures/c.json', declaredBytes: '512', storedBytes: 512 },
+        ],
+      },
+    });
+    const checks = candidateLifecycleChecks('bounded-layers', borrowed);
+
+    expect(failingChecks(borrowed)).toEqual([
+      'the payload closure is completely present at its declared lengths',
+    ]);
+    expect(checks.find((check) => check.name.startsWith('the payload closure'))?.detail)
+      .toContain('2 outside this arm\'s payload prefix');
+  });
+
+  test('a head envelope naming no payload objects at all fails', () => {
+    const empty = candidateFacts({ store: { closure: [] } });
+
+    expect(failingChecks(empty)).toEqual([
+      'the payload closure is completely present at its declared lengths',
+    ]);
+  });
+
+  test('a fixture that could not answer the contract fails as one named check', () => {
+    const refused = candidateLifecycleChecks('merkle-pack', {
+      ok: false,
+      error: 'merkle-pack publishes no candidate control envelope',
+    });
+
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.pass).toBe(false);
+    expect(refused[0]?.name).toBe('the fixture answered the merkle-pack candidate contract');
+    expect(refused[0]?.detail).toContain('publishes no candidate control envelope');
+  });
+});
+
+describe('a legacy control artifact cannot read as verified', () => {
+  const currentArm = {
+    strategy: 'r2fs',
+    verifyPassed: true,
+    verifyChecks: [{ name: '/workspace is really a s3fs mount', pass: true }],
+    ops: { total: 412 },
+  };
+  const cleanFrozenCleanup = () => ({
+    attempted: true,
+    kept: false,
+    workerAbsent: true,
+    runtimeAbsent: true,
+    bucketAndMultipartEmpty: true,
+    boxDurableStateEmpty: true,
+    localSecretsProcessesAbsent: true,
+    countersReconciled: true,
+    replayIdempotent: true,
+    multipartResidue: 0,
+    errors: [],
+  });
+
+  test('an artifact with no lifecycle rows, tally, cleanup or admission is unusable, never verified', () => {
+    const judged = frozenControlStatus({ strategy: 'r2fs', verifyPassed: true }, undefined, undefined);
+
+    expect(judged.status).toBe('legacy-contract');
+    expect(judged.statusDetail).toContain('per-check lifecycle rows');
+    expect(judged.statusDetail).toContain('a per-arm operation tally');
+    expect(judged.statusDetail).toContain('complete C1–C7 cleanup evidence');
+    expect(judged.statusDetail).toContain('a G0–G9 admission decision');
+  });
+
+  test('each missing lifecycle, accounting, cleanup and admission half is named on its own', () => {
+    expect(frozenControlStatus(
+      { ...currentArm, verifyChecks: [] },
+      cleanFrozenCleanup(),
+      { admitted: true },
+    ).statusDetail).toContain('per-check lifecycle rows');
+
+    expect(frozenControlStatus(
+      { ...currentArm, ops: null },
+      cleanFrozenCleanup(),
+      { admitted: true },
+    ).statusDetail).toContain('a per-arm operation tally');
+
+    expect(frozenControlStatus(currentArm, undefined, { admitted: true }).statusDetail)
+      .toContain('complete C1–C7 cleanup evidence');
+
+    expect(frozenControlStatus(currentArm, cleanFrozenCleanup(), undefined).statusDetail)
+      .toContain('a G0–G9 admission decision');
+  });
+
+  test('an artifact carrying the whole contract and passing it reads verified', () => {
+    expect(frozenControlStatus(currentArm, cleanFrozenCleanup(), { admitted: true })).toEqual({
+      status: 'verified',
+      statusDetail: 'lifecycle, accounting, cleanup and admission all present and passing',
+    });
+  });
+
+  test('a contract-carrying artifact with failed cleanup reads refused, not verified', () => {
+    expect(frozenControlStatus(
+      currentArm,
+      { ...cleanFrozenCleanup(), bucketAndMultipartEmpty: false },
+      { admitted: true },
+    )).toMatchObject({
+      status: 'refused',
+      statusDetail: 'its C1–C7 cleanup contract did not complete cleanly',
+    });
+  });
+
+  test('a contract-carrying artifact whose own gates refused reads refused, not verified', () => {
+    expect(frozenControlStatus(currentArm, cleanFrozenCleanup(), { admitted: false })).toMatchObject({
+      status: 'refused',
+      statusDetail: 'its run was not admitted by its own G0–G9 gates',
+    });
+  });
+
+  test('a failed lifecycle check reads refused and names the check', () => {
+    const judged = frozenControlStatus({
+      ...currentArm,
+      verifyChecks: [{ name: 'the writable layer exists', pass: false }],
+    }, cleanFrozenCleanup(), { admitted: true });
+
+    expect(judged.status).toBe('refused');
+    expect(judged.statusDetail).toContain('the writable layer exists');
+  });
+
+  test('a `verifyPassed: true` boolean cannot override a failing check row', () => {
+    expect(frozenControlStatus({
+      ...currentArm,
+      verifyPassed: true,
+      verifyChecks: [{ name: 'the fold advanced the durable cursor', pass: false }],
+    }, cleanFrozenCleanup(), { admitted: true }).status).toBe('refused');
+  });
+
+  test('the rendered table prints the legacy status and never VERIFIED beside it', () => {
+    const legacy = JSON.stringify({
+      meta: {
+        date: '2026-08-26',
+        image: 'docker.io/cloudflare/sandbox:0.12.8',
+        seed: '20260824',
+        'loop budget ms': '6000',
+      },
+      arms: [{ strategy: 'overlay-cas', verifyPassed: true }],
+    });
+    const parsed = parseFrozenControlArtifact('overlay-cas', 'bench-artifacts/legacy.json', legacy);
+
+    expect(parsed.status).toBe('legacy-contract');
+    expect(parsed.verifyPassed).toBe(true);
+    const report = renderFrozenControls([parsed]);
+    expect(report).toContain('UNUSABLE (legacy contract)');
+    expect(report).not.toContain('VERIFIED');
   });
 });

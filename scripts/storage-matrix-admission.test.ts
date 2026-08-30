@@ -1,11 +1,25 @@
 import { describe, expect, test } from 'bun:test';
 import {
   evaluateRun, expectedCells, refusalText, requireAdmitted,
-  type ArmEvidence, type CleanupEvidence, type StorageRunRecord,
+  type AdmissionVerdict, type ArmEvidence, type CleanupEvidence, type GateId,
+  type StorageRunRecord,
 } from './fixtures/storage-matrix/admission';
 import { type CellCompletion } from './fixtures/storage-matrix/admission';
 import { type MeasuredCell } from './fixtures/storage-matrix/protocol';
-import { devboxArmEvidence } from './bench-devbox-strategies';
+import { summarize } from './fixtures/r2-bench/stats';
+import type { ProbeRun } from './fixtures/r2-bench/report';
+import {
+  COLD_ATTACH_CEILING_MS,
+  DECIDING_METRIC,
+  EXPECTED_LADDER_ROWS,
+  SANDBOX_IMAGE,
+  SANDBOX_IMAGE_DIGEST,
+  devboxAdmission,
+  devboxArmEvidence,
+  type ArmResult,
+  type RunIdentity,
+  type Strategy,
+} from './bench-devbox-strategies';
 
 const cell: CellCompletion = { stage: 'blank', tree: 'T0', change: 'C0', cache: 'K0', completed: true };
 const deciding: MeasuredCell = { id: cell, values: [100, 105], wallMs: 1_000 };
@@ -339,5 +353,364 @@ describe('G0-G9 storage run admission', () => {
 
   test('the frozen blank stage has exactly the one expected cell this fixture completes', () => {
     expect(expectedCells(['blank'], null)).toEqual([{ stage: 'blank', tree: 'T0', change: 'C0', cache: 'K0' }]);
+  });
+});
+
+// ── the devbox run's own requirements on the shared gates ───────────────────
+//
+// `evaluateRun` judges a RECORD, and the record this driver used to hand it had
+// `restore: []`, `declaredStages: []`, `cells: []` and `deciding: []`. Every one
+// of those gates then passed VACUOUSLY — `restoreProblems` iterates an empty
+// array, `completenessProblems` compares against `expectedCells([])`, and
+// `censorProblems` guards its only run-level check behind `scored.length > 0` —
+// so three of the ten gates could not fail at all. Its provenance was no better:
+// `git rev-parse HEAD` cannot see uncommitted driver changes, both timestamps
+// were synthesized from the calendar date one second apart, and `versions` held
+// the container image under the `@cloudflare/sandbox` key.
+//
+// Each test below fixes one of those directions. G3 and G4 refuse throughout by
+// design (this driver runs no fault-cut or security-cell instrumentation), so
+// every assertion names its own gate rather than the whole verdict.
+
+/** A run identity with every G0 field present and distinct. */
+function fullIdentity(overrides: Partial<RunIdentity> = {}): RunIdentity {
+  return {
+    commit: '3a115f232',
+    dirtyDigest: 'clean',
+    workerVersion: '0f0a1e2c-9a1b-4c3d-8e5f-6a7b8c9d0e1f',
+    startedAt: '2026-08-30T10:00:00.000Z',
+    finishedAt: '2026-08-30T10:41:00.000Z',
+    image: SANDBOX_IMAGE,
+    imageSha256: SANDBOX_IMAGE_DIGEST,
+    dockerfileSha256: `sha256:${'a'.repeat(64)}`,
+    candidateRunnerSha256: `sha256:${'b'.repeat(64)}`,
+    overlayRunnerSha256: `sha256:${'c'.repeat(64)}`,
+    journalDaemonSha256: `sha256:${'d'.repeat(64)}`,
+    ...overrides,
+  };
+}
+
+/** One probe run that measured the deciding metric once. Two of these are one
+ *  arm's minimum repetition set. */
+function probeRun(p50: number): ProbeRun {
+  return {
+    schema: 'r2-bench/probe@1',
+    root: '/workspace/ab',
+    seed: 20_260_824,
+    loopBudgetMs: 8_000,
+    phases: [{
+      phase: 'small1k',
+      status: 'ok',
+      wallMs: 900,
+      cpuUserMs: 120,
+      cpuSystemMs: 40,
+      metrics: [{ name: DECIDING_METRIC, summary: summarize([p50]), wallMs: 400 }],
+      verdicts: [],
+    }],
+  };
+}
+
+/** The full ladder, sized from the driver's own expectation so a change to the
+ *  ladder cannot leave this fixture asserting a stale count. */
+const ladderRows = Array.from({ length: EXPECTED_LADDER_ROWS }, (_unused, index) => ({
+  changeKiB: 64,
+  kind: index % 2 === 0 ? 'quiesce' as const : 'tick' as const,
+  ms: 120,
+  bytes: 65_536,
+  outcome: 'committed',
+}));
+
+/** An arm that completed everything this instrument asks of one. */
+function measuredArm(strategy: Strategy, overrides: Partial<ArmResult> = {}): ArmResult {
+  return {
+    strategy,
+    box: `ab-${strategy}-20260830`,
+    verifyPassed: true,
+    verifyChecks: [{ name: 'the wake attached durable bytes', pass: true, detail: 'attached' }],
+    attachColdMs: 4_200,
+    attachColdKind: 'attached',
+    attachColdBootId: `cold-${strategy}`,
+    attachWarmMs: 90,
+    attachWarmKind: 'attached',
+    wakeBootId: `wake-${strategy}`,
+    attachWarmBootId: `wake-${strategy}`,
+    checkpoints: [...ladderRows],
+    stopMs: 310,
+    wakeMs: 5_100,
+    wakeKind: 'attached',
+    phases: [probeRun(1.10), probeRun(1.15)],
+    decisiveTicks: [],
+    quiescesBeforeDecisive: 3,
+    decisiveQuiesces: 0,
+    generationBeforeLadder: null,
+    generationAfterLadder: null,
+    treeBytes: {},
+    ops: { calls: { put: 4, get: 2 }, classA: 4, classB: 2, classFree: 0, total: 6 },
+    teardown: null,
+    notes: [],
+    ...overrides,
+  };
+}
+
+const CANDIDATE_ARMS: readonly Strategy[] = ['bounded-layers', 'merkle-pack'];
+
+function devboxVerdict(
+  arms: readonly ArmResult[],
+  requested: readonly Strategy[] = CANDIDATE_ARMS,
+  identity: RunIdentity = fullIdentity(),
+): AdmissionVerdict {
+  return devboxAdmission({
+    arms,
+    requested,
+    identity,
+    meta: {
+      date: '2026-08-30',
+      worker: 'kinu-devbox-bench-20260830',
+      bucket: 'kinu-devbox-bench-20260830',
+      image: SANDBOX_IMAGE,
+      seed: '20260824',
+      'loop budget ms': '8000',
+    },
+    token: 'devbox-test-token',
+    cleanup: cleanCleanup(),
+  });
+}
+
+function gateReasons(verdict: AdmissionVerdict, gate: GateId): string {
+  return verdict.gates.find((row) => row.gate === gate)?.reasons.join(' | ') ?? '(gate absent)';
+}
+
+function gateHeld(verdict: AdmissionVerdict, gate: GateId): boolean {
+  return verdict.gates.find((row) => row.gate === gate)?.ok === true;
+}
+
+/** The complete two-candidate run every test below degrades one field of. */
+const completeArms = (): ArmResult[] => CANDIDATE_ARMS.map((strategy) => measuredArm(strategy));
+
+describe('the devbox run\'s own admission requirements', () => {
+  test('a complete run holds G0, G6, G7 and G9, so the refusals below are discriminating', () => {
+    const verdict = devboxVerdict(completeArms());
+    for (const gate of ['G0', 'G1', 'G2', 'G6', 'G7', 'G8', 'G9'] as const) {
+      expect(gateHeld(verdict, gate), `${gate}: ${gateReasons(verdict, gate)}`).toBe(true);
+    }
+    // Still not admitted, and for the honest reasons: no fault-cut cells, no
+    // security cells, and no counted restore anywhere in this instrument.
+    expect(verdict.admitted).toBe(false);
+    for (const gate of ['G3', 'G4', 'G5'] as const) expect(gateHeld(verdict, gate)).toBe(false);
+  });
+  test('G0 refuses every identity field on its own rather than defaulting it', () => {
+    const blanked: readonly [keyof RunIdentity, string][] = [
+      ['commit', 'source'],
+      ['workerVersion', 'worker-version'],
+      ['image', 'container-image'],
+      ['imageSha256', 'container-image-digest'],
+      ['dockerfileSha256', 'candidate-image-dockerfile'],
+      ['candidateRunnerSha256', 'candidate-runner-bundle'],
+      ['overlayRunnerSha256', 'overlay-cas-runner-bundle'],
+      ['journalDaemonSha256', 'journal-daemon-source'],
+      ['dirtyDigest', 'source-tree'],
+    ];
+    for (const [field, recorded] of blanked) {
+      const verdict = devboxVerdict(completeArms(), CANDIDATE_ARMS, fullIdentity({ [field]: '' }));
+      expect(gateHeld(verdict, 'G0'), field).toBe(false);
+      expect(gateReasons(verdict, 'G0')).toContain(`no ${recorded}`);
+    }
+  });
+
+  test('G0 refuses a dirty-tree digest that is neither `clean` nor a digest', () => {
+    const verdict = devboxVerdict(
+      completeArms(),
+      CANDIDATE_ARMS,
+      fullIdentity({ dirtyDigest: 'dirty' }),
+    );
+    expect(gateReasons(verdict, 'G0')).toContain('neither `clean` nor a digest');
+  });
+
+  test('G0 refuses a tag-only image or a malformed image digest', () => {
+    const tagged = devboxVerdict(
+      completeArms(),
+      CANDIDATE_ARMS,
+      fullIdentity({ image: 'docker.io/cloudflare/sandbox:0.12.8' }),
+    );
+    expect(gateReasons(tagged, 'G0')).toContain('is not pinned to');
+
+    const malformed = devboxVerdict(
+      completeArms(),
+      CANDIDATE_ARMS,
+      fullIdentity({ imageSha256: 'sha256:not-a-digest' }),
+    );
+    expect(gateReasons(malformed, 'G0')).toContain('is not a sha256 digest');
+  });
+
+  test('G0 refuses the synthesized one-second window the artifact used to carry', () => {
+    const verdict = devboxVerdict(completeArms(), CANDIDATE_ARMS, fullIdentity({
+      startedAt: '2026-08-30T00:00:00.000Z',
+      finishedAt: '2026-08-30T00:00:00.000Z',
+    }));
+    expect(gateReasons(verdict, 'G0')).toContain('no run was timed');
+  });
+
+  test('G5 refuses every requested arm for an uncounted restore instead of passing an empty array', () => {
+    const verdict = devboxVerdict(completeArms());
+    expect(gateHeld(verdict, 'G5')).toBe(false);
+    for (const strategy of CANDIDATE_ARMS) {
+      expect(gateReasons(verdict, 'G5')).toContain(`arm \`${strategy}\` has no counted restore`);
+    }
+    expect(gateReasons(verdict, 'G5')).toContain('restore-complexity instrumentation');
+  });
+
+  test('G6 refuses a cold attach past the admission ceiling, whatever the fixture budget allows', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', { attachColdMs: COLD_ATTACH_CEILING_MS + 1 }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateHeld(verdict, 'G6')).toBe(false);
+    expect(gateReasons(verdict, 'G6')).toContain(`past the ${COLD_ATTACH_CEILING_MS} ms admission ceiling`);
+    // The declared cell is incomplete for the same reason, rather than being
+    // scored as a fast arm.
+    expect(gateReasons(verdict, 'G6')).toContain('T0/C0/K0');
+  });
+
+  test('G6 accepts a cold attach exactly at the ceiling', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', { attachColdMs: COLD_ATTACH_CEILING_MS }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateHeld(verdict, 'G6'), gateReasons(verdict, 'G6')).toBe(true);
+  });
+
+  test('G6 refuses missing cold evidence and a warm attach that changed generation', () => {
+    const noCold = devboxVerdict([
+      measuredArm('bounded-layers', { attachColdMs: null }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateReasons(noCold, 'G6')).toContain('recorded no cold attach');
+
+    const wrongKind = devboxVerdict([
+      measuredArm('bounded-layers', { attachWarmKind: 'empty' }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateReasons(wrongKind, 'G6')).toContain('did not observe the unchanged generation');
+
+    // `attached` alone is not evidence of unchanged state: a replacement can
+    // restore successfully and still report that kind. The boot ids prove this
+    // warm probe observed the generation wake had already attached.
+    const replaced = devboxVerdict([
+      measuredArm('bounded-layers', { attachWarmBootId: 'replacement-generation' }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateReasons(replaced, 'G6')).toContain('warm attach changed generation');
+
+    const unrecorded = devboxVerdict([
+      measuredArm('bounded-layers', { wakeBootId: null, attachWarmBootId: null }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateReasons(unrecorded, 'G6')).toContain('unchanged attach was not evidenced');
+  });
+
+  test('G6 refuses a short checkpoint ladder rather than completing the cell anyway', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', { checkpoints: ladderRows.slice(0, EXPECTED_LADDER_ROWS - 1) }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateReasons(verdict, 'G6')).toContain(
+      `recorded ${EXPECTED_LADDER_ROWS - 1} of ${EXPECTED_LADDER_ROWS} ladder checkpoints`,
+    );
+  });
+
+  test('G7 refuses an arm with no tally instead of summing only the arms that reported one', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers'),
+      measuredArm('merkle-pack', { ops: null }),
+    ]);
+    expect(gateHeld(verdict, 'G7')).toBe(false);
+    expect(gateReasons(verdict, 'G7')).toContain('arm `merkle-pack` recorded no `/ops` tally');
+    // And the summed row is withheld entirely, so the shared gate cannot price
+    // the run off a partial total either.
+    expect(gateReasons(verdict, 'G7')).toContain('no operation accounting at all');
+  });
+
+  test('G7 refuses a tally carrying no total', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', { ops: { calls: { put: 1 }, classA: 1, classB: 0, classFree: 0 } }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateReasons(verdict, 'G7')).toContain('reported a tally carrying no total');
+  });
+
+  test('G9 refuses one deciding repetition instead of scoring an unrepeated median as stable', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', { phases: [probeRun(1.10)] }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateHeld(verdict, 'G9')).toBe(false);
+    expect(gateReasons(verdict, 'G9')).toContain(
+      `measured the deciding metric \`${DECIDING_METRIC}\` 1 time(s)`,
+    );
+  });
+
+  test('G9 refuses an arm that measured the deciding metric not at all', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', { phases: [] }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateReasons(verdict, 'G9')).toContain('0 time(s)');
+  });
+
+  test('G9 censors dispersed repetitions rather than ranking their midpoint', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', { phases: [probeRun(1), probeRun(100)] }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateHeld(verdict, 'G9')).toBe(false);
+    expect(gateReasons(verdict, 'G9')).toContain('CV');
+  });
+
+  test('G5, G6 and G9 each refuse an arm set that is not exactly the requested one', () => {
+    const lost = devboxVerdict([measuredArm('bounded-layers')]);
+    for (const gate of ['G5', 'G6', 'G9'] as const) {
+      expect(gateReasons(lost, gate)).toContain(
+        'arm `merkle-pack` was requested but contributed no result row',
+      );
+    }
+
+    const extra = devboxVerdict([...completeArms(), measuredArm('overlay-cas')], CANDIDATE_ARMS);
+    for (const gate of ['G5', 'G6', 'G9'] as const) {
+      expect(gateReasons(extra, gate)).toContain(
+        'arm `overlay-cas` produced a result row without being requested',
+      );
+    }
+
+    const duplicate = devboxVerdict(
+      [...completeArms(), measuredArm('bounded-layers')],
+      CANDIDATE_ARMS,
+    );
+    for (const gate of ['G5', 'G6', 'G9'] as const) {
+      expect(gateReasons(duplicate, gate)).toContain(
+        'arm `bounded-layers` produced 2 result rows but was requested 1 time(s)',
+      );
+    }
+
+    const none = devboxVerdict([], []);
+    for (const gate of ['G5', 'G6', 'G9'] as const) {
+      expect(gateReasons(none, gate)).toContain('no expected arm set to complete');
+    }
+  });
+
+  test('an arm whose lifecycle proof failed cannot complete the declared cell', () => {
+    const verdict = devboxVerdict([
+      measuredArm('bounded-layers', {
+        verifyPassed: false,
+        verifyChecks: [{
+          name: 'the work directory is the journal daemon\'s FUSE mount',
+          pass: false,
+          detail: '/workspace is not mounted',
+        }],
+      }),
+      measuredArm('merkle-pack'),
+    ]);
+    expect(gateHeld(verdict, 'G6')).toBe(false);
+    expect(gateReasons(verdict, 'G6')).toContain('T0/C0/K0');
+    expect(refusalText(verdict)).toContain('G6 Complete cells.');
   });
 });
