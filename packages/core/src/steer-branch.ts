@@ -18,7 +18,7 @@ import { raceWithTimeout, type HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
-import { renderThrownChain } from './obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from './obs/index';
 
 /** A branch is one head answering one redirect: depth 1, so it answers rather
  *  than splitting further. Like any head it runs until it is done — the settle
@@ -117,7 +117,7 @@ export async function startBranchHead(
   const spawned = await runtime.spawnHead(headInput);
 
   const result = raceWithTimeout(spawned, undefined)
-    .catch((err): HeadReport => ({
+    .catch((err: unknown): HeadReport => ({
       id: headInput.id,
       status: 'budget_exceeded',
       summary: 'Branch was aborted before producing an answer.',
@@ -186,9 +186,9 @@ export async function settlePendingBranch(
   }
   if (!turnId || !liveText.trim()) {
     // Broadcast before aborting, so the terminal status lands whatever the
-    // abort does, and the abort itself is then left unguarded: a head that
-    // refuses to abort is a branch still burning tokens, which is exactly the
-    // failure the discarded rejection used to hide.
+    // abort does. The detached settle owner records an abort rejection: a head
+    // that refuses to abort is a branch still burning tokens, which a discarded
+    // rejection would hide.
     fail('the live turn did not complete, so there is nothing to compare against');
     await handle.abort('the live turn did not complete');
     return;
@@ -231,7 +231,17 @@ export function settlePendingBranches(
   liveText: string,
 ): void {
   for (const entry of pending.splice(0)) {
-    void settlePendingBranch(deps, entry, turnId, liveText);
+    settlePendingBranch(deps, entry, turnId, liveText).catch((err: unknown) => {
+      diagnostics.failure(
+        'branch.settlement_failed',
+        toKinuError({
+          doing: 'settle a branch against the finished turn',
+          cause: err,
+          otherwise: 'unavailable',
+        }),
+        { branchId: entry.id, task: entry.task },
+      );
+    });
   }
 }
 

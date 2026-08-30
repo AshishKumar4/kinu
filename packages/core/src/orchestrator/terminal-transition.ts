@@ -310,7 +310,7 @@ export class TerminalTransitions {
     for (const effect of owed) {
       const body = this.deps.effects[effect.name];
       if (body === undefined) continue;
-      const running = body.run(effect.input, effect.scope).catch((err) => {
+      const running = body.run(effect.input, effect.scope).catch((err: unknown) => {
         diagnostics.failure('turn.terminal_effect_failed', toKinuError({
           doing: `running the ${effect.name} effect a settled turn owed`,
           cause: err,

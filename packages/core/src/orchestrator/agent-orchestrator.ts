@@ -414,7 +414,11 @@ export class AgentOrchestrator {
       if (!awaitsFollowup) {
         this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
       }
-      void this.runDueSessionEvolution();
+      this.runDueSessionEvolution().catch((err: unknown) => diagnostics.failure(
+        'orchestrator.detached_work_failed',
+        toKinuError({ doing: 'run detached post-turn work', cause: err, otherwise: 'unavailable' }),
+        { work: 'Session evolution' },
+      ));
     }
   }
 
@@ -516,12 +520,12 @@ export class AgentOrchestrator {
     const claimed = this.deps.engine.enabled && this.window.size() >= this.reflectionInterval
       ? this.window.claim()
       : null;
-    const pass = this.runCadencePass(claimed);
+    let pass = this.runCadencePass(claimed);
     // Only a pass that CLAIMED a window latches. A drain-only pass must not,
     // or it would hide a window that filled while it ran.
     if (claimed) {
+      pass = pass.finally(() => { this.sessionEvolution = null; });
       this.sessionEvolution = pass;
-      void pass.finally(() => { this.sessionEvolution = null; });
     }
     return pass;
   }
@@ -629,7 +633,7 @@ export class AgentOrchestrator {
 
   private detach(work: Promise<void>, label: string): void {
     const tracked = work
-      .catch((err) => diagnostics.failure(
+      .catch((err: unknown) => diagnostics.failure(
         'orchestrator.detached_work_failed',
         toKinuError({ doing: 'run detached post-turn work', cause: err, otherwise: 'unavailable' }),
         { work: label },

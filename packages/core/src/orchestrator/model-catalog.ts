@@ -47,7 +47,17 @@ export class ModelCatalogSession {
     const spec = this.deps.effectiveSpec();
     if (this.cached?.spec !== spec) {
       this.cached = { spec, info: null };
-      void this.armLookup(spec);
+      this.armLookup(spec).catch((error: unknown) => {
+        // Nothing to propagate to: info() must never block, so this lookup stays
+        // detached. The static fallbacks stay authoritative, but an empty catalog
+        // is otherwise indistinguishable from a priced one that reports nothing —
+        // so the reason is stated once, with the spec.
+        diagnostics.failure(
+          'model.catalog_lookup_failed',
+          toKinuError({ doing: 'look a model up in the provider catalog', cause: error, otherwise: 'unavailable' }),
+          { model: spec },
+        );
+      });
     }
     return this.cached.info;
   }
@@ -88,19 +98,7 @@ export class ModelCatalogSession {
   }
 
   private async armLookup(spec: string): Promise<void> {
-    try {
-      const info = await this.deps.lookup(spec);
-      if (info && this.cached?.spec === spec) this.cached.info = info;
-    } catch (error) {
-      // Nothing to propagate to: info() must never block, so this promise is
-      // deliberately floating. The static fallbacks stay authoritative, but an
-      // empty catalog is otherwise indistinguishable from a priced one that
-      // reports nothing — so the reason is stated once, with the spec.
-      diagnostics.failure(
-        'model.catalog_lookup_failed',
-        toKinuError({ doing: 'look a model up in the provider catalog', cause: error, otherwise: 'unavailable' }),
-        { model: spec },
-      );
-    }
+    const info = await this.deps.lookup(spec);
+    if (info && this.cached?.spec === spec) this.cached.info = info;
   }
 }

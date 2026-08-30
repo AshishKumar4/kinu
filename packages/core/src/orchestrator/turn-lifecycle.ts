@@ -392,7 +392,7 @@ export function applyOverflowRecovery(opts: {
       void opts.signals.deliver({
         kind: OVERFLOW_RETRY_EVENT,
         text: OVERFLOW_RETRY_TEXT,
-      }).catch((error) => diagnostics.failure(
+      }).catch((error: unknown) => diagnostics.failure(
         'turn.overflow_retry_enqueue_failed',
         toKinuError({ doing: 'enqueue the context-overflow retry turn', cause: error, otherwise: 'io' }),
         { sessionKey: opts.sessionKey },
