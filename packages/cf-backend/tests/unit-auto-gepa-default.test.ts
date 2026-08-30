@@ -22,7 +22,7 @@ const evolutionNotes = (db: Database) =>
   ).all();
 
 describe('auto-GEPA default activation', () => {
-  test('the tick pins an absent cadence row and records the override note', () => {
+  test('the tick pins an absent cadence row and records the override note', async () => {
     const { agent, db } = orchestratorHarness();
 
     // The ambiguity the pin exists to remove: nothing is stored, yet the
@@ -31,7 +31,7 @@ describe('auto-GEPA default activation', () => {
     expect(agent.observeAutoGepaCadence()).toBe(DEFAULT_AUTO_GEPA_EVERY_N_TURNS);
     expect(evolutionNotes(db)).toEqual([]);
 
-    agent.tickAutoGepa();
+    await agent.tickAutoGepa();
 
     // Pinned explicitly, at the value that was already in force — the tick
     // documents the state, it does not change the cadence.
@@ -48,22 +48,22 @@ describe('auto-GEPA default activation', () => {
     expect(notes[0]!.message).toContain('setAutoGepa(0)');
   });
 
-  test('the note is written once, not once per turn', () => {
+  test('the note is written once, not once per turn', async () => {
     const { agent, db } = orchestratorHarness();
-    agent.tickAutoGepa();
-    agent.tickAutoGepa();
-    agent.tickAutoGepa();
+    await agent.tickAutoGepa();
+    await agent.tickAutoGepa();
+    await agent.tickAutoGepa();
     // The row is now present, so the activation is no longer news. An
     // evolution stream that reprinted it every turn would bury everything else.
     expect(evolutionNotes(db)).toHaveLength(1);
     expect(storedCadence(db)).toBe(String(DEFAULT_AUTO_GEPA_EVERY_N_TURNS));
   });
 
-  test('a deliberate disable survives the tick and is not documented as an override', () => {
+  test('a deliberate disable survives the tick and is not documented as an override', async () => {
     const { agent, db } = orchestratorHarness();
     agent.setAutoGepaCadence(0);
 
-    agent.tickAutoGepa();
+    await agent.tickAutoGepa();
 
     // A stored 0 is a decision, not an absence: the default must not reach it.
     expect(storedCadence(db)).toBe('0');
@@ -71,11 +71,11 @@ describe('auto-GEPA default activation', () => {
     expect(evolutionNotes(db)).toEqual([]);
   });
 
-  test('a cadence the owner chose is left alone', () => {
+  test('a cadence the owner chose is left alone', async () => {
     const { agent, db } = orchestratorHarness();
     agent.setAutoGepaCadence(7);
 
-    agent.tickAutoGepa();
+    await agent.tickAutoGepa();
 
     expect(storedCadence(db)).toBe('7');
     expect(agent.observeAutoGepaCadence()).toBe(7);
