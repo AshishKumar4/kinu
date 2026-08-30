@@ -21,6 +21,14 @@ default to `0.5`, the `CRAFT_NEUTRAL_PRIOR` value
 tool cannot bypass the filter. Extracted candidates use the same store
 (`core/src/craft/conflict.ts:119`). Each settled block updates that row in one
 synchronous SQL statement.
+
+`CRAFT_INVOCATION_QUALITY` maps a returned call to `0.7` and a raised call to
+`0.1`. The store applies its configured EMA alpha of `0.3`. From the neutral
+`0.5` prior, four raises produce `0.196`, below the `0.2` injection floor. One
+later return raises that score to `0.347`. These values come from
+`craft/in-episode.ts` and the current craft-store config. They are declared
+policy arithmetic, not a measured success rate.
+
 A tool that keeps raising drops out of the callable set for the rest of the
 episode because both backends re-read the store per execute.
 
