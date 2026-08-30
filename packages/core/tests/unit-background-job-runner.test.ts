@@ -702,26 +702,30 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       .toBeGreaterThan(BACKGROUND_POLICY.interactive.detachAfterMs);
   });
 
-  test('past the concurrency cap the detach is refused and the work is cancelled', async () => {
-    // A model that sees no result from a slow call launches another; without a
-    // bound that compounds into a fork storm (52 concurrent builds → OOM kill).
+  test('past the concurrency cap classifies refusal without aborting foreground work', async () => {
     const { runner, store, logs } = setup();
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
     const controller = new AbortController();
+    const work = Promise.withResolvers<string>();
+    controller.signal.addEventListener('abort', () => {
+      work.reject(new Error('the threshold aborted live work'));
+    });
     const deps = runner.thresholdDeps('run', { command: 'pystan build' }, 'build', controller);
-    const outcome = await deps.onThreshold('run', new Promise(() => { /* still running */ }));
+    const outcome = await deps.onThreshold('run', work.promise);
 
     expect(outcome.detached).toBe(false);
-    // No new job: the cap is a cap, not a warning.
+    if (outcome.detached) throw new Error('expected the full cap to refuse detach');
+    // No ninth job: the cap stays hard, while this call keeps its foreground owner.
     expect(store.countRunning()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
-    // The work is stopped, not silently orphaned.
-    expect(controller.signal.aborted).toBe(true);
-    const reason = outcome.detached ? '' : outcome.reason;
-    expect(reason).toContain('CANCELLED');
-    expect(reason).toContain('busy-0');
+    expect(controller.signal.aborted).toBe(false);
+    expect(outcome.reason).toContain('foreground');
+    expect(outcome.reason).toContain('busy-0');
     expect(logs.some((l) => l.e === 'bg_job_refused')).toBe(true);
+
+    work.resolve('completed without an implicit timeout');
+    await expect(work.promise).resolves.toBe('completed without an implicit timeout');
   });
 
   test('under the cap a refusal never happens — the boundary is exact', async () => {
@@ -780,24 +784,38 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(ownership.drain(jobId ?? '')).toEqual([]);
   });
 
-  test('a refused transfer refuses the detach — no running job, no claim left behind', async () => {
+  test('a transfer failure keeps the job-owned live completion without aborting it', async () => {
     const ownership = new DeviceRequestOwnership();
     ownership.report('req-1');
-    const { runner, store } = setup({
+    const work = Promise.withResolvers<string>();
+    const { runner, store, logs, settled } = setup({
       onDetached: () => { throw new Error('the device refused the handover'); },
     });
     const controller = new AbortController();
+    controller.signal.addEventListener('abort', () => {
+      work.reject(new Error('the transfer failure aborted live work'));
+    });
     const outcome = await runner
       .thresholdDeps('run', {}, 'build', controller, ownership)
-      .onThreshold('run', Promise.resolve('done'));
+      .onThreshold('run', work.promise);
 
-    expect(outcome.detached).toBe(false);
-    // Live work behind a running job no fiber owns is the state this prevents.
-    expect(store.countRunning()).toBe(0);
-    expect(controller.signal.aborted).toBe(true);
-    // The job it named was just failed; a holder still pointing at it would
-    // insert later requests under a dead owner.
-    expect(ownership.owningJobId).toBeNull();
+    expect(outcome.detached).toBe(true);
+    if (!outcome.detached) throw new Error('expected a job to preserve the live work');
+    const jobId = outcome.jobId;
+    expect(store.get(jobId)?.status).toBe('running');
+    expect(controller.signal.aborted).toBe(false);
+    expect(runner.inFlight).toBe(1);
+    // A per-request transfer may already have moved a prefix, so the job remains
+    // the only truthful owner for the live promise and later device requests.
+    expect(ownership.owningJobId).toBe(jobId);
+    ownership.report('req-late');
+    expect(logs.some((l) => l.e === 'bg_job_transfer_failed' && l.d?.includes(jobId))).toBe(true);
+
+    work.resolve('completed after the unconfirmed handoff');
+    await settled();
+    expect(store.get(jobId)?.status).toBe('completed');
+    expect(runner.inFlight).toBe(0);
+    expect(store.get(jobId)?.result).toBe('"completed after the unconfirmed handoff"');
   });
 });
 

@@ -163,10 +163,11 @@ export interface BackgroundJobRunnerDeps {
   onSettled?(job: BackgroundJob): void;
   /** Transfer the external requests this invocation had already issued when it
    *  crossed the threshold to the job's durable identity, before the foreground
-   *  promise is released. Throws when it cannot: a job that does not own its
-   *  external work must not run. Requests issued AFTER the handoff are not
-   *  transferred at all — the owning job's identity travels with the call
-   *  instead (see ./device-ownership). */
+   *  promise is released. A throw classifies an unconfirmed transfer; it can
+   *  follow a partial per-request move, so the runner preserves the minted job's
+   *  live completion rather than pretending the foreground still owns it.
+   *  Requests issued AFTER the handoff are not transferred at all — the owning
+   *  job's identity travels with the call instead (see ./device-ownership). */
   onDetached?(jobId: string, requestIds: readonly string[]): Promise<void> | void;
   /** Cancel external work transferred to this exact durable job. Throws to
    *  REFUSE the cancel, which leaves the job running and retryable. */
@@ -188,18 +189,17 @@ export interface BackgroundJobRunnerDeps {
   harvest?: JobHarvester;
 }
 
-/** What the model reads when a detach is refused. Honest about what happened to
- *  its call, and specific about the work already in flight, so the answer is
- *  "wait for these" rather than "try launching it again". */
+/** The classified reason a detach cannot be admitted. The live call stays
+ * foreground-owned, so this explains why it kept waiting rather than inviting
+ * another copy of work already in flight. */
 function refusalMessage(kind: string, running: ActiveRoster<BackgroundJob>): string {
   const roster = running.items.map((j) => `${j.id} (${j.kind})`).join(', ');
   return (
     `The "${kind}" call needed to move to the background, but this workspace already has ` +
-    `${running.total} background job(s) running — the maximum — so it was CANCELLED instead of ` +
-    `being detached. Nothing was left running from this call. Already in flight: ${roster}. ` +
-    `Wait for those to finish (you are woken as each one settles, and agent.jobResult('<id>') ` +
-    `reads a settled one), or cancel the ones you no longer need, before starting more ` +
-    `long-running work. Launching another copy will not make the running ones finish sooner.`
+    `${running.total} background job(s) running — the maximum — so it will stay in the ` +
+    `foreground until it settles. It was not cancelled. Already in flight: ${roster}. ` +
+    `Those jobs still wake the agent as each one settles, and agent.jobResult('<id>') reads a ` +
+    `settled one. Do not launch another copy: it will not make the running work finish sooner.`
   );
 }
 
@@ -335,8 +335,9 @@ export class BackgroundJobRunner {
   }
 
   /** ThresholdDeps for withBackgroundThreshold: on cross, mint a job and keep
-   *  the live work alive durably — unless the concurrency cap is already full,
-   *  in which case the work is cancelled and the model is told why.
+   *  the live work alive durably. If the concurrency cap is already full, no job
+   *  has claimed this promise, so the threshold helper keeps it foreground-owned
+   *  and awaits its same eventual settlement.
    *
    *  `ownership` is THIS invocation's device-request holder. A detach drains it
    *  — claiming the invocation for the job and taking the ids issued so far in
@@ -362,64 +363,45 @@ export class BackgroundJobRunner {
   ): Promise<DetachOutcome> {
     const running = this.deps.store.countRunning();
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
-      controller.abort(new Error('background-job concurrency cap reached'));
       this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
       return { detached: false, reason: refusalMessage(kind, this.deps.store.listRunning(MAX_CONCURRENT_DETACHED_JOBS)) };
     }
     const jobId = this.create(kind, input, mode, controller);
     this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
-    const detached = await this.beginDetachedWork(jobId, kind, controller, promise, ownership);
-    return detached
-      ? { detached: true, jobId }
-      : { detached: false, reason: `The "${kind}" call could not transfer its external work to the background, so it was cancelled.` };
+    await this.beginDetachedWork(jobId, kind, promise, ownership);
+    return { detached: true, jobId };
   }
 
-  /** Complete ownership transfer before the durable fiber begins. A failed
-   * transfer must not leave live work behind a running job no fiber owns. */
+  /**
+   * Complete the external-work transfer attempt before the durable fiber begins.
+   *
+   * A per-request transfer can report failure after moving a prefix, so its error
+   * does not prove the foreground still owns the invocation. Keep the minted
+   * job's controller and claim, classify the degraded handoff, then let that job
+   * preserve the same live promise's completion. Releasing the claim or aborting
+   * here would turn elapsed time into an unrequested timeout and would misstate
+   * ownership of the requests that did move.
+   */
   private async beginDetachedWork<T>(
     jobId: string,
     kind: string,
-    controller: AbortController,
     promise: Promise<T>,
     ownership?: DeviceRequestOwnership,
-  ): Promise<boolean> {
+  ): Promise<void> {
     // Drained BEFORE the transfer is awaited: the job's identity has to be
     // visible to any request the call issues while that transfer is in flight,
     // and the drain closes the transferred set in the same tick so no id falls
     // between the two (./device-ownership).
     const requestIds = ownership?.drain(jobId) ?? [];
-    let transferred = false;
     try {
       await this.deps.onDetached?.(jobId, requestIds);
-      this.detach(jobId, kind, promise);
-      transferred = true;
     } catch (err) {
-      // The job this named is about to be failed, so it must stop being the
-      // owner a later request would be inserted under.
-      ownership?.release();
-      controller.abort(err);
-      this.controllers.delete(jobId);
-      this.failUnsettled(jobId, err);
-      try {
-        await this.wake(jobId);
-      } catch (wakeError) {
-        diagnostics.failure('jobs.detach_transfer_wake_failed', toKinuError({
-          doing: 'wake an agent after its external-work transfer failed', cause: wakeError, otherwise: 'io',
-        }), { jobId });
-      }
-      // The live promise no longer has a fiber consuming it. Observe the abort
-      // rejection so a handoff failure cannot create an unhandled rejection.
-      void promise.catch((reason) => {
-        if (reason !== err) {
-          diagnostics.failure('jobs.detach_transfer_work_rejected', toKinuError({
-            doing: 'observe work after its external-work transfer failed',
-            cause: reason,
-            otherwise: 'unavailable',
-          }), { jobId });
-        }
-      });
+      this.deps.logActivity?.(
+        'bg_job_transfer_failed',
+        `${kind} → ${jobId}; external-work transfer was not confirmed — ${renderThrownChain({ cause: err })}`,
+      );
     }
-    return transferred;
+    this.detach(jobId, kind, promise);
   }
 
   /** Keep a backgrounded promise alive in a durable fiber; on settle, record the

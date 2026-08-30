@@ -64,9 +64,9 @@ export const CONFINED_BACKGROUNDABLE_TOOLS = {
  *
  * Each detachable call gets its own AbortController (hard-cancel aborts the
  * underlying work), merged with the turn's signal so a turn abort still
- * propagates. `trackController` (cf) registers the controller for foreground
- * cancellation until the call settles; once detached, BackgroundJobRunner
- * owns it.
+ * propagates. `trackController` (cf) keeps it foreground-owned until the call
+ * settles; a refused detach therefore preserves normal foreground cancellation.
+ * Once a job actually retains the call, BackgroundJobRunner owns the controller.
  */
 export function wrapToolsForBackground(raw: ToolSet, deps: {
   jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy'>;

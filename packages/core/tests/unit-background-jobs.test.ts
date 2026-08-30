@@ -202,13 +202,25 @@ describe('withBackgroundThreshold', () => {
     await expect(detached[0]).resolves.toBe('slow-result');
   });
 
-  test('a refused detach returns the refusal to the model, not a handle', async () => {
-    const out = await withBackgroundThreshold('run', async () => { await delay(80); return 'never read'; }, {
+  test('a refused detach keeps the same live work foreground-owned through completion', async () => {
+    const out = await withBackgroundThreshold('run', async () => {
+      await delay(80);
+      return 'completed after the capacity refusal';
+    }, {
       thresholdMs: 20,
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
     });
-    expect(isBackgroundHandle(out)).toBe(false);
-    expect(out).toEqual({ background: false, kind: 'run', message: 'too many jobs already running' });
+    expect(out).toBe('completed after the capacity refusal');
+  });
+
+  test('a refused detach preserves a later tool failure', async () => {
+    await expect(withBackgroundThreshold('run', async () => {
+      await delay(40);
+      throw new Error('failed after the capacity refusal');
+    }, {
+      thresholdMs: 20,
+      onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
+    })).rejects.toThrow('failed after the capacity refusal');
   });
 
   test('fast rejection propagates inline (no background)', async () => {
@@ -272,16 +284,15 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     })).rejects.toThrow('bad fork input');
   });
 
-  test('a refused detach (concurrency cap) returns the refusal, not a handle', async () => {
+  test('a refused detach keeps the spawned work foreground-owned through completion', async () => {
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       spawnStarted();
       await delay(50);
-      return 'never read';
+      return 'completed after the capacity refusal';
     }, {
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
     });
-    expect(isBackgroundHandle(out)).toBe(false);
-    expect(out).toEqual({ background: false, kind: 'agents', message: 'too many jobs already running' });
+    expect(out).toBe('completed after the capacity refusal');
   });
 
   // The wake promise lives in the runtime message; the never-poll doctrine

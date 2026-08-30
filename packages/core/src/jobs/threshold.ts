@@ -7,8 +7,8 @@
 // keeps the DO alive, settles the job, and publishes a completion event the
 // reactor drains into a synthesis turn) and the model gets a BackgroundHandle
 // immediately — "this is continuing in the background; you'll be woken with the
-// result." When too many jobs are already in flight the detach is refused
-// instead: the work is cancelled and the model is told why.
+// result." If capacity refuses a detach, the foreground keeps its live promise
+// and waits for its settlement instead of treating elapsed time as cancellation.
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
@@ -106,8 +106,9 @@ export interface BackgroundHandle {
   readonly message: string;
 }
 
-/** Returned to the model when a tool call crossed the threshold but could NOT
- *  be detached — too many jobs are already in flight. The work was cancelled. */
+/** A historical serialized shape for a detach refusal. The threshold helpers
+ *  now keep a refusal's live work foreground-owned and return its eventual
+ *  settlement instead. */
 export interface BackgroundRefusal {
   readonly background: false;
   readonly kind: string;
@@ -126,13 +127,13 @@ export function isBackgroundHandle<T>(value: T): value is T & BackgroundHandle {
 }
 
 /**
- * The same discriminator over the SERIALIZED result — a handle OR a refusal.
+ * The same discriminator over the SERIALIZED result — a current handle or a
+ * historical refusal.
  *
  * The tool-result extension seam carries the rendered string, not the value
  * (extension.ts), so a consumer that must not read a detached call as a
- * finished one has only the text. Both outcomes matter equally there: a handle
- * means the work is still running, a refusal means it was cancelled, and
- * neither is a result.
+ * finished one has only the text. A handle means work is still running; an
+ * earlier refusal means this historical result was not the tool's settlement.
  */
 export function isBackgroundOutcomeText(result: string): boolean {
   const text = result.trimStart();
@@ -141,7 +142,8 @@ export function isBackgroundOutcomeText(result: string): boolean {
   return v.safeParse(v.object({ background: v.boolean(), kind: v.string() }), parsed).success;
 }
 
-/** What `onThreshold` decided: the job it minted, or why it refused. */
+/** What `onThreshold` decided: the job it minted, or a classified refusal to
+ * detach. */
 export type DetachOutcome =
   | { readonly detached: true; readonly jobId: string }
   | { readonly detached: false; readonly reason: string };
@@ -151,8 +153,8 @@ export interface ThresholdDeps {
   thresholdMs?: number;
   /** The threshold elapsed. Either mint a background job and keep `promise`
    *  alive durably (settling the job and waking the agent when it resolves), or
-   *  refuse — in which case the implementation has already cancelled the work
-   *  and `reason` is what the model is told. */
+   *  refuse the detach. A refusal leaves this live promise foreground-owned, so
+   *  the threshold helper returns or throws its eventual settlement. */
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome | Promise<DetachOutcome>;
 }
 
@@ -162,7 +164,7 @@ export async function withBackgroundThreshold<T>(
   kind: string,
   exec: () => Promise<T>,
   deps: ThresholdDeps,
-): Promise<T | BackgroundHandle | BackgroundRefusal> {
+): Promise<T | BackgroundHandle> {
   const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
   const promise = exec();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -179,10 +181,14 @@ export async function withBackgroundThreshold<T>(
     return winner.value;
   }
 
-  // Slow path: hand the live work to the background runner.
+  // Slow path: hand the live work to the background runner. A refusal is an
+  // admission decision, not an implicit timeout: no job owns this promise, so
+  // preserve the foreground's controller and eventual settlement.
   const outcome = await deps.onThreshold(kind, promise);
   if (!outcome.detached) {
-    return { background: false, kind, message: outcome.reason };
+    const foreground = await settled;
+    if ('error' in foreground) throw foreground.error;
+    return foreground.value;
   }
   return {
     background: true,
@@ -210,7 +216,7 @@ export async function withSpawnDetach<T>(
   kind: string,
   exec: (spawnStarted: () => void) => Promise<T>,
   deps: Pick<ThresholdDeps, 'onThreshold'>,
-): Promise<T | BackgroundHandle | BackgroundRefusal> {
+): Promise<T | BackgroundHandle> {
   const SPAWNED = Symbol('spawned');
   let announce!: () => void;
   const started = new Promise<typeof SPAWNED>((resolve) => { announce = () => resolve(SPAWNED); });
@@ -226,7 +232,9 @@ export async function withSpawnDetach<T>(
 
   const outcome = await deps.onThreshold(kind, promise);
   if (!outcome.detached) {
-    return { background: false, kind, message: outcome.reason };
+    const foreground = await settled;
+    if ('error' in foreground) throw foreground.error;
+    return foreground.value;
   }
   return {
     background: true,
