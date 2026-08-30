@@ -817,7 +817,7 @@ async function deployFixture(
 
   const unauth = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })
     .then((r) => r.status)
-    .catch((error) => {
+    .catch((error: unknown) => {
       log(`the unauthenticated probe did not answer: ${describeThrown({ cause: error })}`);
       return 0;
     });
@@ -830,7 +830,7 @@ async function deployFixture(
     const authed = await fetch(`${origin}/health`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(15_000),
-    }).then((r) => r.status).catch((error) => {
+    }).then((r) => r.status).catch((error: unknown) => {
       log(`the readiness probe did not answer: ${describeThrown({ cause: error })}`);
       return 0;
     });

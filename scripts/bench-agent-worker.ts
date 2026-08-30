@@ -129,7 +129,7 @@ async function main(): Promise<void> {
 // figures at all. The previous `tokens: 0, peakPromptTokens: 0, modelCalls: 0`
 // was a fabricated bill: a crashed attempt entered the ledger as the cheapest
 // possible run and as comfortably inside its token budget.
-main().catch((err) => {
+main().catch((err: unknown) => {
   const out: WorkerOutput = {
     steps: 0,
     hadError: true,

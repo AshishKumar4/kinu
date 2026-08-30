@@ -706,6 +706,7 @@ describe('long teardown transport', () => {
     const request = new DeferredVerifyRequest();
     let requestedUrl = '';
     let headers: Readonly<Record<string, string>> = {};
+    const rejection: unknown[] = [];
     const teardown = postLiveTeardown(
       { origin: 'https://fixture.invalid', token: 'memory-only-token' },
       'ab-snapshot-chain-20260827000000',
@@ -713,12 +714,15 @@ describe('long teardown transport', () => {
         requestedUrl = url.toString();
         headers = options.headers;
         request.onEnd = () => {
-          void release.promise.then(() => {
-            const response = new DeferredVerifyResponse();
-            respond(response);
-            response.emit('data', JSON.stringify({ ok: true, purged: 4 }));
-            response.emit('end');
-          });
+          release.promise.then(
+            () => {
+              const response = new DeferredVerifyResponse();
+              respond(response);
+              response.emit('data', JSON.stringify({ ok: true, purged: 4 }));
+              response.emit('end');
+            },
+            (thrown: unknown) => { rejection.push(thrown); },
+          );
         };
         return request;
       },
@@ -741,5 +745,6 @@ describe('long teardown transport', () => {
 
     release.resolve();
     await expect(teardown).resolves.toBeUndefined();
+    expect(rejection).toEqual([]);
   });
 });

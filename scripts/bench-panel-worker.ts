@@ -164,7 +164,7 @@ async function main(): Promise<void> {
 // A crash before the meter reported carries no token figures. The head fields
 // stay explicit: an empty panel outcome IS what this run produced, unlike its
 // cost, which nobody measured.
-main().catch((err) => {
+main().catch((err: unknown) => {
   const out: WorkerOutput = {
     steps: 0, hadError: true, budgetBreach: null,
     headScores: [], grounded: false, blindSpots: [],
