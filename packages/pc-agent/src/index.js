@@ -1102,7 +1102,11 @@ function createInFlight(root = INFLIGHT_ROOT) {
   function terminateUnanswered() {
     for (const [requestId, entry] of entries) {
       if (fs.existsSync(path.join(entry.dir, 'result'))) continue;
-      cancel(requestId).catch((err) => log('Could not terminate abandoned command', requestId, err));
+      /** @param {unknown} error */
+      function reportTerminationFailure(error) {
+        log('Could not terminate abandoned command', requestId, error);
+      }
+      cancel(requestId).catch(reportTerminationFailure);
     }
   }
 
@@ -1160,9 +1164,13 @@ function waitForSupervisorState(dir, child) {
     };
     child.once('error', onError);
     child.once('exit', onExit);
+    /** @param {unknown} error */
+    function finishWithError(error) {
+      if (!settled) finish(error);
+    }
     waitForFile(path.join(dir, 'state'), controller.signal).then(
       () => finish(),
-      (err) => { if (!settled) finish(err); },
+      finishWithError,
     );
   });
 }
@@ -1178,6 +1186,10 @@ function handle(msg, ws, ctx) {
       assertSupervisionSupported();
       if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
       const dir = requestDirectory(INFLIGHT_ROOT, id);
+      /** @param {unknown} error */
+      function reportExecReplyFailure(error) {
+        log('Could not report exec command result', id, error);
+      }
       (async () => {
         try {
           if (fs.existsSync(dir)) {
@@ -1193,7 +1205,7 @@ function handle(msg, ws, ctx) {
         } catch (err) {
           rpc(ws, id, null, err instanceof Error ? err.message : String(err));
         }
-      })();
+      })().catch(reportExecReplyFailure);
     } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
       const requested = params[0];
       const target = String(requested);
@@ -1203,9 +1215,13 @@ function handle(msg, ws, ctx) {
       if (target !== requested) return rpc(ws, id, null, `${method} expects the request id to target`);
       requestDirectory(INFLIGHT_ROOT, target);
       const operation = method === CANCEL_METHOD ? inFlight.cancel(target) : inFlight.acknowledge(target);
+      /** @param {unknown} error */
+      function replyWithOperationFailure(error) {
+        rpc(ws, id, null, error instanceof Error ? error.message : String(error));
+      }
       operation.then(
         (result) => rpc(ws, id, result),
-        (err) => rpc(ws, id, null, err instanceof Error ? err.message : String(err)),
+        replyWithOperationFailure,
       );
     } else if (method === 'readFile') {
       const options = params[1] || {};
@@ -1410,7 +1426,7 @@ function startConnectLoop(opts) {
 
   function retry() {
     if (stopped) return;
-    schedule(connect, backoff);
+    schedule(startConnectAttempt, backoff);
     backoff = Math.min(backoff * 2, 60_000);
   }
 
@@ -1448,7 +1464,17 @@ function startConnectLoop(opts) {
     });
   }
 
-  void connect();
+  /** @param {unknown} error */
+  function reportConnectFailure(error) {
+    logger('Connect attempt failed:', connectFailureMessage(error, [secret(), currentTicket]));
+    retry();
+  }
+
+  function startConnectAttempt() {
+    connect().catch(reportConnectFailure);
+  }
+
+  startConnectAttempt();
   return {
     stop() {
       stopped = true;
