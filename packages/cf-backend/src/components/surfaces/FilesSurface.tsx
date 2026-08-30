@@ -161,9 +161,13 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
   }, [jump]);
 
   /** Row-operation runner: every rejection lands in the notice banner. */
-  const run = useCallback((op: () => Promise<void>) => {
+  const run = useCallback(async (op: () => Promise<void>) => {
     setNotice(null);
-    void op().then(undefined, (error: unknown) => setNotice(renderThrownChain({ cause: error })));
+    try {
+      await op();
+    } catch (cause) {
+      setNotice(renderThrownChain({ cause }));
+    }
   }, []);
 
   const rawUrl = useCallback((full: string, download: boolean) =>
@@ -223,7 +227,7 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
     e.preventDefault();
     setDragOver(false);
     const dropped = [...e.dataTransfer.files];
-    run(() => uploadFiles(dropped));
+    return run(() => uploadFiles(dropped));
   }, [run, uploadFiles]);
 
   const atRoot = path === "/";
@@ -335,7 +339,7 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
             </span>
           ))}
           <input ref={uploadInputRef} type="file" multiple className="hidden"
-            onChange={(e) => { const picked = [...(e.currentTarget.files ?? [])]; e.currentTarget.value = ""; run(() => uploadFiles(picked)); }} />
+            onChange={(e) => { const picked = [...(e.currentTarget.files ?? [])]; e.currentTarget.value = ""; return run(() => uploadFiles(picked)); }} />
           <div className="ml-auto flex items-center gap-0.5 shrink-0">
             <button onClick={() => setPath(parentDir(path))} disabled={atRoot}
               className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
@@ -526,7 +530,7 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
   badgeFor: (name: string) => string | null;
   onNavigate: (dir: string) => void;
   onOpenFile: (path: string) => void;
-  onToggle: (dir: string) => void;
+  onToggle: (dir: string) => Promise<void>;
 }) {
   const isOpen = expanded.has(dir);
   const children = cache.get(dir)?.entries;
@@ -540,7 +544,7 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
         onClick={() => onNavigate(dir)}
       >
         <button
-          onClick={(e) => { e.stopPropagation(); onToggle(dir); }}
+          onClick={(e) => { e.stopPropagation(); return onToggle(dir); }}
           className="p-text-3 hover:p-text shrink-0"
           aria-label={isOpen ? `Collapse ${label}` : `Expand ${label}`}
         >
@@ -607,10 +611,10 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
   onSelect: () => void;
   onOpen: () => void;
   onRenameDraft: (draft: string) => void;
-  onRenameCommit: (draft: string) => void;
+  onRenameCommit: (draft: string) => Promise<void>;
   onRenameCancel: () => void;
   onAskDelete: () => void;
-  onDelete: () => void;
+  onDelete: () => Promise<void>;
   onCancelDelete: () => void;
 }) {
   const meta = [
@@ -640,7 +644,7 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
           onChange={(e) => onRenameDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             e.stopPropagation();
-            if (e.key === "Enter") onRenameCommit(e.currentTarget.value);
+            if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
             if (e.key === "Escape") onRenameCancel();
           }}
           onBlur={onRenameCancel}

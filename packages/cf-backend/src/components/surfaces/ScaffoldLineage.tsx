@@ -95,28 +95,34 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const { resource: lineage, reload } = useAsyncResource(loadVersions);
   const versions = lastValue(lineage) ?? [];
 
-  const loadDetail = useCallback((version: number) => {
+  const loadDetail = useCallback(async (version: number) => {
     setDetail({ status: "loading" });
     // An absent verdict is an ordinary empty result, not a failure, so either
     // read failing here is the surface's failure rather than a blank grid.
-    Promise.all([
-      rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
-      rpc<ShadowVerdict>("getShadowVerdict", [version]),
-    ]).then(
-      ([diff, verdict]) => setDetail(loadSucceeded({ diff, verdict })),
-      (err: unknown) => setDetail((prev) => loadFailed(prev, err)),
-    );
+    try {
+      const [diff, verdict] = await Promise.all([
+        rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
+        rpc<ShadowVerdict>("getShadowVerdict", [version]),
+      ]);
+      setDetail(loadSucceeded({ diff, verdict }));
+    } catch (cause) {
+      setDetail((prev) => loadFailed(prev, cause));
+    }
   }, [rpc]);
 
   const select = useCallback((version: number) => {
     setSelected(version); setPreviewOut(null); setDecideErr(null);
-    loadDetail(version);
+    return loadDetail(version);
   }, [loadDetail]);
 
   const decide = useCallback(async (mode: "promote" | "rollback") => {
     setBusy(mode);
     setDecideErr(null);
-    try { await rpc("applyScaffoldDecision", [mode]); reload(); if (selected != null) loadDetail(selected); }
+    try {
+      await rpc("applyScaffoldDecision", [mode]);
+      reload();
+      if (selected != null) await loadDetail(selected);
+    }
     catch (e) { setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); }
     finally { setBusy(null); }
   }, [rpc, reload, loadDetail, selected]);

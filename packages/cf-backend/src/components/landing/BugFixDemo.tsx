@@ -19,7 +19,7 @@
  */
 import { Button } from '@cloudflare/kumo';
 import {
-  Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type ReactElement,
 } from 'react';
 import { flushSync } from 'react-dom';
@@ -28,6 +28,7 @@ import { KinuLogo } from '@/components/ui/KinuLogo';
 import { MessageView } from '@/components/MessageView';
 
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { useAsyncResource } from '@/hooks/use-async-resource';
 
 import {
   CURSOR_ENTER_AT, DEMO_ANNOTATION, DEMO_CUES, DEMO_END,
@@ -209,15 +210,18 @@ export function BugFixDemo(): ReactElement {
     return () => observer.disconnect();
   }, [reduced]);
 
-  // The plan surface is its own chunk (marked, katex, dompurify); fetch it as
-  // soon as the demo mounts so the plan beat never waits on the network.
-  useEffect(() => {
-    import('./BugFixPlanPanel').catch((cause: unknown) => {
+  // The plan surface is its own chunk (marked, katex, dompurify); the resource
+  // owns this independent preload as soon as the demo mounts, so the plan beat
+  // never waits on the network.
+  useAsyncResource(useCallback(async () => {
+    try {
+      await import('./BugFixPlanPanel');
+    } catch (cause) {
       diagnostics.failure('landing.bugfix_plan_preload_failed', toKinuError({
         doing: 'preload the bug-fix plan demo', cause, otherwise: 'io',
       }));
-    });
-  }, []);
+    }
+  }, []));
 
   useEffect(() => {
     const handle: BugFixDemoHandle = {

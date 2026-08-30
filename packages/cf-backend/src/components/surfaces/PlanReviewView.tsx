@@ -194,13 +194,15 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
     return saved;
   }, [annotationSaves, planKey]);
 
-  const changeAnnotations = useCallback((next: Annotation[]) => {
+  const changeAnnotations = useCallback(async (next: Annotation[]) => {
     if (decisionInFlight.current) return;
-    save(next).catch((cause: unknown) => {
+    try {
+      await save(next);
+    } catch (cause) {
       if (activePlanKey.current !== planKey) return;
       setError(renderThrownChain({ cause }));
       if (annotationSaves.pending() === 0) setSaving(false);
-    });
+    }
   }, [annotationSaves, planKey, save]);
 
   const addAnnotation = useCallback((annotation: Annotation) => {
@@ -208,7 +210,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
     const next = [...annotations, annotation];
     setSelected(annotation.id);
     setPanelOpen(true);
-    changeAnnotations(next);
+    return changeAnnotations(next);
   }, [annotations, changeAnnotations]);
 
   const selectAnnotation = useCallback((id: string | null) => {
@@ -400,7 +402,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
           onSelect={setSelected}
           onDelete={(id) => {
             if (selected === id) setSelected(null);
-            changeAnnotations(annotations.filter((annotation) => annotation.id !== id));
+            return changeAnnotations(annotations.filter((annotation) => annotation.id !== id));
           }}
           onEdit={(id, updates) => changeAnnotations(annotations.map((annotation) => annotation.id === id ? { ...annotation, ...updates } : annotation))}
           onClose={closePanel}
@@ -428,14 +430,14 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
                 type="button"
                 size="sm"
                 variant="secondary"
-                onClick={() => void decide("request_changes")}
+                onClick={() => decide("request_changes")}
                 disabled={decisionBusy !== null || saving || annotations.length === 0}
               >
                 {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
                 className="w-full sm:w-auto"
-                onClick={() => void decide("approve")}
+                onClick={() => decide("approve")}
                 disabled={decisionBusy !== null || saving || annotations.length > 0}
               >
                 {decisionBusy === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
@@ -444,7 +446,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
           )}
           {handoffPending && (
             <FilledButton
-              onClick={() => void decide(plan.status === "approved" ? "approve" : "request_changes")}
+              onClick={() => decide(plan.status === "approved" ? "approve" : "request_changes")}
               disabled={decisionBusy !== null || saving}
             >
               {decisionBusy ? <Loader size="sm" /> : plan.status === "approved" ? "Retry implementation" : "Retry revision"}

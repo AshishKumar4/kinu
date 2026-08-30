@@ -30,6 +30,7 @@ import type { Rpc } from "@/lib/protocol";
 import { EmptyState, MarkdownContent, Section } from "./shared";
 import * as v from 'valibot';
 import { renderThrownChain } from "@kinu.run/core/obs";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 type SourceState = { data: JsonValue } | { error: string };
 const AgentViewResponseSchema = v.object({
@@ -262,7 +263,6 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
   const [version, setVersion] = useState<number | null>(null);
   const [sources, setSources] = useState<Map<string, SourceState>>(new Map());
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [showSource, setShowSource] = useState(false);
   // The interval reads the newest spec without re-arming on every data refresh.
   const specRef = useRef<ViewSpec | null>(null);
@@ -295,28 +295,21 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
       await loadData(result.spec);
     } catch (err) {
       setError(renderThrownChain({ cause: err }));
-    } finally {
-      setLoading(false);
-    }
+  }
   }, [rpc, slug, loadData]);
+  const { resource: viewResource, reload: reloadView } = useAsyncResource(load, undefined, slug);
 
-  useEffect(() => {
-    setLoading(true);
-    load().catch((cause: unknown) => {
-      setError(renderThrownChain({ cause }));
-      setLoading(false);
-    });
-  }, [load]);
 
   useEffect(() => {
     const every = spec?.refreshMs;
     if (!every) return;
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
       const current = specRef.current;
-      if (current) {
-        loadData(current).catch((cause: unknown) => {
-          setError(renderThrownChain({ cause }));
-        });
+      if (current === null) return;
+      try {
+        await loadData(current);
+      } catch (cause) {
+        setError(renderThrownChain({ cause }));
       }
     }, every);
     return () => clearInterval(timer);
@@ -324,7 +317,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
 
   const json = useMemo(() => (spec ? JSON.stringify(spec, null, 2) : ""), [spec]);
 
-  if (loading) return <div className="flex justify-center py-16"><Loader /></div>;
+  if (viewResource.status === "loading") return <div className="flex justify-center py-16"><Loader /></div>;
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -349,14 +342,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
         )}
         <button
           type="button"
-          onClick={async () => {
-            try {
-              await load();
-            } catch (cause) {
-              setError(renderThrownChain({ cause }));
-              setLoading(false);
-            }
-          }}
+          onClick={reloadView}
           className="p-btn-ghost inline-flex items-center gap-1 px-2 py-1 text-xs cursor-pointer"
         >
           <ArrowClockwiseIcon size={12} />Refresh
