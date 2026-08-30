@@ -421,18 +421,38 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/leave durable findings under `shared\/findings\/`/);
   });
 
-  test('per-node model routing is discoverable, and named as a case rather than a default', () => {
-    // A search takes `models` for per-node routing and nothing told the model
-    // what varying it was FOR. The prompt names the capability at shape time;
-    // the Self-MoA caveat (arXiv 2502.00674 — panel quality tracks the AVERAGE
-    // member, so diversity for its own sake costs) rides the parameter
-    // description in agents-tool.ts, read while the field is being filled.
+  test('delegation never advertises unsupported per-node model routing', () => {
+    // `models` was parsed but never read by the swarm runner, so neither a
+    // tool-capable profile, a tool-less profile, nor an uncatalogued provider
+    // can make it a real delegation feature.
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/`models` puts a different vendor on a genuinely open question/);
-    expect(prompt).toMatch(/a weaker model added for variety measurably subtracts/);
-    // Never phrased as something to do by default.
-    expect(prompt).not.toMatch(/vary the models|diversify|always use different models/i);
+    const prompts = [
+      buildSystemPromptSync(rt, {
+        availableTools: ['agents'],
+        registeredExecutors: [],
+        model: { provider: 'anthropic', id: 'claude-sonnet-4-6', capabilities: ['tools', 'streaming'] },
+      }),
+      buildSystemPromptSync(rt, {
+        availableTools: ['agents'],
+        registeredExecutors: [],
+        model: { provider: 'openai', id: 'o4-mini', capabilities: ['streaming', 'reasoning'] },
+      }),
+      buildSystemPromptSync(rt, {
+        availableTools: ['agents'],
+        registeredExecutors: [],
+        model: { provider: 'future-provider', id: 'new-model' },
+      }),
+    ];
+
+    for (const prompt of prompts) {
+      expect(prompt).toMatch(/- Ephemeral search \(action=swarm\) — /);
+      expect(prompt).toMatch(/Nodes recurse up to search depth 3/);
+      expect(prompt).not.toContain('`models` puts a different vendor');
+      expect(prompt).not.toContain('a weaker model added for variety');
+    }
+
+    // Red directions: restore either deleted clause and its absence assertion
+    // fails; delete a ladder or recursion line and its presence assertion fails.
   });
 
   test('the agents example is the cheapest COMPLETE call', () => {

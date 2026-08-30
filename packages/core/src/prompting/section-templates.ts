@@ -310,13 +310,6 @@ export const CODE_EXECUTION_SECTION = definePromptSection(
  * never does, one takes a one-line brief and the other takes a written one. The
  * rung itself (DELEGATION_RUNGS.hire) carries the mechanism; this is the index.
  *
- * Per-node `models` routing is named as a case and never a default: panel quality
- * tracks the AVERAGE member (Self-MoA, arXiv 2502.00674), so the caveat rides the
- * parameter in agents-tool.ts, where it is read at the moment the field is being
- * filled. The line that decides the rung is who WRITES the candidates and whether
- * anything MEASURES them, because "spawn several and pick the best" describes
- * several things and only one of them runs a verifier.
- *
  * The sibling-visibility half of the artifact line went to the field that is read
  * when the task is being WRITTEN: DELEGATION_INHERITANCE.swarm.brief names what a
  * node can lean on, on `task` itself. Repeating it thousands of tokens earlier
@@ -348,7 +341,7 @@ Delegate once the shape of the work is settled: naming the parts is yours, runni
 - Ephemeral search (action=swarm) — nodes of you, each running its own tool loop in parallel, whose candidates are measured and settled back this turn. Reach for it when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.{{/if}}{{#if hasTemporaryAsk}}
 - One question (action=ask with \`role\`) — a full agent created for that question, spending ITS window on the reading and handing you back one answer. Name bulk material by \`context_ref\` rather than pasting it. It is released when it answers, so ask everything you need at once.{{/if}}{{#if hasHire}}
 - Persistent subordinate (action=hire) — a helper that outlives this turn and stays in your roster. It starts with a blank context, so its mission is the whole brief; hire when the work needs its own memory across turns rather than one answer now.{{/if}}{{#if hasSwarm}}
-A search writes its own competing candidates from \`task\` and scores each one with the verifier you named in \`objective\` — you supply what counts, not the angles. \`models\` puts a different vendor on a genuinely open question; a weaker model added for variety measurably subtracts.
+A search writes its own competing candidates from \`task\` and scores each one with the verifier you named in \`objective\` — you supply what counts, not the angles.
 Nodes recurse up to search depth 3 and leave durable findings under \`shared/findings/\` — read them after the settle for detail beyond the summary.{{/if}}{{#if rungsInCode}}
 The same rungs are callable inside execute_tools as \`agents.<action>\`, so a multi-step plan can be one script — loop, branch, Promise.all — and \`workspace.createTool\` saves that script as a reusable workflow. A search started there rides that call, which does not resume after an eviction.{{/if}}{{#if hasHire}}
 Run the coordination loop: hire the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you.
