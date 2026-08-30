@@ -116,7 +116,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
                 };
                 return exec(input, execOptions);
               },
-              deps.jobRunner.thresholdDeps(key, input, mode, controller, ownership),
+              deps.jobRunner.thresholdDeps(input, mode, controller, ownership),
             );
           }
         } else {
@@ -128,7 +128,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
           run = withBackgroundThreshold(
             key,
             () => exec(input, execOptions),
-            deps.jobRunner.thresholdDeps(key, input, mode, controller, ownership),
+            deps.jobRunner.thresholdDeps(input, mode, controller, ownership),
           );
         }
         return untrack ? run.finally(untrack) : run;

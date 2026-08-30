@@ -344,7 +344,6 @@ export class BackgroundJobRunner {
    *  one step — so every request the call issues afterwards is registered under
    *  the job directly, with no second transfer to race. */
   thresholdDeps<T>(
-    kind: string,
     input: T,
     mode: WorkMode,
     controller: AbortController,

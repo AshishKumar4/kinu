@@ -26,7 +26,7 @@ interface RunInput { command: string }
 function fakeJobRunner(policy: BackgroundPolicy, onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome) {
   return {
     policy,
-    thresholdDeps: (_kind: string) => ({ thresholdMs: policy.detachAfterMs, onThreshold }),
+    thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }),
   };
 }
 

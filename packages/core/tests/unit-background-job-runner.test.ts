@@ -138,7 +138,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
       },
     });
     const controller = new AbortController();
-    const deps = runner.thresholdDeps('run', {}, 'build', controller);
+    const deps = runner.thresholdDeps({}, 'build', controller);
     const detaching = deps.onThreshold('run', Promise.resolve('done'));
     await Promise.resolve();
     expect(transferred).toHaveLength(1);
@@ -667,7 +667,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring', () => {
   test('crossing the threshold mints a running job (carrying input) + logs bg_job_started', async () => {
     const { runner, store, logs } = setup();
-    const deps = runner.thresholdDeps('heads', { code: '1+1' }, 'build', new AbortController());
+    const deps = runner.thresholdDeps({ code: '1+1' }, 'build', new AbortController());
     const outcome = await deps.onThreshold('heads', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
     const id = outcome.detached ? outcome.jobId : '';
@@ -678,11 +678,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
   test('the threshold carries the session surface\'s detach policy', () => {
     const { runner } = setup();
-    expect(runner.thresholdDeps('run', {}, 'build', new AbortController()).thresholdMs)
+    expect(runner.thresholdDeps({}, 'build', new AbortController()).thresholdMs)
       .toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
 
     const oneShot = setup({ policy: BACKGROUND_POLICY['one-shot'] });
-    expect(oneShot.runner.thresholdDeps('run', {}, 'build', new AbortController()).thresholdMs)
+    expect(oneShot.runner.thresholdDeps({}, 'build', new AbortController()).thresholdMs)
       .toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
 
     // Resolved per read, not captured once: a backend whose surface is a
@@ -712,7 +712,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     controller.signal.addEventListener('abort', () => {
       work.reject(new Error('the threshold aborted live work'));
     });
-    const deps = runner.thresholdDeps('run', { command: 'pystan build' }, 'build', controller);
+    const deps = runner.thresholdDeps({ command: 'pystan build' }, 'build', controller);
     const outcome = await deps.onThreshold('run', work.promise);
 
     expect(outcome.detached).toBe(false);
@@ -733,8 +733,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
-    const outcome = await runner
-      .thresholdDeps('run', {}, 'build', new AbortController())
+    const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
   });
@@ -745,8 +744,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
     store.settle('busy-0', 0, 'done', Date.now());
-    const outcome = await runner
-      .thresholdDeps('run', {}, 'build', new AbortController())
+    const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
   });
@@ -771,8 +769,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
         ownership.report('req-late');
       },
     });
-    const outcome = await runner
-      .thresholdDeps('run', {}, 'build', new AbortController(), ownership)
+    const outcome = await runner.thresholdDeps({}, 'build', new AbortController(), ownership)
       .onThreshold('run', Promise.resolve('done'));
 
     expect(outcome.detached).toBe(true);
@@ -795,8 +792,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     controller.signal.addEventListener('abort', () => {
       work.reject(new Error('the transfer failure aborted live work'));
     });
-    const outcome = await runner
-      .thresholdDeps('run', {}, 'build', controller, ownership)
+    const outcome = await runner.thresholdDeps({}, 'build', controller, ownership)
       .onThreshold('run', work.promise);
 
     expect(outcome.detached).toBe(true);
