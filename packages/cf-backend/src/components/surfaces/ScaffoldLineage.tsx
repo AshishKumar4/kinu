@@ -104,7 +104,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
       rpc<ShadowVerdict>("getShadowVerdict", [version]),
     ]).then(
       ([diff, verdict]) => setDetail(loadSucceeded({ diff, verdict })),
-      (err) => setDetail((prev) => loadFailed(prev, err)),
+      (err: unknown) => setDetail((prev) => loadFailed(prev, err)),
     );
   }, [rpc]);
 

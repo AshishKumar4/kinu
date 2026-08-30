@@ -196,8 +196,12 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
 
   const changeAnnotations = useCallback((next: Annotation[]) => {
     if (decisionInFlight.current) return;
-    void save(next);
-  }, [save]);
+    save(next).catch((cause: unknown) => {
+      if (activePlanKey.current !== planKey) return;
+      setError(renderThrownChain({ cause }));
+      if (annotationSaves.pending() === 0) setSaving(false);
+    });
+  }, [annotationSaves, planKey, save]);
 
   const addAnnotation = useCallback((annotation: Annotation) => {
     if (decisionInFlight.current) return;

@@ -100,7 +100,9 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
   return {
     status: () => {
-      if (!inFlight && now() - checkedAt >= DEVICE_STATUS_TTL_MS) void refreshStatus();
+      if (!inFlight && now() - checkedAt >= DEVICE_STATUS_TTL_MS) {
+        refreshStatus().catch(() => { inFlight = null; });
+      }
       return snapshot;
     },
     refreshStatus,

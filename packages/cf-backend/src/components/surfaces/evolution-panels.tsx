@@ -35,7 +35,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
     setDetail({ status: "loading" });
     rpc<GepaRunDetail>("getGepaRun", [runId]).then(
       (d) => setDetail(loadSucceeded(d)),
-      (err) => setDetail((prev) => loadFailed(prev, err)),
+      (err: unknown) => setDetail((prev) => loadFailed(prev, err)),
     );
   }, [rpc]);
 

@@ -89,7 +89,7 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void) {
     // — but the reason has to reach the reader too, or the badge looks stuck.
     rpc("markChangelogSeen", []).then(
       () => { setSeenError(null); onSeen?.(); },
-      (err) => setSeenError(describeError(err)),
+      (err: unknown) => setSeenError(describeError(err)),
     );
   }, [view, rpc, onSeen]);
 
@@ -145,7 +145,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
     rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]).then(
       (d) => setDiff(loadSucceeded(d)),
       // Collapsing the panel made the click look like it did nothing.
-      (err) => setDiff(loadFailed({ status: "loading" }, err)),
+      (err: unknown) => setDiff(loadFailed({ status: "loading" }, err)),
     );
   }, [rpc, entry.scaffoldVersion, diff]);
 
@@ -154,7 +154,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Keep: ${entry.summary}`}
         onClick={() => setKept(true)} icon={<CheckIcon size={12} />} />
       <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Revert: ${entry.summary}`}
-        disabled={busy} onClick={() => { void revert(); }}
+        disabled={busy} onClick={revert}
         icon={busy ? <Loader size="sm" /> : <XIcon size={12} />} />
     </>
   ) : null;
@@ -284,7 +284,7 @@ function StagedSkillDecision(
       (result) => setStaged((previous) => result.ok
         ? loadSucceeded(result.view)
         : loadFailed(previous ?? { status: "loading" }, new Error(result.error))),
-      (error) => setStaged((previous) => loadFailed(previous ?? { status: "loading" }, error)),
+      (error: unknown) => setStaged((previous) => loadFailed(previous ?? { status: "loading" }, error)),
     );
   }, [rpc, decision.requestId, decision.routeIndex, staged]);
 
@@ -338,11 +338,11 @@ function StagedSkillDecision(
           </pre>
           <div className="flex items-center gap-2 px-3 py-2 border-t p-border">
             <Button size="sm" disabled={busy || !staged.value.intact}
-              onClick={() => { void decide("approve", staged.value.digest); }}>
+              onClick={() => decide("approve", staged.value.digest)}>
               Approve these bytes
             </Button>
             <Button size="sm" variant="ghost" disabled={busy}
-              onClick={() => { void decide("reject", staged.value.digest); }}>
+              onClick={() => decide("reject", staged.value.digest)}>
               Reject
             </Button>
             {busy && <Loader size="sm" />}
@@ -399,7 +399,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
               <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Keep: ${entry.summary}`}
                 onClick={() => setKept(true)} icon={<CheckIcon size={12} />} />
               <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Revert: ${entry.summary}`}
-                disabled={busy} onClick={() => { void revert(); }}
+                disabled={busy} onClick={revert}
                 icon={busy ? <Loader size="sm" /> : <XIcon size={12} />} />
             </>
           )}
