@@ -205,7 +205,7 @@ describe('a completed step is durable at the moment it completes', () => {
       expect(witness.map((w) => w.recordedSteps)).toEqual([1, 2, 3]);
       expect(witness.map((w) => w.requests)).toEqual([1, 2, 3]);
     } finally {
-      provider.stop();
+      await provider.stop();
       db.close();
     }
   }, 20_000);
@@ -242,7 +242,7 @@ describe('a completed step is durable at the moment it completes', () => {
       expect(pairing(transcript).every((c) => c.settled)).toBe(true);
       expect(transcript.length).toBe(4);
     } finally {
-      provider.stop();
+      await provider.stop();
       db.close();
     }
   }, 20_000);
@@ -272,7 +272,7 @@ describe('a completed step is durable at the moment it completes', () => {
         reopened.close();
       }
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 20_000);
 
@@ -295,7 +295,7 @@ describe('a completed step is durable at the moment it completes', () => {
       expect(pairing(transcript).map((c) => c.id)).toEqual(['call_a']);
       expect(pairing(transcript).every((c) => c.settled)).toBe(true);
     } finally {
-      provider.stop();
+      await provider.stop();
       db.close();
     }
   }, 20_000);
@@ -317,7 +317,7 @@ describe('the durable record and the history the caller persists are one constru
       expect(run.history.length).toBeGreaterThan(0);
       expect(recorder.transcript('run-same')).toEqual(run.history);
     } finally {
-      provider.stop();
+      await provider.stop();
       db.close();
     }
   }, 20_000);
@@ -359,7 +359,7 @@ describe('the durable record and the history the caller persists are one constru
       expect(pairing(history).map((c) => c.id)).toEqual(['call_a', 'call_b']);
       expect(pairing(history).every((c) => c.settled)).toBe(true);
     } finally {
-      provider.stop();
+      await provider.stop();
       db.close();
     }
   }, 20_000);
@@ -388,7 +388,7 @@ describe('ordering and idempotency', () => {
       expect(perRow.reduce((a, b) => a + b, 0)).toBe(run.history.length);
       expect(pairing(run.history).map((c) => c.id)).toEqual(['call_a', 'call_b', 'call_c']);
     } finally {
-      provider.stop();
+      await provider.stop();
       db.close();
     }
   }, 20_000);
@@ -412,8 +412,8 @@ describe('ordering and idempotency', () => {
       expect(recorder.transcript('run-y')).toEqual(two.history);
       expect(pairing(recorder.transcript('run-y')).map((c) => c.id)).toEqual(['call_a']);
     } finally {
-      first.stop();
-      second.stop();
+      await first.stop();
+      await second.stop();
       db.close();
     }
   }, 20_000);

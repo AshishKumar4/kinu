@@ -140,7 +140,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       // follow-up's. A history the SDK refuses to assemble produces one.
       expect(provider.prompts.length).toBe(2);
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 20_000);
 
@@ -162,7 +162,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       expect(results[0]?.output).toEqual({ type: 'error-text', value: INTERRUPTED_TOOL_RESULT });
       expect(INTERRUPTED_TOOL_RESULT).toContain('Whether it ran is unknown');
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 20_000);
 
@@ -194,7 +194,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       // ...and only the cut-off call gets the synthetic one.
       expect(resultsById.get(ORPHAN_ID)).toEqual({ type: 'error-text', value: INTERRUPTED_TOOL_RESULT });
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 20_000);
 });
@@ -225,7 +225,7 @@ describe('a history that already holds an orphaned call', () => {
       expect(replies.join('')).toContain('back with you');
       expect(provider.prompts.length).toBe(1);
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 20_000);
 
@@ -238,7 +238,7 @@ describe('a history that already holds an orphaned call', () => {
       })) { /* drain */ }
       expect(JSON.stringify(bricked)).toBe(before);
     } finally {
-      provider.stop();
+      await provider.stop();
     }
   }, 20_000);
 });
