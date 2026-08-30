@@ -229,6 +229,11 @@ export interface CarrySide {
  * Fallback rename spelled in base VFS ops, for a plane with no native rename
  * and for a move that crosses planes, where no native rename can exist.
  *
+ * Only a file can ride a carry, and the carry itself holds that line: a
+ * directory source refuses with EPERM before the payload read, the staged
+ * write, or the source unlink — so a tree is never half-copied under a
+ * rename's name.
+ *
  * A byte carry is not atomic, so its completion boundary is explicit: the copy
  * must be confirmed present before the source is destroyed, and a carry that
  * cannot finish removes the copy it made. Both halves exist for one invariant
@@ -237,6 +242,15 @@ export interface CarrySide {
  * which name to trust.
  */
 export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promise<void> {
+	const sourceStat = await from.files.stat(from.path);
+	if (!sourceStat) throw makeVfsError('ENOENT', 'no such file or directory', from.path);
+	if (sourceStat.isDir) {
+		throw makeVfsError(
+			'EPERM',
+			'a directory cannot be renamed here — this plane has no native rename, and only a file\'s bytes can be carried',
+			from.path,
+		);
+	}
 	const payload = await from.files.readFile(from.path);
 	const temp = siblingPath(to.path, 'carry', nanoid(10));
 	const destinationExisted = await to.files.exists(to.path);
