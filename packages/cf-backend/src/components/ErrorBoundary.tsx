@@ -33,6 +33,11 @@ interface State {
   error: Error | null;
 }
 
+interface ReportOperation {
+  promise: Promise<void> | null;
+}
+
+
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
@@ -51,7 +56,7 @@ export class ErrorBoundary extends Component<Props, State> {
    */
   private reported: Error | null = null;
 
-  private readonly reportOperations = new Map<Error, Promise<void>>();
+  private readonly reportOperations = new Map<Error, ReportOperation>();
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
@@ -60,12 +65,12 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     if (this.reported === error) return;
     this.reported = error;
-    let report: Promise<void> | null = null;
-    report = (async () => {
+    const owner: ReportOperation = { promise: null };
+    this.reportOperations.set(error, owner);
+    owner.promise = (async () => {
       try {
         // The fallback is already on screen — React set this boundary's state
-        // before calling here — so this instance owns the report until it settles.
-        await undefined;
+        // before calling here — and this owner holds the report through settlement.
         await reportRenderFailure(error, info.componentStack ?? "");
       } catch (cause) {
         // The only rejection left is a defect in the reporter itself (its fetch
@@ -76,10 +81,9 @@ export class ErrorBoundary extends Component<Props, State> {
           reason: renderThrownChain({ cause }),
         });
       } finally {
-        if (this.reportOperations.get(error) === report) this.reportOperations.delete(error);
+        if (this.reportOperations.get(error) === owner) this.reportOperations.delete(error);
       }
     })();
-    this.reportOperations.set(error, report);
   }
 
   reset = () => this.setState({ error: null });

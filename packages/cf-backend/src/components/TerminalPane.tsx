@@ -83,13 +83,17 @@ export function TerminalPane({ workspace, executor, outputs, onExecute }: Termin
 
 type PtyState = "connecting" | "connected" | "disconnected";
 
+interface TerminalOperation {
+  promise: Promise<void> | null;
+}
+
 function PtyTerminal({ workspace, executor }: { workspace: string; executor: string }) {
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const addonRef = useRef<SandboxAddon | null>(null);
-  const copyOperation = useRef<Promise<void> | null>(null);
-  const keepaliveOperations = useRef(new Map<string, Promise<void>>());
+  const copyOperation = useRef<TerminalOperation | null>(null);
+  const keepaliveOperations = useRef(new Map<string, TerminalOperation>());
   const [state, setState] = useState<PtyState>("connecting");
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -133,25 +137,23 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
       const selection = term.getSelection();
       if (!selection) return true;
       if (copyOperation.current !== null) return false;
-      let copy: Promise<void> | null = null;
-      copy = (async () => {
+      const owner: TerminalOperation = { promise: null };
+      // The key handler must return its boolean synchronously, so install the
+      // owner before the browser action starts and cleanup can fence its result.
+      copyOperation.current = owner;
+      owner.promise = (async () => {
         try {
-          // The key handler must return its boolean synchronously, so this ref
-          // owns the asynchronous browser action until it settles or cleanup
-          // cancels its result publication.
-          await undefined;
           await navigator.clipboard.writeText(selection);
         } catch (cause) {
-          if (copyOperation.current === copy) {
+          if (copyOperation.current === owner) {
             // The pane's failure line is the reader: the header advertises the
             // chord, so a refused clipboard write must not vanish.
             setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
           }
         } finally {
-          if (copyOperation.current === copy) copyOperation.current = null;
+          if (copyOperation.current === owner) copyOperation.current = null;
         }
       })();
-      copyOperation.current = copy;
       return false;
     });
 
@@ -185,12 +187,12 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     if (state !== "connected") return;
     const beat = setInterval(() => {
       const keepaliveKey = crypto.randomUUID();
-      let keepalive: Promise<void> | null = null;
-      keepalive = (async () => {
+      const owner: TerminalOperation = { promise: null };
+      // Install the owner before the fetch starts; several keepalives may be
+      // outstanding at once, so each owns its own map entry.
+      keepaliveOperations.current.set(keepaliveKey, owner);
+      owner.promise = (async () => {
         try {
-          // Install the owner before the fetch can settle, then ignore its
-          // result when this terminal has been cleaned up or superseded.
-          await undefined;
           const response = await fetch(
             `/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive`
             + `?executor=${encodeURIComponent(executor)}`,
@@ -199,20 +201,19 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
           // A missed beat costs at most one idle cycle of lease, so it is not
           // fatal — but it is shown rather than discarded, because the reason
           // (container gone, attach failed) arrives here before the socket says so.
-          if (keepaliveOperations.current.get(keepaliveKey) === keepalive && !response.ok) {
+          if (keepaliveOperations.current.get(keepaliveKey) === owner && !response.ok) {
             setFailure(`the container refused the terminal's keepalive (${response.status})`);
           }
         } catch (cause) {
-          if (keepaliveOperations.current.get(keepaliveKey) === keepalive) {
+          if (keepaliveOperations.current.get(keepaliveKey) === owner) {
             setFailure(describeError(cause));
           }
         } finally {
-          if (keepaliveOperations.current.get(keepaliveKey) === keepalive) {
+          if (keepaliveOperations.current.get(keepaliveKey) === owner) {
             keepaliveOperations.current.delete(keepaliveKey);
           }
         }
       })();
-      keepaliveOperations.current.set(keepaliveKey, keepalive);
     }, KEEPALIVE_MS);
     return () => {
       clearInterval(beat);
@@ -290,7 +291,7 @@ function LineTerminal(
   const lineBuffer = useRef<string>("");
   const running = useRef<boolean>(false);
   const busy = useRef<boolean>(false);
-  const commandOperation = useRef<Promise<void> | null>(null);
+  const commandOperation = useRef<TerminalOperation | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   // The parent hands a fresh closure every render. Held in a ref so the effect
   // below stays keyed on the executor alone: rebuilding the terminal per render
@@ -333,18 +334,20 @@ function LineTerminal(
           busy.current = true;
           term.write(BUSY);
           setFailure(null);
-          let command: Promise<void> | null = null;
-          command = (async () => {
+          const owner: TerminalOperation = { promise: null };
+          // xterm owns a synchronous data callback. Retain the owner before the
+          // command starts so cleanup can fence a late completion.
+          commandOperation.current = owner;
+          owner.promise = (async () => {
             try {
-              // xterm owns a synchronous data callback. Retain the command
-              // ourselves so cleanup can fence a late completion.
-              await undefined;
               try {
                 await run(cmd);
-                if (commandOperation.current !== command || termRef.current !== term) return;
+                if (commandOperation.current !== owner) return;
+                if (termRef.current !== term) return;
                 running.current = false;
               } catch (cause) {
-                if (commandOperation.current !== command || termRef.current !== term) return;
+                if (commandOperation.current !== owner) return;
+                if (termRef.current !== term) return;
                 running.current = false;
                 // A rejected exec produces no output row, so nothing else would
                 // ever clear the marker or reprint the prompt.
@@ -353,16 +356,15 @@ function LineTerminal(
                 promptLine(term);
               }
             } catch (cause) {
-              if (commandOperation.current === command && termRef.current === term) {
+              if (commandOperation.current === owner && termRef.current === term) {
                 running.current = false;
                 clearBusy(term, busy);
                 setFailure(describeError(cause));
               }
             } finally {
-              if (commandOperation.current === command) commandOperation.current = null;
+              if (commandOperation.current === owner) commandOperation.current = null;
             }
           })();
-          commandOperation.current = command;
           return;
         } else if (code === 0x7f || code === 0x08) {
           if (lineBuffer.current.length > 0) {

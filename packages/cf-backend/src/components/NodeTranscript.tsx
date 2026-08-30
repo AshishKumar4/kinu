@@ -43,6 +43,10 @@ import type { SeekCursor } from "@kinu.run/core";
 import { fmtTokens } from "@/lib/format";
 import type { ForkNode, Rpc } from "@/lib/protocol";
 
+
+interface OlderPageLoad {
+  promise: Promise<void> | null;
+}
 /* ── the frame ───────────────────────────────────────────────────── */
 /**
  * One dot vocabulary, covering BOTH lifecycles this panel can show: a head's
@@ -474,17 +478,17 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const below = walk.steps.length > 0 ? walk.below : (view?.steps.status === 'more' ? view.steps.next : null);
   const walkRef = useRef(subject);
   walkRef.current = subject;
-  const inFlight = useRef<Promise<void> | null>(null);
+  const inFlight = useRef<OlderPageLoad | null>(null);
   const loadOlder = useCallback(() => {
     const at = walkRef.current;
     if (inFlight.current !== null || below === null) return;
     setWalk((prev) => ({ ...prev, loading: true, error: null }));
-    let load: Promise<void> | null = null;
-    load = (async () => {
+    const owner: OlderPageLoad = { promise: null };
+    // Install the strong action owner before a synchronous RPC fake can settle
+    // the page load.
+    inFlight.current = owner;
+    owner.promise = (async () => {
       try {
-        // Install the strong action owner before a synchronous RPC fake can
-        // settle the page load.
-        await undefined;
         try {
           const next = await rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]);
           if (walkRef.current !== at) return; // the reader moved on; the page is nobody's
@@ -514,10 +518,9 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
         diagnostics.event('transcript.older_page_handler_failed',
           { subject: at, error: renderThrownChain({ cause }) });
       } finally {
-        if (inFlight.current === load) inFlight.current = null;
+        if (inFlight.current === owner) inFlight.current = null;
       }
     })();
-    inFlight.current = load;
   }, [rpc, runId, nodeId, below]);
 
   return {

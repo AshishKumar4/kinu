@@ -25,6 +25,10 @@ import { FilledButton } from './ui/FilledButton';
 const EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
 
+interface CatalogOperation {
+  promise: Promise<void> | null;
+}
+
 export function ProfileCatalogSettings() {
   const [envelope, setEnvelope] = useState<ProfileCatalogEnvelope | null>(null);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
@@ -34,18 +38,18 @@ export function ProfileCatalogSettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadOperation = useRef<Promise<void> | null>(null);
-  const saveOperation = useRef<Promise<void> | null>(null);
+  const loadOperation = useRef<CatalogOperation | null>(null);
+  const saveOperation = useRef<CatalogOperation | null>(null);
 
   const load = (): void => {
     if (loadOperation.current !== null) return;
     setBusy(true);
     setError(null);
-    let request: Promise<void> | null = null;
-    request = (async () => {
+    const owner: CatalogOperation = { promise: null };
+    // Install the owner before a synchronous RPC fake can settle this load.
+    loadOperation.current = owner;
+    owner.promise = (async () => {
       try {
-        // Install the owner before a synchronous RPC fake can settle this load.
-        await undefined;
         const [profile, models] = await Promise.all([getProfileCatalog(), listAvailableModels()]);
         setEnvelope(profile);
         setDraft(profile.catalog);
@@ -53,13 +57,12 @@ export function ProfileCatalogSettings() {
       } catch (cause) {
         setError(renderThrownChain({ cause }));
       } finally {
-        if (loadOperation.current === request) {
+        if (loadOperation.current === owner) {
           loadOperation.current = null;
           setBusy(false);
         }
       }
     })();
-    loadOperation.current = request;
   };
 
   useEffect(() => {
@@ -83,24 +86,23 @@ export function ProfileCatalogSettings() {
     if (!draft || !envelope || !dirty || saveOperation.current !== null) return;
     setBusy(true);
     setError(null);
-    let request: Promise<void> | null = null;
-    request = (async () => {
+    const owner: CatalogOperation = { promise: null };
+    // Install the owner before a synchronous RPC fake can settle this save.
+    saveOperation.current = owner;
+    owner.promise = (async () => {
       try {
-        // Install the owner before a synchronous RPC fake can settle this save.
-        await undefined;
         const updated = await updateProfileCatalog(draft, envelope.version);
         setEnvelope(updated);
         setDraft(updated.catalog);
       } catch (cause) {
         setError(renderThrownChain({ cause }));
       } finally {
-        if (saveOperation.current === request) {
+        if (saveOperation.current === owner) {
           saveOperation.current = null;
           setBusy(false);
         }
       }
     })();
-    saveOperation.current = request;
   };
 
   const addRole = () => {
