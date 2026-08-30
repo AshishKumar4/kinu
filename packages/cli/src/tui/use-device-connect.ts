@@ -96,7 +96,10 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
         update({ phase: 'result', ok: false, message: renderThrownChain({ cause: err }) });
       }
       lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
-    })();
+    })().catch((cause: unknown) => {
+      update({ phase: 'result', ok: false, message: renderThrownChain({ cause }) });
+      lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
+    });
   }, [close, update]);
 
   const handleKey = useCallback((key: TuiKeyEvent): boolean => {

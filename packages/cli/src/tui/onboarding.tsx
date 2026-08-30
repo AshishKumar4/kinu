@@ -118,7 +118,7 @@ export function GuidedOnboarding(props: {
   }, [props.onReady, props.operations]);
 
   useEffect(() => {
-    void refresh().catch((cause) => setError(renderThrownChain({ cause })));
+    refresh().catch((cause: unknown) => setError(renderThrownChain({ cause })));
   }, [refresh]);
 
   useEffect(() => {
@@ -155,33 +155,33 @@ export function GuidedOnboarding(props: {
       case 'location': {
         const locations: readonly WorkspaceLocationChoice[] = ['cloud', 'local', 'both'];
         const location = locations[selectedIndex];
-        if (location !== undefined) void run(() => props.operations.chooseLocation(location));
+        if (location !== undefined) run(() => props.operations.chooseLocation(location)).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         return;
       }
       case 'connection':
         if ((readiness.location === 'cloud' || readiness.location === 'both') && !readiness.accountConnected) {
-          void run(props.operations.connectAccount);
+          run(props.operations.connectAccount).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         } else if ((readiness.location === 'local' || readiness.location === 'both') && !readiness.providerConnected) {
-          void run(props.operations.connectProvider);
+          run(props.operations.connectProvider).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         }
         return;
       case 'tiers':
-        void run(props.operations.configureTiers);
+        run(props.operations.configureTiers).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         return;
       case 'theme': {
         const themeId = choices[selectedIndex];
-        if (themeId !== undefined) void run(() => props.operations.selectTheme(themeId));
+        if (themeId !== undefined) run(() => props.operations.selectTheme(themeId)).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         return;
       }
       case 'keymap': {
         const presetId = KEYMAP_PRESET_IDS[selectedIndex];
-        if (presetId !== undefined) void run(() => props.operations.selectKeymap(presetId));
+        if (presetId !== undefined) run(() => props.operations.selectKeymap(presetId)).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         return;
       }
       case 'workspace': {
         const role = props.roles[roleIndex];
         const text = (missionRef.current?.plainText ?? mission).trim();
-        if (role !== undefined && text !== '') void run(() => props.operations.createWorkspace({ mission: text, roleId: role.id }));
+        if (role !== undefined && text !== '') run(() => props.operations.createWorkspace({ mission: text, roleId: role.id })).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         return;
       }
     }
@@ -201,7 +201,7 @@ export function GuidedOnboarding(props: {
       case 'onboarding.skip':
         if (activeStep === null) return;
         event.preventDefault();
-        void run(() => props.operations.skip(activeStep));
+        run(() => props.operations.skip(activeStep)).catch((cause: unknown) => setError(renderThrownChain({ cause })));
         return;
       case 'home.previous':
         if (activeStep === 'workspace') return;

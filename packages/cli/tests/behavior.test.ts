@@ -419,7 +419,7 @@ describe("kinu exec (headless)", () => {
       );
       expect(secondHeader.id).not.toBe(v.parse(SessionEventSchema, events[0]).id);
     } finally {
-      server.stop();
+      await server.stop();
     }
   }, 120_000);
 
@@ -444,8 +444,8 @@ describe("kinu exec (headless)", () => {
       const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
       expect(events.some((e) => e.type === "error" || (e.type === "turn_end" && e.hadError === true))).toBe(true);
     } finally {
-      good.stop();
-      bad.stop();
+      await good.stop();
+      await bad.stop();
     }
   }, 120_000);
 
@@ -470,7 +470,7 @@ describe("kinu exec (headless)", () => {
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
       expect(events.some((e) => e.type === "evolution")).toBe(false);
     } finally {
-      server.stop();
+      await server.stop();
     }
   }, 120_000);
 
@@ -531,7 +531,7 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
       expect(readFileSync(join(home, "cli.log"), "utf-8")).toContain("run.escalation_refused");
     } finally {
       stopLocalDaemon(home);
-      server.stop();
+      await server.stop();
     }
   }, 120_000);
 });
@@ -591,7 +591,7 @@ describe("kinu exec --json — the delegation nudge is observable from outside",
       expect(hints).toHaveLength(1);
       expect(hints[0]).toMatchObject({ trigger: "turn_start_no_delegation", step: 0, converted: false });
     } finally {
-      server.stop();
+      await server.stop();
     }
   }, 120_000);
 });
@@ -635,7 +635,7 @@ describe("kinu exec --json — the turn-end usage payload", () => {
       expect(ledgerTurnEnd).toBeDefined();
       expect(ledgerTurnEnd && "usage" in ledgerTurnEnd).toBe(false);
     } finally {
-      server.stop();
+      await server.stop();
     }
   }, 120_000);
 });
@@ -818,7 +818,7 @@ describe("kinu create — an unusable model is named at creation", () => {
       expect(stdout).toContain("has no connected provider");
       expect(stdout).toContain("kinu provider connect");
     } finally {
-      origin.stop();
+      await origin.stop();
     }
   }, 120_000);
 
@@ -839,7 +839,7 @@ describe("kinu create — an unusable model is named at creation", () => {
       expect(proc.exitCode).toBe(0);
       expect(toText(proc.stdout)).not.toContain("has no connected provider");
     } finally {
-      server.stop();
+      await server.stop();
     }
   }, 120_000);
 });
@@ -876,8 +876,8 @@ describe("kinu exec — provider failures are legible and actionable", () => {
       expect(output.split("Your account is not active.").length - 1).toBe(1);
       expect(output).toContain("kinu provider");
     } finally {
-      good.stop();
-      bad.stop();
+      await good.stop();
+      await bad.stop();
     }
   }, 120_000);
 
@@ -909,8 +909,8 @@ describe("kinu exec — provider failures are legible and actionable", () => {
       expect(error?.message).toContain("Your account is not active.");
       expect(error?.hint).toContain("kinu provider");
     } finally {
-      good.stop();
-      bad.stop();
+      await good.stop();
+      await bad.stop();
     }
   }, 120_000);
 });
@@ -950,9 +950,9 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
     });
     // First chunk inside the grace window, second well past it: the old
     // whole-read race resolved '' at 250ms and dropped BOTH chunks silently.
-    proc.stdin.write("chunk-one ");
+    await proc.stdin.write("chunk-one ");
     await new Promise((r) => setTimeout(r, 600));
-    proc.stdin.write("chunk-two");
+    await proc.stdin.write("chunk-two");
     await proc.stdin.end();
     await proc.exited;
     const stderr = await new Response(proc.stderr).text();

@@ -449,7 +449,7 @@ describe('kinu acp — session lifecycle', () => {
       return ctx.request(AGENT_METHODS.session_prompt, {
         sessionId: 'nope',
         prompt: [{ type: 'text', text: 'hi' }],
-      }).then(() => null, (err: Error) => err);
+      }).then(() => null, (err: unknown) => (err instanceof Error ? err : new Error(String(err))));
     });
 
     expect(failure).toBeInstanceOf(Error);

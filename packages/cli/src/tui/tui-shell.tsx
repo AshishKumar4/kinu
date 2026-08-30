@@ -154,7 +154,10 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
   }, [loading, page]);
 
   useEffect(() => {
-    void reload();
+    reload().catch((cause: unknown) => diagnostics.failure(
+      'tui.roster_reload_failed',
+      toKinuError({ doing: 'reloading the agent roster', cause, otherwise: 'unavailable' }),
+    ));
     return () => { requestRef.current += 1; };
   }, [reload, source]);
 
