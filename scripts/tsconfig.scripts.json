@@ -1,6 +1,6 @@
 {
-  "//": "Typecheck for the standalone scripts that gate CI. Every .ts here is included by default, because the previous hand-maintained file list silently excluded whatever nobody remembered to add — schema-drift.ts and all five gate files were never typechecked at all, and three real type errors were sitting in one of them. `moduleDetection: force` is what makes globbing safe: scripts/ is a folder of runnable programs, not a package, and the ones with no import or export would otherwise share one global scope and collide on their top-level names.",
-  "excluded": "These five have PRE-EXISTING type errors and are excluded so the glob can land without breaking `bun run check` (deploy gate 1). This list is debt: it only shrinks, and a new script can never join it by accident. eval.ts:166,199 + eval.test.ts:74,75,77 — core exports two different JudgeFn/ShadowTrialVerdict shapes from eval/types and scaffold/shadow. layergate.ts:49 — Fault<PipelineSubjects> vs Fault<MergedSubjects> variance in the compaction-ladder substitution. cli-test-runner.ts:134 — one call passes 2 arguments to a 1-argument function. schema-drift.ts:99 — TS7053 implicit any from a string index.",
+  "//": "Typecheck for the standalone scripts that gate CI. Every .ts here is included by default: a maintained list silently excludes the next script someone forgets. `moduleDetection: force` makes that glob safe because scripts/ is a folder of runnable programs, not a package, and files with no import or export would otherwise share one global scope.",
+  "excluded": "The first five entries are declared compiler debt. scripts/typecheck-coverage.ts resolves this config through TypeScript and asserts that its five SCRIPT_TYPECHECK_DEBT rows are exactly the untypechecked scripts/*.ts files; delete both rows when each error is fixed. The remaining four exclusions are workerd workers with their own checked configs.",
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
@@ -20,7 +20,7 @@
   "include": [
     "**/*.ts"
   ],
-  "//exclude": "The first five have PRE-EXISTING type errors and are debt: that list only shrinks. The five fixture workers are a DIFFERENT kind of entry and are not debt — each is a workerd Worker, not a bun program, so it needs @cloudflare/workers-types instead of [bun, node]. Each is compiled by the tsconfig.json beside it, which `bun run check` runs, so nothing here goes unchecked. Excluding them from this project is layering, not an exemption.",
+  "//exclude": "The first five are declared compiler debt. The last four are workerd Workers, not Bun programs: they need @cloudflare/workers-types rather than [bun, node] and are compiled by the tsconfig.json beside each worker, which `bun run check` runs. Excluding those workers here is layering, not an exemption.",
   "exclude": [
     "eval.ts",
     "eval.test.ts",

@@ -1,25 +1,30 @@
-/**
- * The typecheck-coverage gate's own logic, plus the assertion that it is not
- * currently lying about this tree.
- *
- * The gate exists because the root `tests/` directory was typechecked by
- * nothing, and four suites rotted against deleted APIs for months without a
- * single signal. Its own decision boundary therefore has to be tested — a gate
- * built to catch an invisible omission is worthless if its parse quietly returns
- * an empty list.
- */
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
+import { dirname, join } from 'node:path';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { scratchDir } from '@kinu.run/test-utils';
 import {
-  checkedProjects, coveredPrefixes, testDirectories, UNTYPECHECKED_TEST_DIRS,
+  checkedProjects,
+  programFiles,
+  runnableTestFiles,
+  scriptDebtCoverage,
+  scriptTypeScriptFiles,
+  SCRIPT_TYPECHECK_DEBT,
+  testCoverage,
+  UNTYPECHECKED_TESTS,
 } from './typecheck-coverage';
+
+function configFixture(files: Readonly<Record<string, string>>) {
+  const root = scratchDir('typecheck-coverage');
+  for (const [file, content] of Object.entries(files)) {
+    const path = join(root, file);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  }
+  return { root, remove: () => rmSync(root, { recursive: true, force: true }) };
+}
 
 describe('checkedProjects', () => {
   test('follows `bun run <script>` transitively', () => {
-    // `check` runs `lint`, which runs `test:anti-slop`, which is the ONLY thing
-    // that typechecks tools/oxlint/anti-slop. A parse stopping at `check`'s own
-    // text would demand an exclusion for a directory that is in fact covered —
-    // a gate lying in the safe direction, which still trains people to silence
-    // it with exclusions.
     const projects = checkedProjects(JSON.stringify({
       scripts: {
         check: 'bun run lint && tsc --noEmit -p packages/core',
@@ -37,66 +42,92 @@ describe('checkedProjects', () => {
     expect(projects).toEqual(['pkg']);
   });
 
-  test('a `check` script with no projects parses to an empty list, which the gate treats as fatal', () => {
-    // Not an assertion that this is acceptable — the opposite. The gate calls
-    // assertMeasured on this count, so an empty parse kills the run rather than
-    // reporting a clean tree.
+  test('leaves an empty check project list visible to the non-vacuity assertion', () => {
     expect(checkedProjects(JSON.stringify({ scripts: { check: 'echo hi' } }))).toEqual([]);
   });
 });
 
-describe('coveredPrefixes', () => {
-  test('resolves include patterns relative to the tsconfig, and truncates at the first glob', () => {
-    // `include: ["**/*.ts"]` on tests/tsconfig.json must cover `tests` itself,
-    // not the literal string `tests/**/*.ts`.
-    expect(coveredPrefixes('tests')).toEqual(['tests']);
-  });
-
-  test('a package with src and tests covers both', () => {
-    expect(coveredPrefixes('packages/test-utils')).toEqual([
-      'packages/test-utils/src', 'packages/test-utils/tests',
-    ]);
-  });
-});
-
-describe('testDirectories', () => {
-  test('finds a non-empty corpus, so the comparison is never vacuous', () => {
-    const dirs = testDirectories();
-    expect(dirs.length).toBeGreaterThan(0);
-    // The two directories whose omission this gate was built for.
-    expect(dirs).toContain('tests');
-    expect(dirs).toContain('tests/evals');
-  });
-
-  test('does not walk gitignored reference clones or node_modules', () => {
-    const dirs = testDirectories();
-    for (const dir of dirs) {
-      expect(dir.includes('node_modules')).toBe(false);
-      expect(dir.startsWith('external')).toBe(false);
+describe('programFiles', () => {
+  test('uses TypeScript fileNames for include, exclude, files, and references', async () => {
+    const fixture = configFixture({
+      'base.json': '{ "compilerOptions": { "strict": true } }',
+      'include/tsconfig.json': '{ "extends": "../base.json", "include": ["included"], "exclude": ["included/excluded.test.ts"] }',
+      'include/included/covered.test.ts': 'export const covered = true;\n',
+      'include/included/excluded.test.ts': 'export const excluded = true;\n',
+      'listed/tsconfig.json': '{ "files": ["only.test.ts"] }',
+      'listed/only.test.ts': 'export const listed = true;\n',
+      'listed/not-listed.test.ts': 'export const notListed = true;\n',
+      'parent/tsconfig.json': '{ "files": [], "references": [{ "path": "../child" }] }',
+      'child/tsconfig.json': '{ "compilerOptions": { "composite": true }, "files": ["referenced.test.ts"] }',
+      'child/referenced.test.ts': 'export const referenced = true;\n',
+    });
+    try {
+      expect(await programFiles(['include', 'listed', 'parent'], fixture.root)).toEqual([
+        'include/included/covered.test.ts',
+        'listed/only.test.ts',
+      ]);
+      expect(await programFiles(['include', 'listed', 'parent', 'child'], fixture.root)).toEqual([
+        'child/referenced.test.ts',
+        'include/included/covered.test.ts',
+        'listed/only.test.ts',
+      ]);
+    } finally {
+      fixture.remove();
     }
   });
 });
 
 describe('this tree', () => {
-  test('every directory holding a test file is covered by a project `check` runs', () => {
-    // The gate's verdict, asserted here as well as in the gate, so `bun test
-    // scripts/` fails on a new uncovered folder even where nobody ran the gate.
-    const dirs = testDirectories();
-    const prefixes = checkedProjects().flatMap(coveredPrefixes);
-    const uncovered = dirs.filter((dir) => !UNTYPECHECKED_TEST_DIRS.has(dir)
-      && !prefixes.some((prefix) => dir === prefix || dir.startsWith(`${prefix}/`)));
-    expect(uncovered).toEqual([]);
+  test('governs every tracked runnable suite with exact program membership', async () => {
+    const tests = runnableTestFiles();
+    const programs = await programFiles();
+    const coverage = testCoverage(tests, programs);
+
+    expect(tests.length).toBeGreaterThan(0);
+    expect(tests).toContain('tests/deep-evolution.test.ts');
+    expect(tests).toContain('tests/evals/behaviour.eval.ts');
+    expect(coverage).toEqual({ governed: tests, missing: [], staleExceptions: [] });
+
+    // This file is inside scripts/, but the compiler resolver exposes the
+    // exclusion the old directory-prefix gate missed. It needs its one exact,
+    // declared-debt row instead of inheriting scripts/' apparent coverage.
+    expect(programs).not.toContain('scripts/eval.test.ts');
+    expect(testCoverage(['scripts/eval.test.ts'], programs, {}).missing).toEqual([
+      'scripts/eval.test.ts',
+    ]);
+
+    // This was excluded by the devbox config even though its sibling tests were
+    // covered. Removing it from exact membership must fail, while the repaired
+    // config has it in the compiler program.
+    const devboxWorkspaceTest = 'packages/devbox/tests/workspace-resolution.test.ts';
+    expect(programs).toContain(devboxWorkspaceTest);
+    expect(testCoverage([devboxWorkspaceTest], programs.filter((file) => file !== devboxWorkspaceTest), {}).missing)
+      .toEqual([devboxWorkspaceTest]);
   });
 
-  test('the declared-exclusion list holds nothing stale', () => {
-    const dirs = testDirectories();
-    const stale = [...UNTYPECHECKED_TEST_DIRS.keys()].filter((dir) => !dirs.includes(dir));
-    expect(stale).toEqual([]);
+  test('keeps the declared exceptions and script debt exact', async () => {
+    const programs = await programFiles();
+    expect(Object.keys(UNTYPECHECKED_TESTS).sort()).toEqual([
+      'packages/pc-agent/tests/daemon.test.js',
+      'scripts/eval.test.ts',
+    ]);
+    expect(UNTYPECHECKED_TESTS['packages/pc-agent/tests/daemon.test.js']).toMatchObject({
+      kind: 'JavaScript test', runner: 'bun test packages/pc-agent/',
+    });
+    expect(UNTYPECHECKED_TESTS['scripts/eval.test.ts']).toMatchObject({
+      kind: 'declared compiler debt', runner: 'bun test scripts/eval.test.ts',
+    });
+    expect(Object.keys(SCRIPT_TYPECHECK_DEBT).sort()).toEqual([
+      'scripts/cli-test-runner.ts',
+      'scripts/eval.test.ts',
+      'scripts/eval.ts',
+      'scripts/layergate.ts',
+      'scripts/schema-drift.ts',
+    ]);
+    expect(scriptDebtCoverage(scriptTypeScriptFiles(), programs)).toEqual({ undeclared: [], stale: [] });
   });
 
-  test('`check` includes the root tests project', () => {
-    // The fix is not the tsconfig existing; it is `check` running it. A tsconfig
-    // nobody runs is the same artifact class as a gate nobody invokes.
+  test('keeps the root tests project on the check path', () => {
     expect(checkedProjects()).toContain('tests');
   });
 });
