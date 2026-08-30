@@ -292,7 +292,10 @@ describe('exploration-facet spawn seam', () => {
     // a database was stranded in the root's quota because of it.
     const thrown = await spawnBranchFacet(host, 'branch-7', {
       ownerUserId: 'user-1', capabilityToken: 'pwc_parent',
-    }).then(() => null, (err: Error) => err);
+    }).then(() => null, (error: unknown) => {
+      if (!(error instanceof Error)) throw error;
+      return error;
+    });
 
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown?.message).toContain('branch-7');

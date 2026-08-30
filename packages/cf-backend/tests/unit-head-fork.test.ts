@@ -52,7 +52,7 @@ let egressConfigured = 0;
 // process-wide, and a missing `proxyToSandbox`/`Sandbox` export is a load-time
 // failure for whichever later file binds them.
 import * as actualSandboxSdk from '@cloudflare/sandbox';
-mock.module('@cloudflare/sandbox', () => ({
+await mock.module('@cloudflare/sandbox', () => ({
   ...actualSandboxSdk,
   getSandbox: (_ns: DurableObjectNamespace, id: string) => {
     requestedSandboxId = id;

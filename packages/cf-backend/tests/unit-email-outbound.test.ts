@@ -220,7 +220,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('a turn with no drain-bound email events sends nothing', async () => {
     const { log, replies, sent } = setup();
-    admitOwnerEmail(log, replies);          // pending, never bound to this turn
+    await admitOwnerEmail(log, replies);          // pending, never bound to this turn
     expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-other', 'answer', 2_000))
       .toEqual({ delivered: 0, pending: false });
     expect(sent).toHaveLength(0);

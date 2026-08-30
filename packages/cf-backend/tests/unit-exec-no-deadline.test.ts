@@ -35,7 +35,7 @@ import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 // co-run with unit-preview-origin then failed at load with `Export named
 // 'tracing' not found`.
 const workersModule = await import("cloudflare:workers");
-mock.module("cloudflare:workers", () => ({
+await mock.module("cloudflare:workers", () => ({
   ...workersModule,
   RpcTarget: class {},
   WorkerEntrypoint: class {},

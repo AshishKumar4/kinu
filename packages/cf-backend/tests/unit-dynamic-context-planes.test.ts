@@ -55,9 +55,9 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
   test('a raised device consent waits on the user in the block', async () => {
     const agent = harness().agent;
-    // Fire-and-forget: the promise settles when someone answers or times out;
-    // the parked prompt is what this test observes.
-    void agent.harnessAwaitDeviceConsent({
+    // The prompt is observable before its owner answers. Settle the caller's
+    // promise afterward so this fixture does not leave work detached.
+    const consent = agent.harnessAwaitDeviceConsent({
       deviceId: 'dev-1',
       deviceLabel: 'laptop',
       method: 'shell',
@@ -68,5 +68,10 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     const approvals = agent.observeDynamicContext().approvals;
     expect(approvals?.items.some((approval) => approval.kind === 'device consent'
       && approval.detail.includes('git push origin main'))).toBe(true);
+
+    const [pendingConsent] = await agent.listPendingConsents();
+    if (!pendingConsent) throw new Error('expected a pending device consent');
+    expect(await agent.resolveDeviceConsent(pendingConsent.consentId, 'deny')).toEqual({ ok: true });
+    await expect(consent).resolves.toBe('deny');
   });
 });
