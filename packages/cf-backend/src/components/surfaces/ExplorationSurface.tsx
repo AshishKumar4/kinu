@@ -196,15 +196,6 @@ const RUN_DOT = {
   partial: "p-dot-neutral",
 } satisfies Record<ForkRunSummary["status"], string>;
 
-/** What became of the run, said as an outcome rather than as a settle policy —
- *  the distinction the old label collapsed. `partial` is the honest word for a
- *  run that stopped without an answer. */
-const RUN_OUTCOME = {
-  running: "running",
-  completed: "settled",
-  failed: "failed",
-  partial: "stopped without an answer",
-} satisfies Record<ForkRunSummary["status"], string>;
 
 /**
  * What the run is DOING, in one line.
@@ -219,13 +210,14 @@ const RUN_OUTCOME = {
  * question a reader of this surface actually has. The resolution is still one
  * click away in {@link SwarmConfigDisclosure}; what leads is the state.
  *
- * A refusal's REASON leads where there is one, because a run that reached nothing
- * has no state worth stating before its cause.
+ * A refusal's distinct reason follows its stored status, so the row names both
+ * the canonical state and why it reached no answer.
  */
 export function runStateLine(
   run: ForkRunSummary, liveness: RunLiveness | null, refusal: RunRefusal | null,
 ): string {
-  const parts = [refusal === null ? RUN_OUTCOME[run.status] : refusal.reason];
+  const parts: string[] = [run.status];
+  if (refusal !== null && refusal.reason !== run.status) parts.push(refusal.reason);
   if (liveness !== null) parts.push(nodeTally(liveness));
   if (run.winnerScore !== null) parts.push(`winner ${formatScore(run.winnerScore)}`);
   return parts.join(" · ");

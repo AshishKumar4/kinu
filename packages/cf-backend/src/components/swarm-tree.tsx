@@ -199,6 +199,7 @@ const BAND_GAP = 6;
 
 type PointNode = d3.HierarchyPointNode<ForkNode>;
 
+
 /** A fold is per NODE PER SEARCH: node ids are unique inside a search only. */
 function foldKey(runId: string, nodeId: string): string {
 	return `${runId}\u0000${nodeId}`;
@@ -282,7 +283,7 @@ function nodeLabel(
 	const folded = collapsed.has(foldKey(region.runId, node.data.id));
 	const scored = node.data.status === "failed" || node.data.value !== null;
 	const score = !scored ? ""
-		: node.data.status === "failed" ? "fail"
+		: node.data.status === "failed" ? "failed"
 		: `${Math.round(Math.min(1, Math.max(0, node.data.value ?? 0)) * 100)}%`;
 	const fold = folded ? ` +${subtreeCount(node.data)}` : "";
 	const join = fanIn.has(node.data.id) ? ` ⋈${fanIn.get(node.data.id) ?? 0}` : "";
@@ -365,7 +366,9 @@ function layoutRegions(
 		));
 		const data = layout(hierarchy);
 		const nodes = data.descendants();
-		const depth = d3.max(nodes, (d) => d.depth) ?? 0;
+		// The store owns every non-root column. D3 owns rows and links; the root is d0.
+		for (const node of nodes) node.y = (node.parent === null ? 0 : node.data.depth) * COL;
+		const depth = d3.max(nodes, (node) => (node.parent === null ? 0 : node.data.depth)) ?? 0;
 		const [rowStart, rowEnd] = d3.extent(nodes, (d) => d.x);
 		if (rowStart === undefined || rowEnd === undefined) continue;
 		maxDepth = Math.max(maxDepth, depth);
@@ -996,7 +999,7 @@ export function SwarmTree({
 					const [x, y] = d3.pointer(event, svgRef.current);
 					hoverRef.current = { runId: region.runId, nodeId: d.data.id };
 					setTooltip({
-						x, y, node: d.data, competed: region.competed,
+						x, y, node: d.data,
 						fanIn: region.fanIn.get(d.data.id) ?? null,
 						why: region.why.get(d.data.id) ?? null,
 						runName: region.name,
@@ -1330,33 +1333,12 @@ function positionRuler(
 		.text((d) => `d${d}`);
 }
 
-/** What a branch's state MEANS depends on whether the search ranked its
- *  candidates: `open` is "still explorable" where there is a selector to reach it
- *  and "done, its answer went into the settle" where there is not. Same word in
- *  the data, two different facts. */
-const STATUS_NOTE = {
-	competed: {
-		open: "still explorable",
-		terminal: "the answer the search settled on",
-		pruned: "dropped below the prune floor",
-		failed: "the branch never produced a score",
-		running: "still running",
-	},
-	merged: {
-		open: "finished, its answer went into the settle",
-		terminal: "finished, its answer went into the settle",
-		pruned: "abandoned",
-		failed: "this branch errored",
-		running: "still running",
-	},
-} satisfies Record<"competed" | "merged", Record<ForkNode["status"], string>>;
 
 /** What the hovered node is, and everything about it the label had no room for. */
 interface TooltipState {
 	readonly x: number;
 	readonly y: number;
 	readonly node: ForkNode;
-	readonly competed: boolean;
 	/** Parents this node fanned in, or null for a sampled sibling. */
 	readonly fanIn: number | null;
 	/** The node's own reason for existing, verbatim from the journal, or null. */
@@ -1366,7 +1348,7 @@ interface TooltipState {
 }
 
 function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
-	const { node, competed, fanIn, why, runName } = tip;
+	const { node, fanIn, why, runName } = tip;
 	const TIP_W = 260;
 	const flip = tip.x + TIP_W + 24 > width;
 	return (
@@ -1388,7 +1370,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 						className="text-base font-semibold leading-none"
 						style={{ color: node.status === "failed" ? "var(--c-danger)" : scoreToken(node.value ?? 0) }}
 					>
-						{node.status === "failed" ? "fail" : `${Math.round(Math.min(1, Math.max(0, node.value ?? 0)) * 100)}%`}
+						{node.status === "failed" ? "failed" : `${Math.round(Math.min(1, Math.max(0, node.value ?? 0)) * 100)}%`}
 					</span>
 				)}
 				{node.visits !== null && (
@@ -1397,7 +1379,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				<span className="p-text-3">depth {node.depth}</span>
 			</div>
 			<div className="p-text-3 mt-1">
-				{STATUS_NOTE[competed ? "competed" : "merged"][node.status] ?? node.status}
+				{node.status}
 			</div>
 			{/* The fan-in, spelled out. The square on the node says THAT it fanned a
 			    level in; only here is there room to say how wide, and to say that the

@@ -119,11 +119,9 @@ function journalVertex(head: HeadRunView["heads"][number], parent: ForkNode): Fo
   return {
     id: head.id,
     parentId: parent.id,
-    // DERIVED from where it actually attached, never read off the row. The
-    // journal's `depth` is measured from the run's own root, and a top-level
-    // split records no parent at all, so the row's number and the drawn edge can
-    // disagree — and depth is what the renderer indents by.
-    depth: parent.depth + 1,
+    // The journal's depth is authoritative even when its parent is not in this
+    // snapshot and the vertex has to attach beneath the visible root.
+    depth: head.depth,
     value: null,
     visits: null,
     status: journalStatus(head.status),

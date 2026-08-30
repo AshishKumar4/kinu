@@ -3,6 +3,8 @@
 // says, which branches are foldable) without a DOM to render them into.
 import { describe, test, expect } from 'bun:test';
 import type { ForkNode } from '../src/lib/protocol';
+import type { HeadRunView } from '@kinu.run/core';
+import { explorationForkTree, type MctsRow } from '../src/lib/fork-tree-rows';
 import {
   ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
   NODE_R_MAX, NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
@@ -76,6 +78,32 @@ describe('treeStats', () => {
     expect(treeStats(root)).toEqual({ nodes: 6, depth: 3 });
   });
 });
+
+describe('stored tree fields', () => {
+  test('keeps the d0 root and a journalled depth-3 node at its stored depth', () => {
+    const root: MctsRow = {
+      id: 'root', parent_id: null, depth: 0, visits: 0, value: 0,
+      status: 'open', action: 'root',
+    };
+    const head: HeadRunView = {
+      rootId: 'root', task: 'inspect the tree', rationale: 'depth fixture',
+      status: 'running', spawnedAt: 1, merge: null,
+      heads: [{
+        id: 'deep', parentId: 'missing-parent', depth: 3, task: 'deep node',
+        rationale: 'the stored depth is authoritative', status: 'running',
+        summary: null, errorMessage: null, usage: {}, wallClockMs: 0,
+        spawnedAt: 2, lastStepAt: null, decisions: [],
+      }],
+    };
+
+    const tree = explorationForkTree({ tree: [root], head });
+
+    expect(tree).toMatchObject({ id: 'root', depth: 0 });
+    expect(tree!.children[0]).toMatchObject({ id: 'deep', depth: 3, status: 'running' });
+    expect(treeStats(tree!)).toEqual({ nodes: 2, depth: 3 });
+  });
+});
+
 
 describe('live selection', () => {
   test('an id resolves to the node from the newest immutable tree snapshot', () => {
