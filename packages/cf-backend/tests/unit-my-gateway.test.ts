@@ -93,7 +93,7 @@ describe('my-gateway request shape', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ token: 'cf-stale', freshToken: 'cf-fresh' }),
-      fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
         if (headers.get('authorization') === 'Bearer cf-stale') {

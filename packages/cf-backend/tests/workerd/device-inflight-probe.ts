@@ -30,7 +30,7 @@ import {
   DeviceRequestLedger, initDeviceInflightTable,
   type DeviceCancelOutcome,
 } from '../../src/user/device-inflight';
-import type { SqlExec, SqlExecutor, SqlValue } from '@kinu.run/core';
+import type { SqlExec, SqlValue } from '@kinu.run/core';
 
 /** One request as the probe reports it across the RPC boundary. */
 export interface ProbeRequest {
@@ -69,15 +69,6 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
     },
   };
 
-  // SAFETY: the tagged contract guarantees one `?` placeholder per interpolated
-  // value (`join('?')`), DO SQLite binds the same `SqlStorageValue` vocabulary
-  // `SqlExecutor` declares, and `toArray()` returns `Record<string,
-  // SqlStorageValue>` rows — the row shape the contract's callers parse per
-  // field. The cast bridges only the generic row parameter the platform API
-  // cannot carry.
-  private readonly tagged = ((
-    query: TemplateStringsArray, ...values: SqlStorageValue[]
-  ) => this.ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
 
   private readonly ledger = new DeviceRequestLedger(this.sql);
 

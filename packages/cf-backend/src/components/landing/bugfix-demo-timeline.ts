@@ -342,7 +342,6 @@ function candidatesAt(t: number): readonly DemoCandidate[] | null {
     id: string,
     name: string,
     approach: string,
-    runAt: number,
     settleAt: number,
     result: string,
     passed: boolean,
@@ -355,9 +354,9 @@ function candidatesAt(t: number): readonly DemoCandidate[] | null {
     selected: passed && t >= settleAt,
   });
   return [
-    candidate('a', 'update-join', 'single UPDATE joining the catalog', DEMO_CUES.candidateARun, DEMO_CUES.candidateAFail, '6/7', false),
-    candidate('b', 'guard-only', 'guard the NULL branch in applyCoupon', DEMO_CUES.candidateBRun, DEMO_CUES.candidateBFail, '5/7', false),
-    candidate('c', 'join-and-refuse', 'backfill from catalog, refuse missing rows', DEMO_CUES.candidateCRun, DEMO_CUES.candidateCPass, '7/7', true),
+    candidate('a', 'update-join', 'single UPDATE joining the catalog', DEMO_CUES.candidateAFail, '6/7', false),
+    candidate('b', 'guard-only', 'guard the NULL branch in applyCoupon', DEMO_CUES.candidateBFail, '5/7', false),
+    candidate('c', 'join-and-refuse', 'backfill from catalog, refuse missing rows', DEMO_CUES.candidateCPass, '7/7', true),
   ];
 }
 
