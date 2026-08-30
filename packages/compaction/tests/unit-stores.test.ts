@@ -153,27 +153,27 @@ describe('createVfsTranscriptStore', () => {
 });
 
 describe('createCompactionStateStore', () => {
-  test('plan snapshots round-trip through the durable row', () => {
+  test('plan snapshots round-trip through the durable row', async () => {
     const { store } = stateRig();
     expect(store.plans.load('s1')).toBeNull();
     const snap = snapshot('s1');
-    store.plans.save('s1', snap);
+    await store.plans.save('s1', snap);
     expect(store.plans.load('s1')).toEqual(snap);
   });
 
-  test('save(null) clears a stale plan but keeps the prompt-token signal', () => {
+  test('save(null) clears a stale plan but keeps the prompt-token signal', async () => {
     const { store } = stateRig();
     store.savePromptTokens('s1', 12_345, 30);
-    store.plans.save('s1', snapshot('s1'));
-    store.plans.save('s1', null);
+    await store.plans.save('s1', snapshot('s1'));
+    await store.plans.save('s1', null);
     expect(store.plans.load('s1')).toBeNull();
     expect(store.loadPromptTokens('s1', 30)).toBe(12_345);
   });
 
-  test('prompt-token updates never clobber the stored plan', () => {
+  test('prompt-token updates never clobber the stored plan', async () => {
     const { store } = stateRig();
     const snap = snapshot('s1');
-    store.plans.save('s1', snap);
+    await store.plans.save('s1', snap);
     store.savePromptTokens('s1', 9_000, 30);
     store.savePromptTokens('s1', 11_000, 33);
     expect(store.plans.load('s1')).toEqual(snap);
@@ -224,10 +224,10 @@ describe('createCompactionStateStore', () => {
     expect(store.takeForceCompaction('s1')).toBe(true);
   });
 
-  test('arming force-compaction never clobbers the plan or the token signal', () => {
+  test('arming force-compaction never clobbers the plan or the token signal', async () => {
     const { store } = stateRig();
     const snap = snapshot('s1');
-    store.plans.save('s1', snap);
+    await store.plans.save('s1', snap);
     store.savePromptTokens('s1', 9_000, 30);
     store.armForceCompaction('s1');
     expect(store.plans.load('s1')).toEqual(snap);
@@ -292,11 +292,11 @@ describe('archive index', () => {
     expect(store.archive.list('s2')).toHaveLength(1);
   });
 
-  test('the index survives a session whose plan and token signal were cleared', () => {
+  test('the index survives a session whose plan and token signal were cleared', async () => {
     const { store } = stateRig();
     store.archive.append('s1', range());
-    store.plans.save('s1', snapshot('s1'));
-    store.plans.save('s1', null);
+    await store.plans.save('s1', snapshot('s1'));
+    await store.plans.save('s1', null);
     expect(store.archive.list('s1')).toEqual([range()]);
   });
 });
