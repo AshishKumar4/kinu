@@ -49,11 +49,14 @@ await withGallery(async ({ browser, origin }) => {
     await p.setViewport({ width, height, deviceScaleFactor: 1 });
     await p.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
     await p.goto(`${origin}/gallery.html?frame=landing`, { waitUntil: 'networkidle0' });
-    await p.waitForFunction(() => !document.querySelector('[data-growing]'), { timeout: 10_000 })
+    try {
+      await p.waitForFunction(() => !document.querySelector('[data-growing]'), { timeout: 10_000 });
+    } catch (cause) {
       // No [data-growing] guard ships on the canvas hero; a timeout here
       // means only that the wait outlived the draw, which the shot below
       // captures regardless.
-      .catch((cause: unknown) => { console.warn('settle wait elapsed:', cause instanceof Error ? cause.message : String(cause)); });
+      console.warn('settle wait elapsed:', cause instanceof Error ? cause.message : String(cause));
+    }
     await new Promise((r) => setTimeout(r, 600));
     await p.screenshot({ path: `${OUT}/port-${label}.png`, fullPage: true });
     await p.close();

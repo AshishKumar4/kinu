@@ -32,7 +32,7 @@
 
 import { AwsClient } from 'aws4fetch';
 import { SignJWT } from 'jose';
-import { Sandbox, ContainerProxy } from '@cloudflare/sandbox';
+import { Sandbox, ContainerProxy, type Process } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 import { base64ReadPlan, usesMultipart } from './arms';
 import { operationNeedsStart } from './decision';
@@ -380,12 +380,15 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     // DETERMINISTIC REDRIVE: the process table lives in the container daemon,
     // not in this DO. A RUNNING process is read, never duplicated; an EXITED
     // process is final — its result stays pollable instead of being rerun.
-    const existing = await this.getProcess(operationId).catch((error: unknown) => {
+    let existing: Process | null;
+    try {
+      existing = await this.getProcess(operationId);
+    } catch (cause) {
       throw new Error(
-        `process lookup failed: ${describeThrown(error instanceof Error ? error : String(error))}`,
-        { cause: error },
+        `process lookup failed: ${describeThrown(cause instanceof Error ? cause : String(cause))}`,
+        { cause },
       );
-    });
+    }
     if (existing !== null && !operationNeedsStart(existing)) {
       return { started: false, exitCode: existing.exitCode ?? null };
     }

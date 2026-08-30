@@ -374,4 +374,9 @@ async function main() {
   }
 }
 
-main().catch((error: unknown) => { console.error("FATAL:", error); process.exit(1); });
+try {
+  await main();
+} catch (cause) {
+  console.error("FATAL:", cause);
+  process.exit(1);
+}
