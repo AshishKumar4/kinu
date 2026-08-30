@@ -24,7 +24,6 @@ const ModelRejectionSchema = v.looseObject({
   message: v.optional(v.string()),
   responseBody: v.optional(v.string()),
 });
-type ModelRejection = v.InferOutput<typeof ModelRejectionSchema>;
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
 function chatCompletionResponse(): Response {
@@ -94,8 +93,9 @@ describe('Workers AI credential refresh', () => {
         { kind: 'oauth', accessToken: 'cf-access-1', refreshToken: 'cf-refresh-revoked' },
       );
       await expect(attempt).rejects.toBeInstanceOf(CloudflareOAuthTokenError);
-      await attempt.catch((err: CloudflareOAuthTokenError) => {
-        expect(err.oauthError).toBe('invalid_grant');
+      await attempt.catch((err: unknown) => {
+        const parsed = v.safeParse(v.object({ oauthError: v.string() }), err);
+        expect(parsed.success && parsed.output.oauthError).toBe('invalid_grant');
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -170,7 +170,7 @@ describe('Workers AI credential refresh', () => {
     const failure = await generateText({
       model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
       prompt: 'ping',
-    }).then(() => '', (rejection: ModelRejection) => {
+    }).then(() => '', (rejection: unknown) => {
       const parsed = v.safeParse(ModelRejectionSchema, rejection);
       return parsed.success
         ? `${parsed.output.message ?? ''}\n${parsed.output.responseBody ?? ''}`

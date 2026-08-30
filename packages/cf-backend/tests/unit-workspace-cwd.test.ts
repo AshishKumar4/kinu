@@ -280,7 +280,7 @@ describe('hosted workspace preview capabilities', () => {
     class RpcTarget {}
     // Process-wide: retain every preload export a sibling's graph can bind,
     // then replace only the three base classes this route fixture constructs.
-    mock.module('cloudflare:workers', () => ({
+    await mock.module('cloudflare:workers', () => ({
       ...workersModule, WorkerEntrypoint, DurableObject, RpcTarget,
     }));
 

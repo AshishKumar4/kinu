@@ -789,8 +789,8 @@ describe('C11 mechanical steering rides the actor loop\'s one extension, never t
       expect(orch).not.toBeNull();
       orch!.steering.reset();
       for (let i = 0; i < IDENTICAL_CALLS_BEFORE_STEER; i++) {
-        orch!.turnExtension.onToolCall?.({ toolName: 'run', args: REPEATED });
-        orch!.turnExtension.onToolResult?.({
+        await orch!.turnExtension.onToolCall?.({ toolName: 'run', args: REPEATED });
+        await orch!.turnExtension.onToolResult?.({
           toolName: 'run', args: REPEATED, result: 'reference.ts has 412 lines', success: true,
         });
       }
@@ -803,7 +803,7 @@ describe('C11 mechanical steering rides the actor loop\'s one extension, never t
       expect(text).toContain(TURN_STEERING_HEADER);
       // A changed call is what the repeat steer asked for; the durable row the
       // settle spine writes must say the steer converted.
-      orch!.turnExtension.onToolCall?.({ toolName: 'file', args: { action: 'read', path: '/reference.ts' } });
+      await orch!.turnExtension.onToolCall?.({ toolName: 'file', args: { action: 'read', path: '/reference.ts' } });
       expect(orch!.steering.snapshot()).toEqual([
         { trigger: 'repeated_call', step: IDENTICAL_CALLS_BEFORE_STEER, tool: 'run', converted: true },
       ]);

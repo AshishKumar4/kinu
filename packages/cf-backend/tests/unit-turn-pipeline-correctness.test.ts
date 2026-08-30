@@ -858,7 +858,7 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     });
-    prepare.call(orch.turnExtension, {
+    await prepare.call(orch.turnExtension, {
       stepNumber: 0,
       messages: [{ role: 'user' as const, content: 'add caching to the api and update the docs' }],
     });
@@ -878,7 +878,7 @@ describe('turn-pipeline correctness wiring', () => {
     // And the NEXT delivery reads the swapped catalog, which is what keeps the
     // callback load-bearing rather than a constructor argument in disguise.
     orch.beginTurn(Date.now());
-    prepare.call(orch.turnExtension, {
+    await prepare.call(orch.turnExtension, {
       stepNumber: 0,
       messages: [{ role: 'user' as const, content: 'now do a different fresh thing entirely' }],
     });

@@ -32,7 +32,7 @@ import { jsrpcStub } from './helpers/jsrpc-stub';
 // mock keeps the REAL module for everything it does not fake: a throwing
 // `proxyToSandbox` stub here is what a later file's preview test would call.
 import * as actualSandboxSdk from '@cloudflare/sandbox';
-mock.module('@cloudflare/sandbox', () => ({
+await mock.module('@cloudflare/sandbox', () => ({
   ...actualSandboxSdk,
   getSandbox: (namespace: SandboxProbe, name: string) => namespace.get(namespace.idFromName(name)),
   Sandbox: class {},
