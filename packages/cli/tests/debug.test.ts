@@ -413,7 +413,7 @@ describe('kinu debug — cloud backend', () => {
       expect(raw).not.toContain(SECRET_TOKEN);
       expect(raw).toContain('[REDACTED]');
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });

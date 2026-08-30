@@ -200,7 +200,7 @@ describe("kinu exec — a one-shot run terminates", () => {
       await Bun.sleep(2_500);
       expect(readFileSync(beat, "utf-8").length).toBeGreaterThan(before);
     } finally {
-      server.stop();
+      await server.stop();
     }
   }, 240_000);
 
@@ -232,7 +232,7 @@ describe("kinu exec — a one-shot run terminates", () => {
       expect(JSON.stringify(events)).toContain("server-started");
       expect(events.find((e) => e.type === "turn_end")).toMatchObject({ hadError: false });
     } finally {
-      server.stop();
+      await server.stop();
     }
   }, 240_000);
 });

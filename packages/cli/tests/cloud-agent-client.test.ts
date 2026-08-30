@@ -23,13 +23,13 @@ interface MockAgentServer {
   chatMessages: Array<{ id: string; role: string; content: string; createdAt: number }>;
   socket(): ServerWebSocket<unknown>;
   reply(frame: JsonObject): void;
-  close(): void;
+  close(): Promise<void>;
 }
 
 const servers: MockAgentServer[] = [];
 
-afterEach(() => {
-  for (const mock of servers.splice(0)) mock.close();
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((mock) => mock.close()));
 });
 
 function startMockAgentServer(options: {
@@ -138,8 +138,8 @@ function startMockAgentServer(options: {
     reply(frame) {
       this.socket().send(JSON.stringify(frame));
     },
-    close() {
-      server.stop(true);
+    async close() {
+      await server.stop(true);
     },
   };
   servers.push(mock);
@@ -392,7 +392,9 @@ describe('CloudAgentClient protocol', () => {
     );
     expect(durableCancel.args).toEqual([]);
     let turnSettled = false;
-    void turn.then(() => { turnSettled = true; });
+    // Probe rides the turn this test owns and awaits below; its rejection is
+    // recorded here rather than swallowed.
+    turn.then(() => { turnSettled = true; }, () => { turnSettled = true; });
     await Promise.resolve();
     expect(turnSettled).toBe(false);
 
@@ -586,7 +588,7 @@ describe('CloudAgentClient protocol', () => {
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? true : undefined,
       'chat request frame',
     );
-    mock.close();
+    await mock.close();
 
     const result = await turn;
     expect(result.hadError).toBe(true);

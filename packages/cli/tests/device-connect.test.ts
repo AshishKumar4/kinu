@@ -29,11 +29,11 @@ const sleepers: Subprocess[] = [];
 const deviceDaemonPids: number[] = [];
 const stubs: Server<unknown>[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const pid of deviceDaemonPids.splice(0)) tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
   for (const proc of sleepers.splice(0)) proc.kill();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  for (const server of stubs.splice(0)) server.stop(true);
+  await Promise.all(stubs.splice(0).map((server) => server.stop(true)));
 });
 
 interface StubCloud {
@@ -583,13 +583,12 @@ describe('classic cloud chat connect prompt', () => {
           await Bun.sleep(25);
         }
       },
-      send(line: string): void {
-        proc.stdin.write(`${line}\n`);
-        proc.stdin.flush();
+      async send(line: string): Promise<void> {
+        await proc.stdin.write(`${line}\n`);
+        await proc.stdin.flush();
       },
     };
   }
-
   test('interactive open offers c/s/n/d and session connect goes end to end', async () => {
     // Devices connect only after the daemon is registered and started.
     let registered = false;
@@ -609,9 +608,9 @@ describe('classic cloud chat connect prompt', () => {
     const chat = spawnChatInPty(home);
     await chat.waitFor('Let this agent use this PC?');
     await chat.waitFor("[c] connect & keep connected · [s] this session only · [n] not now · [d] don't ask again");
-    chat.send('s');
+    await chat.send('s');
     await chat.waitFor('Connected for this session.');
-    chat.send('/exit');
+    await chat.send('/exit');
     await chat.proc.exited;
     await chat.drained;
 
@@ -684,9 +683,9 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
           await Bun.sleep(25);
         }
       },
-      send(line: string): void {
-        proc.stdin.write(`${line}\n`);
-        proc.stdin.flush();
+      async send(line: string): Promise<void> {
+        await proc.stdin.write(`${line}\n`);
+        await proc.stdin.flush();
       },
     };
   }
@@ -716,11 +715,11 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     expect(stub.hits.register).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
 
-    connect.send('studio tower');
+    await connect.send('studio tower');
     await connect.waitFor('Link this machine as "studio tower" and start the daemon?');
     expect(stub.hits.register).toBe(0); // still nothing, the question is unanswered
 
-    connect.send('y');
+    await connect.send('y');
     await connect.waitFor('Connected this machine as');
     await connect.proc.exited;
     await connect.drained;
@@ -741,9 +740,9 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
 
     const connect = spawnConnectInPty(home);
     await connect.waitFor('Name this device');
-    connect.send(''); // take the suggested user@hostname
+    await connect.send(''); // take the suggested user@hostname
     await connect.waitFor('and start the daemon?');
-    connect.send('n');
+    await connect.send('n');
     await connect.proc.exited;
     await connect.drained;
 

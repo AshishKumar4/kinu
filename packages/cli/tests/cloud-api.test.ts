@@ -35,7 +35,7 @@ describe('callAgentRpc', () => {
         body: { method: 'getHeadRuns', args: [5] },
       });
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -52,7 +52,7 @@ describe('callAgentRpc', () => {
       await callAgentRpc(`http://localhost:${server.port}`, 't', 'a', 'getAgentStatus', v.null());
       expect(bodies[0]).toEqual({ method: 'getAgentStatus', args: [] });
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -65,7 +65,7 @@ describe('callAgentRpc', () => {
       await expect(callAgentRpc(`http://localhost:${server.port}`, 't', 'a', 'nope', v.null()))
         .rejects.toThrow('No such agent RPC method: nope');
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });
