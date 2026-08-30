@@ -178,3 +178,34 @@ describe("/pc/connect upgrade", () => {
     expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);
   });
 });
+
+describe("/pc/daemon.js", () => {
+  test("serves the daemon source with a lowercase-hex sha256 header over its exact bytes", async () => {
+    const userDO = makeUserDO();
+    const response = await handlePcRequest(new Request("https://kinu.test/pc/daemon.js"), makeEnv(userDO));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
+    const body = await response.text();
+    expect(body.length).toBeGreaterThan(0);
+    const digest = response.headers.get("x-kinu-daemon-sha256");
+    expect(digest).toMatch(/^[0-9a-f]{64}$/);
+    // Independent recomputation: the header must describe exactly these bytes.
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+    const hex = Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
+    expect(digest).toBe(hex);
+  });
+});
+
+describe("/pc/daemon.js digest red direction", () => {
+  test("an altered source changes the digest — equality against a wrong value must fail", async () => {
+    const userDO = makeUserDO();
+    const response = await handlePcRequest(new Request("https://kinu.test/pc/daemon.js"), makeEnv(userDO));
+    const body = await response.text();
+    const digest = response.headers.get("x-kinu-daemon-sha256")!;
+    // The header must NOT equal the digest of anything except the exact bytes:
+    // alter one byte of the source and the recomputed digest diverges.
+    const altered = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body + " "));
+    const alteredHex = Array.from(new Uint8Array(altered), (b) => b.toString(16).padStart(2, "0")).join("");
+    expect(digest).not.toBe(alteredHex);
+  });
+});

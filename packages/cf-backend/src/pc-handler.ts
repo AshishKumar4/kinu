@@ -23,6 +23,7 @@
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
 import { DEVICE_CONNECT_PATH } from "@kinu.run/core";
 import { json, readBounded } from "./lib/http";
+import { sha256Hex } from "./lib/crypto";
 import {
   ownerCaller,
   type OwnerCapabilityEnv,
@@ -141,12 +142,18 @@ echo "Kinu device connected. Check the Environment tab. It should flip to connec
   });
 }
 
-function daemonJsResponse(): Response {
+async function daemonJsResponse(): Promise<Response> {
   // The daemon source is packages/pc-agent/src/index.js, bundled as a string
   // at build time via vite's `?raw` import — one source of truth, no copies.
+  // The digest pins the exact bytes this route serves, so a client (or the
+  // install script's curl) can verify the download against this same Worker.
+  const digest = await sha256Hex(PC_AGENT_DAEMON_SOURCE);
   return new Response(PC_AGENT_DAEMON_SOURCE, {
     status: 200,
-    headers: { "content-type": "application/javascript; charset=utf-8" },
+    headers: {
+      "content-type": "application/javascript; charset=utf-8",
+      "x-kinu-daemon-sha256": digest,
+    },
   });
 }
 
