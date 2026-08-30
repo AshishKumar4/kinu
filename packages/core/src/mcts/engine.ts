@@ -31,7 +31,7 @@ import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery';
 import { describeCostBasis, estimateCost } from './cost';
 import { persistableMCTSConfig } from './search-store';
 import { initMctsSearchTable } from './search-store';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { isoDate } from '../utils/date';
 import * as v from 'valibot';
@@ -453,7 +453,7 @@ export async function runMCTS(
               config.reportModelCall?.({ source: 'mcts', usage: reflection.output.usage ?? {} });
               return reflection.output.text.trim();
             },
-            (error) => {
+            (error: unknown) => {
               report({
                 type: 'branch-failed', stage: 'reflect', iteration,
                 branchId: branchIds[i] ?? '', error: renderThrownChain({ cause: error }),
@@ -594,7 +594,19 @@ async function abortable<T>(
       if (done) return;
       done = true;
       cleanup();
-      void onAbort().finally(() => reject(signal.reason instanceof Error ? signal.reason : new Error('MCTS aborted')));
+      void onAbort().finally(
+        () => reject(signal.reason instanceof Error ? signal.reason : new Error('MCTS aborted')),
+      ).catch((cause: unknown) => {
+        // The abort sweep itself failed — infrastructure, not the search's
+        // own work. Recorded so the sweep's failure is stated rather than
+        // surfacing as an unhandled rejection after the race has already
+        // thrown for the abort.
+        diagnostics.failure(
+          'mcts.abort_sweep_failed',
+          toKinuError({ doing: 'abort MCTS branches on signal', cause, otherwise: 'cancelled' }),
+          { signalReason: renderThrownChain({ cause: signal.reason }) },
+        );
+      });
     };
     signal.addEventListener('abort', onSignalAbort, { once: true });
     promise.then(
@@ -604,7 +616,7 @@ async function abortable<T>(
         cleanup();
         resolve(value);
       },
-      (err) => {
+      (err: unknown) => {
         if (done) return;
         done = true;
         cleanup();

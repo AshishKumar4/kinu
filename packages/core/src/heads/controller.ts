@@ -649,7 +649,17 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
       // burning budget past it. A head that survives its abort is a live facet
       // nobody is waiting for, so that failure surfaces rather than being
       // absorbed — the zero-budget path above throws it for the same reason.
-      void h.abort('wall-clock budget exhausted');
+      h.abort('wall-clock budget exhausted').catch((cause: unknown) => {
+        // A head that survives its abort is a live facet nobody is waiting
+        // for; inside this timer callback there is no caller to throw to, so
+        // the failure is STATED here — the classified log the caller-facing
+        // zero-budget path above throws for the same reason.
+        diagnostics.failure(
+          'head.abort_failed',
+          toKinuError({ doing: 'abort a head whose wall-clock budget expired', cause, otherwise: 'timeout' }),
+          { headId: h.id },
+        );
+      });
       reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
     }, timeoutMs);
   });

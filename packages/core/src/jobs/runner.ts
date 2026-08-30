@@ -417,7 +417,7 @@ export class BackgroundJobRunner {
    *  fiber start and stamped on the terminal write, so an executor fenced by a
    *  concurrent reclaim (evict-recovery) can no longer settle the job (§5.3). */
   private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
-    void this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
+    this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
       ctx.stash({ phase: 'running', jobId, kind });
       let settled: boolean;
       try {
@@ -446,6 +446,17 @@ export class BackgroundJobRunner {
       // the force-fail could not write, the snapshot stays 'running' so an
       // eviction in this window still hands the job to recover().
       ctx.stash({ phase: settled ? 'settled' : 'running', jobId, kind });
+    }).catch((cause: unknown) => {
+      // The fiber itself failed — a scheduler that could not even start the
+      // body (both platform implementations reject only there; the body above
+      // handles its own work). No caller holds this promise, so the failure is
+      // STATED here rather than dropped as an unhandled rejection; the job row
+      // stays `running` and recoverOrphans() still hands it to recover().
+      diagnostics.failure(
+        'jobs.fiber_start_failed',
+        toKinuError({ doing: 'run the durable fiber for a background job', cause, otherwise: 'io' }),
+        { jobId, kind },
+      );
     });
   }
 
