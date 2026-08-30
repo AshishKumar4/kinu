@@ -10,6 +10,7 @@ const expectedRules = [
   "anti-slop/no-conditional-empty-object-spread",
   "anti-slop/no-copy-rpc-stub",
   "anti-slop/no-ddl-in-catch",
+  "anti-slop/no-elapsed-work-deadline",
   "anti-slop/no-empty-catch",
   "anti-slop/no-known-value-widening",
   "anti-slop/no-module-mocking",

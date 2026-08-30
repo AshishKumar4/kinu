@@ -2,6 +2,7 @@ import { eslintCompatPlugin } from "@oxlint/plugins";
 
 import { noAmbientGitInTestsRule } from "./rules/no-ambient-git-in-tests.ts";
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.ts";
+import { noElapsedWorkDeadlineRule } from "./rules/no-elapsed-work-deadline.ts";
 import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread.ts";
 import { noCopyRpcStubRule } from "./rules/no-copy-rpc-stub.ts";
 import { noDdlInCatchRule } from "./rules/no-ddl-in-catch.ts";
@@ -36,6 +37,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 	meta: { name: "anti-slop" },
 	rules: {
 		"no-ambient-git-in-tests": noAmbientGitInTestsRule,
+		"no-elapsed-work-deadline": noElapsedWorkDeadlineRule,
 		"no-chained-type-assertions": noChainedTypeAssertionsRule,
 		"no-conditional-empty-object-spread": noConditionalEmptyObjectSpreadRule,
 		"no-copy-rpc-stub": noCopyRpcStubRule,

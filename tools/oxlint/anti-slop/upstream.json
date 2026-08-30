@@ -9,6 +9,7 @@
   "$proteusComment": "Rules authored here, not vendored: they encode Proteus policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `proteusRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails. Both lists cover PLUGIN rules only. `typescript-escapes.gate.test.ts` is deliberately absent from them: it gates `.oxlintrc.json` policy for two oxlint BUILT-INS (typescript/no-explicit-any, typescript/ban-ts-comment), which have no rule file here to author or pin, and naming a built-in in proteusRules would claim authorship of upstream code and break the partition drift.test.ts asserts. It is listed under `vendored` as proteusOnly because every file in this directory must be declared.",
   "proteusRules": [
     "no-ambient-git-in-tests",
+    "no-elapsed-work-deadline",
     "no-copy-rpc-stub",
     "no-ddl-in-catch",
     "no-empty-catch",
@@ -22,6 +23,9 @@
   "proteusRuleGates": {
     "import-extension.gate.test.ts": [
       "require-runtime-import-extension"
+    ],
+    "no-elapsed-deadline.gate.test.ts": [
+      "no-elapsed-work-deadline"
     ],
     "no-ambient-git.gate.test.ts": [
       "no-ambient-git-in-tests"
@@ -55,8 +59,8 @@
     },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "2ff39accfa9dda7053bb966e2d83cbadb5a16a112ed0aa4ba6c9a9c0eafd5896",
-      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the five no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, and require-runtime-import-extension. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "1896db590fb5f344c792bae35a02b5a78082abc1904b808045bb732acb9a3f12",
+      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the five no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, require-runtime-import-extension, and the dormant no-elapsed-work-deadline registration. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
     "no-ambient-git.gate.test.ts": {
       "proteusOnly": true
@@ -77,6 +81,15 @@
       "proteusOnly": true
     },
     "rules/no-ambient-git-in-tests.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-elapsed-work-deadline.test.ts": {
+      "proteusOnly": true
+    },
+    "rules/no-elapsed-work-deadline.ts": {
+      "proteusOnly": true
+    },
+    "no-elapsed-deadline.gate.test.ts": {
       "proteusOnly": true
     },
     "rules/no-ambient-git-in-tests.ts": {
