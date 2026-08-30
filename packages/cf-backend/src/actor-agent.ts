@@ -3355,11 +3355,10 @@ export abstract class ActorAgent extends Think<Env> {
    * owns it.
    *
    * Each transfer is asserted, not assumed. `transferred: false` means the row
-   * was not there to move — it finished, it was already claimed by another job,
-   * or it was never durable — and the runner's contract for a failed handoff is
-   * to abort the work rather than start a fiber over device commands nothing
-   * owns. So this THROWS, and the throw is the whole mechanism: a job that
-   * cannot own its device work must not exist.
+   * was not there to move because it finished, another job already claimed it,
+   * or it was never durable. Failure may follow a partial transfer. The job
+   * retains ownership and settles the live work, while this throw records the
+   * unconfirmed handoff. It does not abort, cancel, or release the job.
    */
   private async transferDeviceRequests(
     jobId: string, requestIds: readonly string[],

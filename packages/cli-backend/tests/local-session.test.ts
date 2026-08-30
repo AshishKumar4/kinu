@@ -1908,7 +1908,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 1 });
   });
 
-  test('past the concurrent-job cap a crossing call is refused, and the model is told why', async () => {
+  test('past the concurrent-job cap a crossing call stays foreground and settles', async () => {
     const { db, session, events } = setup(
       'unused',
       executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
@@ -1920,13 +1920,16 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     await session.send('start another one');
 
-    // No new job minted: the cap held.
+    // The hard cap does not mint a ninth job. A refusal leaves the live call
+    // foreground-owned, so its own settlement reaches the model.
     expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: MAX_CONCURRENT_DETACHED_JOBS });
+    expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(false);
     expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_refused')).toBe(true);
     const result = events.find((event) => event.type === 'tool-result');
     const text = JSON.stringify(result?.result);
-    expect(text).toContain('CANCELLED');
-    expect(text).toContain('busy-0');
+    // Red direction: an implicit abort returns a CANCELLED refusal instead.
+    expect(text).toContain('never detached');
+    expect(text).not.toContain('CANCELLED');
   });
 
   test('toolNames exposes the full surface (agents/memory parity); end() resolves', async () => {
