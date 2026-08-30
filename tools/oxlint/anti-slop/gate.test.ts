@@ -71,6 +71,111 @@ assert.deepEqual(ruleFiles, [...expectedRules].sort(), "every rule file must be 
 assert.deepEqual(registeredRules, [...expectedRules].sort(), "every rule must be registered in index.ts");
 assert.deepEqual([...testedRules].sort(), [...expectedRules].sort(), "every rule must own a suite");
 
+// Value mapping extends the four-way key equality above. A registry value can point at a
+// sibling rule and leave every key set equal, so parse index.ts itself: each property key must
+// resolve to an import whose rule-module basename is that key. The module path is authoritative,
+// not the symbol spelling — no-shape-in-symbol-names intentionally uses
+// noForbiddenTermInSymbolNamesRule from ./rules/no-shape-in-symbol-names.ts.
+type RegistryEntry = readonly [key: string, symbol: string];
+
+function parseRuleRegistry(source: string): {
+  readonly importModuleBySymbol: ReadonlyMap<string, string>;
+  readonly entries: readonly RegistryEntry[];
+} {
+  const importModuleBySymbol = new Map<string, string>();
+  for (const match of source.matchAll(
+    /^import \{ (\w+) \} from "\.\/rules\/([a-z0-9-]+)\.ts";$/gmu,
+  )) {
+    const symbol = match[1]!;
+    assert.ok(
+      !importModuleBySymbol.has(symbol),
+      `index.ts imports ${JSON.stringify(symbol)} from more than one rule module`,
+    );
+    importModuleBySymbol.set(symbol, match[2]!);
+  }
+
+  const entries: RegistryEntry[] = [];
+  let inRules = false;
+  let closedRules = false;
+  for (const line of source.split("\n")) {
+    if (line === "\trules: {") {
+      assert.equal(inRules, false, "index.ts declares more than one rules registry");
+      inRules = true;
+      continue;
+    }
+    if (!inRules) continue;
+    if (line === "\t},") {
+      closedRules = true;
+      break;
+    }
+    const match = line.match(/^\t\t"([a-z0-9-]+)": (\w+),$/u);
+    if (match !== null) entries.push([match[1]!, match[2]!]);
+  }
+  assert.ok(inRules, "index.ts declares no rules registry");
+  assert.ok(closedRules, "index.ts does not close its rules registry");
+  return { importModuleBySymbol, entries };
+}
+
+function registryValueMappingFindings(
+  importModuleBySymbol: ReadonlyMap<string, string>,
+  entries: readonly RegistryEntry[],
+): readonly string[] {
+  return entries.flatMap(([key, symbol]) => {
+    const module = importModuleBySymbol.get(symbol);
+    if (module === undefined) {
+      return [`${key}: ${symbol} is not imported from ./rules/${key}.ts`];
+    }
+    return module === key
+      ? []
+      : [`${key}: ${symbol} is imported from ./rules/${module}.ts, not ./rules/${key}.ts`];
+  });
+}
+
+const indexRegistry = parseRuleRegistry(
+  readRepositoryFile(process.cwd(), `${pluginDirectory}/index.ts`),
+);
+assert.equal(
+  indexRegistry.entries.length,
+  expectedRules.length,
+  "the parsed registry must carry every expected value",
+);
+assert.deepEqual(
+  indexRegistry.entries.map(([key]) => `anti-slop/${key}`).sort(),
+  registeredRules,
+  "the parsed index.ts registry must cover every runtime registration",
+);
+assert.deepEqual(
+  [...indexRegistry.importModuleBySymbol.values()]
+    .map((module) => `anti-slop/${module}`)
+    .sort(),
+  registeredRules,
+  "every registered key must have one imported rule module",
+);
+assert.deepEqual(
+  registryValueMappingFindings(indexRegistry.importModuleBySymbol, indexRegistry.entries),
+  [],
+  "every registry value must resolve to the rule module its key names",
+);
+
+// Self-test: give no-reflect-apply the value from its adjacent no-reflect-get entry. Only the
+// sabotaged mapping should fail; a key-only gate would report green here.
+const sabotageIndex = indexRegistry.entries.findIndex(([key]) => key === "no-reflect-apply");
+assert.ok(sabotageIndex >= 0, "the mapping self-test key is missing from index.ts");
+const adjacentMapping = indexRegistry.entries[sabotageIndex + 1];
+assert.ok(adjacentMapping !== undefined, "the mapping self-test needs an adjacent registry entry");
+assert.equal(adjacentMapping[0], "no-reflect-get", "the mapping self-test entries must stay adjacent");
+const sabotagedMapping = indexRegistry.entries[sabotageIndex];
+assert.ok(sabotagedMapping !== undefined, "the mapping self-test cannot copy a missing entry");
+const sabotagedEntries = [...indexRegistry.entries];
+sabotagedEntries[sabotageIndex] = [sabotagedMapping[0], adjacentMapping[1]];
+assert.deepEqual(
+  registryValueMappingFindings(indexRegistry.importModuleBySymbol, sabotagedEntries),
+  [
+    `${sabotagedMapping[0]}: ${adjacentMapping[1]} is imported from ./rules/${adjacentMapping[0]}.ts, not ./rules/${sabotagedMapping[0]}.ts`,
+  ],
+  "sabotaging one adjacent registry value mapping must fail exactly once",
+);
+
 for (const name of expectedRules) {
   const setting = config.rules[name];
   const severity = Array.isArray(setting) ? setting[0] : setting;
@@ -276,4 +381,8 @@ assert.deepEqual(
   forbiddenDirectives,
   [],
   "blanket and anti-slop-specific lint suppressions are forbidden",
+);
+
+process.stdout.write(
+  `anti-slop: registry-value mapping equality (${indexRegistry.entries.length}/${expectedRules.length})\n`,
 );
