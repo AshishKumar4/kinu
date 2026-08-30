@@ -25,18 +25,17 @@ TypeScript locations, classification, missing evidence per requirement.
 | Storage | 147 | index/list properties, byte-chunk reassembly, a list-backed filesystem, and the SQLite filesystem's own correctness obligations | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
 | Safety | 6 | the shape of operations constructible from modeled provider names | These are constructor witnesses, not a proof of the deployed sandbox boundary |
 
-Counts: `lean/check-traceability.mjs --list-declarations` reports 470
-theorems grouped by top-level namespace, measured 2026-08-27. All 470 are
-claimed by traceability-map requirements, checked in both directions.
+Counts: `lean/check-traceability.mjs --list-declarations` reports 485 named
+declarations, measured 2026-08-30. The traceability map enrolls 380
+`proved-in-abstract-model` entries and 90 `by-construction-witness` entries.
 
 **Two denominators.** Status declares on a REQUIREMENT and inherits to every
 theorem it claims, so the same four words count twice over two totals. Name the
 denominator every time.
 
-By theorem, over 470: **380 `proved-in-abstract-model`**, **90
-`by-construction-witness`**. Near-definitional statements (nonnegativity of a
-`Nat` EMA score; a constructor cannot produce `SQLWrite`) are witnesses, not
-deep safety proofs.
+The two status groups above cover every traceability-enrolled theorem.
+Near-definitional statements (nonnegativity of a `Nat` EMA score; a constructor
+cannot produce `SQLWrite`) are witnesses, not deep safety proofs.
 
 By requirement, over 49: **30 `proved-in-abstract-model`**, **13
 `by-construction-witness`**, **5 `specified-not-modeled`**, **1
@@ -69,7 +68,7 @@ its `remainingEvidence`.
 ## Axiom boundary
 
 [`lean/Proteus/Axioms.lean`](../lean/Proteus/Axioms.lean) prints axioms for all
-470 published theorems; reports contain only kernel `propext`,
+the traceability-enrolled theorems; reports contain only kernel `propext`,
 `Classical.choice`, `Quot.sound`. One separate domain axiom,
 `Proteus.Storage.FTS5Search.fts5_indexed_findable`: an explicit trusted
 assumption about SQLite FTS5 completeness, enrolled by `PR-STORE-002`

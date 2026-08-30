@@ -565,10 +565,11 @@ event logs, Think session tables. Schema and boundaries:
 [STORAGE.md](./STORAGE.md); the vendored filesystem:
 [NIMBUS-INTEGRATION.md](./NIMBUS-INTEGRATION.md).
 
-Selected core algorithms are modeled in Lean 4 (`lean/`): 470 named theorems
-over abstract models of agent, evolution, execution, exploration, MCTS,
-safety, and storage properties, enrolled against 49 requirements with no
-`sorry` (measured 2026-08-27 by `lean/check-traceability.mjs`). Axiom reports
+Selected core algorithms are modeled in Lean 4 (`lean/`): 485 named declarations
+cover abstract models of agent, evolution, execution, exploration, MCTS, safety,
+and storage properties. The traceability map enrolls 380 proved-in-abstract-model
+entries and 90 by-construction witnesses against 49 requirements, with no `sorry`
+(measured 2026-08-30 by `lean/check-traceability.mjs`). Axiom reports
 use only Lean's three kernel axioms; one separate SQLite FTS5 assumption is
 documented and enrolled. CI (`.github/workflows/lean-verify.yml` →
 `scripts/verify-lean.sh`) gates compilation, negative consistency, axiom
