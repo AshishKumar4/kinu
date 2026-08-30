@@ -54,6 +54,7 @@
     "gate:install-scripts": "bun scripts/install-scripts-gate.ts",
     "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts",
     "gate:patch-parity": "bun scripts/patch-parity.ts",
+    "gate:secret-history": "bun scripts/secret-scan.ts --history",
     "gate:bench-corpus": "bun scripts/bench-corpus-gate.ts",
     "gate:scratch-ownership": "bun scripts/scratch-ownership.ts",
     "gate:literature-citations": "bun scripts/literature-citations.ts",

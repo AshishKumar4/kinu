@@ -465,10 +465,16 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/secret-scan.ts',
     tier: 'push',
-    seconds: 2,
-    catches: 'a credential about to leave the machine. Push is the last tier where that '
-      + 'is recoverable without a rotation.',
-    blind: 'a secret already in history.',
+    // Measured 2026-08-30: the persistent cat-file reader made the history
+    // phase 16.3 s; live/index adds under 1 s on the local-ref corpus then present.
+    seconds: 18,
+    catches: 'a credential about to leave the machine in live or index material, and one '
+      + 'that survives in a blob reachable from any locally stored branch, tag, remote-tracking, '
+      + 'or other ref. Push is the last tier where the live half is recoverable without a '
+      + 'rotation; the history half makes a removal claim observable rather than hopeful.',
+    blind: 'unreachable or reflog-only objects, and blobs containing NUL or exceeding 1 MiB. '
+      + 'The latter two are counted in the green denominator but not decoded; a number is a '
+      + 'visible blind spot, not evidence that their contents were scanned.',
   },
   {
     run: 'bun scripts/schema-drift.ts',
@@ -555,12 +561,15 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts',
     tier: 'push',
     seconds: 1,
-    catches: 'a secret scanner that stopped matching, and an enumeration that stopped treating '
-      + 'tracked-ness as authoritative. The scanner passing means nothing until this says it '
-      + 'still recognises a planted credential — including one in a tracked file that is '
-      + 'gitignored, or gone from the working tree, which is how a re-added transcript with '
-      + 'live tokens rode a green scan on 2026-08-18.',
-    blind: 'credential shapes nobody wrote a case for.',
+    catches: 'a secret scanner that stopped matching, an exact historical adjudication that '
+      + 'widened into a path or test exemption, or an enumeration that stopped treating '
+      + 'tracked-ness as authoritative. The red fixture puts a credential only on a non-current '
+      + 'local branch, proves it fails unadjudicated and passes only for its exact '
+      + '(blob OID, path, detector, count) tuple; the live fixture remains gitignored and '
+      + 'gone from disk, which is how a re-added transcript with live tokens rode a green scan '
+      + 'on 2026-08-18.',
+    blind: 'credential shapes nobody wrote a case for, and a history object the scanner '
+      + 'intentionally counts but cannot decode because it contains NUL or exceeds its size cap.',
   },
   {
     run: 'bun test scripts/gate-set-equality.test.ts',

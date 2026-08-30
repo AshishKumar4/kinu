@@ -9,16 +9,22 @@
 // file) are the two holes the rewrite exists to close. Splitting the literal
 // keeps the string identical at runtime and absent from the source.
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  MAX_HISTORY_BLOB_BYTES,
   PATTERNS,
+  REMOVED_CREDENTIAL_BLOB,
+  adjudicateHistory,
   applyIgnores,
+  enumerateHistoricalReachability,
   parseIgnoreFile,
+  scanHistory,
   scanText,
   suppresses,
 } from './secret-scan';
 import { isTextSource, trackedFiles } from './sources';
+import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -182,4 +188,82 @@ test('the scanned set is the enumerated set narrowed by content type, nothing el
   const scanned = trackedFiles().filter(isTextSource);
   expect(scanned.length).toBeGreaterThan(500);
   expect(scanned).toContain('scripts/secret-scan.test.ts');
+});
+
+function historyFixture() {
+  const repo = scratchDir('secret-history');
+  initRepo(repo);
+  writeFileSync(join(repo, 'README.md'), 'clean\n');
+  git(repo, 'add', 'README.md');
+  git(repo, 'commit', '-qm', 'clean base');
+  const primary = git(repo, 'branch', '--show-current').trim();
+
+  // The credential exists only on a non-current local branch. A scanner that
+  // reads HEAD or the working tree alone is green; every local ref is red.
+  git(repo, 'checkout', '-qb', 'history-fixture');
+  const secret = ['AK', 'IA', 'ABCDEFGHIJKLMNOP'].join('');
+  writeFileSync(join(repo, 'history.md'), `key=${secret}\n`);
+  writeFileSync(join(repo, 'binary.bin'), Buffer.from([0x6b, 0, 0x69]));
+  writeFileSync(join(repo, 'oversize.txt'), Buffer.alloc(MAX_HISTORY_BLOB_BYTES + 1, 0x78));
+  git(repo, 'add', 'history.md', 'binary.bin', 'oversize.txt');
+  git(repo, 'commit', '-qm', 'historical fixture');
+  const oid = git(repo, 'rev-parse', 'HEAD:history.md').trim();
+  git(repo, 'checkout', '-q', primary);
+  return { repo, oid, secret };
+}
+
+describe('reachable history', () => {
+  test('a historical credential is red until its exact blob/path/detector/count adjudication is present', async () => {
+    const fixture = historyFixture();
+    const expected = {
+      detector: 'aws-access-key',
+      oid: fixture.oid,
+      path: 'history.md',
+      refClass: 'branch' as const,
+      count: 1,
+    };
+
+    const red = await scanHistory({ repoRoot: fixture.repo, adjudications: [] });
+    expect(red.findings).toEqual([expected]);
+    expect(Object.keys(red.findings[0]!).sort()).toEqual(['count', 'detector', 'oid', 'path', 'refClass']);
+    expect(JSON.stringify(red)).not.toContain(fixture.secret);
+    expect(red.stats.refs).toBe(2);
+    expect(red.stats.objects).toBeGreaterThan(0);
+    expect(red.stats.blobs).toBeGreaterThanOrEqual(4);
+    expect(red.stats.nul).toBe(1);
+    expect(red.stats.oversize).toBe(1);
+    expect(red.stats.scanned).toBeGreaterThan(0);
+
+    const exact = await scanHistory({ repoRoot: fixture.repo, adjudications: [expected] });
+    expect(exact.findings).toEqual([]);
+    expect(exact.adjudicated).toBe(1);
+
+    // None of the tuple's four durable properties is a path-wide or test-wide
+    // exception. A near miss re-arms the historical finding.
+    for (const nearMiss of [
+      { ...expected, oid: '0'.repeat(40) },
+      { ...expected, path: 'other.md' },
+      { ...expected, detector: 'jwt' },
+      { ...expected, count: 2 },
+    ]) {
+      expect(adjudicateHistory([expected], [nearMiss]).findings).toEqual([expected]);
+    }
+  });
+
+  test('the known removed credential blob is absent from local-ref reachability', () => {
+    const reachability = enumerateHistoricalReachability();
+    expect(reachability.objects.some((object) => object.oid === REMOVED_CREDENTIAL_BLOB)).toBe(false);
+  });
+
+  test('the checked-in history has only its reviewed exact adjudications', async () => {
+    const result = await scanHistory();
+    expect(result.findings).toEqual([]);
+    expect(result.adjudicated).toBeGreaterThan(0);
+    expect(result.stats.objects).toBeGreaterThan(0);
+  }, 30_000);
+});
+
+test('the current scanner source has no detector-shaped literal of its own', () => {
+  const source = readFileSync(join(REPO_ROOT, 'scripts', 'secret-scan.ts'), 'utf8');
+  expect(scanText('scripts/secret-scan.ts', source)).toEqual([]);
 });
