@@ -55,7 +55,7 @@ export function raceAbort<T>(
 				(text) => {
 					reject(abortError(text));
 				},
-				(err) => {
+				(err: unknown) => {
 					const failure = new Error(`${message} — stopping the work failed`, { cause: err });
 					failure.name = "AbortError";
 					reject(failure);
@@ -69,7 +69,7 @@ export function raceAbort<T>(
 				signal.removeEventListener("abort", onAbort);
 				resolve(value);
 			},
-			(err) => {
+			(err: unknown) => {
 				if (aborting) return;
 				signal.removeEventListener("abort", onAbort);
 				reject(err);
