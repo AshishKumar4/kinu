@@ -195,7 +195,7 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
           log(`proxy: queued write failed: ${String(cause)}`);
         }
       }
-    }).catch((cause: Error) => {
+    }).catch((cause: unknown) => {
       pipe.dialing = false;
       // Dial failures are expected while the dev server is down; restore()
       // redials every healable pipe.
@@ -464,7 +464,7 @@ function startFailureServer(port: number): Promise<FailureServer> {
   });
   return Promise.resolve({
     async stop() {
-      server.stop(true);
+      await server.stop(true);
       await Bun.sleep(300);
     },
   });
@@ -604,9 +604,9 @@ async function main(): Promise<void> {
     });
     await page.setViewport({ width: 1568, height: 900 });
     await page.setRequestInterception(true);
-    page.on("request", (req: HTTPRequest) => {
+    page.on("request", async (req: HTTPRequest) => {
       if (new URL(req.url()).pathname === "/api/health") {
-        void req.respond({
+        await req.respond({
           status: 200,
           contentType: "application/json",
           headers: { "access-control-allow-origin": "*" },
@@ -620,7 +620,7 @@ async function main(): Promise<void> {
         });
         return;
       }
-      void req.continue();
+      await req.continue();
     });
 
     // ── stage 1: connect through the proxy ────────────────────────────────
@@ -706,13 +706,13 @@ async function main(): Promise<void> {
     log("stage 5 complete: reload affordance shown exactly once");
     log("DRILL GREEN — session survived the supersede without a reload");
   } finally {
-    await browser.close().catch((cause: Error) => log(`cleanup: browser close failed: ${String(cause)}`));
-    await server.kill().catch((cause: Error) => log(`cleanup: dev server kill failed: ${String(cause)}`));
+    await browser.close().catch((cause: unknown) => log(`cleanup: browser close failed: ${String(cause)}`));
+    await server.kill().catch((cause: unknown) => log(`cleanup: dev server kill failed: ${String(cause)}`));
     proxy.stop();
   }
 }
 
-main().then(() => process.exit(0), (cause: Error) => {
-  console.error(cause.message);
+main().then(() => process.exit(0), (cause: unknown) => {
+  console.error(cause instanceof Error ? cause.message : String(cause));
   process.exit(1);
 });
