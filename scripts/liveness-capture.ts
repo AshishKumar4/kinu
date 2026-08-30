@@ -150,8 +150,9 @@ class DriverSocket {
       this.ws = null;
       for (const entry of this.pending.values()) entry.reject(new Error("driver socket closed"));
       this.pending.clear();
-      if (!this.closedForGood && EXPECT_RESTART) setTimeout(() => void this.connect().catch(function onReconnectFailure(err: Error): void {
-        console.error(`driver socket reconnect failed: ${err.message}`);
+      if (!this.closedForGood && EXPECT_RESTART) setTimeout(() => this.connect().catch(function onReconnectFailure(error: unknown): void {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`driver socket reconnect failed: ${message}`);
       }), 2_000);
     });
     ws.addEventListener("message", (ev) => this.onMessage(String(ev.data)));
@@ -199,18 +200,13 @@ async function tapRunEvents(runId: string): Promise<void> {
     return;
   }
   const frames = res.body.pipeThrough(new TextDecoderStream());
-  void (async () => {
-    for await (const chunk of frames) {
-      for (const line of chunk.split("\n")) {
-        if (!line.startsWith("data:")) continue;
-        const frame = v.safeParse(RunEventFrameSchema, JSON.parse(line.slice(5).trim()));
-        if (frame.success) record("sse", `${frame.output.type ?? "?"}#${String(frame.output.eventIndex)}`);
-      }
+  for await (const chunk of frames) {
+    for (const line of chunk.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      const frame = v.safeParse(RunEventFrameSchema, JSON.parse(line.slice(5).trim()));
+      if (frame.success) record("sse", `${frame.output.type ?? "?"}#${String(frame.output.eventIndex)}`);
     }
-  })().catch(function onStreamEnd(err: Error): void {
-    // The stream ends when the run settles or the tab goes away.
-    record("sse-ended", String(err.message).slice(0, 120));
-  });
+  }
 }
 
 /* ── the browser half: wire tap + DOM sampler + the mission ─────── */
@@ -362,13 +358,18 @@ async function main(): Promise<void> {
     const poller = setInterval(() => {
       void pollReadModels(driver, state)
         .then(() => {
-          if (state.targetRoot !== null && !sseTapped) {
-            sseTapped = true;
-            void tapRunEvents(state.targetRoot);
-          }
+          const targetRoot = state.targetRoot;
+          if (targetRoot === null || sseTapped) return;
+          sseTapped = true;
+          return tapRunEvents(targetRoot).catch(function onStreamEnd(error: unknown): void {
+            // The stream ends when the run settles or the tab goes away.
+            const message = error instanceof Error ? error.message : String(error);
+            record("sse-ended", message.slice(0, 120));
+          });
         })
-        .catch(function onPollError(err: Error): void {
-          record("poll-cycle-failed", String(err.message).slice(0, 120));
+        .catch(function onPollError(error: unknown): void {
+          const message = error instanceof Error ? error.message : String(error);
+          record("poll-cycle-failed", message.slice(0, 120));
         });
     }, POLL_MS);
 
@@ -433,7 +434,7 @@ function emitTimeline(state: PollState): void {
   for (const [name, ok] of links) console.log(`${ok ? "PROVED " : "MISSING"}  ${name}`);
 }
 
-await main().catch(function onFatal(err: Error): void {
-  console.error(err);
+await main().catch(function onFatal(error: unknown): void {
+  console.error(error);
   process.exit(1);
 });

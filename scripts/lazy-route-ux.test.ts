@@ -68,14 +68,13 @@ interface Observed {
  */
 async function serve(page: Page, mode: 'stable' | 'moves', served: { count: number }): Promise<void> {
   await page.setRequestInterception(true);
-  page.on('request', (request: HTTPRequest) => {
+  page.on('request', (request: HTTPRequest): Promise<void> => {
     if (new URL(request.url()).pathname !== '/api/health') {
-      void request.continue();
-      return;
+      return request.continue();
     }
     served.count += 1;
     const sha = mode === 'moves' && served.count > 1 ? LATER_SHA : LOADED_SHA;
-    void request.respond({
+    return request.respond({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ ok: true, build: { ...STAMP, sha } }),

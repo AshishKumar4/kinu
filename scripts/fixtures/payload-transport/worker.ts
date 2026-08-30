@@ -380,7 +380,12 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     // DETERMINISTIC REDRIVE: the process table lives in the container daemon,
     // not in this DO. A RUNNING process is read, never duplicated; an EXITED
     // process is final — its result stays pollable instead of being rerun.
-    const existing = await this.getProcess(operationId).catch((error) => { throw new Error(`process lookup failed: ${describeThrown(error instanceof Error ? error : String(error))}`, { cause: error }); });
+    const existing = await this.getProcess(operationId).catch((error: unknown) => {
+      throw new Error(
+        `process lookup failed: ${describeThrown(error instanceof Error ? error : String(error))}`,
+        { cause: error },
+      );
+    });
     if (existing !== null && !operationNeedsStart(existing)) {
       return { started: false, exitCode: existing.exitCode ?? null };
     }

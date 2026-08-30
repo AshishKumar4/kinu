@@ -238,7 +238,7 @@ export function armSignalTeardown(log: (message: string) => void): void {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
       log(`${signal} received; running teardown before exit`);
-      void runTeardownOnce().finally(() => process.exit(130));
+      return runTeardownOnce().finally(() => process.exit(130));
     });
   }
 }
