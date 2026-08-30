@@ -442,11 +442,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   async #withStorageMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = this.#storageMutationTail.then(operation);
-    this.#storageMutationTail = run
-      .then(() => undefined)
-      .catch((error: unknown) => {
-        console.error(`[devbox] storage mutation released its FIFO after failure: ${describe({ cause: error })}`);
-      });
+    this.#storageMutationTail = (async () => {
+      try {
+        await run;
+      } catch (cause) {
+        console.error(`[devbox] storage mutation released its FIFO after failure: ${describe({ cause })}`);
+      }
+    })();
     return await run;
   }
 

@@ -1002,15 +1002,14 @@ export function createCheckpointLane(): CheckpointLane {
       if (pending !== undefined) return pending;
       const run = tail.then(() => op());
       inFlight[kind] = run;
-      const settled = run.then(
-        () => undefined,
-        (cause: unknown) => {
+      const cleaned = (async () => {
+        try {
+          await run;
+        } catch (cause) {
           console.error(`[devbox] ${kind} checkpoint rejected: ${describeThrown({ cause })}`);
-        },
-      );
-      const cleaned = settled.then(() => {
+        }
         if (inFlight[kind] === run) inFlight[kind] = undefined;
-      });
+      })();
       // The next lane entry observes cleanup too; no detached promise remains.
       tail = cleaned;
       return run;

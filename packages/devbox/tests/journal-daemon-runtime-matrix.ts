@@ -816,13 +816,18 @@ async function shutdownRaces(): Promise<void> {
       const traffic = (async (): Promise<{ rounds: number; refusal: string }> => {
         let rounds = 0;
         while (serving) {
-          const refusal = await writeFile(join(space.mount, `busy-${rounds % 4}.txt`), `round ${rounds}`)
-            .then(() => '', (cause: unknown) => {
-              const parsed = v.safeParse(ErrnoFailureSchema, cause);
-              return parsed.success
-                ? parsed.output.code ?? parsed.output.message ?? String(cause)
-                : String(cause);
-            });
+          let refusal = '';
+          try {
+            await writeFile(
+              join(space.mount, `busy-${rounds % 4}.txt`),
+              `round ${rounds}`,
+            );
+          } catch (cause) {
+            const parsed = v.safeParse(ErrnoFailureSchema, cause);
+            refusal = parsed.success
+              ? parsed.output.code ?? parsed.output.message ?? String(cause)
+              : String(cause);
+          }
           if (refusal.length > 0) return { rounds, refusal };
           rounds++;
         }
