@@ -37,7 +37,7 @@ export function isAbortError<Failure>(err: Failure): boolean {
  * and "nobody could stop it" are both answers, and only a thrown rejection
  * would leave the caller with neither.
  */
-export function raceAbort<T>(
+export async function raceAbort<T>(
 	work: () => Promise<T>,
 	signal: AbortSignal | undefined,
 	message: string,
@@ -45,37 +45,47 @@ export function raceAbort<T>(
 ): Promise<T> {
 	if (!signal) return work();
 	const abortError = (text: string) => new DOMException(text, "AbortError");
-	if (signal.aborted) return Promise.reject(abortError(message));
-	return new Promise<T>((resolve, reject) => {
-		let aborting = false;
-		const onAbort = () => {
-			aborting = true;
-			if (!terminate) { reject(abortError(message)); return; }
-			terminate().then(
-				(text) => {
-					reject(abortError(text));
-				},
-				(err: unknown) => {
-					const failure = new Error(`${message} — stopping the work failed`, { cause: err });
-					failure.name = "AbortError";
-					reject(failure);
-				},
-			);
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		work().then(
-			(value) => {
-				if (aborting) return;
-				signal.removeEventListener("abort", onAbort);
-				resolve(value);
-			},
-			(err: unknown) => {
-				if (aborting) return;
-				signal.removeEventListener("abort", onAbort);
-				reject(err);
-			},
-		);
+	if (signal.aborted) throw abortError(message);
+
+	let aborting = false;
+	let resolveAbort: (value: void | PromiseLike<void>) => void;
+	function onAbort(): void {
+		aborting = true;
+		resolveAbort();
+	}
+	const abortRequested = new Promise<void>((resolve) => {
+		resolveAbort = resolve;
 	});
+	signal.addEventListener("abort", onAbort, { once: true });
+
+	try {
+		const pendingWork = work();
+		let workWon = false;
+		const workFinished = (async () => {
+			try {
+				await pendingWork;
+				workWon = !aborting;
+			} catch (cause) {
+				if (!aborting) throw cause;
+			}
+		})();
+
+		await Promise.race([workFinished, abortRequested]);
+		if (workWon) return await pendingWork;
+		if (!terminate) throw abortError(message);
+
+		let text: string;
+		try {
+			text = await terminate();
+		} catch (cause) {
+			const failure = new Error(`${message} — stopping the work failed`, { cause });
+			failure.name = "AbortError";
+			throw failure;
+		}
+		throw abortError(text);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
 }
 
 /** Resolves `.`/`..` segments and prevents directory traversal above root. */
