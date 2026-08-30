@@ -558,7 +558,8 @@ function receipt(
   counters: Partial<Omit<OverlayRunnerReceipt, 'operation'>> = {},
 ): string {
   return `${JSON.stringify({
-    operation, entries: 0, stagedBytes: 0, foldedEntries: 0, sweptBlobs: 0, ...counters,
+    operation, entries: 0, movedBytes: 0, foldedEntries: 0, sweptBlobs: 0, foldedSeq: 0,
+    ...counters,
   })}\n`;
 }
 
@@ -615,7 +616,13 @@ function harness(overrides: {
         exitCode: run.exitCode ?? 0,
       };
     },
-    inventory: async () => ({ objects: overrides.objects ?? 0, bytes: overrides.bytes ?? 0 }),
+    // RECORDED, because its ABSENCE is the assertion. This is a LIST over the
+    // whole prefix, so an attach that calls it carries a term that grows with
+    // the tree, and no end-state check can see the difference.
+    inventory: async () => {
+      calls.push('inventory');
+      return { objects: overrides.objects ?? 0, bytes: overrides.bytes ?? 0 };
+    },
     clearPrefix: async () => {
       calls.push('clearPrefix');
       return overrides.objects ?? 0;
@@ -675,26 +682,54 @@ describe('the container layout this strategy asks the host for', () => {
 
 describe('attach — replay first, mount last, receipt believed only when it parses', () => {
   test('a fresh box attaches an empty overlay', async () => {
-    const record = harness({ objects: 0, bytes: 0 });
+    const record = harness();
     const outcome = await attachOf(record);
     expect(outcome.kind).toBe('empty');
     expect(record.calls).toContain('invokeRunner:restore');
   });
 
-  test('a prefix that already holds bytes attaches and reports them', async () => {
-    const record = harness({ objects: 4, bytes: 800 });
+  test('A STORE THAT HAS FOLDED IS NOT EMPTY, and the cursor is how attach knows', async () => {
+    // The classification the prefix listing used to answer. A folded store has
+    // a cursor past zero and may have nothing pending at all, so "no pending
+    // entries" alone would call it fresh — and a box that reports `empty` for a
+    // workspace holding a folded tree is a box a caller may re-seed over.
+    const record = harness({ runs: { restore: { stdout: receipt('restore', { foldedSeq: 12 }) } } });
     const outcome = await attachOf(record);
     expect(outcome.kind).toBe('attached');
-    expect(outcome.detail).toContain('4 objects 800B');
+    expect(outcome.detail).toContain('folded 12');
   });
 
   test('the replayed pending count reaches the outcome', async () => {
     const record = harness({
-      objects: 0, bytes: 0, runs: { restore: { stdout: receipt('restore', { entries: 3 }) } },
+      runs: { restore: { stdout: receipt('restore', { entries: 3 }) } },
     });
     const outcome = await attachOf(record);
     expect(outcome.kind).toBe('attached');
     expect(outcome.detail).toContain('3P');
+  });
+
+  test('A HUGE PREFIX COSTS NO PREFIX LISTING, which is the whole recovery claim', async () => {
+    // THE TREE-SIZE TERM. `inventory()` is a LIST over every object this box
+    // holds, and attach called it on both of its paths — once to describe an
+    // already-mounted overlay, once to decide whether a fresh one was empty. So
+    // the operation advertised as O(pending change) grew with every fold, and
+    // the counters it produced were the only thing that read as suspicious. The
+    // numbers below are what a mature box looks like; the assertion is that
+    // attach never asks for them.
+    const record = harness({ objects: 1_000_000, bytes: 9_000_000_000 });
+    const outcome = await attachOf(record);
+    expect(record.calls).not.toContain('inventory');
+    // And the fixed control work is all of it: release the stale store mount,
+    // mount the store, one runner invocation, mount the overlay, confirm.
+    expect(record.calls).toEqual([
+      'overlayMounted', 'unmountStore', 'mountStore', 'invokeRunner:restore', 'mountOverlay',
+      'overlayMounted',
+    ]);
+    // A million objects and an empty journal is a FRESH classification now,
+    // because the receipt says nothing was ever folded and nothing is pending.
+    // Those objects cannot exist without a cursor, so this state is
+    // unreachable in a real store — it is here to prove the prefix is not read.
+    expect(outcome.kind).toBe('empty');
   });
 
   test('THE REPLAY LANDS BEFORE THE OVERLAY, so mounted implies replayed', async () => {
@@ -729,6 +764,12 @@ describe('attach — replay first, mount last, receipt believed only when it par
     expect(record.calls).not.toContain('invokeRunner:restore');
     expect(record.calls).not.toContain('mountOverlay');
     expect(record.calls).not.toContain('mountStore');
+    // AND IT DOES NOT LIST THE PREFIX EITHER. This path holds no receipt, so
+    // describing the store would mean paying for the listing — which is what it
+    // used to do, making the cheapest attach carry the tree-size term twice over
+    // a container's life.
+    expect(record.calls).not.toContain('inventory');
+    expect(outcome.detail).toBe('overlay-cas overlay already mounted');
   });
 
   test('a second attach on the same container replays exactly once', async () => {
@@ -760,6 +801,24 @@ describe('attach — replay first, mount last, receipt believed only when it par
       .rejects.toThrow(/produced no receipt/);
     expect(record.calls).not.toContain('mountOverlay');
   });
+
+  test('A RESTORE THAT DIED NEVER REACHES THE MOUNT, so mounted implies restore-done', async () => {
+    // THE CRASH-PREFIX GUARD, stated as its own claim rather than inferred from
+    // the ordering test above. A killed runner is the ordinary failure on a spot
+    // container, and its exit code is the only evidence the adapter gets. If the
+    // mount happened anyway, the next attach would see a mounted overlay, take
+    // the already-attached path and report success over a half-replayed upper —
+    // and because that path deliberately runs no runner, nothing downstream
+    // would ever discover the missing changes.
+    const record = harness({
+      runs: { restore: { stdout: '', stderr: 'Killed', exitCode: 137 } },
+    });
+    await expect(overlayCasStorage(record.ports).attach()).rejects.toThrow(/exit 137/);
+    expect(record.calls).not.toContain('mountOverlay');
+    // The store mount is what the runner needed, and it was taken before the
+    // runner ran; the OVERLAY is what publishes the workspace, and it was not.
+    expect(record.calls).toContain('mountStore');
+  });
 });
 
 describe('the receipt is untrusted input, because it crossed a process boundary', () => {
@@ -783,7 +842,12 @@ describe('the receipt is untrusted input, because it crossed a process boundary'
   test('A RECEIPT MISSING A COUNTER REFUSES, never defaulting the number to zero', async () => {
     const record = harness({
       mounted: true,
-      runs: { checkpoint: { stdout: '{"operation":"checkpoint","entries":1,"stagedBytes":4}\n' } },
+      runs: {
+        checkpoint: {
+          stdout: '{"operation":"checkpoint","entries":1,"movedBytes":4,"foldedEntries":0,'
+            + '"sweptBlobs":0}\n',
+        },
+      },
     });
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('failed');
@@ -796,8 +860,31 @@ describe('the receipt is untrusted input, because it crossed a process boundary'
       runs: {
         checkpoint: {
           stdout: `${JSON.stringify({
+            operation: 'checkpoint', entries: 1, movedBytes: 4, foldedEntries: 0, sweptBlobs: 0,
+            foldedSeq: 0, uploadedLayers: 3,
+          })}\n`,
+        },
+      },
+    });
+    const outcome = await checkpointOf(record, 'tick');
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.reason).toMatch(/does not match its schema/);
+  });
+
+  test('THE PREVIOUS RELEASE’S RECEIPT REFUSES, rather than reading `stagedBytes` as moved', async () => {
+    // The rename is a wire change, and the two fields do not mean the same
+    // thing: `stagedBytes` was the logical size of the journalled files, while
+    // `movedBytes` is the bytes the run wrote. A runner bundle left behind by an
+    // older image would report the first under the second's name, and a caller
+    // measuring cost per checkpoint would silently compare two quantities. It
+    // also cannot report `foldedSeq`, which is what attach now classifies on, so
+    // accepting it would mean calling a folded store fresh.
+    const record = harness({
+      mounted: true,
+      runs: {
+        checkpoint: {
+          stdout: `${JSON.stringify({
             operation: 'checkpoint', entries: 1, stagedBytes: 4, foldedEntries: 0, sweptBlobs: 0,
-            uploadedLayers: 3,
           })}\n`,
         },
       },
@@ -809,7 +896,7 @@ describe('the receipt is untrusted input, because it crossed a process boundary'
 
   test('a negative or fractional counter refuses', async () => {
     const record = harness({
-      mounted: true, runs: { checkpoint: { stdout: receipt('checkpoint', { stagedBytes: -1 }) } },
+      mounted: true, runs: { checkpoint: { stdout: receipt('checkpoint', { movedBytes: -1 }) } },
     });
     expect((await checkpointOf(record, 'tick')).kind).toBe('failed');
     const fractional = harness({
@@ -836,7 +923,7 @@ describe('the receipt is untrusted input, because it crossed a process boundary'
       bytes: 40,
       runs: {
         checkpoint: {
-          stdout: `warning: fuse: mount options ignored\n${receipt('checkpoint', { entries: 2, stagedBytes: 9 })}`,
+          stdout: `warning: fuse: mount options ignored\n${receipt('checkpoint', { entries: 2, movedBytes: 9 })}`,
         },
       },
     });
@@ -936,6 +1023,29 @@ describe('checkpoint — gated on a real overlay, one invocation, receipt believ
     expect(record.stateNow()?.lastCheckpointAt).toBe(5);
   });
 
+  test('A TICK THAT JOURNALLED NOTHING BUT WROTE BYTES IS NOT A SKIP', async () => {
+    // THE RESIDUAL CASE, and the reason the skip is gated on two facts rather
+    // than one. A redrive whose journal batch already landed re-measures the
+    // upper, finds the pending journal already holds every path, and journals
+    // nothing — but it refreshes the scan cache so the next tick does not
+    // re-digest the whole workspace. So `entries === 0` and bytes moved.
+    //
+    // A skip would deny those bytes twice over: CheckpointOutcome says a skip
+    // KNOWS it moved nothing, and the verdict2 rule says never report
+    // nothing-happened after durable state has changed. Testing only
+    // entries>0/moved>0 and entries=0/moved=0 would leave the second half of
+    // that gate free to be deleted.
+    const record = harness({
+      mounted: true, objects: 4, bytes: 512, now: 22_000_000,
+      state: { lastCheckpointAt: 5, lastFailure: undefined },
+      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 0, movedBytes: 4_096 }) } },
+    });
+    const outcome = await checkpointOf(record, 'tick');
+    expect(outcome.kind).toBe('committed');
+    expect(outcome.movedBytes).toBe(4_096);
+    expect(record.stateNow()?.lastCheckpointAt).toBe(22_000_000);
+  });
+
   test('an empty prefix says so, rather than calling an untouched box unchanged', async () => {
     const record = harness({ mounted: true, objects: 0, bytes: 0 });
     const outcome = await checkpointOf(record, 'tick');
@@ -943,10 +1053,10 @@ describe('checkpoint — gated on a real overlay, one invocation, receipt believ
     expect(outcome.reason).toMatch(/holds no objects yet/);
   });
 
-  test('a tick that moved bytes is committed and reports what the runner staged', async () => {
+  test('a tick that moved bytes is committed and reports what the runner wrote', async () => {
     const record = harness({
       mounted: true, objects: 6, bytes: 4_096, now: 12_345_000,
-      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 7, stagedBytes: 2_048 }) } },
+      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 7, movedBytes: 2_048 }) } },
     });
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('committed');
@@ -955,17 +1065,19 @@ describe('checkpoint — gated on a real overlay, one invocation, receipt believ
     expect(record.stateNow()?.lastCheckpointAt).toBe(12_345_000);
   });
 
-  test('A RENAME COMMITS WHILE MOVING ZERO BYTES, which is the receipt reporting reuse', async () => {
+  test('A DEDUPLICATED TICK COMMITS WHILE MOVING ONLY ITS METADATA', async () => {
     // Content-hash dedup means a pure rename journals entries and uploads no
-    // content. `movedBytes` is the runner's figure, so it says 0 here — the
-    // property the header advertises has to be visible in the outcome.
+    // content. `movedBytes` is the runner's own `bytesPut` delta, so what it
+    // reports here is the journal batch and the scan cache and NOTHING for the
+    // reused blobs — the property the header advertises, visible in the outcome
+    // without claiming the metadata objects were free.
     const record = harness({
       mounted: true, objects: 3, bytes: 1_000,
-      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 2, stagedBytes: 0 }) } },
+      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 2, movedBytes: 190 }) } },
     });
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('committed');
-    expect(outcome.movedBytes).toBe(0);
+    expect(outcome.movedBytes).toBe(190);
   });
 
   test('A QUIESCE NEVER REPORTS SKIPPED AFTER IT HAS FOLDED', async () => {
@@ -987,7 +1099,7 @@ describe('checkpoint — gated on a real overlay, one invocation, receipt believ
     const record = harness({
       mounted: true, objects: 2, bytes: 64,
       state: { lastCheckpointAt: 4, lastFailure: { at: 4, reason: 'the runner was killed' } },
-      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 1, stagedBytes: 12 }) } },
+      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 1, movedBytes: 12 }) } },
     });
     expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
     expect(record.stateNow()?.lastFailure).toBeUndefined();
@@ -1002,7 +1114,7 @@ describe('checkpoint — gated on a real overlay, one invocation, receipt believ
     const record = harness({
       mounted: true, objects: 2, bytes: 64,
       state: { lastCheckpointAt: 4, lastFailure: { at: 4, reason: 'the runner was killed' } },
-      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 1, stagedBytes: 12 }) } },
+      runs: { checkpoint: { stdout: receipt('checkpoint', { entries: 1, movedBytes: 12 }) } },
       rejectWrites: [1],
     });
     const outcome = await checkpointOf(record, 'tick');
@@ -1047,7 +1159,7 @@ describe('checkpoint — gated on a real overlay, one invocation, receipt believ
         base.calls.push(`invokeRunner:${operation}`);
         return attempt === 1
           ? { stdout: '', stderr: 'transport closed', exitCode: 1 }
-          : { stdout: receipt(operation, { entries: 3, stagedBytes: 30 }), stderr: '', exitCode: 0 };
+          : { stdout: receipt(operation, { entries: 3, movedBytes: 30 }), stderr: '', exitCode: 0 };
       },
     };
     const storage = overlayCasStorage(ports);

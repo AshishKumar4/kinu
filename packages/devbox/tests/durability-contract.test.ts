@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   CandidateControlStateV1Schema,
   CandidateRunControlV1Schema,
@@ -20,8 +24,13 @@ import type {
   CandidateControlStateV1,
   CandidateRunControlV1,
   HeadPointerV1,
+  RestoreWork,
   RootEnvelopeV1,
 } from '../src/durability/contracts';
+import { FileCasStore, runOverlayRunner } from '../src/cas/overlay-runner';
+import { overlayCasStorage, type OverlayCasPorts } from '../src/overlay-cas';
+import type { AttachOutcome } from '../src/storage';
+import { WatchedCasStore, treeHeavyStore } from './support/cas-cost-probe';
 
 const SHA = 'a'.repeat(64);
 const object = { key: 'v1/boxes/box/attempts/op/try/data-a', byteLength: '12', sha256: SHA };
@@ -318,5 +327,193 @@ describe('durability v1 wire contracts', () => {
       'cleanup-resource',
     ]);
     expect(new Set(DURABILITY_AWAIT_POINTS).size).toBe(DURABILITY_AWAIT_POINTS.length);
+  });
+});
+
+// ── the readiness dimensions, measured on a real attach ──────────────────────
+//
+// `RestoreWorkSchema` above declares the dimensions a readiness claim has to be
+// stated in, and until now nothing produced one — so a strategy could advertise
+// flat recovery while carrying a term that grew with its own tree, and the
+// contract would not notice. overlay-cas did exactly that: `attach` called
+// `inventory()`, a LIST over the whole prefix, on both of its paths.
+//
+// These tests fill a `RestoreWork` from a REAL attach — the shipped adapter,
+// the shipped runner, receipts crossing the shipped stdout schema — and assert
+// which of its seven dimensions may move. The `inventory` port is poisoned, so
+// a prefix listing anywhere in attach fails the attach rather than inflating a
+// number someone has to notice.
+
+interface AttachProbe {
+  readonly outcome: AttachOutcome;
+  readonly work: RestoreWork;
+}
+
+/**
+ * One real attach against a prefix holding `objects` folded objects, plus
+ * whatever `pending` names journalled and not folded.
+ *
+ * Every field of the returned `RestoreWork` comes from something observed:
+ * store calls for the op counts, recorded byte lengths split by key namespace
+ * for the two byte figures, mount port calls for `mounts`, and the restore
+ * receipt for `replayUnits`.
+ */
+async function measureAttach(
+  objects: number,
+  foldedSeq: number,
+  pending: readonly (readonly [string, string])[] = [],
+): Promise<AttachProbe> {
+  const root = await mkdtemp(join(tmpdir(), 'overlay-attach-work-'));
+  try {
+    const upper = join(root, 'upper');
+    const store = join(root, 'store');
+    await Promise.all([mkdir(upper), mkdir(store)]);
+    await treeHeavyStore(store, objects, foldedSeq);
+    // Journalled through the real checkpoint, so what the attach replays is a
+    // journal this release wrote rather than a fixture's idea of one.
+    if (pending.length > 0) {
+      for (const [name, body] of pending) await writeFile(join(upper, name), body);
+      await runOverlayRunner({ operation: 'checkpoint', upper, store: new FileCasStore(store) });
+      await rm(upper, { recursive: true, force: true });
+      await mkdir(upper);
+    }
+
+    const watched = new WatchedCasStore(new FileCasStore(store));
+    let mounted = false;
+    let mounts = 0;
+    let replayUnits = 0;
+    let batchesDecoded = 0;
+    const ports: OverlayCasPorts = {
+      containerRunning: () => true,
+      mountStore: async () => {
+        mounts += 1;
+      },
+      unmountStore: async () => {},
+      mountOverlay: async () => {
+        mounts += 1;
+        mounted = true;
+      },
+      unmountOverlay: async () => {
+        mounted = false;
+      },
+      overlayMounted: async () => mounted,
+      invokeRunner: async (operation) => {
+        const receipt = await runOverlayRunner({ operation, upper, store: watched });
+        replayUnits = receipt.entries;
+        batchesDecoded = watched.keys('get').filter(key => key.startsWith('journal/')).length;
+        // Through stdout, because that is the wire. The adapter parses these
+        // bytes under its strict schema, so a receipt this release cannot
+        // produce fails here rather than in a reviewer's head.
+        return { stdout: `${JSON.stringify(receipt)}\n`, stderr: '', exitCode: 0 };
+      },
+      inventory: async () => {
+        throw new Error('attach listed the prefix, which is the tree-size term');
+      },
+      clearPrefix: async () => 0,
+      readState: async () => null,
+      writeState: async () => {},
+      clearState: async () => {},
+      checkpointIntervalMs: () => 300_000,
+      now: () => 1_000,
+      log: () => {},
+    };
+
+    const outcome = await overlayCasStorage(ports).attach();
+    const payloadBytes = watched.payloadBytes('get') + watched.payloadBytes('put');
+    return {
+      outcome,
+      work: {
+        // The runner awaits each store call before issuing the next, so its
+        // serial depth and its total are the same number. Recording both is how
+        // a future batched implementation would show up as a difference.
+        serialRemoteOps: watched.calls.length,
+        totalRemoteOps: watched.calls.length,
+        metadataBytes: watched.bytes('get') + watched.bytes('put') - payloadBytes,
+        payloadBytes,
+        // Local work the replay performs: decode a pending batch, apply an
+        // entry. Zero when there is nothing pending, which is the point.
+        cpuSteps: batchesDecoded + replayUnits,
+        mounts,
+        replayUnits,
+      },
+    };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+describe('an overlay-cas attach, in the readiness dimensions this contract declares', () => {
+  test('A 100× LARGER TREE PRODUCES AN IDENTICAL RestoreWork', async () => {
+    // THE CLAIM, in the contract's own vocabulary: none of the seven dimensions
+    // is a function of the tree. The cursor is held equal across the two probes
+    // so the only thing that varies is the object count — a larger `foldedSeq`
+    // is a genuinely longer `cursor.json`, and letting both move would give a
+    // real prefix scan an explainable place to hide.
+    const thin = await measureAttach(20, 7);
+    const fat = await measureAttach(2_000, 7);
+
+    expect(v.parse(RestoreWorkSchema, thin.work)).toEqual(thin.work);
+    expect(fat.work).toEqual(thin.work);
+    // Two remote operations: read the cursor, list the journal. Plus the two
+    // mounts the adapter takes — the store, then the overlay, in that order.
+    expect(thin.work).toMatchObject({
+      serialRemoteOps: 2,
+      totalRemoteOps: 2,
+      payloadBytes: 0,
+      cpuSteps: 0,
+      mounts: 2,
+      replayUnits: 0,
+    });
+    expect(thin.work.metadataBytes).toBeGreaterThan(0);
+    // Both prefixes hold objects, and the cursor is how attach knew that
+    // without listing either one.
+    expect(thin.outcome.kind).toBe('attached');
+    expect(fat.outcome.kind).toBe('attached');
+  });
+
+  test('A FRESH PREFIX IS TOLD APART FROM A FOLDED ONE AT THE SAME OP, MOUNT AND PAYLOAD COST',
+    async () => {
+      // The classification `inventory()` used to answer. A fresh prefix reports
+      // `empty`; a folded one reports `attached`; both pay two remote operations
+      // and two mounts and read no payload, and neither is listed.
+      //
+      // THE TWO ROWS ARE NOT EQUAL, and the difference is named rather than
+      // asserted away: a folded prefix has a `cursor.json` to read and a fresh
+      // one does not, so `metadataBytes` differs by the size of that one control
+      // object. Every other dimension is identical, which is the claim — nothing
+      // here is a function of the tree.
+      const fresh = await measureAttach(0, 0);
+      const folded = await measureAttach(2_000, 7);
+
+      expect(fresh.outcome.kind).toBe('empty');
+      expect(folded.outcome.kind).toBe('attached');
+      expect({ ...fresh.work, metadataBytes: 0 }).toEqual({ ...folded.work, metadataBytes: 0 });
+      expect(fresh.work.metadataBytes).toBe(0);
+      expect(folded.work.metadataBytes).toBeGreaterThan(0);
+      expect(fresh.work).toMatchObject({
+        serialRemoteOps: 2, totalRemoteOps: 2, payloadBytes: 0, cpuSteps: 0,
+        mounts: 2, replayUnits: 0,
+      });
+    });
+
+  test('ONLY THE PENDING DIMENSIONS MOVE WHEN THERE IS PENDING WORK', async () => {
+    // The other half of the contract: recovery is O(pending change), so the
+    // dimensions that describe pending work — the batch and blob reads, the
+    // payload bytes, the replay units — are exactly the ones allowed to rise,
+    // and they rise with the pending set rather than with the tree.
+    const body = 'pending bytes a replay must read';
+    const idle = await measureAttach(2_000, 7);
+    const busy = await measureAttach(2_000, 7, [['pending.txt', body]]);
+
+    expect(v.parse(RestoreWorkSchema, busy.work)).toEqual(busy.work);
+    expect(busy.work.payloadBytes).toBe(body.length);
+    expect(busy.work.replayUnits).toBe(1);
+    // One batch decoded, one entry applied.
+    expect(busy.work.cpuSteps).toBe(2);
+    // Cursor, journal listing, the one pending batch, the one blob it names.
+    expect(busy.work.totalRemoteOps).toBe(idle.work.totalRemoteOps + 2);
+    // And the fixed dimensions did not move.
+    expect(busy.work.mounts).toBe(idle.work.mounts);
+    expect(busy.outcome.kind).toBe('attached');
   });
 });

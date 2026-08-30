@@ -452,7 +452,19 @@ function removeIfPresent(root: BeneathRoot, path: string): void {
   }
 }
 
-async function materializePending(root: BeneathRoot, store: CasStore): Promise<number> {
+/**
+ * Replay the pending journal into the upper and report the cursor it read.
+ *
+ * THE CURSOR IS RETURNED BECAUSE IT WAS ALREADY PAID FOR. `replayPending` GETs
+ * `cursor.json` to know where pending begins, and a caller that has to classify
+ * the store — never folded and nothing pending, versus a real store whose
+ * pending set happens to be empty — would otherwise answer by LISTing the
+ * prefix. That listing is the tree-size term this strategy exists to not have.
+ */
+async function materializePending(
+  root: BeneathRoot,
+  store: CasStore,
+): Promise<{ readonly entries: number; readonly foldedSeq: number }> {
   const pending = await replayPending(store);
   const entries = [...pending.pending].sort(byApplyOrder);
   for (const entry of entries) {
@@ -501,46 +513,82 @@ async function materializePending(root: BeneathRoot, store: CasStore): Promise<n
       }
     }
   }
-  return entries.length;
+  return { entries: entries.length, foldedSeq: pending.foldedSeq };
 }
 
 
+/**
+ * One run: what to do, the upper to do it against, and the OPEN store to do it
+ * through.
+ *
+ * `store` is an open `CasStore` rather than the `--store` path, because
+ * `movedBytes` below is defined as a delta on its counters. A caller holding
+ * the instance can read the whole bill — which keys were fetched, how many
+ * listings were paid for, what was written — and check the receipt against it.
+ * A runner that opened its own store from a path would make that claim
+ * unobservable from outside the process, which is how the attach cost went
+ * unmeasured long enough to grow a prefix inventory. `cliRequest` is the one
+ * place a path becomes a store.
+ */
 export type OverlayRunnerRequest = {
   readonly operation: 'checkpoint' | 'fold' | 'restore';
   readonly upper: string;
-  readonly store: string;
+  readonly store: CasStore;
 };
 
 /**
  * Everything the Durable Object learns about a run.
  *
- * Five counters, no signatures: the scan cache lives in the store beside the
+ * Six counters, no signatures: the scan cache lives in the store beside the
  * bytes it describes, so the receipt carries only what the caller acts on —
- * whether anything changed, what it moved, what a fold consumed and what the
- * reap took back.
+ * whether anything changed, what it moved, what a fold consumed, what the reap
+ * took back, and where the durable cursor now stands.
+ *
+ * `movedBytes` IS A MEASUREMENT, NOT A SUM OF ENTRY SIZES. It used to be the
+ * logical size of every journalled file, which is neither what a commit writes
+ * nor a quantity a caller can check against the store: a rename journals a
+ * whole file and uploads no content, so the old figure billed bytes that never
+ * moved, while the journal batch, the tree writes, the manifest and the cursor
+ * — all real objects — were billed to nobody. This is the store's own
+ * `bytesPut` delta across the operation: the bytes this run WROTE. Not net
+ * growth — an overwrite replaces bytes and the reap removes them, so the prefix
+ * can shrink through a run that moved plenty.
+ *
+ * `foldedSeq` is the durable cursor as this run left it: unchanged by a tick,
+ * advanced by a fold, and merely READ by a restore. It is what makes a fresh
+ * store distinguishable from a folded one without a prefix listing.
  */
 export type OverlayRunnerReceipt = {
   readonly operation: 'checkpoint' | 'fold' | 'restore';
   readonly entries: number;
-  readonly stagedBytes: number;
+  readonly movedBytes: number;
   readonly foldedEntries: number;
   readonly sweptBlobs: number;
+  readonly foldedSeq: number;
 };
 
 /** Run the CAS mutation beside the mounted R2 prefix; the DO receives only the receipt. */
 export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<OverlayRunnerReceipt> {
-  const store = new FileCasStore(request.store);
-  if (request.operation === 'restore') {
-    const root = new BeneathRoot(request.upper);
+  const { operation, upper, store } = request;
+  const openedBytesPut = store.counters.bytesPut;
+  if (operation === 'restore') {
+    const root = new BeneathRoot(upper);
     try {
-      const entries = await materializePending(root, store);
-      return { operation: 'restore', entries, stagedBytes: 0, foldedEntries: 0, sweptBlobs: 0 };
+      const replayed = await materializePending(root, store);
+      return {
+        operation: 'restore',
+        entries: replayed.entries,
+        movedBytes: store.counters.bytesPut - openedBytesPut,
+        foldedEntries: 0,
+        sweptBlobs: 0,
+        foldedSeq: replayed.foldedSeq,
+      };
     } finally {
       root.close();
     }
   }
   const previous = await readScanCache(store);
-  const scan = await scanUpper(request.upper, previous);
+  const scan = await scanUpper(upper, previous);
   const pendingState = new PendingJournalState();
   await pendingState.load(store);
   const changed = pendingState.filterChanged(scan.entries);
@@ -549,7 +597,7 @@ export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<O
     entries: stampEntries(changed, pendingState.sequence()),
     known: pendingState.blobHashes(),
     readChunk: async (entry, index, size) => {
-      const root = new BeneathRoot(request.upper);
+      const root = new BeneathRoot(upper);
       try {
         let offset = 0;
         let dataIndex = 0;
@@ -569,32 +617,63 @@ export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<O
   });
   pendingState.record(staged.staged);
   const journalled = new Set(staged.staged.map(entry => entry.path));
-  await store.put(KEY_SCAN, encodeJson({
-    version: CAS_FORMAT_VERSION,
-    signatures: Object.fromEntries(nextScanCache(
-      previous,
-      scan.signatures,
-      new Set(changed.map(entry => entry.path).filter(path => !journalled.has(path))),
-      new Set(staged.staged.filter(entry => entry.kind === 'delete').map(entry => entry.path)),
-    )),
-  }));
-  let folded = { foldedEntries: 0, sweptBlobs: 0 };
-  if (request.operation === 'fold') {
+  // THE CACHE IS WRITTEN ONLY WHEN IT CAN CHANGE WHAT THE NEXT SCAN READS, and
+  // an idle tick therefore writes NOTHING AT ALL. This object carries one row
+  // per path in the upper, so an npm-shaped workspace makes it the largest
+  // thing a tick touches — and it used to be rewritten unconditionally, so a
+  // box sitting idle paid a PUT proportional to its own size every interval,
+  // forever, to store bytes identical to the ones already there. The receipt
+  // then said `entries: 0` while the prefix had grown, and the adapter turned
+  // that into a skip claiming nothing moved.
+  //
+  // The two cases that need no write, and why detection is unharmed:
+  //   - a scanned path that produced NO entry is a path whose existing row
+  //     already satisfies the comparison that produced that verdict, so a fresh
+  //     row would say the same thing;
+  //   - a changed path staging REFUSED keeps its PREVIOUS row anyway, which is
+  //     the stale bystander rule above — writing is how that path stays
+  //     detectable, and it is already detectable.
+  // What does need a write is a path `filterChanged` dropped: the scan measured
+  // it, so its row is stale, but the pending journal already holds that exact
+  // state, so nothing is staged for it. Left uncached it is re-digested on
+  // every tick until the next fold.
+  if (staged.staged.length > 0 || changed.length !== scan.entries.length) {
+    await store.put(KEY_SCAN, encodeJson({
+      version: CAS_FORMAT_VERSION,
+      signatures: Object.fromEntries(nextScanCache(
+        previous,
+        scan.signatures,
+        new Set(changed.map(entry => entry.path).filter(path => !journalled.has(path))),
+        new Set(staged.staged.filter(entry => entry.kind === 'delete').map(entry => entry.path)),
+      )),
+    }));
+  }
+  let folded = { foldedEntries: 0, sweptBlobs: 0, foldedSeq: pendingState.foldedSeq() };
+  if (operation === 'fold') {
     const result = await foldJournalIntoTree(store);
     // THE REAP COMES AFTER THE CURSOR, never before: a blob deleted while a
     // journal entry still names it is a blob the next replay would be asked
     // for, so the sweep runs on the state the fold left behind.
     const swept = await sweepOrphanBlobs(store);
-    folded = { foldedEntries: result.foldedEntries, sweptBlobs: swept.deleted };
+    folded = {
+      foldedEntries: result.foldedEntries,
+      sweptBlobs: swept.deleted,
+      foldedSeq: result.cursorAfter,
+    };
   }
   return {
-    operation: request.operation,
+    operation,
     entries: staged.staged.length,
-    stagedBytes: staged.staged.reduce((sum, entry) => sum + (entry.kind === 'file' ? entry.size : 0), 0),
+    // LAST, because every write above is inside the delta: the chunk blobs, the
+    // journal batch objects, the scan cache, and — on a fold — the tree writes,
+    // the manifest and the cursor.
+    movedBytes: store.counters.bytesPut - openedBytesPut,
     ...folded,
   };
 }
 
+/** The CLI's argv, with `--store PATH` opened into the store the run measures
+ *  itself against. This is the one place a path becomes a store. */
 function cliRequest(argv: readonly string[]): OverlayRunnerRequest {
   const values = new Map<string, string>();
   for (let at = 0; at < argv.length; at += 2) {
@@ -612,7 +691,7 @@ function cliRequest(argv: readonly string[]): OverlayRunnerRequest {
     || upper === undefined || store === undefined) {
     throw new Error('usage: overlay-cas-runner --operation checkpoint|fold|restore --upper PATH --store PATH');
   }
-  return { operation, upper, store };
+  return { operation, upper, store: new FileCasStore(store) };
 }
 
 if (import.meta.main) {

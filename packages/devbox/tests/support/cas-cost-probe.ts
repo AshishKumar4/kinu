@@ -1,0 +1,164 @@
+// Measuring what a CAS operation costs.
+//
+// THE BILL IS THE CLAIM. The overlay-cas headline is that recovery costs
+// O(pending change) and that an unchanged attach costs a fixed few operations,
+// and neither is observable from an end state: a store looks identical whether
+// attach listed its whole prefix or read one object. So the tests need the
+// trace — which keys were fetched, how many listings were paid for, what was
+// written, in what order — and a prefix large enough that a listing would show.
+//
+// Shared because two suites assert against the same numbers: the runner tests
+// measure the operation, and the durability-contract tests state the result in
+// the readiness dimensions that contract declares.
+
+import { createHash } from 'node:crypto';
+
+import {
+  PREFIX_BLOBS,
+  PREFIX_JOURNAL,
+  PREFIX_TREE,
+  KEY_CURSOR,
+  advanceCursor,
+  blobKey,
+  type CasPutMeta,
+  type CasStore,
+  type StoreCounters,
+} from '../../src/cas';
+import { FileCasStore } from '../../src/cas/overlay-runner';
+
+/** One store call. `bytes` is the payload it carried — what a get returned or a
+ *  put wrote. A LIST records zero, because a listing's cost is the call and the
+ *  keys it names, and letting it contribute to a byte sum would make every
+ *  metadata-bytes assertion mean two things at once. */
+export interface StoreCall {
+  readonly op: 'get' | 'put' | 'head' | 'delete' | 'list';
+  readonly key: string;
+  readonly bytes: number;
+}
+
+/** Bytes of file CONTENT, as opposed to the cursor, the journal, the manifest
+ *  and the scan cache. The distinction is the whole point of a byte assertion
+ *  about attach: a fresh attach reads its cursor, so a single total can never
+ *  show that it materialized nothing. */
+export function isPayloadKey(key: string): boolean {
+  return key.startsWith(PREFIX_BLOBS) || key.startsWith(PREFIX_TREE);
+}
+
+/**
+ * A real store that also writes down what it was asked for.
+ *
+ * It WRAPS rather than extends `FileCasStore` on purpose. `putStream`
+ * delegates to `put` for the symlink case, so an override would record one
+ * write twice and quietly inflate every byte assertion built on this.
+ */
+export class WatchedCasStore implements CasStore {
+  readonly calls: StoreCall[] = [];
+
+  constructor(private readonly inner: CasStore) {}
+
+  get counters(): StoreCounters {
+    return this.inner.counters;
+  }
+
+  /** Every call, as `op key`, for order assertions. */
+  trace(): readonly string[] {
+    return this.calls.map(call => `${call.op} ${call.key}`);
+  }
+
+  keys(op: StoreCall['op']): readonly string[] {
+    return this.calls.filter(call => call.op === op).map(call => call.key);
+  }
+
+  /** Content bytes only, so a cursor read does not read as materialization. */
+  payloadBytes(op: StoreCall['op']): number {
+    return this.calls
+      .filter(call => call.op === op && isPayloadKey(call.key))
+      .reduce((sum, call) => sum + call.bytes, 0);
+  }
+
+  bytes(op: StoreCall['op']): number {
+    return this.calls.filter(call => call.op === op).reduce((sum, call) => sum + call.bytes, 0);
+  }
+
+  async put(key: string, bytes: Uint8Array, meta?: CasPutMeta): Promise<void> {
+    await this.inner.put(key, bytes, meta);
+    this.calls.push({ op: 'put', key, bytes: bytes.byteLength });
+  }
+
+  async putStream(
+    key: string,
+    stream: ReadableStream<Uint8Array>,
+    size: number,
+    meta?: CasPutMeta,
+  ): Promise<void> {
+    await this.inner.putStream(key, stream, size, meta);
+    // The declared size, which `putStream` has already refused to disagree with.
+    this.calls.push({ op: 'put', key, bytes: size });
+  }
+
+  async get(key: string): Promise<Uint8Array | null> {
+    const bytes = await this.inner.get(key);
+    this.calls.push({ op: 'get', key, bytes: bytes?.byteLength ?? 0 });
+    return bytes;
+  }
+
+  async head(key: string): Promise<{ size: number } | null> {
+    const found = await this.inner.head(key);
+    this.calls.push({ op: 'head', key, bytes: found?.size ?? 0 });
+    return found;
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.inner.delete(key);
+    this.calls.push({ op: 'delete', key, bytes: 0 });
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    const keys = await this.inner.list(prefix);
+    this.calls.push({ op: 'list', key: prefix, bytes: 0 });
+    return keys;
+  }
+}
+
+/** The trace an unchanged or fresh attach is allowed to produce: read the
+ *  cursor, list the journal, and stop. Stated once, because two suites assert
+ *  against it and a second copy would let one of them drift. */
+export const FIXED_ATTACH_TRACE: readonly string[] = [
+  `get ${KEY_CURSOR}`,
+  `list ${PREFIX_JOURNAL}`,
+];
+
+/**
+ * A store whose `tree/` and `blobs/` hold `count` objects, with a cursor at
+ * `foldedSeq` and an EMPTY journal — the state a mature box spends its life in.
+ *
+ * `count` and `foldedSeq` are separate arguments so a caller can vary the tree
+ * while holding the cursor fixed. They are the two things that could make an
+ * attach's bytes move, and only one of them is supposed to be able to:
+ * `foldedSeq` is written as a decimal, so a larger one really is a longer
+ * `cursor.json`, in the log of the sequence rather than the size of the tree.
+ *
+ * No manifest, deliberately: attach never reads one, and a trace assertion
+ * catches a read of an absent key just as loudly as a present one. A fixture
+ * that built a manifest would be paying checkpoint-path costs to make a point
+ * about the attach path.
+ */
+export async function treeHeavyStore(
+  root: string,
+  count: number,
+  foldedSeq: number,
+): Promise<void> {
+  const store = new FileCasStore(root);
+  for (let at = 0; at < count; at += 1) {
+    const body = `object-${at}-body`;
+    const bytes = new TextEncoder().encode(body);
+    await store.put(`tree/dir-${at % 16}/file-${at}.txt`, bytes, { mode: 0o100644 });
+    await store.put(blobKey(createHash('sha256').update(body).digest('hex')), bytes);
+  }
+  // Through the shipped writer, so the fixture cannot drift from the format the
+  // cursor reader refuses. NOT WRITTEN AT ZERO: only a fold advances the cursor
+  // and a fold always advances past at least one batch, so a store nothing has
+  // folded holds no cursor object at all. Writing one would make every "fresh
+  // prefix" fixture pay a control read the real fresh prefix does not have.
+  if (foldedSeq > 0) await advanceCursor(store, foldedSeq);
+}

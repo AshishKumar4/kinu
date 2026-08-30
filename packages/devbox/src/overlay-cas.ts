@@ -4,7 +4,13 @@
  * attach     mount this box's prefix read-write beside the container, replay
  *            the journal entries newer than the folded cursor onto a fresh
  *            upper, and only then lay fuse-overlayfs over the folded `tree/`.
- *            Recovery is O(pending change), not O(tree).
+ *            Recovery is O(pending change), not O(tree), and the unchanged case
+ *            is FIXED: two remote operations — one cursor GET and one `journal/`
+ *            LIST that names no batch — plus the two-mount stack, the store then
+ *            the overlay. No prefix inventory, no payload byte. A million-object
+ *            tree and a fresh prefix pay the same operation and mount counts and
+ *            the same zero payload; they differ only in whether a cursor object
+ *            exists to read, which is bytes in the log of the sequence.
  * checkpoint('tick')
  *            scan the upper, stage new chunk blobs, append ONE journal object
  *            per batch of 64 entries. Blob before journal. Does not fold.
@@ -37,8 +43,17 @@
  *   Tree grew 14.7×; recovery stayed flat.
  *
  *   LOCAL invariants: native 15 hold / 0 fail / 1 unsupported; s3fs 13 / 1 / 2.
- *   After fold, a restore replayed 0 entries and fetched 720 B (cursor +
- *   manifest). A rename uploaded 0 content bytes (blob reuse).
+ *   After fold, a restore replayed 0 entries and fetched 720 B, which that run
+ *   spent on the cursor AND the manifest. A rename uploaded 0 content bytes
+ *   (blob reuse).
+ *
+ *   THAT BYTE FIGURE IS SUPERSEDED and is kept only as the labelled record of
+ *   what was measured. The manifest is no longer on this path: a restore reads
+ *   `cursor.json` and lists `journal/`, and `tests/overlay-runner.test.ts`
+ *   asserts that trace exactly, against prefixes differing 100× in object
+ *   count. Nothing re-measured the LOCAL harness after the change, so the
+ *   millisecond rows above stand as they were taken and the byte row does not
+ *   describe this release.
  */
 
 import * as v from 'valibot';
@@ -123,9 +138,20 @@ export interface OverlayCasPorts {
   invokeRunner(
     operation: OverlayCasOperation,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
-  /** Objects and bytes this box's prefix holds right now. Read through the
-   *  store binding, not through the mount: the question is what is durable, and
-   *  the mount's answer would come from a cache. */
+  /**
+   * Objects and bytes this box's prefix holds right now. Read through the store
+   * binding, not through the mount: the question is what is durable, and the
+   * mount's answer would come from a cache.
+   *
+   * CHECKPOINT ONLY, AND ATTACH MUST NEVER CALL IT. This is a LIST over the
+   * whole prefix, so its cost rises with the tree — and attach used to call it
+   * twice, once to describe an already-mounted overlay and once to classify a
+   * fresh one, which put an O(tree) term in the one operation whose whole claim
+   * is that recovery is O(pending change). A checkpoint has already scanned the
+   * upper and moved bytes when it asks, and `CheckpointOutcome.bytes` is the
+   * cross-strategy figure that answer feeds; attach classifies from the restore
+   * receipt instead.
+   */
   inventory(): Promise<{ objects: number; bytes: number }>;
   /** Delete every object under this box's prefix. Returns how many went. */
   clearPrefix(): Promise<number>;
@@ -147,9 +173,10 @@ const receiptCount = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 const ReceiptSchema = v.strictObject({
   operation: v.picklist(OVERLAY_CAS_OPERATIONS),
   entries: receiptCount,
-  stagedBytes: receiptCount,
+  movedBytes: receiptCount,
   foldedEntries: receiptCount,
   sweptBlobs: receiptCount,
+  foldedSeq: receiptCount,
 });
 
 /**
@@ -217,15 +244,26 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
    * had recorded, reporting an outcome that reads like success. Mounting LAST
    * makes "the overlay is mounted" imply "the replay finished", so the early
    * return below is correct by construction and needs no marker.
+   *
+   * THE COST INVARIANT: NOTHING HERE SCALES WITH THE TREE. An unchanged attach
+   * is two remote operations — one cursor GET and one `journal/` LIST that
+   * returns no batch — plus the fixed two-mount stack: zero payload bytes,
+   * whether the prefix holds one object or a million. It was not: this body
+   * called `inventory()` on both
+   * of its paths, which is a LIST over the whole prefix, so the operation whose
+   * headline is O(pending change) carried an O(tree) term that grew with every
+   * fold. The classification those listings served now comes from the restore
+   * receipt, which reports facts the replay had already read.
    */
   const attach = async (): Promise<AttachOutcome> => {
     if (await ports.overlayMounted()) {
-      const held = await ports.inventory();
+      // NO STORE FACTS ON THIS PATH, deliberately. This attach did not run the
+      // runner — re-replaying would undo the ordering invariant above — so it
+      // holds no receipt, and the only way to describe the prefix would be the
+      // prefix listing this operation must not pay for. What the caller needs is
+      // that the workspace is attached, and that is exactly what it gets.
       ports.log(`${DEVBOX_WORKDIR} already attached — attach skipped`);
-      return {
-        kind: 'already-attached',
-        detail: `overlay-cas ${held.objects} objects ${held.bytes}B`,
-      };
+      return { kind: 'already-attached', detail: 'overlay-cas overlay already mounted' };
     }
     // A mount left by a previous container generation is released first. The
     // host swallows "not mounted", which is the ordinary case on a fresh spot
@@ -240,17 +278,22 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
         + 'not an overlay mount.',
       );
     }
-    const held = await ports.inventory();
     ports.log(
-      `${DEVBOX_WORKDIR} attached (overlay-cas, ${held.objects} objects, ${held.bytes}B, `
+      `${DEVBOX_WORKDIR} attached (overlay-cas, folded through ${restored.foldedSeq}, `
       + `${restored.entries} pending replayed before the mount)`,
     );
-    if (held.objects === 0 && restored.entries === 0) {
+    // FRESH IS A CURSOR AND A COUNT, not an object count. A store nothing has
+    // folded has no cursor, and journal seqs start at one, so `foldedSeq === 0`
+    // is exactly "never folded"; no pending entries on top of that is exactly
+    // "nothing recorded here yet". Both facts were read by the replay that just
+    // ran. Asking the prefix how many objects it holds answered the same
+    // question at a cost that rose with the answer.
+    if (restored.foldedSeq === 0 && restored.entries === 0) {
       return { kind: 'empty', detail: 'overlay-cas empty overlay attached' };
     }
     return {
       kind: 'attached',
-      detail: `overlay-cas ${held.objects} objects ${held.bytes}B ${restored.entries}P`,
+      detail: `overlay-cas folded ${restored.foldedSeq} ${restored.entries}P`,
     };
   };
 
@@ -302,7 +345,17 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
     // state of the store had already changed — the verdict2 defect, where a
     // marker that had been journalled, folded and cursored came back as
     // `skipped 0B /workspace holds no objects yet` and was then lost.
-    if (kind === 'tick' && receipt.entries === 0) {
+    //
+    // BOTH FACTS ARE REQUIRED, because `movedBytes` now measures the bytes the
+    // run actually WROTE rather than the logical size of the journalled files. A skip
+    // asserts it moved nothing — see CheckpointOutcome — and a run that
+    // journalled no entry can still have written its scan cache: a redrive whose
+    // journal batch already landed re-measures the upper, finds the pending
+    // journal already holds it, and refreshes the rows so the next tick does not
+    // re-digest the whole workspace. Reporting a skip for that would deny bytes
+    // that are durable, on the strength of a counter that used to be blind to
+    // them.
+    if (kind === 'tick' && receipt.entries === 0 && receipt.movedBytes === 0) {
       return {
         kind: 'skipped',
         reason: held.objects === 0
@@ -315,8 +368,9 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
 
     ports.log(
       `${DEVBOX_WORKDIR} ${kind} checkpoint committed (overlay-cas, ${receipt.entries} entries, `
-      + `${receipt.stagedBytes}B staged; folded ${receipt.foldedEntries} entries; swept `
-      + `${receipt.sweptBlobs} orphan blobs; store view ${held.objects} objects ${held.bytes}B)`,
+      + `${receipt.movedBytes}B written, cursor ${receipt.foldedSeq}; folded `
+      + `${receipt.foldedEntries} entries; swept ${receipt.sweptBlobs} orphan blobs; store view `
+      + `${held.objects} objects ${held.bytes}B)`,
     );
     // THE RECEIPT IS THE COMMIT, so this row cannot un-commit it. It is a
     // cursor and a cleared stamp — the runner has already folded, advanced its
@@ -338,7 +392,14 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
     // now holds the change, and reading `objects === 0` as "nothing was
     // committed" is what let a box report a skip after the blob, the journal
     // batch, the fold and the cursor had all landed.
-    return { kind: 'committed', reason: undefined, bytes: held.bytes, movedBytes: receipt.stagedBytes };
+    //
+    // `movedBytes` is the runner's own `bytesPut` delta, so it names every
+    // object this operation wrote — chunk blobs, journal batches, the scan
+    // cache, and on a quiesce the tree writes, the manifest and the cursor. It
+    // was the sum of the journalled files' logical sizes, which billed a rename
+    // for content it deduplicated away and billed nothing for the metadata
+    // objects that really landed.
+    return { kind: 'committed', reason: undefined, bytes: held.bytes, movedBytes: receipt.movedBytes };
   };
 
   const detach = async (): Promise<void> => {

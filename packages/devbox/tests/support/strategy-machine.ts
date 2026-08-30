@@ -62,7 +62,6 @@ import {
   treeKey,
   type CasPutMeta,
   type CasStore,
-  type JournalEntry,
   type NewJournalEntry,
   type StoreCounters,
 } from '../../src/cas';
@@ -1166,11 +1165,18 @@ function overlayCasArm(): ConformanceArm {
    */
   async function invokeRunner(operation: OverlayCasOperation) {
     const cas = store();
+    const openedBytesPut = cas.counters.bytesPut;
+    const moved = (): number => cas.counters.bytesPut - openedBytesPut;
     if (operation === 'restore') {
-      // O(pending change): replay exactly the entries after the folded cursor,
-      // through the shipped verifying stream.
+      // O(pending change): replay every RAW entry after the folded cursor,
+      // through the shipped verifying stream. `replayPending` deliberately
+      // returns the flattened journal rather than its coalesced view: until a
+      // fold removes a batch, each data part that batch names is a blob GET the
+      // real runner makes, including superseded versions of one path. Counting
+      // the coalesced paths here made the conformance arm promise a cheaper
+      // restore than the runner performs.
       const folded = await readFoldedSeq(cas);
-      const pending = coalesce(await listJournalAfter(cas, folded));
+      const pending = await listJournalAfter(cas, folded);
       for (const entry of pending) {
         if (entry.kind === 'delete') {
           container.upper.delete(entry.path);
@@ -1181,7 +1187,11 @@ function overlayCasArm(): ConformanceArm {
         container.upper.set(entry.path, await drain(fileChunkStream(cas, entry)));
         container.whiteouts.delete(entry.path);
       }
-      return receipt('restore', { entries: pending.length });
+      return receipt('restore', {
+        entries: pending.length,
+        movedBytes: moved(),
+        foldedSeq: folded,
+      });
     }
 
     const manifest = await readManifest(cas);
@@ -1226,16 +1236,18 @@ function overlayCasArm(): ConformanceArm {
     if (operation === 'checkpoint') {
       return receipt('checkpoint', {
         entries: staged.staged.length,
-        stagedBytes: stagedBytesOf(staged.staged),
+        movedBytes: moved(),
+        foldedSeq,
       });
     }
     const folded = await foldJournalIntoTree(cas);
     const swept = await sweepOrphanBlobs(cas);
     return receipt('fold', {
       entries: staged.staged.length,
-      stagedBytes: stagedBytesOf(staged.staged),
+      movedBytes: moved(),
       foldedEntries: folded.foldedEntries,
       sweptBlobs: swept.deleted,
+      foldedSeq: folded.cursorAfter,
     });
   }
 
@@ -1390,20 +1402,23 @@ function overlayCasArm(): ConformanceArm {
   };
 }
 
-function stagedBytesOf(entries: readonly JournalEntry[]): number {
-  return entries.reduce((sum, entry) => sum + (entry.kind === 'file' ? entry.size : 0), 0);
-}
-
 function receipt(
   operation: OverlayCasOperation,
-  counts: { entries?: number; stagedBytes?: number; foldedEntries?: number; sweptBlobs?: number },
+  counts: {
+    entries?: number;
+    movedBytes?: number;
+    foldedEntries?: number;
+    sweptBlobs?: number;
+    foldedSeq?: number;
+  },
 ) {
   return {
     operation,
     entries: counts.entries ?? 0,
-    stagedBytes: counts.stagedBytes ?? 0,
+    movedBytes: counts.movedBytes ?? 0,
     foldedEntries: counts.foldedEntries ?? 0,
     sweptBlobs: counts.sweptBlobs ?? 0,
+    foldedSeq: counts.foldedSeq ?? 0,
   };
 }
 

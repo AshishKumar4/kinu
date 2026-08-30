@@ -56,9 +56,11 @@ export class PendingJournalState {
   private entries: Map<string, JournalEntry> | null = null;
   private nextSeq: number | null = null;
   private pendingPaths: Set<string> | null = null;
+  private foldedCursor: number | null = null;
 
   async load(store: CasStore): Promise<void> {
-    if (this.entries !== null && this.nextSeq !== null && this.pendingPaths !== null) return;
+    if (this.entries !== null && this.nextSeq !== null && this.pendingPaths !== null
+      && this.foldedCursor !== null) return;
     const foldedSeq = await readFoldedSeq(store);
     const manifest = await readManifest(store);
     const pending = await listJournalAfter(store, foldedSeq);
@@ -66,10 +68,24 @@ export class PendingJournalState {
     this.entries = new Map(manifest);
     for (const entry of latestPending) this.entries.set(entry.path, entry);
     this.pendingPaths = new Set(latestPending.map(entry => entry.path));
+    this.foldedCursor = foldedSeq;
     this.nextSeq = pending.reduce(
       (next, entry) => Math.max(next, entry.seq + 1),
       foldedSeq + 1,
     );
+  }
+
+  /**
+   * The cursor this load READ, handed back rather than fetched again.
+   *
+   * A run's receipt names the folded seq, and the load above has already paid
+   * for it. Re-reading `cursor.json` to answer would be a second remote
+   * operation for a number this object is holding, and one that could disagree
+   * with the sequence `sequence()` derived from it.
+   */
+  foldedSeq(): number {
+    if (this.foldedCursor === null) throw new Error('pending journal state was not loaded');
+    return this.foldedCursor;
   }
 
   sequence(): number {
@@ -132,5 +148,6 @@ export class PendingJournalState {
     this.entries = null;
     this.nextSeq = null;
     this.pendingPaths = null;
+    this.foldedCursor = null;
   }
 }
