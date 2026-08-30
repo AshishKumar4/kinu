@@ -1004,7 +1004,7 @@ export function createCheckpointLane(): CheckpointLane {
       inFlight[kind] = run;
       const settled = run.then(
         () => undefined,
-        (cause) => {
+        (cause: unknown) => {
           console.error(`[devbox] ${kind} checkpoint rejected: ${describeThrown({ cause })}`);
         },
       );

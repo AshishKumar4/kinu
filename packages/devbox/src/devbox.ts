@@ -444,7 +444,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const run = this.#storageMutationTail.then(operation);
     this.#storageMutationTail = run
       .then(() => undefined)
-      .catch((error) => {
+      .catch((error: unknown) => {
         console.error(`[devbox] storage mutation released its FIFO after failure: ${describe({ cause: error })}`);
       });
     return await run;

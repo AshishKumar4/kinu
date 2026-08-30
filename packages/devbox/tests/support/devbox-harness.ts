@@ -424,7 +424,7 @@ function emptyFileChunks() {
   };
 }
 
-mock.module('@cloudflare/sandbox', () => ({
+await mock.module('@cloudflare/sandbox', () => ({
   Sandbox: FakeSandbox,
   streamFile: emptyFileChunks,
 }));

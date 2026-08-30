@@ -1028,11 +1028,11 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     fixture.container.stampGate = parked;
     const attempt = fixture.box.devboxStartup();
     let settled = false;
-    void attempt.then(() => { settled = true; });
+    const settledAttempt = attempt.then(() => { settled = true; });
     await parked.reached;
     expect(settled).toBe(false);
     parked.release();
-    await attempt;
+    await settledAttempt;
     expect(settled).toBe(true);
   });
 });

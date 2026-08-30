@@ -86,6 +86,10 @@ const BaseReplySchema = v.looseObject({
   baseGeneration: v.optional(v.string()),
   baseRoot: v.optional(v.string()),
 });
+const ErrnoFailureSchema = v.looseObject({
+  code: v.optional(v.string()),
+  message: v.optional(v.string()),
+});
 const reports: ScenarioReport[] = [];
 
 function assert(checks: Check[], name: string, ok: boolean, detail: string): void {
@@ -813,7 +817,12 @@ async function shutdownRaces(): Promise<void> {
         let rounds = 0;
         while (serving) {
           const refusal = await writeFile(join(space.mount, `busy-${rounds % 4}.txt`), `round ${rounds}`)
-            .then(() => '', (cause: NodeJS.ErrnoException) => cause.code ?? cause.message);
+            .then(() => '', (cause: unknown) => {
+              const parsed = v.safeParse(ErrnoFailureSchema, cause);
+              return parsed.success
+                ? parsed.output.code ?? parsed.output.message ?? String(cause)
+                : String(cause);
+            });
           if (refusal.length > 0) return { rounds, refusal };
           rounds++;
         }
