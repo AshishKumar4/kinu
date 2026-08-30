@@ -49,7 +49,9 @@ export function ProfileCatalogSettings() {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    load().catch((cause: unknown) => setError(renderThrownChain({ cause })));
+  }, []);
 
   const roles: RoleCatalog = useMemo(
     () => draft ? effectiveRoleCatalog(draft) : BUILTIN_ROLE_DEFINITIONS,
@@ -143,7 +145,9 @@ export function ProfileCatalogSettings() {
       {!draft || !envelope ? (
         <div className="flex items-center gap-2 text-xs p-text-3">
           <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
-          {!busy && <Button size="xs" variant="secondary" onClick={() => { void load(); }}>Retry</Button>}
+          {!busy && <Button size="xs" variant="secondary" onClick={() => {
+            load().catch((cause: unknown) => setError(renderThrownChain({ cause })));
+          }}>Retry</Button>}
         </div>
       ) : (
         <>
@@ -217,7 +221,9 @@ export function ProfileCatalogSettings() {
             <span className="text-[11px] p-text-3">Catalog version {envelope.version}</span>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={() => { void save(); }}>{busy ? 'Saving…' : 'Save roles and tiers'}</FilledButton>
+              <FilledButton disabled={!dirty || busy} onClick={() => {
+                save().catch((cause: unknown) => setError(renderThrownChain({ cause })));
+              }}>{busy ? 'Saving…' : 'Save roles and tiers'}</FilledButton>
             </div>
           </div>
         </>

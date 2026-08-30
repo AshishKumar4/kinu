@@ -998,7 +998,7 @@ export abstract class ActorAgent extends Think<Env> {
       .then((subordinates) => {
         this.broadcast(JSON.stringify({ type: 'subordinates_changed', subordinates }));
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         diagnostics.failure('subordinate.roster_broadcast_failed', toKinuError({
           doing: 'building the subordinate roster read model',
           cause: error,
@@ -1601,7 +1601,7 @@ export abstract class ActorAgent extends Think<Env> {
           this._rerunningSteerKeys.delete(idempotencyKey);
         }
       }
-    })().catch((err) => diagnostics.failure('steer.rerun_failed', toKinuError({
+    })().catch((err: unknown) => diagnostics.failure('steer.rerun_failed', toKinuError({
       doing: 'enqueuing terminal leftover steers', cause: err, otherwise: 'io',
     }), { steers: rows.length }));
   }
@@ -2091,7 +2091,7 @@ export abstract class ActorAgent extends Think<Env> {
         this._settlingChatRequests.delete(chatRequestId);
       }
     })
-      .catch(async (err) => {
+      .catch(async (err: unknown) => {
         // RELEASED on a handled rejection. An eviction needs no cleanup — nothing
         // runs after it — but a rejection that leaves this isolate alive with the
         // sequence still marked in flight makes every retry alarm and recovery
@@ -2465,7 +2465,7 @@ export abstract class ActorAgent extends Think<Env> {
       await this.orch.settleEvolution();
       await this.orch.runDueSessionEvolution();
     })
-      .catch((err) => diagnostics.failure('evolution.settle_failed', toKinuError({
+      .catch((err: unknown) => diagnostics.failure('evolution.settle_failed', toKinuError({
         doing: 'settling the turn and session evolution lanes',
         cause: err,
         otherwise: 'unavailable',
@@ -2507,7 +2507,7 @@ export abstract class ActorAgent extends Think<Env> {
       const { stub, caller } = await this.userHub();
       await stub.userMcp_warmConnections(caller);
     })
-      .catch((err) => diagnostics.failure('mcp.settle_warmup_failed', toKinuError({
+      .catch((err: unknown) => diagnostics.failure('mcp.settle_warmup_failed', toKinuError({
         doing: 'establishing the user MCP connections after a settled turn',
         cause: err,
         otherwise: 'unavailable',
@@ -2616,7 +2616,7 @@ export abstract class ActorAgent extends Think<Env> {
       if (laneKey !== null) recordEffectDone(this.boundSql, ADVISOR_LANE_SCOPE, laneKey);
       checkpointed.resolve();
       await this.runAdvisorReview(snapshot);
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       const failure = toKinuError({
         doing: 'reviewing the completed turn',
         cause: err,
@@ -2951,7 +2951,7 @@ export abstract class ActorAgent extends Think<Env> {
         setTimer: (fn, ms) => {
           void this.keepAliveWhile(() => new Promise<void>((resolve) => {
             setTimeout(() => {
-              fn().catch((err) =>
+              fn().catch((err: unknown) =>
                 diagnostics.failure('drain.timer_callback_failed', toKinuError({
                   doing: 'running the debounced event drain',
                   cause: err,
@@ -2959,7 +2959,7 @@ export abstract class ActorAgent extends Think<Env> {
                 })),
               ).finally(resolve);
             }, ms);
-          })).catch((err) =>
+          })).catch((err: unknown) =>
             diagnostics.failure('drain.timer_keepalive_failed', toKinuError({
               doing: 'holding the actor alive across the drain debounce window',
               cause: err,
@@ -3629,7 +3629,7 @@ export abstract class ActorAgent extends Think<Env> {
       });
       this.instructionApprovals().grandfatherExisting(entries);
     })();
-    this._instructionMigration = migration.catch((error) => {
+    this._instructionMigration = migration.catch((error: unknown) => {
       this._instructionMigration = null;
       throw error;
     });

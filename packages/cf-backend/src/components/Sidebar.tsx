@@ -211,8 +211,8 @@ export default function Sidebar() {
     // Leave the agent's workspace BEFORE destroying it: the still-mounted
     // useAgent socket would auto-reconnect to the destroyed DO name and
     // resurrect an empty ghost agent (idFromName instantiates on connect).
-    if (name === agentId) navigate("/");
     try {
+      if (name === agentId) await navigate("/");
       await removeWorkspace(name);
       removeFromRoster(name);
       setDeleteTarget(null);

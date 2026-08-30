@@ -62,7 +62,7 @@ export class ErrorBoundary extends Component<Props, State> {
     // boundary's state before calling here — so a report that never lands
     // changes nothing the reader sees, and `reportRenderFailure` tolerates every
     // transport failure by name rather than raising a second error on a page
-    void reportRenderFailure(error, info.componentStack ?? "").catch((cause) => {
+    void reportRenderFailure(error, info.componentStack ?? "").catch((cause: unknown) => {
       // The only rejection left is a defect in the reporter itself (its fetch
       // catch rethrows non-transport failures on purpose). Swallowing it here
       // would be a silent drop inside the one handler whose job is to report,

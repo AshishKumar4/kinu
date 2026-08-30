@@ -508,7 +508,10 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
       } finally {
         inFlight.current = false;
       }
-    })();
+    })().catch((cause: unknown) => {
+      diagnostics.event('transcript.older_page_handler_failed',
+        { subject: at, error: renderThrownChain({ cause }) });
+    });
   }, [rpc, runId, nodeId, below]);
 
   return {
