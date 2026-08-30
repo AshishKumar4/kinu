@@ -130,9 +130,11 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
    * production leaves: the row, and no promise.
    */
   async startLostFiber(name: string): Promise<void> {
-    void this.runFiber(name, async (ctx) => {
+    this.runFiber(name, async (ctx) => {
       ctx.stash({ lane: name, phase: 'running' });
       await new Promise<void>(() => undefined);
+    }).catch((error: unknown) => {
+      console.error('lost fiber rejected before eviction', error);
     });
     // The row is written synchronously inside `runFiber`; returning here means
     // the caller's next read would see it.

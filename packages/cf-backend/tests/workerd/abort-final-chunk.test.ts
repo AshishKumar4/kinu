@@ -176,7 +176,7 @@ describe('KINU-084 — the abort-at-final-chunk boundary', () => {
     // The finish part is delivered the moment the stream parks, so the step
     // settles normally. The abort is then raised AT the `done` event — the
     // latest point the caller can reach while the turn is still finalizing.
-    void gate.parked.then(() => { gate.release([FINISH_PART]); });
+    const releaseFinalPart = gate.parked.then(() => { gate.release([FINISH_PART]); });
 
     try {
       for await (const event of runChat({
@@ -192,6 +192,8 @@ describe('KINU-084 — the abort-at-final-chunk boundary', () => {
     } catch (error) {
       threw = error instanceof Error ? error.message : String(error);
     }
+
+    await releaseFinalPart;
 
     const done = doneEvents(events);
     expect(done).toHaveLength(1);

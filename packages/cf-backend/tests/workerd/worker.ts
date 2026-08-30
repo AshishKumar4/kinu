@@ -77,11 +77,11 @@ const ARMED = 'kinu_timer_armed_at';
  * rationale rests on, and if workerd ever changed the semantic, the rule's
  * stated reason would be false and only this file would notice.
  *
- * The historical form also attached `.catch((err) => console.error(...))`. It
- * is omitted because it never fired: workerd's `IncomingRequest::drain()` ends
- * `result = result.catch_([](kj::Exception&&) {});`, so actor shutdown
- * cancels the task before any JS handler runs — which is the finding, and is
- * also why `anti-slop/no-sentinel-catch` is right to reject the shape.
+ * Detached controls report unexpected rejections without claiming retention.
+ * On actor shutdown, however, workerd's `IncomingRequest::drain()` ends
+ * `result = result.catch_([](kj::Exception&&) {})`, which cancels the task
+ * before its handler runs — the finding that makes
+ * `anti-slop/no-sentinel-catch` right to reject a silent handler.
  */
 function retainViaWaitUntil(state: DurableObjectState, work: Promise<void>): void {
   state.waitUntil(work);
@@ -119,7 +119,9 @@ export class RetentionDO extends DurableObject<Cloudflare.Env> {
    *  claims no retention at all. If this and `scheduleViaWaitUntil` behave
    *  identically, `waitUntil` bought nothing. */
   scheduleFloating(delayMs: number): void {
-    void this.armTimer(delayMs);
+    this.armTimer(delayMs).catch((error: unknown) => {
+      console.error('floating timer arm failed', error);
+    });
   }
 
   async armedAt(): Promise<number | undefined> {
@@ -161,6 +163,8 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
       if (Number.isFinite(stallMs) && stallMs > 0) {
         await env.NEIGHBOUR.get(env.NEIGHBOUR.idFromName('busy')).beBusy(stallMs);
       }
+    }).catch((error: unknown) => {
+      console.error('initialization gate failed', error);
     });
   }
 
