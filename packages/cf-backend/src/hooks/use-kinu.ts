@@ -5,6 +5,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import {
+  activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
   branchHeadId, ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
   type AgentViewSummary, type PendingAction, type PlanReview, type RoleSelection,
 } from "@kinu.run/core";
@@ -369,46 +370,6 @@ function parseSocketMessage(data: MessageEvent["data"]) {
 }
 
 
-/**
- * The socket overlay that wins over a canvas poll. A poll's tree and a pushed
- * tree are folded through the same `explorationForkTree` read model; keeping
- * only the latest accepted push per root means a late poll remains underneath
- * it instead of resurrecting an older snapshot.
- */
-export interface MctsProgressOrder {
-  readonly isolateGen: number;
-  readonly pushSeq: number;
-}
-
-export interface MctsProgressState {
-  readonly trees: ReadonlyMap<string, ForkNode>;
-  readonly lastPush: ReadonlyMap<string, MctsProgressOrder>;
-}
-
-export function createMctsProgressState(): MctsProgressState {
-  return { trees: new Map(), lastPush: new Map() };
-}
-
-export function applyMctsProgress(
-  state: MctsProgressState,
-  progress: MctsProgress,
-): MctsProgressState {
-  const previous = state.lastPush.get(progress.rootId);
-  if (
-    previous !== undefined
-    && (
-      progress.isolateGen < previous.isolateGen
-      || (progress.isolateGen === previous.isolateGen && progress.pushSeq <= previous.pushSeq)
-    )
-  ) return state;
-  const tree = explorationForkTree({ tree: progress.nodes, head: progress.head });
-  if (tree === null) return state;
-  const trees = new Map(state.trees);
-  trees.set(progress.rootId, tree);
-  const lastPush = new Map(state.lastPush);
-  lastPush.set(progress.rootId, { isolateGen: progress.isolateGen, pushSeq: progress.pushSeq });
-  return { trees, lastPush };
-}
 /** Runtime admission for plan broadcasts/RPC results. The browser treats the
  * actor boundary as untrusted even though both ends share the TypeScript type. */
 export function parsePlanReview<Value>(value: Value): PlanReview | null {
@@ -1036,13 +997,18 @@ export function useKinu(target?: string | KinuActorAddress) {
   //
   // A socket can replay a frame after reconnect. `pushSeq` is per root, so an
   // old A cannot reject a fresh B and an old A cannot replace A's newer tree.
-  const mctsProgressState = useRef(createMctsProgressState());
+  const mctsProgressState = useRef(createMctsProgressState<ForkNode>(actorKey));
   const setMctsTreeFromProgress = useCallback((progress: MctsProgress) => {
-    const next = applyMctsProgress(mctsProgressState.current, progress);
+    const next = applyMctsProgress(
+      mctsProgressState.current,
+      actorKey,
+      progress,
+      explorationForkTree({ tree: progress.nodes, head: progress.head }),
+    );
     if (next === mctsProgressState.current) return;
     mctsProgressState.current = next;
     setMctsTrees(next.trees);
-  }, []);
+  }, [actorKey]);
 
   // Fetch all tab data. Keyed on a generation counter because a ref cannot
   // retrigger an effect: on failure the error is sticky and a backoff retry
@@ -1645,9 +1611,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTools([]);
     setMemory([]);
     setMemoryContent("");
-    mctsProgressState.current = createMctsProgressState();
+    mctsProgressState.current =
+      activateMctsProgressActor<ForkNode>(mctsProgressState.current, actorKey);
     setMctsTrees(mctsProgressState.current.trees);
-    setExecutors([]);
     setExecutorOutputs(new Map());
     setLastActiveExecutor(null);
     setPinnedPorts([]);

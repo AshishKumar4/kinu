@@ -1,8 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  applyMctsProgress,
   createLiveRefreshAdmission,
-  createMctsProgressState,
   formatWorkspaceError,
   loadWorkspaceSnapshot,
   refreshLiveResource,
@@ -12,8 +10,34 @@ import {
   type LiveRefreshSource,
   type MctsProgress,
 } from '../src/hooks/use-kinu';
+import { explorationForkTree } from '../src/lib/fork-tree-rows';
+import type { ForkNode } from '../src/lib/protocol';
+import {
+  activateMctsProgressActor,
+  applyMctsProgress as applyMctsProgressOrder,
+  createMctsProgressState as createProgressState,
+  type MctsProgressState,
+} from '@kinu.run/core';
 
 const TEST_ACTOR = 'actor';
+const NEXT_ACTOR = 'next-actor';
+
+function createMctsProgressState(): MctsProgressState<ForkNode> {
+  return createProgressState<ForkNode>(TEST_ACTOR);
+}
+
+function applyMctsProgress(
+  state: MctsProgressState<ForkNode>,
+  progress: MctsProgress,
+  actorKey = TEST_ACTOR,
+): MctsProgressState<ForkNode> {
+  return applyMctsProgressOrder(
+    state,
+    actorKey,
+    progress,
+    explorationForkTree({ tree: progress.nodes, head: progress.head }),
+  );
+}
 
 function activeAdmission(): LiveRefreshAdmission {
   const admission = createLiveRefreshAdmission();
@@ -149,19 +173,27 @@ describe('MCTS progress admission', () => {
     ]);
   });
 
-  test('an actor switch clears progress ordering for the next actor', () => {
+  test('an actor switch clears progress ordering and rejects the old actor', () => {
     const previousActor = applyMctsProgress(
       createMctsProgressState(),
       mctsProgress('root', 7, 80, 'the previous actor'),
     );
+    const activated = activateMctsProgressActor(previousActor, NEXT_ACTOR);
     const nextActor = applyMctsProgress(
-      createMctsProgressState(),
+      activated,
       mctsProgress('root', 1, 1, 'the next actor'),
+      NEXT_ACTOR,
+    );
+    const delayedPrevious = applyMctsProgress(
+      nextActor,
+      mctsProgress('root', 7, 81, 'the delayed previous actor'),
+      TEST_ACTOR,
     );
 
     expect(previousActor.lastPush.get('root')).toEqual({ isolateGen: 7, pushSeq: 80 });
     expect(nextActor.lastPush.get('root')).toEqual({ isolateGen: 1, pushSeq: 1 });
     expect(nextActor.trees.get('root')?.observation).toBe('the next actor');
+    expect(delayedPrevious).toBe(nextActor);
   });
 });
 

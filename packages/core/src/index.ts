@@ -1651,6 +1651,12 @@ export {
 } from './read-models/search-tree';
 export { readExplorationCanvas, readExplorationRun } from './read-models/exploration-canvas';
 export type { ExplorationCanvasRun } from './read-models/exploration-canvas';
+export {
+  activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
+} from './read-models/mcts-progress';
+export type {
+  MctsProgressOrder, MctsProgressStamp, MctsProgressState,
+} from './read-models/mcts-progress';
 export type { ForkRunParams, SearchRunParams } from './read-models/fork-params';
 export { listForkRuns } from './read-models/fork-runs';
 export type { ForkRunSummary } from './read-models/fork-runs';
