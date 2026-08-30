@@ -15,7 +15,8 @@
  * The terminal ledger itself — claim, effects, replay — is
  * unit-durable-terminal.test.ts.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   orchestratorHarness,
@@ -29,6 +30,39 @@ import {
   type FiberMetaRow,
   type FiberRowStore,
 } from '../src/fiber-recovery';
+
+// The actor harness replaces `agents`; load the installed artifact separately
+// after supplying only the Workers builtins its module declaration needs.
+mock.module('cloudflare:email', () => ({ EmailMessage: class {} }));
+mock.module('cloudflare:workers', () => ({ RpcTarget: class {}, exports: {} }));
+mock.module('partyserver', () => ({
+  Server: class {},
+  getServerByName: () => undefined,
+  routePartykitRequest: () => undefined,
+}));
+const installedAgentModule = [
+  '../../../node_modules/agents/dist/index.js',
+  'fiber-recovery-sql-probe',
+].join('?');
+const { Agent: InstalledAgent } = await import(installedAgentModule);
+const InstalledRecoveryMethodsSchema = v.object({ _checkRunFibers: v.function() });
+const installedRecoveryMethods = v.parse(InstalledRecoveryMethodsSchema, InstalledAgent.prototype);
+const installedCheckRunFibers = installedRecoveryMethods._checkRunFibers;
+
+const FiberRecoveryEventSchema = v.object({
+  fiberId: v.string(),
+  fiberName: v.string(),
+});
+type FiberRecoveryEvent = v.InferOutput<typeof FiberRecoveryEventSchema>;
+
+const ManagedRecoveryRowSchema = v.nullable(v.object({ fiber_id: v.string() }));
+type ManagedRecoveryRow = v.InferOutput<typeof ManagedRecoveryRowSchema>;
+
+const RecoverySnapshotSchema = v.nullable(v.object({}));
+type RecoverySnapshot = v.InferOutput<typeof RecoverySnapshotSchema>;
+
+const RecoveryMetadataSchema = v.object({});
+type RecoveryMetadata = v.InferOutput<typeof RecoveryMetadataSchema>;
 
 /** One admitted event bound to a synthetic drain turn with its recovery lease
  *  OPEN — what a drain leaves behind on its way to a turn. The payload is a
@@ -189,6 +223,216 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
   });
 });
 
+
+// ── The installed Agents recovery scan ───────────────────────────────────
+
+interface SqlTrace {
+  readonly query: string;
+  readonly bindings: readonly SQLQueryBindings[];
+}
+
+function tracedSql(database: Database, trace: SqlTrace[]) {
+  return (strings: TemplateStringsArray, ...bindings: SQLQueryBindings[]) => {
+    const query = strings.join('?');
+    trace.push({ query, bindings });
+    const statement = database.prepare(query);
+    if (statement.columnNames.length > 0) return statement.all(...bindings);
+    statement.run(...bindings);
+    return [];
+  };
+}
+
+function installedFiberRecoveryScene() {
+  const database = new Database(':memory:');
+  database.exec(`
+    CREATE TABLE cf_agents_runs (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      snapshot TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE cf_agents_fibers (
+      fiber_id TEXT PRIMARY KEY,
+      idempotency_key TEXT UNIQUE,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      snapshot TEXT,
+      metadata_json TEXT,
+      error_message TEXT,
+      created_at INTEGER NOT NULL,
+      started_at INTEGER,
+      completed_at INTEGER
+    );
+  `);
+  const queries: SqlTrace[] = [];
+  const recovered: string[] = [];
+  const events: Array<{ name: string; payload: FiberRecoveryEvent }> = [];
+  const terminalNotifications: string[] = [];
+  const terminalWaiters = new Map([
+    ['terminal-managed', new Set([() => { terminalNotifications.push('terminal-managed'); }])],
+  ]);
+  const subject = {
+    _runFiberRecoveryInProgress: false,
+    _resolvedOptions: {
+      fiberRecoveryScanDeadlineMs: 10_000,
+      fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
+    },
+    _runFiberActiveFibers: new Set<string>(),
+    _managedFiberTerminalWaiters: terminalWaiters,
+    _recoveryNoProgressScans: 0,
+    sql: tracedSql(database, queries),
+    _isTerminalFiberStatus(status: string): boolean {
+      return ['completed', 'aborted', 'interrupted', 'error'].includes(status);
+    },
+    _notifyManagedFiberTerminal(fiberId: string): void {
+      terminalNotifications.push(fiberId);
+    },
+    _emit(name: string, payload: FiberRecoveryEvent): void {
+      events.push({ name, payload });
+    },
+    _fiberRecoveryPayload(
+      ctx: { id: string; name: string; recoveryReason: string },
+      managedRow: ManagedRecoveryRow,
+    ) {
+      return {
+        fiberId: ctx.id,
+        fiberName: ctx.name,
+        managed: managedRow !== null,
+        recoveryReason: ctx.recoveryReason,
+      };
+    },
+    _parseFiberRecoverySnapshot(
+      _fiberId: string,
+      snapshot: string | null,
+    ): RecoverySnapshot {
+      if (snapshot === null) return null;
+      return v.parse(RecoverySnapshotSchema, JSON.parse(snapshot));
+    },
+    _parseFiberJsonObject(metadata: string | null): RecoveryMetadata | undefined {
+      if (metadata === null) return undefined;
+      return v.parse(RecoveryMetadataSchema, JSON.parse(metadata));
+    },
+    async _runFiberRecoveryHook(ctx: { id: string }): Promise<boolean> {
+      recovered.push(ctx.id);
+      return true;
+    },
+    _hasPendingFiberRecovery(): boolean {
+      return false;
+    },
+  };
+  return { database, queries, recovered, events, terminalNotifications, subject };
+}
+
+describe('the installed Agents recovery scan', () => {
+  test('pages metadata before loading only the fresh run and ledger snapshots', async () => {
+    const scene = installedFiberRecoveryScene();
+    const now = Date.now();
+    const expiredRuns = 128;
+    const largeSnapshot = JSON.stringify({ stash: 'x'.repeat(64 * 1024) });
+    const insertRun = scene.database.prepare(
+      'INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)',
+    );
+    const insertFiber = scene.database.prepare(`
+      INSERT INTO cf_agents_fibers (
+        fiber_id, idempotency_key, name, status, snapshot, metadata_json,
+        error_message, created_at, started_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    try {
+      for (let index = 0; index < expiredRuns; index++) {
+        insertRun.run(
+          `expired-unmanaged-${String(index)}`,
+          'expired unmanaged',
+          largeSnapshot,
+          now - FIBER_RECOVERY_MAX_AGE_MS - 1,
+        );
+      }
+      insertRun.run('terminal-managed', 'terminal managed', '{not-json', now);
+      insertRun.run('fresh-control', 'fresh control', '{}', now);
+      insertFiber.run(
+        'terminal-managed', null, 'terminal managed', 'completed', '{not-json',
+        null, null, now, null, now,
+      );
+      insertFiber.run(
+        'ledger-only', null, 'ledger only', 'running', '{}',
+        null, null, now, now, null,
+      );
+
+      await installedCheckRunFibers.call(scene.subject);
+
+      const snapshotReads = scene.queries.filter(({ query }) => (
+        query.trimStart().startsWith('SELECT') && query.includes('snapshot')
+      ));
+      // The corrupt terminal payload and every large expired payload are never
+      // fetched. The two survivors are fetched exactly at their own ids.
+      expect(snapshotReads.map(({ bindings }) => bindings[0]))
+        .toEqual(['fresh-control', 'ledger-only']);
+
+      const runMetadataPages = scene.queries.filter(({ query }) => (
+        query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
+      ));
+      expect(runMetadataPages.length).toBeGreaterThan(expiredRuns);
+      expect(runMetadataPages.every(({ query }) => (
+        !query.includes('snapshot') && query.includes('ORDER BY rowid ASC LIMIT 1')
+      ))).toBe(true);
+
+      const managedMetadata = scene.queries.filter(({ query }) => (
+        query.includes('SELECT fiber_id, idempotency_key, status, metadata_json')
+        && query.includes('FROM cf_agents_fibers')
+      ));
+      expect(managedMetadata.length).toBeGreaterThan(0);
+      expect(managedMetadata.every(({ query }) => !query.includes('snapshot'))).toBe(true);
+
+      const ledgerMetadataPages = scene.queries.filter(({ query }) => (
+        query.includes('SELECT f.rowid AS rowid, f.fiber_id, f.idempotency_key, f.name')
+      ));
+      expect(ledgerMetadataPages).toHaveLength(2);
+      expect(ledgerMetadataPages.every(({ query }) => (
+        !query.includes('snapshot') && query.includes('ORDER BY f.rowid ASC LIMIT 1')
+      ))).toBe(true);
+
+      const runBoundary = scene.queries.findIndex(({ query }) => (
+        query.trim() === 'SELECT MAX(rowid) AS boundary FROM cf_agents_runs'
+      ));
+      const firstRunPage = scene.queries.findIndex(({ query }) => (
+        query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
+      ));
+      const freshSnapshot = scene.queries.findIndex(({ query, bindings }) => (
+        query.includes('snapshot') && bindings[0] === 'fresh-control'
+      ));
+      const ledgerBoundary = scene.queries.findIndex(({ query }) => (
+        query.trim() === 'SELECT MAX(rowid) AS boundary FROM cf_agents_fibers'
+      ));
+      const ledgerPage = scene.queries.findIndex(({ query }) => (
+        query.includes('SELECT f.rowid AS rowid, f.fiber_id, f.idempotency_key, f.name')
+      ));
+      const ledgerSnapshot = scene.queries.findIndex(({ query, bindings }) => (
+        query.includes('snapshot') && bindings[0] === 'ledger-only'
+      ));
+      expect(runBoundary).toBeGreaterThanOrEqual(0);
+      expect(firstRunPage).toBeGreaterThan(runBoundary);
+      expect(freshSnapshot).toBeGreaterThan(firstRunPage);
+      expect(ledgerBoundary).toBeGreaterThan(freshSnapshot);
+      expect(ledgerPage).toBeGreaterThan(ledgerBoundary);
+      expect(ledgerSnapshot).toBeGreaterThan(ledgerPage);
+
+      expect(scene.recovered).toEqual(['fresh-control', 'ledger-only']);
+      expect(scene.terminalNotifications).toEqual(['terminal-managed', 'ledger-only']);
+      expect(scene.events
+        .filter(({ name }) => name === 'fiber:run:interrupted')
+        .map(({ payload }) => payload.fiberId))
+        .toEqual(['terminal-managed', 'fresh-control', 'ledger-only']);
+      expect(scene.database.query('SELECT id FROM cf_agents_runs').all()).toEqual([]);
+      expect(
+        scene.database.query('SELECT status FROM cf_agents_fibers WHERE fiber_id = ?')
+          .get('ledger-only'),
+      ).toEqual({ status: 'interrupted' });
+    } finally {
+      scene.database.close();
+    }
+  });
+});
 // ── The interrupted-fiber sweep ──────────────────────────────────────────
 
 /** A SqlExecutor over a scripted `cf_agents_runs`, recording every query it is

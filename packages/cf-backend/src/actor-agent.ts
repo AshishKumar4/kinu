@@ -5881,15 +5881,16 @@ export abstract class ActorAgent extends Think<Env> {
   };
 
   /**
-   * Drop the interrupted-fiber rows the recovery budget has already refused,
-   * before the framework's own scan materializes their snapshots.
+   * Drop the interrupted-fiber rows the recovery budget has already refused.
    *
-   * Called from each actor's `onStart`, which is where Kinu already pre-empts an
-   * SDK read of an SDK table for exactly this reason — `sweepUnrunnableSchedules`
-   * runs there so a schedule backlog is pruned rather than dispatched in one go.
-   * Synchronous and cheap by construction (metadata pages, one bounded pass), so
-   * it is safe inside the init gate; a failure is named and dropped, because a
-   * workspace that cannot prune is still a workspace that must activate.
+   * This is cleanup only. It clears rows the budget has already ruled out; it
+   * is not proof that activation avoids snapshot allocation, which the SDK's
+   * recovery scan owns independently.
+   *
+   * Called from each actor's `onStart`. Synchronous and cheap by construction
+   * (metadata pages, one bounded pass), it is safe inside the init gate; a
+   * failure is named and dropped, because a workspace that cannot prune is
+   * still a workspace that must activate.
    */
   protected sweepUnrecoverableFiberRows(): void {
     try {
