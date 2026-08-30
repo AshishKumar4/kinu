@@ -1263,7 +1263,7 @@ export class LocalAgentHost {
     // Wakes arrive from listeners and timers that can outlive close(), and a
     // drive after close() would recreate a lease hold on a closed database.
     if (this.closed) return;
-    void this.drive(entry, () => entry.session.flushPendingDrains()).catch((error) => {
+    void this.drive(entry, () => entry.session.flushPendingDrains()).catch((error: unknown) => {
       diagnostics.failure(
         'host.event_drain_failed',
         toKinuError({ doing: 'draining hosted local events', cause: error, otherwise: 'io' }),

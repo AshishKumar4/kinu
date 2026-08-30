@@ -31,7 +31,7 @@ let child: ChildProcess | null = null;
 // falsy-but-present error, a missing result).
 const realFork = childProcess.fork;
 let lastForked: ChildProcess | null = null;
-mock.module('node:child_process', () => ({
+await mock.module('node:child_process', () => ({
   ...childProcess,
   fork: (...args: Parameters<typeof childProcess.fork>): ChildProcess => {
     lastForked = realFork(...args);
@@ -107,7 +107,7 @@ function startModelEndpoint() {
   return {
     bodies,
     reply,
-    stop: () => { server.stop(true); },
+    stop: () => server.stop(true),
     llm: {
       name: 'workers-ai',
       baseURL: `http://127.0.0.1:${String(server.port)}/v1`,
@@ -158,7 +158,7 @@ describe('branch-worker protocol — no self-rating', () => {
       expect(reflection.text).toBe(BRANCH_ANSWER);
     } finally {
       await abort('uncapped-branch');
-      endpoint.stop();
+      await endpoint.stop();
     }
 
     expect(endpoint.bodies).toHaveLength(2);
@@ -254,7 +254,7 @@ describe('branch worker failure replies', () => {
       expect(replies[1]?.error).toBe('upstream exploded');
     } finally {
       await abort('failing-branch');
-      endpoint.stop();
+      await endpoint.stop();
     }
   });
 
@@ -275,7 +275,7 @@ describe('branch worker failure replies', () => {
       await expect(noResult).rejects.toThrow('Branch worker returned no result for explore');
     } finally {
       await abort('policy-branch');
-      endpoint.stop();
+      await endpoint.stop();
     }
   });
 });

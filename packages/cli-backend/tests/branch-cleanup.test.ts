@@ -55,7 +55,7 @@ function startModelEndpoint(status: number) {
     },
   });
   return {
-    stop: () => { server.stop(true); },
+    stop: () => server.stop(true),
     llm: {
       name: 'workers-ai',
       baseURL: `http://127.0.0.1:${String(server.port)}/v1`,
@@ -85,7 +85,7 @@ test('an aborted successful branch leaves no trace database behind', async () =>
     }
     expect(branchFiles('cleanup-success')).toEqual([]);
   } finally {
-    endpoint.stop();
+    await endpoint.stop();
   }
 });
 

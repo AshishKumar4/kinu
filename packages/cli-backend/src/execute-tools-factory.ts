@@ -220,7 +220,7 @@ function containRejection<T>(run: () => Promise<T>): Promise<T> {
   let call: Promise<T>;
   try { call = run(); }
   catch (error) { call = Promise.reject(error); }
-  void call.catch((error) => {
+  void call.catch((error: unknown) => {
     diagnostics.failure(
       'executor.unawaited_call_rejected',
       toKinuError({ doing: 'running a tool call the model left unawaited', cause: error, otherwise: 'io' }),

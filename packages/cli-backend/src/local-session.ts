@@ -1063,7 +1063,7 @@ export class LocalAgentSession implements BackendHost {
       });
       this.instructionApprovals.grandfatherExisting(entries);
     })();
-    this.instructionMigration = migration.catch((error) => {
+    this.instructionMigration = migration.catch((error: unknown) => {
       this.instructionMigration = null;
       throw error;
     });
@@ -1520,7 +1520,7 @@ export class LocalAgentSession implements BackendHost {
   setTimer(fn: () => Promise<void>, ms: number): void {
     setTimeout(() => {
       if (this.ended) return;
-      void fn().catch((error) => diagnostics.failure(
+      void fn().catch((error: unknown) => diagnostics.failure(
         'drain.timer_callback_failed',
         toKinuError({ doing: 'running the drain-debounce timer callback', cause: error, otherwise: 'io' }),
       ));
@@ -1890,6 +1890,12 @@ export class LocalAgentSession implements BackendHost {
           { fiber: name },
         );
       }
+    }).catch((cause: unknown) => {
+      diagnostics.failure(
+        'fiber.settle_observer_failed',
+        toKinuError({ doing: 'recording a durable background fiber settlement', cause, otherwise: 'io' }),
+        { fiber: name },
+      );
     });
     return running;
   }
@@ -2222,7 +2228,14 @@ export class LocalAgentSession implements BackendHost {
     this.alarmTimer = setTimeout(() => {
       this.alarmTimer = null;
       this.scheduledAlarmAt = null;
-      void this.fireDueTriggers();
+      void this.fireDueTriggers().catch((cause: unknown) => {
+        const failure = toKinuError({
+          doing: 'firing the triggers due on this wake',
+          cause,
+          otherwise: 'io',
+        });
+        diagnostics.failure('schedule.due_triggers_failed', failure);
+      });
     }, Math.min(delay, 2_147_483_647));
   }
 
@@ -3676,7 +3689,7 @@ export class LocalAgentSession implements BackendHost {
     this.terminalRetryAt = atMs;
     const timer = setTimeout(() => {
       this.clearTerminalRetry();
-      void this.recoverTerminalTransitions().catch((cause) => {
+      void this.recoverTerminalTransitions().catch((cause: unknown) => {
         const failure = toKinuError({
           doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
         });
@@ -3733,7 +3746,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
     this.trackFiber('turn.terminal_close', async () => { await close(); })
-      .catch((err) => {
+      .catch((err: unknown) => {
         const failure = toKinuError({
           doing: "recording that a settled turn's effects had all reported",
           cause: err,
@@ -3871,7 +3884,7 @@ export class LocalAgentSession implements BackendHost {
       if (laneKey !== null) recordEffectDone(this.rt.storage.sql, ADVISOR_LANE_SCOPE, laneKey);
       checkpointed.resolve();
       await this.runAdvisorReview(recorded);
-    }).catch((cause) => {
+    }).catch((cause: unknown) => {
       // Not `advisor.review_failed`: the review body catches its own failures
       // (`runAdvisorReview` never throws), so what lands here is the LANE —
       // fiber tracking or checkpoint bookkeeping — dying around the review.
