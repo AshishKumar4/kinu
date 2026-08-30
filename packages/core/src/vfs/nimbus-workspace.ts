@@ -294,37 +294,42 @@ export interface WorkspaceOptions {
 /**
  * Build the workspace filesystem and its shell over a host's SQLite.
  *
- * Returns synchronously over a workspace that is still opening. Booting one is
- * genuinely async — Nimbus sources `/etc/profile` — while runtime construction
- * and the Durable Object constructor behind it are not, and every method of
- * `VFS` and `Shell` already returns a promise. So the boot is started here and
- * awaited inside each call rather than here, which keeps construction
- * synchronous without anyone downstream learning that the filesystem arrives
- * late.
+ * Returns synchronously over a workspace that opens on its first operation.
+ * Booting one is genuinely async — Nimbus sources `/etc/profile` — while
+ * runtime construction and the Durable Object constructor behind it are not,
+ * and every method of `VFS` and `Shell` already returns a promise. Opening
+ * lazily means an unused bundle never starts unowned work; the first operation
+ * owns and awaits the boot without anyone downstream learning that the
+ * filesystem arrives late.
  */
 export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
-  const booting = NimbusWorkspace.create({
-    sql: opts.sql,
-    transactions: opts.transactions,
-    generation: opts.generation,
-    cwd: WORKSPACE_ROOT,
-  }).then((workspace) => {
-    // Before the first command, and after the substrate's own registrations so
-    // a coreutil is never shadowed by a runtime bin of the same name.
-    provisionWorkspaceRuntimes({ workspace, runtimes: opts.runtimes ?? [] });
-    return workspace;
-  });
-  // A boot nobody has awaited yet must not surface as an unhandled rejection.
-  // The failure still reaches every caller that awaits `booting`; this states it
-  // once, because a workspace that fails to boot before any file call is made
-  // would otherwise leave no trace at all.
-  booting.catch((error: unknown) => {
-    diagnostics.failure(
-      'workspace.boot_failed',
-      toKinuError({ doing: 'boot the Nimbus workspace', cause: error, otherwise: 'unavailable' }),
-    );
-  });
-  const open = (): Promise<NimbusWorkspace> => booting;
+  let booting: Promise<NimbusWorkspace> | undefined;
+  const open = async (): Promise<NimbusWorkspace> => {
+    if (!booting) {
+      booting = (async (): Promise<NimbusWorkspace> => {
+        try {
+          const workspace = await NimbusWorkspace.create({
+            sql: opts.sql,
+            transactions: opts.transactions,
+            generation: opts.generation,
+            cwd: WORKSPACE_ROOT,
+          });
+          // Before the first command, and after the substrate's own
+          // registrations so a coreutil is never shadowed by a runtime bin of
+          // the same name.
+          provisionWorkspaceRuntimes({ workspace, runtimes: opts.runtimes ?? [] });
+          return workspace;
+        } catch (cause) {
+          diagnostics.failure(
+            'workspace.boot_failed',
+            toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
+          );
+          throw cause;
+        }
+      })();
+    }
+    return await booting;
+  };
   // The session's process owner, here because a credentialed shell needs a REAL
   // pid: `ShellCommandIdentity` carries one, append capabilities are keyed by
   // it, and a number invented locally would collide with a live writer. One

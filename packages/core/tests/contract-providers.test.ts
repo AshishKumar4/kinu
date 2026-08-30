@@ -284,15 +284,15 @@ describe('Codex provider contract', () => {
     };
     const model = createCodexProvider().createModel('gpt-5.5', deps);
 
-    const failure = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 }).then(
-      () => '',
-      (rejection: unknown) => {
-        const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
-        return surface.success
-          ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
-          : String(rejection);
-      },
-    );
+    let failure = '';
+    try {
+      await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
+    } catch (rejection) {
+      const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
+      failure = surface.success
+        ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
+        : String(rejection);
+    }
     expect(failure).toContain('Your ChatGPT login is no longer valid');
     expect(failure).toContain('kinu setup');
     // The opaque chain the resolver threw must not survive to the surface.
@@ -306,15 +306,15 @@ describe('Codex provider contract', () => {
     }, asFetchFunction(async () =>
       new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 })));
     const model = createCodexProvider().createModel('gpt-5.5', deps);
-    const failure = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 }).then(
-      () => '',
-      (rejection: unknown) => {
-        const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
-        return surface.success
-          ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
-          : String(rejection);
-      },
-    );
+    let failure = '';
+    try {
+      await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
+    } catch (rejection) {
+      const surface = v.safeParse(CodexFailureSurfaceSchema, rejection);
+      failure = surface.success
+        ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
+        : String(rejection);
+    }
     expect(failure).toContain('Your ChatGPT login is no longer valid');
     // The bare upstream word is what the owner was shown for the Cloudflare
     // credential; it must not survive here either.
@@ -341,29 +341,29 @@ describe('Codex OAuth client', () => {
       JSON.stringify({ error: 'invalid_grant', error_description: 'The provided authorization grant is invalid' }),
       { status: 400, headers: { 'content-type': 'application/json' } },
     )));
-    const attempt = client.refresh('codex-refresh-revoked');
-    await expect(attempt).rejects.toBeInstanceOf(CodexOAuthTokenError);
-    await attempt.catch((err: unknown) => {
-      if (!(err instanceof CodexOAuthTokenError)) {
-        throw new Error(`expected CodexOAuthTokenError, got ${String(err)}`);
-      }
+    try {
+      await client.refresh('codex-refresh-revoked');
+    } catch (err) {
+      if (!(err instanceof CodexOAuthTokenError)) throw err;
       expect(err.oauthError).toBe('invalid_grant');
       // The message must never quote the credential it failed on.
       expect(err.message).not.toContain('codex-refresh-revoked');
-    });
+      return;
+    }
+    throw new Error('expected CodexOAuthTokenError');
   });
 
   test('a transient refresh failure carries no OAuth code a caller could treat as terminal', async () => {
     const client = createCodexOAuthClient(asFetchFunction(async () =>
       new Response('upstream exploded', { status: 502 })));
-    const attempt = client.refresh('codex-refresh');
-    await expect(attempt).rejects.toBeInstanceOf(CodexOAuthTokenError);
-    await attempt.catch((err: unknown) => {
-      if (!(err instanceof CodexOAuthTokenError)) {
-        throw new Error(`expected CodexOAuthTokenError, got ${String(err)}`);
-      }
+    try {
+      await client.refresh('codex-refresh');
+    } catch (err) {
+      if (!(err instanceof CodexOAuthTokenError)) throw err;
       expect(err.oauthError).toBe('unknown');
-    });
+      return;
+    }
+    throw new Error('expected CodexOAuthTokenError');
   });
 });
 

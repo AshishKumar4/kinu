@@ -371,12 +371,16 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
   test('a parent-directory mkdir failure propagates with its cause, not as a later writeFile error', async () => {
     const cause = Object.assign(new Error('parent directory does not exist'), { code: 'ENOENT' });
     const vfs = vfsWhoseMkdirThrows(cause);
-    const err: unknown = await sanitizeAttachmentsForModel([pdfMessage()], { accepts: accepts(), vfs })
-      .then(() => null, (e: unknown) => e);
-    if (!(err instanceof KinuError)) throw new Error(`expected a classified KinuError, got ${String(err)}`);
-    expect(err.message).toBe('creating the attachments spill directory');
-    expect(err.cause).toBe(cause);
-    expect(renderCauseChain(err)).toContain('parent directory does not exist');
+    try {
+      await sanitizeAttachmentsForModel([pdfMessage()], { accepts: accepts(), vfs });
+    } catch (err) {
+      if (!(err instanceof KinuError)) throw err;
+      expect(err.message).toBe('creating the attachments spill directory');
+      expect(err.cause).toBe(cause);
+      expect(renderCauseChain(err)).toContain('parent directory does not exist');
+      return;
+    }
+    throw new Error('expected a classified KinuError');
   });
 });
 
