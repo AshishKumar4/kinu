@@ -1005,8 +1005,10 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  main().catch((err: unknown) => {
-    console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  try {
+    await main();
+  } catch (cause) {
+    console.error(cause instanceof Error ? (cause.stack ?? cause.message) : String(cause));
     process.exit(1);
-  });
+  }
 }

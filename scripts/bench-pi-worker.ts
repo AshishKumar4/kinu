@@ -37,10 +37,14 @@ async function main(): Promise<void> {
     maxTokens: input.maxTokens,
     onBreach: () => {
       if (!session) return;
-      breachAbort = session.abort().catch((caught: unknown) => {
-        const detail = caught instanceof Error ? caught.message : String(caught);
-        breachAbortError = `budget breach abort failed: ${detail}`;
-      });
+      breachAbort = (async () => {
+        try {
+          await session.abort();
+        } catch (cause) {
+          const detail = cause instanceof Error ? cause.message : String(cause);
+          breachAbortError = `budget breach abort failed: ${detail}`;
+        }
+      })();
     },
   });
 
@@ -150,13 +154,15 @@ async function main(): Promise<void> {
 // zeros here billed a crashed attempt as the cheapest run in the arm and as
 // inside its token budget, which is the one thing a budget must never say about
 // an attempt it never measured.
-main().catch((caught: unknown) => {
+try {
+  await main();
+} catch (cause) {
   const out: WorkerOutput = {
     steps: 0,
     hadError: true,
     budgetBreach: null,
-    error: caught instanceof Error ? (caught.stack ?? caught.message) : String(caught),
+    error: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);
   process.exit(1);
-});
+}

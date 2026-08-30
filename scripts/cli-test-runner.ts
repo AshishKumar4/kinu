@@ -286,8 +286,10 @@ async function main() {
   process.exit(failCount > 0 ? 1 : 0);
 }
 
-main().catch((e: unknown) => {
+try {
+  await main();
+} catch (cause) {
   cleanup();
-  console.error("FATAL:", e);
+  console.error("FATAL:", cause);
   process.exit(1);
-});
+}

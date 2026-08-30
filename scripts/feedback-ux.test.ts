@@ -138,7 +138,7 @@ async function recordSubmissions(page: Page): Promise<void> {
     const real = window.fetch.bind(window);
     const seen: Submission[] = [];
     window.__feedbackSent = seen;
-    window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+    window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       const body = init?.body;
       if (url.endsWith(endpoint) && body instanceof FormData) {
@@ -153,14 +153,16 @@ async function recordSubmissions(page: Page): Promise<void> {
           outcome: 'pending',
         };
         seen.push(record);
-        const sent = real(input, init);
-        // A branch off the same promise, so the component still receives the
-        // original one — rejection included — and this file learns how it ended.
-        void sent.then(
-          () => { record.outcome = 'answered'; },
-          (thrown: unknown) => { record.outcome = thrown instanceof Error ? thrown.name : 'unknown'; },
-        );
-        return sent;
+        // The returned fetch promise owns the recording and preserves the
+        // component's resolution or rejection.
+        try {
+          const response = await real(input, init);
+          record.outcome = 'answered';
+          return response;
+        } catch (cause) {
+          record.outcome = cause instanceof Error ? cause.name : 'unknown';
+          throw cause;
+        }
       }
       return real(input, init);
     }, { preconnect: real.preconnect });
@@ -185,10 +187,16 @@ async function recordDecodeSettlements(page: Page): Promise<void> {
     };
     Object.assign(window, {
       __feedbackDecodeSettlements: () => settled,
-      createImageBitmap: (image: ImageBitmapSource) => decode(image).then(
-        (bitmap) => { markSettled(); return bitmap; },
-        (thrown: unknown) => { markSettled(); throw thrown; },
-      ),
+      createImageBitmap: async (image: ImageBitmapSource) => {
+        try {
+          const bitmap = await decode(image);
+          markSettled();
+          return bitmap;
+        } catch (cause) {
+          markSettled();
+          throw cause;
+        }
+      },
     });
   });
 }
