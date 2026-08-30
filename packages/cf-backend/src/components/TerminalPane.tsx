@@ -30,7 +30,7 @@ import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { useTheme, type ThemeMode } from "@/hooks/use-theme";
-import { terminalLane } from "@/lib/terminal-lane";
+import { LineTerminalState, terminalLane } from "@/lib/terminal-lane";
 import type { ExecutorCommandResult } from "@/lib/protocol";
 
 export interface TerminalPaneOutput {
@@ -287,10 +287,9 @@ function LineTerminal(
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const writtenIds = useRef<Set<string>>(new Set());
-  const lineBuffer = useRef<string>("");
-  const running = useRef<boolean>(false);
-  const busy = useRef<boolean>(false);
+  const lineStateRef = useRef<LineTerminalState | null>(null);
+  if (lineStateRef.current === null) lineStateRef.current = new LineTerminalState();
+  const lineState = lineStateRef.current;
   const commandOperation = useRef<TerminalOperation | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   // The parent hands a fresh closure every render. Held in a ref so the effect
@@ -300,13 +299,9 @@ function LineTerminal(
   execute.current = onExecute;
 
   useEffect(() => {
+    const generation = lineState.reset();
     const host = hostRef.current;
     if (!host) return;
-    writtenIds.current.clear();
-    lineBuffer.current = "";
-    commandOperation.current = null;
-    running.current = false;
-    busy.current = false;
     const term = newTerminal(theme.mode);
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -317,12 +312,11 @@ function LineTerminal(
 
     const typing = term.onData((data) => {
       const run = execute.current;
-      if (running.current || !run) return;
+      if (lineState.running || !run) return;
       for (const ch of data) {
         const code = ch.charCodeAt(0);
         if (code === 0x0d) {
-          const cmd = lineBuffer.current;
-          lineBuffer.current = "";
+          const cmd = lineState.takeLine();
           term.write("\r\n");
           if (!cmd.trim()) {
             promptLine(term);
@@ -330,35 +324,31 @@ function LineTerminal(
           }
           // Keystrokes are dropped while a command runs, so say so; the marker
           // is cleared by whichever of the two paths below lands.
-          running.current = true;
-          busy.current = true;
+          lineState.beginCommand();
           term.write(BUSY);
           setFailure(null);
+          // xterm owns a synchronous data callback, so retain the background
+          // promise until it settles even though the executor generation fences it.
           const owner: TerminalOperation = { promise: null };
-          // xterm owns a synchronous data callback. Retain the owner before the
-          // command starts so cleanup can fence a late completion.
           commandOperation.current = owner;
           owner.promise = (async () => {
             try {
               try {
                 await run(cmd);
-                if (commandOperation.current !== owner) return;
+                if (!lineState.finishCommand(generation)) return;
                 if (termRef.current !== term) return;
-                running.current = false;
               } catch (cause) {
-                if (commandOperation.current !== owner) return;
+                if (!lineState.finishCommand(generation)) return;
                 if (termRef.current !== term) return;
-                running.current = false;
                 // A rejected exec produces no output row, so nothing else would
                 // ever clear the marker or reprint the prompt.
-                clearBusy(term, busy);
+                clearBusy(term, lineState);
                 term.write(`\x1b[31m${describeError(cause)}\x1b[0m\r\n`);
                 promptLine(term);
               }
             } catch (cause) {
-              if (commandOperation.current === owner && termRef.current === term) {
-                running.current = false;
-                clearBusy(term, busy);
+              if (lineState.finishCommand(generation) && termRef.current === term) {
+                clearBusy(term, lineState);
                 setFailure(describeError(cause));
               }
             } finally {
@@ -367,16 +357,13 @@ function LineTerminal(
           })();
           return;
         } else if (code === 0x7f || code === 0x08) {
-          if (lineBuffer.current.length > 0) {
-            lineBuffer.current = lineBuffer.current.slice(0, -1);
-            term.write("\b \b");
-          }
+          if (lineState.backspace()) term.write("\b \b");
         } else if (code === 0x03) {
-          lineBuffer.current = "";
+          lineState.clearLine();
           term.write("^C\r\n");
           promptLine(term);
         } else if (code >= 0x20) {
-          lineBuffer.current += ch;
+          lineState.append(ch);
           term.write(ch);
         }
       }
@@ -389,7 +376,7 @@ function LineTerminal(
 
     return () => {
       commandOperation.current = null;
-      running.current = false;
+      lineState.reset();
       typing.dispose();
       observer.disconnect();
       term.dispose();
@@ -408,9 +395,8 @@ function LineTerminal(
     if (!term) return;
     let wrote = false;
     for (const out of outputs) {
-      if (writtenIds.current.has(out.id)) continue;
-      writtenIds.current.add(out.id);
-      clearBusy(term, busy);
+      if (!lineState.recordOutput(out.id)) continue;
+      clearBusy(term, lineState);
       if (out.stdout) {
         term.write(out.stdout);
         if (!out.stdout.endsWith("\n")) term.write("\r\n");
@@ -458,9 +444,8 @@ function promptLine(term: Terminal) {
   term.write("\x1b[32m$\x1b[0m ");
 }
 
-function clearBusy(term: Terminal, busy: { current: boolean }) {
-  if (!busy.current) return;
-  busy.current = false;
+function clearBusy(term: Terminal, state: LineTerminalState) {
+  if (!state.clearBusy()) return;
   term.write("\r\x1b[2K"); // carriage return + erase line
 }
 

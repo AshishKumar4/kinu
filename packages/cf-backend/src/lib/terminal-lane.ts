@@ -21,6 +21,75 @@ export type TerminalLane =
   | { mode: 'line'; missing: string };
 
 /**
+ * Mutable state owned by one line terminal. Changing executor starts a new
+ * generation so work started for the previous terminal cannot complete into
+ * this one.
+ */
+export class LineTerminalState {
+  #generation = 0;
+  #writtenOutputIds = new Set<string>();
+  #line = '';
+  #running = false;
+  #busy = false;
+
+  reset(): number {
+    this.#generation += 1;
+    this.#writtenOutputIds.clear();
+    this.#line = '';
+    this.#running = false;
+    this.#busy = false;
+    return this.#generation;
+  }
+
+  get running(): boolean {
+    return this.#running;
+  }
+
+  recordOutput(id: string): boolean {
+    if (this.#writtenOutputIds.has(id)) return false;
+    this.#writtenOutputIds.add(id);
+    return true;
+  }
+
+  takeLine(): string {
+    const line = this.#line;
+    this.#line = '';
+    return line;
+  }
+
+  append(data: string) {
+    this.#line += data;
+  }
+
+  backspace(): boolean {
+    if (this.#line.length === 0) return false;
+    this.#line = this.#line.slice(0, -1);
+    return true;
+  }
+
+  clearLine() {
+    this.#line = '';
+  }
+
+  beginCommand() {
+    this.#running = true;
+    this.#busy = true;
+  }
+
+  finishCommand(generation: number): boolean {
+    if (generation !== this.#generation) return false;
+    this.#running = false;
+    return true;
+  }
+
+  clearBusy(): boolean {
+    if (!this.#busy) return false;
+    this.#busy = false;
+    return true;
+  }
+}
+
+/**
  * Per-environment terminal capability, established from each environment's own
  * source rather than from what would be convenient.
  *

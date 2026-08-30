@@ -19,8 +19,7 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { readFileSync } from 'node:fs';
-import { terminalLane } from '../src/lib/terminal-lane';
+import { LineTerminalState, terminalLane } from '../src/lib/terminal-lane';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 
@@ -471,20 +470,23 @@ describe('a terminal failure names the workspace and the executor', () => {
 });
 
 describe('line terminal executor switches', () => {
-  test('a new xterm resets per-terminal refs and fences old completions', () => {
-    const source = readFileSync(
-      new URL('../src/components/TerminalPane.tsx', import.meta.url),
-      'utf8',
-    );
-    const effect = source.slice(
-      source.indexOf('useEffect(() => {', source.indexOf('function LineTerminal')),
-      source.indexOf('}, [executor]);', source.indexOf('function LineTerminal')),
-    );
-    expect(effect).toContain('writtenIds.current.clear()');
-    expect(effect).toContain('lineBuffer.current = ""');
-    expect(effect).toContain('running.current = false');
-    expect(effect).toContain('busy.current = false');
-    expect(effect).toContain('if (termRef.current !== term) return');
+  test('a new generation clears the prior executor and rejects its completion', () => {
+    const state = new LineTerminalState();
+    const oldGeneration = state.reset();
+    expect(state.recordOutput('old-output')).toBe(true);
+    state.append('echo old');
+    state.beginCommand();
+
+    const generation = state.reset();
+
+    // Deleting any reset, or accepting a completion from another generation,
+    // makes one of the assertions below red.
+    expect(generation).not.toBe(oldGeneration);
+    expect(state.recordOutput('old-output')).toBe(true);
+    expect(state.takeLine()).toBe('');
+    expect(state.running).toBe(false);
+    expect(state.clearBusy()).toBe(false);
+    expect(state.finishCommand(oldGeneration)).toBe(false);
   });
 });
 
