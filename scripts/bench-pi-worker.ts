@@ -30,10 +30,18 @@ function verifierFeedback(checks: Awaited<ReturnType<typeof scoreSandbox>>['chec
 async function main(): Promise<void> {
   const input = parsePiWorkerInput(await Bun.stdin.text());
   let session: AgentSession | undefined;
+  let breachAbort: Promise<void> | undefined;
+  let breachAbortError: string | undefined;
   const proxy = createBenchInferenceProxy({
     upstreamBaseURL: input.llm.baseURL,
     maxTokens: input.maxTokens,
-    onBreach: () => { void session?.abort(); },
+    onBreach: () => {
+      if (!session) return;
+      breachAbort = session.abort().catch((caught: unknown) => {
+        const detail = caught instanceof Error ? caught.message : String(caught);
+        breachAbortError = `budget breach abort failed: ${detail}`;
+      });
+    },
   });
 
   let error: string | undefined;
@@ -106,7 +114,7 @@ async function main(): Promise<void> {
   } finally {
     if (session) {
       try {
-        await session.abort();
+        await (breachAbort ?? session.abort());
       } catch (caught) {
         const abortError = `session abort failed: ${caught instanceof Error ? caught.message : String(caught)}`;
         error = error ? `${error}; ${abortError}` : abortError;
@@ -114,6 +122,10 @@ async function main(): Promise<void> {
       session.dispose();
     }
     await proxy.settle();
+    if (breachAbort) await breachAbort;
+    if (breachAbortError) {
+      error = error ? `${error}; ${breachAbortError}` : breachAbortError;
+    }
   }
 
   const usage = proxy.usage();
@@ -138,7 +150,7 @@ async function main(): Promise<void> {
 // zeros here billed a crashed attempt as the cheapest run in the arm and as
 // inside its token budget, which is the one thing a budget must never say about
 // an attempt it never measured.
-main().catch((caught) => {
+main().catch((caught: unknown) => {
   const out: WorkerOutput = {
     steps: 0,
     hadError: true,

@@ -1358,9 +1358,13 @@ describe('a revoked device whose command may still run', () => {
       await page.setViewport({ width: 1000, height: 1200 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[title="Revoke device"]');
-      page.once('dialog', (dialog) => { void dialog.accept(); });
+      let dialogAccepted: Promise<void> | undefined;
+      page.once('dialog', (dialog) => {
+        dialogAccepted = dialog.accept();
+      });
       await page.click('[title="Revoke device"]');
       await page.waitForSelector('[data-device-incident="dev-1"]', { timeout: 10_000 });
+      await dialogAccepted;
 
       const immediate = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
       expect(immediate).toContain('A command could not be confirmed stopped when you revoked this device.');

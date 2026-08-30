@@ -286,7 +286,7 @@ async function main() {
   process.exit(failCount > 0 ? 1 : 0);
 }
 
-main().catch((e) => {
+main().catch((e: unknown) => {
   cleanup();
   console.error("FATAL:", e);
   process.exit(1);

@@ -91,7 +91,7 @@ async function runWorker(verifierRetry: boolean): Promise<{
     if (proc.exitCode !== 0) throw new Error(`Pi worker exited ${proc.exitCode}: ${stderr}`);
     return { output: parseWorkerOutput(stdout.trim()), requests, authorizations };
   } finally {
-    upstream.stop(true);
+    await upstream.stop(true);
   }
 }
 
