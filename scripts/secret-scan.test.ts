@@ -40,6 +40,8 @@ const ASSIGNMENT = `const api_key = ${'"sk-live-abc12345"'};`;
 // satisfies [^@\s]{8,}, so the shape survived a template literal.
 const CONN_URL = ['postgres://admin', 'hunter2hunter2@db.example.com/app'].join(':');
 const TYPE_DECL = `interface Creds { api_key: ${'"literal-union-value"'} }`;
+const CFUT_TOKEN = ['cfut', 'A'.repeat(48)].join('_');
+const CFUT_PLACEHOLDER = ['cfut', '<your-cloudflare-user-token>'].join('_');
 
 describe('the patterns catch what they are for', () => {
   const cases: Array<[string, string]> = [
@@ -48,6 +50,7 @@ describe('the patterns catch what they are for', () => {
     ['private-key', BARE_PRIVATE_KEY],
     ['jwt', `const t = "${JWT}";`],
     ['aig-bearer', BEARER],
+    ['cloudflare-user-token', CFUT_TOKEN],
     ['secret-assignment', ASSIGNMENT],
     ['credentialed-url', CONN_URL],
   ];
@@ -93,6 +96,16 @@ describe('the patterns catch what they are for', () => {
       TYPE_DECL,
     ];
     for (const line of benign) expect(scanText('f.ts', line)).toEqual([]);
+  });
+
+  test('a Cloudflare user token needs exactly 48 URL-safe body characters; only a whole placeholder is benign', () => {
+    expect(scanText('f.ts', CFUT_PLACEHOLDER)).toEqual([]);
+    expect(scanText('f.ts', `${CFUT_PLACEHOLDER} ${CFUT_TOKEN}`).map((finding) => finding.pattern))
+      .toEqual(['cloudflare-user-token']);
+    for (const body of ['A'.repeat(47), 'A'.repeat(49)]) {
+      const token = ['cfut', body].join('_');
+      expect(scanText('f.ts', token)).toEqual([]);
+    }
   });
 
   test('reports every match on a line, with its line number', () => {
@@ -201,7 +214,7 @@ function historyFixture() {
   // The credential exists only on a non-current local branch. A scanner that
   // reads HEAD or the working tree alone is green; every local ref is red.
   git(repo, 'checkout', '-qb', 'history-fixture');
-  const secret = ['AK', 'IA', 'ABCDEFGHIJKLMNOP'].join('');
+  const secret = CFUT_TOKEN;
   writeFileSync(join(repo, 'history.md'), `key=${secret}\n`);
   writeFileSync(join(repo, 'binary.bin'), Buffer.from([0x6b, 0, 0x69]));
   writeFileSync(join(repo, 'oversize.txt'), Buffer.alloc(MAX_HISTORY_BLOB_BYTES + 1, 0x78));
@@ -216,10 +229,10 @@ describe('reachable history', () => {
   test('a historical credential is red until its exact blob/path/detector/count adjudication is present', async () => {
     const fixture = historyFixture();
     const expected = {
-      detector: 'aws-access-key',
+      detector: 'cloudflare-user-token',
       oid: fixture.oid,
       path: 'history.md',
-      refClass: 'branch' as const,
+      refClass: 'refs/heads',
       count: 1,
     };
 

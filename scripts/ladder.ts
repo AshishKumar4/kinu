@@ -468,8 +468,9 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-08-30: the persistent cat-file reader made the history
     // phase 16.3 s; live/index adds under 1 s on the local-ref corpus then present.
     seconds: 18,
-    catches: 'a credential about to leave the machine in live or index material, and one '
-      + 'that survives in a blob reachable from any locally stored branch, tag, remote-tracking, '
+    catches: 'a credential about to leave the machine in live or index material — including '
+      + 'a Cloudflare user token with its exact 48-character URL-safe body — and one that '
+      + 'survives in a blob reachable from any locally stored branch, tag, remote-tracking, '
       + 'or other ref. Push is the last tier where the live half is recoverable without a '
       + 'rotation; the history half makes a removal claim observable rather than hopeful.',
     blind: 'unreachable or reflog-only objects, and blobs containing NUL or exceeding 1 MiB. '

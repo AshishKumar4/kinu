@@ -8,12 +8,19 @@
 // inspection keeps a removed credential from becoming a forgotten credential:
 // it walks every locally stored ref and scans each reachable text blob exactly
 // once. Neither report writes a matched value to stdout or stderr.
-import { Buffer } from 'node:buffer';
-import type { FileSink, Subprocess } from 'bun';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { gitEnv } from '../packages/test-utils/src/git';
-import { isTextSource, readMatching } from './sources';
+import {
+  bytesToText,
+  historyObjects,
+  isScannableBytes,
+  isTextSource,
+  listHistoryRefs,
+  readHistoryObjects,
+  readMatching,
+  type HistoryObject,
+} from './sources';
+export type { HistoryObject, HistoryRefClass } from './sources';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const IGNORE_FILE = '.secretscanignore';
@@ -61,6 +68,15 @@ export const PATTERNS: readonly SecretPattern[] = [
     regex: /cf-aig-authorization.*Bearer\s+[A-Za-z0-9_-]{30,}/g,
     benign: /process\.env\.|<your-/,
     message: 'hardcoded AI Gateway bearer token',
+  },
+  {
+    // A Cloudflare user token has a 48-character URL-safe body. The benign
+    // form is anchored to one whole placeholder line: a placeholder beside a
+    // value never suppresses that value.
+    id: 'cloudflare-user-token',
+    regex: /\bcfut_[A-Za-z0-9_-]{48}\b/g,
+    benign: /^\s*cfut_<your-[A-Za-z0-9-]+>\s*$/,
+    message: 'Cloudflare user API token (revoke and replace it immediately)',
   },
   {
     id: 'secret-assignment',
@@ -228,26 +244,18 @@ export function applyIgnores(findings: readonly Finding[], entries: readonly Ign
 export const MAX_HISTORY_BLOB_BYTES = 1024 * 1024;
 export const REMOVED_CREDENTIAL_BLOB = 'c9e579c076abdaa62188445f7cebce17895062be';
 
-export type HistoryRefClass = 'branch' | 'tag' | 'remote' | 'other';
-const REF_CLASSES: readonly HistoryRefClass[] = ['branch', 'tag', 'remote', 'other'];
 const OBJECT_ID = /^[0-9a-f]{40,64}$/;
-
-export interface HistoricalObject {
-  oid: string;
-  path: string;
-  refClass: HistoryRefClass;
-}
 
 export interface HistoryReachability {
   refs: number;
-  objects: readonly HistoricalObject[];
+  objects: readonly HistoryObject[];
 }
 
 export interface HistoricalFinding {
   detector: string;
   oid: string;
   path: string;
-  refClass: HistoryRefClass;
+  refClass: string;
   count: number;
 }
 
@@ -628,264 +636,14 @@ export function adjudicateHistory(
   return { findings: kept, adjudicated: findings.length - kept.length };
 }
 
-interface LocalRef {
-  oid: string;
-  refClass: HistoryRefClass;
-}
-
-function refClass(ref: string): HistoryRefClass {
-  if (ref.startsWith('refs/heads/')) return 'branch';
-  if (ref.startsWith('refs/tags/')) return 'tag';
-  if (ref.startsWith('refs/remotes/')) return 'remote';
-  return 'other';
-}
-
-function gitBytes(repoRoot: string, args: readonly string[], stdin?: Buffer): Buffer {
-  const result = Bun.spawnSync(['git', '-C', repoRoot, ...args], {
-    env: gitEnv(),
-    stdin,
-    stdout: 'pipe',
-    stderr: 'ignore',
-  });
-  if (result.exitCode !== 0) {
-    throw new Error('history secret scan: git could not enumerate local ref reachability');
-  }
-  return Buffer.from(result.stdout);
-}
-
-function localRefSnapshot(repoRoot: string): LocalRef[] {
-  // A ref name cannot contain a tab, so this is unambiguous without exposing a
-  // ref name in a report. Snapshot its object ID before the four walks below so
-  // a moving ref cannot silently change which corpus gets measured.
-  const output = gitBytes(repoRoot, ['for-each-ref', '--format=%(objectname)%09%(refname)'])
-    .toString('utf8').trim();
-  if (output === '') throw new Error('history secret scan: repository has no local refs');
-  return output.split('\n').map((line) => {
-    const tab = line.indexOf('\t');
-    const oid = line.slice(0, tab);
-    const ref = line.slice(tab + 1);
-    if (tab === -1 || !OBJECT_ID.test(oid) || ref === '') {
-      throw new Error('history secret scan: git returned an invalid local ref');
-    }
-    return { oid, refClass: refClass(ref) };
-  });
-}
-
-function objectsForRefs(repoRoot: string, refs: readonly LocalRef[]): Map<string, string> {
-  if (refs.length === 0) return new Map();
-  const input = Buffer.from(`${refs.map((ref) => ref.oid).join('\n')}\n`);
-  const records = gitBytes(repoRoot, ['rev-list', '--objects', '-z', '--stdin'], input)
-    .toString('utf8').split('\0');
-  const objects = new Map<string, string>();
-  let pendingOid: string | undefined;
-  for (const record of records) {
-    if (record === '') continue;
-    if (OBJECT_ID.test(record)) {
-      if (objects.has(record)) {
-        throw new Error('history secret scan: git repeated an object in one ref class');
-      }
-      objects.set(record, '');
-      pendingOid = record;
-      continue;
-    }
-    if (record.startsWith('path=') && pendingOid !== undefined) {
-      objects.set(pendingOid, record.slice('path='.length));
-      continue;
-    }
-    throw new Error('history secret scan: git returned an invalid object record');
-  }
-  return objects;
-}
-
-/** Every object reachable from every locally stored ref. The precedence only
- * selects a stable report class when the same object is reachable from more
- * than one class; no class is omitted from the walk. */
+/** Every object/path association reachable from every locally stored ref. */
 export function enumerateHistoricalReachability(repoRoot = REPO_ROOT): HistoryReachability {
-  const refs = localRefSnapshot(repoRoot);
-  const objects = new Map<string, HistoricalObject>();
-  for (const currentClass of REF_CLASSES) {
-    const paths = objectsForRefs(repoRoot, refs.filter((ref) => ref.refClass === currentClass));
-    for (const [oid, path] of paths) {
-      if (!objects.has(oid)) objects.set(oid, { oid, path, refClass: currentClass });
-    }
-  }
-  if (objects.size === 0) throw new Error('history secret scan: ref walk found no objects');
-  if (objects.has(REMOVED_CREDENTIAL_BLOB)) {
+  const refs = listHistoryRefs(repoRoot);
+  const objects = historyObjects(repoRoot, refs);
+  if (objects.some((object) => object.oid === REMOVED_CREDENTIAL_BLOB)) {
     throw new Error(`history secret scan: removed credential blob ${REMOVED_CREDENTIAL_BLOB} is reachable`);
   }
-  return { refs: refs.length, objects: [...objects.values()] };
-}
-
-class BufferedBytes {
-  private readonly chunks: Buffer[] = [];
-  private available = 0;
-
-  constructor(private readonly reader: ReadableStreamDefaultReader<Uint8Array>) {}
-
-  private async fill(): Promise<void> {
-    while (true) {
-      const next = await this.reader.read();
-      if (next.done || next.value === undefined) {
-        throw new Error('history secret scan: git cat-file ended before its response');
-      }
-      if (next.value.byteLength === 0) continue;
-      this.chunks.push(Buffer.from(next.value.buffer, next.value.byteOffset, next.value.byteLength));
-      this.available += next.value.byteLength;
-      return;
-    }
-  }
-
-  private async ensure(bytes: number): Promise<void> {
-    while (this.available < bytes) await this.fill();
-  }
-
-  private indexOf(byte: number): number {
-    let offset = 0;
-    for (const chunk of this.chunks) {
-      const index = chunk.indexOf(byte);
-      if (index !== -1) return offset + index;
-      offset += chunk.byteLength;
-    }
-    return -1;
-  }
-
-  async line(): Promise<Buffer> {
-    let index = this.indexOf(10);
-    while (index === -1) {
-      await this.fill();
-      index = this.indexOf(10);
-    }
-    return this.take(index + 1);
-  }
-
-  async take(bytes: number): Promise<Buffer> {
-    if (bytes === 0) return Buffer.alloc(0);
-    await this.ensure(bytes);
-    const first = this.chunks[0]!;
-    if (first.byteLength >= bytes) {
-      const result = first.subarray(0, bytes);
-      this.available -= bytes;
-      if (first.byteLength === bytes) this.chunks.shift();
-      else this.chunks[0] = first.subarray(bytes);
-      return result;
-    }
-    const result = Buffer.allocUnsafe(bytes);
-    let offset = 0;
-    let remaining = bytes;
-    while (remaining > 0) {
-      const chunk = this.chunks[0]!;
-      const take = Math.min(chunk.byteLength, remaining);
-      chunk.copy(result, offset, 0, take);
-      offset += take;
-      remaining -= take;
-      this.available -= take;
-      if (take === chunk.byteLength) this.chunks.shift();
-      else this.chunks[0] = chunk.subarray(take);
-    }
-    return result;
-  }
-
-  async discard(bytes: number): Promise<void> {
-    while (bytes > 0) {
-      await this.ensure(1);
-      const chunk = this.chunks[0]!;
-      const take = Math.min(chunk.byteLength, bytes);
-      this.available -= take;
-      bytes -= take;
-      if (take === chunk.byteLength) this.chunks.shift();
-      else this.chunks[0] = chunk.subarray(take);
-    }
-  }
-}
-
-interface BatchHeader {
-  type: string;
-  size: number;
-}
-
-async function readBatchHeader(
-
-  stdin: FileSink,
-  bytes: BufferedBytes,
-  oid: string,
-): Promise<BatchHeader> {
-  await stdin.write(`${oid}\n`);
-  await stdin.flush();
-  const header = (await bytes.line()).toString('ascii');
-  const match = /^([0-9a-f]{40,64}) ([a-z]+) (\d+)\n$/.exec(header);
-  if (match === null || !Number.isSafeInteger(Number(match[3]))) {
-    throw new Error('history secret scan: git cat-file returned an invalid object header');
-  }
-  return { type: match[2]!, size: Number(match[3]) };
-}
-
-async function consumeTerminator(bytes: BufferedBytes): Promise<void> {
-  const terminator = await bytes.take(1);
-  if (terminator[0] !== 10) {
-    throw new Error('history secret scan: git cat-file omitted an object separator');
-  }
-}
-
-async function scanObjectsWithBatch(
-  repoRoot: string,
-  objects: readonly HistoricalObject[],
-  stats: HistoryStats,
-  findings: HistoricalFinding[],
-  maxBlobBytes: number,
-): Promise<void> {
-  const child: Subprocess<'pipe', 'pipe', 'ignore'> = Bun.spawn(
-    ['git', '-C', repoRoot, 'cat-file', '--batch'],
-    {
-      env: gitEnv(),
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'ignore',
-    },
-  );
-  const stdin = child.stdin;
-  const bytes = new BufferedBytes(child.stdout.getReader());
-  try {
-    for (const object of objects) {
-      const { type, size } = await readBatchHeader(stdin, bytes, object.oid);
-      stats.objects += 1;
-      if (type !== 'blob') {
-        await bytes.discard(size);
-        await consumeTerminator(bytes);
-        continue;
-      }
-      stats.blobs += 1;
-      if (size > maxBlobBytes) {
-        stats.oversize += 1;
-        await bytes.discard(size);
-        await consumeTerminator(bytes);
-        continue;
-      }
-      const content = await bytes.take(size);
-      await consumeTerminator(bytes);
-      if (content.includes(0)) {
-        stats.nul += 1;
-        continue;
-      }
-      stats.scanned += 1;
-      for (const [detector, count] of countDetections(content.toString('utf8'))) {
-        findings.push({
-          detector,
-          oid: object.oid,
-          path: object.path === '' ? '<unnamed>' : object.path,
-          refClass: object.refClass,
-          count,
-        });
-      }
-    }
-    await stdin.end();
-    if (await child.exited !== 0) {
-      throw new Error('history secret scan: git cat-file failed');
-    }
-  } catch (error) {
-    child.kill();
-    await child.exited;
-    throw error;
-  }
+  return { refs: refs.length, objects };
 }
 
 /** Scan every locally reachable blob. NUL-bearing blobs and blobs above the
@@ -897,11 +655,12 @@ export async function scanHistory(options: {
   adjudications?: readonly HistoricalAdjudication[];
   maxBlobBytes?: number;
 } = {}): Promise<HistoryScanOutcome> {
+  const repoRoot = options.repoRoot ?? REPO_ROOT;
   const maxBlobBytes = options.maxBlobBytes ?? MAX_HISTORY_BLOB_BYTES;
   if (!Number.isSafeInteger(maxBlobBytes) || maxBlobBytes < 0) {
     throw new Error('history secret scan: invalid blob size cap');
   }
-  const reachability = enumerateHistoricalReachability(options.repoRoot ?? REPO_ROOT);
+  const reachability = enumerateHistoricalReachability(repoRoot);
   const stats: HistoryStats = {
     refs: reachability.refs,
     objects: 0,
@@ -911,13 +670,32 @@ export async function scanHistory(options: {
     scanned: 0,
   };
   const raw: HistoricalFinding[] = [];
-  await scanObjectsWithBatch(
-    options.repoRoot ?? REPO_ROOT,
-    reachability.objects,
-    stats,
-    raw,
-    maxBlobBytes,
-  );
+  await readHistoryObjects(repoRoot, reachability.objects, maxBlobBytes, (object, blob) => {
+    stats.objects += 1;
+    if (blob.type !== 'blob') return;
+    stats.blobs += 1;
+    if (blob.size > maxBlobBytes) {
+      stats.oversize += 1;
+      return;
+    }
+    if (blob.bytes === undefined) {
+      throw new Error('history secret scan: blob content was not returned below its size cap');
+    }
+    if (!isScannableBytes(blob.bytes)) {
+      stats.nul += 1;
+      return;
+    }
+    stats.scanned += 1;
+    for (const [detector, count] of countDetections(bytesToText(blob.bytes))) {
+      raw.push({
+        detector,
+        oid: object.oid,
+        path: object.path === '' ? '<unnamed>' : object.path,
+        refClass: object.refClasses.join(','),
+        count,
+      });
+    }
+  });
   raw.sort((left, right) => left.detector.localeCompare(right.detector)
     || left.oid.localeCompare(right.oid)
     || left.path.localeCompare(right.path)

@@ -46,9 +46,11 @@
  * path), so enumeration names each such path in a warning.
  */
 
+import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { FileSink, Subprocess } from 'bun';
 import { gitEnv } from '../packages/test-utils/src/git.ts';
 import {
   TEST_FILE, TEST_SUFFIX,
@@ -248,4 +250,266 @@ export function readSources(): Map<string, string> {
  *  "only its own test calls this" is sayable rather than invisible. */
 export function readTests(): Map<string, string> {
   return readMatching((file) => isTestFile(file) && isParseable(file));
+}
+
+/* ── Historical corpus ─────────────────────────────────────────────────── */
+
+/**
+ * The live enumeration above is what a push ships. This corpus is what locally
+ * stored refs still remember after a working tree and index have been scrubbed.
+ * It is deliberately here, beside the only live-file enumerator: each answers
+ * one version of "what does this repository contain".
+ */
+export type HistoryRefClass = string;
+
+/** One object/path association reachable from local refs. `path` is empty for
+ * commits and root trees; they stay in the denominator but cannot produce a
+ * content finding. */
+export interface HistoryObject {
+  readonly oid: string;
+  readonly path: string;
+  readonly refClasses: readonly HistoryRefClass[];
+}
+
+export interface HistoryBlob {
+  readonly type: string;
+  readonly size: number;
+  /** Present only for a blob at or below the caller's explicit size cap. */
+  readonly bytes: Uint8Array | undefined;
+}
+
+const HISTORY_OID = /^[0-9a-f]{40,64}$/;
+
+/** Every named local ref. A ref name cannot contain a newline, so git's
+ * line-oriented format remains an unambiguous input boundary. */
+export function listHistoryRefs(repoRoot: string): readonly string[] {
+  const output = execFileSync('git', ['-C', repoRoot, 'for-each-ref', '--format=%(refname)'], {
+    env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+  });
+  const refs = output.split('\n').filter((ref) => ref.startsWith('refs/'));
+  if (refs.length === 0) throw new Error('sources: git for-each-ref enumerated no local refs');
+  return refs;
+}
+
+/** The compact ref class a finding may report without dumping hundreds of ref
+ * names. Remote classes retain their remote because those are separate places
+ * a remediation must reach. */
+export function refClassOf(ref: string): HistoryRefClass {
+  const parts = ref.split('/');
+  return parts[1] === 'remotes' && parts.length > 3
+    ? ['refs', 'remotes', parts[2]!].join('/')
+    : parts.slice(0, 2).join('/');
+}
+
+interface HistoryRecord {
+  oid: string;
+  path: string;
+}
+
+function objectRecords(output: Buffer): HistoryRecord[] {
+  const records: HistoryRecord[] = [];
+  let pending: HistoryRecord | undefined;
+  for (const record of output.toString('utf8').split('\0')) {
+    if (record === '') continue;
+    if (HISTORY_OID.test(record)) {
+      if (pending !== undefined) records.push(pending);
+      pending = { oid: record, path: '' };
+      continue;
+    }
+    if (record.startsWith('path=') && pending !== undefined) {
+      pending.path = record.slice('path='.length);
+      continue;
+    }
+    throw new Error('sources: git rev-list returned an invalid object record');
+  }
+  if (pending !== undefined) records.push(pending);
+  return records;
+}
+
+/**
+ * Every object/path association reachable from `refs`, with all of the compact
+ * classes through which that association is reachable. `-z` keeps a newline in
+ * a historical filename from becoming a second object record.
+ */
+export function historyObjects(repoRoot: string, refs: readonly string[]): readonly HistoryObject[] {
+  const byClass = new Map<HistoryRefClass, string[]>();
+  for (const ref of refs) {
+    const current = refClassOf(ref);
+    const grouped = byClass.get(current);
+    if (grouped === undefined) byClass.set(current, [ref]);
+    else grouped.push(ref);
+  }
+  const pairs = new Map<string, { oid: string; path: string; refClasses: Set<HistoryRefClass> }>();
+  for (const [current, classRefs] of byClass) {
+    const output = execFileSync('git', ['-C', repoRoot, 'rev-list', '--objects', '-z', '--stdin'], {
+      env: gitEnv(),
+      input: `${classRefs.join('\n')}\n`,
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    for (const record of objectRecords(Buffer.from(output))) {
+      const key = `${record.oid}\0${record.path}`;
+      const existing = pairs.get(key);
+      if (existing === undefined) {
+        pairs.set(key, { ...record, refClasses: new Set([current]) });
+      } else {
+        existing.refClasses.add(current);
+      }
+    }
+  }
+  if (pairs.size === 0) throw new Error('sources: git rev-list enumerated no history object');
+  return [...pairs.values()]
+    .map(({ oid, path, refClasses }) => ({ oid, path, refClasses: [...refClasses].sort() }))
+    .sort((left, right) => left.path.localeCompare(right.path) || left.oid.localeCompare(right.oid));
+}
+
+/** A NUL byte is the binary boundary used by the historical scanner. */
+export function isScannableBytes(bytes: Uint8Array): boolean {
+  return !bytes.includes(0);
+}
+
+/** Decode lossy by design: all secret shapes are ASCII, and malformed UTF-8
+ * must not hide an ASCII credential beside it. */
+export function bytesToText(bytes: Uint8Array): string {
+  return new TextDecoder('utf8', { fatal: false }).decode(bytes);
+}
+
+class BufferedHistoryBytes {
+  private readonly chunks: Buffer[] = [];
+  private available = 0;
+  private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
+
+  constructor(reader: ReadableStreamDefaultReader<Uint8Array>) {
+    this.reader = reader;
+  }
+
+  private async fill(): Promise<void> {
+    while (true) {
+      const next = await this.reader.read();
+      if (next.done || next.value === undefined) {
+        throw new Error('sources: git cat-file --batch closed before its response');
+      }
+      if (next.value.byteLength === 0) continue;
+      this.chunks.push(Buffer.from(next.value.buffer, next.value.byteOffset, next.value.byteLength));
+      this.available += next.value.byteLength;
+      return;
+    }
+  }
+
+  private async ensure(bytes: number): Promise<void> {
+    while (this.available < bytes) await this.fill();
+  }
+
+  private indexOf(byte: number): number {
+    let offset = 0;
+    for (const chunk of this.chunks) {
+      const index = chunk.indexOf(byte);
+      if (index !== -1) return offset + index;
+      offset += chunk.byteLength;
+    }
+    return -1;
+  }
+
+  async line(): Promise<Buffer> {
+    let index = this.indexOf(10);
+    while (index === -1) {
+      await this.fill();
+      index = this.indexOf(10);
+    }
+    return this.take(index + 1);
+  }
+
+  async take(bytes: number): Promise<Buffer> {
+    if (bytes === 0) return Buffer.alloc(0);
+    await this.ensure(bytes);
+    const first = this.chunks[0]!;
+    if (first.byteLength >= bytes) {
+      const result = first.subarray(0, bytes);
+      this.available -= bytes;
+      if (first.byteLength === bytes) this.chunks.shift();
+      else this.chunks[0] = first.subarray(bytes);
+      return result;
+    }
+    const result = Buffer.allocUnsafe(bytes);
+    let offset = 0;
+    let remaining = bytes;
+    while (remaining > 0) {
+      const chunk = this.chunks[0]!;
+      const count = Math.min(chunk.byteLength, remaining);
+      chunk.copy(result, offset, 0, count);
+      offset += count;
+      remaining -= count;
+      this.available -= count;
+      if (count === chunk.byteLength) this.chunks.shift();
+      else this.chunks[0] = chunk.subarray(count);
+    }
+    return result;
+  }
+
+  async discard(bytes: number): Promise<void> {
+    while (bytes > 0) {
+      await this.ensure(1);
+      const chunk = this.chunks[0]!;
+      const count = Math.min(chunk.byteLength, bytes);
+      this.available -= count;
+      bytes -= count;
+      if (count === chunk.byteLength) this.chunks.shift();
+      else this.chunks[0] = chunk.subarray(count);
+    }
+  }
+}
+
+async function consumeHistoryTerminator(bytes: BufferedHistoryBytes): Promise<void> {
+  if ((await bytes.take(1))[0] !== 10) {
+    throw new Error('sources: git cat-file --batch omitted an object separator');
+  }
+}
+
+/**
+ * Read historical objects through ONE persistent `git cat-file --batch`
+ * process. The visitor receives every denominator object; content is withheld
+ * only when it is not a blob or it exceeds the caller's explicit cap.
+ */
+export async function readHistoryObjects(
+  repoRoot: string,
+  objects: readonly HistoryObject[],
+  maxBlobBytes: number,
+  visit: (object: HistoryObject, blob: HistoryBlob) => void | Promise<void>,
+): Promise<void> {
+  if (!Number.isSafeInteger(maxBlobBytes) || maxBlobBytes < 0) {
+    throw new Error('sources: invalid historical blob size cap');
+  }
+  const child: Subprocess<'pipe', 'pipe', 'ignore'> = Bun.spawn(
+    ['git', '-C', repoRoot, 'cat-file', '--batch'],
+    { env: gitEnv(), stdin: 'pipe', stdout: 'pipe', stderr: 'ignore' },
+  );
+  const stdin: FileSink = child.stdin;
+  const bytes = new BufferedHistoryBytes(child.stdout.getReader());
+  try {
+    for (const object of objects) {
+      await stdin.write(`${object.oid}\n`);
+      await stdin.flush();
+      const header = (await bytes.line()).toString('ascii');
+      const match = /^([0-9a-f]{40,64}) ([a-z]+) (\d+)\n$/.exec(header);
+      if (match === null || !Number.isSafeInteger(Number(match[3]))) {
+        throw new Error('sources: git cat-file --batch returned an invalid object header');
+      }
+      const type = match[2]!;
+      const size = Number(match[3]);
+      if (type !== 'blob' || size > maxBlobBytes) {
+        await bytes.discard(size);
+        await consumeHistoryTerminator(bytes);
+        await visit(object, { type, size, bytes: undefined });
+        continue;
+      }
+      const content = await bytes.take(size);
+      await consumeHistoryTerminator(bytes);
+      await visit(object, { type, size, bytes: content });
+    }
+    await stdin.end();
+    if (await child.exited !== 0) throw new Error('sources: git cat-file --batch failed');
+  } catch (error) {
+    child.kill();
+    await child.exited;
+    throw error;
+  }
 }
