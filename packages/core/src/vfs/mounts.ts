@@ -69,7 +69,7 @@ export interface MountableProvider {
 export function standardMounts(provider: (name: string) => MountableProvider | undefined): VfsMount[] {
 	return [
 		{
-			name: 'pc',
+			name: EXECUTOR_MOUNTS.laptop.slice(1),
 			files: () => {
 				const laptop = provider('laptop');
 				return laptop && laptop.isAvailable() ? laptop.files ?? null : null;
@@ -77,7 +77,7 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 			absentReason: () => 'no device connected',
 		},
 		{
-			name: 'sandbox',
+			name: EXECUTOR_MOUNTS.sandbox.slice(1),
 			files: () => provider('sandbox')?.files ?? null,
 			absentReason: () => 'no Sandbox container bound',
 		},
@@ -299,32 +299,63 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
  * mutating call with ENXIO carrying the stated absence, answers `exists`
  * false and `stat` null.
  *
- * Beyond the base contract the plane carries `rename` and `removeRecursive`:
- * native where the routed tree has them, spelled in base ops where it does
- * not. A rename that would need to carry a directory's bytes across planes
- * refuses (EPERM) rather than half-copying a tree; a file's carry destroys the
- * source only once its copy is confirmed and removes that copy if it cannot;
- * a mount point itself is an entry of THIS plane and refuses both mutations.
- *
- * It carries `readRange` and `readdirStats` on the same terms — routed, native
- * where the tree has one, spelled in base ops where it does not — so a caller
- * gets a bounded read and a stat-inclusive listing without knowing which plane
- * the path landed on.
+ * The operation matrix has one router: read, write, conditional write, list,
+ * stat, existence, mkdir, unlink, bounded reads and stat-inclusive listings
+ * all dispatch through the same first-segment decision. `rename` and
+ * `removeRecursive` extend that matrix: native where the routed tree has them,
+ * spelled in base operations where it does not. Rename stays in its source
+ * namespace: a base↔mount or mount↔mount move refuses before either tree
+ * changes, while a fallback carry is allowed only inside one tree. A mount
+ * point itself is an entry of THIS plane and rejects every mutation.
  */
 export function withMountTable(
 	base: VFS, mounts: readonly VfsMount[],
 ): VFS & VfsNativeMutations & VfsNativeReads {
-	const byName = new Map(mounts.map((m) => [m.name, m]));
+	const byName = new Map<string, VfsMount>();
+	for (const mount of mounts) {
+		if (
+			mount.name.length === 0
+			|| mount.name === '.'
+			|| mount.name === '..'
+			|| mount.name.includes('/')
+		) {
+			throw new Error(`'${mount.name}' is not a usable VFS mount name`);
+		}
+		if (byName.has(mount.name)) {
+			throw new Error(`duplicate VFS mount name '${mount.name}'`);
+		}
+		byName.set(mount.name, mount);
+	}
 
 	/** Split a path into its mount route (`/pc/a/b` → pc, `/a/b`) or a base
-	 *  route. Only a whole first segment matches, so `/pcs/x` stays base. */
+	 * route. Only a whole first segment matches, so `/pcs/x` stays base. A
+	 * `..` may simplify inside a mounted tree, but may never climb through its
+	 * root into the composite namespace. */
 	const routeOf = (path: string): { mount: VfsMount; native: string } | { base: string } => {
 		if (!path.startsWith('/')) return { base: path };
 		const slash = path.indexOf('/', 1);
 		const head = slash === -1 ? path.slice(1) : path.slice(1, slash);
 		const mount = byName.get(head);
 		if (!mount) return { base: path };
-		return { mount, native: slash === -1 ? '/' : path.slice(slash) };
+		if (slash === -1) return { mount, native: '/' };
+
+		const segments: string[] = [];
+		for (const segment of path.slice(slash).split('/')) {
+			if (segment === '' || segment === '.') continue;
+			if (segment === '..') {
+				if (segments.length === 0) {
+					throw makeVfsError(
+						'EPERM',
+						'a mounted path cannot traverse outside its mount point',
+						path,
+					);
+				}
+				segments.pop();
+				continue;
+			}
+			segments.push(segment);
+		}
+		return { mount, native: segments.length === 0 ? '/' : `/${segments.join('/')}` };
 	};
 
 	const delegate = async <T>(path: string, op: (files: VFS, native: string) => Promise<T>): Promise<T> => {
@@ -335,23 +366,40 @@ export function withMountTable(
 		return op(files, routed.native);
 	};
 
-	/** The plane and native path one side of a mutation lands on. Same routing
-	 *  as `delegate`, resolved rather than applied, for the one operation whose
-	 *  two sides can sit on different planes. */
-	const sideOf = (path: string): CarrySide => {
+	const filesForMount = (mount: VfsMount, path: string): VFS => {
+		const files = mount.files();
+		if (!files) throw absentError(mount, path);
+		return files;
+	};
+
+	const rejectMountPointMutation = (path: string, operation: string): void => {
 		const routed = routeOf(path);
-		if (!('mount' in routed)) return { files: base, path };
-		const files = routed.mount.files();
-		if (!files) throw absentError(routed.mount, path);
-		return { files, path: routed.native };
+		if ('mount' in routed && routed.native === '/') {
+			throw makeVfsError('EPERM', `a mount point cannot be ${operation}`, path);
+		}
 	};
 
 	return {
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
 		},
-		writeFile(path, data) {
+		async writeFile(path, data) {
+			rejectMountPointMutation(path, 'written');
 			return delegate(path, (files, native) => files.writeFile(native, data));
+		},
+		async writeFileIfRevision(path, data, expectedRevision) {
+			rejectMountPointMutation(path, 'written');
+			return delegate(path, (files, native) => {
+				const conditional = files.writeFileIfRevision;
+				if (!conditional) {
+					throw makeVfsError(
+						'EPERM',
+						'this file plane does not support revision-checked writes',
+						path,
+					);
+				}
+				return conditional.call(files, native, data, expectedRevision);
+			});
 		},
 		readdir(path) {
 			return delegate(path, async (files, native) => {
@@ -375,13 +423,15 @@ export function withMountTable(
 			// Some trees cannot stat their own root (the container derives stat
 			// from the parent listing, and '/' has no parent entry), which typed
 			// /sandbox as a file in the root listing.
-			if (routed.native === '/') return { size: 0, mtimeMs: 0, isDir: true };
+			if (routed.native === '/') return MOUNT_POINT_STAT;
 			return files.stat(routed.native);
 		},
-		unlink(path) {
+		async unlink(path) {
+			rejectMountPointMutation(path, 'unlinked');
 			return delegate(path, (files, native) => files.unlink(native));
 		},
-		mkdir(path, opts) {
+		async mkdir(path, opts) {
+			rejectMountPointMutation(path, 'created');
 			return delegate(path, (files, native) => files.mkdir(native, opts));
 		},
 		async exists(path) {
@@ -396,33 +446,49 @@ export function withMountTable(
 			if (('mount' in from && from.native === '/') || ('mount' in to && to.native === '/')) {
 				throw makeVfsError('EPERM', 'a mount point cannot be renamed', oldPath);
 			}
-			if ('mount' in from && 'mount' in to && from.mount === to.mount) {
-				const files = from.mount.files();
-				if (!files) throw absentError(from.mount, oldPath);
+
+			if ('mount' in from && 'mount' in to) {
+				if (from.mount !== to.mount) {
+					filesForMount(from.mount, oldPath);
+					filesForMount(to.mount, newPath);
+					throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
+				}
+				const files = filesForMount(from.mount, oldPath);
 				const native = nativeOps(files).rename;
 				if (native) return native.call(files, from.native, to.native);
-			} else if (!('mount' in from) && !('mount' in to)) {
-				const native = nativeOps(base).rename;
-				if (native) return native.call(base, oldPath, newPath);
+				await carryFileWithVfsOps(
+					{ files, path: from.native },
+					{ files, path: to.native },
+				);
+				return;
 			}
-			// No native rename on this route, or the rename crosses planes: bytes
-			// can carry a file, and only a file — a directory move here would be
-			// an unbounded tree copy wearing a rename's name.
-			const st = await delegate(oldPath, (files, native) => files.stat(native));
+
+			if ('mount' in from) {
+				filesForMount(from.mount, oldPath);
+				throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
+			}
+			if ('mount' in to) {
+				filesForMount(to.mount, newPath);
+				throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
+			}
+
+			const native = nativeOps(base).rename;
+			if (native) return native.call(base, oldPath, newPath);
+			const st = await base.stat(oldPath);
 			if (!st) throw makeVfsError('ENOENT', 'no such file or directory', oldPath);
 			if (st.isDir) {
 				throw makeVfsError('EPERM', 'a directory cannot be renamed here — this route has no native rename, and only a file\'s bytes can be carried', oldPath);
 			}
-			await carryFileWithVfsOps(sideOf(oldPath), sideOf(newPath));
+			await carryFileWithVfsOps(
+				{ files: base, path: oldPath },
+				{ files: base, path: newPath },
+			);
 		},
 		async removeRecursive(path) {
-			const routed = routeOf(path);
-			if ('mount' in routed && routed.native === '/') {
-				throw makeVfsError('EPERM', 'a mount point cannot be removed', path);
-			}
+			rejectMountPointMutation(path, 'removed');
 			return delegate(path, (files, native) => {
-				const native0 = nativeOps(files).removeRecursive;
-				return native0 ? native0.call(files, native) : removeTreeWithVfsOps(files, native);
+				const remove = nativeOps(files).removeRecursive;
+				return remove ? remove.call(files, native) : removeTreeWithVfsOps(files, native);
 			});
 		},
 		// Routed, for the reason the mutations are: the workspace tree and a
@@ -435,9 +501,11 @@ export function withMountTable(
 		// exists to avoid. `readBoundedWithVfsOps` is the one place allowed to
 		// whole-read, and only for a file its stat already proved fits.
 		readRange(path, offset, length) {
-			return delegate(path, (files, native) => (
-				requireNativeRange(files, native)(native, offset, length)
-			));
+			return delegate(path, (files, native) => {
+				const range = nativeOps(files).readRange;
+				if (!range) throw makeVfsError('EPERM', 'this plane serves no ranged read', path);
+				return range.call(files, native, offset, length);
+			});
 		},
 		readdirStats(path) {
 			return delegate(path, async (files, native) => {
@@ -461,11 +529,3 @@ export function withMountTable(
  *  same answer `stat` gives it above, for the same reason: some trees cannot
  *  stat their own root. */
 const MOUNT_POINT_STAT: VfsEntryStat = { size: 0, mtimeMs: 0, isDir: true };
-
-function requireNativeRange(files: VFS, path: string): VfsNativeReads['readRange'] {
-	const native = nativeOps(files).readRange;
-	// EPERM rather than a new code: the operation is not permitted on this
-	// plane, and the codes here are the ones every reader already renders.
-	if (!native) throw makeVfsError('EPERM', 'this plane serves no ranged read', path);
-	return native.bind(files);
-}

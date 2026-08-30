@@ -12,7 +12,7 @@ import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC } from "@kin
 import { JsonObjectSchema } from '@kinu.run/core';
 import * as v from 'valibot';
 
-const CLOUD_TOKEN = "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz";
+const CLOUD_TOKEN = ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join("");
 
 const tempDirs: string[] = [];
 

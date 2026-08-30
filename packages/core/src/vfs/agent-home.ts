@@ -111,17 +111,24 @@ export function agentHome(agentName: string): string {
 }
 
 /**
- * This agent's private `/tmp`, as an absolute path.
+ * This agent's private `/tmp` as a logical absolute path.
  *
- * One spelling for two uses: the directory the hosted backend creates and
- * points `TMPDIR` at, and the root `SqliteVFS.confinePrincipal` rewrites `/tmp`
- * to for this agent's uid in this isolate. The registry accepts the absolute
- * form, so a second key-shaped spelling would only be a second thing to keep
- * in step.
+ * Hosted Nimbus sessions create this ordinary directory and use it for
+ * `TMPDIR`. In the in-isolate filesystem it is the logical name the confined
+ * principal sees; the registry below receives its storage key instead, so a
+ * physical `tmp/<agent>` root can never be mistaken for a second user-visible
+ * `/tmp` path.
  */
 export function agentTmpRoot(agentName: string): string {
   assertAgentName(agentName);
   return `/tmp/${agentName}`;
+}
+
+/** The private tmp root's storage key. Keep this at the confinement boundary:
+ * every other caller addresses the one logical path from {@link agentTmpRoot}. */
+function agentTmpStorageRoot(agentName: string): string {
+  assertAgentName(agentName);
+  return `tmp/${agentName}`;
 }
 
 function assertAgentName(agentName: string): void {
@@ -205,9 +212,9 @@ export interface HomeRootVfs {
   chmod(path: string, mode: number): void;
 }
 
-/** Registers a confined principal — `SqliteVFS`, narrowed to that one method. */
+/** Registers a confined principal against its physical storage root. */
 export interface TmpConfiner {
-  confinePrincipal(uid: number, tmpRoot: string): void;
+  confinePrincipal(uid: number, tmpStorageRoot: string): void;
   releasePrincipal(uid: number): void;
 }
 
@@ -270,6 +277,6 @@ export function confineAgentTmp(
   identity: AgentIdentity,
 ): string {
   const tmpRoot = agentTmpRoot(agentName);
-  confiner.confinePrincipal(identity.uid, tmpRoot);
+  confiner.confinePrincipal(identity.uid, agentTmpStorageRoot(agentName));
   return tmpRoot;
 }

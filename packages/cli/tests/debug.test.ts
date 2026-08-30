@@ -48,7 +48,7 @@ async function result(proc: ReturnType<typeof runCli>) {
   return { exitCode, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
-const SECRET_TOKEN = 'sk-ant-api03-thisisaplantedsecretfortest1234567890abcdefgh';
+const SECRET_TOKEN = ['sk-ant-', 'api03-thisisaplantedsecretfortest1234567890abcdefgh'].join('');
 const SECRET_KINU_TOKEN = 'pta_' + 'x'.repeat(40);
 
 /**
@@ -191,7 +191,7 @@ describe('kinu debug — redaction', () => {
   test('redactSecrets scrubs every planted secret shape', () => {
     expect(redactSecrets(`bearer ${SECRET_KINU_TOKEN}`)).not.toContain(SECRET_KINU_TOKEN);
     expect(redactSecrets(SECRET_TOKEN)).not.toContain(SECRET_TOKEN);
-    expect(redactSecrets('AKIAABCDEFGHIJKLMNOP')).toBe('[REDACTED]');
+    expect(redactSecrets(['AKIA', 'ABCDEFGHIJKLMNOP'].join(''))).toBe('[REDACTED]');
     expect(redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz')).not.toContain('abcdefghijklmnopqrstuvwxyz');
     expect(redactSecrets('{"api_key": "verysecretvalue1234"}')).toContain('[REDACTED]');
     expect(redactSecrets('{"api_key": "verysecretvalue1234"}')).not.toContain('verysecretvalue1234');

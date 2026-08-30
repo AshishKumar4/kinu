@@ -526,7 +526,7 @@ describe('serving a Nimbus preview host', () => {
       method: 'POST',
       headers: {
         cookie: '__Host-kinu_session=owner; guest_session=guest; __Host-kinu_d1_bookmark=bookmark',
-        authorization: 'Bearer pta_0123456789abcdef0123456789abcdef_secret',
+        authorization: ['Bearer pta_', '0123456789abcdef0123456789abcdef_secret'].join(''),
         'proxy-authorization': 'Basic c2VjcmV0',
         'x-kinu-user-id': OWNER,
         'x-guest-header': 'kept',

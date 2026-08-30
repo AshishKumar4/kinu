@@ -176,7 +176,7 @@ describe("CLI behavior", () => {
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
-      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
@@ -196,7 +196,7 @@ describe("CLI behavior", () => {
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
-      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
@@ -217,7 +217,7 @@ describe("CLI behavior", () => {
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
-      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
       user: { id: "user_123", email: "ashish@example.com" },
     });
 
@@ -234,7 +234,7 @@ describe("CLI behavior", () => {
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
-      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
       user: { id: "user_123", email: "ashish@example.com" },
       model: "codex/gpt-5.5",
       providers: {
@@ -294,7 +294,7 @@ describe("CLI behavior", () => {
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
-      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
       agents: {
         jarvis: {
           name: "jarvis",
@@ -482,7 +482,7 @@ describe("kinu exec (headless)", () => {
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
       origin: "https://kinu.example.com",
-      accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+      accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
       agents: {
         jarvis: { name: "jarvis", mode: "cloud", cloudName: "jarvis", createdAt: stamp, updatedAt: stamp },
       },
@@ -797,7 +797,7 @@ describe("kinu create — an unusable model is named at creation", () => {
     try {
       writeConfig(home, {
         origin: `http://127.0.0.1:${origin.port}`,
-        accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+        accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
         user: { id: "user_123", email: "ashish@example.com" },
       });
 

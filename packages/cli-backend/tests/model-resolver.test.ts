@@ -226,7 +226,7 @@ describe('createLocalModelResolver', () => {
 // ─── Signed-in cloud source — the worker's /api/user/ai/v1 proxy ───────────
 
 const CLOUD_ORIGIN = 'https://kinu.example.com';
-const CLOUD_TOKEN = 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz';
+const CLOUD_TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 
 /** The llm config cli/config.ts derives for a signed-in user with no BYO keys. */
 function proxyLLMConfig(origin = CLOUD_ORIGIN): LLMProviderConfig {

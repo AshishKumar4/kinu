@@ -27,6 +27,14 @@ import {
 } from '../src/execution/index';
 import { createWorkspaceBundle } from './helpers';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+import {
+  agentCred,
+  agentHome,
+  agentTmpRoot,
+  confineAgentTmp,
+  provisionAgentHome,
+} from '../src/vfs/agent-home';
+import { withMountTable } from '../src/vfs/mounts';
 
 /** The byte corpus that must survive a write→read round trip on every mount:
  *  NUL, a UTF-8 BOM (the silent-3-byte-loss trap), high bytes and a lone 0x80
@@ -311,6 +319,86 @@ for (const c of cases) {
     });
   });
 }
+
+describe('the global workspace namespace', () => {
+  test('registers private tmp by storage key while retaining one logical path', () => {
+    const roots: Array<[number, string]> = [];
+    const logical = confineAgentTmp({
+      confinePrincipal: (uid, tmpRoot) => { roots.push([uid, tmpRoot]); },
+      releasePrincipal: () => {},
+    }, 'agent-a', { uid: 2_001, gid: 2_001 });
+
+    expect(logical).toBe('/tmp/agent-a');
+    expect(roots).toEqual([[2_001, 'tmp/agent-a']]);
+  });
+
+  test('two agents share a readable workspace but own their writes and private tmp on both planes', async () => {
+    const db = new Database(':memory:');
+    try {
+      const workspace = createWorkspaceBundle(db);
+      const { root, confiner } = await workspace.privileged();
+      const agentA = { uid: 2_001, gid: 2_001 };
+      const agentB = { uid: 2_002, gid: 2_002 };
+      provisionAgentHome(root, 'agent-a', agentA);
+      provisionAgentHome(root, 'agent-b', agentB);
+      confineAgentTmp(confiner, 'agent-a', agentA);
+      confineAgentTmp(confiner, 'agent-b', agentB);
+
+      const a = await workspace.asAgent({
+        cred: agentCred(agentA),
+        home: agentHome('agent-a'),
+        tmp: agentTmpRoot('agent-a'),
+      });
+      const b = await workspace.asAgent({
+        cred: agentCred(agentB),
+        home: agentHome('agent-b'),
+        tmp: agentTmpRoot('agent-b'),
+      });
+
+      await a.vfs.writeFile('/home/agent-a/owned.txt', 'a owns this');
+      expect(await b.vfs.readFile('/home/agent-a/owned.txt', { encoding: 'utf8' })).toBe('a owns this');
+      expect(await rejectionCode(() => b.vfs.writeFile('/home/agent-a/blocked.txt', 'b'))).toBe('EACCES');
+
+      expect((await a.shell.exec('echo a-scratch > /tmp/scratch.txt')).exitCode).toBe(0);
+      expect((await b.shell.exec('echo b-scratch > /tmp/scratch.txt')).exitCode).toBe(0);
+      expect(await a.vfs.readFile('/tmp/scratch.txt', { encoding: 'utf8' })).toBe('a-scratch\n');
+      expect(await b.vfs.readFile('/tmp/scratch.txt', { encoding: 'utf8' })).toBe('b-scratch\n');
+
+      confiner.releasePrincipal(agentA.uid);
+      expect(await rejectionCode(() => a.vfs.readFile('/tmp/scratch.txt'))).toBe('ENOENT');
+      expect(await a.vfs.readFile('/home/agent-a/owned.txt', { encoding: 'utf8' })).toBe('a owns this');
+      expect(await b.vfs.readFile('/tmp/scratch.txt', { encoding: 'utf8' })).toBe('b-scratch\n');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('the real shell remains on the base tree when the VFS has a live mount', async () => {
+    const db = new Database(':memory:');
+    try {
+      const workspace = createWorkspaceBundle(db);
+      const device: VFS = {
+        readFile: async () => new Uint8Array(),
+        writeFile: async () => undefined,
+        readdir: async () => [],
+        stat: async () => null,
+        unlink: async () => undefined,
+        mkdir: async () => undefined,
+        exists: async () => false,
+      };
+      const mounted = withMountTable(workspace.vfs, [{
+        name: 'pc',
+        files: () => device,
+        absentReason: () => 'not used',
+      }]);
+
+      expect(await mounted.readdir('/')).toContain('pc');
+      expect((await workspace.shell.exec('test ! -e /pc')).exitCode).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});
 
 // ── the device consent scope ────────────────────────────────────────────────
 

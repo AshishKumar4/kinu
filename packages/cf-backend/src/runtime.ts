@@ -381,15 +381,19 @@ export function createCFRuntime(
   // runtime whose commands were the node's while its file tools stayed the
   // session user could not write its own home — measured `EACCES` — and could
   // write a sibling's. One credential, both surfaces.
-  const workspaceVfs = nimbusSessionFiles(workspaceBox, hooks.workspaceExecution?.cred);
-  const vfs = hooks.workspaceObserver
-    ? observeWrites(workspaceVfs, hooks.workspaceObserver)
-    : workspaceVfs;
+  //
+  // This is the unmounted workspace tree retained by memory and agent-state
+  // services. Snapshot walks start at a relative workspace root, which the
+  // mount table never augments, so foreign bytes stay out of both boundaries.
+  const baseWorkspaceVfs = nimbusSessionFiles(workspaceBox, hooks.workspaceExecution?.cred);
+  const observedWorkspaceVfs = hooks.workspaceObserver
+    ? observeWrites(baseWorkspaceVfs, hooks.workspaceObserver)
+    : baseWorkspaceVfs;
 
   // MemoryStore from agent-utils — FTS5-indexed search over the workspace
   // filesystem itself, so `memory/MEMORY.md` is the same file the agent reads
   // with the `file` tool and greps in the shell.
-  const memoryStore = new MemoryStore(workspaceVfs, sql);
+  const memoryStore = new MemoryStore(baseWorkspaceVfs, sql);
   memoryStore.ensureSchema();
 
   // Vectorize-backed semantic memory, scoped to this workspace's namespace.
@@ -444,7 +448,7 @@ export function createCFRuntime(
     agent, env, actor, hooks.turnProfile, hooks.resolveProfile, hooks.reportModelCall,
   );
   const schedule = createRealSchedule(agent);
-  const identity = createIdentity(agent, access.ctx, vfs, sql, actor.scaffoldPath);
+  const identity = createIdentity(agent, access.ctx, observedWorkspaceVfs, sql, actor.scaffoldPath);
 
   // Execution router — manages workspace plus the separate sandbox and laptop.
   // Live shell-approval policy every gated exec boundary consults (`run`'s
@@ -485,25 +489,27 @@ export function createCFRuntime(
       // so it inherits the root's set whole.
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
-  // The workspace shell is the authoritative Nimbus session's shell, over the
-  // exact same bytes `vfs` addresses.
-  // Gated at the Shell object, so what it wraps is transparent to the seam.
+  // The shell is the authoritative Nimbus session's direct shell over the base
+  // tree. It deliberately never receives the VFS-only `/pc` or `/sandbox`
+  // mounts; only file operations can cross those executor boundaries.
   const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
-  // The agent's ONE file plane: the workspace tree extended by the mount
-  // table — /pc for a connected device, /sandbox for the bound container —
-  // resolved live off this router at every call. The `file` tool and
-  // `workspace.*` reach foreign machines through this same object (both take
-  // it below); memory indexing and identity provisioning above deliberately
-  // keep the base tree, because services that index or provision workspace
-  // bytes must never cross into a user's device or a container.
-  const agentVfs = withMountTable(vfs, standardMounts((name) => executionRouter.getProvider(name)));
+  // The agent's ONE file plane extends the observed workspace tree with `/pc`
+  // for a connected device and `/sandbox` for the bound container, resolved
+  // live from this router on every call. The `file` tool and `workspace.*`
+  // reach foreign machines through this same object; state services above keep
+  // `baseWorkspaceVfs`, because they must never snapshot or index foreign
+  // bytes.
+  const agentFileVfs = withMountTable(
+    observedWorkspaceVfs,
+    standardMounts((name) => executionRouter.getProvider(name)),
+  );
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE != null,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs: agentVfs, memory, craftStore, shell,
+      vfs: agentFileVfs, memory, craftStore, shell,
       // sql is used by workspace.listTools() to read the crafted tools' EMA
       // quality columns.
       sql,
@@ -648,8 +654,8 @@ export function createCFRuntime(
   }));
 
   const runtime: CFRuntime = {
-    storage: { vfs: agentVfs, sql, execRaw },
-    agentStateVfs: workspaceVfs,
+    storage: { vfs: agentFileVfs, sql, execRaw },
+    agentStateVfs: baseWorkspaceVfs,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() {
       return createProfileLaneLLM(
@@ -671,7 +677,7 @@ export function createCFRuntime(
     releaseBranch: createFacetReleaser(agent),
     executionRouter,
     shell,
-    localVfs: workspaceVfs,
+    localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
     sandboxHandle,

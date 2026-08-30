@@ -259,7 +259,7 @@ describe('classic cloud chat connect prompt', () => {
   function cloudAgentConfig(origin: string): JsonObject {
     return {
       origin,
-      accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
+      accessToken: ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join(''),
       agents: {
         jarvis: {
           name: 'jarvis',

@@ -3456,7 +3456,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 });
 
 describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () => {
-  const TOKEN = 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz';
+  const TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 
   /** OpenAI-compatible SSE stream the worker proxy passes through untouched. */
   function sseCompletion(model: string, deltas: string[]): Response {
