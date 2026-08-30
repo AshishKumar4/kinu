@@ -13,19 +13,34 @@ interface DeferredTurn {
   starts: () => number;
 }
 
+interface DeferredSettlement {
+  readonly promise: Promise<void>;
+  finish(): void;
+  fail(reason: Error): void;
+}
+
 function deferredTurn(): DeferredTurn {
   let started = 0;
   // The platform's own resolver pair, so the settle handles carry their types
   // instead of a hand-written anonymous shape restating them.
-  let settle: ReturnType<typeof Promise.withResolvers<void>> | null = null;
+  const unsettled: DeferredSettlement[] = [];
   return {
     begin: () => {
       started += 1;
-      settle = Promise.withResolvers<void>();
+      const settle = Promise.withResolvers<void>();
+      unsettled.push({
+        promise: settle.promise,
+        finish: () => { settle.resolve(); },
+        fail: (reason) => { settle.reject(reason); },
+      });
       return settle.promise;
     },
-    finish: () => { settle?.resolve(); },
-    fail: (reason: Error) => { settle?.reject(reason); },
+    finish: () => {
+      for (const settle of unsettled.splice(0)) settle.finish();
+    },
+    fail: (reason: Error) => {
+      for (const settle of unsettled.splice(0)) settle.fail(reason);
+    },
     starts: () => started,
   };
 }

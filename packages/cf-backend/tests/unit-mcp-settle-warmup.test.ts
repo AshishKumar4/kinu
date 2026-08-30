@@ -23,6 +23,9 @@ import { join } from 'node:path';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { orchestratorHarness, type RecordedUserPlaneCalls } from './helpers/actor-harness';
 import type { CompletedTurn } from '@kinu.run/core';
+import {
+  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
+} from '@kinu.run/core/obs';
 import {} from '../src/fiber-recovery';
 
 /**
@@ -46,12 +49,22 @@ function warmingActor(behaviour: { holdsCapability?: boolean; fail?: Error } = {
   return { harness, userPlane };
 }
 
+async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
+  const logger = createRecordingLogger();
+  const restore = setDiagnosticsSink(logger);
+  try {
+    await body();
+    return logger.emitted;
+  } finally {
+    restore();
+  }
+}
+
 describe('the settled turn warms the next turn’s MCP connections', () => {
   test('one settle asks the one UserDO authority exactly once, with this actor’s caller', async () => {
     const { harness, userPlane } = warmingActor();
 
-    harness.agent.harnessWarmUserMcp();
-    await joinHarnessFibers();
+    await harness.agent.harnessWarmUserMcp();
 
     // The caller is the workspace capability the row holds, resolved by the
     // production `userCaller()` rather than handed in by the test.
@@ -63,33 +76,29 @@ describe('the settled turn warms the next turn’s MCP connections', () => {
       fail: new Error('the MCP server refused the connection'),
     });
 
-    // Synchronous by contract: the lane is detached, so a throw inside it can
-    // never become this turn's failure. If it could, the settle would throw here
-    // and a turn that answered correctly would be recorded as failed.
-    expect(() => { harness.agent.harnessWarmUserMcp(); }).not.toThrow();
-
-    // Both halves matter, and the harness is what lets us see both: it retains
-    // the RAW fiber body so a test can join it, while production attached its
-    // own `.catch` to the promise `runFiber` returned. So the body really did
-    // reject — this is not a warm that quietly did nothing — and the rejection
-    // reached nobody through the spine.
-    await expect(joinHarnessFibers()).rejects.toThrow(/refused the connection/);
+    // Synchronous scheduling cannot turn a correct settled response into a
+    // failure; the returned join observes the contained lane outcome.
+    const logs = await recordDiagnostics(
+      async () => await harness.agent.harnessWarmUserMcp(),
+    );
+    expect(logs.map((line) => line.event)).toContain('mcp.settle_warmup_failed');
     expect(userPlane.warmConnections).toHaveLength(1);
   });
 
   test('the next settle retries — a failure needs no record to be retryable', async () => {
     const { harness, userPlane } = warmingActor({ fail: new Error('connection refused') });
 
-    harness.agent.harnessWarmUserMcp();
-    await expect(joinHarnessFibers()).rejects.toThrow(/connection refused/);
+    const logs = await recordDiagnostics(
+      async () => await harness.agent.harnessWarmUserMcp(),
+    );
+    expect(logs.map((line) => line.event)).toContain('mcp.settle_warmup_failed');
     expect(userPlane.warmConnections).toHaveLength(1);
 
     // The retry is the next settled turn, unconditionally. Nothing was stored
     // about the failure, and nothing had to be: the live connection is the
     // state, and a warm that already succeeded is idempotent inside UserDO.
     userPlane.failWarm = null;
-    harness.agent.harnessWarmUserMcp();
-    await joinHarnessFibers();
+    await harness.agent.harnessWarmUserMcp();
     expect(userPlane.warmConnections).toHaveLength(2);
   });
 
@@ -100,8 +109,7 @@ describe('the settled turn warms the next turn’s MCP connections', () => {
     // null owner. Deleting it is the real state, not an override of the reader.
     harness.db.prepare("DELETE FROM workspace_identity WHERE id = 'harness-actor'").run();
 
-    harness.agent.harnessWarmUserMcp();
-    await joinHarnessFibers();
+    await harness.agent.harnessWarmUserMcp();
 
     expect(userPlane.warmConnections).toEqual([]);
   });
@@ -113,8 +121,7 @@ describe('the settled turn warms the next turn’s MCP connections', () => {
     // token row is written, which IS that state.
     const { harness, userPlane } = warmingActor({ holdsCapability: false });
 
-    harness.agent.harnessWarmUserMcp();
-    await joinHarnessFibers();
+    await harness.agent.harnessWarmUserMcp();
 
     expect(userPlane.warmConnections).toEqual([]);
   });

@@ -2604,6 +2604,11 @@ export abstract class ActorAgent extends Think<Env> {
     })();
   }
 
+  /** The current MCP warm's observable settlement, for lifecycle joins. */
+  protected mcpWarmSettlement(): Promise<void> {
+    return this._mcpWarmTask?.promise ?? Promise.resolve();
+  }
+
   /**
    * The advisor lane: one review of the turn that just ended.
    *

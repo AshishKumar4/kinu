@@ -131,7 +131,7 @@ describe('a device that answers a cancellation for another command', () => {
     expect(v.parse(UnstoppedRowSchema, harness.db.prepare(
       `SELECT unstopped_at FROM user_devices WHERE id = ?`,
     ).all(harness.deviceId)[0]).unstopped_at).not.toBeNull();
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('is not stored as this request\'s answer on the tool\'s own abort path', async () => {
@@ -149,7 +149,7 @@ describe('a device that answers a cancellation for another command', () => {
       { agentName: WORKSPACE },
     )).rejects.toThrow(DEVICE_CANCEL_MISPAIRED);
     expect(requestRow(harness, requestId)?.cancel_outcome).toBeNull();
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 });
 
@@ -185,7 +185,7 @@ describe('a completion held past its own cancellation', () => {
 
     expect(harness.deviceFrames).toHaveLength(framesAtSettlement);
     expect(harness.db.prepare(`SELECT request_id FROM device_inflight_requests`).all()).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 });
 
@@ -213,11 +213,11 @@ describe('revoking consent while a command is running', () => {
     await expect(runCommand(harness, nextDeviceRequestId(), 'bun run deploy'))
       .rejects.toThrow(DEVICE_CONSENT_DENIED);
     expect(askedAbout(harness, 'exec')).toEqual(['bun run build']);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('revoking the device is the stop that revoking consent is not', async () => {
-    const { responder } = holdingDaemon();
+    const { responder, release } = holdingDaemon();
     const harness = await deviceHarness('ashish@studio', responder);
     harness.consentDecision = 'always';
     const requestId = nextDeviceRequestId();
@@ -235,6 +235,9 @@ describe('revoking consent while a command is running', () => {
     // comes back — the caller is told the device is gone, not given a result.
     await expect(running).rejects.toThrow(TUNNEL_DISCONNECTED);
     expect(harness.db.prepare(`SELECT request_id FROM device_inflight_requests`).all()).toEqual([]);
-    harness.close();
+    // Settle the simulated far-end fiber after the disconnected caller has
+    // already observed revocation. A late completion remains fenced.
+    release();
+    await harness.closeDeviceHarness();
   });
 });

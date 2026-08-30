@@ -310,7 +310,7 @@ describe("CLI inspection commands", () => {
     createLocalAgent(home, "localtest");
 
     const initial = runCli(home, ["effort", "localtest"]);
-    expect(initial.exitCode).toBe(0);
+    expect(initial.exitCode, initial.stderr.toString()).toBe(0);
     expect(initial.stdout.toString()).toContain("medium (chat default)");
 
     const set = runCli(home, ["effort", "localtest", "high"]);

@@ -4,7 +4,7 @@ import type { Baseline } from './gate';
 export const LOCKED_BASELINE: Baseline = {
   'backend-turn-driver/failure-classification': 'ff4bd2a7b65227c5',
   'backend-turn-driver/file-edit-row': '23e246f7308fdbd3',
-  'backend-turn-driver/overflow-applied': '5fb734fcf1494a57',
+  'backend-turn-driver/overflow-applied': '0a82d18ce02a03c6',
   'backend-turn-driver/overflow-recovery-plan': 'c12c8ada517dfde3',
   'backend-turn-driver/prompt-token-trigger': '1f11659c0558bb43',
   'backend-turn-driver/run-bracket': '9d79b402e3189d13',

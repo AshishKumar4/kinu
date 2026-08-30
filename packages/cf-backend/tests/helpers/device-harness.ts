@@ -34,6 +34,7 @@ export interface DeviceHarness extends TestUserDO {
   deviceId: string;
   workspace: UserCaller;
   sibling: UserCaller;
+  closeDeviceHarness(): Promise<void>;
 }
 
 /** How a machine answers this harness's frames — immediately, or later, which
@@ -58,5 +59,9 @@ export async function deviceHarness(
     deviceId,
     workspace: { workspaceToken: workspace } satisfies UserCaller,
     sibling: { workspaceToken: sibling } satisfies UserCaller,
+    closeDeviceHarness: async () => {
+      await harness.joinFibers();
+      harness.close();
+    },
   });
 }

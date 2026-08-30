@@ -130,13 +130,13 @@ interface Seam {
   /** End every live browser session at the ONE authority that decides it — the
    *  owner's own Durable Object — leaving the KV record where it is. */
   signOutAtAuthority(): Promise<void>;
-  close(): void;
+  close(): Promise<void>;
 }
 
 const open: Seam[] = [];
 
-afterEach(() => {
-  while (open.length > 0) open.pop()?.close();
+afterEach(async () => {
+  while (open.length > 0) await open.pop()?.close();
 });
 
 /**
@@ -257,7 +257,11 @@ async function seam(options: {
         .all();
       for (const row of rows) await user.userDO.revokeBrowserSession(owner, row.token_hash);
     },
-    close: () => { user.close(); stranger.close(); },
+    close: async () => {
+      await Promise.all([user.joinFibers(), stranger.joinFibers()]);
+      user.close();
+      stranger.close();
+    },
   };
   open.push(built);
   return built;

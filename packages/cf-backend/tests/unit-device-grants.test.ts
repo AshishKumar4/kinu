@@ -66,7 +66,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
       scope: 'full_filesystem',
       workspaceName: WORKSPACE,
     }]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('once the owner grants the workspace, calls run without asking again', async () => {
@@ -87,7 +87,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     expect(harness.consentPrompts).toHaveLength(1);
     expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0]))
       .toEqual(['git status', 'git log -1']);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
 
@@ -103,7 +103,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     )).rejects.toThrow(DEVICE_CONSENT_DENIED);
     expect(harness.deviceFrames).toEqual([]);
     expect(harness.consentPrompts[0]?.scope).toBe('full_filesystem');
-    harness.close();
+    await harness.closeDeviceHarness();
   });
   test('the grant covers file reads too — the whole device plane, not just exec', async () => {
     const harness = await deviceHarness();
@@ -122,7 +122,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     });
     expect(harness.deviceFrames.filter((f) => f.method === 'readFile').map((f) => f.params[0]))
       .toEqual(['/home/me/notes.md']);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('revoking the grant stops the next call — no restart, no cache to wait out', async () => {
@@ -140,7 +140,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['ls'], { agentName: WORKSPACE }))
       .rejects.toThrow(DEVICE_CONSENT_DENIED);
     expect(harness.deviceFrames.filter((f) => f.method === 'exec')).toHaveLength(1);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a grant belongs to one workspace: the sibling is still asked', async () => {
@@ -153,7 +153,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     await expect(harness.userDO.deviceRpc(harness.sibling, 'exec', ['ls'], { agentName: OTHER_WORKSPACE }))
       .rejects.toThrow(DEVICE_CONSENT_DENIED);
     expect(harness.consentPrompts.map((p) => p.workspace)).toEqual([OTHER_WORKSPACE]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('omitting agentName cannot bypass consent for workspace operations', async () => {
@@ -173,7 +173,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
       .toEqual(['exec', 'checkpointRestore']);
     expect(harness.consentPrompts.map((prompt) => prompt.scope))
       .toEqual(['full_filesystem', 'full_filesystem']);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('the closed checkpoint-read set stays consent-free', async () => {
@@ -184,7 +184,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
 
     expect(harness.consentPrompts).toEqual([]);
     expect(harness.deviceFrames.map((frame) => frame.method)).toEqual(['checkpointStatus']);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   /**
@@ -215,7 +215,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
       .toEqual([{ method: DEVICE_CANCEL_METHOD, params: [requestId, DEVICE_CANCEL_PROTOCOL] }]);
     // And it asked nobody: only the refused `exec` raised a card.
     expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('the identity the caller minted is the id the command is issued under', async () => {
@@ -232,7 +232,7 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
 
     expect(harness.deviceFrames.filter((frame) => frame.method === 'exec').map((frame) => frame.id))
       .toEqual([requestId]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 });
 
@@ -262,7 +262,7 @@ describe('durable device request ownership', () => {
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests`,
     ).all()).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a transfer of an unknown or foreign request reports no ownership change', async () => {
@@ -270,7 +270,7 @@ describe('durable device request ownership', () => {
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(
       harness.workspace, nextDeviceRequestId(), 'job-1',
     )).toEqual({ transferred: false });
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   /**
@@ -293,7 +293,7 @@ describe('durable device request ownership', () => {
     // A per-request transfer takes exactly one request identity plus one job
     // identity — no turn argument exists to widen it back to the whole turn.
     expect(seam.transferDeviceRequestToBackgroundJob).toHaveLength(3);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   /**
@@ -316,7 +316,7 @@ describe('durable device request ownership', () => {
       .toEqual({ transferred: false });
     expect(await sweep).toEqual([{ requestId: claimed, outcome: 'terminated' }]);
     expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1')).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a request that detached before the sweep is not cancelled by the turn', async () => {
@@ -331,7 +331,7 @@ describe('durable device request ownership', () => {
       .toEqual({ transferred: true });
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a failed kill releases its claim so a later sweep can retry the same request', async () => {
@@ -350,7 +350,7 @@ describe('durable device request ownership', () => {
     harness.attachDevice(harness.deviceId);
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('an activation that died holding a claim leaves the request cancellable again', async () => {
@@ -370,8 +370,9 @@ describe('durable device request ownership', () => {
     revived.attachDevice(harness.deviceId);
     expect(await revived.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
+    await revived.joinFibers();
     revived.close();
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a killed request whose acknowledgement fails is untransferable and cleaned up in the same activation', async () => {
@@ -406,7 +407,7 @@ describe('durable device request ownership', () => {
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a request killed before a restart is still untransferable and cleaned up after it', async () => {
@@ -434,8 +435,9 @@ describe('durable device request ownership', () => {
     expect(revived.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
+    await revived.joinFibers();
     revived.close();
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('an unknown cancellation whose acknowledgement fails is untransferable and keeps its answer', async () => {
@@ -469,7 +471,7 @@ describe('durable device request ownership', () => {
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a settled request reports its stored answer rather than a kill failure when the device is gone', async () => {
@@ -492,7 +494,7 @@ describe('durable device request ownership', () => {
     // And the revoked-device incident does not count a request already answered.
     expect(await harness.userDO.revokeDevice(await testOwner(), harness.deviceId))
       .toEqual({ ok: true, unstoppedCommands: 0 });
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a sweep that loses its row while the kill fails reports nothing for it', async () => {
@@ -517,7 +519,7 @@ describe('durable device request ownership', () => {
     };
 
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('an exec issued inside a detached scope is the job\'s from the insert, not the turn\'s', async () => {
@@ -538,7 +540,7 @@ describe('durable device request ownership', () => {
     expect(await harness.userDO.cancelDeviceRequestsForTurn(harness.workspace, 'turn-1')).toEqual([]);
     expect(await harness.userDO.cancelDeviceRequestsForBackgroundJob(harness.workspace, 'job-1'))
       .toEqual([{ requestId, outcome: 'terminated' }]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a revoked device\'s unresolved request cannot be detached into a job', async () => {
@@ -556,7 +558,7 @@ describe('durable device request ownership', () => {
     // cancel it: the unresolved command stays revocation's to report.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a request already owned by a job stops reporting success once its device is revoked', async () => {
@@ -576,7 +578,7 @@ describe('durable device request ownership', () => {
     // cancel what it would be told it owns.
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: false });
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('an exec refuses an owner that does not name a job', async () => {
@@ -593,7 +595,7 @@ describe('durable device request ownership', () => {
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
     expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('the owner cannot retire a revocation warning while the sweep still holds rows', async () => {
@@ -616,7 +618,7 @@ describe('durable device request ownership', () => {
     harness.db.prepare(`DELETE FROM device_inflight_requests WHERE device_id = ?`).run(harness.deviceId);
     expect(await harness.userDO.acknowledgeUnstoppedDevice(await testOwner(), harness.deviceId))
       .toEqual({ ok: true });
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a tool that cancelled its own exec and the turn sweep agree on one answer', async () => {
@@ -644,7 +646,7 @@ describe('durable device request ownership', () => {
     expect(harness.db.prepare(
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('an exec is refused when revocation lands inside its acknowledgement probe', async () => {
@@ -670,7 +672,7 @@ describe('durable device request ownership', () => {
       `SELECT request_id FROM device_inflight_requests WHERE request_id = ?`,
     ).all(requestId)).toEqual([]);
     expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a transfer to the job already cancelling the request reports no ownership change', async () => {
@@ -691,7 +693,7 @@ describe('durable device request ownership', () => {
       .run(requestId);
     expect(await harness.userDO.transferDeviceRequestToBackgroundJob(harness.workspace, requestId, 'job-1'))
       .toEqual({ transferred: true });
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a sweep whose claim is taken mid-flight sends no further frame for that row', async () => {
@@ -721,7 +723,7 @@ describe('durable device request ownership', () => {
     // belongs to whoever took it.
     expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_CANCEL_METHOD)
       .map((frame) => frame.params[0])).toEqual([first]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('revocation records its incident before the first kill and clears it only when all are confirmed', async () => {
@@ -748,7 +750,7 @@ describe('durable device request ownership', () => {
     // Every command was confirmed dead, so nothing is left to warn about.
     expect(harness.db.prepare(`SELECT unstopped_at FROM user_devices WHERE id = ?`)
       .all(harness.deviceId)).toEqual([{ unstopped_at: null }]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 });
 
@@ -799,7 +801,7 @@ describe('device revocation admission', () => {
       result: { requestId, cancelled: 'terminated' },
     }));
     expect(await revocation).toEqual({ ok: true, unstoppedCommands: 0 });
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 });
 
@@ -815,7 +817,7 @@ describe('a device is visible before it is usable', () => {
       { id: harness.deviceId, name: 'ashish@studio', os: null, hostname: null, connected: true },
     ]);
     expect(harness.consentPrompts).toEqual([]);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('the same read reports the grant once it exists', async () => {
@@ -826,7 +828,7 @@ describe('a device is visible before it is usable', () => {
 
     expect((await harness.userDO.deviceRuntimeStatus(harness.workspace)).workspaceGranted).toBe(true);
     expect((await harness.userDO.deviceRuntimeStatus(harness.sibling)).workspaceGranted).toBe(false);
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('a renamed device is renamed everywhere, because there is one name', async () => {
@@ -842,14 +844,14 @@ describe('a device is visible before it is usable', () => {
     expect(await harness.userDO.renameDevice(await testOwner(), 'dev-nope', 'x'))
       .toEqual({ ok: false });
     expect((await harness.userDO.listDevices(await testOwner()))[0].label).toBe('studio tower');
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 
   test('registration bounds the name before any surface can render it', async () => {
     const harness = await deviceHarness(`  ${'x'.repeat(120)}  `);
     expect((await harness.userDO.listDevices(await testOwner()))[0].label)
       .toBe('x'.repeat(80));
-    harness.close();
+    await harness.closeDeviceHarness();
   });
 });
 
@@ -869,6 +871,7 @@ describe('asking for a machine when there is none', () => {
       scope: 'all_local_actions',
       workspaceName: WORKSPACE,
     }]);
+    await harness.joinFibers();
     harness.close();
   });
 
@@ -921,6 +924,7 @@ describe('asking for a machine when there is none', () => {
     }
     // And answering did not raise a second card on the way out.
     expect(harness.raisedConsentIds).toEqual(['cons-1']);
+    await harness.joinFibers();
     harness.close();
   });
 
@@ -957,6 +961,7 @@ describe('asking for a machine when there is none', () => {
     expect((await harness.userDO.listDeviceConsents(await testOwner()))).toEqual([
       expect.objectContaining({ agentName: WORKSPACE, deviceId, policy: 'allow' }),
     ]);
+    await harness.joinFibers();
     harness.close();
   });
 });
@@ -1008,6 +1013,7 @@ describe('a copied device.json goes stale', () => {
     // And the device itself is unharmed: its current secret works.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), third ?? ''))
       .toEqual({ ok: true, deviceId });
+    await harness.joinFibers();
     harness.close();
   });
 
@@ -1020,6 +1026,7 @@ describe('a copied device.json goes stale', () => {
     await connectDaemon(harness, first);
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), first))
       .toEqual({ ok: true, deviceId });
+    await harness.joinFibers();
     harness.close();
   });
 
@@ -1044,6 +1051,7 @@ describe('a copied device.json goes stale', () => {
     // An elapsed window is refused, however recently the token was used.
     harness.sql.exec(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, 1, deviceId);
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
+    await harness.joinFibers();
     harness.close();
   });
 
@@ -1060,6 +1068,7 @@ describe('a copied device.json goes stale', () => {
     await connectDaemon(harness, rotated ?? '');
     const [row] = await harness.userDO.listDevices(await testOwner());
     expect(row.replacedAt).not.toBeNull();
+    await harness.joinFibers();
     harness.close();
   });
 });

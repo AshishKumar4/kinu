@@ -325,6 +325,10 @@ describe('a re-driven fork job stays one run', () => {
     const pendingHeads: PendingHead[] = [];
 
     const interruptedRuns = [drive(journal, spawned, false, 5, pendingHeads)];
+    for (let turn = 0; turn < 100 && pendingHeads.length < 5; turn += 1) {
+      await Promise.resolve();
+    }
+    expect(pendingHeads).toHaveLength(5);
     // Nothing retried it: the reconciliation that retires stale heads has run,
     // which is the state a workspace reopens in.
     journal.abandonRunning('no executor: outlived the activation that spawned it');

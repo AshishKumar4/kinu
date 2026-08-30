@@ -314,6 +314,19 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
           + 'registry to wire and nothing to sweep',
       },
     },
+    // The Agents SDK's durable execution rows. A subordinate opens its terminal
+    // recovery lane during start. A root creates the same tables only when its
+    // first durable fiber starts.
+    cf_agents_runs: {
+      'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('runFiber') },
+      'cf-subordinate': WIRED,
+      cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
+    },
+    cf_agents_fibers: {
+      'cf-orchestrator': { absent: LAZY_ON_FIRST_USE('runFiber') },
+      'cf-subordinate': WIRED,
+      cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
+    },
     // Gated commands parked on the owner. The TABLE is part of the shared
     // workspace schema everywhere; what differs is who can decide the rows —
     // the deferral channel is wired into the approval policy on cf, where the

@@ -75,7 +75,7 @@ import {
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportStatus, type TaskTurnEnding,
   TERMINAL_EFFECT_NAMES,
-  terminalEffect, overflowRetryTerminalEffect, keyedScope,
+  terminalEffect, keyedScope,
   RunEndReasonSchema, TurnContinuitySchema, WorkModeSchema, CompletedTurnSchema,
   ModelMessagesSchema, shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
@@ -86,7 +86,7 @@ import {
   turnProvenanceForMetadata, workModeForTurnMetadata,
   runChat, estimateTokens, INTERRUPTED_TURN, type CountableRequest,
   parseModelSpec, agentAffinityKey,
-  OVERFLOW_RETRY_EVENT,
+  OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
   classifyRunEnd, type RunEndFacts, type RunEndReason,
   normalizeUsage,
@@ -3510,7 +3510,29 @@ export class LocalAgentSession implements BackendHost {
           };
         },
       }),
-      overflow_retry: overflowRetryTerminalEffect(this.orch.signals),
+      overflow_retry: terminalEffect({
+        input: v.object({}),
+        run: (_input, scope) => {
+          const effectScope = keyedScope(scope);
+          const identity = effectScope === undefined
+            ? `overflow-retry:${crypto.randomUUID()}`
+            : `overflow-retry:${effectScope}`;
+          if (this.announcementOnDisk(identity)) {
+            return { status: 'completed', detail: 'the retry turn is on disk' };
+          }
+          if (!this.announcementInFlight(identity)) {
+            this.queue.push({
+              text: OVERFLOW_RETRY_TEXT,
+              kind: 'programmatic',
+              idempotencyKey: identity,
+              metadata: { kinuEvent: OVERFLOW_RETRY_EVENT },
+              settle: () => {},
+            });
+            this.pump();
+          }
+          return { status: 'owed', detail: 'the retry turn is queued and not yet on disk' };
+        },
+      }),
 
 
       turn_record: terminalEffect({

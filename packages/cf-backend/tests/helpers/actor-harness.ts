@@ -498,8 +498,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * `env.UserDO` binding the production path resolves. Nothing here asserts a
    * type it has not established.
    */
-  harnessWarmUserMcp(): void {
+  async harnessWarmUserMcp(): Promise<void> {
     this.warmUserMcpInBackground();
+    await this.mcpWarmSettlement();
   }
 
   /** Give this workspace the capability token every user-plane call is gated

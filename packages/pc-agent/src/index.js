@@ -1340,7 +1340,7 @@ function redactConnectSecrets(value, secrets) {
 }
 
 function connectFailureMessage(err, secrets) {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = err instanceof Error ? err.message : String(err?.message ?? err);
   const status = /Unexpected server response:\s*(\d{3})/.exec(raw);
   let message = raw;
   if (status && (status[1] === '401' || status[1] === '403')) {
