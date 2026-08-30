@@ -68,11 +68,11 @@ onTurnStart
 onTurnEnd
 ```
 
-`registerTools` is outside that sequence. Both backends call it before
-`onTurnStart`: `runChat` at `core/src/chat.ts:251`, the cloud bridge at
-`cf-backend/src/actor-agent.ts:3880`, before `assembleTurnMessages`. Its
-position is not guaranteed. Other hooks run in registration order;
-`prepareStep` and `transformContext` chain outputs.
+`registerTools` is outside that sequence. `runChat` in `core/src/chat.ts` and
+`ActorAgent.beforeTurn` in `cf-backend/src/actor-agent.ts` invoke it before
+`assembleTurnMessages`, which fires `onTurnStart`. Its position is not
+guaranteed. Other hooks run in registration order; `prepareStep` and
+`transformContext` chain outputs.
 
 ## Internal consumers
 
@@ -84,15 +84,16 @@ Both backends register these in order.
    `.kinu/compaction/<sessionKey>/<rangeHash>.md`. Its plan and token trigger
    share `compaction_state`; `onOutcome` resets dynamic context for `planned`
    and `invalidated`, never for a byte-stable replay.
-2. The user steer drain is `kinu.steering` on CLI
-   (`cli-backend/src/local-session.ts:2100`) and `kinu.user-steer` in cloud
-   (`cf-backend/src/actor-agent.ts:1121`). The shared `UserSteerDrain`
+2. The user steer drain is `kinu.steering` in
+   `cli-backend/src/local-session.ts` and `kinu.user-steer` in
+   `cf-backend/src/actor-agent.ts`. The shared `UserSteerDrain`
    `prepareStep` hook appends pending steers after tool results. Core marks rows
    with `STEER_METADATA_KEY` (`kinuSteer`) and `STEER_STEP_METADATA_KEY`
-   (`kinuSteerAtStep`) at `core/src/orchestrator/user-steer.ts:175-180`.
-3. `kinu.signals` (`core/src/orchestrator/agent-orchestrator.ts:165`; cloud
-   registration `cf-backend/src/actor-agent.ts:1129`) observes calls for
-   mechanical steering and delivers live signals at the next step.
+   (`kinuSteerAtStep`) in `core/src/orchestrator/user-steer.ts`.
+3. `kinu.signals` (`AgentOrchestrator.turnExtension` in
+   `core/src/orchestrator/agent-orchestrator.ts`; cloud registration in
+   `cf-backend/src/actor-agent.ts`) observes calls for mechanical steering and
+   delivers live signals at the next step.
 
 The steer drain precedes signals so a signal splice cannot shift replayed
 history indices.
@@ -116,11 +117,11 @@ worktree.
 `assembleTurnMessages` at `core/src/orchestrator/turn-context.ts:101-103`, so
 backend ordering cannot drift.
 
-Contributed tools pass two filters. Existing turn or MCP names drop before the
-merge (`cf-backend/src/actor-agent.ts:3879-3882`). Then the active profile
-keeps only names in `profile.allowedTools` through `actorActiveTools()`,
-`resolveAgentTurnProfile()`, and `activeTools`
-(`cf-backend/src/actor-agent.ts:3921-3925`).
+Contributed tools pass two filters. `extensionTools` in
+`cf-backend/src/actor-agent.ts` drops names already in the turn or MCP set
+before the merge. `resolveAgentTurnProfile()` then supplies
+`profile.allowedTools`; `effectiveActiveTools` and `effectiveTools` keep only
+allowed names.
 
 ## Notes
 
@@ -128,7 +129,9 @@ keeps only names in `profile.allowedTools` through `actorActiveTools()`,
 - `onToolResult.result` is full rendered output, shared with the streamed
   `tool-result` event and durable turn record. It stays unbounded because turn
   steering hashes it as call identity; a head slice could merge distinct
-  results. Bound your own render. `evidenceWindow` keeps both ends.
+  results. Bound your own render with `evidenceWindow`. It leaves text within a
+  positive character budget unchanged; otherwise it keeps both ends and names
+  the omitted middle.
 - The mutable scaffold, not extensions, replaces inference through
   `core/src/scaffold/inference-transform.ts` and Think's
   `_transformInferenceResult`.
