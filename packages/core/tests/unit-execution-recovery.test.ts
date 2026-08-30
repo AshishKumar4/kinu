@@ -161,19 +161,21 @@ function eventLog(): EventLog {
 /** Distinct failing calls, then one CHANGED call that runs clean — the shape
  *  the finding exists for. Driven through the same turn extension both
  *  backends register. */
-function grindThenRecover(orch: AgentOrchestrator): void {
+async function grindThenRecover(orch: AgentOrchestrator): Promise<void> {
+  const onToolResult = orch.turnExtension.onToolResult;
+  if (!onToolResult) throw new Error('Expected an onToolResult extension');
   for (let attempt = 0; attempt < 3; attempt++) {
-    orch.turnExtension.onToolResult!({
+    await onToolResult({
       toolName: 'run', args: { command: 'npm test', attempt }, result: 'Error (exit 1): npm not found', success: true,
     });
   }
-  orch.turnExtension.onToolResult!({
+  await onToolResult({
     toolName: 'run', args: { command: 'bun test' }, result: '12 tests passed', success: true,
   });
 }
 
 describe('the loop, through the production seams', () => {
-  test('a recovery observed mid-turn is durable immediately and injectable on the very next step', () => {
+  test('a recovery observed mid-turn is durable immediately and injectable on the very next step', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
@@ -181,7 +183,7 @@ describe('the loop, through the production seams', () => {
     const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
-    grindThenRecover(orch);
+    await grindThenRecover(orch);
 
     // Durable at the moment of observation — no turn boundary was crossed.
     const injectable = listRecoveryFindings(rt.storage.sql);
@@ -204,7 +206,8 @@ describe('the loop, through the production seams', () => {
       openTasks: { items: [], total: 0 },
       liveHeadRuns: { items: [], total: 0 },
       missingCapabilities: [],
-    }))!;
+    }));
+    if (!block) throw new Error('Expected an execution recovery context block');
     expect(block).toContain('## Proven by execution');
     expect(block).toContain('bun test');
 

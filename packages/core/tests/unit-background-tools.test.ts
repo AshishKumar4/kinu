@@ -75,9 +75,10 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
   test('on the interactive surface, a fork detaches the instant it spawns — not after the 30s threshold', async () => {
     const crossings: Array<{ kind: string; at: number }> = [];
     const start = performance.now();
+    const detached: Promise<unknown>[] = [];
     const jobRunner = fakeJobRunner(BACKGROUND_POLICY.interactive, (kind, promise) => {
       crossings.push({ kind, at: performance.now() - start });
-      void promise; // detach: keep the live work alive, exactly like the real runner
+      detached.push(promise);
       return { detached: true, jobId: 'job-fork' };
     });
     expect(jobRunner.policy.wakesAfterTurn).toBe(true);
@@ -93,6 +94,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     // threshold, and well before the 150ms exploration itself finishes.
     expect(elapsedMs).toBeLessThan(100);
     expect(out).toMatchObject({ background: true, jobId: 'job-fork', kind: 'agents' });
+    await Promise.all(detached);
   });
 
   test('on the one-shot surface a fork NEVER detaches — even one that far outruns the threshold returns its own answer', async () => {
@@ -103,9 +105,10 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     // throw the work away — a tree-search fork was measured doing exactly that,
     // 4 of 40 iterations before `bg_jobs_abandoned`.
     const crossings: string[] = [];
+    const detached: Promise<unknown>[] = [];
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
-      (kind, promise) => { crossings.push(kind); void promise; return { detached: true, jobId: 'job-fork-osh' }; },
+      (kind, promise) => { crossings.push(kind); detached.push(promise); return { detached: true, jobId: 'job-fork-osh' }; },
     );
     expect(jobRunner.policy.wakesAfterTurn).toBe(false);
 
@@ -115,6 +118,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
 
     expect(crossings).toEqual([]);
     expect(out).toEqual({ strategy: 'merge', text: 'merged fork answer' });
+    await Promise.all(detached);
   });
 
   test('the one-shot inline rule is spawn-shaped only — result-shaped work still detaches there', async () => {
@@ -122,15 +126,17 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     // there is the genuinely non-terminating work (a server, a VM) whose
     // result was never the point.
     const crossings: string[] = [];
+    const detached: Promise<unknown>[] = [];
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
-      (kind, promise) => { crossings.push(kind); void promise; return { detached: true, jobId: 'job-run' }; },
+      (kind, promise) => { crossings.push(kind); detached.push(promise); return { detached: true, jobId: 'job-run' }; },
     );
     const wrapped = wrapToolsForBackground({ run: fakeRunTool(60) }, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'serve' });
 
     expect(crossings).toEqual(['run']);
     expect(out).toMatchObject({ background: true, jobId: 'job-run', kind: 'run' });
+    await Promise.all(detached);
   });
 
   test('a non-fork agents action (hire/ask/list) is not detachable — always runs inline, on either surface', async () => {
@@ -155,9 +161,10 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
 
   test('run/execute_tools stay result-shaped even on the interactive surface — they race the threshold, never spawn-detach', async () => {
     const crossings: string[] = [];
+    const detached: Promise<unknown>[] = [];
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 20 },
-      (kind, promise) => { crossings.push(kind); void promise; return { detached: true, jobId: 'job-run' }; },
+      (kind, promise) => { crossings.push(kind); detached.push(promise); return { detached: true, jobId: 'job-run' }; },
     );
     const raw: ToolSet = { run: fakeRunTool(80) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
@@ -167,6 +174,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     // spawn announcement, because `run` never calls readSpawnStarted.
     expect(crossings).toEqual(['run']);
     expect(out).toMatchObject({ background: true, jobId: 'job-run', kind: 'run' });
+    await Promise.all(detached);
   });
 
   test('a fast run under the threshold returns inline — the axis never over-detaches ordinary work', async () => {

@@ -55,6 +55,38 @@ const MERGE: MergeOutput = {
   blind_spots: [],
 };
 
+interface PendingHead {
+  input: HeadInput;
+  resolve: (report: HeadReport) => void;
+}
+
+function completedReport(input: HeadInput): HeadReport {
+  return {
+    id: input.id,
+    status: 'completed',
+    summary: `${input.task} reported`,
+    evidence: [],
+    decisions: [],
+    artifactRefs: [],
+    fileChanges: [],
+    childHeadIds: [],
+    toolCalls: [],
+    usage: { input: 10, output: 10 },
+    wallClockMs: 5,
+    stepCount: 1,
+  };
+}
+
+async function settleInterruptedRuns(
+  pendingHeads: readonly PendingHead[],
+  runs: readonly Promise<unknown>[],
+): Promise<void> {
+  for (const { input, resolve } of pendingHeads) {
+    resolve(completedReport(input));
+  }
+  await Promise.all(runs);
+}
+
 function freshJournal() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
@@ -72,28 +104,21 @@ function freshJournal() {
  * never arrive, which is what a fork looks like when the activation driving it
  * dies. `settles: true` is the attempt that lands.
  */
-function runtime(opts: { settles: boolean; spawned: HeadInput[]; compiled?: string[] }): HeadRuntime {
+function runtime(opts: { settles: boolean; spawned: HeadInput[]; pendingHeads?: PendingHead[]; compiled?: string[] }): HeadRuntime {
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       opts.spawned.push(input);
       return {
         id: input.id,
         run: async () => {
-          if (!opts.settles) return Promise.withResolvers<HeadReport>().promise;
-          return {
-            id: input.id,
-            status: 'completed',
-            summary: `${input.task} reported`,
-            evidence: [],
-            decisions: [],
-            artifactRefs: [],
-            fileChanges: [],
-            childHeadIds: [],
-            toolCalls: [],
-            usage: { input: 10, output: 10 },
-            wallClockMs: 5,
-            stepCount: 1,
-          };
+          if (!opts.settles) {
+            const pendingHeads = opts.pendingHeads;
+            if (!pendingHeads) throw new Error('Unsettled test head must have an owner');
+            const pending = Promise.withResolvers<HeadReport>();
+            pendingHeads.push({ input, resolve: pending.resolve });
+            return pending.promise;
+          }
+          return completedReport(input);
         },
         async abort() {},
       };
@@ -117,8 +142,8 @@ function splitRequest(branches: number, rationale = TASK): SplitRequest {
 
 /** One drive of the head, exactly as `resumeBackgroundJob` drives it: a
  *  fresh controller call carrying the stored input and no run identity. */
-function drive(journal: HeadJournal, spawned: HeadInput[], settles: boolean, branches = 5) {
-  return new HeadController(runtime({ settles, spawned }), journal).run({
+function drive(journal: HeadJournal, spawned: HeadInput[], settles: boolean, branches = 5, pendingHeads?: PendingHead[]) {
+  return new HeadController(runtime({ settles, spawned, pendingHeads }), journal).run({
     mode: 'build',
     parentHeadId: null,
     inheritedContext: [],
@@ -130,8 +155,12 @@ describe('a re-driven fork job stays one run', () => {
   test('three interrupted drives and a fourth that lands are ONE run, not four', async () => {
     const { sql, journal } = freshJournal();
     const spawned: HeadInput[] = [];
+    const pendingHeads: PendingHead[] = [];
+    const interruptedRuns = Array.from(
+      { length: 3 },
+      () => drive(journal, spawned, false, 5, pendingHeads),
+    );
 
-    for (let i = 0; i < 3; i++) void drive(journal, spawned, false);
     await drive(journal, spawned, true);
 
     const runs = listForkRuns(sql, null, 30).items;
@@ -141,6 +170,7 @@ describe('a re-driven fork job stays one run', () => {
     // All four attempts' heads live under that one root.
     expect(new Set(spawned.map((head) => head.rootId)).size).toBe(1);
     expect(spawned).toHaveLength(20);
+    await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
   test('N heads requested stays exactly N journal rows through repeated resets', async () => {
@@ -155,9 +185,13 @@ describe('a re-driven fork job stays one run', () => {
     // re-spawns the SAME ids and `insertSpawn` re-opens the rows they already have.
     const { sql, journal } = freshJournal();
     const spawned: HeadInput[] = [];
+    const pendingHeads: PendingHead[] = [];
 
     // Three resets that never report, then one that lands.
-    for (let i = 0; i < 3; i++) void drive(journal, spawned, false);
+    const interruptedRuns = Array.from(
+      { length: 3 },
+      () => drive(journal, spawned, false, 5, pendingHeads),
+    );
     await drive(journal, spawned, true);
 
     const rows = sql<{ id: string; status: string; error_message: string | null }>`
@@ -184,6 +218,7 @@ describe('a re-driven fork job stays one run', () => {
     expect(listForkRuns(sql, null, 30).items).toHaveLength(1);
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_merge_results`[0]?.n).toBe(1);
+    await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
   test('two parents splitting at one depth get distinct branch ids', async () => {
@@ -215,12 +250,17 @@ describe('a re-driven fork job stays one run', () => {
     const { sql, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const compiled: string[] = [];
+    const pendingHeads: PendingHead[] = [];
 
-    for (let i = 0; i < 3; i++) {
-      void new HeadController(runtime({ settles: false, spawned, compiled }), journal).run({
+    const interruptedRuns = Array.from(
+      { length: 3 },
+      () => new HeadController(
+        runtime({ settles: false, spawned, pendingHeads, compiled }),
+        journal,
+      ).run({
         mode: 'build', parentHeadId: null, inheritedContext: [], request: splitRequest(5),
-      });
-    }
+      }),
+    );
     expect(compiled).toEqual([]);
 
     await new HeadController(runtime({ settles: true, spawned, compiled }), journal).run({
@@ -237,6 +277,7 @@ describe('a re-driven fork job stays one run', () => {
     const [row] = sql<{ merged_narrative: string }>`
       SELECT merged_narrative FROM head_merge_results`;
     expect(row?.merged_narrative).toBe(MERGE.narrative);
+    await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
   test('a settled run is never reclaimed: the next fork on the same task is its own run', async () => {
@@ -256,7 +297,8 @@ describe('a re-driven fork job stays one run', () => {
     const { sql, journal } = freshJournal();
     const spawned: HeadInput[] = [];
 
-    void drive(journal, spawned, false, 2);
+    const pendingHeads: PendingHead[] = [];
+    const interruptedRuns = [drive(journal, spawned, false, 2, pendingHeads)];
     await new HeadController(runtime({ settles: true, spawned }), journal).run({
       mode: 'build',
       parentHeadId: null,
@@ -266,6 +308,7 @@ describe('a re-driven fork job stays one run', () => {
 
     expect(listForkRuns(sql, null, 30).items.map((run) => run.task).slice().sort())
       .toEqual([TASK, 'a completely different question']);
+    await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
   /**
@@ -279,22 +322,26 @@ describe('a re-driven fork job stays one run', () => {
   test('an interrupted split reads as stopped, never as merged', async () => {
     const { sql, journal } = freshJournal();
     const spawned: HeadInput[] = [];
+    const pendingHeads: PendingHead[] = [];
 
-    void drive(journal, spawned, false);
+    const interruptedRuns = [drive(journal, spawned, false, 5, pendingHeads)];
     // Nothing retried it: the reconciliation that retires stale heads has run,
     // which is the state a workspace reopens in.
     journal.abandonRunning('no executor: outlived the activation that spawned it');
 
     const [run] = listForkRuns(sql, null, 30).items;
     expect(run).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'partial' });
-    expect(run!.winnerScore).toBeNull();
+    if (!run) throw new Error('Expected an interrupted fork run');
+    expect(run.winnerScore).toBeNull();
+    await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
   test('a recursive sub-split still anchors on its parent head, not on a task match', async () => {
     const { journal } = freshJournal();
     const spawned: HeadInput[] = [];
 
-    void drive(journal, spawned, false, 2);
+    const pendingHeads: PendingHead[] = [];
+    const interruptedRuns = [drive(journal, spawned, false, 2, pendingHeads)];
     await new HeadController(runtime({ settles: true, spawned }), journal).run({
       mode: 'build',
       parentHeadId: 'parent-head-1',
@@ -305,5 +352,6 @@ describe('a re-driven fork job stays one run', () => {
     const subSplit = spawned.slice(-2);
     expect(subSplit.every((head) => head.rootId === 'parent-head-1')).toBe(true);
     expect(subSplit.every((head) => head.parentId === 'parent-head-1')).toBe(true);
+    await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 });

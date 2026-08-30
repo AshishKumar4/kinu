@@ -77,22 +77,26 @@ describe('DeviceConsentRegistry', () => {
   test('resolving one prompt leaves its siblings waiting', async () => {
     const { reg } = registry();
     const first = reg.request(REQUEST);
-    reg.request({ ...REQUEST, command: 'rm -rf build' });
+    const sibling = reg.request({ ...REQUEST, command: 'rm -rf build' });
     expect(reg.list().map((c) => c.consentId)).toEqual(['cons-1', 'cons-2']);
 
     reg.resolve('cons-1', 'deny');
     expect(await first).toBe('deny');
     expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
+    expect(reg.resolve('cons-2', 'deny')).toBe(true);
+    expect(await sibling).toBe('deny');
   });
 
-  test('waiting prompts appear in the per-step dynamic context', () => {
+  test('waiting prompts appear in the per-step dynamic context', async () => {
     const { reg } = registry();
-    void reg.request(REQUEST);
+    const pending = reg.request(REQUEST);
     expect(reg.approvals()).toEqual([{
       id: 'cons-1',
       kind: 'device consent',
       detail: "ashish's laptop: git status",
     }]);
+    expect(reg.resolve('cons-1', 'deny')).toBe(true);
+    expect(await pending).toBe('deny');
   });
 });
 
@@ -139,16 +143,22 @@ describe('DeviceConsentRegistry identity', () => {
     expect(await retry).toBe('deny');
   });
 
-  test('a request differing in anything the card shows gets its own card', () => {
+  test('a request differing in anything the card shows gets its own card', async () => {
     const { reg } = registry();
-    void reg.request(REQUEST);
-    void reg.request({ ...REQUEST, command: 'rm -rf build' });
-    void reg.request({ ...REQUEST, method: 'readFile' });
-    void reg.request({ ...REQUEST, scope: 'full_filesystem' });
-    void reg.request({ ...REQUEST, deviceId: 'dev-2' });
-    void reg.request({ ...REQUEST, workspaceName: 'notes' });
+    const pending = [
+      reg.request(REQUEST),
+      reg.request({ ...REQUEST, command: 'rm -rf build' }),
+      reg.request({ ...REQUEST, method: 'readFile' }),
+      reg.request({ ...REQUEST, scope: 'full_filesystem' }),
+      reg.request({ ...REQUEST, deviceId: 'dev-2' }),
+      reg.request({ ...REQUEST, workspaceName: 'notes' }),
+    ];
     // Approving one action must never approve another, so none of these join.
     expect(reg.list()).toHaveLength(6);
+    for (const consent of reg.list()) {
+      expect(reg.resolve(consent.consentId, 'deny')).toBe(true);
+    }
+    await Promise.all(pending);
   });
 
   test('an answer arriving with the raised notice is accepted, not called unknown', async () => {
@@ -194,10 +204,11 @@ describe('DeviceConsentRegistry always-grant coverage', () => {
 
   test('a base-tier grant does not settle a prompt that needs the full-filesystem tier', async () => {
     const { reg } = registry();
-    void reg.request(REQUEST);
+    const base = reg.request(REQUEST);
     const wider = reg.request({ ...REQUEST, command: 'cat /etc/shadow', scope: 'full_filesystem' });
 
     reg.resolve('cons-1', 'always');
+    expect(await base).toBe('always');
     // Still waiting: the grant the owner gave does not reach this one.
     expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
     reg.resolve('cons-2', 'deny');
@@ -206,29 +217,34 @@ describe('DeviceConsentRegistry always-grant coverage', () => {
 
   test('a full-filesystem grant settles the base-tier prompts under it', async () => {
     const { reg } = registry();
-    void reg.request({ ...REQUEST, scope: 'full_filesystem' });
+    const fullFilesystem = reg.request({ ...REQUEST, scope: 'full_filesystem' });
     const narrower = reg.request({ ...REQUEST, command: 'ls ~' });
 
     reg.resolve('cons-1', 'always');
+    expect(await fullFilesystem).toBe('always');
     expect(await narrower).toBe('once');
     expect(reg.list()).toEqual([]);
   });
 
-  test('the provisioning card grants no device access, so it settles nothing else', () => {
+  test('the provisioning card grants no device access, so it settles nothing else', async () => {
     const { reg } = registry();
     const provision = { deviceId: '', deviceLabel: 'this computer', method: 'connect', scope: 'all_local_actions' } as const;
-    void reg.request({ ...provision, command: 'Connect this computer for "notes"' });
-    void reg.request({ ...provision, command: 'Connect this computer for "inbox"' });
+    const first = reg.request({ ...provision, command: 'Connect this computer for "notes"' });
+    const second = reg.request({ ...provision, command: 'Connect this computer for "inbox"' });
 
     reg.resolve('cons-1', 'always');
+    expect(await first).toBe('always');
     expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
+    expect(reg.resolve('cons-2', 'once')).toBe(true);
+    expect(await second).toBe('once');
   });
 
   test('a denial settles only the card it was given on', async () => {
     const { reg } = registry();
-    void reg.request(REQUEST);
+    const first = reg.request(REQUEST);
     const sibling = reg.request({ ...REQUEST, command: 'rm -rf build' });
     reg.resolve('cons-1', 'deny');
+    expect(await first).toBe('deny');
     expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
     reg.resolve('cons-2', 'once');
     expect(await sibling).toBe('once');

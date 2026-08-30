@@ -85,7 +85,7 @@ async function driveTurn(
   } catch (e) {
     threw = e instanceof Error ? e : new Error(String(e));
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
   return { events, threw, done: events.find((e) => e.type === 'done') };
 }
@@ -178,7 +178,7 @@ describe('a stream has no elapsed deadline', () => {
       },
     }), { headers: SSE_HEADERS }));
     let settled = false;
-    void pending.finally(() => { settled = true; });
+    const settledPending = pending.finally(() => { settled = true; });
 
     await started.promise;
     await Promise.resolve();
@@ -191,7 +191,7 @@ describe('a stream has no elapsed deadline', () => {
     ])));
     controller?.close();
 
-    const { threw, done } = await pending;
+    const { threw, done } = await settledPending;
     expect(threw).toBeNull();
     expect(done && done.type === 'done' ? done.text : '').toContain('started and completed');
   });
