@@ -116,7 +116,7 @@ export function usePagedScroll<Item>({
       setError(null);
       if (page.status === "end") setExhausted(true);
       else cursor.current = page.next;
-    }, (err) => {
+    }, (err: unknown) => {
       if (generation !== walk.current) return;
       setError(describeError(err));
     }).finally(() => {

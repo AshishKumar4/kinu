@@ -123,7 +123,7 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
     for (const file of convertible) transfer.items.add(file);
     void convertFileListToFileUIParts(transfer.files).then((parts) => {
       dispatch({ kind: "offer", parts, oversized });
-    }).catch((cause) => {
+    }).catch((cause: unknown) => {
       // A file the browser cannot read is an offer that never lands, not an
       // empty one: recording it keeps the drop from looking accepted while no
       // part ever appears.

@@ -693,6 +693,21 @@ export function useWorkspaceRpc(agentId: string) {
   return { rpc, connectionStatus };
 }
 
+/** A WeakSet owns terminal refresh work without extending its lifetime.
+ *  Expected RPC failures are reported at their source; this records only a
+ *  rejection that escapes that boundary. */
+const observedLiveRefreshes = new WeakSet<Promise<void>>();
+
+function observeLiveRefresh(work: Promise<void>): void {
+  observedLiveRefreshes.add(work.catch((cause: unknown) => {
+    diagnostics.failure('workspace.live_refresh_failed', toKinuError({
+      doing: 'refreshing live workspace data',
+      cause,
+      otherwise: 'io',
+    }));
+  }));
+}
+
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
  * Fetches all surface data via @callable RPCs on connect.
@@ -1078,7 +1093,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
       if (!isFirst) {
-        void refreshDeployedBuild().catch((error) => {
+        refreshDeployedBuild().catch((error: unknown) => {
           diagnostics.failure('session.build_check_failed', toKinuError({
             doing: 'check the deployed build after reconnect', cause: error, otherwise: 'io',
           }));
@@ -1102,7 +1117,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           sessionRecovery.rpcSucceeded();
           return value;
         },
-        (cause) => {
+        (cause: unknown) => {
           sessionRecovery.rpcFailed(cause, agent.readyState === WebSocket.OPEN);
           throw cause;
         },
@@ -1122,7 +1137,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
       void rpc("getSubordinateSnapshot", []).then(
         () => setSourceError("snapshot", null),
-        (error) => setSourceError("snapshot", errorMessage(error)),
+        (error: unknown) => setSourceError("snapshot", errorMessage(error)),
       );
     }, 25_000);
     return () => clearInterval(id);
@@ -1133,21 +1148,23 @@ export function useKinu(target?: string | KinuActorAddress) {
   // admission's job: re-running it admits a newer load, which retires this one.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    void loadWorkspaceSnapshot(
-      isSubordinate ? loadSubordinateData : loadAllData,
-      setSourceError,
-      (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
-      isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
-    ).then((outcome) => {
-      if (outcome === "superseded") return;
-      if (outcome === "loaded") {
-        failureStreak.current = 0;
-        return;
-      }
-      const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
-      failureStreak.current += 1;
-      timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
-    });
+    observeLiveRefresh(
+      loadWorkspaceSnapshot(
+        isSubordinate ? loadSubordinateData : loadAllData,
+        setSourceError,
+        (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
+        isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
+      ).then((outcome) => {
+        if (outcome === "superseded") return;
+        if (outcome === "loaded") {
+          failureStreak.current = 0;
+          return;
+        }
+        const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
+        failureStreak.current += 1;
+        timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
+      }),
+    );
     return () => clearTimeout(timer);
   }, [actorKey, isSubordinate, liveRefreshAdmission, loadGeneration, rpc, setSourceError, subordinate, workspace]);
 
@@ -1196,12 +1213,14 @@ export function useKinu(target?: string | KinuActorAddress) {
    * they were returned from the `steer_status` broadcast).
    */
   const abortChat = useCallback(async (): Promise<string[]> => {
-    stop();
     try {
-      const outcome = await rpc<{ returnedSteers?: string[] }>("cancelCurrentWork", []);
+      const [, outcome] = await Promise.all([
+        stop(),
+        rpc<{ returnedSteers?: string[] }>("cancelCurrentWork", []),
+      ]);
       return outcome.returnedSteers ?? [];
     } finally {
-      if (!isSubordinate) void refreshBackgroundJobs();
+      if (!isSubordinate) observeLiveRefresh(refreshBackgroundJobs());
     }
   }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
 
@@ -1260,13 +1279,13 @@ export function useKinu(target?: string | KinuActorAddress) {
           // Every head stopped mid-step. Whatever they had written is either
           // journalled or gone, and neither case is still being written.
           forgetDeltas();
-          void refreshBackgroundJobs();
+          observeLiveRefresh(refreshBackgroundJobs());
         } else if (msg.type === "pending_actions_changed") {
           // A command was parked on the owner, or they decided one. The queue
           // is polled, so the server pushes the fact rather than the rows —
           // one re-read keeps the tab badge and the queue the same answer,
           // and updates every open tab, not just the one that clicked.
-          void refreshPendingActions();
+          observeLiveRefresh(refreshPendingActions());
         } else if (msg.type === "branch_status") {
           const status = msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running";
           // A branch that has stopped is writing nothing. Its head id is
@@ -1376,8 +1395,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     });
   }, [rpc]);
   const refreshLiveData = useCallback((): Promise<void> => {
-    void refreshExposedPorts();
     return Promise.all([
+      refreshExposedPorts(),
       refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
       refreshCurrentLiveResource(
         "tools",
@@ -1415,7 +1434,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     // The SDK stops auto-redialling exactly when it sets `connectionError`,
     // so that is the condition under which Retry must force one.
     sessionRecovery.manualRetry(agentRef.current?.connectionError != null);
-    if (!isSubordinate) void refreshLiveData();
+    if (!isSubordinate) observeLiveRefresh(refreshLiveData());
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
   // Refresh surface data when a turn completes (streaming ends).
@@ -1426,7 +1445,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       wasStreaming.current = true;
     } else if (wasStreaming.current) {
       wasStreaming.current = false;
-      void refreshLiveData();
+      observeLiveRefresh(refreshLiveData());
     }
   }, [isStreaming, isSubordinate, refreshLiveData]);
 
@@ -1435,7 +1454,9 @@ export function useKinu(target?: string | KinuActorAddress) {
   // the run timeline for near-real-time spans — not every surface RPC.
   useEffect(() => {
     if (!isConnected || isSubordinate) return;
-    const interval = setInterval(() => { void refreshLiveData(); }, LIVE_DATA_REFRESH_MS);
+    const interval = setInterval(() => {
+      observeLiveRefresh(refreshLiveData());
+    }, LIVE_DATA_REFRESH_MS);
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate, refreshLiveData]);
 
@@ -1479,8 +1500,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     setBranchRuns(snap.branchRuns.map((run) => ({
       branchId: run.branchId, task: run.task, status: run.status,
     })));
-    void refreshExposedPorts();
-    void refreshPendingActions();
+    observeLiveRefresh(refreshExposedPorts());
+    observeLiveRefresh(refreshPendingActions());
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
@@ -1526,7 +1547,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         setSubordinates(roster);
         setSourceError("roster", null);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (generation !== subordinateRefreshGeneration.current) return;
         setSourceError("roster", errorMessage(err));
       });
@@ -1534,7 +1555,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   useEffect(() => {
     if (isSubordinate) return;
-    void refreshSubordinates();
+    observeLiveRefresh(refreshSubordinates());
   }, [isSubordinate, refreshSubordinates, loadGeneration]);
 
   useEffect(() => {
@@ -1657,7 +1678,7 @@ export function useKinu(target?: string | KinuActorAddress) {
               updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
             })));
           },
-          (err) => {
+          (err: unknown) => {
             if (seq !== searchSeq.current) return;
             setSourceError("memory", `Memory search failed: ${errorMessage(err)}`);
           },

@@ -50,7 +50,7 @@ export function useCreateWorkspace() {
       const created = await createWorkspaceFromMission(m);
       roster.upsert(created);
       onBeforeNavigate?.();
-      navigate(`/workspace/${created.name}`);
+      await navigate(`/workspace/${created.name}`);
     } catch (e) {
       setErr(renderThrownChain({ cause: e }));
       setBusy(false);

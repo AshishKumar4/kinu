@@ -32,6 +32,8 @@ import type { InlineSteer } from "@kinu.run/core";
 /** The notice id every line here writes, so one replaces the other rather than
  *  stacking two contradictory statuses over the same draft. */
 const NOTICE_ID = "steer";
+const observedSteerActions = new WeakSet<Promise<void>>();
+
 
 export interface SteerActionsDeps {
   /** `useKinu().steerChat` — resolves with where the text landed: spliced into
@@ -108,7 +110,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
         // Otherwise say nothing here: the server's `queued` broadcast is what
         // the line is read from, and it is the same fact for every open tab.
       },
-      (err) => {
+      (err: unknown) => {
         // Nothing was accepted, so the draft is still the user's — give it back
         // rather than reporting a failure over an empty composer.
         setDraft((current) => current === "" ? text : current);
@@ -122,14 +124,22 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
 
   const stop = useCallback(() => {
     setSettled(null);
-    void abortChat().then((returned) => {
-      if (returned.length === 0) return;
-      setDraft((current) => current.trim() === "" ? returned.join("\n\n") : current);
-      setSettled({
-        id: NOTICE_ID, tone: "warning",
-        text: "Stopped. What you had queued is back in the composer — the agent never saw it.",
+    const work = abortChat()
+      .then((returned) => {
+        if (returned.length === 0) return;
+        setDraft((current) => current.trim() === "" ? returned.join("\n\n") : current);
+        setSettled({
+          id: NOTICE_ID, tone: "warning",
+          text: "Stopped. What you had queued is back in the composer — the agent never saw it.",
+        });
+      })
+      .catch((err: unknown) => {
+        setSettled({
+          id: NOTICE_ID, tone: "danger",
+          text: `Couldn't stop the turn: ${describeError(err)}`,
+        });
       });
-    });
+    observedSteerActions.add(work);
   }, [abortChat, setDraft]);
 
   return { notice, steer, stop };
