@@ -21,6 +21,10 @@ tester.run("anti-slop/no-unknown-parameters", noUnknownParametersRule, {
     "type Parsed = { id: string }; function load(input: Parsed) { return input.id; }",
     "function widen(value: string | number) {}",
     "function narrowed(value: never) {}",
+    "Promise.resolve().catch((reason: unknown) => reason);",
+    'Promise.resolve()["catch"]((reason: unknown) => reason);',
+    "Promise.resolve().then(() => undefined, (reason: unknown) => reason);",
+    'Promise.resolve()["then"](() => undefined, (reason: unknown) => reason);',
   ],
   invalid: [
     { code: "function handle(input: unknown) {}", errors: [error] },
@@ -34,5 +38,13 @@ tester.run("anti-slop/no-unknown-parameters", noUnknownParametersRule, {
     { code: "function handle(input: string | unknown) {}", errors: [error] },
     { code: "function handle(input: unknown | string) {}", errors: [error] },
     { code: "type Alias = External; type External = unknown; function handle(input: Alias) {}", errors: [error] },
+    { code: "Promise.resolve().then((reason: unknown) => reason);", errors: [error] },
+    { code: 'Promise.resolve()["then"]((reason: unknown) => reason);', errors: [error] },
+    { code: "Promise.resolve()[method]((reason: unknown) => reason);", errors: [error] },
+    { code: "callbacks.onFailure((reason: unknown) => reason);", errors: [error] },
+    {
+      code: "Promise.resolve().catch((reason: unknown, extra: unknown) => extra);",
+      errors: [error],
+    },
   ],
 });
