@@ -655,7 +655,7 @@ async function readOptionalStdin(): Promise<string> {
   ]);
   if (first === 'idle') {
     // Not awaited: the idle path exists precisely to stop waiting on this pipe.
-    void reader.cancel().catch((error) => {
+    void reader.cancel().catch((error: unknown) => {
       process.stderr.write(`note: releasing idle stdin failed: ${renderThrownChain({ cause: error })}\n`);
     });
     process.stderr.write(

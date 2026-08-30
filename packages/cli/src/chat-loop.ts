@@ -101,7 +101,11 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       }
       return;
     }
-    void onExit();
+    void onExit().catch((error: unknown) => {
+      console.log(`\n${formatFailure({ cause: error })}\n`);
+      rl.close();
+      process.exit(1);
+    });
   };
   rl.on('SIGINT', onInterrupt);
   process.on('SIGINT', onInterrupt);
@@ -151,7 +155,9 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     if (!turnInFlight || consentAskPending || exiting) return;
     const input = line.trim();
     if (!input) return;
-    void onMidTurnLine(input);
+    void onMidTurnLine(input).catch((error: unknown) => {
+      console.log(`\n${formatFailure({ cause: error })}\n`);
+    });
   });
 
   await client.connect();

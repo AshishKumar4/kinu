@@ -159,20 +159,16 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
   };
 
   const notify = (client: AgentContext, sessionId: SessionId, update: SessionNotification['update']): void => {
-    void (async () => {
-      try {
-        await client.notify(CLIENT_METHODS.session_update, { sessionId, update });
-      } catch (error) {
-        // Notifications are fire-and-forget; a client that has gone away must not take down the
-        // turn that is still running. Reported on stderr because stdout carries the protocol — an
-        // undelivered update silently truncates what the editor shows of the turn.
-        diagnostics.failure(
-          'acp.session_update_undelivered',
-          toKinuError({ doing: 'delivering an acp session/update notification', cause: error, otherwise: 'io' }),
-          { sessionId },
-        );
-      }
-    })();
+    void client.notify(CLIENT_METHODS.session_update, { sessionId, update }).catch((error: unknown) => {
+      // Notifications are fire-and-forget; a client that has gone away must not take down the
+      // turn that is still running. Reported on stderr because stdout carries the protocol — an
+      // undelivered update silently truncates what the editor shows of the turn.
+      diagnostics.failure(
+        'acp.session_update_undelivered',
+        toKinuError({ doing: 'delivering an acp session/update notification', cause: error, otherwise: 'io' }),
+        { sessionId },
+      );
+    });
   };
 
   /** Translate one AgentClient event into its ACP session/update, or null when

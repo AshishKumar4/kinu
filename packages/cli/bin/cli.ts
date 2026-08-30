@@ -37,4 +37,6 @@ program.parse();
 // Once-a-day "newer Kinu available" notice. Fire-and-forget and fail-soft:
 // it never blocks the command, and shouldCheckForUpdate suppresses it in
 // non-TTY runs (CI, pipes, --json), when opted out, and within 24h.
-void runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) });
+void runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) }).catch((error: unknown) => {
+  printFailure({ cause: error });
+});

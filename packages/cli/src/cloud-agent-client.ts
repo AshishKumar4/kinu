@@ -386,7 +386,7 @@ export class CloudAgentClient implements AgentClient {
    *  response (and any pre-flight failure) streams through the event feed. */
   steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     if (this.activeTurns.size === 0) return false;
-    void this.submit(prompt, opts, true).catch((err) => {
+    void this.submit(prompt, opts, true).catch((err: unknown) => {
       this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
     });
     return true;
@@ -409,7 +409,7 @@ export class CloudAgentClient implements AgentClient {
         const r = v.parse(BranchTurnResultSchema, result);
         if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
       })
-      .catch((err) => fail(renderThrownChain({ cause: err })));
+      .catch((err: unknown) => fail(renderThrownChain({ cause: err })));
     return true;
   }
 
@@ -542,7 +542,7 @@ export class CloudAgentClient implements AgentClient {
     if (this.stoppingTurnIds.size > 0 && !this.stopPromise) {
       this.stopPromise = this.callRpc('cancelCurrentWork', [])
         .then(() => undefined)
-        .catch((err) => {
+        .catch((err: unknown) => {
           this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
         })
         .finally(() => {
@@ -828,7 +828,7 @@ export class CloudAgentClient implements AgentClient {
       dropped = true;
       if (this.ws === ws) this.ws = null;
       this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
-      void this.rebindInFlightTurns().catch((cause) => {
+      void this.rebindInFlightTurns().catch((cause: unknown) => {
         this.failInFlight(new Error(
           `Could not reconnect to resume this cloud turn: ${renderThrownChain({ cause })}`,
           { cause },
