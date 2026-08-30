@@ -224,6 +224,11 @@ interface PendingLocalTurn {
   result: AgentTurnResult | null;
 }
 
+interface AutoTitleOperation {
+  readonly controller: AbortController;
+  promise: Promise<void> | null;
+}
+
 /**
  * What a turn that never reported an end is worth.
  *
@@ -268,7 +273,7 @@ export class LocalAgentClient implements AgentClient {
   private closed = false;
   /** The one title operation may outlive opening or a turn, but never the
    * workspace database. Its owning client joins it during close. */
-  private autoTitleTask: Promise<void> | null = null;
+  private autoTitleTask: AutoTitleOperation | null = null;
   private readonly recorder = new SessionRecorder('local');
   /**
    * This process's claim on the one durable conversation in that database.
@@ -333,21 +338,28 @@ export class LocalAgentClient implements AgentClient {
   /** Start one title operation and retain its settlement on this client. */
   startAutoTitle(source: { mission: string; trigger: 'legacy-heal' | 'first-message' }): void {
     if (this.closed || this.autoTitleTask !== null) return;
-    let task: Promise<void> | null = null;
-    task = (async () => {
+    const owner: AutoTitleOperation = {
+      controller: new AbortController(),
+      promise: null,
+    };
+    this.autoTitleTask = owner;
+    owner.promise = (async () => {
       try {
-        await autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, this.deps.naming);
+        await autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, {
+          ...this.deps.naming,
+          signal: owner.controller.signal,
+        });
       } catch (cause) {
+        if (owner.controller.signal.aborted) return;
         diagnostics.failure(
           'workspace.title_save_failed',
           toKinuError({ doing: 'saving the workspace title', cause, otherwise: 'io' }),
           { workspace: this.agentName },
         );
       } finally {
-        if (task !== null && this.autoTitleTask === task) this.autoTitleTask = null;
+        if (this.autoTitleTask === owner) this.autoTitleTask = null;
       }
     })();
-    this.autoTitleTask = task;
   }
 
   get cliSession(): CliSession {
@@ -499,8 +511,9 @@ export class LocalAgentClient implements AgentClient {
     if (this.closed) return;
     this.closed = true;
     const autoTitleTask = this.autoTitleTask;
+    autoTitleTask?.controller.abort(new Error('the client is closing'));
     try {
-      if (autoTitleTask) await autoTitleTask;
+      if (autoTitleTask?.promise) await autoTitleTask.promise;
       await this.session.end();
     } finally {
       // Released BEFORE the handle closes, and even when settling threw: an

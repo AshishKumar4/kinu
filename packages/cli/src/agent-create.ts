@@ -90,7 +90,8 @@ export interface SuggestAgentIdentityOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
-  generate?: (mission: string) => Promise<string>;
+  signal?: AbortSignal;
+  generate?: (mission: string, signal?: AbortSignal) => Promise<string>;
 }
 
 /** The workspace's permanent slug plus the best title available for it: the
@@ -103,11 +104,13 @@ export async function suggestAgentIdentityFromMission(
   const fallback = fallbackWorkspaceIdentity(mission, opts.id ?? crypto.randomUUID());
   try {
     const raw = opts.generate
-      ? await opts.generate(mission)
+      ? await opts.generate(mission, opts.signal)
       : await generateTitleJson(mission, opts);
     const title = parseWorkspaceTitle(raw);
+    if (opts.signal?.aborted) throw opts.signal.reason;
     return title ? { ...fallback, displayName: title } : fallback;
   } catch (error) {
+    if (opts.signal?.aborted) throw opts.signal.reason;
     diagnostics.event('agent.title_fallback', { error: renderThrownChain({ cause: error }) });
     return fallback;
   }
@@ -417,6 +420,7 @@ async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOpti
     model: resolver.resolveModel(opts.model ?? null),
     system: WORKSPACE_TITLE_SYSTEM_PROMPT,
     prompt: workspaceTitlePrompt(mission),
+    abortSignal: opts.signal,
     // No output cap: reasoning models spend budget on thinking before the
     // JSON, so a cap starves them into empty text (the fallback-name bug).
     // Cheapness comes from low reasoning effort, not output caps.

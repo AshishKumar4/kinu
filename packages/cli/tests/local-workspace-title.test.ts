@@ -103,7 +103,36 @@ describe('local workspace auto-titling on open', () => {
 
     expect(config.getDisplayName()).toBe(MISSION);
     expect(config.getNameOrigin()).toBe('auto');
+
     expect(loadConfigFile().agents?.['workspace-7f159a']?.displayName).toBe(refTitle);
+  });
+
+  test('an explicit close aborts model naming before it can persist', async () => {
+    const { rt, config } = workspace('workspace-cancelled');
+    const started = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const task = autoTitleLocalWorkspace(
+      'workspace-cancelled',
+      rt,
+      { mission: MISSION, trigger: 'legacy-heal' },
+      {
+        signal: controller.signal,
+        generate: async (_mission, signal) => {
+          if (!signal) throw new Error('the naming signal is missing');
+          started.resolve();
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener('abort', () => { reject(signal.reason); }, { once: true });
+          });
+          return JSON.stringify({ title: 'Must Not Land' });
+        },
+      },
+    );
+    await started.promise;
+    controller.abort(new Error('the client closed'));
+
+    await expect(task).rejects.toThrow('the client closed');
+    expect(config.getDisplayName()).toBe(MISSION);
+    expect(config.getDisplayName()).not.toBe('Must Not Land');
   });
 
   test('a workspace with nothing to title from is left alone', async () => {
