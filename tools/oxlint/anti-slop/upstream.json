@@ -189,8 +189,8 @@
     },
     "rules/no-unknown-parameters.ts": {
       "upstream": "ab5cd31a9a464dd12e4e930298fcd773c1c1badfaf66619915d5435b5d57db61",
-      "local": "ad7f87fe66d593be97f35d5f44d3f99ee90e6a15a468609a7104b94840d792bf",
-      "reason": "Resolves type aliases, unions and parenthesised types to unknown instead of matching only a literal unknown annotation, and removes upstream's `cause` exemption. It exempts only a statically named `.catch` callback's first parameter or a statically named `.then` rejection callback's first parameter. The AST cannot prove thenability, so gate.test.ts pins typeAware; final integration enables `typescript/use-unknown-in-catch-callback-variable` before this ships."
+      "local": "e5580b03a1d9944eeffd341020c71ec34a76e64efb357820f37e7aa6ad780211",
+      "reason": "Resolves type aliases, unions and parenthesised types to unknown instead of matching only a literal unknown annotation, and grants no exemption to a parameter named `cause`. Upstream's two carve-outs both let unparsed boundary input through unflagged."
     },
     "rules/no-unknown-returns.test.ts": {
       "upstream": "bee5b77fe4f797fcc86d4704997bbf621f6e3909306717ef0e629c2ac692b159"

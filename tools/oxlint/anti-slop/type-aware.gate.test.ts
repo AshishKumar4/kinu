@@ -1,15 +1,13 @@
 /**
- * Type-aware linting gate. `oxlint-tsgolint` must be pinned at the exact
- * version the whole lint chain was measured against, `typeAware` must be the
- * one switch that turns the type-aware layer on (no `--type-check` — the
- * TypeScript compiler diagnostics belong to `tsc`, not to the linter), and the
- * 15 installed default type-aware correctness rules must all be explicitly
- * `off` so the default set is governed: a future oxlint release that flips a
- * new default on fails here instead of silently changing what the tree is
- * linted with. `typescript/return-await` is the only type-aware rule enabled,
- * and only at `error-handling-correctness-only`, so the rule catches the
- * `await` that swallows a rejection around a `try`/`finally` boundary and
- * stays silent on plain returns where `await` is stylistic.
+ * Type-aware linting gate. `oxlint-tsgolint` stays pinned to the version this
+ * policy measured. `typeAware` is the only semantic-engine switch; `typeCheck`
+ * stays absent because compiler diagnostics belong to `tsc`.
+ *
+ * The installed default semantic set is derived from Oxlint metadata. Fourteen
+ * default rules stay explicitly off. Three measured rules are active:
+ * `no-floating-promises`, `return-await`, and
+ * `use-unknown-in-catch-callback-variable`. The fixtures pin each rule's strict
+ * option and a corrected form of the same failure.
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -42,9 +40,9 @@ assert.equal(
 );
 
 // The 15 correctness rules oxlint-tsgolint@7.0.2001 marks both type-aware and
-// default-on. Every one is explicitly off, so enabling the semantic engine does
-// not add policy beside the one measured rule below. The metadata comparison
-// fails when a release changes this set.
+// default-on. Fourteen remain explicitly off. `no-floating-promises` is enabled
+// below with its strict option. The metadata comparison fails when a release
+// changes the default set.
 const defaultTypeAwareRules = [
   "typescript/await-thenable",
   "typescript/no-array-delete",
@@ -66,41 +64,50 @@ const defaultTypeAwareRules = [
 assert.equal(defaultTypeAwareRules.length, 15, "the semantic default set must be 15 rules");
 
 for (const name of defaultTypeAwareRules) {
+  if (name === "typescript/no-floating-promises") continue;
   assert.equal(
     config.rules[name],
     "off",
-    `${name} must be explicitly off; only return-await is enabled`,
+    `${name} must be explicitly off; only the three measured semantic rules are enabled`,
   );
 }
 
-// The one enabled type-aware rule, and the one option value that keeps it
-// pointed at error-handling correctness rather than style. The options matter
-// as much as the severity: "always" would flag every plain `return await` and
-// bury the rejection-swallowing case this rule exists for.
+assert.deepEqual(
+  config.rules["typescript/no-floating-promises"],
+  ["error", { ignoreVoid: false }],
+  "no-floating-promises must reject both bare and void-discarded promises",
+);
 assert.deepEqual(
   config.rules["typescript/return-await"],
   ["error", "error-handling-correctness-only"],
-  "return-await must be the only enabled type-aware rule, at error-handling-correctness-only",
+  "return-await must stay at error-handling-correctness-only",
+);
+assert.equal(
+  config.rules["typescript/use-unknown-in-catch-callback-variable"],
+  "error",
+  "Promise rejection callbacks must receive unknown values",
 );
 
-// Nothing else in the rules block may be type-aware: a second enabled
-// type-aware rule would be an unmeasured behavior change smuggled in beside
-// the governed one.
+// Nothing else in the TypeScript rule block may add semantic policy. The two
+// existing syntax rules are excluded because they do not use type information.
 const enabledTypeAware = Object.entries(config.rules)
   .filter(([name, setting]) => {
     if (!name.startsWith("typescript/")) return false;
-    if (name === "typescript/no-explicit-any" || name === "typescript/ban-ts-comment" || name === "typescript/return-await") {
-      return false;
-    }
+    if (name === "typescript/no-explicit-any" || name === "typescript/ban-ts-comment") return false;
     const severity = Array.isArray(setting) ? setting[0] : setting;
     return severity === "error" || severity === "warn";
   })
-  .map(([name]) => name);
+  .map(([name]) => name)
+  .sort();
 
 assert.deepEqual(
   enabledTypeAware,
-  [],
-  "no type-aware rule other than return-await may be enabled",
+  [
+    "typescript/no-floating-promises",
+    "typescript/return-await",
+    "typescript/use-unknown-in-catch-callback-variable",
+  ],
+  "only the three measured semantic rules may be enabled",
 );
 
 const RuleMetadataSchema = v.array(v.object({
@@ -182,6 +189,14 @@ export async function withLocalWritableDb(): Promise<number> {
     closeDb();
   }
 }
+export function droppedPromises(): void {
+  Promise.resolve();
+  void Promise.resolve();
+}
+export const observedCatch = Promise.reject(new Error("failed"))
+  .catch((reason) => String(reason));
+export const observedThen = Promise.resolve()
+  .then(() => undefined, (reason) => String(reason));
 `);
   writeFileSync(join(green, "case.ts"), `declare function closeDb(): void;
 declare function work(): Promise<number>;
@@ -192,35 +207,51 @@ export async function withLocalWritableDb(): Promise<number> {
     closeDb();
   }
 }
+export async function ownedPromises(): Promise<void> {
+  await Promise.resolve();
+  try {
+    await Promise.reject(new Error("failed"));
+  } catch (reason) {
+    String(reason);
+  }
+}
 export async function plainReturn(): Promise<number> {
   return work();
 }
 `);
 
   const redReport = lint([red], join(red, "tsconfig.json"));
-  const redFindings = redReport.diagnostics.filter((entry) =>
+  const redReturnAwait = redReport.diagnostics.filter((entry) =>
     entry.code === "typescript(return-await)");
+  const redFloating = redReport.diagnostics.filter((entry) =>
+    entry.code === "typescript(no-floating-promises)");
+  const redUnknown = redReport.diagnostics.filter((entry) =>
+    entry.code === "typescript(use-unknown-in-catch-callback-variable)");
   assert.equal(redReport.number_of_files, 1, "red fixture must lint exactly one file");
-  assert.equal(redFindings.length, 1, "returning a promise through finally must turn the gate red");
+  assert.equal(redReturnAwait.length, 1, "returning a promise through finally must turn the gate red");
+  assert.equal(redFloating.length, 2, "both bare and void-discarded promises must turn the gate red");
+  assert.equal(redUnknown.length, 2, "both catch and then rejection callbacks must turn the gate red");
 
   const greenReport = lint([green], join(green, "tsconfig.json"));
-  const greenFindings = greenReport.diagnostics.filter((entry) =>
-    entry.code === "typescript(return-await)");
   assert.equal(greenReport.number_of_files, 1, "green fixture must lint exactly one file");
-  assert.deepEqual(greenFindings, [], "return await fixes the error path; a plain return stays valid");
+  assert.deepEqual(
+    greenReport.diagnostics,
+    [],
+    "the corrected fixture must satisfy the semantic rules and strict anti-slop rules together",
+  );
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }
 
 const repository = lint(["."]);
-assert.ok(repository.number_of_files > 0, "return-await measured no repository files");
-assert.ok(repository.number_of_rules > 0, "return-await loaded no lint rules");
+assert.ok(repository.number_of_files > 0, "type-aware rules measured no repository files");
+assert.ok(repository.number_of_rules > 0, "type-aware rules loaded no lint rules");
 assert.deepEqual(
-  repository.diagnostics.filter((entry) => entry.code === "typescript(return-await)"),
+  repository.diagnostics,
   [],
-  "the active return-await policy has live findings",
+  "the active type-aware and anti-slop policies must be jointly clean over the repository",
 );
 
 console.log(
-  `type-aware: return-await proven red-to-green; ${installedDefaults.length} default type-aware correctness rules explicitly off; ${repository.number_of_files} live files clean. Blind spots: the selected mode governs only returns whose await changes local error handling; plain promise returns remain outside this policy.`,
+  `type-aware: 3 semantic rules proven red-to-green; ${installedDefaults.length - 1} default type-aware correctness rules explicitly off; ${repository.number_of_files} live files clean. Blind spots: return-await governs only error-handling contexts; Promise ownership can still be semantically wrong while syntactically handled; rejection values must still be narrowed before member access.`,
 );

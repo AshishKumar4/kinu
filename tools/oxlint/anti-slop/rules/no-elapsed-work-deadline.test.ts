@@ -77,10 +77,9 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
       filename: production,
     },
     {
-      code: "const timeout = timeoutMs === undefined ? undefined : setTimeout(() => proc.kill(), timeoutMs);",
+      code: "const timeout = timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(new Error('elapsed')), timeoutMs);",
       filename: production,
     },
-    { code: "executor({ timeout: NO_TIMER_DEADLINE_MS });", filename: production },
 
     // The only branch-process exception is its complete child readiness handshake. The message
     // listener resolves on `ready`; child error and exit listeners both clear the timer and reject.
@@ -131,15 +130,6 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
       filename: testHelper,
     },
 
-    // Known survivors in their production shapes.
-    {
-      code: "function raceAllowance<T>(ms: number, work: () => Promise<T>, onLate: (fault: { cause: Error | undefined }) => void): Promise<T> { let overran = false; const timer = setTimeout(() => { overran = true; onLate({ cause: undefined }); }, ms); return work(); }",
-      filename: "packages/devbox/src/lifecycle.ts",
-    },
-    {
-      code: "const probe = await rawExec(healthProbeCommand(port), { signal: AbortSignal.timeout(portWaitMs) });",
-      filename: "packages/devbox/src/devbox.ts",
-    },
     // These production timeout contracts are transport, scripts, or process liveness. They are
     // deliberately outside the policy's work-path scope.
     {
@@ -200,6 +190,57 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
       errors: [armError],
     },
     {
+      name: "the branch handshake requires the ready listener to clear its timer",
+      code: `await new Promise<void>((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
+  const handler = (msg: { method: string }) => {
+    if (msg.method === 'ready') { child.off('message', handler); resolve(); }
+  };
+  child.on('message', handler);
+  child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+  child.on('exit', (code) => {
+    if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
+  });
+});
+`,
+      filename: production,
+      errors: [armError],
+    },
+    {
+      name: "the branch handshake requires every rejecting child listener to clear its timer",
+      code: `await new Promise<void>((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
+  const handler = (msg: { method: string }) => {
+    if (msg.method === 'ready') { clearTimeout(timeout); child.off('message', handler); resolve(); }
+  };
+  child.on('message', handler);
+  child.on('error', (error) => reject(error));
+  child.on('exit', (code) => {
+    if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
+  });
+});
+`,
+      filename: production,
+      errors: [armError],
+    },
+    {
+      name: "the branch handshake listeners must belong to the same child",
+      code: `await new Promise<void>((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error('Branch worker startup timeout')), 30_000);
+  const handler = (msg: { method: string }) => {
+    if (msg.method === 'ready') { clearTimeout(timeout); readyChild.off('message', handler); resolve(); }
+  };
+  readyChild.on('message', handler);
+  child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+  child.on('exit', (code) => {
+    if (code !== 0) { clearTimeout(timeout); reject(new Error('Branch worker exited')); }
+  });
+});
+`,
+      filename: production,
+      errors: [armError],
+    },
+    {
       name: "arm 1 — a callback that throws ends work the same way",
       code: `setTimeout(() => {
   throw new Error('elapsed');
@@ -227,11 +268,19 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
       errors: [armError],
     },
     {
-      name: "arm 1 — void and await wrappers do not hide an ending",
-      code: `void setTimeout(async () => {
-  await Promise.resolve();
-  reject(new Error('elapsed'));
+      name: "arm 1 — function, return, await, and member-reject wrappers do not hide an ending",
+      code: `setTimeout(async function () {
+  return await pending.reject(new Error('elapsed'));
 }, ms);
+`,
+      filename: production,
+      errors: [armError],
+    },
+    {
+      name: "arm 1 — TypeScript wrappers do not hide an ending",
+      code: `setTimeout(() => (
+  controller!.abort(new Error('elapsed')) satisfies void
+), ms);
 `,
       filename: production,
       errors: [armError],
@@ -253,6 +302,15 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
   turnEnvelopeMs: number,
 ): void {
   setTimeout(() => pending.abort(new Error('budget exhausted after 600s')), turnEnvelopeMs);
+}
+`,
+      filename: production,
+      errors: [armError],
+    },
+    {
+      name: "an unrelated boolean does not make a deadline caller-selected",
+      code: `function maybeStop(enabled: boolean, timeoutMs: number): void {
+  if (enabled) setTimeout(() => reject(new Error('elapsed')), timeoutMs);
 }
 `,
       filename: production,

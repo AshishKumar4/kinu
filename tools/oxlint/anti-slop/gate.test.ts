@@ -187,12 +187,6 @@ assert.equal(config.rules["anti-slop/no-runtime-typeof"], "error");
 assert.deepEqual(config.ignorePatterns, ["node_modules", "dist", "tools/oxlint/anti-slop"]);
 assert.equal(config.options?.denyWarnings, true);
 assert.equal(config.options?.reportUnusedDisableDirectives, "error");
-assert.equal(
-  config.options?.typeAware,
-  true,
-  "type-aware linting must remain enabled while rejection callbacks may accept unknown",
-);
-
 
 // KINU-069. These two are oxlint BUILT-INS, so they own no rule file, no suite and no entry in
 // `expectedRules`; their whole existence is this config. That makes them the one kind of rule that

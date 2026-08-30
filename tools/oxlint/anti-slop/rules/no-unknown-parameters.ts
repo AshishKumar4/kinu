@@ -51,31 +51,11 @@ function referencedAliasName(type: ESTree.TSType): string | null {
     ? type.typeName.name
     : null;
 }
-function staticMemberName(member: ESTree.MemberExpression): string | null {
-  if (member.computed) {
-    return member.property.type === "Literal" && typeof member.property.value === "string"
-      ? member.property.value
-      : null;
-  }
-  return member.property.type === "Identifier" ? member.property.name : null;
-}
-
-/** A static rejection callback position; thenability belongs to the type-aware rule. */
-function isRejectionCallbackParameter(owner: ParameterOwner, parameter: Parameter): boolean {
-  if (owner.params[0] !== parameter) return false;
-  const call = owner.parent;
-  if (call.type !== "CallExpression" || call.callee.type !== "MemberExpression") return false;
-  const method = staticMemberName(call.callee);
-  return (
-    (method === "catch" && call.arguments[0] === owner) ||
-    (method === "then" && call.arguments[1] === owner)
-  );
-}
 
 /**
  * PROTEUS-LOCAL: upstream flags only a literal `unknown` annotation and exempts a parameter named
- * `cause`. This copy resolves aliases, unions and parentheses, and only exempts static rejection
- * callback positions. See tools/oxlint/anti-slop/upstream.json.
+ * `cause`. Both carve-outs let unparsed input through, so this copy resolves aliases, unions and
+ * parentheses and exempts nothing. See tools/oxlint/anti-slop/upstream.json.
  */
 /** Disallow unknown inputs; callers must pass a parsed or explicitly wrapped boundary value. */
 export const noUnknownParametersRule = defineRule({
@@ -132,7 +112,6 @@ export const noUnknownParametersRule = defineRule({
         ) {
           continue;
         }
-        if (isRejectionCallbackParameter(node, parameter)) continue;
         const name = parameterName(parameter, context.sourceCode.getText(parameter));
         context.report({
           node: annotation.typeAnnotation,
