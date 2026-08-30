@@ -18,37 +18,71 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
-import { orchestratorHarness } from './helpers/actor-harness';
+import {
+  orchestratorHarness,
+  type ActorHarness,
+  type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
 
-interface Broadcast {
-  type: string; rootId: string; phase: string;
-  nodeCount: number; nodes: Array<{ id: string }>;
-}
 const BroadcastSchema = v.object({
-  type: v.string(),
+  type: v.literal('mcts-progress'),
   rootId: v.string(),
+  isolateGen: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  pushSeq: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
   phase: v.string(),
   nodeCount: v.number(),
-  nodes: v.array(v.object({ id: v.string() })),
+  nodes: v.array(v.object({
+    id: v.string(),
+    task: v.string(),
+    observation: v.string(),
+  })),
+  head: v.nullable(v.object({
+    rootId: v.string(),
+    heads: v.array(v.object({
+      id: v.string(),
+      task: v.string(),
+      rationale: v.string(),
+      summary: v.nullable(v.string()),
+      errorMessage: v.nullable(v.string()),
+    })),
+  })),
 });
+type Broadcast = v.InferOutput<typeof BroadcastSchema>;
 
-function captureBroadcasts(agent: ReturnType<typeof orchestratorHarness>['agent']): Broadcast[] {
+type OrchestratorHarness = ActorHarness<HarnessOrchestratorAgent>;
+
+function captureBroadcasts(agent: HarnessOrchestratorAgent): Broadcast[] {
   const sent: Broadcast[] = [];
   Object.defineProperty(agent, 'broadcast', {
     configurable: true,
-    value: (payload: string) => { sent.push(v.parse(BroadcastSchema, JSON.parse(payload))); },
+    value: (payload: string) => {
+      const parsed = v.safeParse(BroadcastSchema, JSON.parse(payload));
+      if (parsed.success) sent.push(parsed.output);
+    },
   });
   return sent;
 }
 
 function seedNode(
-  harness: ReturnType<typeof orchestratorHarness>,
-  node: { id: string; root: string; parent?: string | null; depth?: number; visits?: number; at: number },
+  harness: OrchestratorHarness,
+  node: {
+    id: string; root: string; parent?: string | null; depth?: number; visits?: number; at: number;
+    task?: string; observation?: string;
+  },
 ): void {
   harness.db.prepare(
     `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, code_used, depth, visits, value, status, created_at)
-     VALUES (?, ?, ?, 'task', 'action', 'observation', NULL, ?, ?, 0.5, 'open', ?)`,
-  ).run(node.id, node.parent ?? null, node.root, node.depth ?? 0, node.visits ?? 1, node.at);
+     VALUES (?, ?, ?, ?, 'action', ?, NULL, ?, ?, 0.5, 'open', ?)`,
+  ).run(
+    node.id,
+    node.parent ?? null,
+    node.root,
+    node.task ?? 'task',
+    node.observation ?? 'observation',
+    node.depth ?? 0,
+    node.visits ?? 1,
+    node.at,
+  );
 }
 
 describe('broadcastMctsProgress', () => {
@@ -66,6 +100,50 @@ describe('broadcastMctsProgress', () => {
     expect(sent[0]!.type).toBe('mcts-progress');
     expect(sent[0]!.rootId).toBe('new-root');
     expect(sent[0]!.nodes.map((n) => n.id)).toEqual(['new-root']);
+  });
+
+  test('carries proposal text and a running journal node before settlement', async () => {
+    const harness = orchestratorHarness();
+    const sent = captureBroadcasts(harness.agent);
+    seedNode(harness, {
+      id: 'root',
+      root: 'root',
+      at: 1_000,
+      task: 'Find the latency regression',
+      observation: 'Start with the service trace.',
+    });
+
+    await harness.agent.headJournalRecordSplit('root', 'Investigate the candidate path.', 1_010);
+    await harness.agent.headJournalInsertSpawn({
+      id: 'running-node',
+      rootId: 'root',
+      parentId: 'root',
+      depth: 1,
+      task: 'Compare the two recent traces',
+      rationale: 'The branch is still collecting the missing observation.',
+      mode: 'build',
+      inheritedContext: [],
+      budget: { maxDepth: 0, spawnedAt: 1_020 },
+      mergeStrategy: 'synthesize',
+    });
+
+    const latest = sent.at(-1)!;
+    expect(latest.pushSeq).toBe(2);
+    expect(latest.nodes).toEqual([{
+      id: 'root',
+      task: 'Find the latency regression',
+      observation: 'Start with the service trace.',
+    }]);
+    expect(latest.head).toMatchObject({
+      rootId: 'root',
+      heads: [{
+        id: 'running-node',
+        task: 'Compare the two recent traces',
+        rationale: 'The branch is still collecting the missing observation.',
+        summary: null,
+        errorMessage: null,
+      }],
+    });
   });
 
   test('a grown tree is pushed; an unchanged one is not re-sent', () => {
@@ -131,6 +209,20 @@ describe('broadcastMctsProgress', () => {
     harness.agent.broadcastMctsProgress('b', 'evaluate', 2, 8);
     expect(sent.at(-1)!.rootId).toBe('b');
     expect(sent.at(-1)!.nodes.map((n) => n.id)).toEqual(['b', 'b1', 'b2']);
+
+    expect(sent.map(({ rootId, pushSeq }) => [rootId, pushSeq])).toEqual([
+      ['a', 1],
+      ['b', 1],
+      ['a', 2],
+      ['b', 2],
+    ]);
+
+    expect(sent.map(({ isolateGen }) => isolateGen)).toEqual([
+      sent[0]!.isolateGen,
+      sent[0]!.isolateGen,
+      sent[0]!.isolateGen,
+      sent[0]!.isolateGen,
+    ]);
   });
 
   /** Change detection is per search: a quiet A must not suppress a growing B,

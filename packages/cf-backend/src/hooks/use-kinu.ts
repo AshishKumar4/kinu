@@ -6,13 +6,12 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import {
   branchHeadId, ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
-  type AgentViewSummary, type PendingAction, type PlanReview,
-  type RoleSelection,
+  type AgentViewSummary, type PendingAction, type PlanReview, type RoleSelection,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { buildTree, type MctsRow } from "../lib/fork-tree-rows";
+import { explorationForkTree } from "../lib/fork-tree-rows";
 import type {
   ToolInfo,
   MemoryEntry,
@@ -211,13 +210,66 @@ const MctsRowSchema = v.object({
   value: v.number(),
   status: v.picklist(["open", "pruned", "terminal", "failed", "running"]),
   action: v.string(),
-  task: v.optional(v.string()),
-  observation: v.optional(v.string()),
+  task: v.string(),
+  observation: v.string(),
   code_used: v.optional(v.nullable(v.string())),
   branch_agent_key: v.optional(v.nullable(v.string())),
   msg_id: v.optional(v.nullable(v.string())),
   created_at: v.optional(v.number()),
 });
+
+const MctsProgressUsageSchema = v.object({
+  input: v.optional(v.number()),
+  output: v.optional(v.number()),
+  cacheRead: v.optional(v.number()),
+  cacheWrite: v.optional(v.number()),
+  cacheWrite1h: v.optional(v.number()),
+  reasoning: v.optional(v.number()),
+  neurons: v.optional(v.number()),
+});
+
+const MctsProgressHeadSchema = v.object({
+  rootId: v.string(),
+  task: v.string(),
+  rationale: v.string(),
+  status: v.string(),
+  spawnedAt: v.number(),
+  heads: v.array(v.object({
+    id: v.string(),
+    parentId: v.nullable(v.string()),
+    depth: v.number(),
+    task: v.string(),
+    rationale: v.string(),
+    status: v.string(),
+    summary: v.nullable(v.string()),
+    errorMessage: v.nullable(v.string()),
+    usage: MctsProgressUsageSchema,
+    wallClockMs: v.number(),
+    spawnedAt: v.number(),
+    lastStepAt: v.nullable(v.number()),
+    decisions: v.array(v.object({
+      question: v.string(),
+      choice: v.string(),
+      rationale: v.string(),
+    })),
+  })),
+  merge: v.nullable(v.object({
+    narrative: v.string(),
+    headCount: v.number(),
+    totalTokens: v.nullable(v.number()),
+  })),
+});
+
+const MctsProgressMessageSchema = v.object({
+  type: v.literal("mcts-progress"),
+  rootId: v.string(),
+  isolateGen: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  pushSeq: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+  nodes: v.array(MctsRowSchema),
+  head: v.nullable(MctsProgressHeadSchema),
+});
+
+export type MctsProgress = v.InferOutput<typeof MctsProgressMessageSchema>;
 
 const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
@@ -263,9 +315,7 @@ const SocketMessageSchema = v.variant("type", [
   // that follows carries the same one — which is how a replay is told from a
   // live failure without guessing.
   v.object({ type: v.literal("cf_agent_stream_resuming"), id: v.string() }),
-  v.object({
-    type: v.literal("mcts-progress"), rootId: v.string(), nodes: v.array(MctsRowSchema),
-  }),
+  MctsProgressMessageSchema,
   v.object({
     type: v.literal("device_consent"), consentId: v.string(), deviceLabel: v.string(),
     method: v.optional(v.string()), command: v.string(),
@@ -318,6 +368,47 @@ function parseSocketMessage(data: MessageEvent["data"]) {
   return decoded.success ? decoded.output : null;
 }
 
+
+/**
+ * The socket overlay that wins over a canvas poll. A poll's tree and a pushed
+ * tree are folded through the same `explorationForkTree` read model; keeping
+ * only the latest accepted push per root means a late poll remains underneath
+ * it instead of resurrecting an older snapshot.
+ */
+export interface MctsProgressOrder {
+  readonly isolateGen: number;
+  readonly pushSeq: number;
+}
+
+export interface MctsProgressState {
+  readonly trees: ReadonlyMap<string, ForkNode>;
+  readonly lastPush: ReadonlyMap<string, MctsProgressOrder>;
+}
+
+export function createMctsProgressState(): MctsProgressState {
+  return { trees: new Map(), lastPush: new Map() };
+}
+
+export function applyMctsProgress(
+  state: MctsProgressState,
+  progress: MctsProgress,
+): MctsProgressState {
+  const previous = state.lastPush.get(progress.rootId);
+  if (
+    previous !== undefined
+    && (
+      progress.isolateGen < previous.isolateGen
+      || (progress.isolateGen === previous.isolateGen && progress.pushSeq <= previous.pushSeq)
+    )
+  ) return state;
+  const tree = explorationForkTree({ tree: progress.nodes, head: progress.head });
+  if (tree === null) return state;
+  const trees = new Map(state.trees);
+  trees.set(progress.rootId, tree);
+  const lastPush = new Map(state.lastPush);
+  lastPush.set(progress.rootId, { isolateGen: progress.isolateGen, pushSeq: progress.pushSeq });
+  return { trees, lastPush };
+}
 /** Runtime admission for plan broadcasts/RPC results. The browser treats the
  * actor boundary as untrusted even though both ends share the TypeScript type. */
 export function parsePlanReview<Value>(value: Value): PlanReview | null {
@@ -938,23 +1029,18 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const isConnected = connectionStatus === "connected";
 
-  // Rebuild a search's tree only when ITS rows actually changed — the polls
-  // return identical data most ticks, and a fresh tree object identity makes
-  // the d3 visualization re-render (and drop tooltips) for nothing.
+  // The live overlay is keyed by root just like the canvas's polled tree map.
+  // Its payload folds the search rows and in-progress journal together, so a
+  // push cannot hide a running node that the poll already knows about.
   //
-  // Keyed by search root, because a workspace runs several searches at once and
-  // one slot made them fight over it: every surface guards the live tree on the
-  // selected run's id, so whichever search pushed last was the only live one and
-  // every other running search silently fell back to its 1.5s poll. The
-  // multi-tree canvas needs all of them at once regardless.
-  const mctsFingerprints = useRef(new Map<string, string>());
-  const setMctsTreeFromRows = useCallback((rootId: string, rows: MctsRow[]) => {
-    if (rows.length === 0) return;
-    const fp = rows.map((r) => `${r.id}:${r.visits}:${r.value}:${r.status}`).join("|");
-    if (fp === mctsFingerprints.current.get(rootId)) return;
-    mctsFingerprints.current.set(rootId, fp);
-    const tree = buildTree(rows);
-    setMctsTrees((prev) => new Map(prev).set(rootId, tree));
+  // A socket can replay a frame after reconnect. `pushSeq` is per root, so an
+  // old A cannot reject a fresh B and an old A cannot replace A's newer tree.
+  const mctsProgressState = useRef(createMctsProgressState());
+  const setMctsTreeFromProgress = useCallback((progress: MctsProgress) => {
+    const next = applyMctsProgress(mctsProgressState.current, progress);
+    if (next === mctsProgressState.current) return;
+    mctsProgressState.current = next;
+    setMctsTrees(next.trees);
   }, []);
 
   // Fetch all tab data. Keyed on a generation counter because a ref cannot
@@ -1152,7 +1238,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         if (msg.type === "cf_agent_chat_messages") {
           setTranscriptSeeded(true);
         } else if (msg.type === "mcts-progress") {
-          setMctsTreeFromRows(msg.rootId, msg.nodes);
+          setMctsTreeFromProgress(msg);
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => {
             if (prev.some((c) => c.consentId === msg.consentId)) return prev;
@@ -1254,7 +1340,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     };
   }, [
     agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshPendingActions,
-    retireDelta, setConsentResolutionError, setMctsTreeFromRows, isSubordinate,
+    retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate,
   ]);
 
   const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent(
@@ -1471,8 +1557,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTools([]);
     setMemory([]);
     setMemoryContent("");
-    setMctsTrees(new Map());
-    mctsFingerprints.current.clear();
+    mctsProgressState.current = createMctsProgressState();
+    setMctsTrees(mctsProgressState.current.trees);
     setExecutors([]);
     setExecutorOutputs(new Map());
     setLastActiveExecutor(null);

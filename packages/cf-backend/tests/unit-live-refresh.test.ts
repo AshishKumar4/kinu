@@ -1,17 +1,21 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  applyMctsProgress,
   createLiveRefreshAdmission,
+  createMctsProgressState,
   formatWorkspaceError,
   loadWorkspaceSnapshot,
   refreshLiveResource,
   resolvePendingConsent,
+  type LiveRefreshAdmission,
   type LiveRefreshErrors,
   type LiveRefreshSource,
+  type MctsProgress,
 } from '../src/hooks/use-kinu';
 
 const TEST_ACTOR = 'actor';
 
-function activeAdmission(): ReturnType<typeof createLiveRefreshAdmission> {
+function activeAdmission(): LiveRefreshAdmission {
   const admission = createLiveRefreshAdmission();
   admission.activateActor(TEST_ACTOR);
   return admission;
@@ -42,6 +46,124 @@ function consentReporter(initial: ReadonlyMap<string, string> = new Map()) {
     },
   };
 }
+
+function mctsProgress(
+  rootId: string,
+  isolateGen: number,
+  pushSeq: number,
+  observation: string,
+): MctsProgress {
+  return {
+    type: 'mcts-progress',
+    rootId,
+    isolateGen,
+    pushSeq,
+    nodes: [{
+      id: rootId,
+      parent_id: null,
+      root_id: rootId,
+      depth: 0,
+      visits: 1,
+      value: 0.5,
+      status: 'open',
+      action: 'investigate',
+      task: `Task for ${rootId}`,
+      observation,
+    }],
+    head: null,
+  };
+}
+
+describe('MCTS progress admission', () => {
+  test('a fresh isolate supersedes its predecessor without admitting either replay', () => {
+    const oldIsolate = applyMctsProgress(
+      createMctsProgressState(),
+      mctsProgress('root', 7, 80, 'the prior isolate observation'),
+    );
+    const freshIsolate = applyMctsProgress(
+      oldIsolate,
+      mctsProgress('root', 8, 1, 'the new isolate observation'),
+    );
+    const delayedPriorIsolate = applyMctsProgress(
+      freshIsolate,
+      mctsProgress('root', 7, 81, 'a delayed prior-isolate observation'),
+    );
+    const replay = applyMctsProgress(
+      freshIsolate,
+      mctsProgress('root', 8, 1, 'the replayed new-isolate observation'),
+    );
+
+    expect(freshIsolate.trees.get('root')?.observation).toBe('the new isolate observation');
+    expect(freshIsolate.lastPush.get('root')).toEqual({ isolateGen: 8, pushSeq: 1 });
+    expect(delayedPriorIsolate).toBe(freshIsolate);
+    expect(replay).toBe(freshIsolate);
+  });
+
+  test('folds a running journal node and its text into the pushed tree', () => {
+    const progress: MctsProgress = {
+      ...mctsProgress('root', 1, 1, 'the root observation'),
+      head: {
+        rootId: 'root',
+        task: 'Root investigation',
+        rationale: 'Compare the active branches.',
+        status: 'running',
+        spawnedAt: 1,
+        heads: [{
+          id: 'running-node',
+          parentId: 'root',
+          depth: 1,
+          task: 'Inspect the slow query',
+          rationale: 'It is the only branch with an unexplained wait.',
+          status: 'running',
+          summary: 'The query is still collecting its observation.',
+          errorMessage: null,
+          usage: {},
+          wallClockMs: 0,
+          spawnedAt: 2,
+          lastStepAt: null,
+          decisions: [],
+        }],
+        merge: null,
+      },
+    };
+
+    const state = applyMctsProgress(createMctsProgressState(), progress);
+
+    expect(state.trees.get('root')?.children).toMatchObject([{
+      id: 'running-node',
+      task: 'Inspect the slow query',
+      observation: 'The query is still collecting its observation.',
+      status: 'running',
+    }]);
+  });
+
+  test('two roots admit and reject progress independently', () => {
+    const a = applyMctsProgress(createMctsProgressState(), mctsProgress('a', 7, 2, 'a current'));
+    const both = applyMctsProgress(a, mctsProgress('b', 7, 1, 'b first'));
+    const replayedA = applyMctsProgress(both, mctsProgress('a', 7, 1, 'a stale'));
+
+    expect(replayedA).toBe(both);
+    expect([...both.trees].map(([rootId, tree]) => [rootId, tree.observation])).toEqual([
+      ['a', 'a current'],
+      ['b', 'b first'],
+    ]);
+  });
+
+  test('an actor switch clears progress ordering for the next actor', () => {
+    const previousActor = applyMctsProgress(
+      createMctsProgressState(),
+      mctsProgress('root', 7, 80, 'the previous actor'),
+    );
+    const nextActor = applyMctsProgress(
+      createMctsProgressState(),
+      mctsProgress('root', 1, 1, 'the next actor'),
+    );
+
+    expect(previousActor.lastPush.get('root')).toEqual({ isolateGen: 7, pushSeq: 80 });
+    expect(nextActor.lastPush.get('root')).toEqual({ isolateGen: 1, pushSeq: 1 });
+    expect(nextActor.trees.get('root')?.observation).toBe('the next actor');
+  });
+});
 
 describe('workspace live refresh failures', () => {
   test('an older completion cannot replace data from a newer refresh', async () => {

@@ -148,7 +148,7 @@ import {
   // The control plane both roots expose over the same core implementations.
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
   type CancelWorkOutcome, type ChatHistoryEntry, type Page, type PageRequest,
-  type MctsSearchStore, readSearchTree, type MCTSProgressEvent,
+  type MctsSearchStore, readSearchTree, isSteerBranchRunId, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
   // Skills + per-turn surface (core turn-surface)
@@ -3068,6 +3068,8 @@ export abstract class ActorAgent extends Think<Env> {
    *  after its write has returned and never lets a throw here reach core. */
   private announceHeadActivity(headId: string): void {
     this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
+    const rootId = this.headJournal.readHead(headId)?.root_id ?? headId;
+    if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId, 'head-activity');
   }
 
   /**
@@ -3255,22 +3257,28 @@ export abstract class ActorAgent extends Think<Env> {
    * its own phase and budget, and a backpropagation (visits change, no insert,
    * so never "latest") was suppressed by the shared fingerprint as a no-change.
    *
-   * Several events fire per iteration and each carries the WHOLE tree —
-   * observations and proposed code included — so a tree that has not changed
-   * SINCE ITS OWN last push is skipped rather than re-serialized and fanned out.
-   * The fingerprint is therefore per search: one search going quiet must not
-   * mask another that is growing.
+   * Each payload carries BOTH durable halves of a run. `search_nodes` contains
+   * scored candidates; the head journal is the only row for an agent node while
+   * it is still working. Sending only the former made a live overlay replace a
+   * poll's complete tree with a lone root until every node settled.
+   *
+   * `(isolateGen, pushSeq)` orders a root's frames. A cold isolate starts its
+   * local sequence at one, so its persisted generation distinguishes that fresh
+   * frame from a replay the prior isolate sent.
    */
   broadcastMctsProgress(rootId: string, phase: string, iteration?: number, budget?: number): void {
     try {
       const nodes = readSearchTree(this.boundSql, rootId);
-      if (nodes.length === 0) return;
-      const fingerprint = nodes.map((n) => `${n.id}:${n.visits}:${n.value}:${n.status}`).join('|');
+      const head = this.headJournal.readRun(rootId);
+      if (nodes.length === 0 && head === null) return;
+      const fingerprint = JSON.stringify([nodes, head]);
       if (fingerprint === this._lastMctsFingerprint.get(rootId)) return;
       this._lastMctsFingerprint.set(rootId, fingerprint);
+      const pushSeq = (this._mctsPushSeq.get(rootId) ?? 0) + 1;
+      this._mctsPushSeq.set(rootId, pushSeq);
       this.broadcast(JSON.stringify({
-        type: 'mcts-progress', rootId, phase, iteration, budget,
-        nodeCount: nodes.length, nodes,
+        type: 'mcts-progress', rootId, isolateGen: this.isolateGeneration, pushSeq, phase, iteration, budget,
+        nodeCount: nodes.length, nodes, head,
       }));
     } catch (err) {
       diagnostics.failure('mcts.progress_broadcast_failed', toKinuError({
@@ -3285,6 +3293,10 @@ export abstract class ActorAgent extends Think<Env> {
    *  lifetime: a reconnecting client is served by the surface's own poll, not by
    *  a resend. */
   private readonly _lastMctsFingerprint = new Map<string, string>();
+
+  /** Last accepted live frame per root. A root's sequence never shares a
+   * counter with another concurrent search. */
+  private readonly _mctsPushSeq = new Map<string, number>();
 
   /** One MCTS progress event → the broadcast, whichever producer raised it. */
   protected onMctsProgress(event: MCTSProgressEvent): void {
@@ -3841,6 +3853,13 @@ export abstract class ActorAgent extends Think<Env> {
     return this._boundSql;
   }
 
+
+  /** Persisted once per activation. Both tracing and live MCTS frames consume
+   * this getter, so observing one cannot advance the other into a new isolate. */
+  private _isolateGeneration: number | null = null;
+  protected get isolateGeneration(): number {
+    return (this._isolateGeneration ??= this.config.countIsolateGeneration());
+  }
   private _tracing: AgentTracing | null = null;
   /**
    * The tracing seam, one per construction of this object.
@@ -3864,7 +3883,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._tracing) {
       this._tracing = createAgentTracing({
         tracer: createWorkersTracer(),
-        isolateGen: this.config.countIsolateGeneration(),
+        isolateGen: this.isolateGeneration,
         selfPath: this.selfPath,
       });
     }
