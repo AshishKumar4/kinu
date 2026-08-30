@@ -75,7 +75,7 @@ interface CorpseProxy {
   /** Close every upstream half. Client sockets stay ESTABLISHED — the corpse. */
   sever(): void;
   /** Redial upstream for every held client socket and resume piping. */
-  restore(): void;
+  restore(): Promise<void>;
   /** Close client AND upstream halves — what the browser sees as a real drop. */
   dropAll(): void;
   stop(): void;
@@ -148,35 +148,36 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
     endQuietly("dropping a pipe's client", pipe.client);
   }
 
-  function dial(pipe: Pipe): void {
+  async function dial(pipe: Pipe): Promise<void> {
     if (pipe.dialing || pipe.upstream) return;
     pipe.dialing = true;
-    Bun.connect({
-      hostname: "127.0.0.1",
-      port: upstreamPort,
-      socket: {
-        data(_upstream, chunk) {
-          try {
-            pipe.client.write(chunk);
-          } catch (cause) {
-            log(`proxy: client write failed: ${String(cause)}`);
-          }
+    try {
+      const up = await Bun.connect({
+        hostname: "127.0.0.1",
+        port: upstreamPort,
+        socket: {
+          data(_upstream, chunk) {
+            try {
+              pipe.client.write(chunk);
+            } catch (cause) {
+              log(`proxy: client write failed: ${String(cause)}`);
+            }
+          },
+          close() {
+            if (!pipe.upstream) return;
+            pipe.upstream = null;
+            pipe.upstreamLost = true;
+            if (pipe.kind === "agent-ws") {
+              log("proxy: AGENT WS upstream lost — socket is now a corpse (no events reach the page)");
+              return;
+            }
+            log(`proxy: ${pipe.kind} upstream closed — client held for redial`);
+          },
+          error(cause) {
+            log(`proxy: upstream socket error: ${String(cause)}`);
+          },
         },
-        close() {
-          if (!pipe.upstream) return;
-          pipe.upstream = null;
-          pipe.upstreamLost = true;
-          if (pipe.kind === "agent-ws") {
-            log("proxy: AGENT WS upstream lost — socket is now a corpse (no events reach the page)");
-            return;
-          }
-          log(`proxy: ${pipe.kind} upstream closed — client held for redial`);
-        },
-        error(cause) {
-          log(`proxy: upstream socket error: ${String(cause)}`);
-        },
-      },
-    }).then((up) => {
+      });
       pipe.dialing = false;
       if (state === "severed") {
         // sever() swept while this dial was in flight; cut it too.
@@ -195,12 +196,12 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
           log(`proxy: queued write failed: ${String(cause)}`);
         }
       }
-    }).catch((cause: unknown) => {
+    } catch (cause) {
       pipe.dialing = false;
       // Dial failures are expected while the dev server is down; restore()
       // redials every healable pipe.
       log(`proxy: upstream dial failed (${String(cause)})`);
-    });
+    }
   }
 
   /** Whether this pipe may ever receive a fresh upstream after losing one. */
@@ -212,7 +213,7 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
     hostname: "127.0.0.1",
     port,
     socket: {
-      data(socket, chunk) {
+      async data(socket, chunk) {
         let pipe = pipeBySocket.get(socket);
         if (!pipe) {
           const fresh: Pipe = {
@@ -237,7 +238,7 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
         if (pipe.kind === "agent-ws" && pipe.upstreamLost) return; // CORPSE: swallow forever
         if (pipe.kind === "vite-ping") return; // production has no HMR escape hatch
         if (pipe.queue.length < DIAL_QUEUE_CHUNKS) pipe.queue.push(chunk);
-        dial(pipe);
+        await dial(pipe);
       },
       close(socket) {
         const pipe = pipeBySocket.get(socket);
@@ -265,9 +266,13 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
         pipe.upstreamLost = true;
       }
     },
-    restore() {
+    async restore(): Promise<void> {
       state = "pass";
-      for (const pipe of pipes) if (!pipe.upstream && isHealable(pipe)) dial(pipe);
+      await Promise.all(
+        Array.from(pipes, (pipe) =>
+          !pipe.upstream && isHealable(pipe) ? dial(pipe) : undefined,
+        ),
+      );
     },
     dropAll() {
       // dropPipe removes from `pipes`; iterate a copy.
@@ -307,7 +312,7 @@ function parseRpcFrame(text: string): RpcFrame | null {
 }
 
 /** Send ONE rpc frame over the agents-SDK websocket protocol and await its reply. */
-async function callAgentRpc(name: string, method: string, args: unknown[]): Promise<void> {
+async function callAgentRpc(name: string, method: string, args: JsonValue[]): Promise<void> {
   const url = `ws://127.0.0.1:${UPSTREAM_PORT}/agents/orchestrator-agent/${encodeURIComponent(name)}`;
   const ws = new WebSocket(url);
   await new Promise<void>((resolve, reject) => {
@@ -674,7 +679,7 @@ async function main(): Promise<void> {
     const newTitle = `Renamed ${new Date().toLocaleTimeString()}`;
     await callAgentRpc(WORKSPACE, "setDisplayName", [newTitle]);
     log(`workspace renamed to "${newTitle}" behind the corpse`);
-    proxy.restore();
+    await proxy.restore();
     log("stage 4: corpse established, world healed behind it");
     await waitFor("fresh data flowing: new title visible", RECOVERY_DEADLINE_MS, 2_000, async () => {
       const p = await probe(page);
@@ -706,13 +711,24 @@ async function main(): Promise<void> {
     log("stage 5 complete: reload affordance shown exactly once");
     log("DRILL GREEN — session survived the supersede without a reload");
   } finally {
-    await browser.close().catch((cause: unknown) => log(`cleanup: browser close failed: ${String(cause)}`));
-    await server.kill().catch((cause: unknown) => log(`cleanup: dev server kill failed: ${String(cause)}`));
+    try {
+      await browser.close();
+    } catch (cause) {
+      log(`cleanup: browser close failed: ${String(cause)}`);
+    }
+    try {
+      await server.kill();
+    } catch (cause) {
+      log(`cleanup: dev server kill failed: ${String(cause)}`);
+    }
     proxy.stop();
   }
 }
 
-main().then(() => process.exit(0), (cause: unknown) => {
+try {
+  await main();
+  process.exit(0);
+} catch (cause) {
   console.error(cause instanceof Error ? cause.message : String(cause));
   process.exit(1);
-});
+}
