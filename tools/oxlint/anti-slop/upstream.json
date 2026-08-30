@@ -269,6 +269,9 @@
     "rules/no-untyped-console.test.ts": {
       "proteusOnly": true
     },
+    "type-aware.gate.test.ts": {
+      "proteusOnly": true
+    },
     "typescript-escapes.gate.test.ts": {
       "proteusOnly": true
     }

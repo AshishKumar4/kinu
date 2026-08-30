@@ -94,6 +94,7 @@ export const SCRATCH_PREFIXES = [
   'no-copy-rpc-stub-gate-',
   'no-swallow-gate-',
   'no-wait-until-gate-',
+  'return-await-gate-',
   'typescript-escapes-gate-',
   'outcome-baseline-',
   'pi-worker-test-',
