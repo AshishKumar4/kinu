@@ -94,17 +94,30 @@ export function watchDeviceConsents(
     }
   };
 
+  // The interval is the watcher’s process-level owner. Retain every started
+  // poll through its settlement so a slow poll is never detached from the
+  // watcher merely because the next interval fired. Each link resolves to void,
+  // releasing the previous settled outcome instead of retaining poll history.
+  let pendingTicks: Promise<void> = Promise.resolve();
   const runTick = () => {
-    void tick().catch((error: unknown) => {
-      diagnostics.failure(
-        'consent.poll_failed',
-        toKinuError({
-          doing: 'polling pending device consents',
-          cause: error,
-          otherwise: 'io',
-        }),
-      );
-    });
+    const task = (async () => {
+      try {
+        await tick();
+      } catch (cause) {
+        diagnostics.failure(
+          'consent.poll_failed',
+          toKinuError({
+            doing: 'polling pending device consents',
+            cause,
+            otherwise: 'io',
+          }),
+        );
+      }
+    })();
+    const previous = pendingTicks;
+    pendingTicks = (async () => {
+      await Promise.allSettled([previous, task]);
+    })();
   };
   const interval = setInterval(runTick, opts.pollMs ?? CONSENT_POLL_MS);
   runTick();

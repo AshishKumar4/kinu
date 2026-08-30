@@ -112,7 +112,7 @@ export interface ChatAppOpts {
   client: AgentClient;
   /** Seed the message list from client.history() before accepting input. */
   hydrateHistory?: boolean;
-  onExit?: () => void;
+  onExit?: () => void | Promise<void>;
   /** A cloud walk-back fork swaps in a sibling client; the host needs the
    *  current one so exit cleanup closes the right connection. */
   onClientChange?: (client: AgentClient) => void;
@@ -154,7 +154,7 @@ function persistedTranscriptEvent(event: AgentClientEvent): boolean {
     || event.type === 'error';
 }
 
-let globalExit: (() => void) | null = null;
+let globalExit: (() => Promise<void>) | null = null;
 
 export function ChatApp(props: ChatAppOpts) {
   return (
@@ -253,6 +253,11 @@ function ChatScene({
   /** Take sets already hinted at, so a turn without a new convergence is quiet. */
   const hintedTakesRef = useRef<string | null>(null);
   const modelRequestRef = useRef(0);
+  // React effects cannot return their tasks. These refs hold scene-owned work
+  // until lexical cleanup after an abort or client-generation replacement.
+  const hubRefreshTaskRef = useRef<Promise<void> | null>(null);
+  const connectionTaskRef = useRef<Promise<void> | null>(null);
+  const metadataTaskRef = useRef<Promise<void> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
   const settings = useMemo<TuiSettingChoice[]>(() => {
@@ -401,14 +406,18 @@ function ChatScene({
    *  it; progress lands in the status bar and settles into /takes. Falls back
    *  to a normal send when the turn just finished. */
   const performBranch = useCallback(async (input: string) => {
-    const text = input.trim();
-    if (!text) return;
-    if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
-      addMessage({ role: 'user', content: text, branched: true });
-      return;
+    try {
+      const text = input.trim();
+      if (!text) return;
+      if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
+        addMessage({ role: 'user', content: text, branched: true });
+        return;
+      }
+      await sendPrompt(text);
+    } catch (cause) {
+      addError({ cause });
     }
-    await sendPrompt(text);
-  }, [addMessage, client, sendPrompt]);
+  }, [addError, addMessage, client, sendPrompt]);
 
   /** Fork before the picked user message, truncate the rendered transcript to
    *  match, and put the message back in the input for editing. */
@@ -430,10 +439,12 @@ function ChatScene({
         const previous = client;
         setClient(result.client);
         onClientChange?.(result.client);
-        void previous.close().catch((closeError: unknown) => {
+        try {
+          await previous.close();
+        } catch (closeError) {
           const reason = renderThrownChain({ cause: closeError });
           addMessage({ role: 'system', content: `The pre-fork session did not close cleanly: ${reason}` });
-        });
+        }
       }
       setMessages((prev) => {
         const pivot = findForkPivot(prev, point);
@@ -529,12 +540,14 @@ function ChatScene({
       setClient(candidate);
       onClientChange?.(candidate);
       candidate = null;
-      void previous.close().catch((error: unknown) => {
+      try {
+        await previous.close();
+      } catch (error) {
         addMessage({
           role: 'system',
           content: errorLine(`The previous workspace did not close cleanly: ${renderThrownChain({ cause: error })}`),
         });
-      });
+      }
     } catch (error) {
       stopBuffering?.();
       if (candidate) {
@@ -589,17 +602,27 @@ function ChatScene({
   useEffect(() => {
     const identity = `${client.mode}:${client.agentName}`;
     if (hub !== null && hub.identity === identity) return;
-    let cancelled = false;
-    loadHubData(client, client.agentName)
-      .then((fresh) => { if (!cancelled) setHub({ identity, data: fresh }); })
-      .catch((error: unknown) => {
+    const abort = new AbortController();
+    let task: Promise<void> | null = null;
+    let settled = false;
+    task = (async () => {
+      try {
+        const fresh = await loadHubData(client, client.agentName);
+        if (!abort.signal.aborted) setHub({ identity, data: fresh });
+      } catch (cause) {
         diagnostics.failure(
           'tui.hub_refresh_failed',
-          toKinuError({ doing: 'refreshing the agent hub', cause: error, otherwise: 'unavailable' }),
+          toKinuError({ doing: 'refreshing the agent hub', cause, otherwise: 'unavailable' }),
           { workspace: client.agentName },
         );
-      });
-    return () => { cancelled = true; };
+      } finally {
+        settled = true;
+        if (task !== null && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
+      }
+    })();
+    hubRefreshTaskRef.current = task;
+    if (settled && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
+    return () => { abort.abort(); };
   }, [client, hub]);
 
   // The hub's agent rows, live: the current virtual workspace's members from
@@ -716,6 +739,15 @@ function ChatScene({
     }
   }, [addError, addMessage, client]);
 
+  const selectReasoningEffort = useCallback(async (effort: 'low' | 'medium' | 'high') => {
+    try {
+      await profileMutations.setReasoningEffort(effort);
+      setStatus((value) => value === null ? value : { ...value, reasoningEffort: effort });
+    } catch (cause) {
+      addError({ cause });
+    }
+  }, [addError, profileMutations]);
+
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
       case 'text':
@@ -745,8 +777,8 @@ function ChatScene({
         addMessage({ role: 'system', content: '', status: outcome.status });
         return;
       case 'exit':
-        if (onExit) onExit();
-        else globalExit?.();
+        if (onExit) await onExit();
+        else if (globalExit) await globalExit();
         return;
       case 'model-picker':
         await openModelPicker();
@@ -796,6 +828,7 @@ function ChatScene({
     // Steers accepted mid-turn but not delivered return to the composer on
     // interrupt. A queue restore in the same batch appends instead of replacing.
     let droppedSteers: string[] = [];
+    let action: Promise<void> | undefined;
     for (const effect of effects) {
       switch (effect.kind) {
         case 'interrupt':
@@ -803,9 +836,8 @@ function ChatScene({
           addMessage({ role: 'system', content: 'Interrupting the active turn… (Esc again to walk back)' });
           break;
         case 'exit':
-          if (onExit) onExit();
-          else globalExit?.();
-          break;
+          if (onExit) return onExit();
+          return globalExit?.();
         case 'clear-input':
           setInputText('');
           break;
@@ -816,16 +848,17 @@ function ChatScene({
           addMessage({ role: 'system', content: effect.text });
           break;
         case 'send-queued':
-          void sendPrompt(effect.text).catch((error: unknown) => addError({ cause: error }));
+          action = sendPrompt(effect.text);
           break;
         case 'send-branch':
-          void performBranch(effect.text).catch((error: unknown) => addError({ cause: error }));
+          action = performBranch(effect.text);
           break;
       }
     }
     if (droppedSteers.length > 0) {
       setInputText([...droppedSteers, inputRef.current?.plainText ?? ''].filter(Boolean).join('\n'));
     }
+    return action;
   }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
   const handleSubmit = useCallback(async (input: string) => {
@@ -847,7 +880,7 @@ function ChatScene({
         const outcome = await executeSlashCommand(client, submitted);
         if (clientGenerationRef.current !== generation) return;
         if (outcome.kind === 'queue') {
-          if (outcome.text) runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
+          if (outcome.text) await runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
           else addMessage({ role: 'system', content: 'Usage: /queue <text> — it sends after the running turn (or immediately when idle).' });
           return;
         }
@@ -902,10 +935,10 @@ function ChatScene({
     }
   }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt]);
 
-  const handleClientEvent = useCallback((event: AgentClientEvent) => {
+  const handleClientEvent = useCallback(async (event: AgentClientEvent) => {
     switch (event.type) {
       case 'turn-start': {
-        runInputEffects(dispatchInput({ type: 'turn-start' }));
+        dispatchInput({ type: 'turn-start' });
         // A new segment opens lazily on the first text-delta — start clean.
         sealSegment();
         turnStreamedTextRef.current = false;
@@ -913,54 +946,60 @@ function ChatScene({
         if (event.kind === 'programmatic') {
           addMessage({ role: 'evolution', content: `» ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
         }
-        break;
+        return;
       }
       case 'text-delta':
-        if (!event.delta) break;
+        if (!event.delta) return;
         turnStreamedTextRef.current = true;
         if (!activeSegmentRef.current) beginSegment();
         stream.append(event.delta);
         setTurnPhase((current) => current === 'writing' ? current : 'writing');
-        break;
+        return;
       case 'tool-call':
         // Seal the preceding text run so this tool — and any text that follows
         // it — lands at its true chronological position.
         sealSegment();
         setTurnPhase(`calling ${event.toolName}`);
         addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
-        break;
+        return;
       case 'tool-result':
         setTurnPhase(`finished ${event.toolName}`);
         addMessage({ role: 'tool_result', content: event.result, success: event.success });
-        break;
+        return;
       case 'step-finish':
         setTurnPhase(`step ${event.stepIndex}`);
-        break;
+        return;
       case 'evolution':
       case 'background':
         addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
-        break;
+        return;
       case 'error':
         sealSegment();
         addMessage({ role: 'system', content: errorLine(event.message) });
-        break;
+        return;
       case 'turn-end': {
         if (activeSegmentRef.current) stream.finish();
         sealSegment();
         if (!turnStreamedTextRef.current && event.turn.text.trim()) {
           addMessage({ role: 'assistant', content: event.turn.text.trim() });
         }
-        runInputEffects(dispatchInput({ type: 'turn-settled' }));
+        const inputEffects = runInputEffects(dispatchInput({ type: 'turn-settled' }));
         if (machineRef.current.activeTurns === 0) setTurnPhase(null);
         if (event.turn.toolCalls.some((call) => call.name === 'agents')) {
           const generation = clientGenerationRef.current;
-          void client.latestTakes().then((set) => {
-            if (clientGenerationRef.current !== generation) return;
-            if (!set || set.candidates.length < 2 || set.chosenNodeId) return;
-            if (hintedTakesRef.current === set.id) return;
-            hintedTakesRef.current = set.id;
-            addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
-          }).catch((takesError: unknown) => {
+          try {
+            const set = await client.latestTakes();
+            if (
+              clientGenerationRef.current === generation
+              && set
+              && set.candidates.length >= 2
+              && !set.chosenNodeId
+              && hintedTakesRef.current !== set.id
+            ) {
+              hintedTakesRef.current = set.id;
+              addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
+            }
+          } catch (takesError) {
             if (clientGenerationRef.current === generation) {
               addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
             } else {
@@ -974,12 +1013,13 @@ function ChatScene({
                 { workspace: client.agentName },
               );
             }
-          });
+          }
         }
-        break;
+        await inputEffects;
+        return;
       }
       case 'broadcast': {
-        if (!isBranchStatusEvent(event.event)) break;
+        if (!isBranchStatusEvent(event.event)) return;
         const status = event.event;
         setBranchTasks((prev) => {
           const next = { ...prev };
@@ -990,10 +1030,10 @@ function ChatScene({
         // The settle/error line IS the takes affordance (the running state
         // lives in the status bar).
         if (status.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(status) });
-        break;
+        return;
       }
       case 'run-event':
-        break;
+        return;
     }
   }, [addMessage, beginSegment, client, dispatchInput, runInputEffects, sealSegment, stream]);
 
@@ -1008,79 +1048,124 @@ function ChatScene({
       ? preconnectedEventsRef.current
       : null;
     const bufferedCount = buffered?.events.length ?? 0;
+    const abort = new AbortController();
     const unsubscribe = client.subscribe((event) => {
-      if (clientGenerationRef.current === generation) handleClientEvent(event);
+      if (clientGenerationRef.current === generation && !abort.signal.aborted) {
+        return handleClientEvent(event);
+      }
     });
+    let replayTask: Promise<void> | null = null;
     if (buffered) {
       buffered.stop();
       preconnectedEventsRef.current = null;
       const replay = buffered.events.slice(0, bufferedCount)
         .filter((event, index) =>
           index >= buffered.historyBoundary || !persistedTranscriptEvent(event));
-      for (const event of replay) handleClientEvent(event);
+      replayTask = (async () => {
+        await Promise.all(replay.map((event) => handleClientEvent(event)));
+      })();
     }
-    let cancelled = false;
-    const connect = async () => {
-      if (hydrateHistory && !skipHydrationRef.current) {
-        try {
-          const history = await client.history();
-          if (!cancelled && history.length > 0) {
-            setMessages([welcomeMessage(client.agentName), ...history]);
-          }
-        } catch (historyError) {
-          if (!cancelled) {
-            addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: historyError })}`) });
+    let task: Promise<void> | null = null;
+    let settled = false;
+    task = (async () => {
+      try {
+        if (hydrateHistory && !skipHydrationRef.current) {
+          try {
+            const history = await client.history();
+            if (!abort.signal.aborted && history.length > 0) {
+              setMessages([welcomeMessage(client.agentName), ...history]);
+            }
+          } catch (historyError) {
+            if (!abort.signal.aborted) {
+              addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: historyError })}`) });
+            }
           }
         }
-      }
-      skipHydrationRef.current = false;
-      let connected = true;
-      try {
-        if (!preconnected) await client.connect();
-      } catch (error) {
-        connected = false;
-        if (!cancelled) addError({ cause: error });
-      }
-      if (!connected || cancelled) return;
-      setReady(true);
-      if (client.mode !== 'cloud') return;
-      try {
-        await deviceConnect.offerIfUnconnected();
+        skipHydrationRef.current = false;
+        let connected = true;
+        try {
+          if (!preconnected) await client.connect();
+        } catch (error) {
+          connected = false;
+          if (!abort.signal.aborted) addError({ cause: error });
+        }
+        if (!connected || abort.signal.aborted) return;
+        setReady(true);
+        if (client.mode !== 'cloud') return;
+        try {
+          await deviceConnect.offerIfUnconnected();
+        } catch (cause) {
+          // A courtesy offer, never the user's work: its failure is a
+          // diagnostic, not a conversation line.
+          diagnostics.failure(
+            'tui.device_connect_offer_failed',
+            toKinuError({ doing: 'offering the device-connect prompt', cause, otherwise: 'unavailable' }),
+            { workspace: client.agentName },
+          );
+        }
       } catch (cause) {
-        // A courtesy offer, never the user's work: its failure is a
-        // diagnostic, not a conversation line.
-        diagnostics.failure(
-          'tui.device_connect_offer_failed',
-          toKinuError({ doing: 'offering the device-connect prompt', cause, otherwise: 'unavailable' }),
-          { workspace: client.agentName },
-        );
+        if (!abort.signal.aborted) addError({ cause });
+      } finally {
+        try {
+          if (replayTask) await replayTask;
+        } finally {
+          settled = true;
+          if (task !== null && connectionTaskRef.current === task) connectionTaskRef.current = null;
+        }
       }
-    };
-    void connect().catch((error: unknown) => {
-      addError({ cause: error });
-    });
+    })();
+    connectionTaskRef.current = task;
+    if (settled && connectionTaskRef.current === task) connectionTaskRef.current = null;
     return () => {
-      cancelled = true;
+      abort.abort();
       unsubscribe();
     };
   }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
 
   useEffect(() => {
-    let cancelled = false;
-    const note = (line: string) => {
-      if (!cancelled) addMessage({ role: 'system', content: errorLine(line) });
-    };
-    void client.status()
-      .then((next) => {
-        if (cancelled) return;
-        setStatus(next);
-        setModelSpec((current) => current || (next.model ?? ''));
-      })
-      .catch((error: unknown) => note(`Workspace status could not be read: ${renderThrownChain({ cause: error })}`));
-    void client.listModels()
-      .then((menu) => { if (!cancelled) setModelCatalog(menu.models); })
-      .catch((error: unknown) => note(`The model catalog could not be read: ${renderThrownChain({ cause: error })}`));
-    return () => { cancelled = true; };
+    const abort = new AbortController();
+    let task: Promise<void> | null = null;
+    let settled = false;
+    task = (async () => {
+      try {
+        await Promise.all([
+          (async () => {
+            try {
+              const next = await client.status();
+              if (abort.signal.aborted) return;
+              setStatus(next);
+              setModelSpec((current) => current || (next.model ?? ''));
+            } catch (cause) {
+              if (!abort.signal.aborted) {
+                addMessage({
+                  role: 'system',
+                  content: errorLine(`Workspace status could not be read: ${renderThrownChain({ cause })}`),
+                });
+              }
+            }
+          })(),
+          (async () => {
+            try {
+              const menu = await client.listModels();
+              if (!abort.signal.aborted) setModelCatalog(menu.models);
+            } catch (cause) {
+              if (!abort.signal.aborted) {
+                addMessage({
+                  role: 'system',
+                  content: errorLine(`The model catalog could not be read: ${renderThrownChain({ cause })}`),
+                });
+              }
+            }
+          })(),
+        ]);
+      } finally {
+        settled = true;
+        if (task !== null && metadataTaskRef.current === task) metadataTaskRef.current = null;
+      }
+    })();
+    metadataTaskRef.current = task;
+    if (settled && metadataTaskRef.current === task) metadataTaskRef.current = null;
+    return () => { abort.abort(); };
   }, [addMessage, client]);
 
   // Watch pending device consents while a turn is processing (cloud agents).
@@ -1183,14 +1268,13 @@ function ChatScene({
         && activeSurface.view === 'agents' && onNewAgent !== undefined) {
         key.preventDefault();
         setActiveSurface(null);
-        void createNewAgent().catch((error: unknown) => addError({ cause: error }));
-        return;
+        return createNewAgent();
       }
       if (actionId === 'modal.close') {
         key.preventDefault();
         if (activeSurface?.kind === 'model') modelRequestRef.current += 1;
         setActiveSurface(null);
-        if (inputState.walkbackOpen) runInputEffects(dispatchInput({ type: 'walkback-closed' }));
+        if (inputState.walkbackOpen) dispatchInput({ type: 'walkback-closed' });
       }
       return;
     }
@@ -1223,8 +1307,7 @@ function ChatScene({
     }
     if (actionId === 'model.open') {
       key.preventDefault();
-      void openModelPicker().catch((error: unknown) => addError({ cause: error }));
-      return;
+      return openModelPicker();
     }
     if (actionId === 'tier.cycle' || actionId === 'tier.cycle-reverse') {
       key.preventDefault();
@@ -1254,23 +1337,18 @@ function ChatScene({
       const efforts = ['low', 'medium', 'high'] as const;
       const current = status?.reasoningEffort ?? 'medium';
       const next = efforts[(efforts.indexOf(current) + 1) % efforts.length]!;
-      void profileMutations.setReasoningEffort(next)
-        .then(() => setStatus((value) => value === null ? value : { ...value, reasoningEffort: next }))
-        .catch((cause: unknown) => addError({ cause }));
-      return;
+      return selectReasoningEffort(next);
     }
     if (actionId === 'conversation.branch') {
       key.preventDefault();
-      runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
-      return;
+      return runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
     }
     if (actionId === 'queue.add') {
       key.preventDefault();
-      runInputEffects(dispatchInput({ type: 'queue', text: inputRef.current?.plainText ?? '' }));
-      return;
+      return runInputEffects(dispatchInput({ type: 'queue', text: inputRef.current?.plainText ?? '' }));
     }
     if (actionId === 'queue.edit-last') {
-      runInputEffects(dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' }));
+      dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' });
       return;
     }
     if (actionId === 'history.page-up' || actionId === 'history.page-down' || actionId === 'history.line-up' || actionId === 'history.line-down') {
@@ -1282,7 +1360,7 @@ function ChatScene({
     }
     if (actionId !== 'conversation.cancel') return;
     key.preventDefault();
-    runInputEffects(dispatchInput({
+    return runInputEffects(dispatchInput({
       type: 'escape',
       now: Date.now(),
       draft: inputRef.current?.plainText ?? '',
@@ -1294,7 +1372,7 @@ function ChatScene({
     const value = inputRef.current?.plainText ?? '';
     if (!value.trim()) return;
     setInputText('');
-    void handleSubmit(value).catch((error: unknown) => addError({ cause: error }));
+    return handleSubmit(value);
   }, [handleSubmit, setInputText]);
 
   const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
@@ -1344,9 +1422,7 @@ function ChatScene({
       navigationOverlayOpen={navigationOpen}
       onNavigationOverlayChange={setNavigationOpen}
       onNavigationFocusChange={handleNavigationFocusChange}
-      onAgentSelect={(agent) => {
-        void switchWorkspace(agent).catch((error: unknown) => addError({ cause: error }));
-      }}
+      onAgentSelect={switchWorkspace}
     >
     <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
       <StatusBar
@@ -1355,9 +1431,7 @@ function ChatScene({
         model={modelSpec}
         reasoningEffort={status?.reasoningEffort ?? 'medium'}
         onModelSelect={() => {
-          if (!overlayOpen) {
-            void openModelPicker().catch((error: unknown) => addError({ cause: error }));
-          }
+          if (!overlayOpen) return openModelPicker();
         }}
         connected={ready}
         scaffoldVersion={status?.scaffoldVersion}
@@ -1433,10 +1507,12 @@ function ChatScene({
           terminal={{ width, height }}
           onSelect={(setting) => {
             setActiveSurface(null);
-            if (setting.command === '/model') {
-              void openModelPicker().catch((error: unknown) => addError({ cause: error }));
-            } else if (setting.command.endsWith(' ')) setInputText(setting.command);
-            else void handleSubmit(setting.command).catch((error: unknown) => addError({ cause: error }));
+            if (setting.command === '/model') return openModelPicker();
+            if (setting.command.endsWith(' ')) {
+              setInputText(setting.command);
+              return;
+            }
+            return handleSubmit(setting.command);
           }}
         />
       ) : hubView !== null && hubLive !== undefined ? (
@@ -1464,25 +1540,25 @@ function ChatScene({
           terminal={{ width, height }}
           loading={modelPicker.loading}
           error={modelPicker.error}
-          onSelect={(model) => { void selectModel(model).catch((error: unknown) => addError({ cause: error })); }}
+          onSelect={selectModel}
         />
       ) : changelogView ? (
         <ChangelogOverlay
           view={changelogView}
           terminal={{ width, height }}
-          onSelect={(entry) => { void revertChangelogEntry(entry).catch((error: unknown) => addError({ cause: error })); }}
+          onSelect={revertChangelogEntry}
         />
       ) : takesView ? (
         <TakesOverlay
           set={takesView}
           terminal={{ width, height }}
-          onSelect={(candidate) => { void pickTake(takesView, candidate).catch((error: unknown) => addError({ cause: error })); }}
+          onSelect={(candidate) => pickTake(takesView, candidate)}
         />
       ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
         <WalkbackOverlay
           candidates={walkbackList}
           terminal={{ width, height }}
-          onSelect={(point) => { void performWalkback(point).catch((error: unknown) => addError({ cause: error })); }}
+          onSelect={performWalkback}
         />
       ) : (
         <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
@@ -1583,11 +1659,13 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     process.exit(0);
   };
 
-  const exit = () => {
-    void cleanup().catch((error: unknown) => {
-      console.error(`\n  The TUI could not shut down cleanly: ${renderThrownChain({ cause: error })}`);
+  const exit = async () => {
+    try {
+      await cleanup();
+    } catch (cause) {
+      console.error(`\n  The TUI could not shut down cleanly: ${renderThrownChain({ cause })}`);
       process.exit(1);
-    });
+    }
   };
   globalExit = exit;
   process.on('SIGINT', exit);

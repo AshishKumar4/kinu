@@ -102,8 +102,7 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     cwd: opts.cwd,
   };
   const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
-  autoTitleLocalWorkspace(name, rt, { mission: info.purpose, trigger: 'legacy-heal' }, opts);
-  return new LocalAgentClient({
+  const client = new LocalAgentClient({
     agentName: name,
     rt,
     db,
@@ -117,6 +116,8 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     naming: opts,
     surface: opts.surface ?? 'interactive',
   });
+  client.startAutoTitle({ mission: info.purpose, trigger: 'legacy-heal' });
+  return client;
 }
 
 /**
@@ -160,42 +161,31 @@ export async function runLocalGepa(
  * once by `createLocalPeerAgent` and by nothing else — a rename refuses an
  * empty title. So the heal skips exactly that value and nothing else.
  *
- * The deterministic title lands before this returns; the model call runs in
- * the background and never blocks the CLI, and failing it leaves the title
- * that already landed.
+ * The persistent client owns the operation and settles it before closing the
+ * workspace database. A failure stays visible to that owner; this operation
+ * deliberately does not detach or reinterpret it.
  */
-export function autoTitleLocalWorkspace(
+export async function autoTitleLocalWorkspace(
   name: string,
   rt: AgentRuntime,
   source: { mission: string; trigger: 'legacy-heal' | 'first-message' },
   opts: SuggestAgentIdentityOptions,
-): void {
+): Promise<void> {
   initAgentConfigTable(rt.storage.execRaw);
   const config = createAgentConfigStore(rt.storage.sql);
   if (source.trigger === 'legacy-heal' && config.getDisplayName() === '') return;
-  void (async () => {
-    await applyWorkspaceTitle({
-      slug: name,
-      displayName: config.getDisplayName(),
-      nameOrigin: config.getNameOrigin(),
-      mission: source.mission,
-    }, {
-      persist: (title) => {
-        if (config.getNameOrigin() === 'user') return false;
-        config.setDisplayNameOrigin(title, 'auto');
-        return true;
-      },
-      suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
-    });
-  })().catch((error: unknown) => {
-    // The naming model refusing, or the database refusing the write:
-    // `applyWorkspaceTitle` absorbs neither, and the deterministic title
-    // has landed by the time either can happen.
-    diagnostics.failure(
-      'workspace.title_save_failed',
-      toKinuError({ doing: 'saving the workspace title', cause: error, otherwise: 'io' }),
-      { workspace: name },
-    );
+  await applyWorkspaceTitle({
+    slug: name,
+    displayName: config.getDisplayName(),
+    nameOrigin: config.getNameOrigin(),
+    mission: source.mission,
+  }, {
+    persist: (title) => {
+      if (config.getNameOrigin() === 'user') return false;
+      config.setDisplayNameOrigin(title, 'auto');
+      return true;
+    },
+    suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
   });
 }
 
@@ -276,6 +266,9 @@ export class LocalAgentClient implements AgentClient {
   private activeCliSession: CliSession;
   private pending: PendingLocalTurn | null = null;
   private closed = false;
+  /** The one title operation may outlive opening or a turn, but never the
+   * workspace database. Its owning client joins it during close. */
+  private autoTitleTask: Promise<void> | null = null;
   private readonly recorder = new SessionRecorder('local');
   /**
    * This process's claim on the one durable conversation in that database.
@@ -337,6 +330,26 @@ export class LocalAgentClient implements AgentClient {
     };
   }
 
+  /** Start one title operation and retain its settlement on this client. */
+  startAutoTitle(source: { mission: string; trigger: 'legacy-heal' | 'first-message' }): void {
+    if (this.closed || this.autoTitleTask !== null) return;
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        await autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, this.deps.naming);
+      } catch (cause) {
+        diagnostics.failure(
+          'workspace.title_save_failed',
+          toKinuError({ doing: 'saving the workspace title', cause, otherwise: 'io' }),
+          { workspace: this.agentName },
+        );
+      } finally {
+        if (task !== null && this.autoTitleTask === task) this.autoTitleTask = null;
+      }
+    })();
+    this.autoTitleTask = task;
+  }
+
   get cliSession(): CliSession {
     return this.activeCliSession;
   }
@@ -388,11 +401,7 @@ export class LocalAgentClient implements AgentClient {
       // owner brings to it is the only thing that distinguishes it from the
       // peers it shares a mission with, so that is what names it — once, since
       // persisting marks `name_origin` and the shared policy stops matching.
-      autoTitleLocalWorkspace(
-        this.deps.agentName, this.deps.rt,
-        { mission: text, trigger: 'first-message' },
-        this.deps.naming,
-      );
+      this.startAutoTitle({ mission: text, trigger: 'first-message' });
       return pending.result ?? unfinishedTurn();
     } finally {
       if (this.pending === pending) this.pending = null;
@@ -489,7 +498,9 @@ export class LocalAgentClient implements AgentClient {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    const autoTitleTask = this.autoTitleTask;
     try {
+      if (autoTitleTask) await autoTitleTask;
       await this.session.end();
     } finally {
       // Released BEFORE the handle closes, and even when settling threw: an

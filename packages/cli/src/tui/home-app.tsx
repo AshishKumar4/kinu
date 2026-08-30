@@ -120,6 +120,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const modelPickerRequestRef = useRef(0);
   const textareaRef = useRef<TextareaRenderable | null>(null);
   const initialFocusApplied = useRef(false);
+  // An effect can return cleanup, not its task. Retain the task here until it
+  // settles so refresh work belongs to this scene for its full lifetime.
+  const cloudSyncTaskRef = useRef<Promise<void> | null>(null);
   const deviceConnect = useDeviceConnectPrompt();
   const cloudReady = isCloudAuthConfigured();
   const localReady = isLocalModelConfigured();
@@ -154,22 +157,30 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
 
   useEffect(() => {
     if (!cloudReady) return;
-    let cancelled = false;
-    void syncCloudAgentRefs()
-      .then(async (sync) => {
-        if (cancelled) return;
+    const abort = new AbortController();
+    let task: Promise<void> | null = null;
+    let settled = false;
+    task = (async () => {
+      try {
+        const sync = await syncCloudAgentRefs();
+        if (abort.signal.aborted) return;
         await roster.reload();
-        if (cancelled) return;
+        if (abort.signal.aborted) return;
         // A contested name reached the roster as neither store's cloud row.
         // Saying nothing would read as "you have no such cloud workspace".
         setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
+      } catch (cause) {
+        if (abort.signal.aborted) return;
         // A list that could not be refreshed must not read as the list itself.
-        setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: err })}`);
-      });
-    return () => { cancelled = true; };
+        setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause })}`);
+      } finally {
+        settled = true;
+        if (task !== null && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
+      }
+    })();
+    cloudSyncTaskRef.current = task;
+    if (settled && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
+    return () => { abort.abort(); };
   }, [cloudReady, roster.reload]);
 
   const modeLabel = useMemo(() => {
@@ -202,31 +213,33 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }
   }, [defaultModel, keybindings, mode, opts]);
 
-  const selectModel = useCallback((model: AgentModelEntry) => {
-    void updateDefaultTier({ model: model.spec })
-      .then(() => {
-        modelPickerRequestRef.current += 1;
-        setDefaultModelState(model.spec);
-        setCatalogHint(null);
-        setModelPicker(null);
-        setError(null);
-      })
-      .catch((error: unknown) => setError(renderThrownChain({ cause: error })));
+  const selectModel = useCallback(async (model: AgentModelEntry) => {
+    try {
+      await updateDefaultTier({ model: model.spec });
+      modelPickerRequestRef.current += 1;
+      setDefaultModelState(model.spec);
+      setCatalogHint(null);
+      setModelPicker(null);
+      setError(null);
+    } catch (cause) {
+      setError(renderThrownChain({ cause }));
+    }
   }, []);
 
-  const selectReasoningEffort = useCallback((effort: ReasoningEffort) => {
-    void updateDefaultTier({ reasoningEffort: effort })
-      .then(() => {
-        setReasoningEffortState(effort);
-        setError(null);
-      })
-      .catch((error: unknown) => setError(renderThrownChain({ cause: error })));
+  const selectReasoningEffort = useCallback(async (effort: ReasoningEffort) => {
+    try {
+      await updateDefaultTier({ reasoningEffort: effort });
+      setReasoningEffortState(effort);
+      setError(null);
+    } catch (cause) {
+      setError(renderThrownChain({ cause }));
+    }
   }, []);
 
   const moveReasoningEffort = useCallback((delta: number) => {
     const index = REASONING_EFFORTS.indexOf(reasoningEffort);
     const next = REASONING_EFFORTS[(index + delta + REASONING_EFFORTS.length) % REASONING_EFFORTS.length] ?? reasoningEffort;
-    selectReasoningEffort(next);
+    return selectReasoningEffort(next);
   }, [reasoningEffort, selectReasoningEffort]);
 
   const submit = useCallback(async () => {
@@ -289,8 +302,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }
     if (actionId === 'model.open') {
       key.preventDefault();
-      void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
-      return;
+      return openModelPicker();
     }
     if (actionId === 'home.exit') {
       key.preventDefault();
@@ -306,16 +318,21 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     const direction = actionId === 'home.previous' ? -1 : actionId === 'home.next' ? 1 : 0;
     if (direction !== 0) {
       key.preventDefault();
-      if (focusArea === 'mode') setMode((current) => current === 'cloud' ? 'local' : 'cloud');
-      else if (focusArea === 'model') void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
-      else moveReasoningEffort(direction);
-      return;
+      if (focusArea === 'mode') {
+        setMode((current) => current === 'cloud' ? 'local' : 'cloud');
+        return;
+      }
+      if (focusArea === 'model') return openModelPicker();
+      return moveReasoningEffort(direction);
     }
     if (actionId !== 'home.activate') return;
     key.preventDefault();
-    if (focusArea === 'mode') setMode((current) => current === 'cloud' ? 'local' : 'cloud');
-    else if (focusArea === 'model') void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
-    else if (focusArea === 'effort') moveReasoningEffort(1);
+    if (focusArea === 'mode') {
+      setMode((current) => current === 'cloud' ? 'local' : 'cloud');
+      return;
+    }
+    if (focusArea === 'model') return openModelPicker();
+    if (focusArea === 'effort') return moveReasoningEffort(1);
   });
 
   const openAgent = (agent: TuiAgentSummary) => {
@@ -424,9 +441,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
                 ...openTuiKeyBindings(keybindings, 'editor.newline'),
               ]}
               onContentChange={() => setDraft(textareaRef.current?.plainText ?? '')}
-              onSubmit={() => {
-                void submit().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
-              }}
+              onSubmit={submit}
             />
           </box>
         )}
@@ -485,7 +500,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               }}
               onMouseDown={(event) => {
                 event.stopPropagation();
-                void openModelPicker().catch((error: unknown) => setError(renderThrownChain({ cause: error })));
+                return openModelPicker();
               }}
             >
               <text>
@@ -508,7 +523,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
                   onMouseDown={(event) => {
                     event.stopPropagation();
                     setFocusArea('effort');
-                    selectReasoningEffort(effort);
+                    return selectReasoningEffort(effort);
                   }}
                 >
                   <text>

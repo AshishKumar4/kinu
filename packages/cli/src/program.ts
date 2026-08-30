@@ -482,18 +482,16 @@ export function buildProgram(): Command {
  *  generic so each command keeps Commander's own arity and parameter checking;
  *  widening it to `any[]` silently accepted a handler with the wrong signature.
  *
- * Commander's action handler returns nothing, so the IIFE is voided only after
- * its rejection handler attaches. That preserves the existing boundary: an
- * action that throws before returning a promise becomes a reported rejection
- * rather than escaping through Commander.
+ * Commander owns the returned action promise, so the error boundary stays in
+ * the action itself rather than detaching a second promise from it.
  */
 function wrapAction<Args extends readonly unknown[]>(fn: (...args: Args) => Promise<void>) {
-  return (...args: Args) => {
-    void (async () => {
+  return async (...args: Args) => {
+    try {
       await fn(...args);
-    })().catch((error: unknown) => {
-      printFailure({ cause: error });
+    } catch (cause) {
+      printFailure({ cause });
       process.exit(1);
-    });
+    }
   };
 }
