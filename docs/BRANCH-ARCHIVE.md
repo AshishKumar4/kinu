@@ -11,9 +11,9 @@ blobs. A nonzero count is the last home. Delete branches, not tags.
 
 ## Tag inventory
 
-Forty lightweight tags live under `refs/tags/archive/`; thirty-one came from the
-2026-08-21 prune wave. The first nine use `main` at `29f654bd`; the wave uses
-`c143c4b6`, both measured 2026-08-21.
+There are 143 lightweight tags under `refs/tags/archive/`. The first forty are
+inventoried below: nine predate the 2026-08-21 prune wave, which added thirty-one.
+Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
 
 - **Blobs `main` lacks** are absent from its history.
 - **Sole copy** blobs have no other ref. Re-measure this count after pruning.
@@ -117,11 +117,21 @@ was pruned. The branch and `archive/isolation-design` tag remain on one shared t
 | `archive/settle-mcts` | `dd81adcb` | `096fcc65` | 1871 | 5933 | 0 |
 | `archive/swarm-depth` | `b19c36f5` | `e703cd98` | 1869 | 5932 | 0 |
 
-Measured 2026-08-30, the repository has 142 `archive/*` tags. The three affected
-tags still carry nonzero novel blobs and have zero sole-copy blobs because sibling
-refs retain the same objects. No tag was deleted. Reflog expiry and object pruning
-remain pending until this inventory lands and a final all-ref scan confirms that no
-credential blob is reachable.
+Measured 2026-08-30, the repository has 143 `archive/*` tags. The three affected
+redaction tags still carry nonzero novel blobs and have zero sole-copy blobs
+because sibling refs retain the same objects. No tag was deleted.
+
+### The pre-rewrite safety anchor
+
+`save-pre-reword` was a branch name for one pre-rewrite savepoint, not a product
+line. Before pruning that branch, `archive/save-pre-reword` pinned `b3b41f5c`.
+Against integration at `f7547b3bf`, it retains 51 commits and 2,849 blobs absent
+from integration. Eight blobs have no other ref. The tag is therefore the last
+home for those eight blobs and must not be deleted.
+
+Reflog expiry and object pruning remain pending until the final all-ref scan
+confirms that no credential blob is reachable and the restart-era empty-object
+quarantine is reconciled.
 
 ### The 2026-08-28 consolidation prune wave
 
