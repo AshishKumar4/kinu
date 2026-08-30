@@ -2496,16 +2496,21 @@ const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
 function ChatHistoryFrame() {
   const [live, setLive] = useState<UIMessage[]>(() => MESSAGES.slice(-3));
   const failed = useRef(historyParams.get("fail") === "1");
+  const requests = useRef(0);
   const [calls, setCalls] = useState<string[]>([]);
 
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
     fetchPage: useCallback(async (cursor) => {
+      const request = ++requests.current;
       setCalls((prev) => [...prev, cursor?.after ?? "newest"]);
       const settled = Promise.withResolvers<void>();
       setTimeout(settled.resolve, HISTORY_LATENCY);
       await settled.promise;
-      if (failed.current) { failed.current = false; throw new Error("stub failure"); }
+      if (request === requests.current && failed.current) {
+        failed.current = false;
+        throw new Error("stub failure");
+      }
       const end = cursor === undefined
         ? STORED_HISTORY.length
         : STORED_HISTORY.findIndex((row) => row.id === cursor.after);

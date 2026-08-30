@@ -168,16 +168,16 @@ interface Beat {
    * where this probe used to look. The swarm liveness notice sits above the run
    * list and says "23 head(s) across 6 fork run(s) were still marked running
    * from an activation that has ended", so a body-wide scan matched `running`
-   * at character 1543 on EVERY stage — including the settled one, whose row
-   * read `· settled` correctly two thousand characters further down. Both
+   * at character 1543 on EVERY stage — including the completed one, whose row
+   * read `· completed` correctly two thousand characters further down. Both
    * liveness arms failed on that one word while the surface was right: the
-   * settled assertion read the banner, and the watch loop, whose break is
-   * `outcome === 'settled'`, never broke and ran on past the frame's wrap back
+   * completed assertion read the banner, and the watch loop, whose break is
+   * `outcome === 'completed'`, never broke and ran on past the frame's wrap back
    * to stage 1, comparing 1 node against 1.
    *
    * Scoping it to the row is stricter, not looser: no prose anywhere else on
    * the page can satisfy this assertion or defeat it. `settle=search` in the
-   * same row is not a false positive — the alternation needs `settled`.
+   * same row is not a false positive — the alternation needs `completed`.
    */
   readonly outcome: string | null;
 }
@@ -252,7 +252,7 @@ function readBeat(page: Page): Promise<Beat> {
     rows: document.querySelectorAll('[data-fork-run]').length,
     nodes: document.querySelectorAll('g.mcts-node').length,
     working: document.querySelectorAll('g.mcts-node[data-working]').length,
-    outcome: /settled|running|stopped without an answer/
+    outcome: /completed|running|stopped without an answer/
       .exec(document.querySelector('[data-fork-run]')?.textContent ?? '')?.[0] ?? null,
   }));
 }
@@ -370,7 +370,7 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
         before,
       );
       watched.push(await readBeat(page));
-      if ((watched.at(-1)?.outcome ?? null) === 'settled') break;
+      if ((watched.at(-1)?.outcome ?? null) === 'completed') break;
     }
   } finally {
     await page.close();
@@ -630,11 +630,11 @@ describe('a search, as it happens', () => {
       expect(after, `stage ${stage} drew ${after} nodes, stage ${stage - 1} drew ${before}`)
         .toBeGreaterThan(before);
     }
-    // Running while it runs, settled when it has. A run that reads "settled"
-    // throughout is the defect the owner hit from the other side: a dead-looking
-    // swarm and a live-looking one must not render the same.
+    // Running while it runs, completed when it has. A run that reads
+    // "completed" throughout is the defect the owner hit from the other side:
+    // a dead-looking swarm and a live-looking one must not render the same.
     expect(pinned[1]?.outcome).toBe('running');
-    expect(pinned[LIVE_STAGES - 1]?.outcome).toBe('settled');
+    expect(pinned[LIVE_STAGES - 1]?.outcome).toBe('completed');
   });
 
   test('the surface grows WITHOUT a reload — the whole claim', () => {
