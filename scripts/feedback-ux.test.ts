@@ -158,7 +158,7 @@ async function recordSubmissions(page: Page): Promise<void> {
         // original one — rejection included — and this file learns how it ended.
         void sent.then(
           () => { record.outcome = 'answered'; },
-          <Thrown,>(thrown: Thrown) => { record.outcome = thrown instanceof Error ? thrown.name : 'unknown'; },
+          (thrown: unknown) => { record.outcome = thrown instanceof Error ? thrown.name : 'unknown'; },
         );
         return sent;
       }
@@ -187,7 +187,7 @@ async function recordDecodeSettlements(page: Page): Promise<void> {
       __feedbackDecodeSettlements: () => settled,
       createImageBitmap: (image: ImageBitmapSource) => decode(image).then(
         (bitmap) => { markSettled(); return bitmap; },
-        (thrown) => { markSettled(); throw thrown; },
+        (thrown: unknown) => { markSettled(); throw thrown; },
       ),
     });
   });
@@ -240,19 +240,19 @@ async function serveFeedback(page: Page, options: { attempts?: readonly Attempt[
   await recordSubmissions(page);
   let attempt = 0;
   await page.setRequestInterception(true);
-  page.on('request', (request: HTTPRequest) => {
+  page.on('request', async (request: HTTPRequest) => {
     if (!request.url().endsWith(FEEDBACK)) {
-      void request.continue();
+      await request.continue();
       return;
     }
     const behaviour = options.attempts?.[attempt] ?? 'answer';
     attempt += 1;
     if (behaviour === 'hold') return;
     if (behaviour === 'refuse') {
-      void request.abort('connectionrefused');
+      await request.abort('connectionrefused');
       return;
     }
-    void request.respond({
+    await request.respond({
       status: 201,
       contentType: 'application/json',
       body: JSON.stringify({ id: 'fb-0001-abcdef' }),

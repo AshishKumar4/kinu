@@ -79,10 +79,10 @@ interface Probe {
 async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe> {
   const probe: Probe = { asked: [], posted: [] };
   await browserPage.setRequestInterception(true);
-  browserPage.on('request', (request: HTTPRequest) => {
+  browserPage.on('request', async (request: HTTPRequest) => {
     const url = new URL(request.url());
     if (!url.pathname.startsWith('/api/control/')) {
-      void request.continue();
+      await request.continue();
       return;
     }
     if (request.method() === 'POST') {
@@ -97,13 +97,13 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
       .sort((a, b) => b.length - a.length)[0];
     const answer = key === undefined ? undefined : fixture[key];
     if (answer === undefined) {
-      void request.respond({
+      await request.respond({
         status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Not found' }),
       });
       return;
     }
     const { status, body } = answer(url);
-    void request.respond({
+    await request.respond({
       status, contentType: 'application/json', body: JSON.stringify(body),
     });
   });
@@ -380,17 +380,17 @@ describe('the control plane in a browser', () => {
       let serveOk = false;
       let refused = 0;
       await browserPage.setRequestInterception(true);
-      browserPage.on('request', (request: HTTPRequest) => {
+      browserPage.on('request', async (request: HTTPRequest) => {
         if (!new URL(request.url()).pathname.startsWith('/api/control/')) {
-          void request.continue();
+          await request.continue();
           return;
         }
         if (!serveOk) {
           refused += 1;
-          void request.abort('connectionrefused');
+          await request.abort('connectionrefused');
           return;
         }
-        void request.respond({
+        await request.respond({
           status: 200, contentType: 'application/json', body: JSON.stringify(OVERVIEW),
         });
       });

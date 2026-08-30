@@ -146,10 +146,10 @@ async function serve(
   sent: Sent[],
 ): Promise<void> {
   await page.setRequestInterception(true);
-  page.on('request', (request: HTTPRequest) => {
+  page.on('request', async (request: HTTPRequest) => {
     const path = new URL(request.url()).pathname;
     if (path === HEALTH) {
-      void request.respond({
+      await request.respond({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ ok: true, build: { ...STAMP, sha: stamp.sha } }),
@@ -157,7 +157,7 @@ async function serve(
       return;
     }
     if (path !== CLIENT_ERRORS) {
-      void request.continue();
+      await request.continue();
       return;
     }
     const body = request.postData() ?? '';
@@ -174,18 +174,18 @@ async function serve(
       return;
     }
     if (decided === 'unreachable') {
-      void request.abort('failed');
+      await request.abort('failed');
       return;
     }
     if (decided === 'refuse') {
-      void request.respond({
+      await request.respond({
         status: 401,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'sign in to report a render failure' }),
       });
       return;
     }
-    void request.respond({
+    await request.respond({
       status: 202,
       contentType: 'application/json',
       body: JSON.stringify({ releaseMatch: 'match' }),
