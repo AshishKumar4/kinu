@@ -439,7 +439,6 @@ export class SubordinateAgent extends ActorAgent {
    * left nothing to correct it.
    */
   protected async persistAutoTitle(displayName: string): Promise<boolean> {
-    await Promise.resolve();
     // The owner's rename wins. Checked here rather than upstream because the
     // model call this follows takes seconds, and a name that landed during it is
     // a choice a person made.

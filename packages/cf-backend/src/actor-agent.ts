@@ -290,6 +290,10 @@ interface SettledTurnEvents {
   injectedSignals: SettledSignals;
 }
 
+interface AsyncTaskOwner {
+  promise: Promise<void> | null;
+}
+
 interface UserHubCoreClient {
   readonly hasPeerGrant: UserDO['hasPeerGrant'];
   readonly hasWorkspace: UserDO['hasWorkspace'];
@@ -993,18 +997,16 @@ export abstract class ActorAgent extends Think<Env> {
     ));
   }
 
-  private _subordinateRosterBroadcast: Promise<void> | null = null;
+  private _subordinateRosterBroadcast: AsyncTaskOwner | null = null;
   private _subordinateRosterBroadcastPending = false;
 
   protected broadcastSubordinatesChanged(_event?: SubordinatesChangedEvent): void {
     this._subordinateRosterBroadcastPending = true;
     if (this._subordinateRosterBroadcast !== null) return;
-    let broadcast: Promise<void> | null = null;
-    broadcast = (async () => {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._subordinateRosterBroadcast = owner;
+    owner.promise = (async () => {
       try {
-        // Yield before querying so the owner field is established before a
-        // synchronous test double can settle this task.
-        await undefined;
         while (this._subordinateRosterBroadcastPending) {
           this._subordinateRosterBroadcastPending = false;
           const subordinates = await this.subordinateViews();
@@ -1017,13 +1019,12 @@ export abstract class ActorAgent extends Think<Env> {
           otherwise: 'unavailable',
         }));
       } finally {
-        if (this._subordinateRosterBroadcast === broadcast) {
+        if (this._subordinateRosterBroadcast === owner) {
           this._subordinateRosterBroadcast = null;
           if (this._subordinateRosterBroadcastPending) this.broadcastSubordinatesChanged();
         }
       }
     })();
-    this._subordinateRosterBroadcast = broadcast;
   }
 
   protected broadcastSubordinateEvent(
@@ -1584,18 +1585,17 @@ export abstract class ActorAgent extends Think<Env> {
    * on the next one's queue slot.
    */
   private readonly _rerunningSteerKeys = new Set<string>();
-  private _rerunningSteerTask: Promise<void> | null = null;
+  private _rerunningSteerTask: AsyncTaskOwner | null = null;
   private _rerunningSteerPending = false;
 
   private rerunLeftoverSteers(): void {
     this._rerunningSteerPending = true;
     if (this._rerunningSteerTask !== null) return;
-    let rerun: Promise<void> | null = null;
-    rerun = (async () => {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._rerunningSteerTask = owner;
+    owner.promise = (async () => {
       let steers = 0;
       try {
-        // Establish the strong owner before entering the durable terminal lane.
-        await undefined;
         await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: TERMINAL_LANE_FIBER });
           while (this._rerunningSteerPending) {
@@ -1641,13 +1641,12 @@ export abstract class ActorAgent extends Think<Env> {
           doing: 'enqueuing terminal leftover steers', cause, otherwise: 'io',
         }), { steers });
       } finally {
-        if (this._rerunningSteerTask === rerun) {
+        if (this._rerunningSteerTask === owner) {
           this._rerunningSteerTask = null;
           if (this._rerunningSteerPending) this.rerunLeftoverSteers();
         }
       }
     })();
-    this._rerunningSteerTask = rerun;
   }
 
   /** The settled turn's telemetry — the measured compaction trigger, the
@@ -2107,6 +2106,7 @@ export abstract class ActorAgent extends Think<Env> {
    * suite asserting what a sequence settled as.
    */
   protected _terminalReported: Promise<void> = Promise.resolve();
+  private _terminalReportedOwner: AsyncTaskOwner | null = null;
 
   /**
    * Keep this isolate alive for a terminal close, and carry it if the isolate
@@ -2128,12 +2128,12 @@ export abstract class ActorAgent extends Think<Env> {
     transition: TerminalTransition, close: () => Promise<void>, chatRequestId: string,
   ): void {
     const prior = this._terminalReported;
-    let reported: Promise<void> | null = null;
-    reported = (async () => {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._terminalReportedOwner = owner;
+    const task = (async () => {
       try {
         // Chain terminal closures so the latest owner retains every earlier
         // close until it settled, rather than overwriting a live fiber.
-        await undefined;
         await prior;
         await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: TERMINAL_LANE_FIBER });
@@ -2172,10 +2172,14 @@ export abstract class ActorAgent extends Think<Env> {
           }), { turnId: transition.turnId, messageId: transition.messageId });
         }
       } finally {
-        if (this._terminalReported === reported) this._terminalReported = Promise.resolve();
+        if (this._terminalReportedOwner === owner) {
+          this._terminalReportedOwner = null;
+          this._terminalReported = Promise.resolve();
+        }
       }
     })();
-    this._terminalReported = reported;
+    owner.promise = task;
+    this._terminalReported = task;
   }
 
 
@@ -2488,8 +2492,8 @@ export abstract class ActorAgent extends Think<Env> {
     this.headJournal.cacheMerge(rootId, result, strategy);
   }
 
-  /** The owned promise while this activation's evolution recovery fiber is live. */
-  private _evolutionSettling: Promise<void> | null = null;
+  /** The owner while this activation's evolution recovery fiber is live. */
+  private _evolutionSettling: AsyncTaskOwner | null = null;
 
   /**
    * Settle the evolution this turn dispatched, inside a DURABLE fiber — the cf
@@ -2527,10 +2531,10 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected settleEvolutionInBackground(): void {
     if (this._evolutionSettling !== null) return;
-    let settling: Promise<void> | null = null;
-    settling = (async () => {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._evolutionSettling = owner;
+    owner.promise = (async () => {
       try {
-        await undefined;
         await this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: EVOLUTION_LANE_FIBER });
           await this.orch.settleEvolution();
@@ -2543,10 +2547,9 @@ export abstract class ActorAgent extends Think<Env> {
           otherwise: 'unavailable',
         }));
       } finally {
-        if (this._evolutionSettling === settling) this._evolutionSettling = null;
+        if (this._evolutionSettling === owner) this._evolutionSettling = null;
       }
     })();
-    this._evolutionSettling = settling;
   }
 
   /**
@@ -2571,14 +2574,14 @@ export abstract class ActorAgent extends Think<Env> {
    * settled turn warms again, so the retry needs no record. One autonomous or
    * post-eviction turn may honestly lack MCP tools and says so on its surface.
    */
-  private _mcpWarmTask: Promise<void> | null = null;
+  private _mcpWarmTask: AsyncTaskOwner | null = null;
 
   protected warmUserMcpInBackground(): void {
     if (!this.getOwnerUserId() || this._mcpWarmTask !== null) return;
-    let warm: Promise<void> | null = null;
-    warm = (async () => {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._mcpWarmTask = owner;
+    owner.promise = (async () => {
       try {
-        await undefined;
         await this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: MCP_WARM_LANE_FIBER });
           // The same gate `buildUserMcpTools` uses, for the same reason: an owned
@@ -2596,10 +2599,9 @@ export abstract class ActorAgent extends Think<Env> {
           otherwise: 'unavailable',
         }));
       } finally {
-        if (this._mcpWarmTask === warm) this._mcpWarmTask = null;
+        if (this._mcpWarmTask === owner) this._mcpWarmTask = null;
       }
     })();
-    this._mcpWarmTask = warm;
   }
 
   /**
@@ -2664,7 +2666,7 @@ export abstract class ActorAgent extends Think<Env> {
    * the fiber's first tick left recovery reading a null snapshot and terminalizing
    * a review that never ran. After it, the fiber is re-drivable on its own.
    */
-  private readonly _advisorReviewTasks = new Map<string, Promise<void>>();
+  private readonly _advisorReviewTasks = new Map<string, AsyncTaskOwner>();
 
   protected reviewTurnInBackground(turn: CompletedTurn, recorded?: AdvisorRecoverySnapshot): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return Promise.resolve();
@@ -2681,10 +2683,10 @@ export abstract class ActorAgent extends Think<Env> {
     const snapshot: AdvisorRecoverySnapshot = recorded ?? this.advisorSnapshotFor(turn);
     const checkpointed = Promise.withResolvers<void>();
     const taskKey = nanoid();
-    let review: Promise<void> | null = null;
-    review = (async () => {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._advisorReviewTasks.set(taskKey, owner);
+    owner.promise = (async () => {
       try {
-        await undefined;
         await this.runFiber(ADVISOR_LANE_FIBER, async (ctx) => {
           // The checkpoint IS what the caller owes. A lane that could not write one
           // is a review no eviction can resume, so the failure travels to the owed
@@ -2725,12 +2727,11 @@ export abstract class ActorAgent extends Think<Env> {
         // failure is the lane's, not the ledger's.
         checkpointed.reject(failure);
       } finally {
-        if (this._advisorReviewTasks.get(taskKey) === review) {
+        if (this._advisorReviewTasks.get(taskKey) === owner) {
           this._advisorReviewTasks.delete(taskKey);
         }
       }
     })();
-    this._advisorReviewTasks.set(taskKey, review);
     return checkpointed.promise;
   }
 
@@ -2986,7 +2987,7 @@ export abstract class ActorAgent extends Think<Env> {
   // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
   // the queued half of signal delivery, reached only through the core seam.
   private _host: BackendHost | null = null;
-  private readonly _drainTimerTasks = new Map<string, Promise<void>>();
+  private readonly _drainTimerTasks = new Map<string, AsyncTaskOwner>();
   protected get host(): BackendHost {
     if (!this._host) {
       const getHeadRuntime = () => this.getCFHeadRuntime();
@@ -3053,10 +3054,10 @@ export abstract class ActorAgent extends Think<Env> {
         // alarm / post-turn drain picks them up (delayed, never dropped).
         setTimer: (fn, ms) => {
           const timerKey = nanoid();
-          let timer: Promise<void> | null = null;
-          timer = (async () => {
+          const owner: AsyncTaskOwner = { promise: null };
+          this._drainTimerTasks.set(timerKey, owner);
+          owner.promise = (async () => {
             try {
-              await undefined;
               await this.keepAliveWhile(async () => {
                 await new Promise<void>((resolve) => {
                   setTimeout(resolve, ms);
@@ -3078,12 +3079,11 @@ export abstract class ActorAgent extends Think<Env> {
                 otherwise: 'io',
               }));
             } finally {
-              if (this._drainTimerTasks.get(timerKey) === timer) {
+              if (this._drainTimerTasks.get(timerKey) === owner) {
                 this._drainTimerTasks.delete(timerKey);
               }
             }
           })();
-          this._drainTimerTasks.set(timerKey, timer);
         },
         // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
         // heads need the owner for UserDO auth, set by first-turn time.
@@ -3693,7 +3693,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  unapproved. The owner's decisions and the turn's classification read the
    *  same rows — there is no second authority to drift from. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
-  private _instructionMigration: Promise<void> | null = null;
+  private _instructionMigration: AsyncTaskOwner | null = null;
   protected _workspaceInstructionApprovals: readonly InstructionApproval[] | null = null;
   private instructionApprovals(): InstructionApprovalStore {
     this._instructionApprovals ??= new InstructionApprovalStore(
@@ -3729,12 +3729,12 @@ export abstract class ActorAgent extends Think<Env> {
    * and resolve unverified.
    */
   protected ensureInstructionApprovalMigration(): Promise<void> {
-    if (this._instructionMigration !== null) return this._instructionMigration;
-    let migration: Promise<void> | null = null;
-    migration = (async () => {
+    const existing = this._instructionMigration;
+    if (existing !== null && existing.promise !== null) return existing.promise;
+    const owner: AsyncTaskOwner = { promise: null };
+    this._instructionMigration = owner;
+    const migration = (async () => {
       try {
-        // Establish the one migration owner before synchronous storage fakes run.
-        await undefined;
         const limits = {
           contextWindow: this.sessionContextWindow(),
           modelOutputLimit: this.modelCatalog.modelOutputLimit(),
@@ -3752,11 +3752,11 @@ export abstract class ActorAgent extends Think<Env> {
         });
         this.instructionApprovals().grandfatherExisting(entries);
       } catch (cause) {
-        if (this._instructionMigration === migration) this._instructionMigration = null;
+        if (this._instructionMigration === owner) this._instructionMigration = null;
         throw cause;
       }
     })();
-    this._instructionMigration = migration;
+    owner.promise = migration;
     return migration;
   }
 
@@ -4601,17 +4601,16 @@ export abstract class ActorAgent extends Think<Env> {
   /** Make this actor's STORED title visible wherever its naming is read from
    *  outside its own storage. The base's title lives where every reader already
    *  looks, so there is nothing to publish. */
-  protected async publishAutoTitle(): Promise<void> { await Promise.resolve(); }
+  protected async publishAutoTitle(): Promise<void> {}
 
   /** Fill whatever activation-local view {@link titleInputs} reads, for an actor
    *  whose naming authority is not its own storage. The base owns its config
    *  row outright, so there is nothing to fetch. */
-  protected async hydrateTitleInputs(): Promise<void> { await Promise.resolve(); }
+  protected async hydrateTitleInputs(): Promise<void> {}
 
   /** Why this actor cannot title itself right now, or null when it can. An
    *  actor whose naming authority is its own storage always can. */
   protected async titlingRefusal(): Promise<string | null> {
-    await Promise.resolve();
     return null;
   }
 
