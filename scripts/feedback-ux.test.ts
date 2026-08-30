@@ -128,6 +128,8 @@ declare global {
     /** Installed by the sabotage stages; each puts the broken global back. */
     __restoreCapture?: () => void;
     __restoreDecode?: () => void;
+    /** Installed by `recordDecodeSettlements`; counts completed preview decodes. */
+    __feedbackDecodeSettlements?: () => number;
   }
 }
 
@@ -168,6 +170,43 @@ async function recordSubmissions(page: Page): Promise<void> {
 async function submissions(page: Page): Promise<Submission[]> {
   return page.evaluate(() => window.__feedbackSent ?? []);
 }
+/**
+ * The gallery mounts under StrictMode, so its initial feedback capture has two
+ * preview-decode paths. Expose their completion as a page event: callers can
+ * wait for the actual work rather than guessing a delay after the first paint.
+ */
+async function recordDecodeSettlements(page: Page): Promise<void> {
+  await page.evaluateOnNewDocument(() => {
+    const decode = window.createImageBitmap.bind(window);
+    let settled = 0;
+    const markSettled = (): void => {
+      settled += 1;
+      document.dispatchEvent(new Event('feedback-decode-settled'));
+    };
+    Object.assign(window, {
+      __feedbackDecodeSettlements: () => settled,
+      createImageBitmap: (image: ImageBitmapSource) => decode(image).then(
+        (bitmap) => { markSettled(); return bitmap; },
+        (thrown) => { markSettled(); throw thrown; },
+      ),
+    });
+  });
+}
+
+async function waitForDecodeSettlements(page: Page, count: number): Promise<void> {
+  await page.evaluate((wanted: number) => {
+    if ((window.__feedbackDecodeSettlements?.() ?? 0) >= wanted) return;
+    return new Promise<void>((resolve) => {
+      const settled = (): void => {
+        if ((window.__feedbackDecodeSettlements?.() ?? 0) < wanted) return;
+        document.removeEventListener('feedback-decode-settled', settled);
+        resolve();
+      };
+      document.addEventListener('feedback-decode-settled', settled);
+    });
+  }, count);
+}
+
 
 /**
  * Answer `/api/feedback` at the network, one behaviour per attempt.
@@ -241,6 +280,25 @@ async function captureSettled(page: Page): Promise<void> {
     { timeout: 90_000 },
   );
 }
+/**
+ * The checkbox's off state removes this marker. Observe that DOM-state
+ * boundary through mutations rather than sampling on animation frames, which
+ * throttled renderers can defer after the state update has committed.
+ */
+async function waitForShotRemoval(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    if (document.querySelector('[data-feedback-shot]') === null) return;
+    return new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (document.querySelector('[data-feedback-shot]') !== null) return;
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  });
+}
+
 
 /** Open the dialog and wait for the capture to settle either way. */
 async function openDialog(page: Page, selector = '[data-feedback-open]'): Promise<void> {
@@ -722,21 +780,15 @@ async function run(): Promise<Observed> {
     // ── note only ────────────────────────────────────────────────────────
     const bare = await browser.newPage();
     await bare.setViewport({ width: 1280, height: 900 });
+    await recordDecodeSettlements(bare);
     await serveFeedback(bare);
     await bare.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await openDialog(bare);
+    // The first ready image is not a quiescence boundary: StrictMode's second
+    // capture can still complete and overwrite the later off state.
+    await waitForDecodeSettlements(bare, 2);
     await bare.click('[data-feedback-include-shot]');
-    // Clearing the shot is a trivial synchronous state flip, but it shares
-    // the renderer's one JS thread with the capture/decode work elsewhere on
-    // this page — under real CPU contention the whole thread stalls, not
-    // just the CPU-heavy parts. 90s matches the recapture wait just below,
-    // which waits on the same renderer for work that IS CPU-heavy; the
-    // Puppeteer-default 30s this call carried was inconsistent with that
-    // and it flaked under a deploy-load reproduction (44.2s observed).
-    await bare.waitForFunction(
-      () => document.querySelector('[data-feedback-shot]') === null,
-      { timeout: 90_000 },
-    );
+    await waitForShotRemoval(bare);
     const shotSectionPresent = await bare.$('[data-feedback-shot]') !== null;
     await bare.type('[data-feedback-note]', 'no screenshot for this one');
     await bare.click('[data-feedback-send]');
@@ -797,14 +849,13 @@ async function run(): Promise<Observed> {
     const captureMessage = await broken.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
     await broken.type('[data-feedback-note]', 'the note survives a failed capture');
     const captureNoteSendable = await broken.$eval('[data-feedback-send]', (node) => !node.hasAttribute('disabled'));
-    await diagnosticsSettled(captureDiagnostics, 1);
+    // The gallery's StrictMode mount starts two captures. Both must fail before
+    // restoring the sabotaged encoder, or a stale attempt can overwrite off.
+    await diagnosticsSettled(captureDiagnostics, 2);
     // The failed state's retry affordance is the checkbox: off, then on again.
     await broken.evaluate(() => window.__restoreCapture?.());
     await broken.click('[data-feedback-include-shot]');
-    await broken.waitForFunction(
-      () => document.querySelector('[data-feedback-shot]') === null,
-      { timeout: 90_000 },
-    );
+    await waitForShotRemoval(broken);
     await broken.click('[data-feedback-include-shot]');
     await broken.waitForFunction(
       () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
@@ -830,13 +881,11 @@ async function run(): Promise<Observed> {
     await openDialog(undecodable);
     await undecodable.waitForSelector('[data-feedback-shot="failed"]', { timeout: 90_000 });
     const decodeMessage = await undecodable.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
-    await diagnosticsSettled(decodeDiagnostics, 1);
+    // Wait for both StrictMode capture/decode paths before restoring the decoder.
+    await diagnosticsSettled(decodeDiagnostics, 2);
     await undecodable.evaluate(() => window.__restoreDecode?.());
     await undecodable.click('[data-feedback-include-shot]');
-    await undecodable.waitForFunction(
-      () => document.querySelector('[data-feedback-shot]') === null,
-      { timeout: 90_000 },
-    );
+    await waitForShotRemoval(undecodable);
     await undecodable.click('[data-feedback-include-shot]');
     await undecodable.waitForFunction(
       () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
