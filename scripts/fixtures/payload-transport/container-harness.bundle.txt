@@ -48,7 +48,7 @@ export async function seed(path: string, sizeMiB: number, seedValue: number): Pr
   for (let written = 0; written < sizeMiB * MIB; written += chunk.length) {
     for (let i = 0; i < chunk.length; i += 1) chunk[i] = Math.floor(next() * 256);
     digest.update(chunk);
-    writer.write(chunk);
+    await writer.write(chunk);
   }
   await writer.end();
   process.stdout.write(`${JSON.stringify({ sha256: digest.digest('hex'), bytes: sizeMiB * MIB })}\n`);
