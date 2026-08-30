@@ -17,7 +17,7 @@
 import type { Memory } from '../types/primitives';
 import type { VectorStore, VectorSearchHit } from './vector-store';
 import { reciprocalRankFusion } from './vector-store';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError, type KinuError } from '../obs/index';
 
 export interface LexicalHit {
   readonly id: string;
@@ -98,11 +98,36 @@ export interface HybridSearchOptions {
 }
 
 /**
+ * What one retrieval arm came back with, held as a value instead of being
+ * settled inside the handler that produced it. The decision a failed arm forces
+ * — degrade to the other source, or admit the search never ran — depends on what
+ * the OTHER arm did, and a `catch` can only see its own.
+ */
+type ArmOutcome<Hit> =
+  | { readonly kind: 'answered'; readonly hits: readonly Hit[] }
+  | { readonly kind: 'failed'; readonly error: KinuError };
+
+/**
+ * The semantic arm has a third outcome the lexical one does not: no store to
+ * ask. `skipped` is deliberately not `answered` with nothing — a vector index
+ * that was never consulted has said nothing about whether the corpus holds a
+ * match, and folding the two together is exactly how "FTS5 is down, and there
+ * was no semantic index to cover for it" reaches a caller spelled "no results".
+ */
+type SemanticOutcome = ArmOutcome<VectorSearchHit> | { readonly kind: 'skipped' };
+
+/**
  * Hybrid search — runs lexical + semantic in parallel, merges via RRF,
  * returns the top-finalK enriched hits.
  *
  * If the vector store is unavailable, this transparently degrades to
  * lexical-only — the caller doesn't need to feature-detect.
+ *
+ * ONE arm failing degrades to the other and is recorded rather than raised:
+ * covering for a dead source is the whole reason two of them run. Losing every
+ * arm raises, because the return type cannot say "the search did not happen" —
+ * an empty array here reads as an empty CORPUS, and answering "no matches" for
+ * a query that was never executed is the one failure this must not fake.
  */
 export async function hybridSearch(
   query: string,
@@ -114,38 +139,72 @@ export async function hybridSearch(
   const finalK = options.finalK ?? 10;
   const rrfK = options.rrfK ?? 60;
 
-  const lexicalPromise: Promise<LexicalHit[]> = (async () => {
+  const lexicalArm = (async (): Promise<ArmOutcome<LexicalHit>> => {
     try {
-      return await lexicalSearch(query, perSourceK);
+      return { kind: 'answered', hits: await lexicalSearch(query, perSourceK) };
     } catch (cause) {
-      diagnostics.failure(
-        'memory.lexical_search_failed',
-        toKinuError({ doing: 'run the lexical half of a hybrid search', cause, otherwise: 'io' }),
-      );
-      return [];
+      return {
+        kind: 'failed',
+        error: toKinuError({
+          doing: 'run the lexical half of a hybrid search', cause, otherwise: 'io',
+        }),
+      };
     }
   })();
-  const semanticPromise: Promise<VectorSearchHit[]> = vectorStore.available
-    ? (async () => {
+  const semanticArm: Promise<SemanticOutcome> = vectorStore.available
+    ? (async (): Promise<SemanticOutcome> => {
         try {
-          return await vectorStore.search(query, perSourceK);
+          return { kind: 'answered', hits: await vectorStore.search(query, perSourceK) };
         } catch (cause) {
-          diagnostics.failure(
-            'memory.semantic_search_failed',
-            toKinuError({ doing: 'run the semantic half of a hybrid search', cause, otherwise: 'unavailable' }),
-          );
-          return [];
+          return {
+            kind: 'failed',
+            error: toKinuError({
+              doing: 'run the semantic half of a hybrid search', cause, otherwise: 'unavailable',
+            }),
+          };
         }
       })()
-    : Promise.resolve([]);
-  const [lexical, semantic] = await Promise.all([lexicalPromise, semanticPromise]);
+    : Promise.resolve({ kind: 'skipped' });
+  // Both arms are already in flight; awaiting them together keeps a slow source
+  // off the other's critical path, exactly as before.
+  const [lexical, semantic] = await Promise.all([lexicalArm, semanticArm]);
+
+  // The fallback decision, taken once with both outcomes in hand — the view no
+  // handler had. A survivor makes the other arm's failure a degradation worth
+  // recording; no survivor makes it the answer.
+  if (lexical.kind === 'answered' || semantic.kind === 'answered') {
+    if (lexical.kind === 'failed') {
+      diagnostics.failure('memory.lexical_search_failed', lexical.error);
+    }
+    if (semantic.kind === 'failed') {
+      diagnostics.failure('memory.semantic_search_failed', semantic.error);
+    }
+  } else if (semantic.kind === 'failed') {
+    // Two chains, and neither is the one that may be dropped: which index broke
+    // first is the whole diagnosis when a retrieval tier goes dark at once.
+    throw new AggregateError(
+      [lexical.error, semantic.error],
+      'hybrid search failed: neither the lexical nor the semantic index answered',
+      { cause: lexical.error },
+    );
+  } else {
+    // Semantic was never available to cover for it, so the lexical failure IS
+    // the result. It is already classified and chained; it travels as it is.
+    throw lexical.error;
+  }
+
+  // Only now, past the classification, does a lost arm become no candidates.
+  const lexicalHits: readonly LexicalHit[] = lexical.kind === 'answered' ? lexical.hits : [];
+  const semanticHits: readonly VectorSearchHit[] = semantic.kind === 'answered'
+    ? semantic.hits
+    : [];
 
   // RRF accepts any { id } shape; we feed both lists.
-  const merged = reciprocalRankFusion<{ id: string }>([lexical, semantic], rrfK);
+  const merged = reciprocalRankFusion<{ id: string }>([lexicalHits, semanticHits], rrfK);
 
   // Re-enrich with metadata (prefer lexical snippet/text; carry semantic score if present).
-  const byIdLex = new Map(lexical.map((h) => [h.id, h]));
-  const byIdSem = new Map(semantic.map((h) => [h.id, h]));
+  const byIdLex = new Map(lexicalHits.map((h) => [h.id, h]));
+  const byIdSem = new Map(semanticHits.map((h) => [h.id, h]));
 
   return Promise.all(merged.slice(0, finalK).map(async (m): Promise<HybridHit> => {
     const l = byIdLex.get(m.id);
