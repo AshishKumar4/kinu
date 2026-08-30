@@ -298,6 +298,10 @@ interface ExecutorOutputRow {
   exit_code: number; created_at: number;
 }
 
+interface AsyncTaskOwner {
+  promise: Promise<void> | null;
+}
+
 const FileRestoreChangeSchema = v.object({
   path: v.string(),
   kind: v.picklist(['modify', 'create', 'delete']),
@@ -535,6 +539,8 @@ export class OrchestratorAgent extends ActorAgent {
 
   private _engine: EvolutionEngine | null = null;
   private _emailOutbox: EmailOutbox | null = null;
+  /** Detached work this actor owns until its lexical error boundary settles. */
+  private readonly _backgroundTasks = new Set<AsyncTaskOwner>();
 
   /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
    *  replies and owner notifications (SPEC §7.4). The shared outbox creates
@@ -838,13 +844,21 @@ export class OrchestratorAgent extends ActorAgent {
   private armDurableWake(): void {
     const next = this.nextWakeAt(Date.now());
     if (next === null) return;
-    void this.armTimer(next).catch((...rejection: [unknown]) => {
-      diagnostics.failure('schedule.durable_wake_arm_failed', toKinuError({
-        doing: 'arming the wake a pending reaction needs',
-        cause: rejection[0],
-        otherwise: 'io',
-      }), { workspace: this.name });
-    });
+    const task: AsyncTaskOwner = { promise: null };
+    this._backgroundTasks.add(task);
+    task.promise = (async () => {
+      try {
+        await this.armTimer(next);
+      } catch (cause) {
+        diagnostics.failure('schedule.durable_wake_arm_failed', toKinuError({
+          doing: 'arming the wake a pending reaction needs',
+          cause,
+          otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._backgroundTasks.delete(task);
+      }
+    })();
   }
 
   /** Drop schedule rows that came due so long ago that nothing downstream can
@@ -2071,13 +2085,21 @@ export class OrchestratorAgent extends ActorAgent {
     // whose only wake row was lost can notice. Detached for the same reason the
     // fork reconciliation below is — arming a schedule row is I/O, and this
     // method runs inside the init gate.
-    void this.reconcileTimerRow().catch((...rejection: [unknown]) => {
-      diagnostics.failure('schedule.timer_reconcile_failed', toKinuError({
-        doing: 'restoring the wake row an activation found missing',
-        cause: rejection[0],
-        otherwise: 'io',
-      }), { workspace: this.name });
-    });
+    const timerReconcileTask: AsyncTaskOwner = { promise: null };
+    this._backgroundTasks.add(timerReconcileTask);
+    timerReconcileTask.promise = (async () => {
+      try {
+        await this.reconcileTimerRow();
+      } catch (cause) {
+        diagnostics.failure('schedule.timer_reconcile_failed', toKinuError({
+          doing: 'restoring the wake row an activation found missing',
+          cause,
+          otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._backgroundTasks.delete(timerReconcileTask);
+      }
+    })();
     // Deliveries a dead activation left leased. An open lease is either a
     // question nobody answered or an ANSWER NOBODY DELIVERED, and only the
     // transcript tells them apart. The sweep could not: it re-pended every open
@@ -2090,13 +2112,21 @@ export class OrchestratorAgent extends ActorAgent {
     // synchronous inside the init gate (it is one indexed UPDATE), the resume
     // sends mail and therefore cannot be, and the invariant must not depend on
     // which of the two happens to run first.
-    void this.reconcileEventDeliveries().catch((...rejection: [unknown]) => {
-      diagnostics.failure('event.delivery_reconcile_failed', toKinuError({
-        doing: 'reconciling the event deliveries a dead activation left open',
-        cause: rejection[0],
-        otherwise: 'io',
-      }), { workspace: this.name });
-    });
+    const eventDeliveryReconcileTask: AsyncTaskOwner = { promise: null };
+    this._backgroundTasks.add(eventDeliveryReconcileTask);
+    eventDeliveryReconcileTask.promise = (async () => {
+      try {
+        await this.reconcileEventDeliveries();
+      } catch (cause) {
+        diagnostics.failure('event.delivery_reconcile_failed', toKinuError({
+          doing: 'reconciling the event deliveries a dead activation left open',
+          cause,
+          otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._backgroundTasks.delete(eventDeliveryReconcileTask);
+      }
+    })();
 
     try {
       const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
@@ -2141,26 +2171,35 @@ export class OrchestratorAgent extends ActorAgent {
     // which queues a turn via `Think.saveMessages` and resolves only when that
     // turn ENDS. Awaiting a whole agent turn inside the init gate is the 30s
     // object reset.
-    void reconcileInterruptedForks({
-      journal: this.headJournal,
-      signals: this.orch.signals,
-      search: this.mctsSearchStore,
-      runEvents: this.eventRecorder,
-      resume: jobRedriveResumeGate({
-        recoverOrphans: () => this.jobRunner.recoverOrphans(),
-        inputOf: (jobId) => this.jobs.getInput(jobId),
-        rootsForTask: (task) => resumableForkRoots(
-          { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
-        ),
-      }),
-      logActivity: (event, detail) => this.logActivity(event, detail),
-    }).then(() => this.reclaimSettledExplorationFacets()).catch((...rejection: [unknown]) => {
-      diagnostics.failure('head.journal_reconcile_failed', toKinuError({
-        doing: 'reconciling fork-journal heads a dead activation left running',
-        cause: rejection[0],
-        otherwise: 'io',
-      }), { workspace: this.name });
-    });
+    const forkJournalReconcileTask: AsyncTaskOwner = { promise: null };
+    this._backgroundTasks.add(forkJournalReconcileTask);
+    forkJournalReconcileTask.promise = (async () => {
+      try {
+        await reconcileInterruptedForks({
+          journal: this.headJournal,
+          signals: this.orch.signals,
+          search: this.mctsSearchStore,
+          runEvents: this.eventRecorder,
+          resume: jobRedriveResumeGate({
+            recoverOrphans: () => this.jobRunner.recoverOrphans(),
+            inputOf: (jobId) => this.jobs.getInput(jobId),
+            rootsForTask: (task) => resumableForkRoots(
+              { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
+            ),
+          }),
+          logActivity: (event, detail) => this.logActivity(event, detail),
+        });
+        await this.reclaimSettledExplorationFacets();
+      } catch (cause) {
+        diagnostics.failure('head.journal_reconcile_failed', toKinuError({
+          doing: 'reconciling fork-journal heads a dead activation left running',
+          cause,
+          otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._backgroundTasks.delete(forkJournalReconcileTask);
+      }
+    })();
     // Workspaces created before mission-derived titling still show their raw
     // slug. Title them from SOUL.md's mission the first time one is opened —
     // every other workspace is already titled, so it costs a registry read.
@@ -2168,19 +2207,24 @@ export class OrchestratorAgent extends ActorAgent {
     // activation cache has hydrated from it. Fire-and-forget: boot never
     // waits on a model call.
     if (this.getOwnerUserId()) {
-      void this.hydrateTitle()
-        .then(() => {
+      const autoTitleTask: AsyncTaskOwner = { promise: null };
+      this._backgroundTasks.add(autoTitleTask);
+      autoTitleTask.promise = (async () => {
+        try {
+          await this.hydrateTitle();
           if (!isPlaceholderWorkspaceTitle(this.getDisplayName(), this.name)) return;
-          return readSoul(this.rt.storage.vfs)
-            .then((soul) => this.maybeAutoTitle(summarizeSoul(soul ?? '')));
-        })
-        .catch((...rejection: [unknown]) => {
+          const soul = await readSoul(this.rt.storage.vfs);
+          await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
+        } catch (cause) {
           diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
             doing: 'reading SOUL.md to title a legacy workspace',
-            cause: rejection[0],
+            cause,
             otherwise: 'io',
           }), { workspace: this.name });
-        });
+        } finally {
+          this._backgroundTasks.delete(autoTitleTask);
+        }
+      })();
     }
   }
   /**
@@ -3665,13 +3709,21 @@ export class OrchestratorAgent extends ActorAgent {
   async beginGenesisTurn(): Promise<{ started: boolean }> {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
     if (!signal) return { started: false };
-    void this.keepAliveWhile(() => this.orch.signals.deliver(signal)).catch((...rejection: [unknown]) => {
-      diagnostics.failure('genesis.turn_failed', toKinuError({
-        doing: "taking the workspace's first turn",
-        cause: rejection[0],
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    });
+    const genesisTurnTask: AsyncTaskOwner = { promise: null };
+    this._backgroundTasks.add(genesisTurnTask);
+    genesisTurnTask.promise = (async () => {
+      try {
+        await this.keepAliveWhile(() => this.orch.signals.deliver(signal));
+      } catch (cause) {
+        diagnostics.failure('genesis.turn_failed', toKinuError({
+          doing: "taking the workspace's first turn",
+          cause,
+          otherwise: 'unavailable',
+        }), { workspace: this.name });
+      } finally {
+        this._backgroundTasks.delete(genesisTurnTask);
+      }
+    })();
     return { started: true };
   }
 
