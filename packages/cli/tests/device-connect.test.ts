@@ -273,17 +273,15 @@ describe('device-connect daemon lifecycle', () => {
     writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
 
     const out = await runScript(home, `
-      import { connectDevice, startDaemon } from './packages/cli/src/device-connect.ts';
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
       const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
-      console.log(JSON.stringify({ result, started: startDaemon({ session: true }) }));
+      console.log(JSON.stringify({ result }));
     `);
 
-    const { result, started } = v.parse(v.object({
+    const { result } = v.parse(v.object({
       result: v.object({ kind: v.string(), connected: v.boolean() }),
-      started: v.object({ started: v.boolean() }),
     }), JSON.parse(out.trim()));
     expect(result).toEqual({ kind: 'already-running', connected: false });
-    expect(started).toEqual({ started: false });
     // No takeover: nothing registered, downloaded, or killed.
     expect(stub.hits.register).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);

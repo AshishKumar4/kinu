@@ -17,9 +17,8 @@ import {
   type FileContent,
 } from '../src/capture';
 import {
-  journalLinearizationPoint,
   materializeJournalPrefix,
-  type JournalCapturePlatformEvidence,
+  type JournalCapturePlatformEvidence, type LinearizationPoint,
 } from '../src/capture/journal-capture';
 
 
@@ -128,7 +127,12 @@ describe('the capture soundness model', () => {
     await log.perform({ op: 'rewrite-in-place', path: 'chosen', content: dense('wxyz') });
     await log.perform({ op: 'mmap-write', path: 'chosen', offset: 2, bytes: new TextEncoder().encode('!') });
 
-    const point = journalLinearizationPoint(log.lastSeq, log.generation, journalEvidence);
+    const point: LinearizationPoint = {
+      kind: 'durable-fence-record',
+      cut: log.lastSeq,
+      generation: log.generation,
+      evidence: journalEvidence,
+    };
     const result = materializeJournalPrefix({
       batches: () => [{
         firstSeq: 0,

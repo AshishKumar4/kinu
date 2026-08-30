@@ -107,13 +107,6 @@ export type JournalCaptureResult =
       readonly detail: string;
     };
 
-export function journalLinearizationPoint(
-  cut: number,
-  generation: number,
-  evidence: JournalCapturePlatformEvidence,
-): LinearizationPoint {
-  return { kind: 'durable-fence-record', cut, generation, evidence };
-}
 
 function firstUnprovenPlatformAssumption(
   evidence: JournalCapturePlatformEvidence,

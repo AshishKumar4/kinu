@@ -21,8 +21,7 @@ import {
 } from '../src/capture';
 import {
   JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS,
-  journalLinearizationPoint,
-  type JournalCapturePlatformEvidence,
+  type JournalCapturePlatformEvidence, type LinearizationPoint,
 } from '../src/capture/journal-capture';
 
 
@@ -55,8 +54,8 @@ function journalPoint(
   cut: number,
   generation: number,
   evidence = journalEvidence(),
-) {
-  return journalLinearizationPoint(cut, generation, evidence);
+): LinearizationPoint {
+  return { kind: 'durable-fence-record', cut, generation, evidence };
 }
 
 

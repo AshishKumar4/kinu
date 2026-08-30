@@ -70,9 +70,6 @@ export interface ConnectDeviceOptions {
   onPoll?: () => void;
 }
 
-export interface StartDaemonResult {
-  started: boolean;
-}
 
 export interface ConnectOutcomeDescription {
   ok: boolean;
@@ -105,15 +102,6 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   return { kind: connected ? 'connected' : 'timeout', deviceId: device.deviceId };
 }
 
-/**
- * Start the installed daemon. Persistent mode replaces any previous daemon
- * (detached child + pidfile); session mode spawns a child tied to this CLI
- * process (killed on exit, no pidfile) and no-ops when a persistent daemon is
- * already running.
- */
-export function startDaemon(opts: { session?: boolean } = {}): StartDaemonResult {
-  return { started: startInstalledDaemon(opts.session === true) !== null };
-}
 
 export interface DaemonStatus {
   deviceConfigPresent: boolean;
