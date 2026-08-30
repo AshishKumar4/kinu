@@ -8,7 +8,8 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 
-const CONFIG_PATH = path.join(os.homedir(), '.kinu', 'device.json');
+const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
+const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
 
 /** The hub's token-rotation frame type. Pinned against core's
  *  DEVICE_TOKEN_ROTATION in cf-backend's device-hub test: this daemon ships as
@@ -643,6 +644,13 @@ function parseString(value, expectation) {
   }
 }
 
+function parseRecord(value, expectation) {
+  if (value === null || Object(value) !== value || Array.isArray(value)) throw new Error(expectation);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(expectation);
+  return value;
+}
+
 function requestDirectory(root, requestId) {
   const parsedRequestId = parseString(requestId, 'exec request id must match rpc-<epoch>-<sequence>');
   if (!REQUEST_ID.test(parsedRequestId)) {
@@ -1275,21 +1283,177 @@ function handle(msg, ws, ctx) {
 
 // ── Daemon startup ─────────────────────────────────────────────────────
 
+function readDeviceConfig(configPath = CONFIG_PATH) {
+  let text;
+  try {
+    text = fs.readFileSync(configPath, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(`device config not found at ${configPath}; run: kinu connect`, { cause: err });
+    }
+    if (err && (err.code === 'EACCES' || err.code === 'EPERM')) {
+      throw new Error(`device config at ${configPath} is not readable by this user; check its owner and permissions`, { cause: err });
+    }
+    throw new Error(`could not read device config at ${configPath}`, { cause: err });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (cause) {
+    const safeCause = cause instanceof SyntaxError
+      ? new Error('device config is not valid JSON')
+      : new Error('device config could not be parsed');
+    throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
+  }
+  const expectation = `device config at ${configPath} is missing its user or token; re-run: kinu connect`;
+  const cfg = parseRecord(parsed, expectation);
+  const user = parseString(cfg.user, expectation);
+  const token = parseString(cfg.token, expectation);
+  const origin = cfg.origin === undefined ? undefined : parseString(cfg.origin, expectation);
+  if (user.length === 0 || token.length === 0) throw new Error(expectation);
+  return origin === undefined ? { ...cfg, user, token } : { ...cfg, user, token, origin };
+}
+
+function redactConnectSecrets(value, secrets) {
+  let redacted = String(value);
+  for (const secret of secrets) {
+    if (secret) redacted = redacted.split(secret).join('[redacted]');
+  }
+  return redacted;
+}
+
+function connectFailureMessage(err, secrets) {
+  const raw = err instanceof Error ? err.message : String(err);
+  const status = /Unexpected server response:\s*(\d{3})/.exec(raw);
+  let message = raw;
+  if (status && (status[1] === '401' || status[1] === '403')) {
+    message = 'refused by the server (invalid, used, or expired connect ticket); retrying with a fresh ticket';
+  } else if (status && status[1] === '404') {
+    message = 'the configured server has no device connect endpoint';
+  } else if (status && status[1] === '426') {
+    message = 'the server refused the WebSocket upgrade';
+  }
+  return redactConnectSecrets(message, secrets);
+}
+
 async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
-  const res = await fetchFn(httpOrigin + '/pc/connect-ticket', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ user: cfg.user, token: cfg.token }),
-  });
+  let res;
+  try {
+    res = await fetchFn(httpOrigin + '/pc/connect-ticket', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ user: cfg.user, token: cfg.token }),
+    });
+  } catch (err) {
+    throw new Error('ticket exchange could not reach the server', {
+      cause: new Error(redactConnectSecrets(err instanceof Error ? err.message : err, [cfg.token])),
+    });
+  }
   let body = {};
   try { body = await res.json(); }
-  catch (err) {
+  catch (cause) {
     // A gateway's non-JSON error page is diagnosed by the status check below;
     // an unreadable body behind HTTP 200 is a real protocol failure.
-    if (res.ok) throw new Error(`ticket exchange returned an unreadable body: HTTP ${res.status}`, { cause: err });
+    if (res.ok) {
+      const safeCause = cause instanceof SyntaxError
+        ? new Error('ticket response is not valid JSON')
+        : new Error('ticket response could not be read');
+      throw new Error(`ticket exchange returned an unreadable body: HTTP ${res.status}`, { cause: safeCause });
+    }
   }
-  if (!res.ok || !body.ticket) throw new Error(body.error || ('ticket exchange failed: HTTP ' + res.status));
-  return body.ticket;
+  let record;
+  try {
+    record = parseRecord(body, 'ticket exchange returned an invalid body');
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : 'ticket response is invalid';
+    throw new Error('ticket exchange returned an invalid body', {
+      cause: new Error(redactConnectSecrets(detail, [cfg.token])),
+    });
+  }
+  let ticket = '';
+  let serviceError = '';
+  try {
+    if (record.ticket !== undefined) {
+      ticket = parseString(record.ticket, 'ticket exchange returned an invalid connect ticket');
+    }
+    if (record.error !== undefined) {
+      serviceError = redactConnectSecrets(
+        parseString(record.error, 'ticket exchange returned an invalid body'),
+        [cfg.token],
+      );
+    }
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : 'ticket response fields are invalid';
+    throw new Error('ticket exchange returned an invalid body', {
+      cause: new Error(redactConnectSecrets(detail, [cfg.token])),
+    });
+  }
+  if (!res.ok || ticket.length === 0) {
+    const detail = serviceError || `HTTP ${res.status}`;
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('device credentials were rejected; re-run: kinu connect', { cause: new Error(detail) });
+    }
+    throw new Error(`ticket exchange failed: HTTP ${res.status}`, { cause: new Error(detail) });
+  }
+  if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) {
+    throw new Error('ticket exchange returned an invalid connect ticket', { cause: new Error('ticket format is invalid') });
+  }
+  return ticket;
+}
+
+function startConnectLoop(opts) {
+  const { getTicket, dial, logger = log, secret = () => '', schedule = setTimeout, onClose } = opts;
+  let backoff = 1000;
+  let stopped = false;
+  let currentTicket = '';
+
+  function retry() {
+    if (stopped) return;
+    schedule(connect, backoff);
+    backoff = Math.min(backoff * 2, 60_000);
+  }
+
+  async function connect() {
+    if (stopped) return;
+    let ticket;
+    try {
+      ticket = await getTicket();
+    } catch (err) {
+      logger('Ticket exchange failed:', connectFailureMessage(err, [secret()]));
+      retry();
+      return;
+    }
+    if (stopped) return;
+    currentTicket = ticket;
+    let ws;
+    try {
+      ws = dial(ticket);
+    } catch (err) {
+      logger('Connect attempt failed:', connectFailureMessage(err, [secret(), currentTicket]));
+      retry();
+      return;
+    }
+    ws.addEventListener('open', () => {
+      backoff = 1000;
+    });
+    ws.addEventListener('close', () => {
+      if (stopped) return;
+      if (onClose) onClose();
+      logger('Disconnected, reconnecting in', backoff, 'ms');
+      retry();
+    });
+    ws.addEventListener('error', (err) => {
+      logger('Connect attempt failed:', connectFailureMessage(err, [secret(), currentTicket]));
+    });
+  }
+
+  void connect();
+  return {
+    stop() {
+      stopped = true;
+    },
+  };
 }
 
 function persistRotatedToken(cfg, token, configPath = CONFIG_PATH) {
@@ -1333,76 +1497,77 @@ function handleTokenRotation(
 }
 
 function main() {
-  const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  const cfg = readDeviceConfig(CONFIG_PATH);
   const USER = cfg.user;
   const HTTP_ORIGIN = (cfg.origin || 'https://kinu.run').replace(/\/+$/, '');
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
   const ctx = { checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }) };
 
   let WS;
-  // `ws` is optional — Node 22+ has a global WebSocket. A `ws` that is present
-  // but fails to load is not that case and must not pass as absent.
+  // `ws` is optional — Node 22+ and Bun have a global WebSocket. A `ws` that
+  // is present but fails to load is not that case and must not pass as absent.
   try { WS = require('ws'); }
-  catch (err) { if (!err || err.code !== 'MODULE_NOT_FOUND') throw err; }
-  const mkWs = (url) => WS ? new WS(url) : new WebSocket(url);
+  catch (err) {
+    if (!err || (err.code !== 'MODULE_NOT_FOUND' && err.code !== 'ERR_MODULE_NOT_FOUND')) throw err;
+  }
+  const NativeWebSocket = globalThis.WebSocket;
+  if (!WS && !(NativeWebSocket instanceof Function)) {
+    throw new Error('no WebSocket implementation is available; install Node 22+ or the ws package');
+  }
+  const mkWs = (url) => WS ? new WS(url) : new NativeWebSocket(url);
 
-  let backoff = 1000;
-  const getTicket = () => getConnectTicket(cfg, HTTP_ORIGIN);
-
-  async function connect() {
-    let ticket;
-    try { ticket = await getTicket(); }
-    catch (err) {
-      log('Ticket exchange failed:', err.message || err);
-      setTimeout(connect, backoff);
-      backoff = Math.min(backoff * 2, 60_000);
-      return;
-    }
-    const WS_URL = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
-    log('Connecting to', WS_ORIGIN + '/pc/connect');
-    const ws = mkWs(WS_URL);
-    ws.addEventListener('open', () => {
-      log('Connected');
-      backoff = 1000;
-      ws.send(JSON.stringify({ type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
-    });
-    ws.addEventListener('message', (ev) => {
-      const payload = ev.data instanceof ArrayBuffer
-        ? new TextDecoder().decode(ev.data)
-        : String(ev.data);
-      let msg;
-      try {
-        msg = JSON.parse(payload);
-      } catch (err) {
-        log('Device message parse failed:', err);
-        return;
-      }
-      // The hub rotates this machine's long-lived token on every accepted
-      // connect. Rename a complete same-directory file before changing memory:
-      // a crash leaves either the old valid JSON or the complete new JSON.
-      if (handleTokenRotation(cfg, msg)) return;
-      try {
-        handle(msg, ws, ctx);
-      } catch (err) {
-        log('Device message failed:', err);
-      }
-    });
-    ws.addEventListener('close', () => {
+  startConnectLoop({
+    getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
+    secret: () => cfg.token,
+    onClose: () => {
       // The commands still waiting to answer can no longer report to anyone,
       // and their ids died with the caller that minted them. Terminating them
       // here is what keeps a dropped socket from leaving work running that
       // nothing can name, stop or observe.
       inFlight.terminateUnanswered();
-      log('Disconnected, reconnecting in', backoff, 'ms');
-      setTimeout(connect, backoff);
-      backoff = Math.min(backoff * 2, 60_000);
-    });
-    ws.addEventListener('error', (err) => log('WS error:', err.message || err));
-  }
-  connect();
+    },
+    dial(ticket) {
+      const wsUrl = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
+      log('Connecting to', WS_ORIGIN + '/pc/connect');
+      const ws = mkWs(wsUrl);
+      ws.addEventListener('open', () => {
+        log('Connected');
+        ws.send(JSON.stringify({ type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
+      });
+      ws.addEventListener('message', (ev) => {
+        const payload = ev.data instanceof ArrayBuffer
+          ? new TextDecoder().decode(ev.data)
+          : String(ev.data);
+        let msg;
+        try {
+          msg = JSON.parse(payload);
+        } catch (err) {
+          log('Device message parse failed:', err);
+          return;
+        }
+        // The hub rotates this machine's long-lived token on every accepted
+        // connect. Rename a complete same-directory file before changing memory:
+        // a crash leaves either the old valid JSON or the complete new JSON.
+        if (handleTokenRotation(cfg, msg)) return;
+        try {
+          handle(msg, ws, ctx);
+        } catch (err) {
+          log('Device message failed:', err);
+        }
+      });
+      return ws;
+    },
+  });
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+  try {
+    main();
+  } catch (err) {
+    console.error('Kinu PC agent:', err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  }
+}
 
 module.exports = {
   handle,
@@ -1418,6 +1583,9 @@ module.exports = {
   waitForSupervisorState,
   createCheckpoints,
   listListeningPorts,
+  CONFIG_PATH,
+  readDeviceConfig,
+  startConnectLoop,
   getConnectTicket,
   persistRotatedToken,
   handleTokenRotation,

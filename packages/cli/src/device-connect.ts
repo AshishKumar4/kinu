@@ -8,12 +8,14 @@
  * connected on the server before claiming success.
  */
 
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { classify, renderThrownChain, tolerate } from '@kinu.run/core/obs';
-import { AGENT_HOME, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { classify, classifyErrorCode, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { enforceOwnerOnly } from '@kinu.run/cli-backend';
+import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice } from './cloud-api';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
@@ -22,6 +24,9 @@ export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 export const DEVICE_CONNECT_DEADLINE_MS = 20_000;
 const CONNECT_POLL_MS = 1_000;
+const DAEMON_EARLY_EXIT_GRACE_MS = 250;
+const DAEMON_CHECKSUM_HEADER = 'x-kinu-daemon-sha256';
+const DAEMON_PROTOCOL_MARKERS = ['/pc/connect-ticket', "'execCancel'", "'ROTATE'"];
 
 /** The name a machine has when nobody named it. */
 export const UNNAMED_DEVICE_NAME = 'Your PC';
@@ -83,15 +88,16 @@ export type ConnectDeviceResult =
 export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {}): Promise<ConnectDeviceResult> {
   if (opts.session && persistentDaemonPid() !== null) {
     // The persistent daemon owns device.json and its credentials — leave it alone.
-    const devices = await listCloudDevices(auth.origin, auth.token);
+    const devices = await listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
     return { kind: 'already-running', connected: devices.some((device) => device.connected) };
   }
-  if (!nodeAvailable()) {
-    throw new Error('Node.js is required for the desktop daemon. Install Node.js, then retry.');
-  }
-  const device = await registerCloudDevice(auth.origin, auth.token, opts.label);
-  installDaemonFiles(await downloadDaemonScript(device.origin), device);
-  startDaemon({ session: opts.session });
+  assertDaemonPlatformSupported();
+  const runtime = daemonRuntime();
+  const device = await registerDeviceForConnect(auth, opts.label);
+  const download = await downloadDaemonScript(device.origin);
+  installDaemonFiles(download, device);
+  const launch = startInstalledDaemon(opts.session === true, runtime);
+  if (launch !== null) await waitForDaemonStart(launch);
   // Don't trust the spawn — the daemon must show up as connected on the
   // server before we claim success.
   const connected = await waitForDeviceConnected(auth, device.deviceId, opts.onPoll);
@@ -106,29 +112,7 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
  * already running.
  */
 export function startDaemon(opts: { session?: boolean } = {}): StartDaemonResult {
-  if (opts.session && persistentDaemonPid() !== null) return { started: false };
-  // Replace, don't accumulate: a previous daemon (with its old credentials)
-  // must die before the new one starts.
-  killSessionDaemon();
-  if (!opts.session) stopPersistentDaemon();
-
-  const logFd = openSync(DAEMON_LOG_PATH, 'a');
-  try {
-    if (opts.session) {
-      sessionDaemon = spawn('node', [SCRIPT_PATH], { stdio: ['ignore', logFd, logFd] });
-      installSessionCleanup();
-    } else {
-      const child = spawn('node', [SCRIPT_PATH], {
-        detached: true,
-        stdio: ['ignore', logFd, logFd],
-      });
-      child.unref();
-      if (child.pid) writeFileSync(PID_PATH, `${child.pid}\n`, { mode: 0o600 });
-    }
-  } finally {
-    closeSync(logFd);
-  }
-  return { started: true };
+  return { started: startInstalledDaemon(opts.session === true) !== null };
 }
 
 export interface DaemonStatus {
@@ -234,57 +218,441 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
 let sessionDaemon: ChildProcess | null = null;
 let sessionCleanupInstalled = false;
 
-async function downloadDaemonScript(origin: string): Promise<string> {
-  const daemonUrl = `${origin.replace(/\/+$/, '')}/pc/daemon.js`;
-  const res = await fetch(daemonUrl);
-  if (!res.ok) throw new Error(`Failed to download desktop daemon: HTTP ${res.status}`);
-  return await res.text();
+interface DaemonDownload {
+  source: string;
+  checksum: string | null;
 }
 
-function installDaemonFiles(script: string, device: { origin: string; userId: string; token: string }): void {
-  mkdirSync(AGENT_HOME, { recursive: true });
-  chmodSync(AGENT_HOME, 0o700);
-  writeFileSync(SCRIPT_PATH, script, { mode: 0o700 });
-  chmodSync(SCRIPT_PATH, 0o700);
-  writeFileSync(DEVICE_CONFIG_PATH, `${JSON.stringify({
+interface DaemonLaunch {
+  child: ChildProcess;
+  failure: KinuError | null;
+}
+
+async function listDevicesForConnect(auth: DeviceAuth, doing: string) {
+  try {
+    return await listCloudDevices(auth.origin, auth.token);
+  } catch (cause) {
+    const detail = redactSecrets(renderThrownChain({ cause }), [auth.token]);
+    throw new KinuError(
+      classifyErrorCode({ cause }) ?? 'unavailable',
+      doing,
+      { cause: new Error(detail) },
+    );
+  }
+}
+
+async function registerDeviceForConnect(auth: DeviceAuth, label: string | undefined) {
+  try {
+    return await registerCloudDevice(auth.origin, auth.token, label);
+  } catch (cause) {
+    const detail = redactSecrets(renderThrownChain({ cause }), [auth.token]);
+    if (/\b(?:duplicate|already exists|already in use)\b/i.test(detail)) {
+      throw new KinuError(
+        'bad_input',
+        'that device name is already registered; choose another name',
+        { cause: new Error(detail) },
+      );
+    }
+    throw new KinuError(
+      classifyErrorCode({ cause }) ?? 'unavailable',
+      'registering this device with Kinu',
+      { cause: new Error(detail) },
+    );
+  }
+}
+
+function redactSecrets(text: string, secrets: string[]): string {
+  let redacted = text;
+  for (const secret of secrets) {
+    if (secret.length > 0) redacted = redacted.split(secret).join('[redacted]');
+  }
+  return redacted;
+}
+
+async function downloadDaemonScript(origin: string): Promise<DaemonDownload> {
+  const daemonUrl = `${origin.replace(/\/+$/, '')}/pc/daemon.js`;
+  let response: Response;
+  try {
+    response = await fetch(daemonUrl);
+  } catch (cause) {
+    throw toKinuError({
+      doing: `downloading the device daemon from ${daemonUrl}`,
+      cause,
+      otherwise: 'unavailable',
+    });
+  }
+  if (!response.ok) {
+    const code = response.status === 404
+      ? 'missing'
+      : response.status === 401 || response.status === 403
+        ? 'denied'
+        : 'unavailable';
+    throw new KinuError(code, `downloading the device daemon from ${daemonUrl} failed with HTTP ${response.status}`);
+  }
+  const checksum = response.headers.get(DAEMON_CHECKSUM_HEADER);
+  if (checksum !== null && !/^[0-9a-f]{64}$/i.test(checksum)) {
+    throw new KinuError('io', 'the device daemon download included an invalid integrity checksum');
+  }
+  try {
+    return { source: await response.text(), checksum: checksum?.toLowerCase() ?? null };
+  } catch (cause) {
+    throw toKinuError({
+      doing: `reading the device daemon download from ${daemonUrl}`,
+      cause,
+      otherwise: 'io',
+    });
+  }
+}
+
+function installDaemonFiles(download: DaemonDownload, device: { origin: string; userId: string; token: string }): void {
+  try {
+    ensureAgentHome();
+  } catch (cause) {
+    throw toKinuError({
+      doing: `preparing the device install directory ${AGENT_HOME}`,
+      cause,
+      otherwise: 'io',
+    });
+  }
+
+  const config = `${JSON.stringify({
     user: device.userId,
     token: device.token,
     origin: device.origin.replace(/\/+$/, ''),
-  }, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(DEVICE_CONFIG_PATH, 0o600);
+  }, null, 2)}\n`;
+  const scriptTemporary = stageInstallFile(
+    SCRIPT_PATH,
+    download.source,
+    0o700,
+    (temporary) => verifyDaemonDownload(temporary, download.checksum),
+  );
+  let scriptPending: string | null = scriptTemporary;
+  let configPending: string | null = null;
+  try {
+    const configTemporary = stageInstallFile(
+      DEVICE_CONFIG_PATH,
+      config,
+      0o600,
+      (temporary) => {
+        if (readFileSync(temporary, 'utf-8') !== config) {
+          throw new KinuError('io', 'temporary device configuration verification failed');
+        }
+      },
+    );
+    configPending = configTemporary;
+
+    // The config activates the replacement on the next daemon start, so it
+    // lands last. A crash can leave a newer script beside the old credentials,
+    // never new credentials beside an unverified script.
+    renameSync(scriptTemporary, SCRIPT_PATH);
+    scriptPending = null;
+    enforceOwnerOnly(SCRIPT_PATH, 0o700);
+    renameSync(configTemporary, DEVICE_CONFIG_PATH);
+    configPending = null;
+    enforceOwnerOnly(DEVICE_CONFIG_PATH, 0o600);
+    syncAgentDirectory();
+  } catch (cause) {
+    try {
+      for (const temporary of [scriptPending, configPending]) {
+        if (temporary !== null) rmSync(temporary, { force: true });
+      }
+    } catch (cleanup) {
+      throw toKinuError({
+        doing: 'cleaning up a failed device install',
+        cause: new AggregateError([cause, cleanup], 'device install and cleanup both failed'),
+        otherwise: 'io',
+      });
+    }
+    if (cause instanceof KinuError) throw cause;
+    throw toKinuError({ doing: 'installing the device daemon', cause, otherwise: 'io' });
+  }
+}
+
+function stageInstallFile(
+  file: string,
+  content: string,
+  mode: number,
+  verify: (temporary: string) => void,
+): string {
+  const temporary = `${file}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
+  let created = false;
+  try {
+    const descriptor = openSync(temporary, 'wx', mode);
+    created = true;
+    try {
+      writeFileSync(descriptor, content);
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    enforceOwnerOnly(temporary, mode);
+    verify(temporary);
+    return temporary;
+  } catch (cause) {
+    if (created) {
+      try {
+        rmSync(temporary, { force: true });
+      } catch (cleanup) {
+        throw toKinuError({
+          doing: `cleaning up the failed device install at ${file}`,
+          cause: new AggregateError([cause, cleanup], 'device install and cleanup both failed'),
+          otherwise: 'io',
+        });
+      }
+    }
+    if (cause instanceof KinuError) throw cause;
+    throw toKinuError({ doing: `preparing the device install at ${file}`, cause, otherwise: 'io' });
+  }
+}
+
+function verifyDaemonDownload(temporary: string, checksum: string | null): void {
+  const source = readFileSync(temporary, 'utf-8');
+  if (checksum !== null && createHash('sha256').update(source, 'utf8').digest('hex') !== checksum) {
+    throw new KinuError('io', 'the downloaded device daemon failed checksum verification');
+  }
+  if (source.trim().length === 0) {
+    throw new KinuError('io', 'the downloaded device daemon failed integrity verification');
+  }
+  try {
+    // Compiles but never evaluates the downloaded code. Node strips a shebang
+    // before executing a script; Function does not, so strip it here too.
+    new Function(source.replace(/^#![^\n]*(?:\n|$)/, ''));
+  } catch (cause) {
+    throw new KinuError('io', 'the downloaded device daemon failed integrity verification', { cause });
+  }
+  if (!DAEMON_PROTOCOL_MARKERS.every((marker) => source.includes(marker))) {
+    throw new KinuError('io', 'the downloaded device daemon failed integrity verification');
+  }
+}
+
+
+function syncAgentDirectory(): void {
+  if (process.platform === 'win32') return;
+  const descriptor = openSync(AGENT_HOME, 'r');
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 async function waitForDeviceConnected(auth: DeviceAuth, deviceId: string, onPoll?: () => void): Promise<boolean> {
   const deadline = Date.now() + DEVICE_CONNECT_DEADLINE_MS;
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, CONNECT_POLL_MS));
+    const nextPoll = Promise.withResolvers<void>();
+    setTimeout(nextPoll.resolve, CONNECT_POLL_MS);
+    await nextPoll.promise;
     onPoll?.();
-    const devices = await listCloudDevices(auth.origin, auth.token);
+    const devices = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
     if (devices.some((device) => device.id === deviceId && device.connected)) return true;
   }
   return false;
 }
 
+function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch | null {
+  if (session && persistentDaemonPid() !== null) return null;
+  assertDaemonPlatformSupported();
+  try {
+    ensureAgentHome();
+  } catch (cause) {
+    throw toKinuError({
+      doing: `preparing the device install directory ${AGENT_HOME}`,
+      cause,
+      otherwise: 'io',
+    });
+  }
+  const executable = runtime ?? daemonRuntime();
+  killSessionDaemon();
+  if (!session) stopPersistentDaemon();
+
+  const launch = spawnDaemonChild(executable, session);
+  if (session) {
+    sessionDaemon = launch.child;
+    installSessionCleanup();
+    return launch;
+  }
+  if (!launch.child.pid) return launch;
+  try {
+    if (!claimPersistentDaemonPid(launch.child.pid)) {
+      throw new KinuError(
+        'unavailable',
+        'another device connect is already starting the daemon on this machine; retry in a moment',
+      );
+    }
+  } catch (cause) {
+    tolerate(() => launch.child.kill('SIGTERM'), 'esrch');
+    throw cause;
+  }
+  launch.child.unref();
+  return launch;
+}
+
+function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
+  let logDescriptor: number;
+  try {
+    logDescriptor = openSync(DAEMON_LOG_PATH, 'a');
+  } catch (cause) {
+    throw toKinuError({
+      doing: `opening the device daemon log at ${DAEMON_LOG_PATH}`,
+      cause,
+      otherwise: 'io',
+    });
+  }
+  try {
+    const child = spawn(runtime, [SCRIPT_PATH], session
+      ? { stdio: ['ignore', logDescriptor, logDescriptor] }
+      : { detached: true, stdio: ['ignore', logDescriptor, logDescriptor] });
+    const launch: DaemonLaunch = { child, failure: null };
+    child.once('error', (cause) => {
+      launch.failure = toKinuError({ doing: 'starting the device daemon', cause, otherwise: 'io' });
+    });
+    return launch;
+  } catch (cause) {
+    throw toKinuError({ doing: 'starting the device daemon', cause, otherwise: 'io' });
+  } finally {
+    closeSync(logDescriptor);
+  }
+}
+
+function waitForDaemonStart(launch: DaemonLaunch): Promise<void> {
+  const completion = Promise.withResolvers<void>();
+  let settled = false;
+
+  function finish(error?: KinuError): void {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    launch.child.off('exit', onExit);
+    launch.child.off('error', onError);
+    if (error) completion.reject(error);
+    else completion.resolve();
+  }
+
+  function onExit(code: number | null, signal: NodeJS.Signals | null): void {
+    const outcome = signal ?? (code === null ? 'unknown exit' : `exit code ${code}`);
+    finish(new KinuError(
+      'unavailable',
+      `the device daemon exited before it could connect (${outcome}). See ${DAEMON_LOG_PATH}`,
+    ));
+  }
+
+  function onError(cause: Error): void {
+    finish(toKinuError({ doing: 'starting the device daemon', cause, otherwise: 'io' }));
+  }
+
+  const timer = setTimeout(() => finish(), DAEMON_EARLY_EXIT_GRACE_MS);
+  launch.child.once('exit', onExit);
+  launch.child.once('error', onError);
+  if (launch.failure !== null) finish(launch.failure);
+  return completion.promise;
+}
+
 function persistentDaemonPid(): number | null {
   if (!existsSync(PID_PATH)) return null;
-  const pid = Number(readFileSync(PID_PATH, 'utf-8').trim());
+  let contents: string;
+  try {
+    contents = readFileSync(PID_PATH, 'utf-8');
+  } catch (cause) {
+    throw toKinuError({ doing: `reading the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
+  }
+  const pid = Number(contents.trim());
   if (!Number.isInteger(pid) || pid <= 0) return null;
   return processAlive(pid) ? pid : null;
 }
 
+function claimPersistentDaemonPid(pid: number): boolean {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (writePidfile(pid)) return true;
+    if (persistentDaemonPid() !== null) return false;
+    try {
+      rmSync(PID_PATH, { force: true });
+    } catch (cause) {
+      throw toKinuError({ doing: `removing the stale device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
+    }
+  }
+  return false;
+}
+
+function writePidfile(pid: number): boolean {
+  let descriptor: number | null = null;
+  let created = false;
+  try {
+    descriptor = openSync(PID_PATH, 'wx', 0o600);
+    created = true;
+    writeFileSync(descriptor, `${pid}\n`);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = null;
+    enforceOwnerOnly(PID_PATH, 0o600);
+    syncAgentDirectory();
+    return true;
+  } catch (cause) {
+    if (descriptor !== null) closeSync(descriptor);
+    if (!created && classify({ cause }) === 'eexist') return false;
+    if (created) {
+      try {
+        rmSync(PID_PATH, { force: true });
+      } catch (cleanup) {
+        throw toKinuError({
+          doing: `cleaning up the failed device daemon pidfile at ${PID_PATH}`,
+          cause: new AggregateError([cause, cleanup], 'pidfile write and cleanup both failed'),
+          otherwise: 'io',
+        });
+      }
+    }
+    throw toKinuError({ doing: `writing the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
+  }
+}
+
 function stopPersistentDaemon(): void {
   const pid = persistentDaemonPid();
-  if (pid) {
-    // ESRCH only: the daemon raced its own exit. Anything else means it is still running and the
-    // pidfile removal below would forget a daemon nobody can stop.
-    tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+  if (pid && processIsInstalledDaemon(pid)) {
+    try {
+      tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+    } catch (cause) {
+      throw toKinuError({ doing: `stopping the device daemon (pid ${pid})`, cause, otherwise: 'io' });
+    }
   }
-  rmSync(PID_PATH, { force: true });
+  try {
+    rmSync(PID_PATH, { force: true });
+  } catch (cause) {
+    throw toKinuError({ doing: `removing the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
+  }
+}
+
+function processIsInstalledDaemon(pid: number): boolean {
+  try {
+    if (process.platform === 'linux') {
+      return readFileSync(`/proc/${pid}/cmdline`, 'utf-8').split('\0').includes(SCRIPT_PATH);
+    }
+    if (process.platform === 'darwin') {
+      return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }).includes(SCRIPT_PATH);
+    }
+    return false;
+  } catch (cause) {
+    if (classify({ cause }) === 'enoent') return false;
+    if (cause instanceof Error && 'code' in cause && (cause.code === 'EACCES' || cause.code === 'EPERM')) {
+      return false;
+    }
+    if (process.platform === 'darwin' && cause instanceof Error && 'status' in cause && cause.status === 1) {
+      return false;
+    }
+    throw toKinuError({
+      doing: `checking whether pid ${pid} is the installed device daemon`,
+      cause,
+      otherwise: 'io',
+    });
+  }
 }
 
 function killSessionDaemon(): void {
-  if (sessionDaemon && sessionDaemon.exitCode === null && !sessionDaemon.killed) {
-    sessionDaemon.kill('SIGTERM');
+  const daemon = sessionDaemon;
+  if (daemon && daemon.exitCode === null && !daemon.killed) {
+    try {
+      tolerate(() => daemon.kill('SIGTERM'), 'esrch');
+    } catch (cause) {
+      throw toKinuError({ doing: 'stopping the session device daemon', cause, otherwise: 'io' });
+    }
   }
   sessionDaemon = null;
 }
@@ -306,14 +674,21 @@ function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (error) {
-    if (classify({ cause: error }) === 'esrch') return false;
-    if (error instanceof Error && 'code' in error && error.code === 'EPERM') return true;
-    throw error;
+  } catch (cause) {
+    if (classify({ cause }) === 'esrch') return false;
+    if (cause instanceof Error && 'code' in cause && cause.code === 'EPERM') return true;
+    throw toKinuError({ doing: `checking whether the device daemon pid ${pid} is running`, cause, otherwise: 'io' });
   }
 }
 
-function nodeAvailable(): boolean {
-  const result = spawnSync('node', ['--version'], { stdio: 'ignore' });
-  return result.status === 0;
+function assertDaemonPlatformSupported(): void {
+  if (process.platform === 'linux' || process.platform === 'darwin') return;
+  throw new KinuError('unsupported', 'The desktop daemon supports Linux and macOS.');
+}
+
+function daemonRuntime(): string {
+  const node = spawnSync('node', ['--version'], { stdio: 'ignore' });
+  if (node.status === 0) return 'node';
+  if ('bun' in process.versions) return process.execPath;
+  throw new KinuError('unsupported', 'Node.js or Bun is required for the desktop daemon. Install one, then retry.');
 }

@@ -11,27 +11,31 @@ const os = require('node:os');
 const path = require('node:path');
 
 /**
- * The daemon's in-flight root, isolated to this run, and set BEFORE the daemon
- * module loads because it reads the variable once at import.
- *
- * Unset, it resolves to `~/.kinu/inflight` — a real directory in the running
- * user's home. `handle()` treats an existing request directory as a request
- * already supervised and replays its recorded state instead of running the
- * command, so a literal request id turned every run after the first into a
- * replay of the first: the command never executed, the frame still carried
- * exit 0, and the assertions about its effects failed. The suite also left its
- * ids behind in the user's home.
+ * The daemon reads its config and in-flight root once at module load. Set both
+ * before require so this suite cannot inspect or modify the developer's home.
  */
 const INFLIGHT_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-inflight-'));
+const DEVICE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-home-'));
+const previousKinuHome = process.env.KINU_HOME;
 process.env.KINU_INFLIGHT_ROOT = INFLIGHT_ROOT;
-afterAll(() => { fs.rmSync(INFLIGHT_ROOT, { recursive: true, force: true }); });
+process.env.KINU_HOME = DEVICE_HOME;
+afterAll(() => {
+  fs.rmSync(INFLIGHT_ROOT, { recursive: true, force: true });
+  fs.rmSync(DEVICE_HOME, { recursive: true, force: true });
+  if (previousKinuHome === undefined) delete process.env.KINU_HOME;
+  else process.env.KINU_HOME = previousKinuHome;
+});
 
 const {
+  CONFIG_PATH,
   handle,
   createCheckpoints,
   getConnectTicket,
-  persistRotatedToken,
   handleTokenRotation,
+  persistRotatedToken,
+  readDeviceConfig,
+  startConnectLoop,
+  supervisionSupported,
 } = require('../src/index.js');
 
 function fakeWs() {
@@ -69,7 +73,7 @@ describe('daemon token rotation', () => {
     const seen = [];
     const fetchTicket = async (_url, init) => {
       seen.push(JSON.parse(init.body));
-      return new Response(JSON.stringify({ ticket: 'pct_ticket' }), {
+      return new Response(JSON.stringify({ ticket: `pct_${'a'.repeat(32)}` }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
@@ -126,6 +130,107 @@ describe('daemon token rotation', () => {
       rename.mockRestore();
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('daemon startup hardening', () => {
+  test('uses the configured home and never reflects a corrupt config token', () => {
+    const configPath = path.join(DEVICE_HOME, 'corrupt-device.json');
+    const secret = 'pdt_secret_that_must_not_appear';
+    fs.writeFileSync(configPath, `{"user":"user-1","token":"${secret}",`);
+
+    let failure;
+    try {
+      readDeviceConfig(configPath);
+    } catch (err) {
+      failure = err;
+    }
+
+    if (!(failure instanceof Error)) throw new Error('expected corrupt config to be refused');
+    expect(CONFIG_PATH).toBe(path.join(DEVICE_HOME, 'device.json'));
+    expect(failure.message).toContain('corrupt');
+    expect(failure.message).not.toContain(secret);
+    expect(() => readDeviceConfig(path.join(DEVICE_HOME, 'missing-device.json')))
+      .toThrow('run: kinu connect');
+  });
+
+  test('redacts rejected device credentials from ticket exchange failures', async () => {
+    const secret = 'pdt_secret_that_must_not_appear';
+    let failure;
+    try {
+      await getConnectTicket(
+        { user: 'user-1', token: secret },
+        'https://kinu.run',
+        async () => Response.json({ error: `rejected ${secret}` }, { status: 401 }),
+      );
+    } catch (err) {
+      failure = err;
+    }
+
+    if (!(failure instanceof Error) || !(failure.cause instanceof Error)) {
+      throw new Error('expected ticket exchange to reject with a caused Error');
+    }
+    expect(failure.message).toContain('device credentials were rejected');
+    expect(failure.message).not.toContain(secret);
+    expect(failure.cause.message).not.toContain(secret);
+  });
+
+  test('mints a fresh ticket after a refusal and never logs either ticket', async () => {
+    const first = `pct_${'a'.repeat(32)}`;
+    const second = `pct_${'b'.repeat(32)}`;
+    const issued = [first, second];
+    const dialed = [];
+    const sockets = [];
+    const scheduled = [];
+    const logs = [];
+    const loop = startConnectLoop({
+      getTicket: async () => issued.shift(),
+      dial(ticket) {
+        const listeners = new Map();
+        const socket = {
+          addEventListener(type, listener) {
+            const callbacks = listeners.get(type) ?? [];
+            callbacks.push(listener);
+            listeners.set(type, callbacks);
+          },
+          emit(type, event = {}) {
+            for (const listener of listeners.get(type) ?? []) listener(event);
+          },
+        };
+        dialed.push(ticket);
+        sockets.push(socket);
+        return socket;
+      },
+      logger(...parts) {
+        logs.push(parts.join(' '));
+      },
+      secret: () => 'pdt_device_secret',
+      schedule(next) {
+        scheduled.push(next);
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(dialed).toEqual([first]);
+    sockets[0].emit('error', { message: `Unexpected server response: 401 for ${first}` });
+    sockets[0].emit('close');
+    expect(logs.join('\n')).toContain('refused by the server');
+    expect(logs.join('\n')).not.toContain(first);
+    expect(scheduled).toHaveLength(1);
+
+    scheduled[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+    loop.stop();
+    expect(dialed).toEqual([first, second]);
+  });
+
+  test('does not claim command supervision on unsupported platforms', () => {
+    expect(supervisionSupported('linux')).toBe(true);
+    expect(supervisionSupported('darwin')).toBe(true);
+    expect(supervisionSupported('win32')).toBe(false);
+    expect(supervisionSupported('sunos')).toBe(false);
   });
 });
 

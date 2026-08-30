@@ -4,12 +4,13 @@
 // on exit, no-op next to a persistent daemon), connectDevice against a stub
 // cloud origin, and the desktop command staying a thin shell over the module.
 // Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
+import { tolerate } from '@kinu.run/core/obs';
 import type { CloudDevice } from '../src/cloud-api';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
@@ -25,11 +26,13 @@ function newProjectDir(): string {
 }
 
 const sleepers: Subprocess[] = [];
+const deviceDaemonPids: number[] = [];
 const stubs: Server<unknown>[] = [];
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const pid of deviceDaemonPids.splice(0)) tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
   for (const proc of sleepers.splice(0)) proc.kill();
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   for (const server of stubs.splice(0)) server.stop(true);
 });
 
@@ -38,14 +41,28 @@ interface StubCloud {
   hits: { register: number; list: number; daemonScript: number };
 }
 
-/** Minimal cloud origin: device register/list plus /pc/daemon.js. */
-function startStubCloud(opts: {
+interface StubCloudOptions {
   devices?: () => CloudDevice[];
+  /** Body appended to a protocol-shaped daemon source. */
   daemonScript?: string;
+  /** Raw source for integrity-refusal cases. */
+  rawDaemonScript?: string;
+  daemonChecksum?: string;
+  daemonDownloadGate?: { release: Promise<void>; onArrival?: () => void };
+  registrationFailure?: { status: number; error: string };
   /** The registration body, so a test can assert the NAME the CLI sent. */
   onRegister?: (body: { label?: string }) => void;
-} = {}): StubCloud {
+}
+
+/** Minimal cloud origin: device register/list plus /pc/daemon.js. */
+function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0 };
+  const daemonSource = opts.rawDaemonScript ?? [
+    '// /pc/connect-ticket',
+    "const daemonCancelProtocol = 'execCancel';",
+    "const daemonRotationProtocol = 'ROTATE';",
+    opts.daemonScript ?? 'setInterval(() => {}, 1000);',
+  ].join('\n');
   const server = Bun.serve({
     port: 0,
     async fetch(req: Request): Promise<Response> {
@@ -54,6 +71,9 @@ function startStubCloud(opts: {
         hits.register += 1;
         const body = v.safeParse(v.object({ label: v.optional(v.string()) }), await req.json());
         opts.onRegister?.(body.success ? body.output : {});
+        if (opts.registrationFailure) {
+          return Response.json({ error: opts.registrationFailure.error }, { status: opts.registrationFailure.status });
+        }
         return Response.json({
           deviceId: 'dev_1',
           token: 'device-token',
@@ -67,9 +87,13 @@ function startStubCloud(opts: {
       }
       if (url.pathname === '/pc/daemon.js') {
         hits.daemonScript += 1;
-        return new Response(opts.daemonScript ?? 'setInterval(() => {}, 1000);\n', {
-          headers: { 'content-type': 'text/javascript' },
-        });
+        if (opts.daemonDownloadGate) {
+          opts.daemonDownloadGate.onArrival?.();
+          await opts.daemonDownloadGate.release;
+        }
+        const headers = new Headers({ 'content-type': 'text/javascript' });
+        if (opts.daemonChecksum !== undefined) headers.set('x-kinu-daemon-sha256', opts.daemonChecksum);
+        return new Response(daemonSource, { headers });
       }
       return new Response('not found', { status: 404 });
     },
@@ -85,11 +109,11 @@ function makeHome(config: JsonObject): string {
   return home;
 }
 
-async function runScript(home: string, script: string) {
+async function runScript(home: string, script: string, environment: Record<string, string> = {}) {
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
-    env: { ...process.env, KINU_HOME: home },
+    env: { ...process.env, ...environment, KINU_HOME: home },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -102,6 +126,16 @@ async function runScript(home: string, script: string) {
     throw new Error(`script failed (${exitCode}): ${stderr}`);
   }
   return stdout;
+}
+
+async function scriptFailure(home: string, script: string, environment: Record<string, string> = {}): Promise<string> {
+  try {
+    await runScript(home, script, environment);
+  } catch (error) {
+    if (error instanceof Error) return error.message;
+    throw error;
+  }
+  throw new Error('expected script to fail');
 }
 
 function connectedDevice(connected: boolean): CloudDevice {
@@ -219,6 +253,9 @@ describe('device-connect daemon lifecycle', () => {
     expect(stub.hits.daemonScript).toBe(1);
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
     expect(deviceConfig).toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin });
+    expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
+    expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
+    expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
 
     // The CLI process exited — its exit hook must have killed the session daemon.
     const daemonPid = Number(readFileSync(join(home, 'fake-daemon.pid'), 'utf-8').trim());
@@ -252,6 +289,243 @@ describe('device-connect daemon lifecycle', () => {
     expect(stub.hits.daemonScript).toBe(0);
     expect(sleeper.killed).toBe(false);
     expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(sleeper.pid));
+  });
+});
+
+describe('device-connect install hardening', () => {
+  test('refuses a checksum mismatch before replacing a complete prior install', async () => {
+    const stub = startStubCloud({
+      devices: () => [connectedDevice(true)],
+      daemonChecksum: '0'.repeat(64),
+    });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const oldScript = '// retained daemon\n';
+    const oldConfig = '{"user":"old","token":"old-token","origin":"https://old.example"}\n';
+    writeFileSync(join(home, 'pc-agent.js'), oldScript, { mode: 0o700 });
+    writeFileSync(join(home, 'device.json'), oldConfig, { mode: 0o600 });
+
+    const failure = await scriptFailure(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      try {
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    `);
+
+    expect(failure).toContain('checksum verification');
+    expect(failure).not.toContain('device-token');
+    expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(oldScript);
+    expect(readFileSync(join(home, 'device.json'), 'utf-8')).toBe(oldConfig);
+    expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
+  });
+
+  test('rejects a structurally invalid daemon before publishing either install file', async () => {
+    const stub = startStubCloud({
+      devices: () => [connectedDevice(true)],
+      rawDaemonScript: '<html>upstream gateway error</html>',
+    });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const failure = await scriptFailure(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      try {
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    `);
+
+    expect(failure).toContain('integrity verification');
+    expect(failure).not.toContain('device-token');
+    expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
+    expect(existsSync(join(home, 'device.json'))).toBe(false);
+    expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
+  });
+
+  test('classifies a duplicate device name without downloading or installing anything', async () => {
+    const stub = startStubCloud({
+      registrationFailure: { status: 409, error: 'device name already exists' },
+    });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const failure = await scriptFailure(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      try {
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { label: 'studio tower' });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    `);
+
+    expect(failure).toContain('that device name is already registered');
+    expect(stub.hits.register).toBe(1);
+    expect(stub.hits.daemonScript).toBe(0);
+    expect(existsSync(join(home, 'device.json'))).toBe(false);
+  });
+
+  test('refuses an unsupported operating system before registration', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      try {
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' });
+      } catch (error) {
+        console.log(error instanceof Error ? error.message : String(error));
+      }
+    `);
+
+    expect(out.trim()).toContain('supports Linux and macOS');
+    expect(stub.hits.register).toBe(0);
+    expect(stub.hits.daemonScript).toBe(0);
+  });
+
+  test('uses the running Bun when Node is absent from PATH', async () => {
+    const daemonScript = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      fs.writeFileSync(path.join(process.env.KINU_HOME, 'bun-daemon.pid'), String(process.pid));
+      fs.writeFileSync(path.join(process.env.KINU_HOME, 'bun-daemon.runtime'), process.versions.bun ? 'bun' : 'node');
+      setInterval(() => {}, 1000);
+    `;
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)], daemonScript });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const pathWithoutNode = mkdtempSync(join(tmpdir(), 'kinu-no-node-'));
+    tempDirs.push(pathWithoutNode);
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      console.log(JSON.stringify(result));
+      process.exit(0);
+    `, { PATH: pathWithoutNode });
+
+    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    const daemonPid = Number(readFileSync(join(home, 'bun-daemon.pid'), 'utf-8').trim());
+    expect(daemonPid).toBeGreaterThan(0);
+    expect(readFileSync(join(home, 'bun-daemon.runtime'), 'utf-8')).toBe('bun');
+    deviceDaemonPids.push(daemonPid);
+  });
+
+  test('reports a device-log permission failure without exposing the device token', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const logPath = join(home, 'pc-agent.log');
+    writeFileSync(logPath, 'read-only log\n', { mode: 0o400 });
+    chmodSync(logPath, 0o400);
+
+    const failure = await scriptFailure(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      try {
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    `);
+
+    expect(failure).toContain('opening the device daemon log');
+    expect(failure).not.toContain('device-token');
+  });
+
+  test('fails fast when a verified but stale daemon exits at startup', async () => {
+    const stub = startStubCloud({
+      devices: () => [connectedDevice(true)],
+      daemonScript: 'process.exit(17);',
+    });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const failure = await scriptFailure(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      try {
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    `);
+
+    expect(failure).toContain('exited before it could connect');
+  });
+
+  test('never signals an unrelated live process named by a stale pidfile', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
+    sleepers.push(sleeper);
+    writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' });
+      console.log(JSON.stringify(result));
+    `);
+
+    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(sleeper.killed).toBe(false);
+    expect(tolerate(() => {
+      process.kill(sleeper.pid, 0);
+      return true;
+    }, 'esrch')).toBe(true);
+    const daemonPid = Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim());
+    expect(daemonPid).toBeGreaterThan(0);
+    deviceDaemonPids.push(daemonPid);
+  });
+
+  test('concurrent installs leave one daemon owner and no partial files', async () => {
+    const release = Promise.withResolvers<void>();
+    const bothDownloadsArrived = Promise.withResolvers<void>();
+    let arrivals = 0;
+    const daemonScript = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      fs.appendFileSync(path.join(process.env.KINU_HOME, 'concurrent-daemon.pids'), String(process.pid) + '\\n');
+      setInterval(() => {}, 1000);
+    `;
+    const stub = startStubCloud({
+      devices: () => [connectedDevice(true)],
+      daemonScript,
+      daemonDownloadGate: {
+        release: release.promise,
+        onArrival() {
+          arrivals += 1;
+          if (arrivals === 2) bothDownloadsArrived.resolve();
+        },
+      },
+    });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const program = `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' });
+      console.log(JSON.stringify(result));
+    `;
+    const outcomes = Promise.allSettled([runScript(home, program), runScript(home, program)]);
+    await bothDownloadsArrived.promise;
+    release.resolve();
+
+    const settled = await outcomes;
+    expect(settled.some((outcome) => outcome.status === 'fulfilled')).toBe(true);
+    const started = [...new Set(
+      readFileSync(join(home, 'concurrent-daemon.pids'), 'utf-8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(Number),
+    )];
+    const live = started.filter((pid) => tolerate(() => {
+      process.kill(pid, 0);
+      return true;
+    }, 'esrch') === true);
+    expect(live).toHaveLength(1);
+    expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(live[0]);
+    expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
+    deviceDaemonPids.push(...live);
   });
 });
 
