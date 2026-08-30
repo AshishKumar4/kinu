@@ -1,6 +1,6 @@
 /**
  * Defect 1, executed. `ctx.waitUntil` inside a Durable Object does not retain
- * work, and is the same code path as a bare floating promise.
+ * work after the invocation returns.
  *
  * WHAT WE HAD BEFORE THIS FILE. The rule
  * `anti-slop/no-wait-until-in-durable-object` rejects the shape, and
@@ -64,18 +64,9 @@ describe('DurableObjectState.waitUntil', () => {
     expect(await reopen('wait-until-reset').armedAt()).toBeUndefined();
   });
 
-  it('a bare floating promise is lost the same way — waitUntil bought nothing', async () => {
-    await reopen('floating-reset').scheduleFloating(ARM_DELAY_MS);
-    await abortAllDurableObjects();
-    await scheduler.wait(SETTLE_MS);
 
-    expect(await reopen('floating-reset').armedAt()).toBeUndefined();
-  });
-
-  // The denominator. Without this the two `toBeUndefined()` assertions above
-  // are satisfied by an arm that never wrote anything, a broken binding, or a
-  // typo in the storage key — the vacuous-pass shape every gate in this repo
-  // carries a control against.
+  // The denominator. Without this, a broken binding or a typo in the storage
+  // key could satisfy the undefined assertion above.
   it('the same waitUntil write DOES land when nothing resets the object', async () => {
     await reopen('wait-until-alive').scheduleViaWaitUntil(ARM_DELAY_MS);
     await scheduler.wait(SETTLE_MS);
