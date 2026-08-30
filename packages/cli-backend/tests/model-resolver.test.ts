@@ -36,7 +36,7 @@ describe('createLocalModelResolver', () => {
       expect(bodies[0]?.max_tokens).toBeUndefined();
       expect(bodies[1]?.max_tokens).toBe(123);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -76,7 +76,7 @@ describe('createLocalModelResolver', () => {
       quiet = true;
       await judge.complete('grade this too');
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
 
     expect(reports).toHaveLength(2);
@@ -348,7 +348,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         expect(request.affinity).toBe('kinu-jarvis');
       }
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 

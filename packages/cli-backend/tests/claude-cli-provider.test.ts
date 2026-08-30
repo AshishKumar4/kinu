@@ -456,7 +456,7 @@ describe('claude-cli provider — tool loop composition', () => {
     // The model was driven through the real `claude -p` invocation (opus alias).
     const pCall = calls.find((a) => a[0] === '-p')!;
     expect(pCall[pCall.indexOf('--model') + 1]).toBe('opus');
-    session.end();
+    await session.end();
   });
 });
 

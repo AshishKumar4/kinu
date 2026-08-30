@@ -3553,7 +3553,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       const deepseek = models.find((m) => m.provider === 'workers-ai' && m.id === DEFAULT_WORKERS_AI_MODEL_ID);
       expect(deepseek?.contextWindow).toBe(1048576);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });
