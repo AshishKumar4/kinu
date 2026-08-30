@@ -18,6 +18,7 @@ import {
   MOUNT_EXECUTORS, carryFileWithVfsOps, listWithVfsOps, readBoundedWithVfsOps,
   removeTreeWithVfsOps, type VfsNativeMutations,
 } from '../vfs/mounts';
+import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
 import type { VFS } from '../types/primitives';
 import { diagnostics, renderThrownChain } from '../obs/index';
@@ -97,6 +98,9 @@ export type ExecutorWriteResult =
   | { conflict: true; revision: number }
   | { unsupported: true; error: string }
   | { error: string };
+
+const CONDITIONAL_WRITE_UNSUPPORTED =
+  'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
 
 /**
  * Byte bound for the file viewer's text preview — past this the content is
@@ -461,7 +465,7 @@ export async function writeExecutorFileOp(
   if (conditional === undefined) {
     return {
       unsupported: true,
-      error: 'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.',
+      error: CONDITIONAL_WRITE_UNSUPPORTED,
     };
   }
   try {
@@ -470,6 +474,9 @@ export async function writeExecutorFileOp(
       ? { ok: true, revision: result.revision }
       : { conflict: true, revision: result.revision };
   } catch (err) {
+    if (isVfsError(err) && err.code === 'ENOTSUP') {
+      return { unsupported: true, error: CONDITIONAL_WRITE_UNSUPPORTED };
+    }
     return { error: renderThrownChain({ cause: err }) };
   }
 }

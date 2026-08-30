@@ -407,7 +407,7 @@ export function withMountTable(
 				const conditional = files.writeFileIfRevision;
 				if (!conditional) {
 					throw makeVfsError(
-						'EPERM',
+						'ENOTSUP',
 						'this file plane does not support revision-checked writes',
 						path,
 					);

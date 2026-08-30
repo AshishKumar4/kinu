@@ -571,8 +571,9 @@ describe('a transfer that does not finish', () => {
     expect(rail.device.get(DEVICE_FILE)).toBe('all of it');
   });
 
-  test('a precondition this plane cannot honour refuses the write instead of taking it', async () => {
+  test('a precondition this plane cannot honour refuses base and mounted writes instead of taking them', async () => {
     const rail = await seam({ workspaces: ['upload-conditional'] });
+    rail.user.consentDecision = 'always';
     await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
       method: 'PUT', body: 'first',
@@ -582,6 +583,10 @@ describe('a transfer that does not finish', () => {
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
       method: 'PUT', body: 'second', ifMatch: '1',
     });
+    const mountedConditional = await rail.files({
+      session: rail.ownerSession, workspace: 'upload-conditional', path: PC_FILE,
+      method: 'PUT', body: 'device second', ifMatch: '1',
+    });
     const malformed = await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
       method: 'PUT', body: 'third', ifMatch: 'W/"etag"',
@@ -589,11 +594,14 @@ describe('a transfer that does not finish', () => {
 
     expect(conditional.status).toBe(409);
     expect(await errorOf(conditional)).toContain('cannot protect an in-place edit');
+    expect(mountedConditional.status).toBe(409);
+    expect(await errorOf(mountedConditional)).toContain('cannot protect an in-place edit');
     expect(malformed.status).toBe(400);
     expect(await errorOf(malformed)).toBe('If-Match must be a non-negative integer revision');
-    // Both refusals left the file as it was.
+    // Every refusal left its file as it was.
     expect(await bytesOf(await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
     }))).toBe('first');
+    expect(rail.device.get(DEVICE_FILE)).toBe('hello');
   });
 });

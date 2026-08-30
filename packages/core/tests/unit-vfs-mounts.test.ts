@@ -116,6 +116,30 @@ describe('the workspace plane mount table', () => {
 		await mounted.unlink('/pc/home/dev/remove.txt');
 		expect(await mounted.exists('/pc/home/dev/remove.txt')).toBe(false);
 	});
+	test('classifies unsupported conditional writes on base and mounted trees', async () => {
+		const base = fakeTree({ '/workspace/base.txt': 'base before' });
+		const device = fakeTree({ '/home/dev/mounted.txt': 'mounted before' });
+		const mounted = withMountTable(base, [mountOf('pc', device)]);
+		const conditional = mounted.writeFileIfRevision;
+		if (conditional === undefined) throw new Error('the composite VFS must expose conditional writes');
+
+		for (const [path, before] of [
+			['/workspace/base.txt', 'base before'],
+			['/pc/home/dev/mounted.txt', 'mounted before'],
+		] as const) {
+			let error: unknown;
+			try {
+				await conditional(path, new TextEncoder().encode('after'), 1);
+			} catch (caught) {
+				error = caught;
+			}
+			if (!isVfsError(error)) throw new Error(`expected a classified unsupported error, got ${String(error)}`);
+			expect(error.code).toBe('ENOTSUP');
+			expect(error.errno).toBe(-95);
+			expect(error.path).toBe(path);
+			expect(await mounted.readFile(path, { encoding: 'utf8' })).toBe(before);
+		}
+	});
 
 	test('an absent mount states its absence instead of serving an empty tree', async () => {
 		const mounted = withMountTable(fakeTree({ 'notes.md': 'workspace' }), [

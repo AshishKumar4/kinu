@@ -22,17 +22,18 @@ export type VfsErrorCode =
   | 'ENOTDIR'    // not a directory
   | 'EISDIR'     // is a directory
   | 'ENOTEMPTY'  // directory not empty
-  | 'EROFS';     // read-only mount / synthetic mount table
+  | 'EROFS'      // read-only mount / synthetic mount table
+  | 'ENOTSUP';   // operation not supported
 
 /** Canonical negative errno numbers (Linux ABI), keyed by code. */
 export const ERRNO = {
   EPERM: -1, ENOENT: -2, EIO: -5, ENXIO: -6, EACCES: -13, EEXIST: -17,
-  ENOTDIR: -20, EISDIR: -21, ENOTEMPTY: -39, EROFS: -30,
+  ENOTDIR: -20, EISDIR: -21, ENOTEMPTY: -39, EROFS: -30, ENOTSUP: -95,
 } satisfies Readonly<Record<VfsErrorCode, number>>;
 
 const VfsErrorCodeSchema = v.picklist([
   'EPERM', 'ENOENT', 'EIO', 'ENXIO', 'EACCES', 'EEXIST', 'ENOTDIR',
-  'EISDIR', 'ENOTEMPTY', 'EROFS',
+  'EISDIR', 'ENOTEMPTY', 'EROFS', 'ENOTSUP',
 ]);
 
 export class VfsError extends Error {
