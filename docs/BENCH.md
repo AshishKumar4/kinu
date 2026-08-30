@@ -133,9 +133,15 @@ Three aggregation arities over one corpus, all spanning every part:
 | `q-list` | exact enumeration | every entry id carrying a planted marker |
 | `q-verbatim` | recall of one planted fact | the value on a named marker |
 
+The generator ranks markers within each part. Every part contains a fact. The
+verbatim target is in part 1, which crosses the most compaction boundaries.
+
 Scoring is `bun scripts/bench-longhorizon-check.ts <encoded-spec>`, run in the
 sandbox like every other check, all-or-nothing. There is no answer key on disk,
 and tampering with the materials cannot help, because scoring never reads them.
+
+Before scoring, the harness restores `scripts` and `packages/core/src` from the
+pristine tree. Only `bench-answer.txt` remains in the scoring surface.
 
 **Power.** 10 dev and 14 sealed, measured 2026-08-19 from the committed
 `SEAL_SALT`: able to reach significance, able to resolve only a large effect.
@@ -178,6 +184,8 @@ strips inherited `KINU_*` so ambient environment cannot reach a scored run.
 Provider config comes from `BENCH_BASE_URL`, `BENCH_AUTH` and `BENCH_MODEL`.
 
 **The budget.** Each attempt runs under a fixed wall-clock and token envelope.
+An abort signal enforces the wall-clock limit. The shared token meter
+interrupts a model session at its limit.
 An unpinned envelope silently becomes the variable under test, so the budget is
 hashed into `configHash`; two runs with different budgets are not comparable.
 Scoring time is never charged to the solver.

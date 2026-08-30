@@ -121,6 +121,9 @@ edit lands in the primary, no error anywhere. So:
   and revert the primary path-scoped. Never a bare checkout or reset there —
   other agents' work may be in flight beside yours.
 
+Parallel writers use isolated worktrees and make focused commits. Main merges
+and verifies those commits before updating `origin/main`.
+
 A fresh worktree whose branch changed `bun.lock` needs its own `bun install`,
 and that install needs the security scanner's own imports resolvable before
 anything is installed — the script pre-seeds them; do not delete that step.
