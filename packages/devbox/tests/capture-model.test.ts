@@ -16,6 +16,12 @@ import {
   type Capture,
   type FileContent,
 } from '../src/capture';
+import {
+  journalLinearizationPoint,
+  materializeJournalPrefix,
+  type JournalCapturePlatformEvidence,
+} from '../src/capture/journal-capture';
+
 
 const sparse = (size: number, runs: readonly { readonly offset: number; readonly bytes: Uint8Array }[]): FileContent => ({
   kind: 'sparse',
@@ -24,6 +30,21 @@ const sparse = (size: number, runs: readonly { readonly offset: number; readonly
 });
 
 const dense = (s: string): FileContent => ({ kind: 'dense', bytes: new TextEncoder().encode(s) });
+
+const journalEvidence: JournalCapturePlatformEvidence = {
+  'mounted-root-intercepts-concurrent-writes': true,
+  'mounted-open-fds-remain-intercepted': true,
+  'mmap-writes-are-intercepted': true,
+  'rename-and-unlink-are-intercepted': true,
+  'intent-fdatasync-precedes-effect': true,
+  'result-fdatasync-precedes-reply': true,
+  'fence-closes-admission-and-drains': true,
+  'root-syncfs-precedes-stage': true,
+  'sealed-stage-and-manifest-are-durable': true,
+  'private-state-and-mount-are-excluded': true,
+  'path-resolution-stays-beneath-root': true,
+};
+
 
 async function seed(log: MutationLog): Promise<void> {
   await log.perform({ op: 'mkdir', path: 'src' });
@@ -94,6 +115,48 @@ describe('the capture soundness model', () => {
     // Leaked: claims the final cut but carries stale bytes.
     const leaked: Capture = { ...goodCapture, cut: log.lastSeq };
     expect(auditCapture(log.entries, leaked).claimedCutMatches).toBe(false);
+  });
+
+  test('a fenced journal executable model proves OneCommittedGeneration, not Torn, and CutExcluded', async () => {
+    const log = new MutationLog();
+    await Promise.all([
+      log.perform({ op: 'write', path: 'left', content: dense('abcd') }),
+      log.perform({ op: 'write', path: 'right', content: dense('gone') }),
+    ]);
+    await log.perform({ op: 'rename', from: 'left', to: 'chosen' });
+    await log.perform({ op: 'unlink', path: 'right' });
+    await log.perform({ op: 'rewrite-in-place', path: 'chosen', content: dense('wxyz') });
+    await log.perform({ op: 'mmap-write', path: 'chosen', offset: 2, bytes: new TextEncoder().encode('!') });
+
+    const point = journalLinearizationPoint(log.lastSeq, log.generation, journalEvidence);
+    const result = materializeJournalPrefix({
+      batches: () => [{
+        firstSeq: 0,
+        lastSeq: log.lastSeq,
+        entries: log.entries,
+      }],
+      overflowed: () => false,
+    }, point);
+    expect(result.verdict).toBe('captured');
+    if (result.verdict !== 'captured') return;
+
+    expect(auditCapture(log.entries, result.capture)).toEqual({
+      claimedCutMatches: true,
+      matchingCuts: [point.cut],
+      uniquelyAnchored: true,
+    });
+    expect(result.soundness.oneCommittedGeneration).toEqual({
+      generation: point.generation,
+      cut: point.cut,
+    });
+    expect(result.soundness.torn.matchesNoCommittedPrefix).toBe(false);
+
+    await log.perform({ op: 'write', path: 'after-cut', content: dense('later') });
+    expect(result.soundness.cutExcluded).toEqual({
+      cut: point.cut,
+      excludesSequencesAfterCut: true,
+    });
+    expect(auditCapture(log.entries, result.capture).claimedCutMatches).toBe(true);
   });
 
   test('generation is part of a capture anchor even when node maps are empty', async () => {

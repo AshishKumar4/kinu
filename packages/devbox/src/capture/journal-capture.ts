@@ -1,24 +1,86 @@
 /**
  * Mechanism three: replay an ordered mutation journal up to a named seq.
  *
- * When every mutation is intercepted and recorded BEFORE it takes effect, a
- * capture is simply the replay of the journal's prefix at the cut — sound by
- * construction, online (no writer pause), and exactly reproducible. The catch
- * is coverage: mmap stores bypass syscall interposers, direct block access
- * bypasses mounts, and a watcher-based transport drops events on overflow. The
- * mechanism is therefore conditional on platform capabilities (see
- * `capabilities.ts`), and its two honest failure modes are built in here:
+ * The capture linearizes at the successful `fdatasync` of the FENCE record.
+ * Before that record is acknowledged, the daemon has closed mutation
+ * admission, drained every admitted mutation, syncfs'd the captured root, and
+ * sealed its generation-local stage. Writers admitted after the fence are
+ * logically after its cut even if they run before the client receives the
+ * control-socket reply.
  *
- *   watch-overflow — the transport admitted dropping events. A journal that
- *     lost events cannot claim any prefix; refuse, never approximate.
- *
- *   journal-gap — sequence numbers are contiguous by construction, so a hole
- *     in the delivered range means undelivered mutations exist inside the cut.
- *     Refuse with the position named.
+ * Replay proves only the logical part of that argument. The platform facts
+ * below are explicit assumptions measured by the probe and daemon runtime
+ * matrix; a caller that cannot establish every one gets a refusal. In
+ * particular, a watcher is not an interceptor: overflow or a hole in the
+ * delivered order makes the prefix unclaimable.
  */
 
 import { prefixState } from './model';
 import type { Capture, LogEntry } from './model';
+
+/**
+ * Every platform fact the journal proof needs. These are deliberately finer
+ * than the mechanism-selection capability: this list names the assumptions
+ * behind a successful journal fence rather than treating CaptureSound itself
+ * as an assumption.
+ */
+export const JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS = [
+  'mounted-root-intercepts-concurrent-writes',
+  'mounted-open-fds-remain-intercepted',
+  'mmap-writes-are-intercepted',
+  'rename-and-unlink-are-intercepted',
+  'intent-fdatasync-precedes-effect',
+  'result-fdatasync-precedes-reply',
+  'fence-closes-admission-and-drains',
+  'root-syncfs-precedes-stage',
+  'sealed-stage-and-manifest-are-durable',
+  'private-state-and-mount-are-excluded',
+  'path-resolution-stays-beneath-root',
+] as const;
+
+export type JournalCapturePlatformAssumption = (typeof JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS)[number];
+export type JournalCapturePlatformEvidence = Readonly<Record<JournalCapturePlatformAssumption, boolean>>;
+
+/**
+ * The one linearization point for a journal capture: a durable FENCE record.
+ * `cut` is sampled after admission closes and active mutations drain; the
+ * FENCE record is persisted only after the sealed stage and manifest exist.
+ */
+export interface LinearizationPoint {
+  readonly kind: 'durable-fence-record';
+  readonly cut: number;
+  readonly generation: number;
+  readonly evidence: JournalCapturePlatformEvidence;
+}
+
+/** `OneCommittedGeneration`: one sealed generation owns every staged entry. */
+export interface OneCommittedGeneration {
+  readonly generation: number;
+  readonly cut: number;
+}
+
+/** `Torn` holds only when a capture matches no committed journal prefix. */
+export interface Torn {
+  readonly matchesNoCommittedPrefix: boolean;
+}
+
+/** `CutExcluded`: no journal sequence strictly after `cut` is staged. */
+export interface CutExcluded {
+  readonly cut: number;
+  readonly excludesSequencesAfterCut: boolean;
+}
+
+/**
+ * The executable counterpart of the Lean properties. It is attached only to
+ * captures made from a contiguous, non-overflowing journal under a complete
+ * platform evidence set.
+ */
+export interface JournalCaptureSoundness {
+  readonly linearizationPoint: LinearizationPoint;
+  readonly oneCommittedGeneration: OneCommittedGeneration;
+  readonly torn: Torn;
+  readonly cutExcluded: CutExcluded;
+}
 
 export interface JournalBatch {
   readonly firstSeq: number;
@@ -34,20 +96,70 @@ export interface JournalSource {
 }
 
 export type JournalCaptureResult =
-  | { readonly verdict: 'captured'; readonly capture: Capture }
-  | { readonly verdict: 'refused'; readonly reason: 'watch-overflow' | 'journal-gap'; readonly detail: string };
+  | {
+      readonly verdict: 'captured';
+      readonly capture: Capture;
+      readonly soundness: JournalCaptureSoundness;
+    }
+  | {
+      readonly verdict: 'refused';
+      readonly reason: 'watch-overflow' | 'journal-gap' | 'unproven-platform-assumption' | 'invalid-linearization-point';
+      readonly detail: string;
+    };
+
+export function journalLinearizationPoint(
+  cut: number,
+  generation: number,
+  evidence: JournalCapturePlatformEvidence,
+): LinearizationPoint {
+  return { kind: 'durable-fence-record', cut, generation, evidence };
+}
+
+function firstUnprovenPlatformAssumption(
+  evidence: JournalCapturePlatformEvidence,
+): JournalCapturePlatformAssumption | null {
+  for (const assumption of JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS) {
+    if (!evidence[assumption]) return assumption;
+  }
+  return null;
+}
+
+function copiedLinearizationPoint(point: LinearizationPoint): LinearizationPoint {
+  return Object.freeze({
+    kind: point.kind,
+    cut: point.cut,
+    generation: point.generation,
+    evidence: Object.freeze({ ...point.evidence }),
+  });
+}
 
 /**
- * Replay the journal prefix at `cut` into a capture. The cut is exact by
- * definition: prefix(cut) IS the captured state, so post-cut mutations — even
- * ones applied concurrently while this function runs — are excluded because
- * they are not in the delivered range.
+ * Replay a complete journal prefix into a capture. `point` is accepted only
+ * after every named platform premise is measured true; continuity then makes
+ * the replayed prefix the non-torn state of exactly one committed generation.
  */
 export function materializeJournalPrefix(
   source: JournalSource,
-  cut: number,
-  generation: number,
+  point: LinearizationPoint,
 ): JournalCaptureResult {
+  if (!Number.isSafeInteger(point.cut) || point.cut < -1 ||
+      !Number.isSafeInteger(point.generation) || point.generation < 0) {
+    return {
+      verdict: 'refused',
+      reason: 'invalid-linearization-point',
+      detail: `invalid durable fence point cut=${point.cut} generation=${point.generation}`,
+    };
+  }
+
+  const unproven = firstUnprovenPlatformAssumption(point.evidence);
+  if (unproven) {
+    return {
+      verdict: 'refused',
+      reason: 'unproven-platform-assumption',
+      detail: `journal capture requires measured platform assumption '${unproven}'`,
+    };
+  }
+
   if (source.overflowed()) {
     return {
       verdict: 'refused',
@@ -59,7 +171,7 @@ export function materializeJournalPrefix(
   const entries: LogEntry[] = [];
   let expected = 0;
   for (const batch of source.batches()) {
-    if (batch.firstSeq > cut) break;
+    if (batch.firstSeq > point.cut) break;
     const first = batch.entries[0];
     const last = batch.entries[batch.entries.length - 1];
     if (!first || !last || first.seq !== batch.firstSeq || last.seq !== batch.lastSeq) {
@@ -77,7 +189,7 @@ export function materializeJournalPrefix(
       };
     }
     for (const entry of batch.entries) {
-      if (entry.seq > cut) break;
+      if (entry.seq > point.cut) break;
       if (entry.seq !== expected) {
         return {
           verdict: 'refused',
@@ -89,18 +201,30 @@ export function materializeJournalPrefix(
       expected += 1;
     }
   }
-  if (expected <= cut) {
+  if (expected <= point.cut) {
     return {
       verdict: 'refused',
       reason: 'journal-gap',
-      detail: `journal ends at ${expected - 1}, short of the requested cut ${cut}`,
+      detail: `journal ends at ${expected - 1}, short of the requested cut ${point.cut}`,
     };
   }
 
-  const state = prefixState(entries, cut);
+  const state = prefixState(entries, point.cut);
+  const linearizationPoint = copiedLinearizationPoint(point);
   return {
     verdict: 'captured',
-    capture: { mechanism: 'mutation-journal', cut, generation, entries: [...state.values()] },
+    capture: {
+      mechanism: 'mutation-journal',
+      cut: point.cut,
+      generation: point.generation,
+      entries: [...state.values()],
+    },
+    soundness: {
+      linearizationPoint,
+      oneCommittedGeneration: { generation: point.generation, cut: point.cut },
+      torn: { matchesNoCommittedPrefix: false },
+      cutExcluded: { cut: point.cut, excludesSequencesAfterCut: true },
+    },
   };
 }
 

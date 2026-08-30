@@ -19,12 +19,47 @@ import {
   type MutationOp,
   type UpperPath,
 } from '../src/capture';
+import {
+  JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS,
+  journalLinearizationPoint,
+  type JournalCapturePlatformEvidence,
+} from '../src/capture/journal-capture';
+
 
 const enc = new TextEncoder();
 const dense = (s: string): FileContent => ({ kind: 'dense', bytes: enc.encode(s) });
 const text = (content: FileContent | undefined): string =>
   content ? Buffer.from(expandContent(content)).toString() : '';
 const asState = (capture: Capture) => new Map(capture.entries.map((e) => [e.path, e]));
+
+function journalEvidence(
+  overrides: Partial<JournalCapturePlatformEvidence> = {},
+): JournalCapturePlatformEvidence {
+  return {
+    'mounted-root-intercepts-concurrent-writes': true,
+    'mounted-open-fds-remain-intercepted': true,
+    'mmap-writes-are-intercepted': true,
+    'rename-and-unlink-are-intercepted': true,
+    'intent-fdatasync-precedes-effect': true,
+    'result-fdatasync-precedes-reply': true,
+    'fence-closes-admission-and-drains': true,
+    'root-syncfs-precedes-stage': true,
+    'sealed-stage-and-manifest-are-durable': true,
+    'private-state-and-mount-are-excluded': true,
+    'path-resolution-stays-beneath-root': true,
+    ...overrides,
+  };
+}
+
+function journalPoint(
+  cut: number,
+  generation: number,
+  evidence = journalEvidence(),
+) {
+  return journalLinearizationPoint(cut, generation, evidence);
+}
+
+
 
 /** A view whose per-path hook runs before each staged read — the deterministic interleaving point. */
 function hookedView(log: MutationLog, hook?: (path: UpperPath) => Promise<void>): CaptureView {
@@ -427,15 +462,31 @@ describe('mechanism three — ordered mutation journal', () => {
     await log.perform({ op: 'unlink', path: 'j/b' });
   });
 
+  for (const assumption of JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS) {
+    test(`refuses when the ${assumption} platform premise is not proven`, () => {
+      const result = materializeJournalPrefix(
+        sourceFromChunks([[0, 1], [2, 3]]),
+        journalPoint(3, 0, journalEvidence({ [assumption]: false })),
+      );
+      expect(result).toMatchObject({ verdict: 'refused', reason: 'unproven-platform-assumption' });
+      if (result.verdict === 'refused') expect(result.detail).toContain(assumption);
+    });
+  }
+
+
   test('materialized prefixes equal the replayed prefix at the cut, whatever happens after', async () => {
     let extra = 0;
     for (const cut of [-1, 0, 1, 2, 3]) {
-      const result = materializeJournalPrefix(sourceFromChunks([[0, 1], [2, 3]]), cut, 0);
+      const result = materializeJournalPrefix(sourceFromChunks([[0, 1], [2, 3]]), journalPoint(cut, 0));
       expect(result.verdict).toBe('captured');
       if (result.verdict !== 'captured') continue;
       const expected = prefixState(log.entries, cut);
       const got = new Map(result.capture.entries.map((e) => [e.path, e]));
       expect(stateEquals(expected, got)).toBe(true);
+      expect(result.soundness.linearizationPoint.kind).toBe('durable-fence-record');
+      expect(result.soundness.oneCommittedGeneration).toEqual({ generation: 0, cut });
+      expect(result.soundness.torn.matchesNoCommittedPrefix).toBe(false);
+      expect(result.soundness.cutExcluded).toEqual({ cut, excludesSequencesAfterCut: true });
 
       // Post-cut mutations are excluded by construction: apply more, capture unchanged.
       await log.perform({ op: 'write', path: `j/post${++extra}`, content: dense('later') });
@@ -443,8 +494,43 @@ describe('mechanism three — ordered mutation journal', () => {
     }
   });
 
+  test('a durable FENCE gives concurrent writes, namespace changes, in-place writes, and mmap stores one cut', async () => {
+    await Promise.all([
+      log.perform({ op: 'write', path: 'j/open-fd.txt', content: dense('aaaa') }),
+      log.perform({ op: 'write', path: 'j/unlink-me.txt', content: dense('bbbb') }),
+    ]);
+    await log.perform({ op: 'rewrite-in-place', path: 'j/open-fd.txt', content: dense('zzzz') });
+    await log.perform({ op: 'mmap-write', path: 'j/open-fd.txt', offset: 1, bytes: enc.encode('!') });
+    await log.perform({ op: 'rename', from: 'j/open-fd.txt', to: 'j/renamed-open-fd.txt' });
+    await log.perform({ op: 'unlink', path: 'j/unlink-me.txt' });
+
+    const cut = log.lastSeq;
+    const result = materializeJournalPrefix(
+      sourceFromChunks([Array.from({ length: cut + 1 }, (_, sequence) => sequence)]),
+      journalPoint(cut, log.generation),
+    );
+    expect(result.verdict).toBe('captured');
+    if (result.verdict !== 'captured') return;
+
+    const atCut = asState(result.capture);
+    expect(stateEquals(prefixState(log.entries, cut), atCut)).toBe(true);
+    expect(text(atCut.get('j/renamed-open-fd.txt')?.content)).toBe('z!zz');
+    expect(atCut.has('j/unlink-me.txt')).toBe(false);
+    expect(result.soundness.linearizationPoint.evidence['intent-fdatasync-precedes-effect']).toBe(true);
+    expect(result.soundness.linearizationPoint.evidence['result-fdatasync-precedes-reply']).toBe(true);
+    expect(result.soundness.linearizationPoint.evidence['private-state-and-mount-are-excluded']).toBe(true);
+
+    await Promise.all([
+      log.perform({ op: 'rewrite-in-place', path: 'j/renamed-open-fd.txt', content: dense('post') }),
+      log.perform({ op: 'write', path: 'j/after-fence.txt', content: dense('later') }),
+    ]);
+    expect(stateEquals(prefixState(log.entries, cut), atCut)).toBe(true);
+    expect(atCut.has('j/after-fence.txt')).toBe(false);
+    expect(auditCapture(log.entries, result.capture).claimedCutMatches).toBe(true);
+  });
+
   test('a gap in delivered sequence numbers refuses with the position named', () => {
-    const result = materializeJournalPrefix(sourceFromChunks([[0, 1], [3]]), 3, 0);
+    const result = materializeJournalPrefix(sourceFromChunks([[0, 1], [3]]), journalPoint(3, 0));
     expect(result.verdict).toBe('refused');
     if (result.verdict === 'refused') expect(result.detail).toContain('expected seq 2');
   });
@@ -458,7 +544,7 @@ describe('mechanism three — ordered mutation journal', () => {
       }],
       overflowed: () => false,
     };
-    const result = materializeJournalPrefix(source, 3, 0);
+    const result = materializeJournalPrefix(source, journalPoint(3, 0));
     expect(result).toMatchObject({ verdict: 'refused', reason: 'journal-gap' });
     if (result.verdict === 'refused') expect(result.detail).toContain('expected seq 1');
   });
@@ -468,7 +554,7 @@ describe('mechanism three — ordered mutation journal', () => {
     queue.push(log.entries[0]!);
     queue.push(log.entries[1]!);
     queue.push(log.entries[2]!); // dropped, flagged
-    expect(materializeJournalPrefix(queue.toSource(), 2, 0)).toEqual({
+    expect(materializeJournalPrefix(queue.toSource(), journalPoint(2, 0))).toEqual({
       verdict: 'refused',
       reason: 'watch-overflow',
       detail: 'the journal transport dropped events; no prefix can be claimed',

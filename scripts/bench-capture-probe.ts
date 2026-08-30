@@ -16,8 +16,8 @@
  *     The full autonomous live run described above.
  *
  *   bun scripts/bench-capture-probe.ts --plan
- *     Diagnostic only: print which capabilities gate which mechanism. Takes
- *     no resources and touches nothing.
+ *     Diagnostic only: print capability gates and every platform premise.
+ *     Takes no resources and touches nothing.
  *
  *   bun scripts/bench-capture-probe.ts --report report.json
  *     Diagnostic only: decide from a saved probe report. Provisions nothing.
@@ -37,6 +37,8 @@ import {
   decideCaptureMechanism,
 } from '../packages/devbox/src/capture/index';
 import type { CaptureCapabilityReport } from '../packages/devbox/src/capture/index';
+import { JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS } from '../packages/devbox/src/capture/journal-capture';
+
 import {
   LiveProbeError,
   lastNonEmptyLine,
@@ -70,6 +72,16 @@ export const MECHANISM_GATES = [
   },
 ] as const;
 
+/** Platform premises for the freeze barrier's process-quiescence proof. */
+export const FREEZE_DRAIN_PLATFORM_ASSUMPTIONS = [
+  'pid-namespace-scopes-all-writers',
+  'process-freeze-stops-all-scoped-writers',
+  'cgroup-freezer-birth-freezes-new-children',
+  'fork-proof-window-is-measured',
+  'syncfs-or-explicit-per-file-fsync-caveat',
+] as const;
+
+
 export function renderPlan(): string {
   const lines = [
     'CaptureSound mechanism gates (all requirements must measure present;',
@@ -81,6 +93,12 @@ export function renderPlan(): string {
     for (const requirement of gate.requires) lines.push(`    requires: ${requirement}`);
     for (const degradation of gate.degradesWithout) lines.push(`    degrades: ${degradation}`);
   }
+  lines.push('');
+  lines.push('Platform assumptions (explicit premises, never a CaptureSound axiom):');
+  lines.push('  freeze-drain:');
+  for (const assumption of FREEZE_DRAIN_PLATFORM_ASSUMPTIONS) lines.push(`    ${assumption}`);
+  lines.push('  mutation-journal:');
+  for (const assumption of JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS) lines.push(`    ${assumption}`);
   lines.push('');
   lines.push(`Measured capability ids: ${CAPTURE_CAPABILITIES.join(', ')}`);
   return lines.join('\n');
