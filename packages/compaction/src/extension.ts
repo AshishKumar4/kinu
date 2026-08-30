@@ -133,7 +133,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       concurrency: profile.summarizerConcurrency,
     });
 
-  const buildInputs = (ctx: TransformContext, turns: Turn[], reportedTokens: number): BuildPlanInputs => ({
+  const buildInputs = (ctx: TransformContext, reportedTokens: number): BuildPlanInputs => ({
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
     triggerRatio: profile.triggerPercent / 100,
@@ -193,7 +193,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     reportedTokens: number,
     summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>,
   ): Promise<ProcessResult> {
-    const inputs: BuildPlanInputs = { ...buildInputs(ctx, turns, reportedTokens), force: true, priorPlan: prior ?? undefined };
+    const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens), force: true, priorPlan: prior ?? undefined };
     let plan = buildPlan(turns, inputs, kinuSpec);
     if (!plan) return { outcome: 'unchanged' };
     if (plan.summaryJobs.length > 0) {
@@ -260,7 +260,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     const upgraded = buildPlan(
       turns,
       {
-        ...buildInputs(ctx, turns, reportedTokens),
+        ...buildInputs(ctx, reportedTokens),
         force: true,
         // The just-built plan is the floor; its snapshot already carries the
         // assistant summaries and preserved tool ids forward.

@@ -993,7 +993,7 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
         fromSubordinate: 'researcher', status, content,
         sequenceId: `settle:msg-${++sequence}`, mode: 'build', now: 1,
       });
-      roster.applyReport('researcher', status, 'report_tool', NOW);
+      roster.applyReport('researcher', status, origin, NOW);
     };
 
     return {

@@ -369,7 +369,7 @@ export function unverifiedInstructionsMessage(ctx: UnverifiedInstructions): Mode
  * string synchronously and the runtime's sql executor is synchronous.
  */
 export function buildSystemPromptSync(
-  rt: AgentRuntime,
+  _rt: AgentRuntime,
   opts: SystemPromptOptions = {},
 ): string {
   const surface = compilePromptSurface(opts);
