@@ -838,10 +838,10 @@ export class OrchestratorAgent extends ActorAgent {
   private armDurableWake(): void {
     const next = this.nextWakeAt(Date.now());
     if (next === null) return;
-    void this.armTimer(next).catch((err) => {
+    void this.armTimer(next).catch((...rejection: [unknown]) => {
       diagnostics.failure('schedule.durable_wake_arm_failed', toKinuError({
         doing: 'arming the wake a pending reaction needs',
-        cause: err,
+        cause: rejection[0],
         otherwise: 'io',
       }), { workspace: this.name });
     });
@@ -2066,10 +2066,10 @@ export class OrchestratorAgent extends ActorAgent {
     // whose only wake row was lost can notice. Detached for the same reason the
     // fork reconciliation below is — arming a schedule row is I/O, and this
     // method runs inside the init gate.
-    void this.reconcileTimerRow().catch((err) => {
+    void this.reconcileTimerRow().catch((...rejection: [unknown]) => {
       diagnostics.failure('schedule.timer_reconcile_failed', toKinuError({
         doing: 'restoring the wake row an activation found missing',
-        cause: err,
+        cause: rejection[0],
         otherwise: 'io',
       }), { workspace: this.name });
     });
@@ -2085,10 +2085,10 @@ export class OrchestratorAgent extends ActorAgent {
     // synchronous inside the init gate (it is one indexed UPDATE), the resume
     // sends mail and therefore cannot be, and the invariant must not depend on
     // which of the two happens to run first.
-    void this.reconcileEventDeliveries().catch((err) => {
+    void this.reconcileEventDeliveries().catch((...rejection: [unknown]) => {
       diagnostics.failure('event.delivery_reconcile_failed', toKinuError({
         doing: 'reconciling the event deliveries a dead activation left open',
-        cause: err,
+        cause: rejection[0],
         otherwise: 'io',
       }), { workspace: this.name });
     });
@@ -2149,10 +2149,10 @@ export class OrchestratorAgent extends ActorAgent {
         ),
       }),
       logActivity: (event, detail) => this.logActivity(event, detail),
-    }).then(() => this.reclaimSettledExplorationFacets()).catch((err) => {
+    }).then(() => this.reclaimSettledExplorationFacets()).catch((...rejection: [unknown]) => {
       diagnostics.failure('head.journal_reconcile_failed', toKinuError({
         doing: 'reconciling fork-journal heads a dead activation left running',
-        cause: err,
+        cause: rejection[0],
         otherwise: 'io',
       }), { workspace: this.name });
     });
@@ -2169,10 +2169,10 @@ export class OrchestratorAgent extends ActorAgent {
           return readSoul(this.rt.storage.vfs)
             .then((soul) => this.maybeAutoTitle(summarizeSoul(soul ?? '')));
         })
-        .catch((error) => {
+        .catch((...rejection: [unknown]) => {
           diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
             doing: 'reading SOUL.md to title a legacy workspace',
-            cause: error,
+            cause: rejection[0],
             otherwise: 'io',
           }), { workspace: this.name });
         });
@@ -3660,10 +3660,10 @@ export class OrchestratorAgent extends ActorAgent {
   async beginGenesisTurn(): Promise<{ started: boolean }> {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
     if (!signal) return { started: false };
-    void this.keepAliveWhile(() => this.orch.signals.deliver(signal)).catch((err) => {
+    void this.keepAliveWhile(() => this.orch.signals.deliver(signal)).catch((...rejection: [unknown]) => {
       diagnostics.failure('genesis.turn_failed', toKinuError({
         doing: "taking the workspace's first turn",
-        cause: err,
+        cause: rejection[0],
         otherwise: 'unavailable',
       }), { workspace: this.name });
     });
@@ -4586,9 +4586,9 @@ export class OrchestratorAgent extends ActorAgent {
     if (opts?.turnIds !== undefined) request = { ...request, turnIds: opts.turnIds };
     const view = await requestRefinement(this.refinementDeps, request);
     void this.runRefinementLane()
-      .catch((err) => diagnostics.failure('refinement.lane_failed', toKinuError({
+      .catch((...rejection: [unknown]) => diagnostics.failure('refinement.lane_failed', toKinuError({
         doing: 'advancing the continual-refinement lane',
-        cause: err,
+        cause: rejection[0],
         otherwise: 'unavailable',
       }), { workspace: this.name }));
     return view;
@@ -4845,9 +4845,9 @@ export class OrchestratorAgent extends ActorAgent {
         ownerEmail: await this.getOwnerEmail(),
         outbox: this.emailOutbox,
       }, notification);
-    })().catch((err) => diagnostics.failure('email.owner_notification_failed', toKinuError({
+    })().catch((...rejection: [unknown]) => diagnostics.failure('email.owner_notification_failed', toKinuError({
       doing: 'sending the owner an away-channel notification',
-      cause: err,
+      cause: rejection[0],
       otherwise: 'unavailable',
     }), { subject }));
   }

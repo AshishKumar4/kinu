@@ -10,6 +10,7 @@
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
@@ -29,9 +30,15 @@ export default function HomePage() {
   const { hasModels, busy, err, create } = useCreateWorkspace();
 
 
-  const submit = (event?: FormEvent) => {
+  const submit = (event?: FormEvent): void => {
     event?.preventDefault();
-    void create(mission);
+    void create(mission).catch((...rejection: [unknown]) => {
+      diagnostics.failure("workspace.create_submit_failed", toKinuError({
+        doing: "creating a workspace from the home screen",
+        cause: rejection[0],
+        otherwise: "io",
+      }));
+    });
   };
 
   return (

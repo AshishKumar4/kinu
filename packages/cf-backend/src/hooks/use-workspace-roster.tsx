@@ -60,9 +60,9 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
         setTotal(roster.total);
         setError(null);
       },
-      (cause) => {
+      (...rejection: [unknown]) => {
         if (current !== generation.current) return;
-        setError(renderThrownChain({ cause }));
+        setError(renderThrownChain({ cause: rejection[0] }));
       },
     );
   }, []);

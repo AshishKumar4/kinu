@@ -55,10 +55,10 @@ export function forwardFacetModelOperations(
     const delivered = parent === null
       ? Promise.reject(new Error('this facet has no parent workspace to forward to'))
       : parent.reportFacetModelOperation(event);
-    void delivered.catch((cause) => {
+    void delivered.catch((...rejection: [unknown]) => {
       diagnostics.failure('event.model_operation_emit_failed', toKinuError({
         doing: 'forwarding a model_operation frame to the root workspace',
-        cause,
+        cause: rejection[0],
         otherwise: 'io',
       }), { operationId: event.operationId, phase: event.phase, source: event.source });
     });

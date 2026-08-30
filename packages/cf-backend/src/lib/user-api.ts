@@ -273,7 +273,7 @@ export const updateProfileCatalog = (
 let _modelsCache: Promise<ModelMenu> | null = null;
 export function listAvailableModels(): Promise<ModelMenu> {
   if (!_modelsCache) {
-    _modelsCache = api(ModelMenuSchema, 'GET', '/models').catch((e) => { _modelsCache = null; throw e; });
+    _modelsCache = api(ModelMenuSchema, 'GET', '/models').catch((...rejection: [unknown]) => { _modelsCache = null; throw rejection[0]; });
   }
   return _modelsCache;
 }
