@@ -51,6 +51,7 @@ import {
   type TerminalTurnParts,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { TERMINAL_LANE_FIBER } from './fiber-recovery';
 
 /** The workspace root's class name, which is also its Durable Object binding
  *  name — the equality the SDK itself relies on when it resolves a top-level
@@ -477,15 +478,19 @@ export class SubordinateAgent extends ActorAgent {
     this.sweepUnrecoverableFiberRows();
     // And the same terminal sweep, for the same reason the root has one and for
     // one more: this is the only carrier a sequence has when the ledger could not
-    // arm its wake at all. A subordinate owes reports, titles and recordings
-    // exactly as a root does, and without this an interrupted one waited on an
-    // alarm that a failed schedule never wrote.
-    void this.terminal.resumeAll()
-      .catch((err: unknown) => diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
-        doing: 'finishing what interrupted terminal transitions still owed',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name }));
+    // arm its wake at all. The terminal lane owns this asynchronous replay, so a
+    // later eviction re-enters the existing terminal recovery path.
+    this._terminalReported = this.runFiber(TERMINAL_LANE_FIBER, async () => {
+      try {
+        await this.terminal.resumeAll();
+      } catch (cause) {
+        diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
+          doing: 'finishing what interrupted terminal transitions still owed',
+          cause,
+          otherwise: 'unavailable',
+        }), { workspace: this.name });
+      }
+    });
   }
 
   /**
@@ -652,7 +657,8 @@ export class SubordinateAgent extends ActorAgent {
 
   async onChatResponse(result: ChatResponseResult): Promise<void> {
     const { programmaticUserMessage, errorText, completed } = this.settleTurnEvents(result);
-    this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
+    const overflowRecovery =
+      this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     // The identity of THIS terminal sequence: the durable turn plus the response
     // being settled. Both, because Think fires this hook once per response and a
     // continuation keeps the turn's user-message id.
@@ -752,6 +758,7 @@ export class SubordinateAgent extends ActorAgent {
         : this.terminal.sequenceId(transition),
     };
     const parts: TerminalTurnParts = {
+      overflowRetry: overflowRecovery?.enqueueRetry === true,
       turnEndExtensions: { message: projectJsonValue({ value: result.message }) },
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(turn)) }),
       shadowTrial,

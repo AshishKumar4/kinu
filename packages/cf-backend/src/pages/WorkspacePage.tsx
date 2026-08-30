@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
+import { startTransition, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -737,10 +737,13 @@ export default function WorkspacePage() {
     setDragOver(false);
   }, []);
   const onChatDrop = useCallback((e: ReactDragEvent) => {
-    if (!e.dataTransfer.files.length) return;
+    const files = e.dataTransfer.files;
+    if (!files.length) return;
     e.preventDefault();
     setDragOver(false);
-    attachments.add(e.dataTransfer.files);
+    startTransition(async () => {
+      await attachments.add(files);
+    });
   }, [attachments]);
 
   // Auto-grow the chat input with its content (kumo InputArea has no resize
@@ -755,10 +758,14 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     if (!agentId) return;
-    touchWorkspace(agentId).then(
-      () => reportSide("visit", null),
-      (cause: unknown) => reportSide("visit", describeError(cause)),
-    );
+    startTransition(async () => {
+      try {
+        await touchWorkspace(agentId);
+        reportSide("visit", null);
+      } catch (cause) {
+        reportSide("visit", describeError(cause));
+      }
+    });
   }, [agentId, reportSide]);
 
   // Bridge the open workspace's live status to the sidebar roster (running dot +
@@ -853,12 +860,15 @@ export default function WorkspacePage() {
     // The composer is cleared only once the branch was actually accepted — a
     // refused or failed branch used to destroy what the user had typed. The
     // identity check leaves anything typed while the RPC was in flight alone.
-    state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t])
-      .then((r) => {
-        if (r.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
-        else setBranchNotice(r.reason ?? "Branching is unavailable right now.");
-      })
-      .catch((cause: unknown) => setBranchNotice(renderThrownChain({ cause })));
+    startTransition(async () => {
+      try {
+        const result = await state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]);
+        if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
+        else setBranchNotice(result.reason ?? "Branching is unavailable right now.");
+      } catch (cause) {
+        setBranchNotice(renderThrownChain({ cause }));
+      }
+    });
   }, [chatInput, effectiveChatMode, state]);
 
   /**
@@ -887,10 +897,15 @@ export default function WorkspacePage() {
   const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
   useEffect(() => {
     if (state.connectionStatus !== "connected") return;
-    state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback').then(
-      (loaded) => { setFeedbackByMessage(loaded); reportSide("feedback", null); },
-      (cause: unknown) => reportSide("feedback", describeError(cause)),
-    );
+    startTransition(async () => {
+      try {
+        const loaded = await state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback');
+        setFeedbackByMessage(loaded);
+        reportSide("feedback", null);
+      } catch (cause) {
+        reportSide("feedback", describeError(cause));
+      }
+    });
   }, [state.connectionStatus, state.rpc, reportSide]);
 
   // Alternate Takes chips, keyed by assistant message id — hydrated on load
@@ -922,10 +937,15 @@ export default function WorkspacePage() {
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
     if (state.connectionStatus !== "connected" || state.isStreaming) return;
-    state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes').then(
-      (loaded) => { setTakesByTurn(loaded); reportSide("takes", null); },
-      (cause: unknown) => reportSide("takes", describeError(cause)),
-    );
+    startTransition(async () => {
+      try {
+        const loaded = await state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes');
+        setTakesByTurn(loaded);
+        reportSide("takes", null);
+      } catch (cause) {
+        reportSide("takes", describeError(cause));
+      }
+    });
     // settledBranchCount: a branch settling after the turn ended persists a
     // fresh set — refetch so its chip can hydrate the comparison.
   }, [state.connectionStatus, state.isStreaming, state.rpc, settledBranchCount, reportSide]);
@@ -1255,7 +1275,11 @@ export default function WorkspacePage() {
                 mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planAwaitingDecision }}
                 attachments={{
                   parts: [...attachments.parts],
-                  onAdd: attachments.add,
+                  onAdd: (files) => {
+                    startTransition(async () => {
+                      await attachments.add(files);
+                    });
+                  },
                   onRemove: attachments.remove,
                 }}
                 modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}

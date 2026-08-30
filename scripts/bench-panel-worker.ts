@@ -164,12 +164,14 @@ async function main(): Promise<void> {
 // A crash before the meter reported carries no token figures. The head fields
 // stay explicit: an empty panel outcome IS what this run produced, unlike its
 // cost, which nobody measured.
-main().catch((err: unknown) => {
+try {
+  await main();
+} catch (cause) {
   const out: WorkerOutput = {
     steps: 0, hadError: true, budgetBreach: null,
     headScores: [], grounded: false, blindSpots: [],
-    error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+    error: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);
   process.exit(1);
-});
+}

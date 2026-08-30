@@ -89,7 +89,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     process.exit(0);
   };
 
-  const onInterrupt = () => {
+  const onInterrupt = async (): Promise<void> => {
     if (turnInFlight && !interruptRequested) {
       interruptRequested = true;
       client.stop();
@@ -101,11 +101,13 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       }
       return;
     }
-    void onExit().catch((error: unknown) => {
-      console.log(`\n${formatFailure({ cause: error })}\n`);
+    try {
+      await onExit();
+    } catch (cause) {
+      console.log(`\n${formatFailure({ cause })}\n`);
       rl.close();
       process.exit(1);
-    });
+    }
   };
   rl.on('SIGINT', onInterrupt);
   process.on('SIGINT', onInterrupt);
@@ -151,13 +153,15 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       console.log(DIM('  ⧗ the turn just finished — queued to send next'));
     }
   };
-  rl.on('line', (line) => {
+  rl.on('line', async (line) => {
     if (!turnInFlight || consentAskPending || exiting) return;
     const input = line.trim();
     if (!input) return;
-    void onMidTurnLine(input).catch((error: unknown) => {
-      console.log(`\n${formatFailure({ cause: error })}\n`);
-    });
+    try {
+      await onMidTurnLine(input);
+    } catch (cause) {
+      console.log(`\n${formatFailure({ cause })}\n`);
+    }
   });
 
   await client.connect();

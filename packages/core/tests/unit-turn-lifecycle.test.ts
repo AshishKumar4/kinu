@@ -7,11 +7,10 @@ import { Database } from 'bun:sqlite';
 import {
   initRunEventTables, RunEventRecorder,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
-  persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
+  persistMeasuredPromptTokens, applyOverflowRecovery, declareTerminalRoster, creditedTurnId,
   TurnAccumulator, TurnSteering, CraftCycle, TurnEscalationLedger,
-  OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
-  type AgentSignal, type CompactionTriggerState,
+  type CompactionTriggerState,
 } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 import type { TurnRunRecorder } from '../src/orchestrator/turn-lifecycle';
@@ -285,52 +284,57 @@ describe('persistMeasuredPromptTokens', () => {
   });
 });
 
-/** Records what the recovery policy hands the one delivery seam. */
-function recordingSignals() {
-  const delivered: AgentSignal[] = [];
-  return {
-    delivered,
-    deliver: async (signal: AgentSignal) => { delivered.push(signal); return 'queued' as const },
-  };
-}
 
 describe('applyOverflowRecovery', () => {
-  test('a context overflow arms force-compaction and delivers exactly one retry', async () => {
+  test('a context overflow arms force-compaction and declares exactly one retry', () => {
     const state = recordingState();
-    const signals = recordingSignals();
     const decision = applyOverflowRecovery({
       error: 'prompt is too long: 210000 tokens > 200000 maximum',
       lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
-      state, sessionKey: 'k', signals,
+      state, sessionKey: 'k',
     });
     expect(decision.forceCompaction).toBe(true);
+    expect(decision.enqueueRetry).toBe(true);
     expect(state.armed).toEqual(['k']);
-    await Promise.resolve();
-    // The retry never steers a live turn: the turn that failed is over.
-    expect(signals.delivered).toEqual([
-      { kind: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT },
-    ]);
   });
 
-  test('a failed retry never delivers another; unrelated failures never arm', () => {
+  test('a failed retry never declares another; unrelated failures never arm', () => {
     const state = recordingState();
-    const signals = recordingSignals();
     const retryFailure = applyOverflowRecovery({
       error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
-      turnWasOverflowRetry: true, state, sessionKey: 'k', signals,
+      turnWasOverflowRetry: true, state, sessionKey: 'k',
     });
     expect(retryFailure.forceCompaction).toBe(true);
     expect(retryFailure.enqueueRetry).toBe(false);
     const rateLimit = applyOverflowRecovery({
       error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
-      turnWasOverflowRetry: false, state, sessionKey: 'k', signals,
+      turnWasOverflowRetry: false, state, sessionKey: 'k',
     });
     expect(rateLimit.forceCompaction).toBe(false);
-    expect(signals.delivered).toEqual([]);
     expect(state.armed).toEqual(['k']); // only the genuine overflow armed
   });
 });
 
+
+test('an earned overflow retry is recorded as one inline terminal effect', () => {
+  const facts: Parameters<typeof declareTerminalRoster>[0] = {
+    messageId: 'answer-1',
+    status: 'error',
+    workMode: 'build',
+    continuity: 'conversation',
+    completed: false,
+    userText: 'continue',
+    assistantText: '',
+    scopedTurn: {},
+    recordedAt: 1,
+    evolutionEnabled: false,
+  };
+  const owed = declareTerminalRoster(facts, { overflowRetry: true });
+  expect(owed.filter((effect) => effect.name === 'overflow_retry')).toEqual([
+    { name: 'overflow_retry', scope: 'answer-1', lane: 'inline', input: {} },
+  ]);
+  expect(declareTerminalRoster(facts).some((effect) => effect.name === 'overflow_retry')).toBe(false);
+});
 // The credit decision — which id the work captured INSIDE a turn is attributed
 // to. Both backends attribute two capture kinds (alternate takes, steer
 // branches) to the same answer, so this is the cross-backend contract for both.

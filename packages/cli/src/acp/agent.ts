@@ -158,17 +158,23 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
     return session;
   };
 
-  const notify = (client: AgentContext, sessionId: SessionId, update: SessionNotification['update']): void => {
-    void client.notify(CLIENT_METHODS.session_update, { sessionId, update }).catch((error: unknown) => {
-      // Notifications are fire-and-forget; a client that has gone away must not take down the
-      // turn that is still running. Reported on stderr because stdout carries the protocol — an
-      // undelivered update silently truncates what the editor shows of the turn.
+  const notify = async (
+    client: AgentContext,
+    sessionId: SessionId,
+    update: SessionNotification['update'],
+  ): Promise<void> => {
+    try {
+      await client.notify(CLIENT_METHODS.session_update, { sessionId, update });
+    } catch (cause) {
+      // An undelivered update must not take down the request/turn that owns it.
+      // Report on stderr because stdout carries the protocol — otherwise the
+      // editor silently loses part of the turn.
       diagnostics.failure(
         'acp.session_update_undelivered',
-        toKinuError({ doing: 'delivering an acp session/update notification', cause: error, otherwise: 'io' }),
+        toKinuError({ doing: 'delivering an acp session/update notification', cause, otherwise: 'io' }),
         { sessionId },
       );
-    });
+    }
   };
 
   /** Translate one AgentClient event into its ACP session/update, or null when
@@ -258,12 +264,12 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
       // updates a live turn would have produced.
       for (const message of await session.client.history()) {
         if (message.role === 'user') {
-          notify(ctx.client, session.id, {
+          await notify(ctx.client, session.id, {
             sessionUpdate: 'user_message_chunk',
             content: { type: 'text', text: message.content },
           });
         } else if (message.role === 'assistant') {
-          notify(ctx.client, session.id, {
+          await notify(ctx.client, session.id, {
             sessionUpdate: 'agent_message_chunk',
             content: { type: 'text', text: message.content },
           });
@@ -276,9 +282,10 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
       const session = requireSession(ctx.params.sessionId);
       session.beginTurn();
 
+      const pendingNotifications: Promise<void>[] = [];
       const unsubscribe = session.client.subscribe((event) => {
         const update = toUpdate(event);
-        if (update) notify(ctx.client, session.id, update);
+        if (update) pendingNotifications.push(notify(ctx.client, session.id, update));
       });
       try {
         await session.client.send(
@@ -287,6 +294,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         );
       } finally {
         unsubscribe();
+        await Promise.all(pendingNotifications);
       }
       // stop() resolves the turn early, so a cancelled turn still lands here —
       // the flag is what distinguishes it from a natural finish.

@@ -217,6 +217,12 @@ export class AgentOrchestrator {
    *  null. At most one at a time — a second would re-run the same window,
    *  because `claim()` retires nothing until the pass settles. */
   private sessionEvolution: Promise<void> | null = null;
+  /** CADENCE LANE: every pass dispatched at turn end. This is an observer, not
+   *  the claim latch above: a no-op pass must never hide a window that fills
+   *  while it runs, but its rejection still needs a process owner. It is
+   *  deliberately not joined by `settleEvolution`; its rows are durable and a
+   *  one-shot host must not inherit a lifetime cycle's clock. */
+  private cadencePasses: Promise<void> = Promise.resolve();
   /** CADENCE LANE: the promotion gate's trial drain, or null. Its own latch,
    *  separate from the window pass: two drains would run the same queued
    *  trials twice and record each verdict twice, and folding it into the
@@ -414,11 +420,19 @@ export class AgentOrchestrator {
       if (!awaitsFollowup) {
         this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
       }
-      this.runDueSessionEvolution().catch((err: unknown) => diagnostics.failure(
-        'orchestrator.detached_work_failed',
-        toKinuError({ doing: 'run detached post-turn work', cause: err, otherwise: 'unavailable' }),
-        { work: 'Session evolution' },
-      ));
+      const cadence = this.runDueSessionEvolution();
+      const previousCadence = this.cadencePasses;
+      this.cadencePasses = (async (): Promise<void> => {
+        try {
+          await Promise.all([previousCadence, cadence]);
+        } catch (cause) {
+          diagnostics.failure(
+            'orchestrator.detached_work_failed',
+            toKinuError({ doing: 'run detached post-turn work', cause, otherwise: 'unavailable' }),
+            { work: 'Session evolution' },
+          );
+        }
+      })();
     }
   }
 
@@ -632,13 +646,20 @@ export class AgentOrchestrator {
   }
 
   private detach(work: Promise<void>, label: string): void {
-    const tracked = work
-      .catch((err: unknown) => diagnostics.failure(
-        'orchestrator.detached_work_failed',
-        toKinuError({ doing: 'run detached post-turn work', cause: err, otherwise: 'unavailable' }),
-        { work: label },
-      ))
-      .then(() => { this.inFlight.delete(tracked); });
+    let tracked: Promise<void> | null = null;
+    tracked = (async (): Promise<void> => {
+      try {
+        await work;
+      } catch (cause) {
+        diagnostics.failure(
+          'orchestrator.detached_work_failed',
+          toKinuError({ doing: 'run detached post-turn work', cause, otherwise: 'unavailable' }),
+          { work: label },
+        );
+      } finally {
+        if (tracked !== null) this.inFlight.delete(tracked);
+      }
+    })();
     this.inFlight.set(tracked, label);
   }
 

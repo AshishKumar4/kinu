@@ -5,7 +5,7 @@
  * lives in DeviceConnectOverlay and key routing in the host's useKeyboard.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
 import { requireAuthConfig } from '../config';
 import {
   connectDevice,
@@ -41,6 +41,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
   const keybindings = useKeybindingRegistry();
   const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
   const [state, setState] = useState<DeviceConnectPromptState | null>(null);
+  const [, startTransition] = useTransition();
   const stateRef = useRef<DeviceConnectPromptState | null>(null);
   const doneRef = useRef<(() => void) | null>(null);
   const lingerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -79,7 +80,7 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
 
   const startConnect = useCallback((session: boolean) => {
     update({ phase: 'connecting', session, ticks: 0 });
-    void (async () => {
+    startTransition(async () => {
       try {
         const auth = requireAuthConfig();
         const result = await connectDevice(auth, {
@@ -92,15 +93,13 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
         });
         const outcome = describeConnectOutcome(result, session);
         update({ phase: 'result', ok: outcome.ok, message: outcome.message });
-      } catch (err) {
-        update({ phase: 'result', ok: false, message: renderThrownChain({ cause: err }) });
+      } catch (cause) {
+        update({ phase: 'result', ok: false, message: renderThrownChain({ cause }) });
+      } finally {
+        lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
       }
-      lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
-    })().catch((cause: unknown) => {
-      update({ phase: 'result', ok: false, message: renderThrownChain({ cause }) });
-      lingerRef.current = setTimeout(close, RESULT_LINGER_MS);
     });
-  }, [close, update]);
+  }, [close, startTransition, update]);
 
   const handleKey = useCallback((key: TuiKeyEvent): boolean => {
     const current = stateRef.current;

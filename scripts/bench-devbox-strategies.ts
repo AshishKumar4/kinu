@@ -1019,25 +1019,27 @@ async function deployFixture(
   }
   log(`deployed ${origin} at version ${workerVersion}`);
 
-  const unauth = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })
-    .then((r) => r.status)
-    .catch((error: unknown) => {
-      log(`the unauthenticated probe did not answer: ${describeThrown({ cause: error })}`);
-      return 0;
-    });
+  let unauth = 0;
+  try {
+    unauth = (await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })).status;
+  } catch (cause) {
+    log(`the unauthenticated probe did not answer: ${describeThrown({ cause })}`);
+  }
   if (unauth === 200) {
     throw new Error('the bench app answered an unauthenticated request; refusing to run');
   }
 
   const deadline = Date.now() + 180_000;
   for (;;) {
-    const authed = await fetch(`${origin}/health`, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15_000),
-    }).then((r) => r.status).catch((error: unknown) => {
-      log(`the readiness probe did not answer: ${describeThrown({ cause: error })}`);
-      return 0;
-    });
+    let authed = 0;
+    try {
+      authed = (await fetch(`${origin}/health`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(15_000),
+      })).status;
+    } catch (cause) {
+      log(`the readiness probe did not answer: ${describeThrown({ cause })}`);
+    }
     if (authed === 200) break;
     if (Date.now() > deadline) {
       throw new Error(

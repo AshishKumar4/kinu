@@ -16,7 +16,7 @@
  * second counter to keep in step with the list — the list IS the ledger — and
  * `admitAttachments` is pure, so replaying the reducer cannot double-spend.
  */
-import { useCallback, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { convertFileListToFileUIParts, type FileUIPart } from "ai";
 import { dataUrlRawBytes } from "@/components/AttachmentChip";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
@@ -61,17 +61,21 @@ export function admitAttachments(
 
 interface State {
   readonly parts: readonly FileUIPart[];
-  /** Names from the LAST action only — a one-shot statement about what the user
-   *  just did, not a log that outlives the capacity it described. */
+  /** Names from the LAST capacity decision only — a one-shot statement about
+   *  what the user just did, not a log that outlives the capacity it described. */
   readonly refused: readonly string[];
+  /** A conversion failure is not a capacity refusal, but belongs in the same
+   *  visible attachment notice rather than disappearing into diagnostics. */
+  readonly conversionFailure: string | null;
 }
 
 type Action =
   | { readonly kind: "offer"; readonly parts: readonly FileUIPart[]; readonly oversized: readonly string[] }
+  | { readonly kind: "conversion_failed"; readonly oversized: readonly string[]; readonly message: string }
   | { readonly kind: "remove"; readonly index: number }
   | { readonly kind: "clear" };
 
-const EMPTY: State = { parts: [], refused: [] };
+const EMPTY: State = { parts: [], refused: [], conversionFailure: null };
 
 function reduce(state: State, action: Action, limitBytes: number): State {
   if (action.kind === "clear") return EMPTY;
@@ -81,21 +85,37 @@ function reduce(state: State, action: Action, limitBytes: number): State {
       // Removing frees capacity, so whatever "did not fit" said is no longer
       // true. Keeping the line would blame the cap for a message that now fits.
       refused: [],
+      conversionFailure: null,
+    };
+  }
+  if (action.kind === "conversion_failed") {
+    return {
+      parts: state.parts,
+      refused: action.oversized,
+      conversionFailure: action.message,
     };
   }
   const admission = admitAttachments(state.parts, action.parts, limitBytes);
-  return { parts: admission.parts, refused: [...action.oversized, ...admission.refused] };
+  return {
+    parts: admission.parts,
+    refused: [...action.oversized, ...admission.refused],
+    conversionFailure: null,
+  };
 }
 
 export interface PendingAttachments {
   readonly parts: readonly FileUIPart[];
-  /** The one line naming what the cap refused, or null. */
+  /** The one attachment notice naming a capacity refusal or failed conversion. */
   readonly refusal: string | null;
-  /** Add files from a picker, a paste, or a drop. Fire-and-forget: conversion
-   *  is asynchronous and admission happens when it lands. */
+  /** Start conversion from a picker, paste, or drop. The hook owns the task
+   *  through settlement; the visible notice lands with its outcome. */
   readonly add: (files: FileList | null | undefined) => void;
   readonly remove: (index: number) => void;
   readonly clear: () => void;
+}
+
+interface ConversionTask {
+  promise: Promise<void> | null;
 }
 
 export function usePendingAttachments(limitBytes: number): PendingAttachments {
@@ -104,7 +124,16 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
     EMPTY,
   );
 
-  const add = useCallback((files: FileList | null | undefined) => {
+  // Each browser action starts an independent conversion. Keep every task
+  // strongly owned until it settles; unmount retires its publication generation.
+  const conversionGeneration = useRef(0);
+  const nextConversionTaskId = useRef(0);
+  const conversionTasks = useRef(new Map<number, ConversionTask>());
+  useEffect(() => () => {
+    conversionGeneration.current += 1;
+  }, []);
+
+  const add = useCallback((files: FileList | null | undefined): void => {
     if (!files || files.length === 0) return;
     const candidates = [...files];
     // A file larger than the WHOLE aggregate can never be attached, whatever
@@ -116,32 +145,53 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       dispatch({ kind: "offer", parts: [], oversized });
       return;
     }
-    // A materialized list, never the live FileList: an input's FileList empties
-    // the instant its value is cleared, and a dataTransfer's when the handler
-    // returns.
-    const transfer = new DataTransfer();
-    for (const file of convertible) transfer.items.add(file);
-    void convertFileListToFileUIParts(transfer.files).then((parts) => {
-      dispatch({ kind: "offer", parts, oversized });
-    }).catch((cause: unknown) => {
-      // A file the browser cannot read is an offer that never lands, not an
-      // empty one: recording it keeps the drop from looking accepted while no
-      // part ever appears.
-      diagnostics.event('attachments.conversion_failed', {
-        names: convertible.map((file) => file.name).join(', '),
-        reason: renderThrownChain({ cause }),
-      });
-    });
+    // Materialize before the event returns: an input's FileList empties when
+    // its value is cleared, and a dataTransfer's when the handler returns.
+    const generation = conversionGeneration.current;
+    const taskId = ++nextConversionTaskId.current;
+    const owner: ConversionTask = { promise: null };
+    conversionTasks.current.set(taskId, owner);
+    owner.promise = (async () => {
+      try {
+        const transfer = new DataTransfer();
+        for (const file of convertible) transfer.items.add(file);
+        const parts = await convertFileListToFileUIParts(transfer.files);
+        if (generation !== conversionGeneration.current) return;
+        dispatch({ kind: "offer", parts, oversized });
+      } catch (cause) {
+        if (generation !== conversionGeneration.current) return;
+        const names = convertible.map((file) => file.name).join(", ");
+        const reason = renderThrownChain({ cause });
+        let message = `Couldn't read ${names}: ${reason}`;
+        try {
+          diagnostics.event('attachments.conversion_failed', {
+            names,
+            reason,
+          });
+        } catch (diagnosticCause) {
+          message += ` Recording the conversion failure also failed: ${renderThrownChain({ cause: diagnosticCause })}`;
+        }
+        dispatch({ kind: "conversion_failed", oversized, message });
+      } finally {
+        if (conversionTasks.current.get(taskId) === owner) conversionTasks.current.delete(taskId);
+      }
+    })();
   }, [limitBytes]);
 
   const remove = useCallback((index: number) => { dispatch({ kind: "remove", index }); }, []);
   const clear = useCallback(() => { dispatch({ kind: "clear" }); }, []);
 
-  const refusal = useMemo(() => (state.refused.length === 0 ? null : (
-    `Chat attachments are capped at ${String(limitBytes / (1024 * 1024))} MB per message. `
-    + `${state.refused.join(", ")} did not fit. `
-    + `Upload larger files via the Files pane on the Environment tab.`
-  )), [limitBytes, state.refused]);
+  const refusal = useMemo(() => {
+    const capacityRefusal = state.refused.length === 0 ? null : (
+      `Chat attachments are capped at ${String(limitBytes / (1024 * 1024))} MB per message. `
+      + `${state.refused.join(", ")} did not fit. `
+      + `Upload larger files via the Files pane on the Environment tab.`
+    );
+    if (state.conversionFailure === null) return capacityRefusal;
+    return capacityRefusal === null
+      ? state.conversionFailure
+      : `${capacityRefusal} ${state.conversionFailure}`;
+  }, [limitBytes, state.conversionFailure, state.refused]);
 
   return { parts: state.parts, refusal, add, remove, clear };
 }

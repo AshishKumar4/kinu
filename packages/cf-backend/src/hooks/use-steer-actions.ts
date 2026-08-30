@@ -24,7 +24,7 @@
  * action the user just took, true at the moment it was made and about nothing
  * the server will later contradict.
  */
-import { useCallback, useMemo, useState } from "react";
+import { startTransition, useCallback, useMemo, useState } from "react";
 import { describeError } from "@/hooks/use-async-resource";
 import type { ComposerNotice } from "@/components/Composer";
 import type { InlineSteer } from "@kinu.run/core";
@@ -32,8 +32,6 @@ import type { InlineSteer } from "@kinu.run/core";
 /** The notice id every line here writes, so one replaces the other rather than
  *  stacking two contradictory statuses over the same draft. */
 const NOTICE_ID = "steer";
-const observedSteerActions = new WeakSet<Promise<void>>();
-
 
 export interface SteerActionsDeps {
   /** `useKinu().steerChat` — resolves with where the text landed: spliced into
@@ -96,8 +94,9 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     // broadcast the moment it is taken, so the text is visibly somewhere.
     setDraft(() => "");
     setSettled(null);
-    steerChat(text).then(
-      (landed) => {
+    startTransition(async () => {
+      try {
+        const landed = await steerChat(text);
         if (landed === "queued") {
           // The turn ended before this arrived, so the ACTOR queued it as the
           // next ordinary turn — atomically, in its own turn queue, so another
@@ -109,37 +108,36 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
         }
         // Otherwise say nothing here: the server's `queued` broadcast is what
         // the line is read from, and it is the same fact for every open tab.
-      },
-      (err: unknown) => {
+      } catch (cause) {
         // Nothing was accepted, so the draft is still the user's — give it back
         // rather than reporting a failure over an empty composer.
         setDraft((current) => current === "" ? text : current);
         setSettled({
           id: NOTICE_ID, tone: "danger",
-          text: `Couldn't steer the turn: ${describeError(err)}`,
+          text: `Couldn't steer the turn: ${describeError(cause)}`,
         });
-      },
-    );
+      }
+    });
   }, [draft, setDraft, steerChat]);
 
   const stop = useCallback(() => {
     setSettled(null);
-    const work = abortChat()
-      .then((returned) => {
+    startTransition(async () => {
+      try {
+        const returned = await abortChat();
         if (returned.length === 0) return;
         setDraft((current) => current.trim() === "" ? returned.join("\n\n") : current);
         setSettled({
           id: NOTICE_ID, tone: "warning",
           text: "Stopped. What you had queued is back in the composer — the agent never saw it.",
         });
-      })
-      .catch((err: unknown) => {
+      } catch (cause) {
         setSettled({
           id: NOTICE_ID, tone: "danger",
-          text: `Couldn't stop the turn: ${describeError(err)}`,
+          text: `Couldn't stop the turn: ${describeError(cause)}`,
         });
-      });
-    observedSteerActions.add(work);
+      }
+    });
   }, [abortChat, setDraft]);
 
   return { notice, steer, stop };

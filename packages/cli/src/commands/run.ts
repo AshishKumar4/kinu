@@ -654,10 +654,12 @@ async function readOptionalStdin(): Promise<string> {
     new Promise<'idle'>((resolve) => setTimeout(() => resolve('idle'), OPTIONAL_STDIN_GRACE_MS)),
   ]);
   if (first === 'idle') {
-    // Not awaited: the idle path exists precisely to stop waiting on this pipe.
-    void reader.cancel().catch((error: unknown) => {
-      process.stderr.write(`note: releasing idle stdin failed: ${renderThrownChain({ cause: error })}\n`);
-    });
+    // Cancelling ends the idle read; await its release before returning.
+    try {
+      await reader.cancel();
+    } catch (cause) {
+      process.stderr.write(`note: releasing idle stdin failed: ${renderThrownChain({ cause })}\n`);
+    }
     process.stderr.write(
       `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
       'pipe data promptly or close it (< /dev/null)\n',

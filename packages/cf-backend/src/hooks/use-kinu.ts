@@ -693,20 +693,6 @@ export function useWorkspaceRpc(agentId: string) {
   return { rpc, connectionStatus };
 }
 
-/** A WeakSet owns terminal refresh work without extending its lifetime.
- *  Expected RPC failures are reported at their source; this records only a
- *  rejection that escapes that boundary. */
-const observedLiveRefreshes = new WeakSet<Promise<void>>();
-
-function observeLiveRefresh(work: Promise<void>): void {
-  observedLiveRefreshes.add(work.catch((cause: unknown) => {
-    diagnostics.failure('workspace.live_refresh_failed', toKinuError({
-      doing: 'refreshing live workspace data',
-      cause,
-      otherwise: 'io',
-    }));
-  }));
-}
 
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
@@ -1068,6 +1054,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   // next dial, so recovery starts the moment transport returns.
   const [loadGeneration, setLoadGeneration] = useState(0);
   const failureStreak = useRef(0);
+  // Loads can overlap during reconnect and a workspace switch. Retain each
+  // lifecycle task through settlement; admission still decides what may publish.
+  const snapshotLoadTaskId = useRef(0);
+  const snapshotLoadTasks = useRef(new Map<number, Promise<void>>());
 
   // The corpse detector + forced-redial policy. Created once; `agentRef`
   // indirection keeps its callbacks stable across renders.
@@ -1088,16 +1078,18 @@ export function useKinu(target?: string | KinuActorAddress) {
   const recoveryFirstOpen = useRef(true);
   useEffect(() => {
     if (!agent) return;
-    const onOpen = () => {
+    const onOpen = async () => {
       const isFirst = recoveryFirstOpen.current;
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
       if (!isFirst) {
-        refreshDeployedBuild().catch((error: unknown) => {
+        try {
+          await refreshDeployedBuild();
+        } catch (error) {
           diagnostics.failure('session.build_check_failed', toKinuError({
             doing: 'check the deployed build after reconnect', cause: error, otherwise: 'io',
           }));
-        });
+        }
       }
     };
     agent.addEventListener("open", onOpen);
@@ -1111,17 +1103,16 @@ export function useKinu(target?: string | KinuActorAddress) {
   // is evidence, any other outcome is proof of life.
   const rpc = useMemo(() => {
     const call = bindRpc(agent);
-    return <T,>(method: string, args: unknown[] = []): Promise<T> =>
-      call<T>(method, args).then(
-        (value) => {
-          sessionRecovery.rpcSucceeded();
-          return value;
-        },
-        (cause: unknown) => {
-          sessionRecovery.rpcFailed(cause, agent.readyState === WebSocket.OPEN);
-          throw cause;
-        },
-      );
+    return async <T,>(method: string, args: unknown[] = []): Promise<T> => {
+      try {
+        const value = await call<T>(method, args);
+        sessionRecovery.rpcSucceeded();
+        return value;
+      } catch (cause) {
+        sessionRecovery.rpcFailed(cause, agent.readyState === WebSocket.OPEN);
+        throw cause;
+      }
+    };
   }, [agent, sessionRecovery]);
 
   // Root sockets keep the existing application heartbeat. Subordinate sockets
@@ -1129,16 +1120,18 @@ export function useKinu(target?: string | KinuActorAddress) {
   // OPEN corpse otherwise produces no RPC evidence for the recovery controller.
   useEffect(() => {
     if (connectionStatus !== "connected") return;
-    const id = setInterval(() => {
+    const id = setInterval(async () => {
       if (agent.readyState !== WebSocket.OPEN) return;
       if (!isSubordinate) {
         agent.send(JSON.stringify({ type: "ping" }));
         return;
       }
-      void rpc("getSubordinateSnapshot", []).then(
-        () => setSourceError("snapshot", null),
-        (error: unknown) => setSourceError("snapshot", errorMessage(error)),
-      );
+      try {
+        await rpc("getSubordinateSnapshot", []);
+        setSourceError("snapshot", null);
+      } catch (error) {
+        setSourceError("snapshot", errorMessage(error));
+      }
     }, 25_000);
     return () => clearInterval(id);
   }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
@@ -1148,14 +1141,18 @@ export function useKinu(target?: string | KinuActorAddress) {
   // admission's job: re-running it admits a newer load, which retires this one.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    observeLiveRefresh(
-      loadWorkspaceSnapshot(
-        isSubordinate ? loadSubordinateData : loadAllData,
-        setSourceError,
-        (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
-        isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
-      ).then((outcome) => {
-        if (outcome === "superseded") return;
+    let disposed = false;
+    const taskId = ++snapshotLoadTaskId.current;
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        const outcome = await loadWorkspaceSnapshot(
+          isSubordinate ? loadSubordinateData : loadAllData,
+          setSourceError,
+          (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
+          isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
+        );
+        if (disposed || outcome === "superseded") return;
         if (outcome === "loaded") {
           failureStreak.current = 0;
           return;
@@ -1163,9 +1160,21 @@ export function useKinu(target?: string | KinuActorAddress) {
         const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
         failureStreak.current += 1;
         timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
-      }),
-    );
-    return () => clearTimeout(timer);
+      } catch (cause) {
+        diagnostics.failure('workspace.initial_snapshot_task_failed', toKinuError({
+          doing: 'refreshing live workspace data',
+          cause,
+          otherwise: 'io',
+        }));
+      } finally {
+        snapshotLoadTasks.current.delete(taskId);
+      }
+    })();
+    snapshotLoadTasks.current.set(taskId, task);
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+    };
   }, [actorKey, isSubordinate, liveRefreshAdmission, loadGeneration, rpc, setSourceError, subordinate, workspace]);
 
   const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
@@ -1220,7 +1229,17 @@ export function useKinu(target?: string | KinuActorAddress) {
       ]);
       return outcome.returnedSteers ?? [];
     } finally {
-      if (!isSubordinate) observeLiveRefresh(refreshBackgroundJobs());
+      if (!isSubordinate) {
+        try {
+          await refreshBackgroundJobs();
+        } catch (cause) {
+          diagnostics.failure('workspace.abort_refresh_failed', toKinuError({
+            doing: 'refreshing live workspace data',
+            cause,
+            otherwise: 'io',
+          }));
+        }
+      }
     }
   }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
 
@@ -1251,7 +1270,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // dropping events. (STABILITY-AUDIT §A3.)
   useEffect(() => {
     if (!agent) return;
-    const handler = (event: MessageEvent) => {
+    const handler = async (event: MessageEvent) => {
       const msg = parseSocketMessage(event.data);
       if (!msg) return;
         if (msg.type === "cf_agent_chat_messages") {
@@ -1279,13 +1298,29 @@ export function useKinu(target?: string | KinuActorAddress) {
           // Every head stopped mid-step. Whatever they had written is either
           // journalled or gone, and neither case is still being written.
           forgetDeltas();
-          observeLiveRefresh(refreshBackgroundJobs());
+          try {
+            await refreshBackgroundJobs();
+          } catch (cause) {
+            diagnostics.failure('workspace.cancelled_work_refresh_failed', toKinuError({
+              doing: 'refreshing live workspace data',
+              cause,
+              otherwise: 'io',
+            }));
+          }
         } else if (msg.type === "pending_actions_changed") {
           // A command was parked on the owner, or they decided one. The queue
           // is polled, so the server pushes the fact rather than the rows —
           // one re-read keeps the tab badge and the queue the same answer,
           // and updates every open tab, not just the one that clicked.
-          observeLiveRefresh(refreshPendingActions());
+          try {
+            await refreshPendingActions();
+          } catch (cause) {
+            diagnostics.failure('workspace.pending_actions_refresh_failed', toKinuError({
+              doing: 'refreshing live workspace data',
+              cause,
+              otherwise: 'io',
+            }));
+          }
         } else if (msg.type === "branch_status") {
           const status = msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running";
           // A branch that has stopped is writing nothing. Its head id is
@@ -1394,31 +1429,50 @@ export function useKinu(target?: string | KinuActorAddress) {
       return next.ports;
     });
   }, [rpc]);
-  const refreshLiveData = useCallback((): Promise<void> => {
-    return Promise.all([
-      refreshExposedPorts(),
-      refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
-      refreshCurrentLiveResource(
-        "tools",
-        () => rpc<ToolDescResult>("getToolDescriptions", []),
-        (result) => setTools(mapToolDescriptions(result)),
-      ),
-      refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
-      refreshBackgroundJobs(),
-      refreshCurrentLiveResource("views", () => rpc<AgentViewSummary[]>("listAgentViews", []), setAgentViews),
-      refreshPendingActions(),
-      refreshTabPresence(),
-      refreshCurrentLiveResource(
-        "consents",
-        () => rpc<PendingConsent[]>("listPendingConsents", []),
-        setPendingConsents,
-      ),
-      refreshCurrentLiveResource(
-        "plan",
-        () => rpc<unknown>("getActivePlanReview", []),
-        (plan) => setActivePlan(parseActivePlanReview(plan)),
-      ),
-    ]).then(() => {});
+  // Timer ticks and user/reconnect refreshes may overlap. Each cycle retains
+  // its own task through settlement instead of borrowing a global catch sink.
+  const liveRefreshTaskId = useRef(0);
+  const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
+  const refreshLiveData = useCallback((): void => {
+    const taskId = ++liveRefreshTaskId.current;
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        await Promise.all([
+          refreshExposedPorts(),
+          refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
+          refreshCurrentLiveResource(
+            "tools",
+            () => rpc<ToolDescResult>("getToolDescriptions", []),
+            (result) => setTools(mapToolDescriptions(result)),
+          ),
+          refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
+          refreshBackgroundJobs(),
+          refreshCurrentLiveResource("views", () => rpc<AgentViewSummary[]>("listAgentViews", []), setAgentViews),
+          refreshPendingActions(),
+          refreshTabPresence(),
+          refreshCurrentLiveResource(
+            "consents",
+            () => rpc<PendingConsent[]>("listPendingConsents", []),
+            setPendingConsents,
+          ),
+          refreshCurrentLiveResource(
+            "plan",
+            () => rpc<unknown>("getActivePlanReview", []),
+            (plan) => setActivePlan(parseActivePlanReview(plan)),
+          ),
+        ]);
+      } catch (cause) {
+        diagnostics.failure('workspace.live_refresh_failed', toKinuError({
+          doing: 'refreshing live workspace data',
+          cause,
+          otherwise: 'io',
+        }));
+      } finally {
+        liveRefreshTasks.current.delete(taskId);
+      }
+    })();
+    liveRefreshTasks.current.set(taskId, task);
   }, [
     refreshBackgroundJobs,
     refreshCurrentLiveResource,
@@ -1434,7 +1488,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     // The SDK stops auto-redialling exactly when it sets `connectionError`,
     // so that is the condition under which Retry must force one.
     sessionRecovery.manualRetry(agentRef.current?.connectionError != null);
-    if (!isSubordinate) observeLiveRefresh(refreshLiveData());
+    if (!isSubordinate) refreshLiveData();
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
   // Refresh surface data when a turn completes (streaming ends).
@@ -1445,7 +1499,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       wasStreaming.current = true;
     } else if (wasStreaming.current) {
       wasStreaming.current = false;
-      observeLiveRefresh(refreshLiveData());
+      refreshLiveData();
     }
   }, [isStreaming, isSubordinate, refreshLiveData]);
 
@@ -1454,9 +1508,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // the run timeline for near-real-time spans — not every surface RPC.
   useEffect(() => {
     if (!isConnected || isSubordinate) return;
-    const interval = setInterval(() => {
-      observeLiveRefresh(refreshLiveData());
-    }, LIVE_DATA_REFRESH_MS);
+    const interval = setInterval(refreshLiveData, LIVE_DATA_REFRESH_MS);
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate, refreshLiveData]);
 
@@ -1500,8 +1552,15 @@ export function useKinu(target?: string | KinuActorAddress) {
     setBranchRuns(snap.branchRuns.map((run) => ({
       branchId: run.branchId, task: run.task, status: run.status,
     })));
-    observeLiveRefresh(refreshExposedPorts());
-    observeLiveRefresh(refreshPendingActions());
+    try {
+      await Promise.all([refreshExposedPorts(), refreshPendingActions()]);
+    } catch (cause) {
+      diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
+        doing: 'refreshing live workspace data',
+        cause,
+        otherwise: 'io',
+      }));
+    }
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
@@ -1535,27 +1594,35 @@ export function useKinu(target?: string | KinuActorAddress) {
     setActivePlan(parseActivePlanReview(snapshot.activePlan));
     setSteerRuns(snapshot.pendingSteers);
   }
+  // Roster loads may overlap across reconnects; their generation decides which
+  // result is current, while this map keeps every started task owned to settle.
+  const subordinateRefreshTasks = useRef(new Map<number, Promise<void>>());
 
-  const refreshSubordinates = useCallback(() => {
-    if (isSubordinate) return Promise.resolve();
+  const refreshSubordinates = useCallback((): void => {
+    if (isSubordinate) return;
     const generation = ++subordinateRefreshGeneration.current;
-    return rpc<unknown>("listSubordinates", [])
-      .then((value) => {
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        const value = await rpc<unknown>("listSubordinates", []);
         if (generation !== subordinateRefreshGeneration.current) return;
         const roster = parseSubordinateRoster(value);
         if (!roster) throw new Error('Subordinate roster returned an invalid response');
         setSubordinates(roster);
         setSourceError("roster", null);
-      })
-      .catch((err: unknown) => {
+      } catch (err) {
         if (generation !== subordinateRefreshGeneration.current) return;
         setSourceError("roster", errorMessage(err));
-      });
+      } finally {
+        subordinateRefreshTasks.current.delete(generation);
+      }
+    })();
+    subordinateRefreshTasks.current.set(generation, task);
   }, [isSubordinate, rpc, setSourceError]);
 
   useEffect(() => {
     if (isSubordinate) return;
-    observeLiveRefresh(refreshSubordinates());
+    refreshSubordinates();
   }, [isSubordinate, refreshSubordinates, loadGeneration]);
 
   useEffect(() => {
@@ -1665,24 +1732,21 @@ export function useKinu(target?: string | KinuActorAddress) {
       if (memoryContent) setMemory(parseMemoryContent(memoryContent));
       return;
     }
-    searchTimer.current = setTimeout(() => {
-      rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q])
-        .then(
-          (results) => {
-            if (seq !== searchSeq.current) return;
-            setSourceError("memory", null);
-            setMemory((results ?? []).map(r => ({
-              path: r.path,
-              content: r.snippet,
-              matchScore: r.rrfScore,
-              updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
-            })));
-          },
-          (err: unknown) => {
-            if (seq !== searchSeq.current) return;
-            setSourceError("memory", `Memory search failed: ${errorMessage(err)}`);
-          },
-        );
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const results = await rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]);
+        if (seq !== searchSeq.current) return;
+        setSourceError("memory", null);
+        setMemory((results ?? []).map(r => ({
+          path: r.path,
+          content: r.snippet,
+          matchScore: r.rrfScore,
+          updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
+        })));
+      } catch (err) {
+        if (seq !== searchSeq.current) return;
+        setSourceError("memory", `Memory search failed: ${errorMessage(err)}`);
+      }
     }, MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
 

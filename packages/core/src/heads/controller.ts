@@ -644,12 +644,12 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
   }
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timeoutHandle = setTimeout(() => {
-      // The deadline rejects immediately; the abort is what stops the head from
-      // burning budget past it. A head that survives its abort is a live facet
-      // nobody is waiting for, so that failure surfaces rather than being
-      // absorbed — the zero-budget path above throws it for the same reason.
-      h.abort('wall-clock budget exhausted').catch((cause: unknown) => {
+    timeoutHandle = setTimeout(async () => {
+      // The deadline first owns the abort, then rejects the caller-visible race:
+      // this timer must not leave a live head after it has declared a timeout.
+      try {
+        await h.abort('wall-clock budget exhausted');
+      } catch (cause) {
         // A head that survives its abort is a live facet nobody is waiting
         // for; inside this timer callback there is no caller to throw to, so
         // the failure is STATED here — the classified log the caller-facing
@@ -659,7 +659,7 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
           toKinuError({ doing: 'abort a head whose wall-clock budget expired', cause, otherwise: 'timeout' }),
           { headId: h.id },
         );
-      });
+      }
       reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
     }, timeoutMs);
   });

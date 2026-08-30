@@ -10,7 +10,7 @@
  *   3. Defaults
  *      - default model new agents inherit
  */
-import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
+import { startTransition, useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Combobox, Loader } from "@cloudflare/kumo";
 import {
@@ -320,11 +320,16 @@ function DevicesCard() {
   // exactly like a live one. Reported apart from `err` because this runs every
   // 5s — writing the action slot would wipe a register/revoke failure before
   // the owner could read it.
-  const refreshDevices = useCallback(() => {
-    listDevices().then(
-      (roster) => { setDevices(roster); setRosterErr(null); },
-      (e: unknown) => { setRosterErr(`Could not list devices: ${renderThrownChain({ cause: e })}`); },
-    );
+  const refreshDevices = useCallback((): void => {
+    startTransition(async () => {
+      try {
+        const roster = await listDevices();
+        setDevices(roster);
+        setRosterErr(null);
+      } catch (cause) {
+        setRosterErr(`Could not list devices: ${renderThrownChain({ cause })}`);
+      }
+    });
   }, []);
   useEffect(() => {
     refreshDevices();
@@ -335,11 +340,15 @@ function DevicesCard() {
   // The grants themselves — which workspace may act on which device. Read
   // beside the roster because revoking one is the answer to "who has reach
   // into this machine", and that question is asked here, not per workspace.
-  const refreshGrants = useCallback(() => {
-    listDeviceConsents().then(
-      (rows) => { setGrants(rows); },
-      (e: unknown) => { setRosterErr(`Could not list device grants: ${renderThrownChain({ cause: e })}`); },
-    );
+  const refreshGrants = useCallback((): void => {
+    startTransition(async () => {
+      try {
+        const rows = await listDeviceConsents();
+        setGrants(rows);
+      } catch (cause) {
+        setRosterErr(`Could not list device grants: ${renderThrownChain({ cause })}`);
+      }
+    });
   }, []);
   // Grants ride the SAME 5s cycle as the roster: revoking one changes both
   // what the machine may do and who has reach, so one clock keeps them honest.
@@ -514,12 +523,17 @@ function DeviceRow({
           <button type="button" disabled={acknowledging}
             onClick={() => {
               setAcknowledging(true);
-              onAcknowledge().finally(() => setAcknowledging(false)).catch((cause: unknown) => {
-                // `onAcknowledge` reports its own failures into this row's
-                // `onError`; a rejection here is one that escaped that path —
-                // the request dying while `.finally` was still chained — and
-                // the row must not look acknowledged anyway.
-                onError(`Could not acknowledge the command warning: ${renderThrownChain({ cause })}`);
+              startTransition(async () => {
+                try {
+                  await onAcknowledge();
+                } catch (cause) {
+                  // `onAcknowledge` reports its own failures into this row's
+                  // `onError`; a rejection that escapes that path still leaves
+                  // the row visibly unacknowledged.
+                  onError(`Could not acknowledge the command warning: ${renderThrownChain({ cause })}`);
+                } finally {
+                  setAcknowledging(false);
+                }
               });
             }}
             className="p-btn-quiet shrink-0 px-2 py-1 disabled:opacity-50">

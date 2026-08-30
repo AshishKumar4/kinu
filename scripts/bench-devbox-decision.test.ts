@@ -733,33 +733,27 @@ describe('live arm teardown', () => {
 
 describe('long teardown transport', () => {
   test('waits for a deferred HTTPS purge reply without an elapsed timeout', async () => {
-    const release = Promise.withResolvers<void>();
+    const requestEnded = Promise.withResolvers<void>();
     const request = new DeferredVerifyRequest();
     let requestedUrl = '';
     let headers: Readonly<Record<string, string>> = {};
-    const rejection: unknown[] = [];
+    const responseCallback =
+      Promise.withResolvers<(response: DeferredVerifyResponse) => void>();
     const teardown = postLiveTeardown(
       { origin: 'https://fixture.invalid', token: 'memory-only-token' },
       'ab-snapshot-chain-20260827000000',
       (url, options, respond) => {
         requestedUrl = url.toString();
         headers = options.headers;
+        responseCallback.resolve(respond);
         request.onEnd = () => {
-          release.promise.then(
-            () => {
-              const response = new DeferredVerifyResponse();
-              respond(response);
-              response.emit('data', JSON.stringify({ ok: true, purged: 4 }));
-              response.emit('end');
-            },
-            (thrown: unknown) => { rejection.push(thrown); },
-          );
+          requestEnded.resolve();
         };
         return request;
       },
     );
 
-    await Promise.resolve();
+    await requestEnded.promise;
     expect(request.body).toBe(JSON.stringify({
       purge: true,
       prefix: '',
@@ -774,9 +768,12 @@ describe('long teardown transport', () => {
     expect(requestedUrl).not.toContain('memory-only-token');
     expect(request.body).not.toContain('memory-only-token');
 
-    release.resolve();
+    const sendResponse = await responseCallback.promise;
+    const response = new DeferredVerifyResponse();
+    sendResponse(response);
+    response.emit('data', JSON.stringify({ ok: true, purged: 4 }));
+    response.emit('end');
     await expect(teardown).resolves.toBeUndefined();
-    expect(rejection).toEqual([]);
   });
 });
 

@@ -330,6 +330,10 @@ export class CloudAgentClient implements AgentClient {
    * durable cancellation sweep has finished. */
   private readonly stoppingTurnIds = new Set<string>();
   private stopPromise: Promise<void> | null = null;
+  /** Boolean-returning API actions stay client-owned until their submission or
+   * RPC acknowledgement reaches the event stream. IDs let independent actions
+   * run concurrently and make each task's cleanup identity-safe. */
+  private readonly launchedTasks = new Map<string, Promise<void>>();
 
   constructor(opts: CloudAgentClientOptions) {
     this.origin = opts.origin;
@@ -382,13 +386,22 @@ export class CloudAgentClient implements AgentClient {
 
   /** Cloud steer: the DO persists an incoming chat request immediately and
    *  serializes it on its TurnQueue, so a mid-turn submit reaches the agent
-   *  now and runs as the next turn at the boundary. Fire-and-forget — the
-   *  response (and any pre-flight failure) streams through the event feed. */
+   *  now and runs as the next turn at the boundary. Admission stays immediate;
+   *  this client owns the submission until its result or failure is rendered. */
   steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     if (this.activeTurns.size === 0) return false;
-    void this.submit(prompt, opts, true).catch((err: unknown) => {
-      this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
-    });
+    const taskId = randomRequestId();
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        await this.submit(prompt, opts, true);
+      } catch (cause) {
+        this.emit({ type: 'error', message: renderThrownChain({ cause }) });
+      } finally {
+        if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
+      }
+    })();
+    this.launchedTasks.set(taskId, task);
     return true;
   }
 
@@ -404,12 +417,20 @@ export class CloudAgentClient implements AgentClient {
       const event: BranchStatusEvent = { type: 'branch_status', status: 'error', branchId: '', task: text, message };
       this.emit({ type: 'broadcast', event });
     };
-    void this.callRpc('branchTurn', [text])
-      .then((result) => {
+    const taskId = randomRequestId();
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        const result = await this.callRpc('branchTurn', [text]);
         const r = v.parse(BranchTurnResultSchema, result);
         if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
-      })
-      .catch((err: unknown) => fail(renderThrownChain({ cause: err })));
+      } catch (cause) {
+        fail(renderThrownChain({ cause }));
+      } finally {
+        if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
+      }
+    })();
+    this.launchedTasks.set(taskId, task);
     return true;
   }
 
@@ -540,26 +561,26 @@ export class CloudAgentClient implements AgentClient {
       this.stoppingTurnIds.add(id);
     }
     if (this.stoppingTurnIds.size > 0 && !this.stopPromise) {
-      this.stopPromise = this.callRpc('cancelCurrentWork', [])
-        .then(() => undefined)
-        .catch((err: unknown) => {
-          this.emit({ type: 'error', message: renderThrownChain({ cause: err }) });
-        })
-        .finally(() => {
-          this.stopPromise = null;
-          this.settleStoppedTurns();
-        });
+      this.stopPromise = this.settleStoppedTurns();
     }
     return [];
   }
 
-  private settleStoppedTurns(): void {
-    for (const id of this.stoppingTurnIds) {
-      this.stoppingTurnIds.delete(id);
-      const turn = this.activeTurns.get(id);
-      if (!turn) continue;
-      this.activeTurns.delete(id);
-      turn.settle();
+  /** Wait for the durable cancellation sweep before ending locally stopped turns. */
+  private async settleStoppedTurns(): Promise<void> {
+    try {
+      await this.callRpc('cancelCurrentWork', []);
+    } catch (cause) {
+      this.emit({ type: 'error', message: renderThrownChain({ cause }) });
+    } finally {
+      this.stopPromise = null;
+      for (const id of this.stoppingTurnIds) {
+        this.stoppingTurnIds.delete(id);
+        const turn = this.activeTurns.get(id);
+        if (!turn) continue;
+        this.activeTurns.delete(id);
+        turn.settle();
+      }
     }
   }
 
@@ -569,6 +590,10 @@ export class CloudAgentClient implements AgentClient {
     this.ws?.close();
     this.ws = null;
     this.connectPromise = null;
+    await Promise.all([
+      ...this.launchedTasks.values(),
+      ...(this.stopPromise ? [this.stopPromise] : []),
+    ]);
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
@@ -823,17 +848,19 @@ export class CloudAgentClient implements AgentClient {
     // `close`, and handling both would report the same drop twice — which, on
     // the rebind path below, reads as a turn that failed to rebind twice.
     let dropped = false;
-    const onDrop = (): void => {
+    const onDrop = async (): Promise<void> => {
       if (dropped) return;
       dropped = true;
       if (this.ws === ws) this.ws = null;
       this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
-      void this.rebindInFlightTurns().catch((cause: unknown) => {
+      try {
+        await this.rebindInFlightTurns();
+      } catch (cause) {
         this.failInFlight(new Error(
           `Could not reconnect to resume this cloud turn: ${renderThrownChain({ cause })}`,
           { cause },
         ));
-      });
+      }
     };
     ws.addEventListener('close', onDrop);
     ws.addEventListener('error', onDrop);

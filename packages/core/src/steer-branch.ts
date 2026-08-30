@@ -116,24 +116,28 @@ export async function startBranchHead(
   journal.insertSpawn(headInput);
   const spawned = await runtime.spawnHead(headInput);
 
-  const result = raceWithTimeout(spawned, undefined)
-    .catch((err: unknown): HeadReport => ({
-      id: headInput.id,
-      status: 'budget_exceeded',
-      summary: 'Branch was aborted before producing an answer.',
-      evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
-      childHeadIds: [], toolCalls: [], stepCount: 0,
-      // Aborted before it produced anything, so nothing was reported. `{}`
-      // rather than zeros: the branch may have spent real tokens first, and
-      // recording it as free is a claim nobody measured.
-      usage: {},
-      wallClockMs: Date.now() - spawnedAt,
-      errorMessage: renderThrownChain({ cause: err }),
-    }))
-    .then((report) => {
-      journal.recordReport(report);
-      return report;
-    });
+  const result = (async (): Promise<HeadReport> => {
+    let report: HeadReport;
+    try {
+      report = await raceWithTimeout(spawned, undefined);
+    } catch (cause) {
+      report = {
+        id: headInput.id,
+        status: 'budget_exceeded',
+        summary: 'Branch was aborted before producing an answer.',
+        evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
+        childHeadIds: [], toolCalls: [], stepCount: 0,
+        // Aborted before it produced anything, so nothing was reported. `{}`
+        // rather than zeros: the branch may have spent real tokens first, and
+        // recording it as free is a claim nobody measured.
+        usage: {},
+        wallClockMs: Date.now() - spawnedAt,
+        errorMessage: renderThrownChain({ cause }),
+      };
+    }
+    journal.recordReport(report);
+    return report;
+  })();
 
   return {
     id: rootId,
@@ -215,12 +219,12 @@ export async function settlePendingBranch(
  * Settle every branch launched during the just-finished turn, draining the
  * pending list as it goes.
  *
- * Detached per branch: a slow head must never hold up the turn queue that is
- * already free to take the next message. Draining is the reason this is one
- * function rather than a loop at each call site — a branch left in the list
- * would be settled a second time against the NEXT turn's answer.
+ * Starts every branch concurrently while draining the list synchronously; the
+ * caller owns the returned drain, so no slow head holds up the turn queue. One
+ * function rather than a loop at each call site means a branch cannot be settled
+ * a second time against the NEXT turn's answer.
  */
-export function settlePendingBranches(
+export async function settlePendingBranches(
   deps: {
     sql: SqlExecutor;
     sessionId: string;
@@ -229,20 +233,22 @@ export function settlePendingBranches(
   pending: PendingBranch[],
   turnId: string | null,
   liveText: string,
-): void {
-  for (const entry of pending.splice(0)) {
-    settlePendingBranch(deps, entry, turnId, liveText).catch((err: unknown) => {
+): Promise<void> {
+  await Promise.all(pending.splice(0).map(async (entry) => {
+    try {
+      await settlePendingBranch(deps, entry, turnId, liveText);
+    } catch (cause) {
       diagnostics.failure(
         'branch.settlement_failed',
         toKinuError({
           doing: 'settle a branch against the finished turn',
-          cause: err,
+          cause,
           otherwise: 'unavailable',
         }),
         { branchId: entry.id, task: entry.task },
       );
-    });
-  }
+    }
+  }));
 }
 
 /**

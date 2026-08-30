@@ -175,8 +175,8 @@ function isTolerableHealthFailure<ErrorValue>(cause: ErrorValue): boolean {
 
 /** The deployed build's sha from the public health endpoint, or null when this
  *  deployment carries none (a dev server has no stamp — correctly no signal).
- *  Never rejects: both callers fire and forget, so every tolerated outcome
- *  folds into "no signal". */
+ *  Tolerable transport failures fold into "no signal"; a shared baseline owner
+ *  records any unexpected defect before it reaches a page consumer. */
 export async function fetchDeployedBuildSha(): Promise<string | null> {
   try {
     const res = await fetch("/api/health", { signal: AbortSignal.timeout(10_000) });
@@ -192,6 +192,21 @@ export async function fetchDeployedBuildSha(): Promise<string | null> {
 /** This page's baseline, read at most once. */
 let pageBuild: Promise<string | null> | null = null;
 
+/** The memoized baseline's async boundary. The module retains this task from
+ * creation through settlement, so both eager priming and later readers share
+ * one named no-signal outcome for an unexpected health-read defect. */
+async function loadPageBuildSha(): Promise<string | null> {
+  try {
+    const build = await fetchDeployedBuildSha();
+    return build;
+  } catch (cause) {
+    diagnostics.event('session_recovery.build_baseline_failed', {
+      reason: renderThrownChain({ cause }),
+    });
+    return null;
+  }
+}
+
 /**
  * The build this PAGE loaded, read once and shared.
  *
@@ -204,31 +219,20 @@ let pageBuild: Promise<string | null> | null = null;
  * deployment now serving instead of the one that produced the stack.
  *
  * Called eagerly by `index.tsx` at load, so the read happens while the page is
- * still the page it says it is. Never rejects — see `fetchDeployedBuildSha`.
+ * still the page it says it is. The shared loader records an unexpected failure
+ * and resolves to no signal, so every consumer receives the same settled value.
  */
 export function pageDeployedBuildSha(): Promise<string | null> {
-  pageBuild ??= fetchDeployedBuildSha();
+  pageBuild ??= loadPageBuildSha();
   return pageBuild;
 }
 
 /**
- * Prime the baseline the way {@link pageDeployedBuildSha}'s eager callers do,
- * without letting a rejection die in a `void`.
- *
- * The read itself already folds every tolerable transport failure into
- * "no signal" ({@link fetchDeployedBuildSha}); what can still reject is a
- * non-transport defect — the memoised promise is shared, so the one
- * rejection would otherwise surface as an unhandled rejection on every
- * page that primed eagerly and again at whichever reader awaited it. Those
- * are named on the shared diagnostics sink: there is no UI state to attach
- * them to, and the two consumers re-read through the same memo.
+ * Start the shared baseline at page load. `pageBuild` retains the task through
+ * settlement, and {@link loadPageBuildSha} owns its rejection boundary.
  */
 export function primePageDeployedBuildSha(): void {
-  pageDeployedBuildSha().catch((cause: unknown) => {
-    diagnostics.event('session_recovery.build_baseline_failed', {
-      reason: renderThrownChain({ cause }),
-    });
-  });
+  pageBuild ??= loadPageBuildSha();
 }
 
 /** Skew needs BOTH ends identified: without a baseline (the health read failed

@@ -115,13 +115,13 @@ export class RetentionDO extends DurableObject<Cloudflare.Env> {
     retainViaWaitUntil(this.ctx, this.armTimer(delayMs));
   }
 
-  /** The control that makes the finding sharp: a bare floating promise, which
-   *  claims no retention at all. If this and `scheduleViaWaitUntil` behave
-   *  identically, `waitUntil` bought nothing. */
-  scheduleFloating(delayMs: number): void {
-    this.armTimer(delayMs).catch((error: unknown) => {
-      console.error('floating timer arm failed', error);
-    });
+  /** Completion is returned to the caller instead of leaving the timer detached. */
+  async scheduleFloating(delayMs: number): Promise<void> {
+    try {
+      await this.armTimer(delayMs);
+    } catch (cause) {
+      console.error('timer arm failed', cause);
+    }
   }
 
   async armedAt(): Promise<number | undefined> {
@@ -159,13 +159,15 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     const stallMs = Number.parseInt(ctx.id.name?.split(':')[1] ?? '', 10);
-    ctx.blockConcurrencyWhile(async () => {
-      if (Number.isFinite(stallMs) && stallMs > 0) {
-        await env.NEIGHBOUR.get(env.NEIGHBOUR.idFromName('busy')).beBusy(stallMs);
+    ctx.waitUntil(ctx.blockConcurrencyWhile(async () => {
+      try {
+        if (Number.isFinite(stallMs) && stallMs > 0) {
+          await env.NEIGHBOUR.get(env.NEIGHBOUR.idFromName('busy')).beBusy(stallMs);
+        }
+      } catch (cause) {
+        console.error('initialization gate failed', cause);
       }
-    }).catch((error: unknown) => {
-      console.error('initialization gate failed', error);
-    });
+    }));
   }
 
   /** A pure read with no I/O of its own — the `@callable` SELECT that answered

@@ -11,7 +11,7 @@
  * Live status: polled every 5s; if a tab returns from the OAuth flow with
  * `mcp_auth=ok`, we refresh immediately.
  */
-import { useEffect, useState, useCallback, useRef } from "react";
+import { startTransition, useEffect, useState, useCallback, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
@@ -54,19 +54,21 @@ export default function UserMcpPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // The reader every caller here owns: the mount effect, the 5s poll, the
-  // OAuth return and the add/remove callbacks all detach this read, so the
-  // chain that reports it lives HERE instead of at four call sites, and every
-  // one of them calls a function that returns nothing to own. `.finally`
-  // before `.catch` on purpose: the spinner clears on both outcomes, and a
-  // throw from the success arm still lands in `err` rather than becoming an
-  // unhandled rejection.
+  // The mount effect, poll, OAuth return and mutation callbacks all invoke this
+  // synchronous reader. React owns its transition and the visible error remains
+  // the one place every refresh failure is recorded.
   const refresh = useCallback((): void => {
     setErr(null);
-    listMcpServers()
-      .then((rows) => { setServers(rows); })
-      .finally(() => { setLoading(false); })
-      .catch((cause: unknown) => { setErr(renderThrownChain({ cause })); });
+    startTransition(async () => {
+      try {
+        const rows = await listMcpServers();
+        setServers(rows);
+      } catch (cause) {
+        setErr(renderThrownChain({ cause }));
+      } finally {
+        setLoading(false);
+      }
+    });
   }, []);
 
   useEffect(() => {

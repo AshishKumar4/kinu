@@ -82,25 +82,37 @@ export function useAsyncResource<T>(
   // Only the newest run may write: a slow failing load must not overwrite the
   // result of the retry that superseded it.
   const runId = useRef(0);
+  // Reloads intentionally overlap; retain every task until it settles while the
+  // run id decides which one may publish.
+  const activeRuns = useRef(new Map<number, Promise<void>>());
 
-  const run = useCallback(() => {
+  // A task that settles after unmount must not publish into a retired resource.
+  useEffect(() => () => {
+    runId.current += 1;
+  }, []);
+
+  const run = useCallback((): void => {
     const id = ++runId.current;
     setState((previous) => ({
       identity,
       resource: beginLoad(previous.identity === identity ? previous.resource : { status: "loading" }),
     }));
-    load().then(
-      (value) => {
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        const value = await load();
         if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
-      },
-      (error: unknown) => {
+      } catch (error) {
         if (id !== runId.current) return;
         setState((previous) => ({
           identity,
           resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, error),
         }));
-      },
-    );
+      } finally {
+        activeRuns.current.delete(id);
+      }
+    })();
+    activeRuns.current.set(id, task);
   }, [identity, load]);
 
   useEffect(() => { run(); }, [run]);

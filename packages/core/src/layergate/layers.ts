@@ -35,7 +35,6 @@ import type { ActiveSkill } from '../skills/types';
 import type { PipelineSubjects } from './subjects';
 import * as v from 'valibot';
 import type { RunEventInput } from '../events/types';
-import type { AgentSignal } from '../types/signals';
 
 /** A single deterministic observation of the pipeline. Generic over the
  *  subjects record so a dependent package (e.g. @kinu.run/compaction) can
@@ -1631,29 +1630,26 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'backend-turn-driver/overflow-applied',
-        asserts: 'a context overflow arms force-compaction and enqueues exactly one retry; a failed retry and a rate limit never do',
-        observe: async (s) => {
+        asserts: 'a context overflow arms force-compaction and declares exactly one retry; a failed retry and a rate limit never do',
+        observe: (s) => {
           const armed: string[] = [];
-          const enqueued: AgentSignal[] = [];
           const state = { savePromptTokens: () => {}, armForceCompaction: (key: string) => { armed.push(key); } };
-          const signals = { deliver: (signal: AgentSignal) => { enqueued.push(signal); return Promise.resolve('queued' as const); } };
           const decisions = [
             s.applyOverflowRecovery({
               error: 'prompt is too long: 210000 tokens > 200000 maximum',
               lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
-              state, sessionKey: 'k', signals,
+              state, sessionKey: 'k',
             }),
             s.applyOverflowRecovery({
               error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
-              turnWasOverflowRetry: true, state, sessionKey: 'k', signals,
+              turnWasOverflowRetry: true, state, sessionKey: 'k',
             }),
             s.applyOverflowRecovery({
               error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
-              turnWasOverflowRetry: false, state, sessionKey: 'k', signals,
+              turnWasOverflowRetry: false, state, sessionKey: 'k',
             }),
           ];
-          await Promise.resolve();
-          return { decisions, armed, enqueued };
+          return { decisions, armed };
         },
       },
       {

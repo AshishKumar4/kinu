@@ -67,6 +67,8 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import type { TurnContinuity } from './agent-orchestrator';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
+import type { SignalDeliverer } from '../types/signals';
 
 /**
  * The driver's verdict on how a turn ended, as a recorded effect input reads it
@@ -159,12 +161,12 @@ export const TERMINAL_EFFECT_NAMES = [
   // ledger row is the only thing that survives a restart saying whether the one
   // confirming turn it enqueues has already been enqueued.
   'completion_gate',
-  // The settle spine, as four separately claimed boundaries rather than one
+  // The settle spine, as five separately claimed boundaries rather than one
   // compound effect. It used to be a single row, so a crash after the extension
   // turn-end but before the window append lost the remaining suffix and nothing
   // could tell which half had happened. Each of these is keyed on the turn's own
   // durable identity and is idempotent at its own boundary.
-  'turn_end_extensions', 'turn_record', 'event_drain', 'improvement_lanes',
+  'turn_end_extensions', 'overflow_retry', 'turn_record', 'event_drain', 'improvement_lanes',
   // Separate from the improvement lanes it used to sit inside: a queue that is
   // full is a legitimate refusal, and the lanes' own model calls must not be
   // held behind it — nor repeated when it is retried.
@@ -240,6 +242,27 @@ export function terminalEffect<I>(spec: {
   readonly run: (input: I, scope: string) => Promise<TerminalEffectOutcome> | TerminalEffectOutcome;
 }): TerminalEffect {
   return { run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
+}
+
+/** The one durable body both backends use for a context-overflow retry. */
+export function overflowRetryTerminalEffect(signals: SignalDeliverer): TerminalEffect {
+  return terminalEffect({
+    input: v.object({}),
+    run: async (_input, scope) => {
+      const effectScope = keyedScope(scope);
+      const signal = effectScope === undefined
+        ? { kind: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT }
+        : {
+          kind: OVERFLOW_RETRY_EVENT,
+          text: OVERFLOW_RETRY_TEXT,
+          idempotencyKey: `overflow-retry:${effectScope}`,
+        };
+      const outcome = await signals.deliver(signal);
+      return outcome === 'undelivered'
+        ? { status: 'owed', detail: 'the overflow retry signal was undelivered' }
+        : { status: 'completed' };
+    },
+  });
 }
 
 /**

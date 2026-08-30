@@ -34,9 +34,11 @@ if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0
 
 program.parse();
 
-// Once-a-day "newer Kinu available" notice. Fire-and-forget and fail-soft:
-// it never blocks the command, and shouldCheckForUpdate suppresses it in
+// Once-a-day "newer Kinu available" notice. The entrypoint owns its bounded,
+// fail-soft completion after parsing; shouldCheckForUpdate suppresses it in
 // non-TTY runs (CI, pipes, --json), when opted out, and within 24h.
-void runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) }).catch((error: unknown) => {
-  printFailure({ cause: error });
-});
+try {
+  await runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) });
+} catch (cause) {
+  printFailure({ cause });
+}

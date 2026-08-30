@@ -102,6 +102,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         // stays clean. Declared out here so the catch below can return partial
         // output produced before a throw.
         const logs: string[] = [];
+        const pendingCalls: Promise<void>[] = [];
         const capture: Console['log'] = (...values) => {
           logs.push(values.map((value) => formatLogArg({ value })).join(' '));
         };
@@ -119,14 +120,17 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           const craftedBindings: Record<string, CraftedExecute> = {};
           const craftedAliases: Record<string, CraftedExecute> = {};
           for (const [name, entry] of Object.entries(opts.craftedTools())) {
-            craftedBindings[name] = (arg) => containRejection(() => entry.execute(arg));
+            craftedBindings[name] = (arg) => containRejection(() => entry.execute(arg), pendingCalls);
             craftedAliases[name] = async () => { throw new Error(craftedNamespaceCorrection(name)); };
           }
           const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
           for (const p of providers) {
             const nsp: Record<string, CodemodeExecute> = {};
             for (const [toolName, t] of Object.entries(p.tools)) {
-              nsp[toolName] = (...toolArgs) => containRejection(() => t.execute(...toolArgs, context));
+              nsp[toolName] = (...toolArgs) => containRejection(
+                () => t.execute(...toolArgs, context),
+                pendingCalls,
+              );
             }
             providerBindings[p.name] = nsp;
           }
@@ -171,6 +175,8 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           };
           if (logs.length > 0) payload.logs = logs;
           return payload;
+        } finally {
+          await Promise.allSettled(pendingCalls);
         }
       },
     });
@@ -199,33 +205,38 @@ function adaptExecutorProvider(
 }
 
 /**
- * Every binding the sandbox exposes, made safe to float.
+ * Every binding the sandbox exposes, kept inside the executing tool's completion
+ * boundary.
  *
  * The code inside `execute_tools` is written by the model, and its most common
  * slip is a missing `await`. A floated call that then rejects — a VFS ENOENT,
- * a shell failure — has no handler anywhere, so it surfaced as an
- * `unhandledRejection` and Bun killed the CLI mid-turn: a solvable benchmark
- * task died at tool call #13 that way. Attaching a sink to the call marks it
- * handled at the source, which costs nothing and changes nothing for code that
- * DOES await — that await still sees the real rejection, and the tool's own
- * try/catch still turns it into a returned error.
+ * a shell failure — must not surface as an unhandled rejection after the tool
+ * returned. The execute call therefore owns an observer for every binding until
+ * all of them settle. It records a failure to stderr rather than the captured
+ * `logs`: the model may already have continued after its omitted `await`, and a
+ * write that never landed must not read like one that did.
  *
- * The sink RECORDS rather than discards, because the un-awaited case is the
- * whole reason it exists: the model was told its code ran, and a write that
- * never landed reads exactly like one that did. It goes to stderr, not to the
- * captured `logs` — a floated call settles after the tool has already returned
- * its payload, so there is nothing left to attach it to.
+ * The original call is still returned. Code that does await sees its real
+ * rejection, while the observer makes an omitted await safe and lets the
+ * enclosing execute action wait for the actual work rather than detach it.
  */
-function containRejection<T>(run: () => Promise<T>): Promise<T> {
+function containRejection<T>(run: () => Promise<T>, pendingCalls: Promise<void>[]): Promise<T> {
   let call: Promise<T>;
-  try { call = run(); }
-  catch (error) { call = Promise.reject(error); }
-  void call.catch((error: unknown) => {
-    diagnostics.failure(
-      'executor.unawaited_call_rejected',
-      toKinuError({ doing: 'running a tool call the model left unawaited', cause: error, otherwise: 'io' }),
-    );
-  });
+  try {
+    call = run();
+  } catch (cause) {
+    call = Promise.reject(cause);
+  }
+  pendingCalls.push((async () => {
+    try {
+      await call;
+    } catch (cause) {
+      diagnostics.failure(
+        'executor.unawaited_call_rejected',
+        toKinuError({ doing: 'running a tool call the model left unawaited', cause, otherwise: 'io' }),
+      );
+    }
+  })());
   return call;
 }
 

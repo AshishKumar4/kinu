@@ -25,7 +25,7 @@ import {
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import type { CompletedTurn } from '@kinu.run/core';
+import type { AgentSignal, CompletedTurn } from '@kinu.run/core';
 import { createChatFiberSnapshot, wrapChatFiberSnapshot } from 'agents/chat';
 import { CHAT_TURN_SNAPSHOT_KEY } from '../src/fiber-recovery';
 import { projectJsonValue, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
@@ -37,6 +37,18 @@ function settledResponse(messageId: string, text = 'the answer'): Parameters<
   return {
     message: { id: messageId, role: 'assistant', parts: [{ type: 'text', text }] },
     requestId: `req-${messageId}`, continuation: false, status: 'completed',
+  };
+}
+
+function overflowResponse(messageId: string): Parameters<
+  HarnessOrchestratorAgent['onChatResponse']
+>[0] {
+  return {
+    message: { id: messageId, role: 'assistant', parts: [] },
+    requestId: `req-${messageId}`,
+    continuation: false,
+    status: 'error',
+    error: 'prompt is too long: 210000 tokens > 200000 maximum',
   };
 }
 
@@ -186,6 +198,44 @@ describe('a terminal transition is claimed before its effects and released after
 
     expect(harness.agent.harnessBeginTerminalTransition(null)).toBe('unclaimed');
     expect(harness.agent.harnessTerminalClaims()).toEqual([]);
+  });
+});
+
+describe('overflow retry delivery is a durable terminal effect', () => {
+  test('an undelivered retry stays owed and replays with the same identity', async () => {
+    const harness = orchestratorHarness();
+    const delivered: AgentSignal[] = [];
+    harness.agent.harnessSetSignalDeliverer(async (signal) => {
+      delivered.push(signal);
+      return 'undelivered';
+    });
+    harness.agent.declareTurnCheckpoint('u-overflow');
+
+    await harness.agent.onChatResponse(overflowResponse('a-overflow'));
+    await harness.agent.harnessTerminalReported();
+    await joinHarnessFibers();
+
+    const first = harness.agent.harnessTerminalEffects('u-overflow', 'a-overflow')
+      .find((row) => row.effect_key === 'v1:overflow_retry:a-overflow');
+    expect(first).toMatchObject({ status: 'pending', attempts: 1 });
+
+    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
+      clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
+      beforeStart: (agent) => {
+        agent.harnessSetSignalDeliverer(async (signal) => {
+          delivered.push(signal);
+          return 'queued';
+        });
+      },
+    });
+
+    expect(delivered).toHaveLength(2);
+    expect(delivered[0]?.idempotencyKey).toBe('overflow-retry:a-overflow');
+    expect(delivered[1]?.idempotencyKey).toBe(delivered[0]?.idempotencyKey);
+    expect(restarted.agent.harnessTerminalEffects('u-overflow', 'a-overflow')).toEqual([]);
+    expect(restarted.agent.harnessTerminalClaims()).toEqual([
+      { turn_id: 'u-overflow', call_id: 'terminal:response:a-overflow', result_json: '"settled"' },
+    ]);
   });
 });
 

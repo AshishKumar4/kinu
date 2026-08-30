@@ -4,7 +4,7 @@
  * MCTS knobs, shell-approval mode, GEPA optimisation, pinned skills.
  * (Scaffold promote/rollback + the per-trial verdict live on the Self surface.)
  */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
@@ -161,40 +161,36 @@ export default function SettingsPage() {
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateMcts, fail: failMcts } = mcts;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
-  // A `(): void` reader, the same shape `useAsyncResource` uses: one effect and
-  // three retry buttons detach this read and none of them has an `await` to put
-  // it in, so the settlement is consumed right here. `allSettled` never
-  // rejects, so the trailing `.catch` can only be a defect in the hydrate arm
-  // below — and a field the defect skipped would otherwise sit on "Loading…"
-  // for the life of the page with nothing said.
+  // These effect and retry callers are synchronous. React owns the async
+  // transition, while this reader records every failed field in place rather
+  // than inventing a value Save could write over the stored setting.
   //
   // Named for the fields it reads rather than `load`: four card components in
   // this file declare a `load` of their own, and they are async loaders that
-  // DO propagate a rejection, so sharing the name makes both this call and
-  // theirs unreadable to anything reasoning by name.
+  // propagate a rejection, so sharing the name makes both calls unreadable.
   const loadRpcFields = useCallback((): void => {
-    // A read that fails leaves its field unloaded — and so unsaveable — and
-    // says so in place of the editor. It never substitutes a default that Save
-    // would then write over the stored value.
-    Promise.allSettled([
-      rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
-      rpc<MctsConfig>("getMctsConfig", []),
-      rpc<EvolutionConfigView>("getEvolutionConfig", []),
-    ]).then(([mode, config, evolution]) => {
-      if (mode.status === "rejected") failApproval(mode.reason);
-      else hydrateApproval(mode.value?.mode ?? "strict");
+    startTransition(async () => {
+      try {
+        const [mode, config, evolution] = await Promise.allSettled([
+          rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
+          rpc<MctsConfig>("getMctsConfig", []),
+          rpc<EvolutionConfigView>("getEvolutionConfig", []),
+        ]);
+        if (mode.status === "rejected") failApproval(mode.reason);
+        else hydrateApproval(mode.value?.mode ?? "strict");
 
-      if (config.status === "rejected") failMcts(config.reason);
-      else if (config.value) hydrateMcts(config.value);
-      else failMcts("the agent returned no MCTS config");
+        if (config.status === "rejected") failMcts(config.reason);
+        else if (config.value) hydrateMcts(config.value);
+        else failMcts("the agent returned no MCTS config");
 
-      if (evolution.status === "rejected") failAdvisor(evolution.reason);
-      else hydrateAdvisor({
-        advisorEnabled: evolution.value?.advisorEnabled ?? false,
-        advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
-      });
-    }).catch((cause: unknown) => {
-      failApproval(cause); failMcts(cause); failAdvisor(cause);
+        if (evolution.status === "rejected") failAdvisor(evolution.reason);
+        else hydrateAdvisor({
+          advisorEnabled: evolution.value?.advisorEnabled ?? false,
+          advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
+        });
+      } catch (cause) {
+        failApproval(cause); failMcts(cause); failAdvisor(cause);
+      }
     });
   }, [
     rpc, hydrateApproval, failApproval, hydrateMcts, failMcts,
@@ -891,13 +887,17 @@ function AlwaysActiveSkillsCard({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // The card's own `(): void` reader — see the page-level `load` above. The
-  // terminal `.catch` also covers a schema failure raised from the success
-  // arm, which is exactly what the try/catch it replaced covered.
+  // The mount effect invokes a synchronous reader; React owns its asynchronous
+  // transition so a malformed response reaches this card's visible error.
   const refresh = useCallback((): void => {
-    rpc('getAlwaysActiveSkills', [])
-      .then((raw) => { setNames(v.parse(SkillNamesSchema, raw).names); })
-      .catch((cause: unknown) => { setErr(renderThrownChain({ cause })); });
+    startTransition(async () => {
+      try {
+        const raw = await rpc('getAlwaysActiveSkills', []);
+        setNames(v.parse(SkillNamesSchema, raw).names);
+      } catch (cause) {
+        setErr(renderThrownChain({ cause }));
+      }
+    });
   }, [rpc]);
 
   useEffect(() => { refresh(); }, [refresh]);

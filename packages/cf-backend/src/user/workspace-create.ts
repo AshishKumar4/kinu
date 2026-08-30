@@ -101,11 +101,13 @@ export async function createCloudWorkspaceForUser(
     await indexNewWorkspace(env, {
       userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
     });
-    if (identity.nameOrigin === 'auto' && purpose) {
-      const titleTask = scheduleCloudAgentDisplayNameGeneration(
+    if (identity.nameOrigin === 'auto' && purpose && options.waitUntil) {
+      // A Worker request owns this pre-turn generation. Callers without that
+      // request owner already queued the genesis turn, whose durable
+      // `auto_title` effect derives the same title without delaying dispatch.
+      options.waitUntil(scheduleCloudAgentDisplayNameGeneration(
         env, userDO, caller, entry.name, purpose, model, options,
-      );
-      if (!options.waitUntil) await titleTask;
+      ));
     }
     return entry;
   } catch (err) {
@@ -119,14 +121,15 @@ export async function createCloudWorkspaceForUser(
     // own failure is recorded under its own name here and the original still
     // propagates.
     if (!existed) {
-      await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err })
-        .catch((rollbackFailure: unknown) => {
-          diagnostics.failure('workspace.create_rollback_unexpected', toKinuError({
-            doing: 'undoing a failed workspace create',
-            cause: rollbackFailure,
-            otherwise: 'unavailable',
-          }), { workspace: entry.name });
-        });
+      try {
+        await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
+      } catch (rollbackFailure) {
+        diagnostics.failure('workspace.create_rollback_unexpected', toKinuError({
+          doing: 'undoing a failed workspace create',
+          cause: rollbackFailure,
+          otherwise: 'unavailable',
+        }), { workspace: entry.name });
+      }
     }
     throw err;
   }
@@ -225,7 +228,7 @@ function createInitialCloudAgentIdentity(
   };
 }
 
-function scheduleCloudAgentDisplayNameGeneration(
+async function scheduleCloudAgentDisplayNameGeneration(
   env: Env,
   userDO: CloudWorkspaceRegistry,
   caller: UserCaller,
@@ -234,16 +237,17 @@ function scheduleCloudAgentDisplayNameGeneration(
   modelSpec: string,
   options: CreateCloudWorkspaceOptions,
 ): Promise<void> {
-  const task = applyGeneratedDisplayName(env, userDO, caller, agentName, mission, modelSpec, options.suggestDisplayName)
-    .catch((err: unknown) => {
-      diagnostics.failure('workspace.display_name_generation_failed', toKinuError({
-        doing: "generating a new workspace's display name",
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: agentName });
-    });
-  if (options.waitUntil) options.waitUntil(task);
-  return task;
+  try {
+    await applyGeneratedDisplayName(
+      env, userDO, caller, agentName, mission, modelSpec, options.suggestDisplayName,
+    );
+  } catch (cause) {
+    diagnostics.failure('workspace.display_name_generation_failed', toKinuError({
+      doing: "generating a new workspace's display name",
+      cause,
+      otherwise: 'unavailable',
+    }), { workspace: agentName });
+  }
 }
 
 async function applyGeneratedDisplayName(

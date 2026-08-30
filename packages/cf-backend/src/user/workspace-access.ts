@@ -59,22 +59,26 @@ export async function handleCreateWorkspaceRequest(
 /** Fan a credential-change notification out to the user's active workspaces so
  *  each drops its cached provider/model state (onCredentialsChanged) —
  *  otherwise a disconnected provider stays "available" until the next
- *  claimOwner/setModel. Fire-and-forget; runs via waitUntil when available. */
+ *  claimOwner/setModel. The request's waitUntil owns the fanout. */
 export function notifyWorkspacesCredentialsChanged(
   env: Env,
   userDO: DurableObjectStub<UserDO>,
   ctx?: ExecutionContext,
 ): void {
-  const task = (async () => {
-    const workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
-    await Promise.allSettled(workspaces
-      .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
-  })().catch((e: unknown) => {
-    diagnostics.failure('workspace.credential_fanout_failed', toKinuError({
-      doing: 'notifying the user\'s workspaces of a credential change',
-      cause: e,
-      otherwise: 'unavailable',
-    }));
-  });
-  ctx?.waitUntil(task);
+  if (ctx === undefined) {
+    throw new Error('Credential fanout requires the request ExecutionContext owner');
+  }
+  ctx.waitUntil((async (): Promise<void> => {
+    try {
+      const workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
+      await Promise.allSettled(workspaces
+        .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
+    } catch (cause) {
+      diagnostics.failure('workspace.credential_fanout_failed', toKinuError({
+        doing: 'notifying the user\'s workspaces of a credential change',
+        cause,
+        otherwise: 'unavailable',
+      }));
+    }
+  })());
 }

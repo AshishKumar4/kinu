@@ -27,10 +27,9 @@ import type { WorkMode } from '../prompting/surface';
 import { usageReported, type Usage } from '../usage';
 import type { TurnAccumulator } from './turn-accumulator';
 import {
-  planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  planOverflowRecovery,
   type OverflowRecoveryDecision,
 } from '../turn-failure';
-import type { SignalDeliverer } from '../types/signals';
 import { diagnostics, toKinuError } from '../obs/index';
 
 /** The recorder slice this spine writes through — structural (both backends
@@ -363,11 +362,9 @@ export function persistMeasuredPromptTokens(
 }
 
 /**
- * The shared turn-failure policy, applied: a context_length-class provider
- * failure arms force-compaction for the next assembly and delivers ONE retry
- * signal — a failed retry never delivers another. Rate limits never
- * force-compact (throughput is not size) unless the measured PER-REQUEST
- * prompt crossed half the window. Returns the plan for the caller's logging.
+ * Apply the synchronous half of the shared turn-failure policy. Retry delivery
+ * is a durable terminal effect declared by each backend after this returns, so
+ * no provider/network await can sit between a persisted answer and its claim.
  */
 export function applyOverflowRecovery(opts: {
   error: string;
@@ -378,7 +375,6 @@ export function applyOverflowRecovery(opts: {
   turnWasOverflowRetry: boolean;
   state: CompactionTriggerState;
   sessionKey: string;
-  signals: SignalDeliverer;
 }): OverflowRecoveryDecision {
   const recovery = planOverflowRecovery({
     error: opts.error,
@@ -386,19 +382,7 @@ export function applyOverflowRecovery(opts: {
     contextWindow: opts.contextWindow,
     turnWasOverflowRetry: opts.turnWasOverflowRetry,
   });
-  if (recovery.forceCompaction) {
-    opts.state.armForceCompaction(opts.sessionKey);
-    if (recovery.enqueueRetry) {
-      void opts.signals.deliver({
-        kind: OVERFLOW_RETRY_EVENT,
-        text: OVERFLOW_RETRY_TEXT,
-      }).catch((error: unknown) => diagnostics.failure(
-        'turn.overflow_retry_enqueue_failed',
-        toKinuError({ doing: 'enqueue the context-overflow retry turn', cause: error, otherwise: 'io' }),
-        { sessionKey: opts.sessionKey },
-      ));
-    }
-  }
+  if (recovery.forceCompaction) opts.state.armForceCompaction(opts.sessionKey);
   return recovery;
 }
 

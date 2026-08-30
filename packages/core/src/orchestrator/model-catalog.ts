@@ -31,7 +31,7 @@ import type { ModelInfo, ModelPricing } from '../providers/types';
 import { diagnostics, toKinuError } from '../obs/index';
 
 export class ModelCatalogSession {
-  private cached: { spec: string; info: ModelInfo | null } | null = null;
+  private cached: { spec: string; info: ModelInfo | null; lookup?: Promise<void> } | null = null;
 
   constructor(private readonly deps: {
     /** The resolved `<provider>/<modelId>` the next turn will use. */
@@ -42,22 +42,13 @@ export class ModelCatalogSession {
   }) {}
 
   /** Catalog ModelInfo for the current spec, cached per spec. Arms the async
-   *  lookup on first sight of a spec; never blocks. */
+   *  lookup on first sight of a spec; the cache owns its completion, but reads
+   *  never block. */
   info(): ModelInfo | null {
     const spec = this.deps.effectiveSpec();
     if (this.cached?.spec !== spec) {
       this.cached = { spec, info: null };
-      this.armLookup(spec).catch((error: unknown) => {
-        // Nothing to propagate to: info() must never block, so this lookup stays
-        // detached. The static fallbacks stay authoritative, but an empty catalog
-        // is otherwise indistinguishable from a priced one that reports nothing —
-        // so the reason is stated once, with the spec.
-        diagnostics.failure(
-          'model.catalog_lookup_failed',
-          toKinuError({ doing: 'look a model up in the provider catalog', cause: error, otherwise: 'unavailable' }),
-          { model: spec },
-        );
-      });
+      this.cached.lookup = this.armLookup(spec);
     }
     return this.cached.info;
   }
@@ -98,7 +89,19 @@ export class ModelCatalogSession {
   }
 
   private async armLookup(spec: string): Promise<void> {
-    const info = await this.deps.lookup(spec);
-    if (info && this.cached?.spec === spec) this.cached.info = info;
+    try {
+      const info = await this.deps.lookup(spec);
+      if (info && this.cached?.spec === spec) this.cached.info = info;
+    } catch (cause) {
+      // Nothing to propagate to: reads never block, while the cache retains this
+      // lookup until it settles. The static fallbacks stay authoritative, but an
+      // empty catalog is otherwise indistinguishable from a priced one that
+      // reports nothing — so the reason is stated once, with the spec.
+      diagnostics.failure(
+        'model.catalog_lookup_failed',
+        toKinuError({ doing: 'look a model up in the provider catalog', cause, otherwise: 'unavailable' }),
+        { model: spec },
+      );
+    }
   }
 }

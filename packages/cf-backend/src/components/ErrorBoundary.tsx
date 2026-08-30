@@ -51,6 +51,8 @@ export class ErrorBoundary extends Component<Props, State> {
    */
   private reported: Error | null = null;
 
+  private readonly reportOperations = new Map<Error, Promise<void>>();
+
   static getDerivedStateFromError(error: Error): State {
     return { error };
   }
@@ -58,19 +60,26 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     if (this.reported === error) return;
     this.reported = error;
-    // Fire and forget. The fallback is already on screen — React set this
-    // boundary's state before calling here — so a report that never lands
-    // changes nothing the reader sees, and `reportRenderFailure` tolerates every
-    // transport failure by name rather than raising a second error on a page
-    void reportRenderFailure(error, info.componentStack ?? "").catch((cause: unknown) => {
-      // The only rejection left is a defect in the reporter itself (its fetch
-      // catch rethrows non-transport failures on purpose). Swallowing it here
-      // would be a silent drop inside the one handler whose job is to report,
-      // so it is recorded rather than raised onto a page that already has one.
-      diagnostics.event('client_error.reporter_failed', {
-        reason: renderThrownChain({ cause }),
-      });
-    });
+    let report: Promise<void> | null = null;
+    report = (async () => {
+      try {
+        // The fallback is already on screen — React set this boundary's state
+        // before calling here — so this instance owns the report until it settles.
+        await undefined;
+        await reportRenderFailure(error, info.componentStack ?? "");
+      } catch (cause) {
+        // The only rejection left is a defect in the reporter itself (its fetch
+        // catch rethrows non-transport failures on purpose). Swallowing it here
+        // would be a silent drop inside the one handler whose job is to report,
+        // so it is recorded rather than raised onto a page that already has one.
+        diagnostics.event('client_error.reporter_failed', {
+          reason: renderThrownChain({ cause }),
+        });
+      } finally {
+        if (this.reportOperations.get(error) === report) this.reportOperations.delete(error);
+      }
+    })();
+    this.reportOperations.set(error, report);
   }
 
   reset = () => this.setState({ error: null });

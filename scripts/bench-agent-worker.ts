@@ -129,13 +129,15 @@ async function main(): Promise<void> {
 // figures at all. The previous `tokens: 0, peakPromptTokens: 0, modelCalls: 0`
 // was a fabricated bill: a crashed attempt entered the ledger as the cheapest
 // possible run and as comfortably inside its token budget.
-main().catch((err: unknown) => {
+try {
+  await main();
+} catch (cause) {
   const out: WorkerOutput = {
     steps: 0,
     hadError: true,
     budgetBreach: null,
-    error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+    error: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);
   process.exit(1);
-});
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@cloudflare/kumo';
 import { IdentificationCardIcon } from '@phosphor-icons/react';
 import {
@@ -34,23 +34,36 @@ export function ProfileCatalogSettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
+  const loadOperation = useRef<Promise<void> | null>(null);
+  const saveOperation = useRef<Promise<void> | null>(null);
+
+  const load = (): void => {
+    if (loadOperation.current !== null) return;
     setBusy(true);
     setError(null);
-    try {
-      const [profile, models] = await Promise.all([getProfileCatalog(), listAvailableModels()]);
-      setEnvelope(profile);
-      setDraft(profile.catalog);
-      setMenu(models);
-    } catch (cause) {
-      setError(renderThrownChain({ cause }));
-    } finally {
-      setBusy(false);
-    }
+    let request: Promise<void> | null = null;
+    request = (async () => {
+      try {
+        // Install the owner before a synchronous RPC fake can settle this load.
+        await undefined;
+        const [profile, models] = await Promise.all([getProfileCatalog(), listAvailableModels()]);
+        setEnvelope(profile);
+        setDraft(profile.catalog);
+        setMenu(models);
+      } catch (cause) {
+        setError(renderThrownChain({ cause }));
+      } finally {
+        if (loadOperation.current === request) {
+          loadOperation.current = null;
+          setBusy(false);
+        }
+      }
+    })();
+    loadOperation.current = request;
   };
 
   useEffect(() => {
-    load().catch((cause: unknown) => setError(renderThrownChain({ cause })));
+    load();
   }, []);
 
   const roles: RoleCatalog = useMemo(
@@ -66,19 +79,28 @@ export function ProfileCatalogSettings() {
     setDraft({ ...draft, roles: { ...draft.roles, [id]: next } });
   };
 
-  const save = async () => {
-    if (!draft || !envelope || !dirty) return;
+  const save = (): void => {
+    if (!draft || !envelope || !dirty || saveOperation.current !== null) return;
     setBusy(true);
     setError(null);
-    try {
-      const updated = await updateProfileCatalog(draft, envelope.version);
-      setEnvelope(updated);
-      setDraft(updated.catalog);
-    } catch (cause) {
-      setError(renderThrownChain({ cause }));
-    } finally {
-      setBusy(false);
-    }
+    let request: Promise<void> | null = null;
+    request = (async () => {
+      try {
+        // Install the owner before a synchronous RPC fake can settle this save.
+        await undefined;
+        const updated = await updateProfileCatalog(draft, envelope.version);
+        setEnvelope(updated);
+        setDraft(updated.catalog);
+      } catch (cause) {
+        setError(renderThrownChain({ cause }));
+      } finally {
+        if (saveOperation.current === request) {
+          saveOperation.current = null;
+          setBusy(false);
+        }
+      }
+    })();
+    saveOperation.current = request;
   };
 
   const addRole = () => {
@@ -145,9 +167,7 @@ export function ProfileCatalogSettings() {
       {!draft || !envelope ? (
         <div className="flex items-center gap-2 text-xs p-text-3">
           <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
-          {!busy && <Button size="xs" variant="secondary" onClick={() => {
-            load().catch((cause: unknown) => setError(renderThrownChain({ cause })));
-          }}>Retry</Button>}
+          {!busy && <Button size="xs" variant="secondary" onClick={load}>Retry</Button>}
         </div>
       ) : (
         <>
@@ -221,9 +241,7 @@ export function ProfileCatalogSettings() {
             <span className="text-[11px] p-text-3">Catalog version {envelope.version}</span>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={() => {
-                save().catch((cause: unknown) => setError(renderThrownChain({ cause })));
-              }}>{busy ? 'Saving…' : 'Save roles and tiers'}</FilledButton>
+              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save roles and tiers'}</FilledButton>
             </div>
           </div>
         </>

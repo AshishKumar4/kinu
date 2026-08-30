@@ -6,7 +6,7 @@
 // guard the owner's credentials rather than a re-description of them.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
-import { mockAgentsSdk } from './agents-sdk';
+import { joinHarnessFibers, mockAgentsSdk } from './agents-sdk';
 import { sha256Hex } from '../../src/lib/crypto';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
 import {
@@ -93,6 +93,8 @@ export interface TestUserDO {
   /** Sockets the UserDO accepted through its own upgrade path, with what it
    *  wrote to each — how a test reads the rotation frame the hub pushes. */
   acceptedSockets: Array<{ sent: string[] }>;
+  /** Join device responder fibers before inspecting asynchronous effects. */
+  joinFibers(): Promise<void>;
   close(): void;
 }
 
@@ -232,17 +234,22 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       const call: DeviceFrame = { id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [] };
       deviceFrames.push(call);
       const responder = options.deviceResponder;
-      if (!responder) return;
+      const owner = hub.current;
+      if (!responder || !owner) return;
       // The daemon answers a method that throws with an error frame, so a double
       // that can only ever answer `result` cannot exercise a failing device call.
-      // A responder that answers later settles the same two ways, so holding a
-      // frame is not a second code path.
-      void (async () => responder(call))().then(
-        (result) => hub.current?.webSocketMessage(socket, JSON.stringify({ id: call.id, result })),
-        (err: unknown) => hub.current?.webSocketMessage(socket, JSON.stringify({
-          id: call.id, error: err instanceof Error ? err.message : String(err),
-        })),
-      );
+      // The harness fiber owns a delayed answer through the same durable lifecycle
+      // production uses; tests join it before inspecting its asynchronous effects.
+      return owner.runFiber('test:device-responder', async () => {
+        try {
+          const result = await responder(call);
+          await owner.webSocketMessage(socket, JSON.stringify({ id: call.id, result }));
+        } catch (cause) {
+          await owner.webSocketMessage(socket, JSON.stringify({
+            id: call.id, error: cause instanceof Error ? cause.message : String(cause),
+          }));
+        }
+      });
     },
     close: () => {},
   };
@@ -359,6 +366,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     },
     attachDevice: (deviceId) => { attached = deviceId; },
     get acceptedSockets() { return ACCEPTED_SOCKETS.slice(acceptedFrom); },
+    joinFibers: joinHarnessFibers,
     close: () => { if (!options.storage) db.close(); },
   };
 }

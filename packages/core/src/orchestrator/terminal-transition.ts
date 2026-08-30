@@ -303,22 +303,29 @@ export class TerminalTransitions {
    *
    * The path a response with no durable identity takes. Nothing here is
    * recoverable — there is no row to recover from — so the bodies run through the
-   * same declared effects and their outcomes are dropped, which is exactly what
-   * this path did before any of them was claimed.
+   * same declared effects and their outcomes are dropped. Detached bodies still
+   * start in order and concurrently; this caller owns them until all settle.
    */
   private async runUnledgered(owed: readonly OwedEffect[]): Promise<void> {
+    const detached: Promise<void>[] = [];
     for (const effect of owed) {
       const body = this.deps.effects[effect.name];
       if (body === undefined) continue;
-      const running = body.run(effect.input, effect.scope).catch((err: unknown) => {
-        diagnostics.failure('turn.terminal_effect_failed', toKinuError({
-          doing: `running the ${effect.name} effect a settled turn owed`,
-          cause: err,
-          otherwise: 'unavailable',
-        }), { sequence: '(unledgered)', effect: effect.name });
-      });
+      const running = (async (): Promise<void> => {
+        try {
+          await body.run(effect.input, effect.scope);
+        } catch (cause) {
+          diagnostics.failure('turn.terminal_effect_failed', toKinuError({
+            doing: `running the ${effect.name} effect a settled turn owed`,
+            cause,
+            otherwise: 'unavailable',
+          }), { sequence: '(unledgered)', effect: effect.name });
+        }
+      })();
       if (effect.lane === 'inline') await running;
+      else detached.push(running);
     }
+    await Promise.all(detached);
   }
 
   /** When to come back, given the sequences this process is still running. */

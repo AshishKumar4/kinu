@@ -1263,12 +1263,17 @@ export class LocalAgentHost {
     // Wakes arrive from listeners and timers that can outlive close(), and a
     // drive after close() would recreate a lease hold on a closed database.
     if (this.closed) return;
-    void this.drive(entry, () => entry.session.flushPendingDrains()).catch((error: unknown) => {
-      diagnostics.failure(
-        'host.event_drain_failed',
-        toKinuError({ doing: 'draining hosted local events', cause: error, otherwise: 'io' }),
-        { agent: entry.key, source },
-      );
+    queueMicrotask(async () => {
+      if (this.closed) return;
+      try {
+        await this.drive(entry, () => entry.session.flushPendingDrains());
+      } catch (cause) {
+        diagnostics.failure(
+          'host.event_drain_failed',
+          toKinuError({ doing: 'draining hosted local events', cause, otherwise: 'io' }),
+          { agent: entry.key, source },
+        );
+      }
     });
   }
 }

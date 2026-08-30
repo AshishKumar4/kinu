@@ -96,6 +96,9 @@ export interface TerminalTurnParts {
    *  is RAM-only, so the row is the only record that the confirming turn it
    *  enqueues was already enqueued. */
   readonly completionGate?: { readonly text: string };
+  /** A context-overflow retry this turn earned. Delivery is a claimed effect
+   *  because enqueueing it is asynchronous and must survive a process cut. */
+  readonly overflowRetry?: boolean;
   /** The advisor's recovery snapshot, as the improvement lanes replay it. */
   readonly advisor?: JsonValue;
   /** The sampling plan, when this turn is sampled against a candidate. */
@@ -217,6 +220,11 @@ export function declareTerminalRoster(
     owed.push({
       name: 'turn_end_extensions', scope: messageId, lane: 'inline',
       input: { messageId, text: assistantText, message: parts.turnEndExtensions.message },
+    });
+  }
+  if (parts.overflowRetry) {
+    owed.push({
+      name: 'overflow_retry', scope: messageId, lane: 'inline', input: {},
     });
   }
   owed.push({

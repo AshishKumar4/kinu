@@ -75,7 +75,7 @@ import {
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportStatus, type TaskTurnEnding,
   TERMINAL_EFFECT_NAMES,
-  terminalEffect, keyedScope,
+  terminalEffect, overflowRetryTerminalEffect, keyedScope,
   RunEndReasonSchema, TurnContinuitySchema, WorkModeSchema, CompletedTurnSchema,
   ModelMessagesSchema, shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
@@ -1048,8 +1048,12 @@ export class LocalAgentSession implements BackendHost {
   getAlwaysActiveSkills(): string[] { return getAlwaysActiveSkills(this.config).names; }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { setAlwaysActiveSkills(this.config, names); }
 
-  private ensureInstructionApprovalMigration(): Promise<void> {
-    if (this.instructionMigration !== null) return this.instructionMigration;
+  private async ensureInstructionApprovalMigration(): Promise<void> {
+    const existing = this.instructionMigration;
+    if (existing !== null) {
+      await existing;
+      return;
+    }
     const migration = (async () => {
       const limits = {
         contextWindow: this.sessionContextWindow(),
@@ -1063,11 +1067,13 @@ export class LocalAgentSession implements BackendHost {
       });
       this.instructionApprovals.grandfatherExisting(entries);
     })();
-    this.instructionMigration = migration.catch((error: unknown) => {
-      this.instructionMigration = null;
-      throw error;
-    });
-    return this.instructionMigration;
+    this.instructionMigration = migration;
+    try {
+      await migration;
+    } catch (cause) {
+      if (this.instructionMigration === migration) this.instructionMigration = null;
+      throw cause;
+    }
   }
 
   /**
@@ -1518,12 +1524,16 @@ export class LocalAgentSession implements BackendHost {
    *  Skips a window that outlives the session so consumed events are never
    *  bound to a turn a dead pump will not run. */
   setTimer(fn: () => Promise<void>, ms: number): void {
-    setTimeout(() => {
+    setTimeout(async () => {
       if (this.ended) return;
-      void fn().catch((error: unknown) => diagnostics.failure(
-        'drain.timer_callback_failed',
-        toKinuError({ doing: 'running the drain-debounce timer callback', cause: error, otherwise: 'io' }),
-      ));
+      try {
+        await fn();
+      } catch (cause) {
+        diagnostics.failure(
+          'drain.timer_callback_failed',
+          toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
+        );
+      }
     }, ms);
   }
 
@@ -1879,24 +1889,28 @@ export class LocalAgentSession implements BackendHost {
     // not even record its own outcome — a stash or row-delete against a
     // database closed under it at teardown — which has no other reader, so it
     // is stated rather than dropped as an unhandled rejection.
-    const settled = Promise.allSettled([running]);
-    this.backgroundFibers.add(settled);
-    void settled.then(([outcome]) => {
-      this.backgroundFibers.delete(settled);
-      if (outcome.status === 'rejected') {
+    let settled: Promise<void> | null = null;
+    settled = (async () => {
+      try {
+        for (const outcome of await Promise.allSettled([running])) {
+          if (outcome.status !== 'rejected') continue;
+          diagnostics.failure(
+            'fiber.settle_failed',
+            toKinuError({ doing: 'settling a durable background fiber', cause: outcome.reason, otherwise: 'io' }),
+            { fiber: name },
+          );
+        }
+      } catch (cause) {
         diagnostics.failure(
-          'fiber.settle_failed',
-          toKinuError({ doing: 'settling a durable background fiber', cause: outcome.reason, otherwise: 'io' }),
+          'fiber.settle_observer_failed',
+          toKinuError({ doing: 'recording a durable background fiber settlement', cause, otherwise: 'io' }),
           { fiber: name },
         );
+      } finally {
+        if (settled !== null) this.backgroundFibers.delete(settled);
       }
-    }).catch((cause: unknown) => {
-      diagnostics.failure(
-        'fiber.settle_observer_failed',
-        toKinuError({ doing: 'recording a durable background fiber settlement', cause, otherwise: 'io' }),
-        { fiber: name },
-      );
-    });
+    })();
+    this.backgroundFibers.add(settled);
     return running;
   }
 
@@ -2225,17 +2239,19 @@ export class LocalAgentSession implements BackendHost {
     this.clearLocalAlarm();
     this.scheduledAlarmAt = ts;
     const delay = Math.max(0, ts - Date.now());
-    this.alarmTimer = setTimeout(() => {
+    this.alarmTimer = setTimeout(async () => {
       this.alarmTimer = null;
       this.scheduledAlarmAt = null;
-      void this.fireDueTriggers().catch((cause: unknown) => {
+      try {
+        await this.fireDueTriggers();
+      } catch (cause) {
         const failure = toKinuError({
           doing: 'firing the triggers due on this wake',
           cause,
           otherwise: 'io',
         });
         diagnostics.failure('schedule.due_triggers_failed', failure);
-      });
+      }
     }, Math.min(delay, 2_147_483_647));
   }
 
@@ -2706,6 +2722,7 @@ export class LocalAgentSession implements BackendHost {
      *  because an interrupt throws too, and folding the two together is what
      *  made a user's Stop read as an agent failure in the local run ledger. */
     let interrupted = false;
+    let overflowRetry = false;
     const abort = new AbortController();
     this.currentAbort = abort;
 
@@ -2887,17 +2904,16 @@ export class LocalAgentSession implements BackendHost {
       if (!interrupted) this.orch.acc.hadError = true;
       runError = message.slice(0, 500);
       this.emit({ type: 'error', message });
-      // Overflow recovery — the shared core policy, APPLIED by the shared
-      // core helper (arm force-compaction + at most one retry enqueue).
-      applyOverflowRecovery({
+      // Planning and compaction arming are synchronous. The retry itself is
+      // recorded in the terminal roster below, beside the answer it follows.
+      overflowRetry = applyOverflowRecovery({
         error: message,
         lastPromptTokens: this.orch.acc.lastPromptTokens,
         contextWindow,
         turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
         state: this.compactionState,
         sessionKey: cache.sessionKey,
-        signals: this.orch.signals,
-      });
+      }).enqueueRetry;
     } finally {
       this.currentAbort = null;
     }
@@ -2912,6 +2928,7 @@ export class LocalAgentSession implements BackendHost {
       interrupted,
       trialContext: liveTurnOpts.history,
       reachableTools: Object.keys(liveTurnOpts.tools ?? {}),
+      overflowRetry,
     });
 
     // Turn over for signal delivery — the same spine the cf backend runs, and
@@ -3045,6 +3062,7 @@ export class LocalAgentSession implements BackendHost {
     readonly trialContext: readonly ModelMessage[];
     /** The tool surface the turn could reach, for the advisor's snapshot. */
     readonly reachableTools: readonly string[];
+    readonly overflowRetry: boolean;
   }): TurnCommit {
     const { item, runError } = input;
     try {
@@ -3094,6 +3112,7 @@ export class LocalAgentSession implements BackendHost {
         startedAt: input.startedAt,
         trialContext: input.trialContext,
         reachableTools: input.reachableTools,
+        overflowRetry: input.overflowRetry,
       });
       // A response whose turn has no durable identity has nothing to claim
       // against, so it also has nothing to record an intent under: it runs
@@ -3187,6 +3206,7 @@ export class LocalAgentSession implements BackendHost {
     /** The tool surface the turn could reach, for the advisor's reachability
      *  check. A cold replay has no live toolset to ask. */
     readonly reachableTools: readonly string[];
+    readonly overflowRetry: boolean;
   }): OwedEffect[] {
     const mission = readMission(this.rt.storage.sql);
     // WHICH candidate this turn is sampled against, decided ONCE, here. The
@@ -3264,6 +3284,7 @@ export class LocalAgentSession implements BackendHost {
       takeIds: unclaimedAlternateTakeIds(this.rt.storage.sql),
     };
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
+    if (input.overflowRetry) parts.overflowRetry = true;
     if (gated) parts.completionGate = { text: this.completionGate.task };
     // EVERY input the review's verdict reads, recorded — not just the tool
     // surface. The severity floor, the dedupe window and the completion gate
@@ -3489,6 +3510,8 @@ export class LocalAgentSession implements BackendHost {
           };
         },
       }),
+      overflow_retry: overflowRetryTerminalEffect(this.orch.signals),
+
 
       turn_record: terminalEffect({
         input: v.object({
@@ -3687,14 +3710,16 @@ export class LocalAgentSession implements BackendHost {
     if (this.ended || this.terminalRetryAt <= atMs) return;
     this.clearTerminalRetry();
     this.terminalRetryAt = atMs;
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       this.clearTerminalRetry();
-      void this.recoverTerminalTransitions().catch((cause: unknown) => {
+      try {
+        await this.recoverTerminalTransitions();
+      } catch (cause) {
         const failure = toKinuError({
           doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
         });
         diagnostics.failure('turn.terminal_retry_failed', failure);
-      });
+      }
     }, Math.max(0, atMs - Date.now()));
     // UNREF'D: an owed row must not hold a finished process open. The next start
     // is the durable carrier; this timer only shortens the wait for a process
@@ -3745,11 +3770,15 @@ export class LocalAgentSession implements BackendHost {
    * so a process cannot exit through a detached tail that is still reporting.
    */
   private holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
-    this.trackFiber('turn.terminal_close', async () => { await close(); })
-      .catch((err: unknown) => {
+    const closing = this.trackFiber('turn.terminal_close', async () => { await close(); });
+    let recovered: Promise<void> | null = null;
+    recovered = (async () => {
+      try {
+        await closing;
+      } catch (cause) {
         const failure = toKinuError({
           doing: "recording that a settled turn's effects had all reported",
-          cause: err,
+          cause,
           otherwise: 'io',
         });
         // RELEASED. A sequence this process still holds is one every later
@@ -3764,8 +3793,24 @@ export class LocalAgentSession implements BackendHost {
         // wake failing — and the fiber is about to delete itself. Without this
         // the rows stay owed with nothing left to come back for them until the
         // whole session is restarted.
-        return this.terminal.armRecovery(transition, { cause: err });
-      });
+        try {
+          await this.terminal.armRecovery(transition, { cause });
+        } catch (recoveryCause) {
+          diagnostics.failure(
+            'turn.terminal_transition_recovery_failed',
+            toKinuError({
+              doing: "re-arming a settled turn's effects after their close failed",
+              cause: recoveryCause,
+              otherwise: 'unavailable',
+            }),
+            { turnId: transition.turnId, messageId: transition.messageId },
+          );
+        }
+      } finally {
+        if (recovered !== null) this.backgroundFibers.delete(recovered);
+      }
+    })();
+    this.backgroundFibers.add(recovered);
   }
 
   /**
@@ -3863,7 +3908,7 @@ export class LocalAgentSession implements BackendHost {
       : recorded.turn.turnId;
     if (laneKey !== null && effectAlreadyDone(this.rt.storage.sql, ADVISOR_LANE_SCOPE, laneKey)) return;
     const checkpointed = Promise.withResolvers<void>();
-    void this.trackFiber(ADVISOR_LANE_FIBER, async (ctx) => {
+    const review = this.trackFiber(ADVISOR_LANE_FIBER, async (ctx) => {
       // The checkpoint IS what the caller owes, so a lane that cannot write one
       // is a review no interruption can resume and the failure travels to the
       // owed row rather than being absorbed here.
@@ -3884,16 +3929,25 @@ export class LocalAgentSession implements BackendHost {
       if (laneKey !== null) recordEffectDone(this.rt.storage.sql, ADVISOR_LANE_SCOPE, laneKey);
       checkpointed.resolve();
       await this.runAdvisorReview(recorded);
-    }).catch((cause: unknown) => {
-      // Not `advisor.review_failed`: the review body catches its own failures
-      // (`runAdvisorReview` never throws), so what lands here is the LANE —
-      // fiber tracking or checkpoint bookkeeping — dying around the review.
-      const failure = toKinuError({
-        doing: 'tracking the advisor review lane', cause, otherwise: 'unavailable',
-      });
-      diagnostics.failure('advisor.lane_failed', failure);
-      checkpointed.reject(failure);
     });
+    let observed: Promise<void> | null = null;
+    observed = (async () => {
+      try {
+        await review;
+      } catch (cause) {
+        // Not `advisor.review_failed`: the review body catches its own failures
+        // (`runAdvisorReview` never throws), so what lands here is the LANE —
+        // fiber tracking or checkpoint bookkeeping — dying around the review.
+        const failure = toKinuError({
+          doing: 'tracking the advisor review lane', cause, otherwise: 'unavailable',
+        });
+        diagnostics.failure('advisor.lane_failed', failure);
+        checkpointed.reject(failure);
+      } finally {
+        if (observed !== null) this.backgroundFibers.delete(observed);
+      }
+    })();
+    this.backgroundFibers.add(observed);
     await checkpointed.promise;
   }
 

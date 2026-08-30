@@ -88,6 +88,8 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const addonRef = useRef<SandboxAddon | null>(null);
+  const copyOperation = useRef<Promise<void> | null>(null);
+  const keepaliveOperations = useRef(new Map<string, Promise<void>>());
   const [state, setState] = useState<PtyState>("connecting");
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -130,11 +132,26 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
       if (!copyChord || event.type !== "keydown") return true;
       const selection = term.getSelection();
       if (!selection) return true;
-      navigator.clipboard.writeText(selection).catch((cause: unknown) => {
-        // The pane's failure line is the reader: the header advertises the
-        // chord, so a refused clipboard write must not vanish.
-        setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
-      });
+      if (copyOperation.current !== null) return false;
+      let copy: Promise<void> | null = null;
+      copy = (async () => {
+        try {
+          // The key handler must return its boolean synchronously, so this ref
+          // owns the asynchronous browser action until it settles or cleanup
+          // cancels its result publication.
+          await undefined;
+          await navigator.clipboard.writeText(selection);
+        } catch (cause) {
+          if (copyOperation.current === copy) {
+            // The pane's failure line is the reader: the header advertises the
+            // chord, so a refused clipboard write must not vanish.
+            setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
+          }
+        } finally {
+          if (copyOperation.current === copy) copyOperation.current = null;
+        }
+      })();
+      copyOperation.current = copy;
       return false;
     });
 
@@ -147,6 +164,8 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     observer.observe(host);
 
     return () => {
+      copyOperation.current = null;
+      keepaliveOperations.current.clear();
       observer.disconnect();
       addon.dispose();
       term.dispose();
@@ -165,22 +184,40 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   useEffect(() => {
     if (state !== "connected") return;
     const beat = setInterval(() => {
-      fetch(
-        `/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive`
-        + `?executor=${encodeURIComponent(executor)}`,
-        { method: "POST", credentials: "same-origin" },
-      ).then((response) => {
-        // A missed beat costs at most one idle cycle of lease, so it is not
-        // fatal — but it is shown rather than discarded, because the reason
-        // (container gone, attach failed) arrives here before the socket says so.
-        if (!response.ok) {
-          setFailure(`the container refused the terminal's keepalive (${response.status})`);
+      const keepaliveKey = crypto.randomUUID();
+      let keepalive: Promise<void> | null = null;
+      keepalive = (async () => {
+        try {
+          // Install the owner before the fetch can settle, then ignore its
+          // result when this terminal has been cleaned up or superseded.
+          await undefined;
+          const response = await fetch(
+            `/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive`
+            + `?executor=${encodeURIComponent(executor)}`,
+            { method: "POST", credentials: "same-origin" },
+          );
+          // A missed beat costs at most one idle cycle of lease, so it is not
+          // fatal — but it is shown rather than discarded, because the reason
+          // (container gone, attach failed) arrives here before the socket says so.
+          if (keepaliveOperations.current.get(keepaliveKey) === keepalive && !response.ok) {
+            setFailure(`the container refused the terminal's keepalive (${response.status})`);
+          }
+        } catch (cause) {
+          if (keepaliveOperations.current.get(keepaliveKey) === keepalive) {
+            setFailure(describeError(cause));
+          }
+        } finally {
+          if (keepaliveOperations.current.get(keepaliveKey) === keepalive) {
+            keepaliveOperations.current.delete(keepaliveKey);
+          }
         }
-      }).catch((cause: unknown) => {
-        setFailure(describeError(cause));
-      });
+      })();
+      keepaliveOperations.current.set(keepaliveKey, keepalive);
     }, KEEPALIVE_MS);
-    return () => clearInterval(beat);
+    return () => {
+      clearInterval(beat);
+      keepaliveOperations.current.clear();
+    };
   }, [state, workspace, executor]);
 
   // A shell that exits leaves the container holding a dead PTY that every later
@@ -253,6 +290,8 @@ function LineTerminal(
   const lineBuffer = useRef<string>("");
   const running = useRef<boolean>(false);
   const busy = useRef<boolean>(false);
+  const commandOperation = useRef<Promise<void> | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
   // The parent hands a fresh closure every render. Held in a ref so the effect
   // below stays keyed on the executor alone: rebuilding the terminal per render
   // would wipe the scrollback under whoever was reading it.
@@ -264,6 +303,7 @@ function LineTerminal(
     if (!host) return;
     writtenIds.current.clear();
     lineBuffer.current = "";
+    commandOperation.current = null;
     running.current = false;
     busy.current = false;
     const term = newTerminal(theme.mode);
@@ -292,28 +332,38 @@ function LineTerminal(
           running.current = true;
           busy.current = true;
           term.write(BUSY);
-          // `describeError` IS the parse: the rejection becomes a message at
-          // the boundary, and the handler below takes that message rather than
-          // an unparsed value. `undefined` is the success arm.
-          Promise.resolve(run(cmd))
-            .then(() => undefined, describeError)
-            .then((message) => {
-              if (termRef.current !== term) return;
-              running.current = false;
-              if (message === undefined) return;
-              // A rejected exec produces no output row, so nothing else would
-              // ever clear the marker or reprint the prompt.
-              clearBusy(term, busy);
-              term.write(`\x1b[31m${message}\x1b[0m\r\n`);
-              promptLine(term);
-            })
-            .catch((cause: unknown) => {
-              if (termRef.current !== term) return;
-              running.current = false;
-              clearBusy(term, busy);
-              term.write(`\x1b[31m${describeError(cause)}\x1b[0m\r\n`);
-              promptLine(term);
-            });
+          setFailure(null);
+          let command: Promise<void> | null = null;
+          command = (async () => {
+            try {
+              // xterm owns a synchronous data callback. Retain the command
+              // ourselves so cleanup can fence a late completion.
+              await undefined;
+              try {
+                await run(cmd);
+                if (commandOperation.current !== command || termRef.current !== term) return;
+                running.current = false;
+              } catch (cause) {
+                if (commandOperation.current !== command || termRef.current !== term) return;
+                running.current = false;
+                // A rejected exec produces no output row, so nothing else would
+                // ever clear the marker or reprint the prompt.
+                clearBusy(term, busy);
+                term.write(`\x1b[31m${describeError(cause)}\x1b[0m\r\n`);
+                promptLine(term);
+              }
+            } catch (cause) {
+              if (commandOperation.current === command && termRef.current === term) {
+                running.current = false;
+                clearBusy(term, busy);
+                setFailure(describeError(cause));
+              }
+            } finally {
+              if (commandOperation.current === command) commandOperation.current = null;
+            }
+          })();
+          commandOperation.current = command;
+          return;
         } else if (code === 0x7f || code === 0x08) {
           if (lineBuffer.current.length > 0) {
             lineBuffer.current = lineBuffer.current.slice(0, -1);
@@ -336,6 +386,8 @@ function LineTerminal(
     observer.observe(host);
 
     return () => {
+      commandOperation.current = null;
+      running.current = false;
       typing.dispose();
       observer.disconnect();
       term.dispose();
@@ -380,6 +432,7 @@ function LineTerminal(
         <span className="font-mono">{executor}</span>
         <span>·</span>
         <span>line mode — one command at a time, no interactive programs</span>
+        {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
         <span className="ml-auto truncate" title={missing}>{missing}</span>
       </div>
       <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />

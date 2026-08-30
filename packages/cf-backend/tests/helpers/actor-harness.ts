@@ -31,6 +31,7 @@ import {
   type WorkMode, DEFAULT_MERGE_STRATEGY, type JsonObject,
   type ShellApprovalRequest,
   type FactsStore, type SleepTimeUpdate,
+  type AgentSignal, type SignalOutcome,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
@@ -229,6 +230,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   harnessClearTurnCheckpoint(): void { this._turnCheckpoint = null; }
   harnessDurableTurnId(): string | null { return this.durableTurnId(); }
+  /** Replace the delivery seam for a terminal-effect test. The actor still runs
+   *  the real signal policy and terminal ledger around this one external port. */
+  harnessSetSignalDeliverer(
+    deliver: (signal: AgentSignal) => Promise<SignalOutcome>,
+  ): void {
+    Object.defineProperty(this.orch.signals, 'deliver', {
+      configurable: true,
+      value: deliver,
+    });
+  }
+
 
   /** Rebuild the reset-lost steer drain from its SQL authority for one turn. */
   harnessRestorePendingSteers(turnId: string): void {
@@ -917,6 +929,8 @@ export async function reactivateOrchestratorHarness(
      *  Armed here for the same reason as the skew: the reconcile below IS the
      *  replay, so a lane re-enabled after it arrives too late. */
     readonly sleepTimeAnswer?: readonly [key: string, update: SleepTimeUpdate];
+    /** Configure a fresh activation before its real onStart recovery runs. */
+    readonly beforeStart?: (agent: HarnessOrchestratorAgent) => void;
   },
 ): Promise<ActorHarness<HarnessOrchestratorAgent>> {
   const harness = instantiate(HarnessOrchestratorAgent, db, undefined, userPlane);
@@ -930,6 +944,7 @@ export async function reactivateOrchestratorHarness(
   } else {
     harness.agent.harnessDisableSleepTimeCompute();
   }
+  opts?.beforeStart?.(harness.agent);
   ensureActorSchema(harness.agent);
   harness.agent.declareScaffoldPresent();
   // The activation's OWN reconcile, JOINED on its observable end state. `onStart`

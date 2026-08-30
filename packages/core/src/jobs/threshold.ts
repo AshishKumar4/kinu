@@ -171,8 +171,14 @@ export async function withBackgroundThreshold<T>(
   const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
     timer = setTimeout(() => resolve(TIMED_OUT), thresholdMs);
   });
-  // Wrap with both handlers so the abandoned branch never throws unhandled.
-  const settled = promise.then((value) => ({ value }), (error: unknown) => ({ error }));
+  // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
+  const settled = (async () => {
+    try {
+      return { value: await promise };
+    } catch (cause) {
+      return { error: cause };
+    }
+  })();
   const winner = await Promise.race([settled, timeout]);
   if (timer) clearTimeout(timer);
 
@@ -221,8 +227,14 @@ export async function withSpawnDetach<T>(
   let announce!: () => void;
   const started = new Promise<typeof SPAWNED>((resolve) => { announce = () => resolve(SPAWNED); });
   const promise = exec(announce);
-  // Wrap with both handlers so the abandoned branch never throws unhandled.
-  const settled = promise.then((value) => ({ value }), (error: unknown) => ({ error }));
+  // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
+  const settled = (async () => {
+    try {
+      return { value: await promise };
+    } catch (cause) {
+      return { error: cause };
+    }
+  })();
   const winner = await Promise.race([settled, started]);
 
   if (winner !== SPAWNED) {

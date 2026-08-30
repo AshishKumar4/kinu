@@ -11,7 +11,7 @@
  * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
 
-import type { AgentRuntime } from '../types/agent-runtime';
+import type { AgentRuntime, BranchReflection } from '../types/agent-runtime';
 import type { MCTSConfig, MCTSPhase, MCTSProgressBody } from '../types/mcts';
 import { missionMeter } from '../mission-budget';
 import type { ConvergenceResult } from '../types/evaluation';
@@ -445,22 +445,24 @@ export async function runMCTS(
           // table holds only what it proposed, so asking "what went wrong?"
           // without the environment's answer asks a model to guess at a runtime
           // error the engine already read. Null when nothing executed.
-          const reflection = await handle.generateReflection(task, observations[i] ?? undefined).then(
-            async (result) => {
-              const reflection = v.safeParse(BranchReflectionSchema, result);
-              if (!reflection.success) return '';
-              await charge(reflection.output.usage);
-              config.reportModelCall?.({ source: 'mcts', usage: reflection.output.usage ?? {} });
-              return reflection.output.text.trim();
-            },
-            (error: unknown) => {
-              report({
-                type: 'branch-failed', stage: 'reflect', iteration,
-                branchId: branchIds[i] ?? '', error: renderThrownChain({ cause: error }),
-              });
-              return '';
-            },
-          );
+          let result: BranchReflection | undefined;
+          try {
+            result = await handle.generateReflection(task, observations[i] ?? undefined);
+          } catch (cause) {
+            report({
+              type: 'branch-failed', stage: 'reflect', iteration,
+              branchId: branchIds[i] ?? '', error: renderThrownChain({ cause }),
+            });
+          }
+          let reflection = '';
+          if (result) {
+            const parsed = v.safeParse(BranchReflectionSchema, result);
+            if (parsed.success) {
+              await charge(parsed.output.usage);
+              config.reportModelCall?.({ source: 'mcts', usage: parsed.output.usage ?? {} });
+              reflection = parsed.output.text.trim();
+            }
+          }
           throwIfAborted(config.signal);
           // An empty reflection carries no lesson — writing it just litters
           // MEMORY.md with duplicate bare "### Failure lesson" headers.
@@ -587,16 +589,16 @@ async function abortable<T>(
     await onAbort();
     throwIfAborted(signal);
   }
-  return new Promise<T>((resolve, reject) => {
-    let done = false;
-    const cleanup = () => signal.removeEventListener('abort', onSignalAbort);
-    const onSignalAbort = () => {
-      if (done) return;
-      done = true;
+  let aborting = false;
+  let cleanup = (): void => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onSignalAbort = async (): Promise<void> => {
+      if (aborting) return;
+      aborting = true;
       cleanup();
-      void onAbort().finally(
-        () => reject(signal.reason instanceof Error ? signal.reason : new Error('MCTS aborted')),
-      ).catch((cause: unknown) => {
+      try {
+        await onAbort();
+      } catch (cause) {
         // The abort sweep itself failed — infrastructure, not the search's
         // own work. Recorded so the sweep's failure is stated rather than
         // surfacing as an unhandled rejection after the race has already
@@ -606,22 +608,28 @@ async function abortable<T>(
           toKinuError({ doing: 'abort MCTS branches on signal', cause, otherwise: 'cancelled' }),
           { signalReason: renderThrownChain({ cause: signal.reason }) },
         );
-      });
+      }
+      reject(signal.reason instanceof Error ? signal.reason : new Error('MCTS aborted'));
     };
+    cleanup = () => signal.removeEventListener('abort', onSignalAbort);
     signal.addEventListener('abort', onSignalAbort, { once: true });
-    promise.then(
-      (value) => {
-        if (done) return;
-        done = true;
-        cleanup();
-        resolve(value);
-      },
-      (err: unknown) => {
-        if (done) return;
-        done = true;
-        cleanup();
-        reject(err);
-      },
-    );
   });
+  try {
+    return await Promise.race([
+      (async (): Promise<T> => {
+        try {
+          const value = await promise;
+          return aborting ? await aborted : value;
+        } catch (cause) {
+          if (aborting) return await aborted;
+          throw cause;
+        } finally {
+          if (!aborting) cleanup();
+        }
+      })(),
+      aborted,
+    ]);
+  } finally {
+    cleanup();
+  }
 }

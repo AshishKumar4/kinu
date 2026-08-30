@@ -246,6 +246,11 @@ export class BackgroundJobRunner {
    *  a DO eviction loses them, and recover() then fails the orphan. */
   private readonly controllers = new Map<string, AbortController>();
 
+  /** Scheduler-owned durable drivers. Keeping each Promise by job id means a
+   *  detached turn never drops the scheduler's terminal result; the driver
+   *  itself records and wakes a start/body failure before it leaves this map. */
+  private readonly fiberDrivers = new Map<string, Promise<void>>();
+
   /**
    * Jobs whose operator cancel is in flight, and the terminal write each one is
    * holding back.
@@ -417,47 +422,66 @@ export class BackgroundJobRunner {
    *  fiber start and stamped on the terminal write, so an executor fenced by a
    *  concurrent reclaim (evict-recovery) can no longer settle the job (§5.3). */
   private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
-    this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
-      ctx.stash({ phase: 'running', jobId, kind });
-      let settled: boolean;
+    let driver: Promise<void> | undefined;
+    const drive = async (): Promise<void> => {
       try {
-        await this.settleAndWake(jobId, exec);
-        // A fenced executor's terminal write is a no-op (§5.3), so the store —
-        // not this fiber's own success — decides whether the job settled.
-        settled = this.deps.store.get(jobId)?.status !== 'running';
-      } catch (err) {
-        // The settlement path itself threw — a store write, the post-settle
-        // status read, or the undeliverable wake's durable retry breadcrumb.
-        // Letting the fiber reject here would lose the force-fail below: both
-        // fiber implementations DELETE their recovery row in a `finally`, so a
-        // rejected body is never handed to onFiberRecovered. When the store is
-        // gone entirely (teardown closed it under us) neither write lands and
-        // the row stays `running` — which is recoverable, but only because
-        // recoverOrphans() sweeps the registry at the next start rather than
-        // trusting a fiber row to survive.
+        await this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
+          ctx.stash({ phase: 'running', jobId, kind });
+          let settled: boolean;
+          try {
+            await this.settleAndWake(jobId, exec);
+            // A fenced executor's terminal write is a no-op (§5.3), so the store —
+            // not this fiber's own success — decides whether the job settled.
+            settled = this.deps.store.get(jobId)?.status !== 'running';
+          } catch (err) {
+            // The settlement path itself threw — a store write, the post-settle
+            // status read, or the undeliverable wake's durable retry breadcrumb.
+            // Letting the fiber reject here would lose the force-fail below: both
+            // fiber implementations DELETE their recovery row in a `finally`, so a
+            // rejected body is never handed to onFiberRecovered. When the store is
+            // gone entirely (teardown closed it under us) neither write lands and
+            // the row stays `running` — which is recoverable, but only because
+            // recoverOrphans() sweeps the registry at the next start rather than
+            // trusting a fiber row to survive.
+            diagnostics.failure(
+              'jobs.settlement_failed',
+              toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
+              { jobId },
+            );
+            settled = this.failUnsettled(jobId, err);
+          }
+          // Only a job that actually reached a terminal status is 'settled'; if even
+          // the force-fail could not write, the snapshot stays 'running' so an
+          // eviction in this window still hands the job to recover().
+          ctx.stash({ phase: settled ? 'settled' : 'running', jobId, kind });
+        });
+      } catch (cause) {
+        // A scheduler/start/body failure has no foreground caller, but it still
+        // owns a live job row. Run the same terminal failure + wake path rather
+        // than leaving that row running after its durable driver has gone away.
         diagnostics.failure(
-          'jobs.settlement_failed',
-          toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
-          { jobId },
+          'jobs.fiber_start_failed',
+          toKinuError({ doing: 'run the durable fiber for a background job', cause, otherwise: 'io' }),
+          { jobId, kind },
         );
-        settled = this.failUnsettled(jobId, err);
+        try {
+          if (this.deps.store.get(jobId)?.status === 'running') {
+            await this.settleAndWake(jobId, async () => { throw cause; });
+          }
+        } catch (err) {
+          diagnostics.failure(
+            'jobs.settlement_failed',
+            toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
+            { jobId },
+          );
+          this.failUnsettled(jobId, err);
+        }
+      } finally {
+        if (driver && this.fiberDrivers.get(jobId) === driver) this.fiberDrivers.delete(jobId);
       }
-      // Only a job that actually reached a terminal status is 'settled'; if even
-      // the force-fail could not write, the snapshot stays 'running' so an
-      // eviction in this window still hands the job to recover().
-      ctx.stash({ phase: settled ? 'settled' : 'running', jobId, kind });
-    }).catch((cause: unknown) => {
-      // The fiber itself failed — a scheduler that could not even start the
-      // body (both platform implementations reject only there; the body above
-      // handles its own work). No caller holds this promise, so the failure is
-      // STATED here rather than dropped as an unhandled rejection; the job row
-      // stays `running` and recoverOrphans() still hands it to recover().
-      diagnostics.failure(
-        'jobs.fiber_start_failed',
-        toKinuError({ doing: 'run the durable fiber for a background job', cause, otherwise: 'io' }),
-        { jobId, kind },
-      );
-    });
+    };
+    driver = drive();
+    this.fiberDrivers.set(jobId, driver);
   }
 
   /** exec → record the outcome → notify → wake. Throws only when a store write

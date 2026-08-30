@@ -474,44 +474,50 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const below = walk.steps.length > 0 ? walk.below : (view?.steps.status === 'more' ? view.steps.next : null);
   const walkRef = useRef(subject);
   walkRef.current = subject;
-  const inFlight = useRef(false);
+  const inFlight = useRef<Promise<void> | null>(null);
   const loadOlder = useCallback(() => {
     const at = walkRef.current;
-    if (inFlight.current || below === null) return;
-    inFlight.current = true;
+    if (inFlight.current !== null || below === null) return;
     setWalk((prev) => ({ ...prev, loading: true, error: null }));
-    (async () => {
+    let load: Promise<void> | null = null;
+    load = (async () => {
       try {
-        const next = await rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]);
-        if (walkRef.current !== at) return; // the reader moved on; the page is nobody's
-        if (!next) {
-          setWalk((prev) => ({ ...prev, loading: false, error: 'This trace could not be read.' }));
-          return;
+        // Install the strong action owner before a synchronous RPC fake can
+        // settle the page load.
+        await undefined;
+        try {
+          const next = await rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]);
+          if (walkRef.current !== at) return; // the reader moved on; the page is nobody's
+          if (!next) {
+            setWalk((prev) => ({ ...prev, loading: false, error: 'This trace could not be read.' }));
+            return;
+          }
+          setWalk((prev) => ({
+            steps: [...next.steps.items, ...prev.steps],
+            hasMore: next.steps.status === 'more',
+            below: next.steps.status === 'more' ? next.steps.next : null,
+            loading: false,
+            error: null,
+          }));
+        } catch (cause) {
+          // One name for every failure of this walk — a reader who moved on
+          // mid-read owns neither the page nor the error, so the failure is
+          // named with its chain either way, and only the walk that still owns
+          // this subject also shows it.
+          diagnostics.event('transcript.older_page_abandoned',
+            { subject: at, error: renderThrownChain({ cause }) });
+          if (walkRef.current === at) {
+            setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause }) }));
+          }
         }
-        setWalk((prev) => ({
-          steps: [...next.steps.items, ...prev.steps],
-          hasMore: next.steps.status === 'more',
-          below: next.steps.status === 'more' ? next.steps.next : null,
-          loading: false,
-          error: null,
-        }));
-      } catch (error) {
-        // One name for every failure of this walk — a reader who moved on
-        // mid-read owns neither the page nor the error, so the failure is
-        // named with its chain either way, and only the walk that still owns
-        // this subject also shows it.
-        diagnostics.event('transcript.older_page_abandoned',
-          { subject: at, error: renderThrownChain({ cause: error }) });
-        if (walkRef.current === at) {
-          setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause: error }) }));
-        }
+      } catch (cause) {
+        diagnostics.event('transcript.older_page_handler_failed',
+          { subject: at, error: renderThrownChain({ cause }) });
       } finally {
-        inFlight.current = false;
+        if (inFlight.current === load) inFlight.current = null;
       }
-    })().catch((cause: unknown) => {
-      diagnostics.event('transcript.older_page_handler_failed',
-        { subject: at, error: renderThrownChain({ cause }) });
-    });
+    })();
+    inFlight.current = load;
   }, [rpc, runId, nodeId, below]);
 
   return {

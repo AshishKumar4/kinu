@@ -12,7 +12,7 @@
  * have reached the beginning" because a request failed. That is the same lie a
  * bare `LIMIT` tells, one layer up.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Page, SeekCursor } from "@kinu.run/core";
 import { describeError } from "@/hooks/use-async-resource";
 
@@ -95,6 +95,10 @@ export function usePagedScroll<Item>({
   // one frame, and every one of them would read the same not-yet-committed
   // `false` and start its own duplicate request.
   const inFlight = useRef(false);
+  // The component owns its one active page task through settlement. Keeping the
+  // promise here makes the synchronous scroll/retry API an action trigger, not
+  // a detached async boundary; the in-flight latch still rejects overlap.
+  const loadTask = useRef<Promise<void> | null>(null);
   const cursor = useRef<SeekCursor | null>(null);
   // Which walk a reply belongs to. Only the current walk may publish, so a
   // page fetched before a reset can neither append to the new list nor move its
@@ -103,6 +107,12 @@ export function usePagedScroll<Item>({
   const latest = useRef({ fetchPage, startFrom });
   latest.current = { fetchPage, startFrom };
 
+  // A settled page after unmount must not publish into this hook. `reset` uses
+  // the same generation invalidation for an explicitly abandoned walk.
+  useEffect(() => () => {
+    walk.current += 1;
+  }, []);
+
   const loadMore = useCallback(() => {
     if (inFlight.current || exhausted) return;
     const from = cursor.current ?? latest.current.startFrom();
@@ -110,20 +120,27 @@ export function usePagedScroll<Item>({
     const generation = walk.current;
     inFlight.current = true;
     setLoading(true);
-    void latest.current.fetchPage(from === "newest" ? undefined : from).then((page) => {
-      if (generation !== walk.current) return;
-      setFetched((prev) => grows === "up" ? [...page.items, ...prev] : [...prev, ...page.items]);
-      setError(null);
-      if (page.status === "end") setExhausted(true);
-      else cursor.current = page.next;
-    }, (err: unknown) => {
-      if (generation !== walk.current) return;
-      setError(describeError(err));
-    }).finally(() => {
-      if (generation !== walk.current) return;
-      inFlight.current = false;
-      setLoading(false);
-    });
+    let task: Promise<void> | null = null;
+    task = (async () => {
+      try {
+        const page = await latest.current.fetchPage(from === "newest" ? undefined : from);
+        if (generation !== walk.current) return;
+        setFetched((prev) => grows === "up" ? [...page.items, ...prev] : [...prev, ...page.items]);
+        setError(null);
+        if (page.status === "end") setExhausted(true);
+        else cursor.current = page.next;
+      } catch (err) {
+        if (generation !== walk.current) return;
+        setError(describeError(err));
+      } finally {
+        if (loadTask.current === task) loadTask.current = null;
+        if (generation === walk.current) {
+          inFlight.current = false;
+          setLoading(false);
+        }
+      }
+    })();
+    loadTask.current = task;
   }, [grows, exhausted]);
 
   const reset = useCallback(() => {

@@ -1216,6 +1216,7 @@ export class OrchestratorAgent extends ActorAgent {
     readonly turn: CompletedTurn;
     readonly status: RunEndReason;
     readonly answeredDrains: ReadonlySet<string>;
+    readonly overflowRetry: boolean;
   }): OwedEffect[] {
     const messageId = input.result.message.id;
     const completed = input.result.status === 'completed';
@@ -1255,6 +1256,7 @@ export class OrchestratorAgent extends ActorAgent {
       readonly assistantText: string;
       readonly turn: CompletedTurn;
       readonly answeredDrains: ReadonlySet<string>;
+      readonly overflowRetry: boolean;
     }, sampledVersion: number | null, mission: string | null,
   ): TerminalTurnParts {
     const parts: TerminalTurnParts = {
@@ -1267,6 +1269,7 @@ export class OrchestratorAgent extends ActorAgent {
       craftedToolsUsed: this.acc.craftedToolsUsed(),
       eventReplies: { answered: input.answeredDrains, requestId: input.result.requestId },
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
+      overflowRetry: input.overflowRetry,
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn)) }),
       sleepTime: { toolCalls: projectJsonValue({ value: this.acc.toolCalls }) },
       autoTitle: isPlaceholderMission(mission) || mission === null
@@ -1480,7 +1483,8 @@ export class OrchestratorAgent extends ActorAgent {
     // here is orchestrator sequencing (takes, branches, evolution, naming).
     const { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals } =
       this.settleTurnEvents(result);
-    this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
+    const overflowRecovery =
+      this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     // The identity of THIS terminal sequence — the durable turn plus the response
     // being settled. Both, because Think fires this hook once per response and a
     // continuation keeps the turn's user-message id: keyed on the turn alone, the
@@ -1557,6 +1561,7 @@ export class OrchestratorAgent extends ActorAgent {
         // Mission Inbox: a drain reaches a turn two ways and the ids come back
         // from two places, so the SET is what makes the settle exactly-once per
         // delivery.
+        overflowRetry: overflowRecovery?.enqueueRetry === true,
         answeredDrains: drainTurnsAnswered(drainTurnId, injectedSignals),
       }),
       hold: (claimed, close) => { this.holdTerminalClose(claimed, close, result.requestId); },

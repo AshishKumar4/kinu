@@ -84,7 +84,7 @@ import {
   UserSteerDrain, describeLandedSteers,
   type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
-  OVERFLOW_RETRY_EVENT,
+  OVERFLOW_RETRY_EVENT, type OverflowRecoveryDecision,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
   // plus the run_end vocabulary and the classifier that derives it from raw
   // facts, so neither backend chooses the string.
@@ -234,8 +234,8 @@ import {
 import {
   // Core's once-only lifecycle for one settled response, and the per-effect
   // ledger it wraps. Both backends drive this same state machine.
-  TerminalTransitions, initTerminalEffectTable, 
-  terminalEffect, keyedScope,
+  TerminalTransitions, initTerminalEffectTable,
+  terminalEffect, overflowRetryTerminalEffect, keyedScope,
   RunEndReasonSchema, ModelMessagesSchema, WorkModeSchema, TurnContinuitySchema,
   CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
@@ -993,18 +993,37 @@ export abstract class ActorAgent extends Think<Env> {
     ));
   }
 
+  private _subordinateRosterBroadcast: Promise<void> | null = null;
+  private _subordinateRosterBroadcastPending = false;
+
   protected broadcastSubordinatesChanged(_event?: SubordinatesChangedEvent): void {
-    void this.subordinateViews()
-      .then((subordinates) => {
-        this.broadcast(JSON.stringify({ type: 'subordinates_changed', subordinates }));
-      })
-      .catch((error: unknown) => {
+    this._subordinateRosterBroadcastPending = true;
+    if (this._subordinateRosterBroadcast !== null) return;
+    let broadcast: Promise<void> | null = null;
+    broadcast = (async () => {
+      try {
+        // Yield before querying so the owner field is established before a
+        // synchronous test double can settle this task.
+        await undefined;
+        while (this._subordinateRosterBroadcastPending) {
+          this._subordinateRosterBroadcastPending = false;
+          const subordinates = await this.subordinateViews();
+          this.broadcast(JSON.stringify({ type: 'subordinates_changed', subordinates }));
+        }
+      } catch (cause) {
         diagnostics.failure('subordinate.roster_broadcast_failed', toKinuError({
           doing: 'building the subordinate roster read model',
-          cause: error,
+          cause,
           otherwise: 'unavailable',
         }));
-      });
+      } finally {
+        if (this._subordinateRosterBroadcast === broadcast) {
+          this._subordinateRosterBroadcast = null;
+          if (this._subordinateRosterBroadcastPending) this.broadcastSubordinatesChanged();
+        }
+      }
+    })();
+    this._subordinateRosterBroadcast = broadcast;
   }
 
   protected broadcastSubordinateEvent(
@@ -1565,45 +1584,70 @@ export abstract class ActorAgent extends Think<Env> {
    * on the next one's queue slot.
    */
   private readonly _rerunningSteerKeys = new Set<string>();
+  private _rerunningSteerTask: Promise<void> | null = null;
+  private _rerunningSteerPending = false;
 
   private rerunLeftoverSteers(): void {
-    // Terminal leftovers come from SQL, not the RAM drain: a reset has already
-    // lost RAM, while these rows are the operator words we acknowledged. Keep
-    // seq order and mode boundaries; merging a Plan steer with Build would run
-    // it on the wrong tool surface.
-    const rows = this.sql<{ id: string; turn_id: string; mode: WorkMode; text: string }>`
-      SELECT id, turn_id, mode, text FROM pending_steers ORDER BY seq ASC`;
-    void (async () => {
-      let index = 0;
-      while (index < rows.length) {
-        const first = rows[index]!;
-        const group = [first];
-        index++;
-        while (index < rows.length && rows[index]!.mode === first.mode && rows[index]!.turn_id === first.turn_id) group.push(rows[index++]!);
-        const idempotencyKey = `steer-rerun:${first.turn_id}:${first.mode}:${first.id}`;
-        // A duplicate terminal callback can arrive before the first admission
-        // resolves. RAM closes that window; the durable idempotency key closes
-        // the same window across an activation reset.
-        if (this._rerunningSteerKeys.has(idempotencyKey)) continue;
-        this._rerunningSteerKeys.add(idempotencyKey);
-        try {
-          const queued = await this.host.enqueueTurn({
-            text: group.map((row) => row.text).join('\n\n'),
-            metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: first.mode },
-            idempotencyKey,
-          });
-          const duplicateAdmission = queued.durable?.accepted === false
-            && (queued.durable.status === 'pending' || queued.durable.status === 'running'
-              || queued.durable.status === 'completed');
-          if (queued.status !== 'queued' && !duplicateAdmission) continue;
-          for (const row of group) this.ctx.storage.sql.exec('DELETE FROM pending_steers WHERE id = ?', row.id);
-        } finally {
-          this._rerunningSteerKeys.delete(idempotencyKey);
+    this._rerunningSteerPending = true;
+    if (this._rerunningSteerTask !== null) return;
+    let rerun: Promise<void> | null = null;
+    rerun = (async () => {
+      let steers = 0;
+      try {
+        // Establish the strong owner before entering the durable terminal lane.
+        await undefined;
+        await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
+          ctx.stash({ lane: TERMINAL_LANE_FIBER });
+          while (this._rerunningSteerPending) {
+            this._rerunningSteerPending = false;
+            // Terminal leftovers come from SQL, not the RAM drain: a reset has
+            // already lost RAM, while these rows are the operator words we
+            // acknowledged. Keep seq order and mode boundaries; merging a Plan
+            // steer with Build would run it on the wrong tool surface.
+            const rows = this.sql<{ id: string; turn_id: string; mode: WorkMode; text: string }>`
+              SELECT id, turn_id, mode, text FROM pending_steers ORDER BY seq ASC`;
+            steers = rows.length;
+            let index = 0;
+            while (index < rows.length) {
+              const first = rows[index]!;
+              const group = [first];
+              index++;
+              while (index < rows.length && rows[index]!.mode === first.mode && rows[index]!.turn_id === first.turn_id) group.push(rows[index++]!);
+              const idempotencyKey = `steer-rerun:${first.turn_id}:${first.mode}:${first.id}`;
+              // A duplicate terminal callback can arrive before the first admission
+              // resolves. RAM closes that window; the durable idempotency key closes
+              // the same window across an activation reset.
+              if (this._rerunningSteerKeys.has(idempotencyKey)) continue;
+              this._rerunningSteerKeys.add(idempotencyKey);
+              try {
+                const queued = await this.host.enqueueTurn({
+                  text: group.map((row) => row.text).join('\n\n'),
+                  metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: first.mode },
+                  idempotencyKey,
+                });
+                const duplicateAdmission = queued.durable?.accepted === false
+                  && (queued.durable.status === 'pending' || queued.durable.status === 'running'
+                    || queued.durable.status === 'completed');
+                if (queued.status !== 'queued' && !duplicateAdmission) continue;
+                for (const row of group) this.ctx.storage.sql.exec('DELETE FROM pending_steers WHERE id = ?', row.id);
+              } finally {
+                this._rerunningSteerKeys.delete(idempotencyKey);
+              }
+            }
+          }
+        });
+      } catch (cause) {
+        diagnostics.failure('steer.rerun_failed', toKinuError({
+          doing: 'enqueuing terminal leftover steers', cause, otherwise: 'io',
+        }), { steers });
+      } finally {
+        if (this._rerunningSteerTask === rerun) {
+          this._rerunningSteerTask = null;
+          if (this._rerunningSteerPending) this.rerunLeftoverSteers();
         }
       }
-    })().catch((err: unknown) => diagnostics.failure('steer.rerun_failed', toKinuError({
-      doing: 'enqueuing terminal leftover steers', cause: err, otherwise: 'io',
-    }), { steers: rows.length }));
+    })();
+    this._rerunningSteerTask = rerun;
   }
 
   /** The settled turn's telemetry — the measured compaction trigger, the
@@ -1613,25 +1657,26 @@ export abstract class ActorAgent extends Think<Env> {
     errorText: string | undefined;
     completed: boolean;
     programmaticUserMessage: UIMessage | null;
-  }): void {
+  }): OverflowRecoveryDecision | null {
     const { errorText, completed, programmaticUserMessage } = turn;
+    let overflowRecovery: OverflowRecoveryDecision | null = null;
     // The NEXT turn's measured compaction trigger (core turn-lifecycle).
     persistMeasuredPromptTokens(this.compactionState, this.name, this.acc.lastPromptTokens, this._turnDurableLength);
-    // Overflow recovery — the shared core policy, APPLIED by the shared core
-    // helper (arm force-compaction + at most one retry enqueue).
+    // Overflow planning and compaction arming are synchronous. If this turn
+    // earned a retry, the caller records it as `overflow_retry` in the terminal
+    // roster before any asynchronous effect runs.
     if (!completed && result.error) {
-      const recovery = applyOverflowRecovery({
+      overflowRecovery = applyOverflowRecovery({
         error: result.error,
         lastPromptTokens: this.acc.lastPromptTokens,
         contextWindow: this._turnContextWindow > 0 ? this._turnContextWindow : this.sessionContextWindow(),
         turnWasOverflowRetry: this.turnUserMessageEvent(programmaticUserMessage) === OVERFLOW_RETRY_EVENT,
         state: this.compactionState,
         sessionKey: this.name,
-        signals: this.orch.signals,
       });
-      if (recovery.forceCompaction) {
+      if (overflowRecovery.forceCompaction) {
         this.logActivity('overflow_detected',
-          `${recovery.failureClass} — force compaction armed${recovery.enqueueRetry ? ', retry enqueued' : ''}`);
+          `${overflowRecovery.failureClass} — force compaction armed${overflowRecovery.enqueueRetry ? ', retry owed' : ''}`);
       }
     }
     // Seal the durable run: turn_end + run_end (core turn-lifecycle).
@@ -1697,6 +1742,7 @@ export abstract class ActorAgent extends Think<Env> {
       usage: this.acc.usage,
       usd: this.priceAt(this.acc.usage),
     });
+    return overflowRecovery;
   }
 
   // ── The terminal transition ───────────────────────────────────────────
@@ -1782,6 +1828,8 @@ export abstract class ActorAgent extends Think<Env> {
             : { status: 'completed', detail: refusal };
         },
       }),
+      overflow_retry: overflowRetryTerminalEffect(this.orch.signals),
+
 
       turn_record: terminalEffect({
         input: v.object({
@@ -2050,8 +2098,8 @@ export abstract class ActorAgent extends Think<Env> {
 
 
   /**
-   * The promise of the terminal sequence this actor started most recently,
-   * resolved once its disposition is written.
+   * The terminal sequence this actor started most recently, resolved once its
+   * disposition is written.
    *
    * Retained rather than dropped: the close is detached (a person waiting on
    * their next message must not wait on an SMTP round trip), and an unnamed
@@ -2079,19 +2127,27 @@ export abstract class ActorAgent extends Think<Env> {
   protected holdTerminalClose(
     transition: TerminalTransition, close: () => Promise<void>, chatRequestId: string,
   ): void {
-    this._terminalReported = this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
-      ctx.stash({ lane: TERMINAL_LANE_FIBER });
-      // NAMED for the duration of the close, because the close asks the chat
-      // roster whether anything else may still act under this turn and the
-      // response being closed usually still owns a row of its own.
-      this._settlingChatRequests.add(chatRequestId);
+    const prior = this._terminalReported;
+    let reported: Promise<void> | null = null;
+    reported = (async () => {
       try {
-        await close();
-      } finally {
-        this._settlingChatRequests.delete(chatRequestId);
-      }
-    })
-      .catch(async (err: unknown) => {
+        // Chain terminal closures so the latest owner retains every earlier
+        // close until it settled, rather than overwriting a live fiber.
+        await undefined;
+        await prior;
+        await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
+          ctx.stash({ lane: TERMINAL_LANE_FIBER });
+          // NAMED for the duration of the close, because the close asks the chat
+          // roster whether anything else may still act under this turn and the
+          // response being closed usually still owns a row of its own.
+          this._settlingChatRequests.add(chatRequestId);
+          try {
+            await close();
+          } finally {
+            this._settlingChatRequests.delete(chatRequestId);
+          }
+        });
+      } catch (cause) {
         // RELEASED on a handled rejection. An eviction needs no cleanup — nothing
         // runs after it — but a rejection that leaves this isolate alive with the
         // sequence still marked in flight makes every retry alarm and recovery
@@ -2099,15 +2155,27 @@ export abstract class ActorAgent extends Think<Env> {
         this.terminal.leave(transition);
         diagnostics.failure('turn.terminal_transition_close_failed', toKinuError({
           doing: "recording that a settled turn's effects had all reported",
-          cause: err,
+          cause,
           otherwise: 'io',
         }), { turnId: transition.turnId, messageId: transition.messageId });
         // RE-ARMED, for the reason the initial arm is. The close carries the
         // ledger's own final wake, so this rejection can BE that wake failing —
         // and the fiber is about to be disposed. Without this the rows stay owed
         // with the alarm that would have carried them already spent.
-        await this.terminal.armRecovery(transition, { cause: err });
-      });
+        try {
+          await this.terminal.armRecovery(transition, { cause });
+        } catch (recoveryCause) {
+          diagnostics.failure('turn.terminal_transition_recovery_failed', toKinuError({
+            doing: 're-arming the terminal transition after its close failed',
+            cause: recoveryCause,
+            otherwise: 'io',
+          }), { turnId: transition.turnId, messageId: transition.messageId });
+        }
+      } finally {
+        if (this._terminalReported === reported) this._terminalReported = Promise.resolve();
+      }
+    })();
+    this._terminalReported = reported;
   }
 
 
@@ -2420,8 +2488,8 @@ export abstract class ActorAgent extends Think<Env> {
     this.headJournal.cacheMerge(rootId, result, strategy);
   }
 
-  /** True while this activation's evolution recovery fiber is live. */
-  private _evolutionSettling = false;
+  /** The owned promise while this activation's evolution recovery fiber is live. */
+  private _evolutionSettling: Promise<void> | null = null;
 
   /**
    * Settle the evolution this turn dispatched, inside a DURABLE fiber — the cf
@@ -2458,19 +2526,27 @@ export abstract class ActorAgent extends Think<Env> {
    * pass, so unlike `kinu exec` it waits for it rather than carrying it forward.
    */
   protected settleEvolutionInBackground(): void {
-    if (this._evolutionSettling) return;
-    this._evolutionSettling = true;
-    void this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
-      ctx.stash({ lane: EVOLUTION_LANE_FIBER });
-      await this.orch.settleEvolution();
-      await this.orch.runDueSessionEvolution();
-    })
-      .catch((err: unknown) => diagnostics.failure('evolution.settle_failed', toKinuError({
-        doing: 'settling the turn and session evolution lanes',
-        cause: err,
-        otherwise: 'unavailable',
-      })))
-      .finally(() => { this._evolutionSettling = false; });
+    if (this._evolutionSettling !== null) return;
+    let settling: Promise<void> | null = null;
+    settling = (async () => {
+      try {
+        await undefined;
+        await this.runFiber(EVOLUTION_LANE_FIBER, async (ctx) => {
+          ctx.stash({ lane: EVOLUTION_LANE_FIBER });
+          await this.orch.settleEvolution();
+          await this.orch.runDueSessionEvolution();
+        });
+      } catch (cause) {
+        diagnostics.failure('evolution.settle_failed', toKinuError({
+          doing: 'settling the turn and session evolution lanes',
+          cause,
+          otherwise: 'unavailable',
+        }));
+      } finally {
+        if (this._evolutionSettling === settling) this._evolutionSettling = null;
+      }
+    })();
+    this._evolutionSettling = settling;
   }
 
   /**
@@ -2495,23 +2571,35 @@ export abstract class ActorAgent extends Think<Env> {
    * settled turn warms again, so the retry needs no record. One autonomous or
    * post-eviction turn may honestly lack MCP tools and says so on its surface.
    */
+  private _mcpWarmTask: Promise<void> | null = null;
+
   protected warmUserMcpInBackground(): void {
-    if (!this.getOwnerUserId()) return;
-    void this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
-      ctx.stash({ lane: MCP_WARM_LANE_FIBER });
-      // The same gate `buildUserMcpTools` uses, for the same reason: an owned
-      // workspace that has not been issued a capability token yet reaches
-      // nothing, and that is an ordinary state rather than a failure to report.
-      // Asked rather than caught, so a real failure reading one still travels.
-      if (!(await this.workspaceCapabilityToken())) return;
-      const { stub, caller } = await this.userHub();
-      await stub.userMcp_warmConnections(caller);
-    })
-      .catch((err: unknown) => diagnostics.failure('mcp.settle_warmup_failed', toKinuError({
-        doing: 'establishing the user MCP connections after a settled turn',
-        cause: err,
-        otherwise: 'unavailable',
-      })));
+    if (!this.getOwnerUserId() || this._mcpWarmTask !== null) return;
+    let warm: Promise<void> | null = null;
+    warm = (async () => {
+      try {
+        await undefined;
+        await this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
+          ctx.stash({ lane: MCP_WARM_LANE_FIBER });
+          // The same gate `buildUserMcpTools` uses, for the same reason: an owned
+          // workspace that has not been issued a capability token yet reaches
+          // nothing, and that is an ordinary state rather than a failure to report.
+          // Asked rather than caught, so a real failure reading one still travels.
+          if (!(await this.workspaceCapabilityToken())) return;
+          const { stub, caller } = await this.userHub();
+          await stub.userMcp_warmConnections(caller);
+        });
+      } catch (cause) {
+        diagnostics.failure('mcp.settle_warmup_failed', toKinuError({
+          doing: 'establishing the user MCP connections after a settled turn',
+          cause,
+          otherwise: 'unavailable',
+        }));
+      } finally {
+        if (this._mcpWarmTask === warm) this._mcpWarmTask = null;
+      }
+    })();
+    this._mcpWarmTask = warm;
   }
 
   /**
@@ -2576,6 +2664,8 @@ export abstract class ActorAgent extends Think<Env> {
    * the fiber's first tick left recovery reading a null snapshot and terminalizing
    * a review that never ran. After it, the fiber is re-drivable on its own.
    */
+  private readonly _advisorReviewTasks = new Map<string, Promise<void>>();
+
   protected reviewTurnInBackground(turn: CompletedTurn, recorded?: AdvisorRecoverySnapshot): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return Promise.resolve();
     // ONE lane per turn, ever STARTED. A terminal replay arriving after the
@@ -2590,45 +2680,57 @@ export abstract class ActorAgent extends Think<Env> {
     }
     const snapshot: AdvisorRecoverySnapshot = recorded ?? this.advisorSnapshotFor(turn);
     const checkpointed = Promise.withResolvers<void>();
-    void this.runFiber(ADVISOR_LANE_FIBER, async (ctx) => {
-      // The checkpoint IS what the caller owes. A lane that could not write one
-      // is a review no eviction can resume, so the failure travels to the owed
-      // row rather than being absorbed here — the earlier "named and dropped"
-      // reported an unrecoverable lane as a completed obligation.
+    const taskKey = nanoid();
+    let review: Promise<void> | null = null;
+    review = (async () => {
       try {
-        ctx.stash(snapshot);
+        await undefined;
+        await this.runFiber(ADVISOR_LANE_FIBER, async (ctx) => {
+          // The checkpoint IS what the caller owes. A lane that could not write one
+          // is a review no eviction can resume, so the failure travels to the owed
+          // row rather than being absorbed here — the earlier "named and dropped"
+          // reported an unrecoverable lane as a completed obligation.
+          try {
+            ctx.stash(snapshot);
+          } catch (cause) {
+            const failure = toKinuError({
+              doing: 'checkpointing the advisor review so an eviction can resume it',
+              cause,
+              otherwise: 'io',
+            });
+            diagnostics.failure('advisor.snapshot_failed', failure, { turnId: turn.turnId ?? '(none)' });
+            checkpointed.reject(failure);
+            // The caller owes a resumable review, not a finished one: a body that
+            // returned here would let the fiber retire as complete with no
+            // checkpoint on disk, so the same rejection the owed row already sees
+            // must reach the lane catch below, which records it as lane work.
+            throw failure;
+          }
+          // Adjacent to the stash: from this instant the lane is recoverable on its
+          // own, which is exactly when a second one becomes a duplicate.
+          if (laneKey !== null) recordEffectDone(this.boundSql, ADVISOR_LANE_SCOPE, laneKey);
+          checkpointed.resolve();
+          await this.runAdvisorReview(snapshot);
+        });
       } catch (cause) {
         const failure = toKinuError({
-          doing: 'checkpointing the advisor review so an eviction can resume it',
+          doing: 'reviewing the completed turn',
           cause,
-          otherwise: 'io',
+          otherwise: 'unavailable',
         });
-        diagnostics.failure('advisor.snapshot_failed', failure, { turnId: turn.turnId ?? '(none)' });
+        diagnostics.failure('advisor.review_failed', failure);
+        // A fiber that never reached its body leaves the caller waiting on a
+        // checkpoint that will never be written. Rejecting is what keeps the row
+        // owed; once the stash landed, this settles nothing and the review's own
+        // failure is the lane's, not the ledger's.
         checkpointed.reject(failure);
-        // The caller owes a resumable review, not a finished one: a body that
-        // returned here would let the fiber retire as complete with no
-        // checkpoint on disk, so the same rejection the owed row already sees
-        // must reach the lane catch below, which records it as lane work.
-        throw failure;
+      } finally {
+        if (this._advisorReviewTasks.get(taskKey) === review) {
+          this._advisorReviewTasks.delete(taskKey);
+        }
       }
-      // Adjacent to the stash: from this instant the lane is recoverable on its
-      // own, which is exactly when a second one becomes a duplicate.
-      if (laneKey !== null) recordEffectDone(this.boundSql, ADVISOR_LANE_SCOPE, laneKey);
-      checkpointed.resolve();
-      await this.runAdvisorReview(snapshot);
-    }).catch((err: unknown) => {
-      const failure = toKinuError({
-        doing: 'reviewing the completed turn',
-        cause: err,
-        otherwise: 'unavailable',
-      });
-      diagnostics.failure('advisor.review_failed', failure);
-      // A fiber that never reached its body leaves the caller waiting on a
-      // checkpoint that will never be written. Rejecting is what keeps the row
-      // owed; once the stash landed, this settles nothing and the review's own
-      // failure is the lane's, not the ledger's.
-      checkpointed.reject(failure);
-    });
+    })();
+    this._advisorReviewTasks.set(taskKey, review);
     return checkpointed.promise;
   }
 
@@ -2884,6 +2986,7 @@ export abstract class ActorAgent extends Think<Env> {
   // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
   // the queued half of signal delivery, reached only through the core seam.
   private _host: BackendHost | null = null;
+  private readonly _drainTimerTasks = new Map<string, Promise<void>>();
   protected get host(): BackendHost {
     if (!this._host) {
       const getHeadRuntime = () => this.getCFHeadRuntime();
@@ -2949,22 +3052,38 @@ export abstract class ActorAgent extends Think<Env> {
         // events are still durable in the EventLog — the next ingress / cron
         // alarm / post-turn drain picks them up (delayed, never dropped).
         setTimer: (fn, ms) => {
-          void this.keepAliveWhile(() => new Promise<void>((resolve) => {
-            setTimeout(() => {
-              fn().catch((err: unknown) =>
-                diagnostics.failure('drain.timer_callback_failed', toKinuError({
-                  doing: 'running the debounced event drain',
-                  cause: err,
-                  otherwise: 'io',
-                })),
-              ).finally(resolve);
-            }, ms);
-          })).catch((err: unknown) =>
-            diagnostics.failure('drain.timer_keepalive_failed', toKinuError({
-              doing: 'holding the actor alive across the drain debounce window',
-              cause: err,
-              otherwise: 'io',
-            })));
+          const timerKey = nanoid();
+          let timer: Promise<void> | null = null;
+          timer = (async () => {
+            try {
+              await undefined;
+              await this.keepAliveWhile(async () => {
+                await new Promise<void>((resolve) => {
+                  setTimeout(resolve, ms);
+                });
+                try {
+                  await fn();
+                } catch (cause) {
+                  diagnostics.failure('drain.timer_callback_failed', toKinuError({
+                    doing: 'running the debounced event drain',
+                    cause,
+                    otherwise: 'io',
+                  }));
+                }
+              });
+            } catch (cause) {
+              diagnostics.failure('drain.timer_keepalive_failed', toKinuError({
+                doing: 'holding the actor alive across the drain debounce window',
+                cause,
+                otherwise: 'io',
+              }));
+            } finally {
+              if (this._drainTimerTasks.get(timerKey) === timer) {
+                this._drainTimerTasks.delete(timerKey);
+              }
+            }
+          })();
+          this._drainTimerTasks.set(timerKey, timer);
         },
         // Branching-heads runtime (Facet spawner + merge LLM), resolved lazily —
         // heads need the owner for UserDO auth, set by first-turn time.
@@ -3611,29 +3730,34 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected ensureInstructionApprovalMigration(): Promise<void> {
     if (this._instructionMigration !== null) return this._instructionMigration;
-    const migration = (async () => {
-      const limits = {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      };
-      const agentsMd = await collectWorkspaceAgentsMd(
-        this.rt.storage.vfs,
-        limits,
-        () => 'unverified',
-        this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
-      );
-      const entries = await snapshotExistingInstructions({
-        agentsMd,
-        skillsVfs: this.getSkillsVfs(),
-        admissionTokens: stepContextLimit(limits),
-      });
-      this.instructionApprovals().grandfatherExisting(entries);
+    let migration: Promise<void> | null = null;
+    migration = (async () => {
+      try {
+        // Establish the one migration owner before synchronous storage fakes run.
+        await undefined;
+        const limits = {
+          contextWindow: this.sessionContextWindow(),
+          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        };
+        const agentsMd = await collectWorkspaceAgentsMd(
+          this.rt.storage.vfs,
+          limits,
+          () => 'unverified',
+          this.rt.executionRouter?.getProvider('sandbox') ?? undefined,
+        );
+        const entries = await snapshotExistingInstructions({
+          agentsMd,
+          skillsVfs: this.getSkillsVfs(),
+          admissionTokens: stepContextLimit(limits),
+        });
+        this.instructionApprovals().grandfatherExisting(entries);
+      } catch (cause) {
+        if (this._instructionMigration === migration) this._instructionMigration = null;
+        throw cause;
+      }
     })();
-    this._instructionMigration = migration.catch((error: unknown) => {
-      this._instructionMigration = null;
-      throw error;
-    });
-    return this._instructionMigration;
+    this._instructionMigration = migration;
+    return migration;
   }
 
 

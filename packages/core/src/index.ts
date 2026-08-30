@@ -14,8 +14,8 @@ export {
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
 } from './orchestrator/terminal-transition';
 export {
-  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, terminalEffectKey,
-  terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
+  TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
+  terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema, ModelMessagesSchema, WorkModeSchema, TurnContinuitySchema,

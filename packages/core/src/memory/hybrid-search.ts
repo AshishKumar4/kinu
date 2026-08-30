@@ -114,21 +114,29 @@ export async function hybridSearch(
   const finalK = options.finalK ?? 10;
   const rrfK = options.rrfK ?? 60;
 
-  const lexicalPromise: Promise<LexicalHit[]> = lexicalSearch(query, perSourceK).catch((err: unknown) => {
+  const lexicalPromise: Promise<LexicalHit[]> = (async () => {
+    try {
+      return await lexicalSearch(query, perSourceK);
+    } catch (cause) {
       diagnostics.failure(
         'memory.lexical_search_failed',
-        toKinuError({ doing: 'run the lexical half of a hybrid search', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'run the lexical half of a hybrid search', cause, otherwise: 'io' }),
       );
       return [];
-    });
+    }
+  })();
   const semanticPromise: Promise<VectorSearchHit[]> = vectorStore.available
-    ? vectorStore.search(query, perSourceK).catch((err: unknown) => {
+    ? (async () => {
+        try {
+          return await vectorStore.search(query, perSourceK);
+        } catch (cause) {
           diagnostics.failure(
             'memory.semantic_search_failed',
-            toKinuError({ doing: 'run the semantic half of a hybrid search', cause: err, otherwise: 'unavailable' }),
+            toKinuError({ doing: 'run the semantic half of a hybrid search', cause, otherwise: 'unavailable' }),
           );
           return [];
-        })
+        }
+      })()
     : Promise.resolve([]);
   const [lexical, semantic] = await Promise.all([lexicalPromise, semanticPromise]);
 

@@ -446,10 +446,15 @@ describe('kinu acp — session lifecycle', () => {
     const fake = fakeClient();
     const failure = await withConnection(fake, async (ctx) => {
       await newSession(ctx);
-      return ctx.request(AGENT_METHODS.session_prompt, {
-        sessionId: 'nope',
-        prompt: [{ type: 'text', text: 'hi' }],
-      }).then(() => null, (err: unknown) => (err instanceof Error ? err : new Error(String(err))));
+      try {
+        await ctx.request(AGENT_METHODS.session_prompt, {
+          sessionId: 'nope',
+          prompt: [{ type: 'text', text: 'hi' }],
+        });
+        return null;
+      } catch (cause) {
+        return cause instanceof Error ? cause : new Error(String(cause));
+      }
     });
 
     expect(failure).toBeInstanceOf(Error);

@@ -293,24 +293,20 @@ describe('settlePendingBranches — the drain both backends run at turn end', ()
       branches.push({ id: handle.id, task: spec.task, handle: Promise.resolve(handle) });
     }
 
-    settlePendingBranches(
+    await settlePendingBranches(
       { sql, sessionId: 'default', broadcast: (e) => { events.push(e); } },
       branches,
       'turn-1',
       'the live answer',
     );
-    // Draining is synchronous even though each settle is detached: a branch
-    // left behind would be settled again against the NEXT turn's answer.
     expect(branches).toEqual([]);
-
-    await new Promise((r) => setTimeout(r, 50));
     expect(events.filter((e) => e.status === 'settled')).toHaveLength(2);
   });
 
-  test('an empty list is a no-op', () => {
+  test('an empty list is a no-op', async () => {
     const { sql } = setup();
     const events: BranchStatusEvent[] = [];
-    settlePendingBranches({ sql, sessionId: 'default', broadcast: (e) => { events.push(e); } }, [], 'turn-1', 'x');
+    await settlePendingBranches({ sql, sessionId: 'default', broadcast: (e) => { events.push(e); } }, [], 'turn-1', 'x');
     expect(events).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode, type RefObject } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 
@@ -98,6 +98,7 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
   const [page, setPage] = useState<TuiAgentPage>(EMPTY_AGENT_PAGE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
   const sourceRef = useRef(source);
   sourceRef.current = source;
   const requestRef = useRef(0);
@@ -154,12 +155,18 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
   }, [loading, page]);
 
   useEffect(() => {
-    reload().catch((cause: unknown) => diagnostics.failure(
-      'tui.roster_reload_failed',
-      toKinuError({ doing: 'reloading the agent roster', cause, otherwise: 'unavailable' }),
-    ));
+    startTransition(async () => {
+      try {
+        await reload();
+      } catch (cause) {
+        diagnostics.failure(
+          'tui.roster_reload_failed',
+          toKinuError({ doing: 'reloading the agent roster', cause, otherwise: 'unavailable' }),
+        );
+      }
+    });
     return () => { requestRef.current += 1; };
-  }, [reload, source]);
+  }, [reload, source, startTransition]);
 
   return { page, loading, error, reload, loadMore };
 }
