@@ -301,12 +301,16 @@ describe('a span marks a failure and changes nothing about it', () => {
     const { tracer, attributes } = spanFor();
     const thrown = new KinuError('timeout', 'awaiting the node', { cause: new Error('600s idle') });
     const rejected: Error[] = [];
-    await tracer
-      .span('run', { isolateGen: 1, selfPath: 'A:a' }, async () => { await Promise.resolve(); throw thrown; })
-      .catch((error: unknown) => {
-        if (!(error instanceof Error)) throw error;
-        rejected.push(error);
-      });
+    try {
+      await tracer.span(
+        'run',
+        { isolateGen: 1, selfPath: 'A:a' },
+        async () => { await Promise.resolve(); throw thrown; },
+      );
+    } catch (cause) {
+      if (!(cause instanceof Error)) throw cause;
+      rejected.push(cause);
+    }
     expect(rejected[0]).toBe(thrown);
     expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
   });
@@ -315,14 +319,14 @@ describe('a span marks a failure and changes nothing about it', () => {
     const secret = 'sk-live-0000000000000000';
     const { tracer } = spanFor();
     const absorbed: Error[] = [];
-    await tracer
-      .span('thrown', { isolateGen: 1, selfPath: 'A:a' }, async () => {
+    try {
+      await tracer.span('thrown', { isolateGen: 1, selfPath: 'A:a' }, async () => {
         throw new Error(`upstream refused: ${secret}`);
-      })
-      .catch((error: unknown) => {
-        if (!(error instanceof Error)) throw error;
-        absorbed.push(error);
       });
+    } catch (cause) {
+      if (!(cause instanceof Error)) throw cause;
+      absorbed.push(cause);
+    }
     expect(absorbed).toHaveLength(1);
     tracer.span('tolerated', { isolateGen: 1, selfPath: 'A:a' }, (span) => {
       span.fail(new Error(`upstream refused: ${secret}`));

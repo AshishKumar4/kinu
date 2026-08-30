@@ -290,12 +290,15 @@ describe('exploration-facet spawn seam', () => {
 
     // Both facts matter and neither may hide the other: the spawn failed, AND
     // a database was stranded in the root's quota because of it.
-    const thrown = await spawnBranchFacet(host, 'branch-7', {
-      ownerUserId: 'user-1', capabilityToken: 'pwc_parent',
-    }).then(() => null, (error: unknown) => {
-      if (!(error instanceof Error)) throw error;
-      return error;
-    });
+    let thrown: Error | null = null;
+    try {
+      await spawnBranchFacet(host, 'branch-7', {
+        ownerUserId: 'user-1', capabilityToken: 'pwc_parent',
+      });
+    } catch (cause) {
+      if (!(cause instanceof Error)) throw cause;
+      thrown = cause;
+    }
 
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown?.message).toContain('branch-7');

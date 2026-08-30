@@ -309,18 +309,20 @@ describe('timer-less ask waiter + cancellation', () => {
       signal: abort.signal,
     });
     let settled = false;
-    void pending.then(() => { settled = true; }, () => { settled = true; });
+    const settledPending = pending.finally(() => {
+      settled = true;
+    });
     await until(() => pendingPeerEvents(bob).length === 1, 'the pending ask delivery');
     expect(settled).toBe(false);
 
     abort.abort(new Error('cancelled by user'));
-    const cancellation = await pending.then(
-      () => null,
-      (rejection: unknown) => {
-        const parsed = v.safeParse(RejectionErrorSchema, rejection);
-        return parsed.success ? parsed.output : new Error(String(rejection));
-      },
-    );
+    let cancellation: Error | null = null;
+    try {
+      await settledPending;
+    } catch (cause) {
+      const parsed = v.safeParse(RejectionErrorSchema, cause);
+      cancellation = parsed.success ? parsed.output : new Error(String(cause));
+    }
     expect(cancellation?.message).toBe('cancelled by user');
 
     const events = pendingPeerEvents(bob);

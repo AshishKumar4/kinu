@@ -88,15 +88,19 @@ describe('Workers AI credential refresh', () => {
       error_description: 'The provided authorization grant is invalid',
     }), { status: 400, headers: { 'content-type': 'application/json' } }));
     try {
-      const attempt = refreshCloudflareCredential(
-        { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
-        { kind: 'oauth', accessToken: 'cf-access-1', refreshToken: 'cf-refresh-revoked' },
-      );
-      await expect(attempt).rejects.toBeInstanceOf(CloudflareOAuthTokenError);
-      await attempt.catch((err: unknown) => {
-        const parsed = v.safeParse(v.object({ oauthError: v.string() }), err);
+      let rejected = false;
+      try {
+        await refreshCloudflareCredential(
+          { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
+          { kind: 'oauth', accessToken: 'cf-access-1', refreshToken: 'cf-refresh-revoked' },
+        );
+      } catch (cause) {
+        rejected = true;
+        expect(cause).toBeInstanceOf(CloudflareOAuthTokenError);
+        const parsed = v.safeParse(v.object({ oauthError: v.string() }), cause);
         expect(parsed.success && parsed.output.oauthError).toBe('invalid_grant');
-      });
+      }
+      expect(rejected).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -167,15 +171,18 @@ describe('Workers AI credential refresh', () => {
     // `String(err)` on an AI SDK error is just its NAME — asserting against
     // that would make the negative below unable to fail, which is the same as
     // not having it. The body the owner is shown is `responseBody`/`message`.
-    const failure = await generateText({
-      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
-      prompt: 'ping',
-    }).then(() => '', (rejection: unknown) => {
-      const parsed = v.safeParse(ModelRejectionSchema, rejection);
-      return parsed.success
+    let failure = '';
+    try {
+      await generateText({
+        model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+        prompt: 'ping',
+      });
+    } catch (cause) {
+      const parsed = v.safeParse(ModelRejectionSchema, cause);
+      failure = parsed.success
         ? `${parsed.output.message ?? ''}\n${parsed.output.responseBody ?? ''}`
-        : String(rejection);
-    });
+        : String(cause);
+    }
 
     expect(failure).toContain('Reconnect Cloudflare in User settings');
     // The bare upstream word is what the owner was shown; it must not survive.

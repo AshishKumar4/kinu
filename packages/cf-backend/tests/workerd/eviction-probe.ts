@@ -125,19 +125,18 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
   /**
    * A durable fiber whose body never settles.
    *
-   * `runFiber` writes its `cf_agents_runs` row before running the body and takes
-   * a `keepAlive` for the duration, so the reset below leaves exactly the pair
+   * `startFiber` accepts the independent job before returning. Its execution
+   * writes the `cf_agents_runs` row before running the body and takes a
+   * `keepAlive` for the duration, so the reset below leaves exactly the pair
    * production leaves: the row, and no promise.
    */
   async startLostFiber(name: string): Promise<void> {
-    this.runFiber(name, async (ctx) => {
+    await this.startFiber(name, async (ctx) => {
       ctx.stash({ lane: name, phase: 'running' });
       await new Promise<void>(() => undefined);
-    }).catch((error: unknown) => {
-      console.error('lost fiber rejected before eviction', error);
     });
-    // The row is written synchronously inside `runFiber`; returning here means
-    // the caller's next read would see it.
+    // The durable run is registered before `startFiber` resolves; returning
+    // here means the caller's next read sees it.
   }
 
   /** Report the recovery to the witness and terminalize, which is the shape
