@@ -344,20 +344,32 @@ export class LocalAgentClient implements AgentClient {
     };
     this.autoTitleTask = owner;
     owner.promise = (async () => {
+      // The rejection leaves the handler as a value rather than being judged
+      // inside it: what a failure here MEANS is a fact about this client — only
+      // `close()` aborts this controller — and not a fact about the error.
+      let failure: { readonly cause: unknown } | undefined;
       try {
         await autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, {
           ...this.deps.naming,
           signal: owner.controller.signal,
         });
       } catch (cause) {
-        if (owner.controller.signal.aborted) return;
-        diagnostics.failure(
-          'workspace.title_save_failed',
-          toKinuError({ doing: 'saving the workspace title', cause, otherwise: 'io' }),
-          { workspace: this.agentName },
-        );
+        failure = { cause };
       } finally {
         if (this.autoTitleTask === owner) this.autoTitleTask = null;
+      }
+      // `close()` aborts this controller and the abort reason travels as the
+      // rejection, so a failure standing here after it is the cancellation the
+      // caller asked for. Filed as `title_save_failed` it would report the
+      // owner's own exit as an io fault against a save never allowed to finish.
+      if (failure !== undefined && !owner.controller.signal.aborted) {
+        diagnostics.failure(
+          'workspace.title_save_failed',
+          toKinuError({
+            doing: 'saving the workspace title', cause: failure.cause, otherwise: 'io',
+          }),
+          { workspace: this.agentName },
+        );
       }
     })();
   }

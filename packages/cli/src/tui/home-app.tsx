@@ -161,6 +161,10 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     let task: Promise<void> | null = null;
     let settled = false;
     task = (async () => {
+      // The rejection leaves the handler as a value: whether a refresh failure
+      // has anywhere to land is this effect's fact — its own cleanup is the only
+      // thing that aborts the signal — and not the error's.
+      let failure: { readonly cause: unknown } | undefined;
       try {
         const sync = await syncCloudAgentRefs();
         if (abort.signal.aborted) return;
@@ -170,12 +174,15 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         // Saying nothing would read as "you have no such cloud workspace".
         setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
       } catch (cause) {
-        if (abort.signal.aborted) return;
-        // A list that could not be refreshed must not read as the list itself.
-        setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause })}`);
+        failure = { cause };
       } finally {
         settled = true;
         if (task !== null && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
+      }
+      // A list that could not be refreshed must not read as the list itself —
+      // and a scene the cleanup already tore down has no notice to show.
+      if (failure !== undefined && !abort.signal.aborted) {
+        setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: failure.cause })}`);
       }
     })();
     cloudSyncTaskRef.current = task;
