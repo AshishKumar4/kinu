@@ -64,12 +64,12 @@ prefix (`fix/reliability-a1a3` becomes `archive/reliability-a1a3`). Counts use
 | `bench/tbench-run-3` | `archive/tbench-run-3` | `ec7baac5` | 1088 | 4409 | 0 |
 | `chore/commit-hygiene-gate` | `archive/commit-hygiene-gate` | `ef3e9a70` | 845 | 4198 | 0 |
 | `gate/patch-parity` | `archive/patch-parity` | `0b4f1064` | 845 | 4197 | 0 |
-| `cutover/settle-mcts` | `archive/settle-mcts` | `dd81adcb` | 1871 | 5933 | 0 |
+| `cutover/settle-mcts` | `archive/settle-mcts` | `096fcc65` | 1871 | 5933 | 0 |
 | `feat/agent-nodes` | `archive/agent-nodes` | `7a0598b6` | 846 | 4194 | 0 |
 | `feat/agents-swarm` | `archive/agents-swarm` | `8a464199` | 1839 | 5902 | 0 |
 | `feat/node-substrate` | `archive/node-substrate` | `7d1cbea9` | 1885 | 5946 | 0 |
 | `feat/records-judge` | `archive/records-judge` | `b8fb9f05` | 871 | 4214 | 0 |
-| `feat/swarm-depth` | `archive/swarm-depth` | `b19c36f5` | 1869 | 5932 | 0 |
+| `feat/swarm-depth` | `archive/swarm-depth` | `e703cd98` | 1869 | 5932 | 0 |
 | `feat/merge-back-wiring` | `archive/merge-back-wiring` | `fd482aa0` | 863 | 4210 | 0 |
 | `feat/infra-provision` | `archive/infra-provision` | `a21becc0` | 1844 | 5906 | 0 |
 | `fix/strict-agents-input` | `archive/strict-agents-input` | `88dffa5d` | 1793 | 5827 | 0 |
@@ -98,6 +98,30 @@ Untraced branches wait on an owner ruling.
 index, and 272 of 1,179 files at `df014c73`. Its work had landed:
 `packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1 and §A3.
 
+
+### The 2026-08-30 credential redaction
+
+A local history scan found two expired Proteus access tokens in one old owner-message
+record. No remote ref reached that blob. Four local refs did: one branch and three
+archive tags. An isolated `filter-repo` pass replaced only those two token strings
+with `[REDACTED-PROTEUS-ACCESS-TOKEN]`.
+
+The rewrite produced 1,871 old-to-new commit mappings. Every rewritten commit kept
+its parent topology, author, committer, message, and every non-target path. No commit
+was pruned. The branch and `archive/isolation-design` tag remain on one shared tip.
+
+| Ref | Old tip | Redacted tip | Commits | Blobs `main` lacks | Sole copy |
+|---|---|---|---:|---:|---:|
+| `fix/inspect-events-row-shape` | `a3e0752c` | `1a4ca8e8` | 1866 | 5923 | 0 |
+| `archive/isolation-design` | `a3e0752c` | `1a4ca8e8` | 1866 | 5923 | 0 |
+| `archive/settle-mcts` | `dd81adcb` | `096fcc65` | 1871 | 5933 | 0 |
+| `archive/swarm-depth` | `b19c36f5` | `e703cd98` | 1869 | 5932 | 0 |
+
+Measured 2026-08-30, the repository has 142 `archive/*` tags. The three affected
+tags still carry nonzero novel blobs and have zero sole-copy blobs because sibling
+refs retain the same objects. No tag was deleted. Reflog expiry and object pruning
+remain pending until this inventory lands and a final all-ref scan confirms that no
+credential blob is reachable.
 
 ### The 2026-08-28 consolidation prune wave
 
