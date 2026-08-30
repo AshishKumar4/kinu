@@ -8,7 +8,7 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 -import { isCurrentUser } from '../utils/identity';
 -import { ImageThumbnail } from './ImageThumbnail';
 -import { EditorAnnotationCard } from './EditorAnnotationCard';
-+import React, { useEffect, useRef, useState } from 'react';
++import { useEffect, useRef, useState } from 'react';
 +import type { Annotation } from '../types';
 +import { AnnotationType } from '../types';
  import { useIsMobile } from '../hooks/useIsMobile';

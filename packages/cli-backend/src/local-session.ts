@@ -538,10 +538,6 @@ export class LocalAgentSession implements BackendHost {
   private cachedModel: LanguageModel | null = null;
   private cachedModelSpec: string | null = null;
   private tools: ToolSet = {};
-  /** The UNWRAPPED tool surface (no 30s background threshold). The turn path
-   *  uses `tools`; job resume runs the raw tool so a re-drive can't detach a
-   *  second job (the DO's getRawTools). */
-  private rawTools: ToolSet = {};
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
@@ -4827,7 +4823,6 @@ export class LocalAgentSession implements BackendHost {
   private activateToolMode(mode: WorkMode): void {
     const surface = this.toolSets[mode];
     if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
-    this.rawTools = surface.raw;
     this.tools = surface.wrapped;
   }
 }
