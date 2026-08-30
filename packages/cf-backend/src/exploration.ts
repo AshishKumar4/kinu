@@ -44,6 +44,7 @@
  *   • LLM config derived per-call from the owner user's provider registry
  */
 
+import * as v from "valibot";
 import { Agent, callable, type AgentContext, type SubAgentClass } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import { generateText } from "ai";
@@ -76,7 +77,8 @@ import {
   type NodeLoopDeps,
   type NodeLoopResult,
   type MissionScope,
-  type ModelOperationSink,
+  MODEL_OPERATION_KINDS, MODEL_OPERATION_OUTCOMES, MODEL_OPERATION_PHASES, SPEND_SOURCES,
+  type ModelOperationEvent, type ModelOperationSink,
   type WorkMode,
   type ResolvedTurnProfile,
 } from "@kinu.run/core";
@@ -95,10 +97,41 @@ import {
   type AgentTracing,
 } from "@kinu.run/core/obs";
 import { createAgentConfigStore, initAgentConfigTable } from "@kinu.run/core";
-import { forwardFacetModelOperations } from "./obs/facet-operations";
+import { forwardFacetModelOperation } from "./obs/facet-operations";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { installAnalyticsDiagnostics } from "./analytics/install";
 import { openAnalyticsWindow } from "./analytics/writer";
+
+const ModelOperationEventSchema = v.object({
+  operationId: v.string(),
+  source: v.picklist(SPEND_SOURCES),
+  op: v.picklist(MODEL_OPERATION_KINDS),
+  phase: v.picklist(MODEL_OPERATION_PHASES),
+  outcome: v.optional(v.picklist(MODEL_OPERATION_OUTCOMES)),
+  usage: v.optional(v.object({
+    input: v.optional(v.number()),
+    output: v.optional(v.number()),
+    cacheRead: v.optional(v.number()),
+    cacheWrite: v.optional(v.number()),
+    cacheWrite1h: v.optional(v.number()),
+    reasoning: v.optional(v.number()),
+    neurons: v.optional(v.number()),
+  })),
+  spec: v.optional(v.string()),
+  modelId: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+
+const MODEL_OPERATION_LANE_FIBER = 'model-operation-forward';
+
+interface ModelOperationOutboxRow {
+  readonly id: number;
+  readonly event_json: string;
+}
+
+interface ModelOperationDrain {
+  promise: Promise<void> | null;
+}
 
 /**
  * One turn of the conversation a BRANCH is asked to continue from.
@@ -173,11 +206,68 @@ export class ExplorationAgent extends Agent<Env> {
     return this._boundSql;
   }
 
-  /** Where THIS facet's model-operation frames go. The thunk, rather than the
-   *  stub: `_cf_initAsFacet` seeds the parent AFTER every field initializer has
-   *  run, so a value captured here would be the null it started as. */
+  /** Durable local outbox. A root RPC is deleted only after acknowledgement. */
+  private modelOperationDrain: ModelOperationDrain | null = null;
+
+  private ensureModelOperationOutbox(): void {
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS facet_model_operation_outbox (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_json TEXT NOT NULL
+      )
+    `);
+  }
+
+  private enqueueModelOperation(event: ModelOperationEvent): void {
+    this.ensureModelOperationOutbox();
+    this.ctx.storage.sql.exec(
+      'INSERT INTO facet_model_operation_outbox (event_json) VALUES (?)',
+      JSON.stringify(event),
+    );
+    this.startModelOperationDrain();
+  }
+
+  private startModelOperationDrain(): void {
+    if (this.modelOperationDrain !== null) return;
+    const owner: ModelOperationDrain = { promise: null };
+    this.modelOperationDrain = owner;
+    owner.promise = (async () => {
+      try {
+        await this.runFiber(MODEL_OPERATION_LANE_FIBER, async (ctx) => {
+          ctx.stash({ lane: MODEL_OPERATION_LANE_FIBER });
+          await this.drainModelOperationOutbox();
+        });
+      } catch (cause) {
+        diagnostics.failure('event.model_operation_emit_failed', toKinuError({
+          doing: 'draining the facet model-operation outbox',
+          cause,
+          otherwise: 'io',
+        }));
+      } finally {
+        if (this.modelOperationDrain === owner) this.modelOperationDrain = null;
+      }
+    })();
+  }
+
+  private async drainModelOperationOutbox(): Promise<void> {
+    while (true) {
+      const rows = this.sql<ModelOperationOutboxRow>`
+        SELECT id, event_json
+        FROM facet_model_operation_outbox
+        ORDER BY id
+        LIMIT 64
+      `;
+      if (rows.length === 0) return;
+      for (const row of rows) {
+        const event = v.parse(ModelOperationEventSchema, JSON.parse(row.event_json));
+        await forwardFacetModelOperation(() => this.getSharedParentStub(), event);
+        this.ctx.storage.sql.exec('DELETE FROM facet_model_operation_outbox WHERE id = ?', row.id);
+      }
+    }
+  }
+
   private readonly modelOperations: ModelOperationSink =
-    forwardFacetModelOperations(() => this.getSharedParentStub());
+    (event) => { this.enqueueModelOperation(event); };
 
   /**
    * The parent workspace's resolved turn profile — the one thing a facet must
@@ -383,6 +473,11 @@ export class ExplorationAgent extends Agent<Env> {
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
       )
     `);
+    this.ensureModelOperationOutbox();
+    const pending = this.ctx.storage.sql.exec<{ id: number }>(
+      'SELECT id FROM facet_model_operation_outbox ORDER BY id LIMIT 1',
+    ).toArray();
+    if (pending.length > 0) this.startModelOperationDrain();
   }
 
   // ── MCTS mode @callables ────────────────────────────────────────

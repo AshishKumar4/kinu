@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
   type ReactNode,
 } from "react";
 
@@ -37,6 +38,7 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
   const knownNames = useRef(new Set<string>());
   /**
    * Which roster read may publish.
@@ -50,22 +52,43 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
    */
   const generation = useRef(0);
 
-  const refresh = useCallback((): void => {
+  /**
+   * A read returns its generation with either data or failure. The load checks
+   * that generation after the lexical catch, so stale success and stale failure
+   * both publish nothing while the current failure reaches the UI.
+   */
+  type RosterRead =
+    | { readonly kind: "roster"; readonly roster: { readonly entries: WorkspaceEntry[]; readonly total: number } }
+    | { readonly kind: "failure"; readonly cause: unknown };
+
+  const readRoster = useCallback(async (): Promise<{
+    readonly generation: number;
+    readonly outcome: RosterRead;
+  }> => {
     const current = ++generation.current;
-    listWorkspaces().then(
-      (roster) => {
-        if (current !== generation.current) return;
-        knownNames.current = new Set(roster.entries.map((entry) => entry.name));
-        setEntries(roster.entries);
-        setTotal(roster.total);
-        setError(null);
-      },
-      (...rejection: [unknown]) => {
-        if (current !== generation.current) return;
-        setError(renderThrownChain({ cause: rejection[0] }));
-      },
-    );
+    try {
+      return { generation: current, outcome: { kind: "roster", roster: await listWorkspaces() } };
+    } catch (cause) {
+      return { generation: current, outcome: { kind: "failure", cause } };
+    }
   }, []);
+
+
+  const loadRoster = useCallback(async (): Promise<void> => {
+    const read = await readRoster();
+    if (read.generation !== generation.current) return;
+    if (read.outcome.kind === "failure") {
+      setError(renderThrownChain({ cause: read.outcome.cause }));
+      return;
+    }
+    knownNames.current = new Set(read.outcome.roster.entries.map((entry) => entry.name));
+    setEntries(read.outcome.roster.entries);
+    setTotal(read.outcome.roster.total);
+    setError(null);
+  }, [readRoster]);
+  const refresh = useCallback((): void => {
+    startTransition(async () => { await loadRoster(); });
+  }, [loadRoster, startTransition]);
 
   // Every local edit retires whatever read is in flight. A list fetched before
   // the edit does not know about it, so publishing it would undo the edit —
@@ -101,18 +124,21 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
 
   useEffect(() => {
     const sync = (): void => {
-      if (document.visibilityState === "visible") refresh();
+      if (document.visibilityState !== "visible") return;
+      refresh();
     };
     refresh();
     const interval = window.setInterval(sync, 30_000);
     window.addEventListener("focus", sync);
     document.addEventListener("visibilitychange", sync);
     return () => {
+      generation.current += 1;
       window.clearInterval(interval);
       window.removeEventListener("focus", sync);
       document.removeEventListener("visibilitychange", sync);
     };
   }, [refresh]);
+
   useEffect(() => {
     const handleRename = (event: Event): void => {
       const parsed = v.safeParse(

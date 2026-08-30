@@ -15,13 +15,26 @@ import {
   JsonValueSchema,
   type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
 } from '@kinu.run/core';
+import { diagnostics, toKinuError, type LogEventName } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { shellQuote } from './cli/install-command';
 import type { UserCaller } from './user/workspace-capability';
 
+
 /** How long the cached device-status snapshot stays fresh before status()
  *  kicks a background re-check against the user hub. */
 const DEVICE_STATUS_TTL_MS = 5_000;
+
+/**
+ * What a background re-check does with a hub failure. The failure is RECORDED
+ * first, then tolerated as a request-scope non-fatal: the answer to a stale
+ * `status()` is still the snapshot it holds, and tearing a working snapshot
+ * down to `disconnected` on a blip would blind the tool gating that reads it.
+ * What the old detached `.catch(() => snapshot)` destroyed was the record — a
+ * hub that had stopped answering read exactly like a hub with nothing to say.
+ */
+const STATUS_RECHECK_FAILED: LogEventName = 'device.status_refresh_failed';
+
 
 /** No machine, and nothing known about one. The `toolchain: null` is not a
  *  detail: it is what keeps "we have not asked" from reading as "it has no
@@ -73,36 +86,71 @@ export interface HubDeviceTransportOpts {
   now?: () => number;
 }
 
+interface StatusRefresh {
+  promise: Promise<DeviceStatus> | null;
+}
+
 export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTransport {
   const now = opts.now ?? Date.now;
   let snapshot: DeviceStatus = DISCONNECTED;
   let checkedAt = 0;
-  let inFlight: Promise<DeviceStatus> | null = null;
+  let inFlight: StatusRefresh | null = null;
 
-  const refreshStatus = (): Promise<DeviceStatus> => {
-    if (inFlight) return inFlight;
+  /**
+   * The authoritative hub check, deduped while one is running. The failure
+   * arm lives HERE, once, under a lexical owner: a device-status failure is
+   * recorded (see `STATUS_RECHECK_FAILED`) and then represented as "keep the
+   * last snapshot" — the transport's documented answer to a transient hub
+   * error, and the fail-closed direction the turn start awaits. The slot is
+   * released only while this round trip still owns it, so a later re-check
+   * can never be cleared by an earlier failure.
+   */
+  const beginStatusRefresh = (): StatusRefresh => {
+    if (inFlight?.promise) return inFlight;
     const hub = opts.hub();
     if (!hub) {
       snapshot = DISCONNECTED;
       checkedAt = now();
-      return Promise.resolve(snapshot);
+      return { promise: Promise.resolve(snapshot) };
     }
-    inFlight = opts.caller()
-      .then((caller) => hub.deviceRuntimeStatus(caller))
-      .then((status) => {
+    const owner: StatusRefresh = { promise: null };
+    inFlight = owner;
+    owner.promise = (async (): Promise<DeviceStatus> => {
+      try {
+        const status = await opts.caller().then((caller) => hub.deviceRuntimeStatus(caller));
         snapshot = status;
-        return snapshot;
-      })
-      .catch(() => snapshot) // transient hub error — keep the last snapshot
-      .finally(() => { checkedAt = now(); inFlight = null; });
-    return inFlight;
+      } catch (cause) {
+        // Transient hub error — keep the last snapshot. The outcome is recorded
+        // rather than only tolerated, so a hub gone dark is a line in the journal
+        // and not silence wearing the cache.
+        diagnostics.failure(STATUS_RECHECK_FAILED, toKinuError({
+          doing: 'refreshing the device status from the hub',
+          cause,
+          otherwise: 'unavailable',
+        }));
+      } finally {
+        checkedAt = now();
+        if (inFlight === owner) inFlight = null;
+      }
+      return snapshot;
+    })();
+    return owner;
   };
+  const refreshStatus = (): Promise<DeviceStatus> => (
+    beginStatusRefresh().promise ?? Promise.resolve(snapshot)
+  );
 
   return {
-    status: () => {
-      if (!inFlight && now() - checkedAt >= DEVICE_STATUS_TTL_MS) {
-        refreshStatus().catch(() => { inFlight = null; });
-      }
+    /**
+     * Sync + hot, so it serves the cache and KICKS a re-check when stale. The
+     * kick is not a promise discarded into the air: the retained `inFlight`
+     * slot IS the ownership — the same slot `refreshStatus()` dedupes against
+     * — and the lexical `catch` inside that round trip is where a hub failure
+     * becomes a recorded one. `refreshStatus` never rejects, so there is no
+     * rejection to lose.
+     */
+    status: (): DeviceStatus => {
+      if (!inFlight && now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
       return snapshot;
     },
     refreshStatus,

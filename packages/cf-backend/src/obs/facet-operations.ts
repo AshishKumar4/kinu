@@ -15,8 +15,7 @@
  * PLATFORM-ONLY. Cloud exploration facets cross a Durable Object RPC boundary.
  * Local nodes report into their owning process and have no parent facet RPC.
  */
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
-import type { ModelOperationEvent, ModelOperationSink } from '@kinu.run/core';
+import type { ModelOperationEvent } from '@kinu.run/core';
 
 /** The one RPC these frames travel over. Declared narrow, not as the
  *  orchestrator stub, so the forwarding below is drivable without a Durable
@@ -27,40 +26,16 @@ export interface FacetOperationTarget {
 }
 
 /**
- * Forward a facet's model-operation frames to the root workspace.
- *
- * `parentOf` is a THUNK because a facet's parent is seeded by the async
- * `_cf_initAsFacet`, after every field initializer has run: a value captured at
- * construction is the null it started as, forever.
- *
- * THE FAILURE ARM IS THE POINT. `ModelOperationSink` returns `void`, so the RPC
- * cannot be awaited here and must not be: this is instrumentation wrapped around
- * a model call, and a ledger fault must not become the reason the call the
- * ledger was watching never happened. What it must not do is DISCARD the
- * rejection. `void parent.reportFacetModelOperation(event)` did, and on workerd
- * an unhandled rejection is a line in a log stream with no request attached to
- * it — so a root that had stopped accepting frames read exactly like one
- * receiving every frame, while a whole search's spend went unexplained.
- *
- * Both ways the hand-off can fail are reported through the one classified event
- * core's shared projection uses for a ledger fault, and a rejected `Promise` for
- * the absent parent is what lets them share a single report site rather than two
- * copies of the same log call drifting apart.
+ * Deliver one outbox row to the current parent. The caller owns durability,
+ * retry, and deletion; this boundary either transfers the complete frame or
+ * rejects with its original cause.
  */
-export function forwardFacetModelOperations(
+
+export async function forwardFacetModelOperation(
   parentOf: () => FacetOperationTarget | null,
-): ModelOperationSink {
-  return (event) => {
-    const parent = parentOf();
-    const delivered = parent === null
-      ? Promise.reject(new Error('this facet has no parent workspace to forward to'))
-      : parent.reportFacetModelOperation(event);
-    void delivered.catch((...rejection: [unknown]) => {
-      diagnostics.failure('event.model_operation_emit_failed', toKinuError({
-        doing: 'forwarding a model_operation frame to the root workspace',
-        cause: rejection[0],
-        otherwise: 'io',
-      }), { operationId: event.operationId, phase: event.phase, source: event.source });
-    });
-  };
+  event: ModelOperationEvent,
+): Promise<void> {
+  const parent = parentOf();
+  if (parent === null) throw new Error('this facet has no parent workspace to forward to');
+  await parent.reportFacetModelOperation(event);
 }

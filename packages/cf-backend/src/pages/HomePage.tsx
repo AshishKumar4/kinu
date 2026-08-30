@@ -7,10 +7,9 @@
  * automatically — a deterministic provisional from the mission, replaced by a
  * generated title moments later — so there is no name field to fill in.
  */
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
@@ -28,16 +27,13 @@ export default function HomePage() {
   const { entries: workspaces, error: rosterError } = useWorkspaceRoster();
   const listFailed = rosterError !== null;
   const { hasModels, busy, err, create } = useCreateWorkspace();
+  const [, startTransition] = useTransition();
 
-
+  /** React owns the async action; the workspace hook owns its visible error. */
   const submit = (event?: FormEvent): void => {
     event?.preventDefault();
-    void create(mission).catch((...rejection: [unknown]) => {
-      diagnostics.failure("workspace.create_submit_failed", toKinuError({
-        doing: "creating a workspace from the home screen",
-        cause: rejection[0],
-        otherwise: "io",
-      }));
+    startTransition(async () => {
+      await create(mission);
     });
   };
 
