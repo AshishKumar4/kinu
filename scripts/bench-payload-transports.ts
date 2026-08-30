@@ -70,7 +70,6 @@ const ARTIFACT_ROOT = join(ROOT, 'bench-artifacts/payload-transport');
 const log = (message: string): void => {
   process.stderr.write(`[payload-transport] ${message}\n`);
 };
-armSignalTeardown(log);
 
 const wrangler = (args: readonly string[], allowFailure = false): string =>
   runWrangler(ROOT, args, { allowFailure });
@@ -113,6 +112,19 @@ interface Options {
   readonly concurrency: number;
   readonly seed: number;
   readonly out?: string;
+}
+
+/**
+ * An explicit environment bucket is authoritative: it is bound and later
+ * cleaned by name, never replaced by a generated or discovered bucket.
+ */
+export function withAuthoritativeBucket(
+  identity: RunIdentity,
+  configuredBucketName: string | undefined,
+): RunIdentity {
+  return configuredBucketName === undefined
+    ? identity
+    : { ...identity, bucketName: configuredBucketName };
 }
 
 function options(argv: readonly string[]): Options {
@@ -312,6 +324,7 @@ function planText(identity: RunIdentity, opts: Options): string {
     `Worker: ${identity.workerName}  Bucket: ${identity.bucketName}`,
     `Image: ${pinnedImage()} (verified running before evidence is accepted)`,
     `Matrix: ${PAYLOAD_ARMS.join(', ')} × PUT/GET × ${PAYLOAD_SIZES_MIB.join('/')} MiB × ${opts.reps} reps`,
+    'Each available arm/tier has one measured PUT/GET warm-up pair recorded outside rank samples.',
     'All timed transfers execute inside the benchmark container (or across its owning-DO SDK surface).',
     'The driver carries commands and results only — no payload body originates on it.',
     `Cleanup gates: ${CLEANUP_GATES.map((gate) => gate.id).join(', ')} — residue exits nonzero.`,
@@ -330,13 +343,16 @@ function configFor(identity: RunIdentity): string {
 
 async function main(): Promise<number> {
   const opts = options(process.argv.slice(2));
-  const identity = runIdentity();
+  const configuredBucketName = process.env['PAYLOAD_BENCH_BUCKET_NAME'];
+  const identity = withAuthoritativeBucket(runIdentity(), configuredBucketName);
   const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
   const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
   const r2KeysPresent = r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined;
   const availabilityRows = availability(r2KeysPresent);
   if (!isValidResourceName(identity.workerName) || !isValidResourceName(identity.bucketName)) {
-    throw new Error('generated resource names are illegal');
+    throw new Error(configuredBucketName === undefined
+      ? 'generated resource names are illegal'
+      : 'PAYLOAD_BENCH_BUCKET_NAME is illegal');
   }
   if (opts.plan) {
     process.stdout.write(`${planText(identity, opts)}\n`);
@@ -358,6 +374,7 @@ async function main(): Promise<number> {
   let failure: string | null = null;
   let imageObserved: string | null = null;
   const cells: Cell[] = [];
+  const warmups: Cell[] = [];
   const controlRpc: Artifact['controlRpc'] = [];
   const concurrencyRows: Artifact['concurrency'] = [];
 
@@ -478,7 +495,7 @@ async function main(): Promise<number> {
       gate: 'multipart-ledger-drained',
       ok: deletionProvedEmpty,
       detail: deletionProvedEmpty
-        ? 'single-PUT instrument created no multipart id and the run bucket was deleted twice'
+        ? 'bucket deletion on both cleanup passes proved no multipart state remains'
         : 'bucket deletion did not prove multipart state absent',
     });
     cleanup.push({
@@ -491,8 +508,11 @@ async function main(): Promise<number> {
 
   try {
     if (wrangler(['whoami'], true).startsWith(WRANGLER_FAILED)) throw new Error('wrangler is not authenticated');
-    wrangler(['r2', 'bucket', 'create', identity.bucketName]);
-
+    // A named bucket is provisioned outside this driver; it remains the only
+    // candidate and follows the same strict two-pass cleanup as generated runs.
+    if (configuredBucketName === undefined) {
+      wrangler(['r2', 'bucket', 'create', identity.bucketName]);
+    }
     // Deploy NON-SECRET vars only. Bearer token and parent R2 credentials are
     // injected afterwards through stdin-only `wrangler secret put` — never as
     // command arguments, never into the generated config.
@@ -704,6 +724,21 @@ async function main(): Promise<number> {
       if (!availabilityFor(availabilityRows, arm).available) continue;
       for (const sizeMiB of PAYLOAD_SIZES_MIB) {
         const file = requiredSeed(seeded, sizeMiB);
+        // This is an observed pre-sample, not a retry: its pair gets a unique
+        // object key, is retained under `warmups`, and never enters `cells`.
+        const warmupKey = `warmup/${arm}/${sizeMiB}`;
+        const warmupRep = opts.reps;
+        const warmupPut = await runCell(arm, 'put', file, warmupRep, warmupKey);
+        warmups.push(warmupPut);
+        if (warmupPut.status !== 'ok') {
+          throw new Error(`warm-up PUT ${arm}/${sizeMiB}MiB failed: ${warmupPut.reason ?? warmupPut.status}`);
+        }
+        const warmupGet = await runCell(arm, 'get', file, warmupRep, warmupKey);
+        warmups.push(warmupGet);
+        if (warmupGet.status !== 'ok') {
+          throw new Error(`warm-up GET ${arm}/${sizeMiB}MiB failed: ${warmupGet.reason ?? warmupGet.status}`);
+        }
+        log(`arm ${arm} ${sizeMiB} MiB warm-up done; excluded from rank samples`);
         for (let rep = 0; rep < opts.reps; rep += 1) {
           cells.push(await runCell(arm, 'put', file, rep, `put/${arm}/${sizeMiB}/${rep}`));
           cells.push(await runCell(arm, 'get', file, rep, `put/${arm}/${sizeMiB}/${rep}`));
@@ -817,6 +852,7 @@ async function main(): Promise<number> {
     version: 1,
     plan,
     availability: [...availabilityRows],
+    warmups,
     cells,
     controlRpc,
     concurrency: concurrencyRows,
@@ -831,4 +867,7 @@ async function main(): Promise<number> {
   return exitFor(failure, verdict);
 }
 
-if (import.meta.main) process.exit(await main());
+if (import.meta.main) {
+  armSignalTeardown(log);
+  process.exit(await main());
+}

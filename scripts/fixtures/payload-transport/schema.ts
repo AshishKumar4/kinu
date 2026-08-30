@@ -112,6 +112,9 @@ export const ArtifactSchema = v.object({
   version: v.literal(1),
   plan: RunPlanSchema,
   availability: v.array(AvailabilitySchema),
+  /** One pre-sample PUT/GET pair per available arm and tier; never ranked. */
+  warmups: v.array(CellSchema),
+  /** Statistical samples only. `decision.ts` ranks this collection and no other. */
   cells: v.array(CellSchema),
   controlRpc: v.array(ControlRpcSchema),
   concurrency: v.array(v.object({
@@ -153,7 +156,7 @@ export function assertCellCoherence(cell: Cell): string | null {
 
 export function validateArtifact(value: v.InferInput<typeof ArtifactSchema>): Artifact {
   const parsed = v.parse(ArtifactSchema, value);
-  for (const cell of parsed.cells) {
+  for (const cell of [...parsed.warmups, ...parsed.cells]) {
     const problem = assertCellCoherence(cell);
     if (problem !== null) {
       throw new Error(`cell ${cell.arm}/${cell.op}/${cell.sizeMiB}MiB#${cell.rep}: ${problem}`);

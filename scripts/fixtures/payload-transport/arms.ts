@@ -98,29 +98,64 @@ export type PayloadSizeMiB = (typeof PAYLOAD_SIZES_MIB)[number];
 export const MIB = 1024 * 1024;
 
 /**
- * One multipart part. Chosen so the largest part still survives the owner's
- * base64 expansion inside the platform's structured-clone budget:
- * 16 MiB raw → ceil(16 MiB / 3) × 4 ≈ 21.8 MiB of base64 text per crossing,
- * comfortably under the ~32 MiB RPC argument ceiling ('rpc.arg_bytes').
+ * One R2 multipart part. The owning-DO arm assembles each part from bounded
+ * base64 reads before uploading it, so no individual structured clone carries
+ * more than `BASE64_CHUNK_BYTES` raw payload.
  */
 export const PART_SIZE_BYTES = 16 * MIB;
 
-/** Sizes larger than one part travel as multipart uploads, identically on every arm. */
+/** Sizes larger than one part use R2 multipart assembly in the owning-DO arm. */
 export const usesMultipart = (sizeBytes: number): boolean => sizeBytes > PART_SIZE_BYTES;
 
 export const partCount = (sizeBytes: number): number =>
   usesMultipart(sizeBytes) ? Math.ceil(sizeBytes / PART_SIZE_BYTES) : 1;
 
 /**
- * How many raw bytes ride in ONE boundary crossing for an arm. The base64 arm
- * shrinks its crossings further, because the expansion happens per crossing:
- * 8 MiB raw → ceil(8 MiB / 3) × 4 ≈ 10.9 MiB of base64 text per clone.
+ * How many raw bytes ride in ONE base64 boundary crossing. Six raw MiB expands
+ * to exactly eight MiB of base64 text, comfortably below the clone ceiling.
  */
 export const RAW_CHUNK_BYTES = 8 * MIB;
 export const BASE64_CHUNK_BYTES = 6 * MIB;
 
 export const chunkSizeFor = (arm: ArmSpec): number =>
   arm.base64AtBoundary ? BASE64_CHUNK_BYTES : RAW_CHUNK_BYTES;
+
+export interface Base64ReadChunk {
+  /** Offset from the source file, never crossing its owning multipart part. */
+  readonly offset: number;
+  readonly byteLength: number;
+}
+
+export interface Base64ReadPart {
+  /** R2 multipart part numbers are one-based. */
+  readonly partNumber: number;
+  readonly offset: number;
+  readonly byteLength: number;
+  readonly chunks: readonly Base64ReadChunk[];
+}
+
+/**
+ * The exact read/assembly plan for the owning-DO base64 arm. Chunks cover the
+ * source contiguously in order and each part closes at `PART_SIZE_BYTES`.
+ */
+export function base64ReadPlan(sizeBytes: number): readonly Base64ReadPart[] {
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+    throw new Error(`base64 read size must be a non-negative safe integer, got ${sizeBytes}`);
+  }
+  const parts: Base64ReadPart[] = [];
+  for (let offset = 0, partNumber = 1; offset < sizeBytes; offset += PART_SIZE_BYTES, partNumber += 1) {
+    const byteLength = Math.min(PART_SIZE_BYTES, sizeBytes - offset);
+    const chunks: Base64ReadChunk[] = [];
+    for (let chunkOffset = offset; chunkOffset < offset + byteLength; chunkOffset += BASE64_CHUNK_BYTES) {
+      chunks.push({
+        offset: chunkOffset,
+        byteLength: Math.min(BASE64_CHUNK_BYTES, offset + byteLength - chunkOffset),
+      });
+    }
+    parts.push({ partNumber, offset, byteLength, chunks });
+  }
+  return parts;
+}
 
 /**
  * Cell outcome statuses. `corrupt` stands alone, not as a failure flavour:

@@ -3,7 +3,14 @@ import { gzipSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
-import { PAYLOAD_ARMS, type PayloadArmId } from './fixtures/payload-transport/arms';
+import {
+  BASE64_CHUNK_BYTES,
+  MIB,
+  PART_SIZE_BYTES,
+  PAYLOAD_ARMS,
+  base64ReadPlan,
+  type PayloadArmId,
+} from './fixtures/payload-transport/arms';
 import { CLEANUP_GATES, evaluateCleanup, EXIT_RESIDUE, exitFor } from './fixtures/payload-transport/cleanup';
 import { decideAll, judgeImage, LOOPBACK_RESIDENCY_NOTE, operationNeedsStart, SDK_THROUGHPUT_CLAIM_NOTE } from './fixtures/payload-transport/decision';
 import { isValidResourceName, runIdentity } from './fixtures/payload-transport/payload';
@@ -17,6 +24,7 @@ import {
 } from './fixtures/payload-transport/schema';
 import { mulberry32 } from './fixtures/payload-transport/container-harness';
 import { wranglerProvesAbsence } from './fixtures/r2-bench/deploy-substrate';
+import { withAuthoritativeBucket } from './bench-payload-transports';
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname));
 const FIXTURE_DIR = join(ROOT, 'fixtures/payload-transport');
@@ -31,7 +39,7 @@ function cell(arm: PayloadArmId, op: 'put' | 'get', sizeMiB: 1 | 10 | 100, wallM
   return result;
 }
 
-function artifact(cells: readonly Cell[]): Artifact {
+function artifact(cells: readonly Cell[], warmups: readonly Cell[] = []): Artifact {
   return validateArtifact({
     instrument: 'payload-transports', version: 1,
     plan: { runId: 'r', workerName: 'kinu-payload-bench-r', bucketName: 'kinu-payload-bench-r', seed: 7, sizesMiB: [1, 10, 100], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z', imagePinned: 'docker.io/cloudflare/sandbox:0.12.8', imageObserved: '0.12.8' },
@@ -40,6 +48,7 @@ function artifact(cells: readonly Cell[]): Artifact {
       if (arm === 'temp-s3-creds') row.reason = 'R2 has no STS';
       return row;
     }),
+    warmups: [...warmups],
     cells: [...cells],
     controlRpc: [],
     concurrency: [],
@@ -70,6 +79,71 @@ describe('payload workload determinism (in-container generator)', () => {
     expect(isValidResourceName(a.bucketName)).toBe(true);
     expect(a.workerName).not.toBe(b.workerName);
     expect(a.bucketName).not.toBe(b.bucketName);
+  });
+});
+
+describe('bounded do-base64 assembly', () => {
+  test('the 100 MiB plan performs bounded contiguous reads within exact multipart parts', () => {
+    const sizeBytes = 100 * MIB;
+    const parts = base64ReadPlan(sizeBytes);
+    expect(parts).toHaveLength(7);
+    expect(parts.map((part) => part.byteLength)).toEqual([
+      PART_SIZE_BYTES,
+      PART_SIZE_BYTES,
+      PART_SIZE_BYTES,
+      PART_SIZE_BYTES,
+      PART_SIZE_BYTES,
+      PART_SIZE_BYTES,
+      4 * MIB,
+    ]);
+
+    let cursor = 0;
+    let reads = 0;
+    for (const [index, part] of parts.entries()) {
+      expect(part.partNumber).toBe(index + 1);
+      expect(part.offset).toBe(cursor);
+      expect(part.byteLength).toBeLessThanOrEqual(PART_SIZE_BYTES);
+      let partCursor = part.offset;
+      for (const chunk of part.chunks) {
+        expect(chunk.offset).toBe(partCursor);
+        expect(chunk.byteLength).toBeGreaterThan(0);
+        expect(chunk.byteLength).toBeLessThanOrEqual(BASE64_CHUNK_BYTES);
+        expect(chunk.offset + chunk.byteLength).toBeLessThanOrEqual(part.offset + part.byteLength);
+        partCursor += chunk.byteLength;
+        reads += 1;
+      }
+      expect(partCursor).toBe(part.offset + part.byteLength);
+      cursor += part.byteLength;
+    }
+    expect(cursor).toBe(sizeBytes);
+    expect(reads).toBe(19);
+  });
+
+  test('the owner applies that plan through bounded base64 reads and abortable multipart assembly', () => {
+    expect(workerSource).toContain('base64ReadPlan(sizeBytes)');
+    expect(workerSource).toContain("readFile(scratch, { encoding: 'base64' })");
+    expect(workerSource).toContain('await upload.uploadPart(part.partNumber, assembled)');
+    expect(workerSource).toContain('await upload.complete(uploadedParts)');
+    expect(workerSource).toContain('await upload.abort()');
+    expect(workerSource).not.toContain('await this.readFile(file)');
+  });
+});
+
+describe('benchmark bucket authority', () => {
+  test('an explicit bucket is used exactly, without generated-name or discovery fallback', () => {
+    const generated = runIdentity(new Date('2026-08-30T00:00:00Z'), 'abcdef');
+    const named = withAuthoritativeBucket(generated, 'kinu-payload-bench-final-20260830');
+    expect(named.bucketName).toBe('kinu-payload-bench-final-20260830');
+    expect(named.workerName).toBe(generated.workerName);
+    expect(withAuthoritativeBucket(generated, undefined)).toBe(generated);
+
+    expect(driverSource).toContain("process.env['PAYLOAD_BENCH_BUCKET_NAME']");
+    const provisioning = driverSource.slice(
+      driverSource.indexOf('if (configuredBucketName === undefined)'),
+      driverSource.indexOf('// Deploy NON-SECRET vars only.'),
+    );
+    expect(provisioning).toContain("wrangler(['r2', 'bucket', 'create', identity.bucketName])");
+    expect(driverSource).not.toContain("'r2', 'bucket', 'list'");
   });
 });
 
@@ -264,11 +338,35 @@ describe('decision honesty', () => {
     const verdict = decideAll([cell('do-base64', 'put', 1, 100), cell('do-base64', 'get', 1, 100)]).find((entry) => entry.sizeMiB === 1)!;
     expect(verdict.kind).toBe('no-ranking');
   });
+  test('records warm-up evidence separately from statistic samples and ranking', () => {
+    const samples = [
+      cell('do-base64', 'put', 1, 100), cell('do-base64', 'get', 1, 100),
+      cell('loopback-entrypoint', 'put', 1, 50), cell('loopback-entrypoint', 'get', 1, 50),
+    ];
+    const warmups = [
+      cell('do-base64', 'put', 1, 10_000), cell('do-base64', 'get', 1, 10_000),
+    ];
+    const observed = artifact(samples, warmups);
+    expect(observed.cells).toHaveLength(samples.length);
+    expect(observed.warmups).toEqual(warmups);
+    const verdict = decideAll(observed.cells).find((entry) => entry.sizeMiB === 1)!;
+    expect(verdict.kind).toBe('ranking');
+    if (verdict.kind === 'ranking') {
+      expect(verdict.ranked.map((row) => row.arm)).toEqual(['loopback-entrypoint', 'do-base64']);
+    }
+
+    const warmupIndex = driverSource.indexOf('const warmupKey');
+    const sampleIndex = driverSource.indexOf('cells.push(await runCell');
+    expect(warmupIndex).toBeGreaterThan(-1);
+    expect(warmupIndex).toBeLessThan(sampleIndex);
+    expect(driverSource).toContain('warmups.push(warmupPut)');
+    expect(driverSource).toContain('warmups.push(warmupGet)');
+  });
   test('validates embedded shared UploadIntent contracts rather than a copied shape', () => {
     const invalid = {
       instrument: 'payload-transports', version: 1,
       plan: { runId: 'r', workerName: 'w', bucketName: 'b', seed: 1, sizesMiB: [1], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z' },
-      availability: [], controlRpc: [], concurrency: [], verdicts: [], cleanup: { residue: false, steps: [] },
+      availability: [], warmups: [], controlRpc: [], concurrency: [], verdicts: [], cleanup: { residue: false, steps: [] },
       cells: [{ ...cell('do-base64', 'put', 1, 10), uploadIntent: { operationId: 'op', attemptId: 'attempt', boxId: 'box', epoch: '0', exactKey: 'key', method: 'PUT', byteLength: '1', sha256: 'NOT-A-DIGEST', expiresAt: '1' } }],
     };
     expect(() => v.parse(ArtifactSchema, invalid)).toThrow();

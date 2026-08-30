@@ -34,15 +34,22 @@ import { AwsClient } from 'aws4fetch';
 import { SignJWT } from 'jose';
 import { Sandbox, ContainerProxy } from '@cloudflare/sandbox';
 import * as v from 'valibot';
+import { base64ReadPlan, usesMultipart } from './arms';
 import { operationNeedsStart } from './decision';
 import { HarnessResultSchema } from './wire';
 import type { HarnessResult } from './wire';
+
 
 // The harness ships as RAW TEXT inside this Worker's bundle (wrangler Text rule)
 // so onStart can install it. The .bundle.txt twin is byte-identical to
 // container-harness.ts by test — one source of truth, mechanically gated.
 // `wrangler-text-modules.d.ts` types this import; see it for why not a suppression.
 import HARNESS_TS from './container-harness.bundle.txt';
+
+/** Quote a path for the shell commands that ask the container for bounded ranges. */
+function shellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
 
 export { ContainerProxy };
 
@@ -174,13 +181,129 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
 
   async control(): Promise<void> {}
 
-  /** Arm 1 PUT — the CURRENT product path: base64 across the RPC boundary. */
+  private async sourceFileSize(file: string): Promise<number> {
+    const measured = await this.exec(`wc -c < ${shellArg(file)}`, { timeout: 120_000 });
+    const output = measured.stdout.trim();
+    if (measured.exitCode !== 0 || !/^\d+$/.test(output)) {
+      throw new Error(`could not measure ${file}: ${measured.stderr.slice(0, 200)}`);
+    }
+    const size = Number(output);
+    if (!Number.isSafeInteger(size)) throw new Error(`file size is not a safe integer: ${output}`);
+    return size;
+  }
+
+  private async sourceSha256(file: string): Promise<string> {
+    const hashed = await this.exec(`sha256sum ${shellArg(file)}`, { timeout: 120_000 });
+    const sha256 = /^([0-9a-f]{64})/.exec(hashed.stdout)?.[1];
+    if (hashed.exitCode !== 0 || sha256 === undefined) {
+      throw new Error(`sha256sum printed no digest: ${hashed.stdout.slice(0, 120)}`);
+    }
+    return sha256;
+  }
+
+  /**
+   * Copy one bounded byte range into a disposable container file, then use the
+   * product's base64 `readFile` surface. The temporary range makes the clone
+   * budget explicit even though the SDK file API has no range option.
+   */
+  private async readBase64Chunk(file: string, offset: number, byteLength: number): Promise<Uint8Array> {
+    const scratch = `/tmp/payload-bench/base64-${crypto.randomUUID()}.chunk`;
+    let result: Uint8Array | undefined;
+    let failure: unknown;
+    let failed = false;
+    try {
+      const copied = await this.exec([
+        'dd',
+        `if=${shellArg(file)}`,
+        `of=${shellArg(scratch)}`,
+        'bs=1048576',
+        'iflag=skip_bytes,count_bytes',
+        `skip=${offset}`,
+        `count=${byteLength}`,
+        'status=none',
+      ].join(' '), { timeout: 120_000 });
+      if (copied.exitCode !== 0) {
+        throw new Error(`could not copy base64 chunk at ${offset}: ${copied.stderr.slice(0, 200)}`);
+      }
+      const read = await this.readFile(scratch, { encoding: 'base64' });
+      if (read.encoding !== 'base64') {
+        throw new Error(`base64 chunk at ${offset} returned ${read.encoding ?? 'no'} encoding`);
+      }
+      result = decodeBase64(read.content);
+      if (result.byteLength !== byteLength) {
+        throw new Error(`base64 chunk at ${offset} decoded ${result.byteLength} bytes, expected ${byteLength}`);
+      }
+    } catch (error) {
+      failed = true;
+      failure = error;
+    }
+    const removed = await this.exec(`rm -f ${shellArg(scratch)}`, { timeout: 60_000 });
+    if (removed.exitCode !== 0) {
+      const cleanupError = new Error(`could not remove base64 chunk: ${removed.stderr.slice(0, 200)}`);
+      if (failed) {
+        throw new Error(
+          `base64 chunk failed and cleanup also failed: ${describeThrown(failure instanceof Error ? failure : String(failure))}`,
+          { cause: cleanupError },
+        );
+      }
+      throw cleanupError;
+    }
+    if (failed) throw failure;
+    if (result === undefined) throw new Error(`base64 chunk at ${offset} produced no bytes`);
+    return result;
+  }
+
+  /**
+   * Arm 1 PUT — the current base64 RPC surface, read in bounded chunks and
+   * assembled into exact R2 multipart parts rather than one giant clone.
+   */
   async fileThroughOwnerToObject(file: string, key: string): Promise<{ ms: number; sha256: string }> {
+    const sizeBytes = await this.sourceFileSize(file);
+    const sha256 = await this.sourceSha256(file);
+    const parts = base64ReadPlan(sizeBytes);
+    const bucket = this.env.BACKUP_BUCKET;
     const started = Date.now();
-    const read = await this.readFile(file);
-    const bytes = read.encoding === 'base64' ? decodeBase64(read.content) : encoder.encode(read.content);
-    await this.env.BACKUP_BUCKET.put(key, bytes);
-    return { ms: Date.now() - started, sha256: await sha256Of(bytes) };
+    const upload = usesMultipart(sizeBytes)
+      ? await bucket.createMultipartUpload(key)
+      : undefined;
+    const uploadedParts: R2UploadedPart[] = [];
+    try {
+      if (parts.length === 0) await bucket.put(key, new Uint8Array());
+      for (const part of parts) {
+        const assembled = new Uint8Array(part.byteLength);
+        let written = 0;
+        for (const chunk of part.chunks) {
+          if (chunk.offset !== part.offset + written) {
+            throw new Error(`base64 chunk order broke at ${chunk.offset}, expected ${part.offset + written}`);
+          }
+          const bytes = await this.readBase64Chunk(file, chunk.offset, chunk.byteLength);
+          assembled.set(bytes, written);
+          written += bytes.byteLength;
+        }
+        if (written !== part.byteLength) {
+          throw new Error(`base64 part ${part.partNumber} assembled ${written} bytes, expected ${part.byteLength}`);
+        }
+        if (upload === undefined) {
+          await bucket.put(key, assembled);
+        } else {
+          uploadedParts.push(await upload.uploadPart(part.partNumber, assembled));
+        }
+      }
+      if (upload !== undefined) await upload.complete(uploadedParts);
+    } catch (error) {
+      if (upload !== undefined) {
+        try {
+          await upload.abort();
+        } catch (abortError) {
+          throw new Error(
+            `base64 multipart upload failed and could not be aborted: ${describeThrown(error instanceof Error ? error : String(error))}`,
+            { cause: abortError },
+          );
+        }
+      }
+      throw error;
+    }
+    return { ms: Date.now() - started, sha256 };
   }
 
   /** Arm 1 GET — stream the stored object INTO the container; hash afterwards. */
