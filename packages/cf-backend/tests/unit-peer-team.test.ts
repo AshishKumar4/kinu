@@ -316,7 +316,7 @@ describe('timer-less ask waiter + cancellation', () => {
     abort.abort(new Error('cancelled by user'));
     const cancellation = await pending.then(
       () => null,
-      (rejection) => {
+      (rejection: unknown) => {
         const parsed = v.safeParse(RejectionErrorSchema, rejection);
         return parsed.success ? parsed.output : new Error(String(rejection));
       },

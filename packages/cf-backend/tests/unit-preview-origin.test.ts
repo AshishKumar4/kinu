@@ -59,7 +59,7 @@ afterAll(() => { suiteDone = true; });
 // export list here is drift: it omitted `streamFile` and turned every later
 // file that binds it into a load-time SyntaxError.
 import * as actualSandboxSdk from '@cloudflare/sandbox';
-mock.module('@cloudflare/sandbox', () => ({
+await mock.module('@cloudflare/sandbox', () => ({
   ...actualSandboxSdk,
   proxyToSandbox: async (request: Request) => {
     sdkRequest = request;

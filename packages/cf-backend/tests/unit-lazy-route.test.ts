@@ -195,8 +195,9 @@ describe('a stale chunk', () => {
 
   test('with the origin on a different build, the page reloads once', async () => {
     const run = drive();
-    void loadRouteChunk(stale, run.deps);
+    const pending = loadRouteChunk(stale, run.deps);
     await run.reloaded;
+    expect(await stillOpen(pending)).toBe(true);
     expect(run.reloads()).toBe(1);
     expect(run.claimed()).toBe(LIVE);
   });

@@ -21,7 +21,7 @@ import * as v from 'valibot';
 // this file, and a throwing `proxyToSandbox` stub was what unit-transport-
 // security's preview-route test inherited under full-suite order.
 import * as actualSandboxSdk from '@cloudflare/sandbox';
-mock.module('@cloudflare/sandbox', () => ({
+await mock.module('@cloudflare/sandbox', () => ({
   ...actualSandboxSdk,
   getSandbox: (namespace: SandboxNamespaceProbe, name: string) =>
     namespace.get(namespace.idFromName(name)),

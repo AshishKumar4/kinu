@@ -40,14 +40,15 @@ const settleMicrotasks = async (): Promise<void> => { await Promise.resolve(); a
  * `streaming` stands for React state: a value the press READS but that only
  * becomes visible on the next render, which is why both presses saw `false`.
  */
-function reactiveAdmission(): (begin: () => Promise<void>) => boolean {
+function reactiveAdmission(startedTurns: Promise<void>[]): (begin: () => Promise<void>) => boolean {
   let streaming = false;
   let committed = false;
   return (begin) => {
     if (streaming) return false;
     // The write the old code relied on, deferred exactly as a render is.
     if (!committed) { committed = true; queueMicrotask(() => { streaming = true; }); }
-    void begin();
+    const started = begin();
+    startedTurns.push(started);
     return true;
   };
 }
@@ -67,8 +68,9 @@ describe('send admission', () => {
     expect(turn.starts()).toBe(1);
   });
 
-  test('NEGATIVE CONTROL: the reactive guard admits both presses', () => {
-    const admit = reactiveAdmission();
+  test('NEGATIVE CONTROL: the reactive guard admits both presses', async () => {
+    const startedTurns: Promise<void>[] = [];
+    const admit = reactiveAdmission(startedTurns);
     const turn = deferredTurn();
 
     // Same interleaving, old mechanism. Both pass, and two turns start — which
@@ -76,6 +78,8 @@ describe('send admission', () => {
     expect(admit(turn.begin)).toBe(true);
     expect(admit(turn.begin)).toBe(true);
     expect(turn.starts()).toBe(2);
+    turn.finish();
+    await Promise.all(startedTurns);
   });
 
   test('a refused press never calls begin, so a draft survives it', () => {
