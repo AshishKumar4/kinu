@@ -82,7 +82,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { tolerate } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
@@ -2892,7 +2892,7 @@ function AgentChatsScene() {
       name, displayName: "", role: "agent", createdBy: "user",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     }]);
-    navigate(`/workspace/checkout-fixes/agents/${name}`);
+    await navigate(`/workspace/checkout-fixes/agents/${name}`);
   };
   const send = (agent: string) => (text: string, mode: ChatMode) => {
     setSent((current) => [...current, { agent, mode, text }]);
@@ -5241,4 +5241,10 @@ async function mount() {
     <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,
   );
 }
-void mount();
+void mount().catch((cause: unknown) => {
+  diagnostics.failure("gallery.mount_failed", toKinuError({
+    doing: "mount the design-system gallery",
+    cause,
+    otherwise: "unavailable",
+  }));
+});

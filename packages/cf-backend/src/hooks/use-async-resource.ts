@@ -93,7 +93,7 @@ export function useAsyncResource<T>(
       (value) => {
         if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
       },
-      (error) => {
+      (error: unknown) => {
         if (id !== runId.current) return;
         setState((previous) => ({
           identity,

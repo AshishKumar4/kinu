@@ -224,7 +224,7 @@ export function pageDeployedBuildSha(): Promise<string | null> {
  * them to, and the two consumers re-read through the same memo.
  */
 export function primePageDeployedBuildSha(): void {
-  pageDeployedBuildSha().catch((cause) => {
+  pageDeployedBuildSha().catch((cause: unknown) => {
     diagnostics.event('session_recovery.build_baseline_failed', {
       reason: renderThrownChain({ cause }),
     });

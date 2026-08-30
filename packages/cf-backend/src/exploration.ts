@@ -713,7 +713,7 @@ export class ExplorationAgent extends Agent<Env> {
             reason: renderThrownChain({ cause }),
           });
         }
-      })().catch((cause) => {
+      })().catch((cause: unknown) => {
         // The only statement this body runs outside the try is the IIFE's own
         // exit, so a rejection here means the handler itself threw. Recorded at
         // lane level: a broken sink must not masquerade as a dropped frame.
@@ -833,7 +833,15 @@ export class ExplorationAgent extends Agent<Env> {
       profile: () => this.facetProfile(),
       // Reported to the root over the same cross-DO port the journal above uses,
       // because that is where the workspace's total is assembled.
-      reportModelCall: (report) => { void parent.reportFacetModelCall(report); },
+      reportModelCall: (report) => {
+        void parent.reportFacetModelCall(report).catch((cause: unknown) => {
+          diagnostics.failure('event.model_call_emit_failed', toKinuError({
+            doing: 'forwarding a model_call report to the root workspace',
+            cause,
+            otherwise: 'io',
+          }), { source: report.source });
+        });
+      },
       // The merge's operation frames go to the root beside its cost report.
       operations: this.modelOperations,
       // No `grounding`: a subtree's merge stays n=1 with neutral head scores.

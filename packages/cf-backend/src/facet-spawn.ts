@@ -238,7 +238,7 @@ async function runOnceAndReclaim<Result>(
 ): Promise<Result> {
   const settled = await run().then(
     (value) => ({ ok: true as const, value }),
-    <Thrown,>(thrown: Thrown) => ({ ok: false as const, thrown }),
+    (thrown: unknown) => ({ ok: false as const, thrown }),
   );
   try {
     await deleteExplorationFacet(host, id);
