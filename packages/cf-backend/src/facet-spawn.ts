@@ -236,21 +236,31 @@ async function runOnceAndReclaim<Result>(
   kind: 'Head' | 'Node',
   run: () => Promise<Result>,
 ): Promise<Result> {
-  const settled = await run().then(
-    (value) => ({ ok: true as const, value }),
-    (thrown: unknown) => ({ ok: false as const, thrown }),
-  );
+  let reclaiming = false;
   try {
+    const result = await run();
+    reclaiming = true;
     await deleteExplorationFacet(host, id);
-  } catch (cleanupError) {
-    throw new Error(
-      `${kind} facet ${id} settled but its storage was not reclaimed `
-      + `(leaked into the root's quota): ${renderThrownChain({ cause: cleanupError })}`,
-      { cause: cleanupError },
-    );
+    return result;
+  } catch (cause) {
+    if (reclaiming) {
+      throw new Error(
+        `${kind} facet ${id} settled but its storage was not reclaimed `
+        + `(leaked into the root's quota): ${renderThrownChain({ cause })}`,
+        { cause },
+      );
+    }
+    try {
+      await deleteExplorationFacet(host, id);
+    } catch (cleanupError) {
+      throw new Error(
+        `${kind} facet ${id} settled but its storage was not reclaimed `
+        + `(leaked into the root's quota): ${renderThrownChain({ cause: cleanupError })}`,
+        { cause: cleanupError },
+      );
+    }
+    throw cause;
   }
-  if (!settled.ok) throw settled.thrown;
-  return settled.value;
 }
 
 /** MCTS branch: a one-shot rollout facet.

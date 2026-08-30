@@ -30,13 +30,15 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
   const [detail, setDetail] = useState<AsyncResource<GepaRunDetail>>({ status: "loading" });
   const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
-  const open = useCallback((runId: string) => {
+  const open = useCallback(async (runId: string) => {
     setSel(runId);
     setDetail({ status: "loading" });
-    rpc<GepaRunDetail>("getGepaRun", [runId]).then(
-      (d) => setDetail(loadSucceeded(d)),
-      (err: unknown) => setDetail((prev) => loadFailed(prev, err)),
-    );
+    try {
+      const detail = await rpc<GepaRunDetail>("getGepaRun", [runId]);
+      setDetail(loadSucceeded(detail));
+    } catch (cause) {
+      setDetail((previous) => loadFailed(previous, cause));
+    }
   }, [rpc]);
 
   const runs = lastValue(resource);

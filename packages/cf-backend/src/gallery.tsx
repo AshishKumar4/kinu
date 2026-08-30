@@ -5241,10 +5241,12 @@ async function mount() {
     <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,
   );
 }
-void mount().catch((cause: unknown) => {
+try {
+  await mount();
+} catch (cause) {
   diagnostics.failure("gallery.mount_failed", toKinuError({
     doing: "mount the design-system gallery",
     cause,
     otherwise: "unavailable",
   }));
-});
+}

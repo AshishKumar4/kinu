@@ -26,7 +26,7 @@ import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@kinu.run/cor
 import type { Rpc } from "@/lib/protocol";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { type AsyncResource, describeError, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines, timeAgo } from "./shared";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
@@ -83,15 +83,17 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void) {
   if (openedSeenAt.current === null && view !== null) openedSeenAt.current = view.seenAt;
 
   const [seenError, setSeenError] = useState<string | null>(null);
-  useEffect(() => {
+  const markSeen = useCallback(async () => {
     if (!view || view.unseenCount === 0) return;
-    // A failed acknowledgement leaves the badge up, which is honest on its own
-    // — but the reason has to reach the reader too, or the badge looks stuck.
-    rpc("markChangelogSeen", []).then(
-      () => { setSeenError(null); onSeen?.(); },
-      (err: unknown) => setSeenError(describeError(err)),
-    );
+    await rpc("markChangelogSeen", []);
+    setSeenError(null);
+    onSeen?.();
   }, [view, rpc, onSeen]);
+  const { resource: seenMark } = useAsyncResource(markSeen);
+
+  useEffect(() => {
+    if (seenMark.status === "error") setSeenError(seenMark.message);
+  }, [seenMark]);
 
   return { view, seenAt: openedSeenAt.current ?? 0, resource, reload, seenError };
 }
@@ -138,15 +140,17 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
     }
   }, [rpc, entry.id, onReverted]);
 
-  const toggleDiff = useCallback(() => {
+  const toggleDiff = useCallback(async () => {
     if (diff !== null) { setDiff(null); return; }
     if (entry.scaffoldVersion == null) return;
     setDiff({ status: "loading" });
-    rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]).then(
-      (d) => setDiff(loadSucceeded(d)),
+    try {
+      const d = await rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]);
+      setDiff(loadSucceeded(d));
+    } catch (cause) {
       // Collapsing the panel made the click look like it did nothing.
-      (err: unknown) => setDiff(loadFailed({ status: "loading" }, err)),
-    );
+      setDiff(loadFailed({ status: "loading" }, cause));
+    }
   }, [rpc, entry.scaffoldVersion, diff]);
 
   const actions = entry.revert && !kept ? (
@@ -277,15 +281,17 @@ function StagedSkillDecision(
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
-  const open = useCallback(() => {
+  const open = useCallback(async () => {
     if (staged !== null) { setStaged(null); return; }
     setStaged({ status: "loading" });
-    rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]).then(
-      (result) => setStaged((previous) => result.ok
+    try {
+      const result = await rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]);
+      setStaged((previous) => result.ok
         ? loadSucceeded(result.view)
-        : loadFailed(previous ?? { status: "loading" }, new Error(result.error))),
-      (error: unknown) => setStaged((previous) => loadFailed(previous ?? { status: "loading" }, error)),
-    );
+        : loadFailed(previous ?? { status: "loading" }, new Error(result.error)));
+    } catch (cause) {
+      setStaged((previous) => loadFailed(previous ?? { status: "loading" }, cause));
+    }
   }, [rpc, decision.requestId, decision.routeIndex, staged]);
 
   const decide = useCallback(async (verdict: "approve" | "reject", digest: string) => {

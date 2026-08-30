@@ -37,7 +37,8 @@
  *   • schedule()/keepAlive()/runFiber() WORK in facets — each delegates to
  *     the root DO (_cf_scheduleForFacet / _cf_acquireFacetKeepAlive /
  *     _cf_registerFacetRun), which owns the single physical alarm slot.
- *     This class simply doesn't need them.
+ *     Frame and cost-report sinks use `keepAliveWhile()` for their independent
+ *     parent RPCs without delaying their producers.
  *   • Own SQLite — independent from the orchestrator's (shares the parent
  *     DO's storage quota)
  *   • LLM config derived per-call from the owner user's provider registry
@@ -699,31 +700,19 @@ export class ExplorationAgent extends Agent<Env> {
     parent: DurableObjectStub<OrchestratorAgent>,
     headId: HeadId,
   ): ReportHeadDelta {
-    return (kind, delta) => {
-      // NOT AWAITED, and not a `.catch` with an annotated thrown parameter either:
-      // the catch BINDING is where a thrown value is narrowed in this repo, and
-      // `renderThrownChain` is the one reader of it. A frame is a repaint, so a
-      // parent gone quiet costs a stale pane and never the run.
-      void (async () => {
-        try {
-          await parent.publishHeadStream(headId, kind, delta);
-        } catch (cause) {
-          diagnostics.event('head.stream_frame_dropped', {
-            headId,
-            reason: renderThrownChain({ cause }),
-          });
-        }
-      })().catch((cause: unknown) => {
-        // The only statement this body runs outside the try is the IIFE's own
-        // exit, so a rejection here means the handler itself threw. Recorded at
-        // lane level: a broken sink must not masquerade as a dropped frame.
-        diagnostics.failure('head.stream_sink_failed', toKinuError({
-          doing: 'reporting that a head stream frame was dropped',
-          cause,
-          otherwise: 'unavailable',
-        }), { headId });
-      });
-    };
+    return (kind, delta) => this.keepAliveWhile(async () => {
+      // A frame is a repaint, so the stream does not wait for its cross-isolate
+      // round trip. The keep-alive owner holds delivery after the producer moves
+      // on, and the lexical catch narrows the one untrusted rejection value.
+      try {
+        await parent.publishHeadStream(headId, kind, delta);
+      } catch (cause) {
+        diagnostics.event('head.stream_frame_dropped', {
+          headId,
+          reason: renderThrownChain({ cause }),
+        });
+      }
+    });
   }
 
   /**
@@ -833,15 +822,19 @@ export class ExplorationAgent extends Agent<Env> {
       profile: () => this.facetProfile(),
       // Reported to the root over the same cross-DO port the journal above uses,
       // because that is where the workspace's total is assembled.
-      reportModelCall: (report) => {
-        void parent.reportFacetModelCall(report).catch((cause: unknown) => {
+      reportModelCall: (report) => this.keepAliveWhile(async () => {
+        // Cost reporting must not hold the recursive merge, but its keep-alive
+        // owner retains the cross-isolate RPC until the root acknowledges it.
+        try {
+          await parent.reportFacetModelCall(report);
+        } catch (cause) {
           diagnostics.failure('event.model_call_emit_failed', toKinuError({
             doing: 'forwarding a model_call report to the root workspace',
             cause,
             otherwise: 'io',
           }), { source: report.source });
-        });
-      },
+        }
+      }),
       // The merge's operation frames go to the root beside its cost report.
       operations: this.modelOperations,
       // No `grounding`: a subtree's merge stays n=1 with neutral head scores.
