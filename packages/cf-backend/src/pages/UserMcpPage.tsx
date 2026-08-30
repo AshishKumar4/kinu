@@ -54,13 +54,19 @@ export default function UserMcpPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      setErr(null);
-      const rows = await listMcpServers();
-      setServers(rows);
-    } catch (e) { setErr(renderThrownChain({ cause: e })); }
-    finally { setLoading(false); }
+  // The reader every caller here owns: the mount effect, the 5s poll, the
+  // OAuth return and the add/remove callbacks all detach this read, so the
+  // chain that reports it lives HERE instead of at four call sites, and every
+  // one of them calls a function that returns nothing to own. `.finally`
+  // before `.catch` on purpose: the spinner clears on both outcomes, and a
+  // throw from the success arm still lands in `err` rather than becoming an
+  // unhandled rejection.
+  const refresh = useCallback((): void => {
+    setErr(null);
+    listMcpServers()
+      .then((rows) => { setServers(rows); })
+      .finally(() => { setLoading(false); })
+      .catch((cause: unknown) => { setErr(renderThrownChain({ cause })); });
   }, []);
 
   useEffect(() => {

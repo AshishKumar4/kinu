@@ -415,11 +415,14 @@ function SubordinateChatColumn({
     return () => onPlanContext(null);
   }, [onPlanContext, state.activePlan, state.rpc, subName]);
 
-  // The picker is fire-and-forget: setModel records the failure on state.error
-  // and rolls the picker back to the stored spec, so this call site has nothing
+  // The picker awaits its own write. `setModel` records the failure on
+  // `state.error` and rolls the picker back to the stored spec before it
+  // resolves the reason, so this handler owns the settlement and has nothing
   // to add to what the banner already shows.
   const setModel = state.setModel;
-  const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
+  const onPickModel = useCallback(async (spec: string): Promise<void> => {
+    await setModel(spec);
+  }, [setModel]);
   const ui = useConversationUiState(`${workspace}/agents/${subName}`);
   const input = ui.draft;
   const setInput = ui.setDraft;
@@ -623,7 +626,7 @@ export default function WorkspacePage() {
     setCreateAgentError(null);
     try {
       const created = await state.createSubordinate();
-      navigate(`/workspace/${agentId}/agents/${created.name}`);
+      await navigate(`/workspace/${agentId}/agents/${created.name}`);
     } catch (cause) {
       setCreateAgentError(renderThrownChain({ cause }));
     } finally {
@@ -632,16 +635,19 @@ export default function WorkspacePage() {
     }
   }, [agentId, navigate, state.createSubordinate]);
   useEffect(() => {
-    const open = () => { void createAndOpenAgent(); };
+    const open = async (): Promise<void> => { await createAndOpenAgent(); };
     window.addEventListener("kinu:new-agent", open);
     return () => window.removeEventListener("kinu:new-agent", open);
   }, [createAndOpenAgent]);
 
-  // The picker is fire-and-forget: setModel records the failure on state.error
-  // and rolls the picker back to the stored spec, so this call site has nothing
+  // The picker awaits its own write. `setModel` records the failure on
+  // `state.error` and rolls the picker back to the stored spec before it
+  // resolves the reason, so this handler owns the settlement and has nothing
   // to add to what the banner already shows.
   const setModel = state.setModel;
-  const onPickModel = useCallback((spec: string) => { void setModel(spec); }, [setModel]);
+  const onPickModel = useCallback(async (spec: string): Promise<void> => {
+    await setModel(spec);
+  }, [setModel]);
   const [sideErrors, setSideErrors] = useState<Partial<Record<SideSource, string>>>({});
   const reportSide = useCallback((source: SideSource, message: string | null) => {
     setSideErrors((prev) => {
@@ -751,7 +757,7 @@ export default function WorkspacePage() {
     if (!agentId) return;
     touchWorkspace(agentId).then(
       () => reportSide("visit", null),
-      (err) => reportSide("visit", describeError(err)),
+      (cause: unknown) => reportSide("visit", describeError(cause)),
     );
   }, [agentId, reportSide]);
 
@@ -852,7 +858,7 @@ export default function WorkspacePage() {
         if (r.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
         else setBranchNotice(r.reason ?? "Branching is unavailable right now.");
       })
-      .catch((err) => setBranchNotice(renderThrownChain({ cause: err })));
+      .catch((cause: unknown) => setBranchNotice(renderThrownChain({ cause })));
   }, [chatInput, effectiveChatMode, state]);
 
   /**
@@ -883,7 +889,7 @@ export default function WorkspacePage() {
     if (state.connectionStatus !== "connected") return;
     state.rpc<Record<string, 'positive' | 'negative'>>('listTurnFeedback').then(
       (loaded) => { setFeedbackByMessage(loaded); reportSide("feedback", null); },
-      (err) => reportSide("feedback", describeError(err)),
+      (cause: unknown) => reportSide("feedback", describeError(cause)),
     );
   }, [state.connectionStatus, state.rpc, reportSide]);
 
@@ -918,7 +924,7 @@ export default function WorkspacePage() {
     if (state.connectionStatus !== "connected" || state.isStreaming) return;
     state.rpc<Record<string, AlternateTakeSet>>('listAlternateTakes').then(
       (loaded) => { setTakesByTurn(loaded); reportSide("takes", null); },
-      (err) => reportSide("takes", describeError(err)),
+      (cause: unknown) => reportSide("takes", describeError(cause)),
     );
     // settledBranchCount: a branch settling after the turn ended persists a
     // fresh set — refetch so its chip can hydrate the comparison.
@@ -1346,7 +1352,7 @@ export default function WorkspacePage() {
             try {
               const result = await state.forkAgent(forkFor, name ? { name } : undefined);
               setForkFor(null);
-              navigate(result.url);
+              await navigate(result.url);
             } catch (err) {
               // Surface the error inside the modal — return string rejects.
               throw err instanceof Error ? err : new Error(String(err));

@@ -323,7 +323,7 @@ function DevicesCard() {
   const refreshDevices = useCallback(() => {
     listDevices().then(
       (roster) => { setDevices(roster); setRosterErr(null); },
-      (e) => { setRosterErr(`Could not list devices: ${renderThrownChain({ cause: e })}`); },
+      (e: unknown) => { setRosterErr(`Could not list devices: ${renderThrownChain({ cause: e })}`); },
     );
   }, []);
   useEffect(() => {
@@ -338,7 +338,7 @@ function DevicesCard() {
   const refreshGrants = useCallback(() => {
     listDeviceConsents().then(
       (rows) => { setGrants(rows); },
-      (e) => { setRosterErr(`Could not list device grants: ${renderThrownChain({ cause: e })}`); },
+      (e: unknown) => { setRosterErr(`Could not list device grants: ${renderThrownChain({ cause: e })}`); },
     );
   }, []);
   // Grants ride the SAME 5s cycle as the roster: revoking one changes both
@@ -514,7 +514,7 @@ function DeviceRow({
           <button type="button" disabled={acknowledging}
             onClick={() => {
               setAcknowledging(true);
-              void onAcknowledge().finally(() => setAcknowledging(false)).catch((cause) => {
+              onAcknowledge().finally(() => setAcknowledging(false)).catch((cause: unknown) => {
                 // `onAcknowledge` reports its own failures into this row's
                 // `onError`; a rejection here is one that escaped that path —
                 // the request dying while `.finally` was still chained — and
@@ -562,8 +562,12 @@ function DeviceRow({
             value={editing}
             onChange={(e) => setEditing(e.target.value)}
             onBlur={save}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void save();
+            onKeyDown={async (e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setEditing(null);
+                await save();
+              }
               if (e.key === "Escape") setEditing(null);
             }}
             aria-label="Device name"
@@ -584,7 +588,7 @@ function DeviceRow({
               <span key={g.agentName} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm p-fill">
                 {g.agentName}
                 {g.scope === "full_filesystem" && <span className="p-text-3">· full filesystem</span>}
-                <button onClick={() => void dropGrant(g.agentName)} title={`Revoke ${g.agentName}'s access`} className="p-text-3 hover:p-danger">
+                <button onClick={async () => { await dropGrant(g.agentName); }} title={`Revoke ${g.agentName}'s access`} className="p-text-3 hover:p-danger">
                   <XIcon size={10} />
                 </button>
               </span>

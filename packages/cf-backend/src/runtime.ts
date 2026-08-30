@@ -424,10 +424,25 @@ export function createCFRuntime(
   // it is the idempotent prefix of the `initWorkspaceSchema` its attach runs.
   initActorTables(execRaw, sql);
   const memoryConfig = createAgentConfigStore(sql);
-  // One-time backfill of chunks indexed before the vector store existed.
-  // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
-  // per boot, idempotent, and a no-op once the marker is set.
-  void backfillMemoryVectors(memoryStore, memoryConfig, vectorStore);
+  // One-time backfill of chunks indexed before the vector store existed:
+  // bounded per boot, idempotent, and a no-op once the marker is set.
+  //
+  // Detached, and owned right here. `createCFRuntime` is synchronous — every
+  // caller wants the runtime, not a promise — so this read has no `await` to
+  // land in, and a DO has no `waitUntil` to hand it to (work handed to a DO's
+  // ctx outlives no request, which is why
+  // `anti-slop/no-wait-until-in-durable-object` refuses one). The backfill
+  // folds every EXPECTED failure into diagnostics of its own and returns; what
+  // reaches this handler is the marker/cursor write OUTSIDE its try/catch,
+  // which used to reject into nothing and surface as an unhandled rejection
+  // attributed to whichever turn happened to be running when it landed.
+  backfillMemoryVectors(memoryStore, memoryConfig, vectorStore).catch((cause: unknown) => {
+    diagnostics.failure('memory.vector_backfill_detached_failed', toKinuError({
+      doing: 'backfilling semantic-memory vectors at runtime construction',
+      cause,
+      otherwise: 'unavailable',
+    }), { workspace: actor.workspaceName });
+  });
 
   // CraftStore from agent-utils — FTS5-indexed tool storage
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
@@ -627,7 +642,23 @@ export function createCFRuntime(
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
   };
   const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
-  void deviceTransport.refreshStatus();
+  // Warm the device snapshot while the rest of the runtime is still being
+  // built, so the first `status()` read is not a guaranteed miss. The
+  // AUTHORITATIVE read is the awaited one at turn start (ActorAgent), which
+  // shares this call's in-flight promise while it is in flight.
+  //
+  // Detached for the same reason as the memory backfill above, and owned the
+  // same way. `refreshStatus` folds every hub failure into "keep the last
+  // snapshot", so this handler can only see a defect in that folding — and a
+  // defect a boot dropped silently is one the turn that pays for it cannot
+  // explain.
+  deviceTransport.refreshStatus().catch((cause: unknown) => {
+    diagnostics.failure('device.status_warmup_failed', toKinuError({
+      doing: 'warming the device hub presence at runtime construction',
+      cause,
+      otherwise: 'unavailable',
+    }), { workspace: actor.workspaceName });
+  });
   // The executor's file view scopes paths to the consented subtree (connect dir
   // / home) unless the agent holds the full-filesystem consent tier on the hub.
   // Action consent (ask-once-then-remember) still applies to every RPC beneath.

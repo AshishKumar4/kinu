@@ -161,29 +161,41 @@ export default function SettingsPage() {
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateMcts, fail: failMcts } = mcts;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
-  const load = useCallback(async () => {
+  // A `(): void` reader, the same shape `useAsyncResource` uses: one effect and
+  // three retry buttons detach this read and none of them has an `await` to put
+  // it in, so the settlement is consumed right here. `allSettled` never
+  // rejects, so the trailing `.catch` can only be a defect in the hydrate arm
+  // below — and a field the defect skipped would otherwise sit on "Loading…"
+  // for the life of the page with nothing said.
+  //
+  // Named for the fields it reads rather than `load`: four card components in
+  // this file declare a `load` of their own, and they are async loaders that
+  // DO propagate a rejection, so sharing the name makes both this call and
+  // theirs unreadable to anything reasoning by name.
+  const loadRpcFields = useCallback((): void => {
     // A read that fails leaves its field unloaded — and so unsaveable — and
     // says so in place of the editor. It never substitutes a default that Save
     // would then write over the stored value.
-    const [mode, config, evolution] = await Promise.allSettled([
+    Promise.allSettled([
       rpc<{ mode: ApprovalMode }>("getShellApprovalMode", []),
       rpc<MctsConfig>("getMctsConfig", []),
       rpc<EvolutionConfigView>("getEvolutionConfig", []),
-    ]);
+    ]).then(([mode, config, evolution]) => {
+      if (mode.status === "rejected") failApproval(mode.reason);
+      else hydrateApproval(mode.value?.mode ?? "strict");
 
-    if (mode.status === "rejected") failApproval(mode.reason);
-    else hydrateApproval(mode.value?.mode ?? "strict");
+      if (config.status === "rejected") failMcts(config.reason);
+      else if (config.value) hydrateMcts(config.value);
+      else failMcts("the agent returned no MCTS config");
 
-    if (config.status === "rejected") failMcts(config.reason);
-    else if (config.value) hydrateMcts(config.value);
-    else failMcts("the agent returned no MCTS config");
-
-    if (evolution.status === "rejected") failAdvisor(evolution.reason);
-    else hydrateAdvisor({
-      advisorEnabled: evolution.value?.advisorEnabled ?? false,
-      advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
+      if (evolution.status === "rejected") failAdvisor(evolution.reason);
+      else hydrateAdvisor({
+        advisorEnabled: evolution.value?.advisorEnabled ?? false,
+        advisorMinSeverity: evolution.value?.advisorMinSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
+      });
+    }).catch((cause: unknown) => {
+      failApproval(cause); failMcts(cause); failAdvisor(cause);
     });
-
   }, [
     rpc, hydrateApproval, failApproval, hydrateMcts, failMcts,
     hydrateAdvisor, failAdvisor,
@@ -194,8 +206,8 @@ export default function SettingsPage() {
   useEffect(() => {
     if (connectionStatus !== "connected" || loaded.current) return;
     loaded.current = true;
-    void load();
-  }, [connectionStatus, load]);
+    loadRpcFields();
+  }, [connectionStatus, loadRpcFields]);
 
   const dirty = displayName.dirty || soul.dirty || approval.dirty || mcts.dirty
     || advisor.dirty;
@@ -307,7 +319,7 @@ export default function SettingsPage() {
 
         {/* Advisor */}
         <Card title="Advisor" icon={EyeIcon}>
-          <FieldState field={advisor} what="the advisor settings" onRetry={() => void load()}>
+          <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
             {(value) => (
               <>
                 <div className="space-y-1.5">
@@ -348,7 +360,7 @@ export default function SettingsPage() {
 
         {/* Approval */}
         <Card title="Shell-command approval" icon={ShieldIcon}>
-          <FieldState field={approval} what="the approval mode" onRetry={() => void load()}>
+          <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
             {(value) => (
               <div className="grid grid-cols-3 gap-2">
                 {(['strict', 'allow_all', 'deny_all'] satisfies ApprovalMode[]).map((m) => (
@@ -367,7 +379,7 @@ export default function SettingsPage() {
 
         {/* MCTS knobs */}
         <Card title="MCTS tunables" icon={TreeStructureIcon}>
-          <FieldState field={mcts} what="the MCTS tunables" onRetry={() => void load()}>
+          <FieldState field={mcts} what="the MCTS tunables" onRetry={loadRpcFields}>
             {(value) => (
               <div className="grid grid-cols-2 gap-3">
                 <NumField label="Exploration constant" value={value.explorationConstant} step={0.1} onChange={(v) => mcts.edit({ ...value, explorationConstant: v })} />
@@ -462,7 +474,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
               <button
                 type="button"
-                onClick={() => void revoke(grant)}
+                onClick={async () => { await revoke(grant); }}
                 disabled={busy !== null}
                 className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
                 title={`Ask again next time a command trips ${grant.rule} on ${grant.executor}`}
@@ -582,7 +594,7 @@ export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {row.reason === undefined && (
                     <button
                       type="button"
-                      onClick={() => void read(row)}
+                      onClick={async () => { await read(row); }}
                       disabled={busy !== null}
                       className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
                     >{busy === row.path ? "…" : opened ? "Hide" : "Read"}</button>
@@ -590,7 +602,7 @@ export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   {row.decision === "approved" || row.decision === "grandfathered" ? (
                     <button
                       type="button"
-                      onClick={() => void decide(row, "revoke")}
+                      onClick={async () => { await decide(row, "revoke"); }}
                       disabled={busy !== null}
                       className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
                       title="Stop following this file as instructions"
@@ -598,7 +610,7 @@ export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                   ) : row.reason === undefined ? (
                     <button
                       type="button"
-                      onClick={() => void decide(row, "approve")}
+                      onClick={async () => { await decide(row, "approve"); }}
                       disabled={busy !== null}
                       className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
                       title="Follow these exact contents as instructions"
@@ -697,7 +709,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
           </span>
           {err && <span className="p-danger truncate">{err}</span>}
           <button
-            onClick={() => void toggle()}
+            onClick={async () => { await toggle(); }}
             disabled={busy}
             className="ml-auto px-2 py-1 rounded-sm p-card p-card-hover p-text-2 disabled:opacity-50"
             title={full
@@ -774,7 +786,7 @@ function WorkspaceBackupCard({
       </p>
       <button
         type="button"
-        onClick={() => void download()}
+        onClick={async () => { await download(); }}
         disabled={busy || !workspace}
         className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
       >{busy ? "Exporting…" : "Download archive"}</button>
@@ -879,14 +891,16 @@ function AlwaysActiveSkillsCard({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const r = v.parse(SkillNamesSchema, await rpc('getAlwaysActiveSkills', []));
-      setNames(r.names);
-    } catch (e) { setErr(renderThrownChain({ cause: e })); }
+  // The card's own `(): void` reader — see the page-level `load` above. The
+  // terminal `.catch` also covers a schema failure raised from the success
+  // arm, which is exactly what the try/catch it replaced covered.
+  const refresh = useCallback((): void => {
+    rpc('getAlwaysActiveSkills', [])
+      .then((raw) => { setNames(v.parse(SkillNamesSchema, raw).names); })
+      .catch((cause: unknown) => { setErr(renderThrownChain({ cause })); });
   }, [rpc]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const save = useCallback(async (next: string[]) => {
     setBusy(true);
@@ -898,16 +912,16 @@ function AlwaysActiveSkillsCard({
     finally { setBusy(false); }
   }, [rpc]);
 
-  const add = useCallback(() => {
+  const add = useCallback(async () => {
     const n = input.trim();
     if (!n) return;
     if (names.includes(n)) { setInput(''); return; }
     setInput('');
-    void save([...names, n]);
+    await save([...names, n]);
   }, [input, names, save]);
 
-  const remove = useCallback((n: string) => {
-    void save(names.filter(x => x !== n));
+  const remove = useCallback(async (n: string) => {
+    await save(names.filter(x => x !== n));
   }, [names, save]);
 
   return (
@@ -922,7 +936,7 @@ function AlwaysActiveSkillsCard({
           : names.map(n => (
             <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card p-meta font-mono">
               {n}
-              <button type="button" onClick={() => remove(n)} className="p-text-3 hover:p-text">×</button>
+              <button type="button" onClick={async () => { await remove(n); }} className="p-text-3 hover:p-text">×</button>
             </span>
           ))}
       </div>
@@ -932,12 +946,12 @@ function AlwaysActiveSkillsCard({
           value={input}
           placeholder="skill-name"
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') add(); }}
+          onKeyDown={async (e) => { if (e.key === 'Enter') await add(); }}
           className={inputCls + " text-xs"}
         />
         <button
           type="button"
-          onClick={add}
+          onClick={async () => { await add(); }}
           disabled={busy || !input.trim()}
           className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
         >Pin</button>
