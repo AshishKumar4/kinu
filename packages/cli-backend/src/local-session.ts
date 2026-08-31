@@ -28,7 +28,7 @@ import {
 import type {
   ChatOptions, ChatEvent,
   CompletedTurn, TurnContinuity, FiberCtx,
-  LLM, ModelCallSink, ModelRouteResolution,
+  LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -141,7 +141,8 @@ import {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, settlePendingBranch, settleBranchIntoTakes, newBranchId,
-  type PendingBranch, type BranchStatusEvent, type BranchOutcome,
+  branchHeadId, branchOutcomeFromJournal,
+  type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type BackgroundJob, type SqlExec, type RawSqlExec,
   type TimerTrigger, type TimerTriggerOpts, type TriggerView,
   type CancelTriggerResult, type TrustLevel,
@@ -149,7 +150,7 @@ import {
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute,
+  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   isPlaceholderMission, readMission, type WorkspaceTitleState,
@@ -911,15 +912,21 @@ export class LocalAgentSession implements BackendHost {
 
     const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
       model: () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
-      providerFamily: parseModelSpec(STATIC_MODEL_SPEC).provider,
-      // A static session has ONE model, so this constant IS its spec. On a
-      // resolver session it is the wrong label: the head runs on `model` above,
-      // whatever `cachedModelSpec` resolved, and its calls are reported as the
-      // static spec regardless. `effectiveModelSpec()` is the honest answer for
-      // both fields, but `providerFamily` is a value read once at construction
-      // rather than a callback, so the two move together or not at all.
-      reportModelCall: (report) =>
-        this.modelCallSink({ ...report, spec: STATIC_MODEL_SPEC }),
+      // The merge's model, effort and spend label are core's policy
+      // (`headMergeLLM`) off this profile; the binding below is the only local
+      // say in it. It used to be the SESSION'S CHAT MODEL at a hardcoded `'low'`
+      // effort, filed as `judge` spend regardless — so the same split was
+      // synthesised by the deep tier in the cloud and by whatever `/model` was
+      // set to here, and the ledger could not tell the two apart.
+      profile: () => this.routingProfile(),
+      bindMergeModel: (route) => this.bindRouteModel(route),
+      // No `spec` stamp: this sink carries the MERGE only (a head's own
+      // inference is aggregated from `head_journal`), and the merge runs on the
+      // routed judge tier rather than on this session's chat model. Stamping the
+      // chat spec here was the label that made a deep-tier grading look like it
+      // ran on whatever `/model` was set to. `modelId` from the provider's own
+      // response is the honest record, exactly as on the cloud backend.
+      reportModelCall: (report) => this.modelCallSink(report),
       operations: this.modelOperations,
       parentRuntime: this.rt,
       webSearch: this.getWebSearchProvider(),
@@ -3387,6 +3394,12 @@ export class LocalAgentSession implements BackendHost {
         // record of it, and the check is not "is the head still running": a head
         // reaches `completed` when its report lands, which is before any take set
         // exists. The row's own disposition is the settlement marker instead.
+        //
+        // ASKED FOR BY THE HEAD'S ID, which is `branchHeadId(id)` and not `id`:
+        // the row this effect carries is the branch RUN, and a branch run's one
+        // head is journalled under a DERIVED id (steer-branch.ts). Read by the run
+        // id it found no row at all and reported that as `completed`, so every
+        // restart between the report and the settle dropped the comparison.
         run: async ({ id, task, turnId, liveText }) => {
           const live = this.pendingBranches.findIndex((entry) => entry.id === id);
           if (live >= 0) {
@@ -3405,17 +3418,14 @@ export class LocalAgentSession implements BackendHost {
               return { status: 'completed' };
             }
           }
-          const head = this.headJournal.readHeadView(id);
+          const head = this.headJournal.readHeadView(branchHeadId(id));
           if (head === null) {
             return { status: 'completed', detail: 'the journal holds no such branch head' };
           }
-          if (head.status === 'running' || head.status === 'interrupted') {
+          const report = branchOutcomeFromJournal(head);
+          if (report === null) {
             return { status: 'owed', detail: `branch head is ${head.status}` };
           }
-          const outcomeStatus = head.status === 'completed' ? 'completed' as const : 'errored' as const;
-          const report: BranchOutcome = head.errorMessage === null
-            ? { status: outcomeStatus, summary: head.summary ?? '' }
-            : { status: outcomeStatus, summary: head.summary ?? '', errorMessage: head.errorMessage };
           const outcome = settleBranchIntoTakes(this.rt.storage.sql, {
             task,
             report,
@@ -3893,7 +3903,7 @@ export class LocalAgentSession implements BackendHost {
    * disagree.
    */
   private async suggestTitle(mission: string): Promise<string | null> {
-    const profile = this.turnProfile ?? await this.profiles().resolvePreTurn();
+    const profile = await this.routingProfile();
     const resolution = resolveModelRoute('fast', profile);
     if (!resolution) return null;
     // The prompt pair and parse are core's; only the model is local. This does
@@ -4597,16 +4607,10 @@ export class LocalAgentSession implements BackendHost {
    *  request the cloud backend does instead of folding the system half into the
    *  user half and hoping the model reads it the same way. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
-    const model = this.modelResolver
-      ? this.modelResolver.resolveModel(resolution.model)
-      : this.defaultModel(`${resolution.source} model lane`);
+    const { model, providerOptions } = this.bindRouteModel(resolution);
     return {
       async *stream() { yield ""; },
       complete: async (prompt: string): Promise<string> => {
-        const providerOptions = reasoningEffortOptions(
-          resolution.reasoningEffort,
-          parseModelSpec(resolution.model).provider,
-        );
         const request: Parameters<typeof generateText>[0] = { model, prompt };
         if (system !== undefined) request.system = system;
         if (providerOptions) request.providerOptions = providerOptions;
@@ -4623,6 +4627,43 @@ export class LocalAgentSession implements BackendHost {
         return result.text.trim();
       },
     };
+  }
+
+  /**
+   * One routed lane's concrete client, and the provider options its tier's
+   * effort asks for.
+   *
+   * The one local answer to "turn this routed decision into something callable",
+   * shared by {@link localRouteLlm} and by the head merge — whose policy lives in
+   * core (`headMergeLLM`) precisely so that this binding is all either backend
+   * gets to decide. Before that, the merge bound the SESSION'S CHAT MODEL at a
+   * hardcoded `'low'` and filed it as `judge` spend anyway.
+   *
+   * A session with no resolver has exactly one model, so a lane resolves to it
+   * rather than failing: the effort still comes from the routed tier, which is
+   * the axis a single-model session can still honour.
+   */
+  private bindRouteModel(resolution: ModelRouteResolution): HeadMergeModelBinding {
+    const model = this.modelResolver
+      ? this.modelResolver.resolveModel(resolution.model)
+      : this.defaultModel(`${resolution.source} model lane`);
+    const providerOptions = reasoningEffortOptions(
+      resolution.reasoningEffort,
+      parseModelSpec(resolution.model).provider,
+    );
+    return providerOptions ? { model, providerOptions } : { model };
+  }
+
+  /** The profile a non-turn lane routes against. The PRECEDENCE is core's
+   *  (`resolveRoutingProfile`), shared with the Cloudflare backend so the two
+   *  cannot disagree about when a lane inherits the open turn; what is local is
+   *  only where a fresh resolution comes from. Asked per call, never captured — a
+   *  lane built at construction time must not pin the tier the account had then. */
+  private async routingProfile(): Promise<ResolvedTurnProfile> {
+    return resolveRoutingProfile({
+      live: () => this.turnProfile,
+      resolve: () => this.profiles().resolvePreTurn(),
+    });
   }
 
   /**
@@ -4813,16 +4854,17 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private rebuildModelBoundState(model: LanguageModel): void {
-    // Captured, not re-read: this is the spec `model` was resolved from, so it is
-    // what prices the merge call this runtime makes. A later model switch rebuilds
-    // the whole runtime, which is what keeps the pair honest.
-    const spec = this.effectiveModelSpec();
     // Branching heads — in-process runtime over an isolated ephemeral store.
     // The agent's VFS backs the shared findings scratch sibling heads write to.
     this._headRuntime = createCLIHeadRuntime({
       model: () => model,
-      providerFamily: parseModelSpec(spec).provider,
-      reportModelCall: (report) => this.modelCallSink({ ...report, spec }),
+      // The merge's model/effort/spend is core's `headMergeLLM` off the routed
+      // profile, not this rebind's chat model at a constant effort — so a model
+      // switch changes what the HEADS run on and leaves the synthesis on its own
+      // routed tier, where it belongs.
+      profile: () => this.routingProfile(),
+      bindMergeModel: (route) => this.bindRouteModel(route),
+      reportModelCall: (report) => this.modelCallSink(report),
       operations: this.modelOperations,
       parentRuntime: this.rt,
       webSearch: this.getWebSearchProvider(),

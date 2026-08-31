@@ -13,11 +13,15 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
-  MissionGovernor, CRAFT_NEUTRAL_PRIOR,
+  MissionGovernor, CRAFT_NEUTRAL_PRIOR, reasoningEffortOptions,
+  type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
   type ModelCallReport, type ModelOperationEvent,
 } from '@kinu.run/core';
-import { scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
+import {
+  MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
+  mergePolicyProfile, scratchDir, scratchPath, toolExecute,
+} from '@kinu.run/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime';
 
@@ -61,12 +65,39 @@ function makeJournal(): HeadJournal {
   return new HeadJournal(makeSql(db));
 }
 
-/** Head-runtime deps around a fresh parent, with test overrides. */
-function headDeps(model: LanguageModel, over?: Partial<CLIHeadRuntimeDeps>): CLIHeadRuntimeDeps {
+/** What the merge asked its binder for — the route it actually took. Shared by
+ *  every deps builder below, so any merge in this file is measurable. */
+interface RouteProbe {
+  readonly asked: Array<{ spec: string; effort: ReasoningEffort }>;
+}
+
+/** Head-runtime deps around a fresh parent, with test overrides.
+ *
+ *  `profile` and `bindMergeModel` are the merge's whole local surface: core's
+ *  `headMergeLLM` resolves the `judge` route off the profile and hands the
+ *  resolution here, so this binder records the routed decision and answers with
+ *  the merge model. It deliberately does NOT answer with `model` — the merge
+ *  used to run the session's chat model at a hardcoded `'low'` effort while
+ *  filing `judge` spend, and a binder that ignored the route could not tell
+ *  that regression from the fix. */
+function headDeps(
+  model: LanguageModel,
+  over?: Partial<CLIHeadRuntimeDeps>,
+  probe?: RouteProbe,
+): CLIHeadRuntimeDeps {
   const governor = makeGovernor();
   const journal = makeJournal();
   return {
     model: () => model, parentRuntime: makeParent(),
+    profile: async () => mergePolicyProfile(),
+    bindMergeModel: (route) => {
+      probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });
+      return {
+        model,
+        providerOptions: reasoningEffortOptions(route.reasoningEffort, 'openai') ?? {},
+      };
+    },
+    reportModelCall: () => {},
     webSearch: stubWeb, codemodeExtras: () => [],
     governor: () => governor, journal: () => journal, ...over,
   };
@@ -130,15 +161,14 @@ function fakeHeadsModel(capture?: (options: {
   });
 }
 
-function controllerWithCLIRuntime(model: LanguageModel, providerFamily?: string) {
+function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db), makeSql(db));
   const journal = new HeadJournal(makeSql(db));
   const overrides: Partial<CLIHeadRuntimeDeps> = { journal: () => journal };
-  if (providerFamily) overrides.providerFamily = providerFamily;
   return {
     journal,
-    controller: new HeadController(createCLIHeadRuntime(headDeps(model, overrides)), journal),
+    controller: new HeadController(createCLIHeadRuntime(headDeps(model, overrides, probe)), journal),
   };
 }
 
@@ -198,17 +228,52 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
 
     expect(reports).toHaveLength(1);
-    expect(reports[0]).toMatchObject({ source: 'judge', usage: { input: 8, output: 12 } });
+    expect(reports[0]).toMatchObject({
+      source: MERGE_POLICY_SPEND_SOURCE, usage: { input: 8, output: 12 },
+    });
   });
 
-  test('merge synthesis uses low provider effort without an output cap', async () => {
+  /**
+   * THE DRIFT THIS CLOSES, measured on the local side.
+   *
+   * The merge ran `deps.model()` — the SESSION'S CHAT MODEL — at a hardcoded
+   * `reasoningEffortOptions('low', …)`, and filed the result as `judge` spend.
+   * The Cloudflare merge resolved the `judge` route off the turn profile and ran
+   * at the deep tier's own effort. So one split, one account, two models, both
+   * reported as deep-tier grading.
+   *
+   * The expectation is `MERGE_POLICY_BINDING` from the shared fixture — the same
+   * value `unit-head-runtime-operations.test.ts` asserts on the cloud side over
+   * the same catalog. Two suites, one equality.
+   */
+  test('the merge takes the judge route, not the session model at a constant effort', async () => {
+    const probe: RouteProbe = { asked: [] };
+    const { controller } = controllerWithCLIRuntime(fakeHeadsModel(), probe);
+    await controller.run({
+      mode: 'build',
+      parentHeadId: null,
+      inheritedContext: [],
+      request: {
+        rationale: 'compare two views',
+        heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }],
+      },
+      parentBudget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    });
+
+    expect(probe.asked).toEqual([MERGE_POLICY_BINDING]);
+    // Both halves of the tier, stated separately so a half-routed merge — the
+    // routed model at somebody's constant effort — fails on the axis it dropped.
+    expect(probe.asked[0]?.spec).toBe(MERGE_POLICY_JUDGE_MODEL);
+    expect(probe.asked[0]?.effort).not.toBe('low');
+  });
+
+  test('the routed effort reaches the provider, and no output cap does', async () => {
     let mergeOptions: {
       maxOutputTokens?: number;
       providerOptions?: LanguageModelV2CallOptions['providerOptions'];
     } | undefined;
     const { controller } = controllerWithCLIRuntime(
       fakeHeadsModel((options, isMerge) => { if (isMerge) mergeOptions = options; }),
-      'openai',
     );
     await controller.run({
       mode: 'build',
@@ -222,7 +287,11 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
 
     expect(mergeOptions?.maxOutputTokens).toBeUndefined();
-    expect(mergeOptions?.providerOptions).toEqual({ openai: { reasoningEffort: 'low' } });
+    // The DEEP tier's effort, derived from the routed decision by the binder —
+    // not the `'low'` this seam used to name for itself.
+    expect(mergeOptions?.providerOptions).toEqual({
+      openai: { reasoningEffort: MERGE_POLICY_BINDING.effort },
+    });
   });
 
   test('a head is offered the real fork surface: run + file + execute_tools + web + record + split', async () => {

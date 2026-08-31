@@ -39,7 +39,7 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
       return {
         entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7, archivedAt: null },
-        existed: false,
+        status: 'created' as const,
       };
     },
     async releaseWorkspaceReservation() { return true; },

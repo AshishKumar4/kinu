@@ -27,6 +27,24 @@
  *                 out to be observable fails too, so the blind spot can only
  *                 shrink and can only shrink deliberately.
  *
+ * ONE ROW IS A NEGATIVE ASSERTION, AND IT IS READ THE SAME WAY AS ALL THE
+ * OTHERS. `access-scope.<host>` says "Cloudflare Access covers the two
+ * control-plane paths and nothing else on this deployment". `present` means that
+ * property HOLDS; `absent` means an Access application covers more — the app
+ * host at large or a preview wildcard — and names which one. That failure is
+ * invisible to every positive check, because in that state the admin plane works
+ * perfectly while every preview URL an agent hands out has an interactive
+ * corporate login in front of it, so the only way it is ever noticed is by being
+ * observed on purpose.
+ *
+ * THE ACCESS ROWS NEED AN API TOKEN, NOT THE WRANGLER LOGIN. wrangler has no
+ * `access` command at all, so those four rows go to the REST API and need
+ * CLOUDFLARE_API_TOKEN (or CF_API_TOKEN) with `Access: Apps and Policies Read`.
+ * Without one they come back `unknown`, which FAILS — deliberately. A deploy that
+ * could not look at the admin plane's outer gate has not verified it, and the
+ * failure names the token to mint. The alternative, reporting them as absent,
+ * would let a machine with no token ship an unprotected admin plane.
+ *
  * SUPPLIED VALUES ARE CHECKED BY PRESENCE, NEVER BY VALUE, AND PER ENVIRONMENT.
  * `wrangler secret list` returns names; Cloudflare will not return a value and
  * nothing here asks for one. An ordinary config var is checked the same way
@@ -38,6 +56,18 @@
  * while being an R2 bucket, and the reason that survived is that no program ever
  * asked whether the names in `Env` were satisfied by anything.
  *
+ * THREE PHASES, AND ONLY ONE OF THEM IS EVER RELAXED — see {@link PHASES}. The
+ * split exists because "does this resource exist" has two different answers
+ * depending on who creates it, and the manifest already says which: a bucket, an
+ * index or a DNS record is an EXTERNAL PREREQUISITE that exists before a deploy
+ * or does not exist at all, while a Durable Object namespace, a container
+ * application, a route and the Worker itself are created BY the deploy. Demanding
+ * the second kind BEFORE the upload refuses the only command that could satisfy
+ * it — which is what happened to staging when `ControlPlaneDO` was added to
+ * `migrations`: the pre-deploy gate refused the deploy that would have created
+ * the namespace, and printed `bun run infra:provision` as the fix, a command
+ * that cannot create a Durable Object namespace and is forbidden from trying.
+ *
  * It needs a Cloudflare session, so it runs at the deploy tier and carries a
  * `CI_EXEMPT` entry. Without a session the whole assertion is unreachable, which
  * is `blocked()`: non-zero by default, because a gate that prints "skipped" and
@@ -46,14 +76,15 @@
 
 import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
-  type Deployment, type Observation, PROBE_LABEL, authenticated, container, deployment,
-  edgeResponds, emailRoutingToWorker, hostResolves, kvNamespace, r2, secretNames, servesWorker,
-  vectorize, wildcardDns,
+  type Deployment, type Observation, PROBE_LABEL, accessApplication, accessOrganization,
+  accessPolicies, accessScope, authenticated, container, deployment, edgeResponds,
+  emailRoutingToWorker, hostResolves, kvNamespace, r2, secretNames, servesWorker, vectorize,
+  wildcardDns,
 } from './infra-cloudflare';
 import {
-  type InfraEnvironment, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, UNOBSERVABLE,
-  WRANGLER_CONFIG, deriveInfrastructure, envFields, readSites, requiredIn, supplyCensus,
-  vectorizeGeometry,
+  CONTROL_PLANE_ACCESS_PATHS, type InfraEnvironment, type Infrastructure, type Resource, SUPPLY,
+  UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deriveInfrastructure, envFields,
+  readSites, requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import { isProductSource, readMatching } from './sources';
 
@@ -76,6 +107,48 @@ export interface Row {
   readonly origin: Resource['origin'];
 }
 
+/**
+ * WHICH RUN THIS IS. Exactly one thing changes between phases: whether an absent
+ * resource THE DEPLOY ITSELF CREATES is a finding or a deferral. Nothing else is
+ * ever softened — an unreadable lookup, an undeclared blind spot, a missing
+ * secret, a missing bucket, index, namespace-id or DNS record fails in every
+ * phase, because none of those is anything a deploy could have created.
+ *
+ *   full         the gate. `bun run gate:infra`, and any direct call. The only
+ *                tolerance in it is the one the manifest itself implies: before
+ *                the FIRST deploy there is no Worker, so nothing bound to one can
+ *                exist either.
+ *   bootstrap    the pre-deploy half of a deploy that is itself the provisioner
+ *                of something newly declared — a Durable Object class added to
+ *                `migrations`, a new container, a new route. Those are DEFERRED,
+ *                because no command in this repository can create one and the
+ *                only thing that does is the upload this phase gates. Reachable
+ *                only by asking for it (`--phase=bootstrap`, or the variable
+ *                `scripts/deploy.sh` exports when the operator passes
+ *                `--bootstrap`), and useful only inside a deploy, which runs
+ *                `post-deploy` afterwards whether anything was deferred or not.
+ *   post-deploy  after the upload, and the whole reason `bootstrap` is allowed to
+ *                exist. NO tolerance at all: the deploy has run, so a resource it
+ *                owns is present or the deployment failed. STRICTER than `full`,
+ *                which still tolerates an absent Worker — a statement about a
+ *                deploy that has not happened yet, and one this phase can never
+ *                truthfully make.
+ *
+ * A deferral is therefore never a skip: it names a row and hands it to a run that
+ * cannot tolerate it, and `scripts/deploy.sh` performs that run unconditionally
+ * in both environments. There is no value of anything — argv, environment, or
+ * both — that reaches an upload without `post-deploy` behind it.
+ */
+export const PHASES = ['full', 'bootstrap', 'post-deploy'] as const;
+export type Phase = (typeof PHASES)[number];
+
+/** Resources THIS DEPLOY creates, from the manifest's own `origin` rather than a
+ *  list of names here: `wrangler-deploy` is already the manifest's word for "the
+ *  upload creates it, and provisioning must not". A name list would be correct
+ *  until the next class lands in `migrations`, which is precisely the event this
+ *  distinction exists for. */
+const deployOwned = (origin: Row['origin']): boolean => origin === 'wrangler-deploy';
+
 /** Which binding types on the deployed Worker satisfy which manifest kind. The
  *  Workers API spells them its own way and this is the only place the two
  *  vocabularies meet. */
@@ -90,17 +163,24 @@ const DEPLOYED_TYPE = new Map<string, string>([
   ['worker_loader', 'Worker Loader'],
 ]);
 
-function row(resource: Resource, observation: Observation): Row {
+/** One resource's row, from what was observed of it. Exported for the self-test:
+ *  the absent branch's precedence — the observation's own detail over the
+ *  resource's static manual step — is what makes a NEGATIVE assertion actionable,
+ *  and it is decided here rather than at any call site. */
+export function observedRow(resource: Resource, observation: Observation): Row {
   const base = { id: resource.id, required: resource.required, purpose: resource.purpose, origin: resource.origin };
   if (observation.state === 'present') return { ...base, verdict: 'present', detail: observation.detail };
   if (observation.state === 'unknown') return { ...base, verdict: 'unknown', detail: observation.reason };
   // An absent row is the one an operator acts on, so it carries the action: the
-  // manual step for a resource nothing can create, and otherwise the fact that
-  // provisioning is what creates it.
+  // observation's own detail where it has one, then the manual step for a
+  // resource nothing can create, and otherwise the fact that provisioning is what
+  // creates it. The observation wins because it is the only one of the three that
+  // saw the account: a negative assertion fails because something EXISTS, and
+  // naming which thing cannot be done by a string written before the run.
   return {
     ...base,
     verdict: 'absent',
-    detail: resource.manual ?? `does not exist. ${resource.origin === 'wrangler-deploy'
+    detail: observation.detail ?? resource.manual ?? `does not exist. ${resource.origin === 'wrangler-deploy'
       ? '`bun run deploy` creates it' : '`bun run infra:provision` creates it'}`,
   };
 }
@@ -156,42 +236,70 @@ async function observe(
 
   switch (resource.kind) {
     case 'kv':
-      return row(resource, kvNamespace(resource.name));
+      return observedRow(resource, kvNamespace(resource.name));
     case 'r2':
-      return row(resource, r2(resource.name));
+      return observedRow(resource, r2(resource.name));
     case 'vectorize': {
       const geometry = vectorizeGeometry();
-      return row(resource, vectorize(resource.name, geometry.dimensions, geometry.metric));
+      return observedRow(resource, vectorize(resource.name, geometry.dimensions, geometry.metric));
     }
     case 'container': {
       const image = /image (\S+)$/u.exec(resource.purpose)?.[1] ?? '';
-      return row(resource, container(resource.name, image));
+      return observedRow(resource, container(resource.name, image));
     }
     case 'worker':
-      if (live.state === 'deployed') return row(resource, { state: 'present', detail: `version ${live.versionId}` });
-      return row(resource, live.state === 'absent' ? { state: 'absent' } : { state: 'unknown', reason: live.reason });
+      if (live.state === 'deployed') return observedRow(resource, { state: 'present', detail: `version ${live.versionId}` });
+      return observedRow(resource, live.state === 'absent' ? { state: 'absent' } : { state: 'unknown', reason: live.reason });
     case 'durable-object':
-      return row(resource, bound(resource.boundBy[0]?.binding ?? '', 'Durable Object'));
+      return observedRow(resource, bound(resource.boundBy[0]?.binding ?? '', 'Durable Object'));
     case 'binding':
-      return row(resource, bound(resource.boundBy[0]?.binding ?? '', undefined));
+      return observedRow(resource, bound(resource.boundBy[0]?.binding ?? '', undefined));
     case 'custom-domain':
-      return row(resource, await servesWorker(resource.name));
+      return observedRow(resource, await servesWorker(resource.name));
     case 'zone-route': {
       const host = routeHost(resource.name);
       // A wildcard route is asked whether ANYTHING answers under it, because a
       // preview host with no live preview answers 404 on purpose. An exact route
       // claims one origin, so it is asked the stronger question the custom
       // domain is asked: does this hostname reach THIS Worker.
-      return row(resource, resource.name.startsWith('*.')
+      return observedRow(resource, resource.name.startsWith('*.')
         ? await edgeResponds(`${PROBE_LABEL}.${host}`)
         : await servesWorker(host));
     }
     case 'wildcard-dns':
-      return row(resource, await wildcardDns(routeHost(resource.name)));
+      return observedRow(resource, await wildcardDns(routeHost(resource.name)));
     case 'dns-record':
-      return row(resource, await hostResolves(resource.name));
+      return observedRow(resource, await hostResolves(resource.name));
     case 'email-routing':
-      return row(resource, emailRoutingToWorker(resource.name, environment.workerName));
+      return observedRow(resource, emailRoutingToWorker(resource.name, environment.workerName));
+    // ── Cloudflare Access ───────────────────────────────────────────────
+    //
+    // The two vars come from the ENVIRONMENT rather than from the resource,
+    // because they are configuration this repository holds and the resource is
+    // the account-side object they point at. `resource.name` is the app host, so
+    // one row per environment stays readable across an AUD rotation.
+    case 'access-organization':
+      return observedRow(resource, await accessOrganization(
+        (environment.vars.get('CONTROL_PLANE_ACCESS_TEAM_DOMAIN') ?? '').trim(),
+      ));
+    case 'access-application':
+      return observedRow(resource, await accessApplication(
+        resource.name,
+        (environment.vars.get('CONTROL_PLANE_ACCESS_AUD') ?? '').trim(),
+        CONTROL_PLANE_ACCESS_PATHS,
+      ));
+    case 'access-policy':
+      return observedRow(resource, await accessPolicies(
+        resource.name,
+        (environment.vars.get('CONTROL_PLANE_ACCESS_AUD') ?? '').trim(),
+      ));
+    // The negative assertion. `present` means the property HOLDS — Access covers
+    // nothing outside the control plane — so a passing account reads as a ✓ row
+    // rather than as a missing resource.
+    case 'access-scope':
+      return observedRow(resource, await accessScope(
+        resource.name, claimedHosts(environment).wildcards, CONTROL_PLANE_ACCESS_PATHS,
+      ));
     default:
       return unobservableRow(resource);
   }
@@ -331,12 +439,44 @@ export interface Audit {
   readonly notes: readonly string[];
 }
 
-/** Pure, so the self-test drives every branch without a Cloudflare account. */
+/**
+ * What CREATES the absent thing, for the fix line.
+ *
+ * It used to say `bun run infra:provision` for every absence, and for a resource
+ * the manifest marks `wrangler-deploy` that instruction cannot work and must not:
+ * there is no wrangler verb that creates a Durable Object namespace, and
+ * provisioning is explicitly forbidden from touching what the upload owns. That
+ * is not hypothetical — `ControlPlaneDO` landed in `migrations`, this gate refused
+ * staging's deploy, and the one command it named could never have fixed it. A fix
+ * line that cannot work is how a real red gets bypassed instead of read.
+ */
+function remedy(entry: Row, phase: Phase): string {
+  if (!deployOwned(entry.origin)) {
+    return 'bun run infra:provision — or, for a resource provisioning cannot create, the manual '
+      + 'step it prints.';
+  }
+  if (phase === 'post-deploy') {
+    return 'nothing is left to run: the upload carried the config that declares this and the '
+      + 'account does not hold it. Read the `wrangler deploy` output above. A Durable Object '
+      + 'namespace needs a `migrations` entry naming its class IN THE ENVIRONMENT BEING DEPLOYED '
+      + '(a named `env.*` block inherits none), and a container, a route and a cron each need '
+      + 'their own block there. Provisioning can create none of them.';
+  }
+  return 'the deploy creates this one; `bun run infra:provision` neither can nor may. If THIS '
+    + 'deploy is the one that declares it — a class new to `migrations`, a new container or a new '
+    + 'route — say so: `bash scripts/deploy.sh <environment> --bootstrap` defers exactly this row '
+    + 'before the upload and rejects it after, when the deploy has had its chance to create it.';
+}
+
+/** Pure, so the self-test drives every branch without a Cloudflare account. The
+ *  `phase` default is the strict one: a caller that has not thought about phases
+ *  gets the gate. */
 export function audit(
   infrastructure: Infrastructure,
   rows: readonly Row[],
   supplied: readonly SupplyRow[],
   unreadFields: readonly string[],
+  phase: Phase = 'full',
 ): Audit {
   const findings: string[] = [];
   const notes: string[] = [];
@@ -373,14 +513,23 @@ export function audit(
     if (
       entry.verdict === 'absent'
       && entry.required
-      && entry.origin === 'wrangler-deploy'
-      && !workerDeployed
+      && deployOwned(entry.origin)
+      // THE ONE TOLERANCE, and the whole behavioural difference between the three
+      // phases. `post-deploy` has none: the upload has run. `bootstrap` defers
+      // every deploy-owned absence, because a class new to `migrations` cannot
+      // exist before the deploy that declares it. `full` defers one only while
+      // the Worker itself is absent — the pre-first-deploy state, in which
+      // nothing bound to a Worker could exist either.
+      && phase !== 'post-deploy'
+      && (phase === 'bootstrap' || !workerDeployed)
     ) {
-      // The Worker is not deployed yet, and this deploy is itself the
-      // provisioner. Once the Worker exists, every absent required binding is
-      // a regression and falls through to the finding below.
-      notes.push(`${entry.id} is absent and is created by the deploy itself — expected before `
-        + 'the first deploy carrying its migration; verify it exists after this deploy lands');
+      // Deferred, never skipped: nothing reachable from here can create it, and
+      // the run that collects it tolerates nothing.
+      notes.push(`${entry.id} is absent and is created by the deploy itself — ${phase === 'bootstrap'
+        ? 'deferred by the bootstrap phase, which is why that phase exists; the post-deploy run '
+          + 'rejects it if the upload does not create it'
+        : 'expected before the first deploy carrying its migration; verify it exists after this '
+          + 'deploy lands'}`);
       continue;
     }
     if (entry.verdict === 'absent' && entry.required) {
@@ -388,11 +537,12 @@ export function audit(
         at: entry.id,
         invariant: `it exists and is bound: ${entry.purpose}. The manifest binds it and `
           + '`env.d.ts` does not mark it optional, so the Worker has stated it needs this.',
-        found: 'not present in this account',
+        found: phase === 'post-deploy' && deployOwned(entry.origin)
+          ? 'not present AFTER the upload that creates it — the new version is live and this is not'
+          : 'not present in this account',
         silently: 'the Worker deploys, the site answers 200, and the first request down this path '
           + 'throws at runtime.',
-        fix: 'bun run infra:provision — or, for a resource provisioning cannot create, the manual '
-          + 'step it prints.',
+        fix: remedy(entry, phase),
       }));
     }
   }
@@ -508,6 +658,34 @@ export function supplySummary(environment: InfraEnvironment, fields = envFields(
     + `${String(census.length)}:\n  ${census.map((field) => field.name).join(', ')}`;
 }
 
+/** How a phase is asked for on the command line, and the variable
+ *  `scripts/deploy.sh` carries it in. Both spellings exist for the same reason
+ *  the environment already has both: the deploy's gate line has to stay ONE
+ *  string for `scripts/ladder.ts` to parse and match against LADDER, so anything
+ *  that varies per run travels beside the command rather than inside it. */
+const PHASE_FLAG = '--phase=';
+const PHASE_ENV = 'KINU_INFRA_PHASE';
+
+/**
+ * The phase this run is, from an explicit flag or from the variable the deploy
+ * script exports. Neither ⇒ `full`, the gate.
+ *
+ * `undefined` means a phase was NAMED and is not one this program has, which is
+ * refused rather than defaulted. Defaulting would be the dangerous direction in
+ * the readable case and the confusing one in the other: a mistyped
+ * `--phase=post-deply` silently running the full gate turns a post-deploy
+ * verification into a weaker check nobody asked for, and a mistyped bootstrap
+ * fails a deploy for a reason no output explains.
+ */
+export function phaseFrom(
+  argv: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>,
+): Phase | undefined {
+  const flag = argv.find((argument) => argument.startsWith(PHASE_FLAG));
+  const named = flag?.slice(PHASE_FLAG.length) ?? environment[PHASE_ENV] ?? 'full';
+  return PHASES.find((candidate) => candidate === named);
+}
+
 /**
  * ONE ENVIRONMENT PER RUN. An explicit argv wins; failing that the environment
  * being deployed, which `scripts/deploy.sh` exports as KINU_DEPLOY_ENV; failing
@@ -524,18 +702,34 @@ export function supplySummary(environment: InfraEnvironment, fields = envFields(
  *
  * The environments NOT checked are named on every run with the command that
  * checks them, so this is a scope and not a silent skip.
+ *
+ * ONE PHASE PER RUN too, and it is named in every line this prints: a `bootstrap`
+ * run is not the gate and must not be readable as one.
  */
 async function main(): Promise<number> {
+  const argv = process.argv.slice(2);
+  const phase = phaseFrom(argv, process.env);
+  if (phase === undefined) {
+    console.error(`${GATE}: usage: bun scripts/infra-verify.ts [environment] `
+      + `[${PHASE_FLAG}${PHASES.join('|')}]`);
+    return 2;
+  }
+  // Every line this run prints says which phase produced it. `infra: ok` from a
+  // bootstrap run would be read as the gate passing, and the whole point of the
+  // phase is that it has not.
+  const label = phase === 'full' ? GATE : `${GATE} ${phase}`;
+
   const session = authenticated();
   if (session.state !== 'present') {
-    return blocked(GATE, `no Cloudflare session — ${session.state === 'unknown' ? session.reason : 'wrangler is logged out'}`, ACK);
+    return blocked(label, `no Cloudflare session — ${session.state === 'unknown' ? session.reason : 'wrangler is logged out'}`, ACK);
   }
 
   const infrastructure = deriveInfrastructure();
-  const requested = process.argv[2] ?? process.env.KINU_DEPLOY_ENV ?? 'production';
+  const requested = argv.find((argument) => !argument.startsWith('--'))
+    ?? process.env.KINU_DEPLOY_ENV ?? 'production';
   const selected = infrastructure.environments.filter((entry) => entry.key === requested);
   if (selected.length === 0) {
-    console.error(`${GATE}: no environment named \`${requested}\` in the manifest. `
+    console.error(`${label}: no environment named \`${requested}\` in the manifest. `
       + `Declared: ${infrastructure.environments.map((entry) => entry.key).join(', ')}`);
     return 1;
   }
@@ -562,10 +756,10 @@ async function main(): Promise<number> {
 
   const sources = readMatching(isProductSource);
   const unread = [...SUPPLY.keys()].filter((name) => readSites(name, sources).length === 0);
-  const verdict = audit(infrastructure, rows, supplied, unread);
+  const verdict = audit(infrastructure, rows, supplied, unread, phase);
 
   const fields = envFields();
-  const measured = assertMeasured(GATE, [
+  const measured = assertMeasured(label, [
     ['environments checked', selected.length],
     ['resources declared', rows.length],
     ['resources observed present', rows.filter((entry) => entry.verdict === 'present').length],
@@ -592,22 +786,42 @@ async function main(): Promise<number> {
 
   const present = rows.filter((entry) => entry.verdict === 'present').length;
   console.log(
-    `\n${GATE}: ${requested} declares ${String(rows.length)} resources; `
+    `\n${label}: ${requested} declares ${String(rows.length)} resources; `
     + `${String(present)} observed present, `
     + `${String(rows.filter((entry) => entry.verdict === 'absent').length)} absent, `
     + `${String(rows.filter((entry) => entry.verdict === 'unknown').length)} unreadable, `
     + `${String(rows.filter((entry) => entry.verdict === 'unobservable').length)} unobservable by any CLI.`,
   );
 
-  for (const note of verdict.notes) console.log(`${GATE}: NOTE — ${note}`);
+  for (const note of verdict.notes) console.log(`${label}: NOTE — ${note}`);
+
+  // WHAT THIS RUN IS AND IS NOT, on both the red and the green path, because the
+  // difference between the phases is exactly the difference between "verified"
+  // and "verified except for the part something else has to check".
+  if (phase === 'bootstrap') {
+    console.log(
+      `${label}: THIS RUN IS NOT THE GATE. It deferred `
+      + `${String(verdict.notes.length)} resource(s) the manifest says the upload creates, and `
+      + 'reported everything else exactly as the gate does — every secret, bucket, index, '
+      + 'namespace id and DNS record was required to exist here and now. The deferrals are owed '
+      + `to \`bun scripts/infra-verify.ts ${requested} ${PHASE_FLAG}post-deploy\`, which `
+      + 'scripts/deploy.sh runs after the upload and which tolerates none of them.',
+    );
+  }
+  if (phase === 'post-deploy') {
+    console.log(
+      `${label}: no absence is tolerated in this phase — the upload that owns these resources has `
+      + 'already run, so every one of them exists or this deployment failed.',
+    );
+  }
 
   if (verdict.findings.length > 0) {
-    console.error(`\n${GATE}: ${String(verdict.findings.length)} finding(s)\n`);
+    console.error(`\n${label}: ${String(verdict.findings.length)} finding(s)\n`);
     for (const entry of verdict.findings) console.error(entry);
-    console.error(`\n${GATE}: measured ${measured}`);
+    console.error(`\n${label}: measured ${measured}`);
     return 1;
   }
-  console.log(`${GATE}: ok — ${measured}`);
+  console.log(`${label}: ok — ${measured}`);
   return 0;
 }
 

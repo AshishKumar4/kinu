@@ -22,7 +22,8 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { auditCoverage, auditFile, auditQuotations, auditRegister, coverage } from './literature-citations';
+import { auditCoverage, auditFile, auditRegister, coverage } from './literature-citations';
+import { auditQuotations } from './literature-quotations';
 
 /** One markdown file, as the gate reads its corpus. */
 function audit(text: string): string[] {

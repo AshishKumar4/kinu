@@ -114,7 +114,8 @@ reconstruction and are restored before routing.
 The preview edge:
 
 - routes preview hosts before the application and auth router;
-- strips the `__Host-kinu_session` and `__Host-kinu_d1_bookmark` cookies,
+- strips every cookie the Kinu app sets (`__Host-kinu_session`,
+  `__Host-kinu_oauth_state`, `__Host-kinu_d1_bookmark`),
   `pta_`/`ptc_`/`pdt_` bearer tokens, proxy credentials, and every
   `x-kinu-*` header before guest code receives the request
   (`lib/preview-request.ts`);

@@ -718,7 +718,16 @@ describe('loadBenchCorpus', () => {
   // the difference (`orphan`), and `gate:bench-corpus` holds the same census at
   // COMMIT tier, so nothing can pass here and fail there either.
   test('every defect patch still applies to the tree it was seeded against', () => {
-    expect(stalePatches(REPO_ROOT, benchPatchFiles())).toEqual([]);
+    // THE DENOMINATOR FIRST, for the reason `assertMeasured` exists one tier up:
+    // `stalePatches` over an empty enumeration returns `[]`, so this assertion
+    // reported the HEALTHIEST possible answer about a corpus nobody had looked
+    // at. `gate:bench-corpus` states its count and dies on zero
+    // (`scripts/bench-corpus-gate.ts`); this test had no such floor, so a
+    // narrowing of `isBenchDefectPatch` — or an enumeration that silently came
+    // back empty — would have gone green here and red only at commit tier.
+    const patches = benchPatchFiles();
+    expect(patches.length).toBeGreaterThan(100);
+    expect(stalePatches(REPO_ROOT, patches)).toEqual([]);
   });
 
   test('every dev task really is dev — the split is derived, not declared', () => {
@@ -918,7 +927,10 @@ describe('the task corpus stays applicable to HEAD', () => {
   // state a half-finished retirement leaves behind. `retired.jsonl`'s own test
   // below asserts the inverse, where a patch file's ABSENCE is the claim.
   test('no patch file sits outside the corpus that measures it', () => {
-    expect(stalePatches(REPO_ROOT, benchPatchFiles()).filter((p) => p.orphan)).toEqual([]);
+    // Same denominator, same reason: an empty enumeration has no orphans.
+    const patches = benchPatchFiles();
+    expect(patches.length).toBeGreaterThan(100);
+    expect(stalePatches(REPO_ROOT, patches).filter((p) => p.orphan)).toEqual([]);
     const named = new Set(loadBenchCorpus(REPO_ROOT).patches.keys());
     const files = readdirSync(join(REPO_ROOT, 'tests', 'bench', 'patches'))
       .filter((f) => f.endsWith('.patch'))

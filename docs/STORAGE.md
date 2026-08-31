@@ -24,25 +24,33 @@ source of truth.
 handoff state, CLI browser-approval state, each carrying its own TTL. None of
 it is a source of truth. A user's identity lives in their `UserDO`, keyed on a
 userId derived from the verified email, so an emptied namespace costs everyone
-a fresh sign-in and nothing more.
+a fresh sign-in and nothing more. The handoff record keeps the hash of a
+binding cookie the initiating browser holds, so a callback URL is worth nothing
+away from the browser that started that sign-in.
 
-A session cookie's KV record says who signed in. It does not say whether the
-session is still live. A KV delete needs up to a minute to reach every colo, so
-a copied cookie replayed at another colo would outlive logout by that window.
-One row per live session in the signing-in user's own `UserDO` answers that
-instead, and every cookie check reads it. Logout deletes that row first, and
-the KV delete that follows is cleanup, so a failed cleanup does not report a
-revocation that landed as one that did not.
+A session cookie's KV record is a projection. What the cookie stands for and
+whether it is still live are both one row in the signing-in user's own
+`UserDO`, written once at sign-in and read on every cookie check. KV needs up
+to a minute to reach every colo in either direction, so it can answer neither
+question: a copied cookie replayed at a lagging colo would outlive logout by
+that window, and the first request after a sign-in redirect would read as
+signed out at a colo the write had not reached, then be sent back into a
+sign-in that loses the same race. The row answers both, from every colo.
+Logout deletes it first, and the KV delete that follows is cleanup, so a failed
+cleanup does not report a revocation that landed as one that did not.
 
 A store that will not answer gives a 503. It is never an admitted request, and
 never the 401 that would tell a signed-in user to sign in again. A sign-out
 that cannot reach the store keeps the cookie and offers a retry: the cookie is
 the only handle that can still revoke that session, so clearing it would leave
-the session live with nothing able to reach it. A record that is missing or
-lapsed is simply not signed in. A record that no longer decodes is both a fault
-and a dead credential: it is reported once, cleared from the row and from KV,
-and still answered as not signed in, so the browser can sign in again instead of
-being trapped behind a cookie it cannot replace.
+the session live with nothing able to reach it. A session whose row is gone or
+lapsed is simply not signed in, and a record KV does not hold is not a sign-out
+on its own: the row still says what the cookie stands for, and every path that
+ends a session deletes that row first, so an absent record can never revive a
+revoked one. A record that no longer decodes is both a fault and a dead
+credential: it is reported once, cleared from the row and from KV, and still
+answered as not signed in, so the browser can sign in again instead of being
+trapped behind a cookie it cannot replace.
 
 ## Entity Relationship
 

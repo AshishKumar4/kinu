@@ -162,10 +162,63 @@ export interface HeadStep {
   readonly toolCalls: readonly HeadStepToolCall[];
 }
 
+/**
+ * Every status a head's own run can END on — the closed set `head_journal.status`
+ * holds once a report has landed.
+ *
+ * A LIST and not just a union, because two readers outside this module have to
+ * ask a `TEXT` column which of these it holds, and both used to answer with a
+ * hand-written subset that named `completed` and treated the rest as one lump.
+ * The exploration-facet sweep classified a facet terminal on `completed` or
+ * `aborted` alone, so a head that THREW or blew its budget kept its facet for the
+ * life of the workspace; the cold branch settle reported every non-`completed`
+ * status as `errored`, so a branch that ran out of wall clock was recorded as
+ * having thrown. Four statuses, none of them a lump.
+ */
+export const HEAD_REPORT_STATUSES = ['completed', 'budget_exceeded', 'aborted', 'errored'] as const;
+export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];
+
+/**
+ * The statuses a journal row carries while it still CLAIMS to execute — the only
+ * two that are not terminal, and the exact complement of
+ * {@link HEAD_REPORT_STATUSES} over what `HeadJournal` writes.
+ *
+ * `running` is written at spawn and `interrupted` by a cold activation's
+ * reconciliation, so both are non-terminal and neither is permanent: the resume
+ * gate either re-drives the run or `abandonRunning` settles it `aborted`. That is
+ * what makes a caller owing work on these two terminate.
+ */
+export const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;
+export type HeadUnsettledStatus = (typeof HEAD_UNSETTLED_STATUSES)[number];
+
+/** Is this stored status one a head is still executing under? */
+export function headStatusUnsettled(status: string): status is HeadUnsettledStatus {
+  // SAFETY: `includes` checked tuple membership — the exact invariant the predicate's narrowing declares; widening only relaxes the parameter.
+  return (HEAD_UNSETTLED_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * A stored `head_journal.status` read back as the report status it records, or
+ * null when it records none.
+ *
+ * Null covers an unsettled row AND a value no version of this journal writes; a
+ * caller that must tell those apart asks {@link headStatusUnsettled} first. Kept
+ * apart from that predicate rather than folded into one three-way answer because
+ * the two callers weigh the unknown differently: a facet sweep must not wipe
+ * storage it cannot account for, and a settlement must not owe forever on a
+ * status nothing will ever change.
+ */
+export function storedHeadReportStatus(status: string): HeadReportStatus | null {
+  // SAFETY: `includes` checked membership in HEAD_REPORT_STATUSES, the invariant both assertions state; widening only relaxes the parameter.
+  return (HEAD_REPORT_STATUSES as readonly string[]).includes(status)
+    ? status as HeadReportStatus
+    : null;
+}
+
 /** What a head reports back to its parent on completion. */
 export interface HeadReport {
   readonly id: HeadId;
-  readonly status: 'completed' | 'budget_exceeded' | 'aborted' | 'errored';
+  readonly status: HeadReportStatus;
   /** 2-4 sentence finding — the LLM writes this. Used in the merge prompt. */
   readonly summary: string;
   /** Top-N evidence items (head decides; usually <= 10). */

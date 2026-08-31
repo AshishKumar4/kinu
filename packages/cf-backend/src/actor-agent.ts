@@ -19,6 +19,7 @@
 import {
   callable,
   type AgentContext, type Connection, type ConnectionContext, type SubAgentClass,
+  type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
 import { ExplorationAgent } from './exploration';
@@ -31,7 +32,16 @@ import type {
   SubordinateRosterEntry as SubordinateView,
 } from './lib/protocol';
 import { parseProtocolMessage } from "agents/chat";
-import { CLI_SCOPES_HEADER, cliScopesConnectionTag, rejectOutOfScopeRpc } from "./cli/rpc-gate";
+import {
+  CLI_BEARER_HEADER,
+  CLI_SCOPES_HEADER,
+  cliBearerConnectionTag,
+  cliBearerFromTags,
+  cliScopesConnectionTag,
+  rejectOutOfScopeRpc,
+  type CliSocketBearer,
+} from "./cli/rpc-gate";
+import { retryTransientDO } from "./lib/do-rpc";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
@@ -172,7 +182,8 @@ import {
   renderSubordinateInheritedContext,
   type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
-  slugifyName,
+  // One minting rule for every subordinate, on either backend
+  mintSubordinateName,
   // The subordinate tree's depth cap — derived per child, never stated by one
   DELEGATION_MAX_DEPTH,
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
@@ -204,7 +215,8 @@ import {
   // memory.* / tasks.* — codemode projections of the same-named native tools
   JsonObjectSchema, JsonValueSchema, TIER_IDS, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
-  resolveAgentTurnProfile, createMemoryCodemodeProvider, createTasksCodemodeProvider,
+  resolveAgentTurnProfile, resolveRoutingProfile,
+  createMemoryCodemodeProvider, createTasksCodemodeProvider,
   resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   beginModelOperation,
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
@@ -296,6 +308,10 @@ interface AsyncTaskOwner {
 
 interface UserHubCoreClient {
   readonly hasPeerGrant: UserDO['hasPeerGrant'];
+  /** Whether the CLI bearer behind a live websocket on this workspace may
+   *  still act — asked at frame time, so the answer comes from the object that
+   *  owns revocation rather than from a verdict cached at the upgrade. */
+  readonly verifyCliSocketBearer: UserDO['verifyCliSocketBearer'];
   readonly hasWorkspace: UserDO['hasWorkspace'];
   readonly listActiveWorkspaces: UserDO['listActiveWorkspaces'];
   readonly publishExperience: UserDO['publishExperience'];
@@ -365,6 +381,12 @@ function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
   const frame = v.safeParse(ClientRpcFrameSchema, json);
   return frame.success ? { id: frame.output.id, method: frame.output.method } : null;
 }
+
+/** The close code the agents SDK treats as TERMINAL (`isTerminalCloseEvent`),
+ *  so a client whose authority is gone stops reconnecting and surfaces the
+ *  reason instead of retrying a socket it can never hold again. */
+const WEBSOCKET_POLICY_CLOSE = 1008;
+const CLI_AUTHORITY_REVOKED = 'This CLI authorization is no longer valid. Sign in again with: kinu auth';
 
 
 function jsonObject<Input>(input: Input): JsonObject {
@@ -1153,10 +1175,7 @@ export abstract class ActorAgent extends Think<Env> {
       runtime: this.subordinateRuntime(),
       now: () => Date.now(),
       renderInheritedContext: () => renderSubordinateInheritedContext(this.readInheritedContext()),
-      createName: (role) => {
-        const base = slugifyName(role).slice(0, 48) || 'subordinate';
-        return `${base}-${nanoid(6)}`;
-      },
+      createName: mintSubordinateName,
       // Existence only. The temporary rung's whole point is that the material
       // reaches the CHILD's window and not this one, so this side authorizes the
       // path through the workspace VFS and never reads the bytes.
@@ -1174,10 +1193,7 @@ export abstract class ActorAgent extends Think<Env> {
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
       ownMission: () => this.ownMission(),
-      createName: (role) => {
-        const base = slugifyName(role).slice(0, 48) || 'subordinate';
-        return `${base}-${nanoid(6)}`;
-      },
+      createName: mintSubordinateName,
       broadcast: (event) => this.broadcastSubordinatesChanged(event),
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
@@ -1341,8 +1357,17 @@ export abstract class ActorAgent extends Think<Env> {
     // agents-SDK rpc dispatcher (installed as an own-property onMessage
     // wrapper by the Agent constructor, hence the re-wrap instead of an
     // onMessage override). Chat frames pass through untouched.
+    //
+    // WHETHER the bearer may still act is asked FIRST, because the scope gate
+    // answers a different question: it pins a connection to what its token was
+    // granted, and says nothing about whether that token still exists. A
+    // connect ticket is verified once, at the upgrade, so without the check
+    // below a revoked CLI kept this workspace's whole surface for as long as it
+    // held the socket — across every await, and across hibernation, which
+    // restored the connection from its tags with its scopes intact.
     const dispatchMessage = this.onMessage;
     this.onMessage = async (connection, message) => {
+      if (await this.refuseRevokedCliBearer(connection, message)) return;
       const rejection = rejectOutOfScopeRpc(connection.tags, message);
       if (rejection) {
         connection.send(rejection);
@@ -2305,13 +2330,101 @@ export abstract class ActorAgent extends Think<Env> {
     }));
   }
 
-  /** Persist the verified connect-ticket scopes (edge-set header, see
-   *  appendIdentityHeaders) as a connection tag — tags ride the WebSocket
-   *  attachment, so the rpc gate survives DO hibernation. */
+  /** Persist the verified connect-ticket scopes AND the bearer behind them
+   *  (edge-set headers, see appendIdentityHeaders) as connection tags — tags
+   *  ride the WebSocket attachment, so both the rpc gate and the bearer's
+   *  identity survive DO hibernation. */
   override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
     const tags = await super.getConnectionTags(connection, ctx);
     const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
-    return scopeTag ? [...tags, scopeTag] : tags;
+    const bearerTag = cliBearerConnectionTag(ctx.request.headers.get(CLI_BEARER_HEADER));
+    return [
+      ...tags,
+      ...(scopeTag === null ? [] : [scopeTag]),
+      ...(bearerTag === null ? [] : [bearerTag]),
+    ];
+  }
+
+  /**
+   * Close every CLI websocket admitted before `generation`.
+   *
+   * Called by the owner's UserDO the moment it records a revocation, and it is
+   * the half a per-frame check cannot cover: a client that says nothing sends
+   * no frames, while the connection it is holding keeps RECEIVING this
+   * workspace's stream. A revoked CI token has to lose that too.
+   *
+   * Best-effort by construction, and the frame-time check is what makes the
+   * revocation true either way — this only makes it immediate. A connection
+   * whose recorded bearer cannot be read is closed rather than kept, because
+   * there is nothing left to compare it against.
+   */
+  async closeRevokedCliSockets(generation: number): Promise<{ closed: number }> {
+    let closed = 0;
+    for (const connection of this.getConnections()) {
+      const bearer = cliBearerFromTags(connection.tags);
+      if (bearer === null) continue;
+      if (bearer.readable && bearer.generation >= generation) continue;
+      connection.close(WEBSOCKET_POLICY_CLOSE, CLI_AUTHORITY_REVOKED);
+      closed += 1;
+    }
+    if (closed > 0) {
+      diagnostics.event('auth.cli_sockets_closed', { outcome: 'denied', closed, generation });
+    }
+    return { closed };
+  }
+
+  /**
+   * Refuse a frame from a connection whose CLI bearer no longer holds.
+   *
+   * FRAME TIME, AND AGAINST THE AUTHORITY, because a connect ticket is checked
+   * exactly once — at the upgrade — and everything after that used to be
+   * unconditional trust: revoke the token, and the socket kept its full
+   * @callable surface until the client disconnected, which for a CI runner is
+   * as long as it likes. Hibernation made it worse, since the connection came
+   * back from its tags with its scopes and no bearer at all.
+   *
+   * The question goes to the UserDO that owns the revocation, so there is no
+   * cached verdict to be stale. Only bearer-tagged connections pay for it:
+   * browser sessions carry no tag and return on the first line. A UserDO that
+   * cannot be reached refuses the frame — the alternative is a socket that
+   * keeps acting precisely when its authority cannot be confirmed.
+   */
+  private async refuseRevokedCliBearer(connection: Connection, message: WSMessage): Promise<boolean> {
+    const bearer = cliBearerFromTags(connection.tags);
+    if (bearer === null) return false;
+    const denial = await this.cliBearerDenial(bearer);
+    if (denial === null) return false;
+    const rpc = parseClientRpcFrame(message);
+    // Answered in the protocol the client already speaks, so a pending call
+    // fails with a reason instead of hanging until it notices the close.
+    if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial }));
+    connection.close(WEBSOCKET_POLICY_CLOSE, CLI_AUTHORITY_REVOKED);
+    diagnostics.event('auth.cli_frame_denied', { outcome: 'denied', reason: 'bearer_not_live' });
+    return true;
+  }
+
+  /** Why this connection's bearer may no longer act, or null when it may.
+   *
+   *  A generation from the FUTURE is refused as well: this workspace is asking
+   *  the object that owns the counter, so a connection claiming to have been
+   *  admitted under a later authority state than the account has ever reached
+   *  is not a socket to keep. */
+  private async cliBearerDenial(bearer: CliSocketBearer): Promise<string | null> {
+    if (!bearer.readable) return 'This connection carries no readable authorization. Reconnect with: kinu auth';
+    try {
+      const { stub, caller } = await this.userHub();
+      const verified = await retryTransientDO('verifyCliSocketBearer',
+        () => stub.verifyCliSocketBearer(caller, bearer.tokenHash));
+      if (verified.live && verified.generation <= bearer.generation) return null;
+      return verified.error ?? CLI_AUTHORITY_REVOKED;
+    } catch (cause) {
+      diagnostics.failure('auth.cli_bearer_check_failed', toKinuError({
+        doing: 'checking whether a websocket\'s CLI bearer is still live',
+        cause,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+      return 'This connection\'s authorization could not be confirmed. Reconnect with: kinu auth';
+    }
   }
 
   /** Scoped access-token connections may chat but never write agent state. */
@@ -5922,14 +6035,16 @@ export abstract class ActorAgent extends Think<Env> {
    * model any other way has bypassed the one routing table.
    */
   protected async routingProfile(): Promise<ResolvedTurnProfile> {
-    if (this._turnProfile) return this._turnProfile;
-    return resolveAgentTurnProfile({
-      ...(await this.profileInputs()),
-      activeRoleId: this.activeRoleLabel(),
-      workMode: this.turnWorkMode(),
-      availableTools: [],
-      activeSkills: [],
-      explicitTier: this.config.getAssignedTier() ?? undefined,
+    return resolveRoutingProfile({
+      live: () => this._turnProfile,
+      resolve: async () => resolveAgentTurnProfile({
+        ...(await this.profileInputs()),
+        activeRoleId: this.activeRoleLabel(),
+        workMode: this.turnWorkMode(),
+        availableTools: [],
+        activeSkills: [],
+        explicitTier: this.config.getAssignedTier() ?? undefined,
+      }),
     });
   }
 

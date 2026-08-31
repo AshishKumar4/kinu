@@ -50,9 +50,11 @@ export async function handleCreateWorkspaceRequest(
   } catch (e) {
     const message = renderThrownChain({ cause: e });
     // workspace-create.ts throws plain Errors; this is the single home for the
-    // provider-not-connected → 409 mapping.
-    const status = message.startsWith('Cloudflare Workers AI is not connected') ? 409 : 400;
-    return err(status, message);
+    // two answers that are conflicts rather than bad requests — a provider the
+    // account cannot serve, and a name an unfinished transfer is still holding.
+    const conflict = message.startsWith('Cloudflare Workers AI is not connected')
+      || message.startsWith('Workspace name conflict');
+    return err(conflict ? 409 : 400, message);
   }
 }
 

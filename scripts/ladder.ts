@@ -37,7 +37,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
-import { isRunnableSuite, trackedFiles } from './sources';
+import {
+  isBunDiscoverableSuite, isPythonSuite, isRunnableSuite, isVitestEvalSuite, trackedFiles,
+} from './sources';
 import { CLI_TEST_ROOT } from './test-cli';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
@@ -528,7 +530,7 @@ export const LADDER: readonly Gate[] = [
       + 'creates a bucket.',
   },
   {
-    run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts',
+    run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
     tier: 'push',
     seconds: 0.1,
     catches: 'the two new gates\' own decision boundaries — including the one that '
@@ -630,6 +632,30 @@ export const LADDER: readonly Gate[] = [
     blind: 'both backend composition roots, and every subprocess path. It also covers '
       + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
       + 'which pins the other 5 by equality with the gate that does run each.',
+  },
+  {
+    run: 'bun run gate:python-suites',
+    tier: 'push',
+    // 0.23s: 77 tests over three `unittest discover` processes, measured
+    // 2026-08-30. Cheap because the suites need no dependency and no harness
+    // install — which is also why nothing noticed they were never run.
+    seconds: 0.3,
+    catches: 'the 77 Python tests under `bench/tests/`, `bench/harbor/tests/` and '
+      + '`bench/clbench/tests/` — the shared KINU_HOME guard both bench adapters load by '
+      + 'path, the model-endpoint adapter, harbor corpus identity and the clbench event '
+      + 'mapping. Every one of them ran in NO pipeline: the ladder\'s denominator is '
+      + '`isRunnableSuite`, a JS/TS basename rule, so "every test file is claimed by some '
+      + 'runner" was a sentence about TypeScript and three suites sat outside it. It also '
+      + 'catches the silent zero that made a naive fix worse: `unittest discover -t . -s '
+      + 'bench` reports `Ran 0 tests` and exits 0, because those directories carry no '
+      + '`__init__.py` and discovery will not recurse into them — the invocation each '
+      + 'suite\'s own docstring documented. So the gate proves each root non-empty AND '
+      + 'compares the MODULES discovery loaded against the enumerated files, because a '
+      + 'root that silently loaded two of its three still reports a healthy count.',
+    blind: 'everything about the Python the bench harness runs in anger — the corpus '
+      + 'builder, the trajectory writer and the agent adapter have no suites at all, so '
+      + 'this gate governs four files out of eleven. It is also blind to type errors: '
+      + 'there is no Python typechecker in this repository.',
   },
   {
     run: 'bun test packages/devbox/',
@@ -1245,7 +1271,16 @@ export const LADDER: readonly Gate[] = [
       + 'Email Routing rule delivers to this Worker (Mission Inbox receives nothing while every '
       + 'binding is present and correct), staging\'s deployed version predates the MonitorDO '
       + 'migration, staging has no root secret, and Google and GitHub sign-in are dark for want '
-      + 'of two secrets nobody had recorded as missing.',
+      + 'of two secrets nobody had recorded as missing. It also proves the admin control plane\'s '
+      + 'OUTER gate: that a Cloudflare Access organization, a self-hosted application whose AUD '
+      + 'the Worker pins, and an Allow policy naming identities all exist and cover BOTH '
+      + '`kinu.run/control*` and `kinu.run/api/control*` — plus the NEGATIVE half, that no Access '
+      + 'application covers the app host at large or any `*.kinu.run` preview hostname. Both '
+      + 'directions are silent failures without it: the admin plane fails closed, so a missing '
+      + 'application 404s its own operators and looks like an allowlist typo, while an '
+      + 'over-broad one leaves the admin plane working perfectly and puts an interactive '
+      + 'corporate login in front of every preview URL an agent hands out, the landing page and '
+      + '/api/feedback.',
     blind: 'anything no CLI can observe, which it refuses to hide: the AI Gateway (wrangler 4.97 '
       + 'has no `ai-gateway` command and the OAuth session has no `aig` scope) and the cron '
       + 'trigger (writable, never readable) are DECLARED blind spots pinned by equality, so the '
@@ -1253,7 +1288,10 @@ export const LADDER: readonly Gate[] = [
       + 'whether a resource that exists is CORRECT beyond its name — a Vectorize geometry '
       + 'mismatch is reported, an R2 lifecycle rule is not — and, deliberately, to every '
       + 'environment but the one named: staging is reported as not-checked with the command that '
-      + 'checks it.',
+      + 'checks it. The four Access rows need an API token with `Access: Apps and Policies Read` '
+      + 'rather than the wrangler login, which has no Access scope; without one they report '
+      + 'UNKNOWN and fail, because a machine that could not look at the admin plane\'s outer gate '
+      + 'has not verified it.',
   },
 ];
 
@@ -1364,6 +1402,82 @@ export function deployExclusions(
   return groups;
 }
 
+/** The path of the Python suites' runner, as its gate spells it. */
+export const PYTHON_SUITES_SCRIPT = 'scripts/python-suites.ts';
+
+/** The path of the eval tier's runner, as `bun run test:eval` spells it. */
+export const EVAL_TIER_SCRIPT = 'scripts/eval-tier.sh';
+
+/** The eval tier's arms, as data. */
+export interface EvalTierArms {
+  /** The DEFAULT-backend `bun test` argv, verbatim. `--backend cloud` names a
+   *  different list; this is what `bun run test:eval` runs. */
+  readonly bunTargets: readonly string[];
+  /** The single-family vitest arms, each selected by path. */
+  readonly vitestSelected: readonly string[];
+  /** The paths the behaviour arm EXCLUDES. Must equal `vitestSelected` or a
+   *  file runs in two arms and is billed twice — the invariant the script's own
+   *  comments claim and nothing asserted. */
+  readonly vitestExcluded: readonly string[];
+}
+
+/**
+ * The eval tier, read out of `scripts/eval-tier.sh`. A parse of the
+ * authoritative script, never a copy, for the reason {@link deployGates} is one.
+ *
+ * It exists because the tier's containment was a claim in prose. The behaviour
+ * arm selects `tests/evals/**\/*.eval.ts` and subtracts three named files, and
+ * each of those three then selects itself; nothing held the two spellings equal,
+ * so a fourth single-family arm added without its `--exclude` would have run one
+ * episode in two arms, paid for it twice, and reported both bills as liveness.
+ * `ladder.test.ts` compares this against `isVitestEvalSuite` over the tracked
+ * enumeration, so the set the tier EXECUTES and the set on disk are one set.
+ */
+export function evalTierArms(
+  source = readFileSync(resolve(root, EVAL_TIER_SCRIPT), 'utf8'),
+): EvalTierArms {
+  const assigned = new Map<string, string>();
+  const bunTargets: string[] = [];
+  const vitestSelected: string[] = [];
+  const vitestExcluded: string[] = [];
+  // `"$NAME"` resolves against the assignments above it, so a rename that moves
+  // an arm's path moves both spellings at once and this parse cannot disagree
+  // with the shell.
+  const resolveWord = (word: string): string | undefined => {
+    const named = /^"?\$\{?([A-Z_][A-Z0-9_]*)\}?"?$/.exec(word);
+    return named?.[1] === undefined ? word.replace(/^"|"$/g, '') : assigned.get(named[1]);
+  };
+  for (const line of source.split('\n')) {
+    const assignment = /^([A-Z_][A-Z0-9_]*)=([^\s()]+)\s*$/.exec(line.trim());
+    if (assignment?.[1] !== undefined && assignment[2] !== undefined) {
+      assigned.set(assignment[1], assignment[2]);
+      continue;
+    }
+    // The FIRST `TARGETS=(…)` only: the second sits inside the `--backend
+    // cloud` branch, and a resolver that took the last one would credit the
+    // default invocation with the cloud arm's single file.
+    const targets = /^TARGETS=\(([^)]*)\)\s*$/.exec(line.trim());
+    if (targets?.[1] !== undefined && bunTargets.length === 0) {
+      bunTargets.push(...targets[1].split(/\s+/).filter((word) => word.length > 0));
+      continue;
+    }
+    for (const match of line.matchAll(/--exclude\s+(\S+)/g)) {
+      const path = resolveWord(match[1] ?? '');
+      if (path !== undefined) vitestExcluded.push(path);
+    }
+    // A single-family arm is a positional path after the config flag. The
+    // behaviour arm passes none, which is what makes it the complement: its
+    // invocation wraps immediately after the flag, so the next word is `\` —
+    // bash's line continuation, not an argument. A flag is not a path either.
+    const invocation = /--config\s+vitest\.evals\.config\.ts\s+(\S+)/.exec(line);
+    const selected = invocation?.[1] === undefined ? undefined : resolveWord(invocation[1]);
+    if (selected !== undefined && selected !== '\\' && !selected.startsWith('-')) {
+      vitestSelected.push(selected);
+    }
+  }
+  return { bunTargets, vitestSelected, vitestExcluded };
+}
+
 /**
  * Deploy gates whose FILES the CI tier does not cover, each with the reason.
  * This map is the whole CI-vs-deploy delta, so "a green CI badge means
@@ -1414,9 +1528,16 @@ export function gatesFor(tier: Tier, deploy: readonly string[]): Gate[] {
  * `isRunnableSuite` is the rule's own basename arm: narrower than the rule on
  * purpose, because `bun test` executes suffixed files and never the helpers
  * beside them, and narrower by IMPORT rather than by a private copy.
+ *
+ * `isPythonSuite` joins it because a denominator in one language answers the
+ * question in one language. `bench/` ships 77 unittest tests across three
+ * directories and the ladder's own "every test file is claimed by some runner"
+ * assertion could not see any of them, so the answer was yes and the suites ran
+ * nowhere. Two predicates, one union, and `bun run gate:python-suites` is what
+ * claims the second.
  */
 export function trackedTestFiles(): string[] {
-  return trackedFiles().filter(isRunnableSuite);
+  return trackedFiles().filter((file) => isRunnableSuite(file) || isPythonSuite(file));
 }
 
 /** The npm script bodies, so a `bun run <key>` gate resolves to what it runs
@@ -1471,6 +1592,26 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   if (words[0] === 'bun' && words[1] === 'scripts/test-cli.ts') {
     return tracked.filter((path) => path.startsWith(`${CLI_TEST_ROOT}/`) && !bunWouldSkip(path));
   }
+  // The PYTHON suites, whose runner is not a JS one. Named like the CLI form
+  // above rather than parsed, because `python-suites.ts` derives its own
+  // discovery roots from `isPythonSuite` over the same enumeration — so the set
+  // this credits and the set that process runs come from one predicate.
+  if (words[0] === 'bun' && words[1] === PYTHON_SUITES_SCRIPT) {
+    return tracked.filter(isPythonSuite);
+  }
+  // The EVAL TIER. Two runners inside one script, so the claim is the union of
+  // both: the bun argv it runs by default, and every vitest eval suite its arms
+  // execute. Parsed rather than assumed for the reason `deployGates` is —
+  // before this form existed the tier claimed NOTHING, and the four
+  // `*.eval.ts` suites were credited to `bun test ./tests/`, which cannot see
+  // them.
+  if (words[0] === 'bash' && words[1] === EVAL_TIER_SCRIPT) {
+    const arms = evalTierArms();
+    return [...new Set([
+      ...claims(['bun', 'test', ...arms.bunTargets].join(' '), tracked),
+      ...tracked.filter(isVitestEvalSuite),
+    ])];
+  }
   if (words[0] === 'node') {
     return words.filter((word) => isRunnableSuite(word) && tracked.includes(word));
   }
@@ -1507,7 +1648,15 @@ export function claims(command: string, tracked: readonly string[]): string[] {
     }
     if (tracked.includes(clean)) claimed.push(clean);
   }
-  return [...new Set(claimed)].filter((path) => !bunWouldSkip(path));
+  // TWO narrowings, and both are what bun would really run. `bunWouldSkip` is
+  // the bunfig `pathIgnorePatterns` half; `isBunDiscoverableSuite` is the
+  // MATCHER half, and its absence is how `bun test ./tests/` came to be
+  // credited with four `tests/evals/*.eval.ts` suites bun does not select. A
+  // directory target sweeps every tracked path under it, so without this the
+  // resolver answered "which files live here" where the question is "which
+  // files does this command execute".
+  return [...new Set(claimed)]
+    .filter((path) => !bunWouldSkip(path) && isBunDiscoverableSuite(path));
 }
 
 /**

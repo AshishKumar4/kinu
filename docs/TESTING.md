@@ -73,9 +73,12 @@ tests/workerd/`. Its current inventory, measured 2026-08-27, has 14 files:
 `instruction-digest`, `steer-chain`, `step-cap`, and `tracing-fallback`. These
 files run in workerd, not Bun. The UI command is
 `bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts`.
-It drives Chromium over the gallery. `scripts/ladder.ts:703-705` assigns ci
-23 s; `gate:computed-style` stays standalone at vite plus Chrome over 19
-frames, ~68 s.
+It drives Chromium over the gallery. The UI-gates row in `scripts/ladder.ts`
+declares that cost at the `ci` tier; `gate:computed-style` stays standalone at
+vite plus Chrome over every gallery frame it boots. Both figures are in
+`bun scripts/ladder.ts --matrix` rather than here: the line numbers this
+paragraph used to cite had slid onto an unrelated gate, and the frame count it
+quoted was two short of the one the gate reads.
 
 ### Ambient credentials no longer change what a suite measures
 
@@ -527,7 +530,10 @@ tests/
 ```
 
 `bun test tests` matches nothing; only `./tests/` selects root suites.
-`scripts/ladder.ts:626-628` guards that silent-zero class.
+The path-form guard against that silent zero is in the `bun test ./tests/`
+entry's own `catches` prose in `scripts/ladder.ts` — cited by the gate it
+describes rather than by a line number, because the number this sentence carried
+had already rotted onto a different entry.
 
 `packages/agent-utils` has no `SqliteFS` or shell. `SqliteFS` was deleted on
 2026-08-12 (`core/src/checkpoints/types.ts:29`). Both backends use Nimbus's

@@ -106,6 +106,8 @@ import {
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
   startBranchHead, settlePendingBranch, settleBranchIntoTakes, newBranchId,
+  branchHeadId, branchOutcomeFromJournal, headStatusUnsettled, storedHeadReportStatus,
+  isSteerBranchRunId,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseStatus, type ReleaseToolDeps,
   runExperienceAction,
@@ -228,7 +230,7 @@ import {
 } from "./sandbox-lifecycle";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,
-  type OwedEffect, type TerminalEffectTable, type TerminalTurnParts, type BranchOutcome,
+  type OwedEffect, type TerminalEffectTable, type TerminalTurnParts,
 } from "@kinu.run/core";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
@@ -1386,6 +1388,13 @@ export class OrchestratorAgent extends ActorAgent {
         // REPORT lands, which is before any take set exists, so treating
         // non-running as settled skipped precisely the report this effect still
         // owed. The row's own disposition is the settlement marker instead.
+        //
+        // ASKED FOR BY THE HEAD'S ID, which is `branchHeadId(id)` and not `id`:
+        // the row this effect carries is the branch RUN, and a branch run's one
+        // head is journalled under a DERIVED id (steer-branch.ts). Read by the
+        // run id it found no row at all, reported that as `completed`, and every
+        // eviction between the report and the settle silently dropped the
+        // comparison — the exact case this effect exists for.
         run: async ({ id, task, turnId, liveText }) => {
           const live = this._pendingBranches.findIndex((entry) => entry.id === id);
           if (live >= 0) {
@@ -1405,20 +1414,16 @@ export class OrchestratorAgent extends ActorAgent {
               return { status: 'completed' };
             }
           }
-          const head = this.headJournal.readHeadView(id);
+          const head = this.headJournal.readHeadView(branchHeadId(id));
           if (head === null) {
             return { status: 'completed', detail: 'the journal holds no such branch head' };
           }
-          if (head.status === 'running' || head.status === 'interrupted') {
+          const report = branchOutcomeFromJournal(head);
+          if (report === null) {
             // Still executing, or waiting for the activation sweep to write its
             // terminal status. Owed, so the row stays and the wake comes back.
             return { status: 'owed', detail: `branch head is ${head.status}` };
           }
-          const report: BranchOutcome = {
-            status: head.status === 'completed' ? 'completed' : 'errored',
-            summary: head.summary ?? '',
-            errorMessage: head.errorMessage ?? undefined,
-          };
           const outcome = settleBranchIntoTakes(this.boundSql, {
             task,
             report,
@@ -2234,7 +2239,7 @@ export class OrchestratorAgent extends ActorAgent {
    * resumable here, never terminal — only rows whose work is provably finished
    * or taken over lose their facet storage.
    */
-  private async reclaimSettledExplorationFacets(): Promise<void> {
+  protected async reclaimSettledExplorationFacets(): Promise<void> {
     try {
       const { reclaimed } = await reconcileExplorationFacets(
         {
@@ -2254,15 +2259,29 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  /** The lifecycle ledgers are the ONLY status authority — no per-facet copy. */
+  /**
+   * The lifecycle ledgers are the ONLY status authority — no per-facet copy.
+   *
+   * A head that REPORTED is finished whatever it reported: `errored` and
+   * `budget_exceeded` are terminal exactly as `completed` and `aborted` are, and
+   * nothing will ever read that facet again. This used to name two of the four by
+   * hand and treat the rest as resumable, so a head that threw or blew its budget
+   * kept its facet — and because the id is never reused, that storage is
+   * abandoned inside the root DO for the life of the workspace, which is the one
+   * leak facet-spawn.ts exists to prevent.
+   *
+   * `resumable` is now exactly the two statuses under which work can still
+   * continue, and a status this journal does not write reads `unknown` rather
+   * than either: the sweep already refuses to guess about an unledgered facet
+   * while exploration is live, and a value nobody wrote is the same question.
+   */
   private explorationFacetLedgerStatus(id: string): ExplorationFacetLedgerStatus {
     const head = this.sql<{ status: string }>`
       SELECT status FROM head_journal WHERE id = ${id} LIMIT 1
     `[0];
     if (!head) return 'unknown';
-    return head.status === 'completed' || head.status === 'aborted'
-      ? 'terminal'
-      : 'resumable';
+    if (headStatusUnsettled(head.status)) return 'resumable';
+    return storedHeadReportStatus(head.status) === null ? 'unknown' : 'terminal';
   }
 
   private hasLiveExploration(): boolean {
@@ -3853,7 +3872,7 @@ export class OrchestratorAgent extends ActorAgent {
    * the sweep is idempotent. */
   private reconcileOrphanedBranches(): void {
     for (const run of this.headJournal.listRunningRuns()) {
-      if (!run.rootId.startsWith('branch-') || run.status !== 'running') continue;
+      if (!isSteerBranchRunId(run.rootId) || run.status !== 'running') continue;
       for (const head of run.heads) {
         if (head.status !== 'running') continue;
         this.headJournal.recordReport({

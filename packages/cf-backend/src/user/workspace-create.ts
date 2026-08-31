@@ -18,7 +18,7 @@ import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from './workspace-capability';
 import { listAvailableModels } from './available-models';
-import type { WorkspaceEntry } from './user-do';
+import type { WorkspaceEntry, WorkspaceRegistration } from './user-do';
 import { indexNewWorkspace, unindexWorkspace } from '../control-plane/index-feed';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
@@ -28,7 +28,7 @@ export interface CloudWorkspaceRegistry extends UserCredentialClient {
     name: string,
     displayName?: string,
     purpose?: string,
-  ): Promise<{ entry: WorkspaceEntry; existed: boolean }>;
+  ): Promise<WorkspaceRegistration>;
   removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>;
   /** Drop the exact roster row this create inserted, matched on its own
    *  `createdAt`, without touching the workspace's Durable Object. The only
@@ -79,7 +79,23 @@ export async function createCloudWorkspaceForUser(
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
-  const { entry, existed } = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
+  const registered = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
+  // A name an uncommitted fork transfer is holding is not a name a create may
+  // take: the roster row IS that reservation, and the workspace it will become
+  // is still being streamed into.
+  if (registered.status === 'reserved') {
+    throw new Error(`Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
+  }
+  const entry = registered.entry;
+  // ALREADY SOMEBODY'S. Creating over a live workspace used to run the whole
+  // birth sequence on it — re-seeding SOUL.md from this request's mission,
+  // resetting the Output baseline the workspace measures its diff against, and
+  // opening a SECOND genesis turn beside whatever it was already doing. Two
+  // creates racing on one name did it to each other, and a retried request did
+  // it to itself. The name is taken by a workspace this owner already has, so
+  // the honest answer is that workspace, unchanged and byte-stable across
+  // retries.
+  if (registered.status === 'active') return entry;
   try {
     const initialization: InitializeOrchestratorInput = {
       env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
@@ -111,25 +127,25 @@ export async function createCloudWorkspaceForUser(
     }
     return entry;
   } catch (err) {
-    // Roll back ONLY a row this create inserted. A pre-existing row — even an
-    // archived one, which registerWorkspace resurrects on name conflict — must
-    // never be destroyed here: removeWorkspace wipes the agent's whole DO.
+    // Only a row THIS create inserted is rolled back, which is now a fact about
+    // the status rather than a flag: an `active` create returned above without
+    // touching the workspace, so the undo below can only ever be undoing its
+    // own insert. `removeWorkspace` wipes an agent's whole Durable Object, and
+    // that is only ever correct for a workspace this call brought into being.
     //
     // A ROLLBACK FAULT MUST NOT REPLACE THE FAULT THAT CAUSED IT. The caller
     // asked for a workspace, and why the create failed is the answer it needs;
     // an undo that could not finish is a second, separate fact. So the undo's
     // own failure is recorded under its own name here and the original still
     // propagates.
-    if (!existed) {
-      try {
-        await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
-      } catch (rollbackFailure) {
-        diagnostics.failure('workspace.create_rollback_unexpected', toKinuError({
-          doing: 'undoing a failed workspace create',
-          cause: rollbackFailure,
-          otherwise: 'unavailable',
-        }), { workspace: entry.name });
-      }
+    try {
+      await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
+    } catch (rollbackFailure) {
+      diagnostics.failure('workspace.create_rollback_unexpected', toKinuError({
+        doing: 'undoing a failed workspace create',
+        cause: rollbackFailure,
+        otherwise: 'unavailable',
+      }), { workspace: entry.name });
     }
     throw err;
   }

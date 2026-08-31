@@ -43,6 +43,7 @@
     "gate:silent-drop": "bun scripts/silent-drop.ts",
     "gate:skip-ratchet": "bun scripts/skip-ratchet.ts",
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
+    "gate:python-suites": "bun scripts/python-suites.ts",
     "test:mutation": "bun test packages/core/tests/mutation-*.test.ts",
     "sweep:mutation": "bun scripts/mutation-sweep.ts",
     "test:eval": "bash scripts/eval-tier.sh",

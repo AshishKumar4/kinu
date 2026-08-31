@@ -381,13 +381,18 @@ describe('auth and desktop security invariants', () => {
     const routes = source('src/auth/routes.ts');
     const session = source('src/auth/session.ts');
     const store = source('src/auth/store.ts');
-    // The cookie name has exactly one home (auth/session.ts); routes reuse it.
+    // Each cookie name has exactly one home (auth/session.ts); routes reuse it.
     expect(session).toContain("export const SESSION_COOKIE_NAME = '__Host-kinu_session'");
+    expect(session).toContain("export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state'");
     expect(routes).toContain('SESSION_COOKIE_NAME');
+    expect(routes).toContain('OAUTH_STATE_COOKIE_NAME');
     expect(routes).not.toContain('__Host-kinu_session');
+    expect(routes).not.toContain('__Host-kinu_oauth_state');
     expect(routes).toContain('HttpOnly; Secure; SameSite=Lax');
-    // The browser holds a handle, never the state: the state token is hashed
-    // into the key, and the record is burned on the way out.
+    // The browser holds two handles and neither is the state: the state token
+    // is hashed into the key, the binding that says a callback belongs to THIS
+    // browser is stored only as a hash too, and the record is burned on the
+    // way out.
     expect(store).toContain('`oauth-state:${await sha256Hex(state)}`');
     expect(store).toContain('await kv.delete(key)');
   });

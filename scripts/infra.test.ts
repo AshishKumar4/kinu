@@ -14,12 +14,16 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
-  type InfraEnvironment, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, UNOBSERVABLE,
-  deriveInfrastructure, envFields, exclusiveTo, readSites, requiredIn, supplyCensus,
-  vectorizeGeometry,
+  CONTROL_PLANE_ACCESS_PATHS, type InfraEnvironment, type Infrastructure, type Resource, SUPPLY,
+  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, exclusiveTo, readSites,
+  requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
-  type Row, audit, supplyDrift, supplyRows, supplySummary, unobservableDrift,
+  type AccessApplicationView, accessCovering, accessDestinations, accessOverreach,
+} from './infra-cloudflare';
+import {
+  type Phase, type Row, PHASES, audit, observedRow, phaseFrom, supplyDrift, supplyRows,
+  supplySummary, unobservableDrift,
 } from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { plan } from './infra-provision';
@@ -285,6 +289,222 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
   });
 });
 
+describe('the control plane\'s outer Access gate is declared and proved, not assumed', () => {
+  function environmentNamed(key: string): InfraEnvironment {
+    const found = infrastructure.environments.find((entry) => entry.key === key);
+    if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
+    return found;
+  }
+  const production = environmentNamed('production');
+  const staging = environmentNamed('staging');
+  const ids = infrastructure.resources.map((resource) => resource.id);
+
+  /** The Access application this deployment is supposed to have, as the API
+   *  returns it. Two destinations, one AUD, `self_hosted`. */
+  const CORRECT: readonly AccessApplicationView[] = [{
+    id: 'app-1', name: 'Kinu control plane', aud: 'a'.repeat(64), type: 'self_hosted',
+    destinations: [
+      { type: 'public', uri: 'kinu.run/control*' },
+      { type: 'public', uri: 'kinu.run/api/control*' },
+    ],
+  }];
+
+  test('production declares the organization, the application, the policy and the scope', () => {
+    // Four rows, because an operator's next move differs for each: a missing
+    // policy is one dashboard field, a missing application is the whole setup, a
+    // mismatched organization is a var this repository holds, and an over-broad
+    // application is a deletion.
+    expect(ids).toContain('access-organization.kinu.run');
+    expect(ids).toContain('access-application.kinu.run');
+    expect(ids).toContain('access-policy.kinu.run');
+    expect(ids).toContain('access-scope.kinu.run');
+    for (const id of ['access-organization', 'access-application', 'access-policy', 'access-scope']) {
+      const resource = infrastructure.resources.find((entry) => entry.id === `${id}.kinu.run`);
+      expect(resource?.required).toBe(true);
+      expect(resource?.environments).toEqual(['production']);
+      // Nothing here can be created by a program, so every row has to say what a
+      // human does — an absent row whose detail is "does not exist" is unusable.
+      expect((resource?.manual ?? '').length).toBeGreaterThan(60);
+      expect(resource?.create).toBe(undefined);
+      expect(resource?.destroy).toBe(undefined);
+    }
+  });
+
+  test('staging declares the scope row and NO application: it admits no operators', () => {
+    // The whole reason `requiredIn` pairs the two vars with a NON-EMPTY
+    // CONTROL_PLANE_ADMINS. Staging runs on DEV_USER_EMAIL and admits nobody, so
+    // demanding a Zero Trust application there would be a gate complaining about
+    // a deployment shaped that way on purpose.
+    expect(staging.vars.get('CONTROL_PLANE_ADMINS')).toBe('');
+    expect(ids).not.toContain('access-application.staging.kinu.run');
+    expect(ids).not.toContain('access-organization.staging.kinu.run');
+    expect(ids).not.toContain('access-policy.staging.kinu.run');
+    // But the NEGATIVE row is declared for staging too: an over-broad Access
+    // application would break staging exactly as it breaks production.
+    expect(ids).toContain('access-scope.staging.kinu.run');
+  });
+
+  test('the hostnames each environment claims are read from its routes', () => {
+    expect(claimedHosts(production)).toEqual({ app: 'kinu.run', wildcards: ['kinu.run'] });
+    expect(claimedHosts(staging)).toEqual({ app: 'staging.kinu.run', wildcards: [] });
+  });
+
+  test('the two Access vars are required in production and not in staging', () => {
+    for (const name of ['CONTROL_PLANE_ACCESS_TEAM_DOMAIN', 'CONTROL_PLANE_ACCESS_AUD']) {
+      expect(SUPPLY.has(name)).toBe(true);
+      expect(SUPPLY.get(name)?.handling).toBe('config-var');
+      expect(requiredIn(name, production)).toBe(true);
+      expect(requiredIn(name, staging)).toBe(false);
+    }
+  });
+
+  test('a paired var set to the empty string supplies nothing', () => {
+    // The rule staging depends on, and the reason `.has()` was not enough:
+    // `CONTROL_PLANE_ADMINS: ""` is the line that means NOBODY, and keying on
+    // whether the KEY was typed made a feature explicitly turned off drag in
+    // every value its enabled form needs.
+    const emptied: InfraEnvironment = { ...production, vars: new Map([['CONTROL_PLANE_ADMINS', '  ']]) };
+    expect(requiredIn('CONTROL_PLANE_ACCESS_AUD', emptied)).toBe(false);
+    const filled: InfraEnvironment = { ...staging, vars: new Map([['CONTROL_PLANE_ADMINS', 'a@b.c']]) };
+    expect(requiredIn('CONTROL_PLANE_ACCESS_AUD', filled)).toBe(true);
+  });
+
+  test('destinations are normalized, and a private one is neither coverage nor overreach', () => {
+    expect(accessDestinations({
+      domain: 'https://legacy.kinu.run/control*',
+      destinations: [
+        { type: 'public', uri: 'https://kinu.run/control*' },
+        { type: 'public', hostname: 'kinu.run/api/control*' },
+        // A network destination protects an IP range and cannot cover an HTTP
+        // path on our host.
+        { type: 'private', uri: '10.0.0.0/8' },
+        { type: 'public', uri: '' },
+      ],
+    })).toEqual(['kinu.run/control*', 'kinu.run/api/control*', 'legacy.kinu.run/control*']);
+    expect(accessDestinations({})).toEqual([]);
+  });
+
+  test('ONE application must cover BOTH control-plane paths', () => {
+    const aud = 'a'.repeat(64);
+    const covered = accessCovering(CORRECT, 'kinu.run', aud, CONTROL_PLANE_ACCESS_PATHS);
+    expect(covered.covering?.id).toBe('app-1');
+
+    // Split across two applications: each is fine on its own and the pair is
+    // useless, because the Worker pins ONE aud and would answer 404 on whichever
+    // path belongs to the other application.
+    const split: readonly AccessApplicationView[] = [
+      { id: 'ui', aud, destinations: [{ uri: 'kinu.run/control*' }] },
+      { id: 'api', aud: 'c'.repeat(64), destinations: [{ uri: 'kinu.run/api/control*' }] },
+    ];
+    expect(accessCovering(split, 'kinu.run', aud, CONTROL_PLANE_ACCESS_PATHS).covering).toBe(undefined);
+    // The failure still reports what the matching aud DOES cover, which is the
+    // only thing that tells an operator which half is missing.
+    expect(accessCovering(split, 'kinu.run', aud, CONTROL_PLANE_ACCESS_PATHS).destinations)
+      .toEqual(['kinu.run/control*']);
+
+    // A destination with no trailing star covers the exact path only, so
+    // /control/users/x — a real SPA route — would be unprotected.
+    const exact: readonly AccessApplicationView[] = [{
+      id: 'narrow', aud,
+      destinations: [{ uri: 'kinu.run/control' }, { uri: 'kinu.run/api/control' }],
+    }];
+    expect(accessCovering(exact, 'kinu.run', aud, CONTROL_PLANE_ACCESS_PATHS).covering).toBe(undefined);
+
+    // An application on a different aud is not ours, however well it covers.
+    expect(accessCovering(CORRECT, 'kinu.run', 'd'.repeat(64), CONTROL_PLANE_ACCESS_PATHS).covering)
+      .toBe(undefined);
+  });
+
+  test('the correct configuration is NOT reported as overreach', () => {
+    // The negative assertion's negative control. Without this the whole row could
+    // be a permanent red that nobody can clear, which is a gate people delete.
+    expect(accessOverreach(CORRECT, 'kinu.run', ['kinu.run'], CONTROL_PLANE_ACCESS_PATHS))
+      .toEqual([]);
+    expect(accessOverreach([], 'kinu.run', ['kinu.run'], CONTROL_PLANE_ACCESS_PATHS)).toEqual([]);
+  });
+
+  test('an application covering the app host at large IS overreach, and is named', () => {
+    // The exact mistake: "protect kinu.run with Access" in one dashboard click.
+    // Every positive check still passes — the admin plane works perfectly — while
+    // the public landing page, /api/feedback and /api/client-errors are behind a
+    // corporate login.
+    for (const destination of ['kinu.run', 'kinu.run/', 'kinu.run/*', 'kinu.run/api/feedback']) {
+      const found = accessOverreach(
+        [{ name: 'Everything', aud: 'z', destinations: [{ uri: destination }] }],
+        'kinu.run', ['kinu.run'], CONTROL_PLANE_ACCESS_PATHS,
+      );
+      expect(found).toHaveLength(1);
+      expect(found[0]).toContain('Everything');
+      expect(found[0]).toContain(destination);
+    }
+  });
+
+  test('an application covering a preview wildcard IS overreach whatever its path', () => {
+    // A preview URL is an arbitrary path on an arbitrary label, so there is no
+    // narrowing of an Access destination that makes gating *.kinu.run safe: it
+    // would put a login in front of every preview an agent hands out.
+    for (const destination of ['*.kinu.run', '*.kinu.run/*', '*.kinu.run/control*']) {
+      const found = accessOverreach(
+        [{ name: 'Previews', destinations: [{ uri: destination }] }],
+        'kinu.run', ['kinu.run'], CONTROL_PLANE_ACCESS_PATHS,
+      );
+      expect(found).toHaveLength(1);
+      expect(found[0]).toContain('Previews');
+    }
+  });
+
+  test('an application on somebody else\'s hostname is not our business', () => {
+    // The gate must not fail because the account also protects an unrelated
+    // internal tool. A negative assertion that fires on everything is one people
+    // learn to acknowledge past.
+    expect(accessOverreach(
+      [
+        { name: 'Grafana', destinations: [{ uri: 'grafana.example.com' }] },
+        { name: 'Other zone previews', destinations: [{ uri: '*.example.com/*' }] },
+        { name: 'Staging', destinations: [{ uri: 'staging.kinu.run/control*' }] },
+      ],
+      'kinu.run', ['kinu.run'], CONTROL_PLANE_ACCESS_PATHS,
+    )).toEqual([]);
+  });
+
+  test('an absent or unreadable Access row BLOCKS the deploy', () => {
+    // The point of declaring them at all. `absent` + required is a finding; and
+    // `unknown` — nobody could look, typically a missing API token — is a
+    // finding too, because a check that could not look is not a check that
+    // passed and the alternative is shipping an unprotected admin plane from a
+    // machine that had no credential.
+    const deployed = row('worker.kinu', 'present', true, 'wrangler-deploy');
+    for (const id of ['access-organization.kinu.run', 'access-application.kinu.run',
+      'access-policy.kinu.run', 'access-scope.kinu.run']) {
+      const missing = audit(infrastructure, [deployed, row(id, 'absent', true)], [], []);
+      expect(missing.findings.some((entry) => entry.includes(id))).toBe(true);
+
+      const unreadable = audit(infrastructure, [deployed, row(id, 'unknown', true)], [], []);
+      expect(unreadable.findings.some((entry) => entry.includes(id))).toBe(true);
+
+      // The negative control: present is silent, so the findings above are about
+      // the verdict rather than about the row existing.
+      const present = audit(infrastructure, [deployed, row(id, 'present', true)], [], []);
+      expect(present.findings).toEqual([]);
+    }
+  });
+
+  test('an absent Access row keeps the observation\'s own detail, not a static step', () => {
+    // Which application is over-broad is the entire actionable content of the
+    // scope finding, and a string written before the run cannot say it.
+    const scope = infrastructure.resources.find((entry) => entry.id === 'access-scope.kinu.run');
+    const manual = scope?.manual;
+    if (scope === undefined || manual === undefined) {
+      throw new Error('fixture lost the scope resource or its manual step');
+    }
+    expect(observedRow(scope, { state: 'absent', detail: '"Everything" → kinu.run/*' }).detail)
+      .toBe('"Everything" → kinu.run/*');
+    // With no detail it falls back to the manual step, exactly as every other
+    // resource does.
+    expect(observedRow(scope, { state: 'absent' }).detail).toBe(manual);
+  });
+});
+
 describe('the verdict keeps absent, unknown and unobservable apart', () => {
   // Every declared blind spot appears, because UNOBSERVABLE is pinned by
   // equality in both directions: a fixture that omitted one would be red for
@@ -379,6 +599,176 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     }], []);
     expect(unreadable.findings.length).toBe(1);
     expect(unreadable.findings[0]).toContain('token expired');
+  });
+});
+
+/**
+ * THE PHASE SPLIT, which is the difference between a deploy that can bootstrap
+ * what it declares and a deploy that refuses itself.
+ *
+ * The red case is real and is this repository's: `ControlPlaneDO` was added to
+ * `migrations`, staging's 55 source gates passed, and the pre-deploy
+ * infrastructure gate then refused the only command that could have created the
+ * namespace — no wrangler verb creates one, and provisioning is forbidden from
+ * trying. The tolerance that answers it has to be narrow in three directions at
+ * once, so each is a case below: narrow by OWNERSHIP (a secret or a bucket is
+ * never deferred), narrow by PHASE (post-deploy tolerates nothing), and narrow by
+ * VERDICT (a lookup that failed is not an absence and is never deferred).
+ */
+describe('the phases differ in exactly one tolerance, and only one direction', () => {
+  const clean: readonly Row[] = [
+    row(authStore('staging').id, 'present', true),
+    ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
+  ];
+  /** Staging's Worker EXISTS. That is what makes this the red case rather than
+   *  the first-deploy case the `full` phase already tolerated: the Worker has
+   *  been deployed for months and the namespace is new. */
+  const deployedWorker = row('worker.kinu-staging', 'present', true, 'wrangler-deploy');
+  const absentNamespace = row(
+    'durable-object.kinu-staging:ControlPlaneDO', 'absent', true, 'wrangler-deploy',
+  );
+  const at = (phase: Phase, rows: readonly Row[], supplied: Parameters<typeof audit>[2] = []) =>
+    audit(infrastructure, rows, supplied, [], phase);
+
+  test('the tolerance is exactly the three phases, and a mistyped one is refused', () => {
+    expect([...PHASES]).toEqual(['full', 'bootstrap', 'post-deploy']);
+    // An explicit argv wins over the variable the deploy script exports, which is
+    // what lets step 5 spell `--phase=post-deploy` inside a bootstrap deploy.
+    expect(phaseFrom(['staging', '--phase=post-deploy'], { KINU_INFRA_PHASE: 'bootstrap' }))
+      .toBe('post-deploy');
+    expect(phaseFrom([], { KINU_INFRA_PHASE: 'bootstrap' })).toBe('bootstrap');
+    expect(phaseFrom(['staging'], {})).toBe('full');
+    // Refused, never defaulted: a mistyped phase that fell back to `full` would
+    // turn step 5 into a weaker check nobody asked for and would fail a bootstrap
+    // deploy for a reason no output explains.
+    expect(phaseFrom(['--phase=post-deply'], {})).toBeUndefined();
+    expect(phaseFrom(['--phase='], { KINU_INFRA_PHASE: 'bootstrap' })).toBeUndefined();
+  });
+
+  test('a newly declared namespace is deferred before the upload and rejected after', () => {
+    const rows = [...clean, deployedWorker, absentNamespace];
+
+    const bootstrap = at('bootstrap', rows);
+    expect(bootstrap.findings).toEqual([]);
+    expect(bootstrap.notes).toHaveLength(1);
+    expect(bootstrap.notes[0]).toContain('ControlPlaneDO');
+    // The deferral names what collects it. A note that said only "expected" would
+    // be a skip wearing a note's clothes.
+    expect(bootstrap.notes[0]).toContain('post-deploy');
+
+    const post = at('post-deploy', rows);
+    expect(post.notes).toEqual([]);
+    expect(post.findings).toHaveLength(1);
+    expect(post.findings[0]).toContain('ControlPlaneDO');
+
+    // And the gate itself is unmoved: a deployed Worker missing a namespace it
+    // declares is a finding for a direct `bun run gate:infra` too.
+    expect(at('full', rows).findings).toHaveLength(1);
+  });
+
+  test('post-deploy tolerates nothing at all, not even the Worker', () => {
+    // `full` tolerates an absent Worker and everything bound to it, because
+    // before the first deploy that is the true state of a correct account. After
+    // an upload it is not a state anything can excuse: the deploy either
+    // published the Worker or it did not.
+    const rows = [
+      ...clean,
+      row('worker.kinu-staging', 'absent', true, 'wrangler-deploy'),
+      absentNamespace,
+    ];
+
+    expect(at('full', rows).findings).toEqual([]);
+    expect(at('full', rows).notes).toHaveLength(2);
+    expect(at('bootstrap', rows).findings).toEqual([]);
+
+    const post = at('post-deploy', rows);
+    expect(post.notes).toEqual([]);
+    expect(post.findings).toHaveLength(2);
+    expect(post.findings.join('\n')).toContain('worker.kinu-staging');
+  });
+
+  test('an external prerequisite is refused in every phase, deploy or no deploy', () => {
+    // The other half of the staging case: the two secrets nobody but a human can
+    // supply. A bootstrap deploy must still refuse to upload without them, and
+    // the fixture below is exactly the shape `supplyRows` produces for one.
+    const external: readonly Row[] = [
+      // Provisioned by hand; a deploy has never created a KV namespace.
+      row(authStore('staging').id, 'absent', true, 'manual'),
+      // `wrangler r2 bucket create` creates it; `bun run deploy` does not.
+      row('r2.kinu-backups-staging', 'absent', true, 'wrangler-cli'),
+      // Nothing here can create it at all.
+      row('dns-record.staging.kinu.run', 'absent', true, 'manual'),
+    ];
+    const secrets = ['WEBHOOK_ROUTE_SECRET', 'DEV_IDENTITY_SECRET'].map((name) => ({
+      environment: 'staging', name, verdict: 'absent' as const, required: true,
+      detail: 'prompt — absent ⇒ the feature it names is off',
+    }));
+
+    for (const phase of PHASES) {
+      const resources = at(phase, [...clean, deployedWorker, ...external]);
+      expect(resources.notes, `${phase} deferred an external prerequisite`).toEqual([]);
+      expect(resources.findings, `${phase} tolerated an external prerequisite`)
+        .toHaveLength(external.length);
+
+      const supplied = at(phase, [...clean, deployedWorker], secrets);
+      expect(supplied.findings, `${phase} tolerated a missing secret`).toHaveLength(2);
+      expect(supplied.findings.join('\n')).toContain('WEBHOOK_ROUTE_SECRET');
+      expect(supplied.findings.join('\n')).toContain('DEV_IDENTITY_SECRET');
+    }
+  });
+
+  test('a lookup that failed is never deferred, whatever owns the resource', () => {
+    // `unknown` on a deploy-owned resource in the bootstrap phase is the hole
+    // this closes: "the deploy will create it" is an answer about an ABSENCE, and
+    // a failed lookup did not observe one. Deferring it would turn an expired
+    // token into a green pre-deploy phase.
+    for (const phase of PHASES) {
+      const verdict = at(phase, [
+        ...clean,
+        deployedWorker,
+        row('durable-object.kinu-staging:ControlPlaneDO', 'unknown', true, 'wrangler-deploy'),
+      ]);
+      expect(verdict.notes, `${phase} deferred a failed lookup`).toEqual([]);
+      expect(verdict.findings, `${phase} tolerated a failed lookup`).toHaveLength(1);
+      expect(verdict.findings[0]).toContain('lookup failed');
+    }
+  });
+
+  test('an optional deploy-owned absence stays a capability loss, not a deferral', () => {
+    // Optionality is `env.d.ts`'s statement and phases do not touch it. Reported
+    // by `print`, never a finding and never a note — a deferral list padded with
+    // things nobody is waiting for is a deferral list nobody reads.
+    for (const phase of PHASES) {
+      const verdict = at(phase, [
+        ...clean,
+        deployedWorker,
+        row('binding.kinu-staging:EMAIL', 'absent', false, 'wrangler-deploy'),
+      ]);
+      expect(verdict.findings, `${phase} failed on an optional resource`).toEqual([]);
+      expect(verdict.notes, `${phase} deferred an optional resource`).toEqual([]);
+    }
+  });
+
+  test('the fix for a deploy-owned absence never names provisioning', () => {
+    // The diagnostic that made the red unactionable. `bun run infra:provision`
+    // cannot create a Durable Object namespace and is forbidden from touching
+    // what the upload owns, so naming it sends the operator to a command that
+    // exits 0 having done nothing — after which the gate refuses again.
+    const rows = [...clean, deployedWorker, absentNamespace];
+
+    const full = at('full', rows).findings.join('\n');
+    expect(full).not.toContain('infra:provision —');
+    expect(full).toContain('--bootstrap');
+
+    const post = at('post-deploy', rows).findings.join('\n');
+    expect(post).not.toContain('infra:provision —');
+    expect(post).toContain('migrations');
+
+    // The instruction is still there for a resource provisioning really does
+    // create, which is what keeps the check above from passing vacuously.
+    const bucket = at('full', [...clean, deployedWorker,
+      row('r2.kinu-backups-staging', 'absent', true, 'wrangler-cli')]).findings.join('\n');
+    expect(bucket).toContain('bun run infra:provision');
   });
 });
 

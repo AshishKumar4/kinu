@@ -180,7 +180,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'config', name: 'listConfig', run: (u, c) => u.listConfig(c) },
   { capability: 'profile.resolve', name: 'getWorkspaceProfileCatalog', run: (u, c) => u.getWorkspaceProfileCatalog(c) },
 
-  { capability: 'auth_tokens', name: 'mintCliToken', run: (u, c) => u.mintCliToken(c, USER_ID) },
+  { capability: 'auth_tokens', name: 'mintCliToken', run: (u, c) => u.mintCliToken(c, USER_ID, TOKEN_HASH) },
   { capability: 'auth_tokens', name: 'verifyCliToken', run: (u, c) => u.verifyCliToken(c, `ptc_${USER_ID}_${'x'.repeat(44)}`) },
   { capability: 'auth_tokens', name: 'listCliTokens', run: (u, c) => u.listCliTokens(c) },
   { capability: 'auth_tokens', name: 'revokeCliTokenHash', run: (u, c) => u.revokeCliTokenHash(c, TOKEN_HASH) },
@@ -205,10 +205,20 @@ const GATED_CALLS: GatedCall[] = [
   {
     capability: 'auth_tokens',
     name: 'registerBrowserSession',
-    run: (u, c) => u.registerBrowserSession(c, TOKEN_HASH, Date.now() + 60_000),
+    run: (u, c) => u.registerBrowserSession(c, TOKEN_HASH, Date.now() + 60_000, {
+      email: 'person@example.com', displayName: null, provider: 'cloudflare', sub: 'cf-1', authTime: Date.now(),
+    }),
   },
   { capability: 'auth_tokens', name: 'verifyBrowserSession', run: (u, c) => u.verifyBrowserSession(c, TOKEN_HASH) },
   { capability: 'auth_tokens', name: 'revokeBrowserSession', run: (u, c) => u.revokeBrowserSession(c, TOKEN_HASH) },
+  // The frame-time revocation check a workspace runs on its own CLI sockets.
+  // `shared` on purpose (see its tier entry), so this row is also the proof
+  // that a tainted workspace can still ENFORCE a revocation.
+  {
+    capability: 'auth_tokens.socket',
+    name: 'verifyCliSocketBearer',
+    run: (u, c) => u.verifyCliSocketBearer(c, TOKEN_HASH),
+  },
 
   { capability: 'codex_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
   { capability: 'codex_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },

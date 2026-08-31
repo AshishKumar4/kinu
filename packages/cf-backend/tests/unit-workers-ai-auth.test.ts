@@ -220,9 +220,14 @@ describe('Workers AI credential refresh', () => {
     const userDO = readFileSync(join(import.meta.dir, '..', 'src/user/user-do.ts'), 'utf8');
     // Proactive refresh on use…
     expect(userDO).toContain('opts?.forceRefresh || isCloudflareCredentialExpiring(cred)');
-    // …persisted back to storage so the next caller gets the rotated tokens…
+    // …persisted back to storage so the next caller gets the rotated tokens,
+    // through the fenced commit rather than a bare write: a rotation that
+    // returns after the owner disconnected must not reconnect the account.
+    // That behaviour is driven against the real UserDO in
+    // unit-user-authority-races.test.ts; this line is the source gate that the
+    // rotation is persisted at all.
     expect(userDO).toContain('refreshCloudflareCredential(this.env, current)');
-    expect(userDO).toContain('await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, next);');
+    expect(userDO).toContain('return await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, next, revision);');
     // …and the base-URL gate treats expired-but-refreshable as usable.
     expect(userDO).toContain('if (!isCloudflareCredentialUsable(cred)) return null;');
     // A terminal invalid_grant strips the dead refresh token so the

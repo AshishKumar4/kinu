@@ -182,6 +182,16 @@ SWARM_EVAL=tests/evals/swarm.eval.ts
 RESEARCH_EVAL=tests/evals/research.eval.ts
 OPTIMIZATION_EVAL=tests/evals/optimization.eval.ts
 
+# The BEHAVIOUR arm's identity. It is the only arm that SELECTS BY EXCLUSION —
+# the config's `include` minus the three files above — so it passes no path to
+# vitest and this string is never argv. It is here because the skip ratchet
+# proves one target per arm non-empty, and an arm with no name cannot be proven:
+# before the arms carried their targets, this file's path lived only inside
+# `SKIP_RATCHET_VITEST_TARGETS` and the two could disagree about which arm
+# existed. `scripts/ladder.test.ts` holds the four names here equal to the
+# `*.eval.ts` files on disk, so a fifth cannot join the behaviour arm silently.
+BEHAVIOUR_EVAL=tests/evals/behaviour.eval.ts
+
 # ── WHICH ARMS THIS BACKEND CAN MEASURE ───────────────────────────────────────
 #
 # THE ONE LIST, and it is a list of what READS THE KNOB rather than of what is
@@ -462,23 +472,47 @@ fi
 # `SKIPPED_ARMS` is printed rather than left implicit: an arm missing from the
 # report because it was never run and one missing because it crashed look
 # identical afterwards, and only one of them is fine.
+#
+# EACH ARM CARRIES ITS RATCHET TARGET, because that is the fifth thing that used
+# to be spelled somewhere else: `skip-ratchet.ts` proved every target it knows
+# about non-empty, and this backend runs a SUBSET of them. Under `--backend
+# cloud` the behaviour, research and optimization arms are deliberately absent,
+# so all three of their targets reported missing and the ratchet exited 1 — the
+# tier could not pass while doing exactly what it was told. Now the arm array is
+# also the target list, so the set the ratchet governs is the set this run
+# produced, by construction rather than by two lists agreeing.
 ARM_NAMES=()
 ARM_JUNITS=()
 ARM_SPENDS=()
 ARM_SECONDS=()
+ARM_TARGETS=()
 
 arm() {
   ARM_NAMES+=("$1")
   ARM_JUNITS+=("$2")
   ARM_SPENDS+=("$3")
   ARM_SECONDS+=("$4")
+  ARM_TARGETS+=("$5")
 }
 
-arm 'bun suites' "$JUNIT" "$SPEND_BUN" "$BUN_SECONDS"
-if [[ $RUN_EVALS_ARM -eq 1 ]]; then arm 'behaviour evals' "$JUNIT_EVALS" "$SPEND_EVALS" "$EVALS_SECONDS"; fi
-if [[ $RUN_SWARM_ARM -eq 1 ]]; then arm 'live swarm' "$JUNIT_SWARM" "$SPEND_SWARM" "$SWARM_SECONDS"; fi
-if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then arm 'research' "$JUNIT_RESEARCH" "$SPEND_RESEARCH" "$RESEARCH_SECONDS"; fi
-if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then arm 'optimization' "$JUNIT_OPTIMIZATION" "$SPEND_OPTIMIZATION" "$OPTIMIZATION_SECONDS"; fi
+# The bun arm's target is its OWN argv, not a fixed `./tests/`: under cloud that
+# argv is one file, and claiming the directory would let the ratchet pass over a
+# target the run never selected.
+#
+# ONE entry, refused rather than truncated. `arm` carries one target per arm, so
+# a second bun target would be silently dropped and the ratchet would prove the
+# first non-empty while the run selected two. This is the check, not a comment.
+if [[ ${#TARGETS[@]} -ne 1 ]]; then
+  echo "eval-tier: the bun arm names ${#TARGETS[@]} targets and the ratchet takes one prefix per" \
+    "arm — either split it into its own arm (its own JUnit and spend file) or give \`arm\` a" \
+    "target list" >&2
+  exit 1
+fi
+arm 'bun suites' "$JUNIT" "$SPEND_BUN" "$BUN_SECONDS" "${TARGETS[0]}"
+if [[ $RUN_EVALS_ARM -eq 1 ]]; then arm 'behaviour evals' "$JUNIT_EVALS" "$SPEND_EVALS" "$EVALS_SECONDS" "./$BEHAVIOUR_EVAL"; fi
+if [[ $RUN_SWARM_ARM -eq 1 ]]; then arm 'live swarm' "$JUNIT_SWARM" "$SPEND_SWARM" "$SWARM_SECONDS" "./$SWARM_EVAL"; fi
+if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then arm 'research' "$JUNIT_RESEARCH" "$SPEND_RESEARCH" "$RESEARCH_SECONDS" "./$RESEARCH_EVAL"; fi
+if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then arm 'optimization' "$JUNIT_OPTIMIZATION" "$SPEND_OPTIMIZATION" "$OPTIMIZATION_SECONDS" "./$OPTIMIZATION_EVAL"; fi
 
 for index in "${!ARM_NAMES[@]}"; do
   if [[ ! -f "${ARM_JUNITS[$index]}" ]]; then
@@ -489,12 +523,20 @@ for index in "${!ARM_NAMES[@]}"; do
 done
 
 echo
-# EVERY ACTIVE ARM'S REPORT, and `--expect-live` when a target was resolved. One
-# report governed one arm; the flag is what stops a locked skip that RAN — which
-# is the tier working — from being read as the lock owing an update, a verdict
-# that made this script unable to exit 0 on any machine holding a credential.
+# EVERY ACTIVE ARM'S REPORT AND ITS TARGET, and `--expect-live` when a target was
+# resolved. One report governed one arm; the flag is what stops a locked skip
+# that RAN — which is the tier working — from being read as the lock owing an
+# update, a verdict that made this script unable to exit 0 on any machine holding
+# a credential.
+#
+# `--target` per arm is what makes `--backend cloud` runnable. The ratchet's own
+# list names five arms; this backend runs two, and the three absent targets read
+# as "the gate looked at an empty set" — exit 1 for a run that measured exactly
+# what it was asked to. Both flags come off the same array, so the reports and
+# the targets cannot describe different arms.
 RATCHET_ARGS=()
 for junit in "${ARM_JUNITS[@]}"; do RATCHET_ARGS+=(--junit "$junit"); done
+for target in "${ARM_TARGETS[@]}"; do RATCHET_ARGS+=(--target "$target"); done
 if [[ $EXPECT_LIVE -eq 1 ]]; then RATCHET_ARGS+=(--expect-live); fi
 bun scripts/skip-ratchet.ts "${RATCHET_ARGS[@]}"
 RATCHET_STATUS=$?

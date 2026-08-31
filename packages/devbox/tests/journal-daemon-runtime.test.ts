@@ -17,6 +17,28 @@ const matrixEntry = join(testsRoot, 'journal-daemon-runtime-matrix.ts');
  * holes: /tmp is tmpfs here and reports a fully allocated file. */
 const exportBase = '/var/tmp';
 
+/**
+ * `KINU_RUNTIME_SCENARIO`, read ONCE and in one place.
+ *
+ * IT MUST NOT NARROW THIS SUITE AMBIENTLY, and it used to do exactly that. The
+ * single test asserted `report.scenarios` equalled `[env.KINU_RUNTIME_SCENARIO]`
+ * when the variable was set — so an eight-scenario matrix collapsed to one and
+ * the equality still passed — and then `return`ed before every fact assertion:
+ * group-commit batching, both mmap rounds, the first fence's extents, torn
+ * intents, durable results, compaction shrinkage, the three raced shutdowns, and
+ * the re-audit of a real exported fence through the production client. All of it
+ * gone, one passing test reported, and nothing in the output saying so. A
+ * variable exported in a shell, or left in a CI env block, silently turned this
+ * suite into an eighth of itself.
+ *
+ * The narrowing is STRUCTURAL now: the two tests at the bottom are mutually
+ * exclusive, and whichever one a run is not doing appears in the report as a
+ * SKIP. A narrowed run can no longer look like a full one, because the
+ * full-matrix test is visibly absent from it — and the narrowed test carries the
+ * scenario name in its own title, so the report says which eighth it measured.
+ */
+const NARROWED = process.env.KINU_RUNTIME_SCENARIO;
+
 const exported: string[] = [];
 /* The daemon writes the export as root, so the image that ran it removes what it
  * left: the host only ever owns the temporary directory itself. */
@@ -53,9 +75,7 @@ async function runMatrix(exportDir: string): Promise<MatrixReport> {
     '-e', 'HOME=/tmp',
     '-e', `KINU_EXPORT_DIR=${exportDir}`,
     '-e', `KINU_EXPORT_UID=${process.getuid?.() ?? 0}`,
-    ...(process.env.KINU_RUNTIME_SCENARIO === undefined
-      ? []
-      : ['-e', `KINU_RUNTIME_SCENARIO=${process.env.KINU_RUNTIME_SCENARIO}`]),
+    ...(NARROWED === undefined ? [] : ['-e', `KINU_RUNTIME_SCENARIO=${NARROWED}`]),
   ];
   const executed = await run([
     'docker', 'run', '--rm', '--privileged', '--device', '/dev/fuse',
@@ -81,6 +101,16 @@ function scenarioNamed(report: MatrixReport, name: string): ScenarioReport {
   return scenario;
 }
 
+/** The matrix's own verdict, raised with every failing cell and check named. */
+function assertMatrixOk(report: MatrixReport): void {
+  if (report.ok) return;
+  const failed = report.scenarios.flatMap((scenario) => [
+    ...(scenario.error === undefined ? [] : [`${scenario.name}: ${scenario.error}`]),
+    ...scenario.checks.filter((check) => !check.ok).map((check) => `${scenario.name}/${check.check}: ${check.detail}`),
+  ]);
+  throw new Error(`journal matrix failed: ${failed.join('; ')}`);
+}
+
 /** Re-reads one real fence with the production client the daemon serves. */
 async function auditExportedFence(fence: ExportedFence): Promise<string> {
   const capture = requireAuditedCapture(await captureFromJournalFence(fence, {
@@ -95,54 +125,100 @@ async function auditExportedFence(fence: ExportedFence): Promise<string> {
   return new TextDecoder().decode(await readCaptureRange(capture, entry, 6, 6));
 }
 
-describe('journal daemon runtime', () => {
-  test('serves POSIX, seals fences and recovers from kills in a privileged FUSE container', async () => {
-    const exportDir = await mkdtemp(join(exportBase, 'journal-runtime-'));
-    exported.push(exportDir);
-    const report = await runMatrix(exportDir);
-    const expected = [
-      'posix-fence-continuity',
-      'kill-intent-recovery',
-      'kill-after-fence',
-      'journal-compaction',
-      'seeded-base',
-      'unstageable-node',
-      'bounded-shutdown',
-      'shutdown-races',
-    ];
-    expect(report.scenarios.map((scenario) => scenario.name)).toEqual(
-      process.env.KINU_RUNTIME_SCENARIO === undefined ? expected : [process.env.KINU_RUNTIME_SCENARIO],
-    );
-    if (!report.ok) {
-      const failed = report.scenarios.flatMap((scenario) => [
-        ...(scenario.error === undefined ? [] : [`${scenario.name}: ${scenario.error}`]),
-        ...scenario.checks.filter((check) => !check.ok).map((check) => `${scenario.name}/${check.check}: ${check.detail}`),
-      ]);
-      throw new Error(`journal matrix failed: ${failed.join('; ')}`);
-    }
-    if (process.env.KINU_RUNTIME_SCENARIO !== undefined) return;
+/** The matrix's scenarios, in the order it runs them. */
+const SCENARIOS = [
+  'posix-fence-continuity', 'kill-intent-recovery', 'kill-after-fence', 'journal-compaction',
+  'seeded-base', 'unstageable-node', 'bounded-shutdown', 'shutdown-races',
+] as const;
+type ScenarioName = (typeof SCENARIOS)[number];
 
+function isScenarioName(name: string): name is ScenarioName {
+  // SAFETY: `includes` checked tuple membership, the invariant ScenarioName declares; widening only relaxes the parameter.
+  return (SCENARIOS as readonly string[]).includes(name);
+}
+
+/**
+ * Every scenario the matrix runs, and the FACTS each one's report must carry.
+ *
+ * Enumerated as a total map rather than as a sequence of statements after the
+ * matrix returns, because the narrowing knob below used to skip all of them at
+ * once. A scenario whose report this suite makes no further claim about is an
+ * EXPLICIT empty entry: `[]` is a decision someone wrote down, an absent key is
+ * an omission, and the two used to look identical.
+ */
+const SCENARIO_FACTS = {
+  'posix-fence-continuity': async (report) => {
     const fenced = scenarioNamed(report, 'posix-fence-continuity');
     expect(fenced.facts.groupCommit?.records ?? 0).toBeGreaterThan(fenced.facts.groupCommit?.batches ?? 0);
     expect(fenced.facts.mmapRounds?.before ?? 0).toBeGreaterThan(0);
     expect(fenced.facts.mmapRounds?.after ?? 0).toBeGreaterThan(0);
     expect(fenced.facts.firstFence?.extents ?? 0).toBeGreaterThan(0);
-
-    const recovery = scenarioNamed(report, 'kill-intent-recovery');
-    expect(recovery.facts.tornIntents ?? 0).toBeGreaterThan(0);
-    expect(recovery.facts.durableResults ?? 0).toBeGreaterThan(0);
-
-    const compacted = scenarioNamed(report, 'journal-compaction');
-    expect(compacted.facts.journalBytesAfter ?? 0).toBeLessThan(compacted.facts.journalBytesBefore ?? 0);
-
-    /* A cell that stopped after its first entry would report no failure at all. */
-    const raced = scenarioNamed(report, 'shutdown-races');
-    expect(Object.keys(raced.facts.racedShutdowns ?? {})).toEqual(['stop', 'fence-stop', 'sigterm']);
-
     /* The exported fence is re-verified by the production client, so the daemon's
      * manifest is proven acceptable to the capture surface that consumes it. */
     const fence = fenced.facts.exportedFence;
     if (fence === undefined) throw new Error('the fence scenario exported no fence');
     expect(await auditExportedFence(fence)).toBe('sealed');
-  }, 1_800_000);
+  },
+  'kill-intent-recovery': async (report) => {
+    const recovery = scenarioNamed(report, 'kill-intent-recovery');
+    expect(recovery.facts.tornIntents ?? 0).toBeGreaterThan(0);
+    expect(recovery.facts.durableResults ?? 0).toBeGreaterThan(0);
+  },
+  /* Its checks live in the matrix cell; the report carries no fact this suite
+   * re-derives. Declared so a reader knows that is deliberate. */
+  'kill-after-fence': async () => {},
+  'journal-compaction': async (report) => {
+    const compacted = scenarioNamed(report, 'journal-compaction');
+    expect(compacted.facts.journalBytesAfter ?? 0).toBeLessThan(compacted.facts.journalBytesBefore ?? 0);
+  },
+  'seeded-base': async () => {},
+  'unstageable-node': async () => {},
+  'bounded-shutdown': async () => {},
+  'shutdown-races': async (report) => {
+    /* A cell that stopped after its first entry would report no failure at all. */
+    const raced = scenarioNamed(report, 'shutdown-races');
+    expect(Object.keys(raced.facts.racedShutdowns ?? {})).toEqual(['stop', 'fence-stop', 'sigterm']);
+  },
+} satisfies Readonly<Record<ScenarioName, (report: MatrixReport) => Promise<void>>>;
+
+describe('journal daemon runtime', () => {
+  test.skipIf(NARROWED !== undefined)(
+    'serves POSIX, seals fences and recovers from kills in a privileged FUSE container',
+    async () => {
+      const exportDir = await mkdtemp(join(exportBase, 'journal-runtime-'));
+      exported.push(exportDir);
+      const report = await runMatrix(exportDir);
+      expect(report.scenarios.map((scenario) => scenario.name)).toEqual([...SCENARIOS]);
+      assertMatrixOk(report);
+      // Every scenario's facts, from the total map. No early return can drop one:
+      // the loop's denominator is the enumeration this suite asserted the report
+      // against on the line above.
+      for (const name of SCENARIOS) await SCENARIO_FACTS[name](report);
+    },
+    1_800_000,
+  );
+
+  test.skipIf(NARROWED === undefined)(
+    `KINU_RUNTIME_SCENARIO=${NARROWED ?? '<unset>'} — ONE scenario, not the matrix`,
+    async () => {
+      // The knob's own validity, checked before docker spends thirty minutes on a
+      // typo. `journal-daemon-runtime-matrix.ts` also refuses an unknown name, but
+      // it refuses inside the container after the image build. The re-read is what
+      // narrows the type; `test.skipIf` cannot tell the compiler this body only
+      // runs when the knob is set.
+      const scenario = NARROWED;
+      if (scenario === undefined) throw new Error('KINU_RUNTIME_SCENARIO is unset');
+      if (!isScenarioName(scenario)) throw new Error(`unknown KINU_RUNTIME_SCENARIO: ${scenario}`);
+      const exportDir = await mkdtemp(join(exportBase, 'journal-runtime-'));
+      exported.push(exportDir);
+      const report = await runMatrix(exportDir);
+      expect(report.scenarios.map((candidate) => candidate.name)).toEqual([scenario]);
+      assertMatrixOk(report);
+      // The named scenario's OWN facts still hold. The narrowed path used to
+      // assert `report.ok` and nothing else, so the one scenario a developer was
+      // debugging was also the one whose facts stopped being checked.
+      await SCENARIO_FACTS[scenario](report);
+    },
+    1_800_000,
+  );
 });

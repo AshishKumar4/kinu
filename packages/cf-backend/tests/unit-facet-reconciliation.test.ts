@@ -11,6 +11,7 @@ import {
   reconcileExplorationFacets,
   type ExplorationFacetRegistry,
 } from '../src/facet-spawn';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 function host(
   facets: string[],
@@ -59,5 +60,51 @@ describe('reconcileExplorationFacets', () => {
     // `unknown` is retained because the live rollout forbids guessing.
     expect(out).toEqual({ reclaimed: 1, retained: 2 });
     expect(h.deleted).toEqual(['dead']);
+  });
+});
+
+/**
+ * The same sweep over the REAL ledger, which is where the classification lives.
+ *
+ * The cases above hand `reconcileExplorationFacets` a status directly, so they
+ * say nothing about which rows produce which status — and that mapping is where
+ * the leak was: `errored` and `budget_exceeded` were classified `resumable`, so a
+ * head that threw or blew its budget kept its facet. Because a facet id is never
+ * reused that storage is never overwritten, which makes the retention permanent
+ * for the life of the workspace.
+ *
+ * Every row here is written by the branch head's own producer (`startBranchHead`)
+ * and every facet is registered by the same `subAgent` call `spawnHeadFacet`
+ * makes, so what is classified is a real journal row under its real id.
+ */
+describe('the exploration-facet sweep over the head journal', () => {
+  test('every terminal head loses its facet; only the executing ones keep theirs', async () => {
+    const harness = orchestratorHarness();
+    const settled = [
+      ['branch-done', 'completed'],
+      ['branch-threw', 'errored'],
+      ['branch-spent', 'budget_exceeded'],
+      ['branch-cut', 'aborted'],
+    ] as const;
+    for (const [id, status] of settled) {
+      await harness.agent.harnessSpawnBranchHead(id, `settle as ${status}`, {
+        status, summary: status === 'completed' ? 'the branch answer' : '',
+      });
+    }
+    // Spawned with no report, then marked by the journal's own cold-activation
+    // transition: the two statuses under which work can still continue.
+    await harness.agent.harnessSpawnBranchHead('branch-stale', 'never reported', null);
+    harness.agent.harnessMarkHeadsInterrupted();
+    await harness.agent.harnessSpawnBranchHead('branch-live', 'still running', null);
+
+    expect(harness.agent.harnessExplorationFacets().length).toBe(6);
+    await harness.agent.harnessReclaimSettledExplorationFacets();
+
+    // The four settled heads are gone whatever they settled AS; the interrupted
+    // and the running one are held, and holding them is not a guess — a live
+    // head is what makes the sweep refuse to reclaim an unledgered facet too.
+    expect(harness.agent.harnessExplorationFacets()).toEqual([
+      'branch-live-head', 'branch-stale-head',
+    ]);
   });
 });

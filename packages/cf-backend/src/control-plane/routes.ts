@@ -1,13 +1,24 @@
 /**
  * `/api/control/*` — the admin control plane's HTTP surface.
  *
- * THE GATE IS IN THIS FILE AND NOWHERE ELSE. Every handler below goes through
- * `admin()` before it touches a binding, and `admin()` is the only place the
- * operator allowlist, the dev-identity refusal and the step-up window are
- * consulted. The backend audit of this Worker recorded that `run-events-routes.ts`
- * relies on an ownership check performed in `server.ts` rather than in its own
- * handlers; that pattern is not copied here, because a route whose authorization
- * lives in its caller is one refactor away from being unguarded.
+ * THE OPERATOR GATE IS IN THIS FILE AND NOWHERE ELSE. Every handler below goes
+ * through the authorization at the top of `handleControlRequest` before it
+ * touches a binding, and that is the only place the operator allowlist, the
+ * dev-identity refusal and the step-up window are consulted. The backend audit of
+ * this Worker recorded that `run-events-routes.ts` relies on an ownership check
+ * performed in `server.ts` rather than in its own handlers; that pattern is not
+ * copied here, because a route whose authorization lives in its caller is one
+ * refactor away from being unguarded.
+ *
+ * THE ONE THING THAT IS DELIBERATELY NOT IN THIS FILE is the Cloudflare Access
+ * check, and the reason is the ordering the security property needs: it has to
+ * run BEFORE the app's own session gate, which means before this module is
+ * reached at all. So `server.ts` verifies the assertion for every control-plane
+ * path — the UI document and this API alike — and hands the verified identity
+ * down. It cannot be forgotten or refactored away, because `AccessIdentity` is a
+ * REQUIRED parameter of this function and of `authorizeAdmin` below it: there is
+ * no way to call either without one, and no way to obtain one except from
+ * `access-gate.ts`.
  *
  * ROUTES
  *   GET  /api/control/overview               fleet counts + last admin action
@@ -40,6 +51,7 @@ import {
   actorDigest, adminCaller, adminDenialMessage, adminDenialStatus, authorizeAdmin,
   reportAdminDenial, type AuthorizedAdmin, type ControlCaller,
 } from './admin-caller';
+import { isControlPlaneApiPath, type AccessIdentity } from './access-gate';
 import { controlPlaneStub } from './stub';
 import {
   ControlActionSchema, describeAction, runControlAction,
@@ -72,21 +84,30 @@ export type ControlEnv = ActionEnv & {
  *
  * Returns `null` for anything outside `/api/control/`, so `server.ts` can hang
  * it in its table the same way every other route module is hung.
+ *
+ * `access` is the verified Cloudflare Access identity `server.ts` produced for
+ * this request. It is a REQUIRED parameter and there is no arm that tolerates its
+ * absence: that is what makes the outer gate structural rather than a step in a
+ * checklist. The path test is shared with `access-gate.ts` rather than spelled
+ * again here, because the set of paths this module answers and the set of paths
+ * the outer gate protects have to be the same set — a route answered here and not
+ * gated there is exactly the hole this whole change closes.
  */
 export async function handleControlRequest(
   request: Request,
   env: ControlEnv,
   identity: AuthIdentity,
+  access: AccessIdentity,
 ): Promise<Response | null> {
   const url = new URL(request.url);
-  if (!url.pathname.startsWith('/api/control/') && url.pathname !== '/api/control') return null;
+  if (!isControlPlaneApiPath(url.pathname)) return null;
 
   // Authorize as a READER first, for every method. A recognized operator whose
   // sign-in has gone stale is authorized here and refused at the mutation check
   // below — which is deliberate, because it is the only way an attempted
   // mutation by a real operator gets an audit row instead of vanishing into a
   // 403.
-  const authorization = authorizeAdmin(env, identity, { mutating: false });
+  const authorization = authorizeAdmin(env, identity, access, { mutating: false });
   if (!authorization.ok) {
     reportAdminDenial(authorization.denial, url.pathname, request.method);
     return err(adminDenialStatus(authorization.denial), adminDenialMessage(authorization.denial));

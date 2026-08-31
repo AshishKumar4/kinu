@@ -1,1 +1,1 @@
-export { deriveWorkspaceTitle, resolveWorkspaceTitle, slugifyName } from "@kinu.run/core";
+export { deriveWorkspaceTitle, resolveWorkspaceTitle } from "@kinu.run/core";

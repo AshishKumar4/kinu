@@ -38,7 +38,7 @@ import {
   receiveSubordinateEvent,
   readMission,
   renderSoulMarkdown,
-  slugifyName,
+  mintSubordinateName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
   TEMPORARY_LIFETIME,
@@ -242,13 +242,6 @@ interface HostEntry {
 }
 
 export type AgentEventListener = (agent: string, event: SessionEvent) => void;
-
-/** One name-minting rule for every locally created subordinate: the slugified
- *  role, bounded, with a short random suffix nothing else shares. */
-function mintSubordinateName(role: string): string {
-  const base = slugifyName(role).slice(0, 48) || 'subordinate';
-  return `${base}-${crypto.randomUUID().slice(0, 6)}`;
-}
 
 export class LocalAgentHost {
   private readonly entries = new Map<string, HostEntry>();

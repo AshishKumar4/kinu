@@ -108,7 +108,20 @@ type WranglerEnvironment = v.InferOutput<typeof EnvironmentSchema>;
 export type ResourceKind =
   | 'account' | 'kv' | 'r2' | 'vectorize' | 'ai-gateway'
   | 'worker' | 'durable-object' | 'container' | 'custom-domain' | 'zone-route'
-  | 'wildcard-dns' | 'dns-record' | 'cron' | 'binding' | 'email-routing';
+  | 'wildcard-dns' | 'dns-record' | 'cron' | 'binding' | 'email-routing'
+  // The outer control-plane gate, in three separately-actionable pieces: the
+  // organization the Worker pins as issuer, the application whose AUD it pins,
+  // and that application's allow policy. Split because they fail separately and
+  // an operator's next move differs for each — a missing policy is one dashboard
+  // field, a missing application is the whole setup, and a mismatched
+  // organization is a var this repository holds.
+  | 'access-organization' | 'access-application' | 'access-policy'
+  // The NEGATIVE assertion: no Access application may cover the app host broadly
+  // or any preview hostname. There is no such resource to create — its correct
+  // state is absence — so it is declared as a resource in order to be OBSERVED,
+  // which is the only way "we did not accidentally put a login in front of every
+  // preview URL" is a checked fact rather than an assumption.
+  | 'access-scope';
 
 /** How a resource comes into existence. This is the whole of provision's plan
  *  and the whole of teardown's: `wrangler-cli` is what provision creates,
@@ -164,6 +177,51 @@ export interface InfraEnvironment {
   readonly migrationTags: readonly string[];
   /** Every binding name this environment declares, whatever its kind. */
   readonly bindings: readonly string[];
+  /** Every route PATTERN this environment claims, verbatim. Carried on the
+   *  environment rather than recomputed per consumer because the Access scope
+   *  assertion and the Access resource ids have to agree about which hostnames
+   *  are ours — two spellings of that question is how a negative assertion
+   *  silently stops covering one of them. */
+  readonly routes: readonly string[];
+}
+
+/**
+ * The ONLY path patterns a Cloudflare Access application may cover on this
+ * deployment, in Access's own destination syntax.
+ *
+ * They are a superset of what the Worker demands an assertion for — the Worker
+ * gates `/control`, `/control/*`, `/api/control` and `/api/control/*`
+ * (control-plane/access-gate.ts) — and the direction of that containment is
+ * load-bearing. Access covering LESS than the Worker demands means an operator
+ * has no way to obtain the assertion the Worker insists on: a permanent 404 with
+ * a correct-looking configuration. Access covering MORE means an interactive
+ * login in front of routes that must stay public.
+ */
+export const CONTROL_PLANE_ACCESS_PATHS = ['/control*', '/api/control*'] as const;
+
+/** The hostnames one environment claims, split by whether the claim is a
+ *  wildcard. The app host is the first non-wildcard route — the origin the SPA
+ *  and the admin plane are served on — and the wildcards are the preview
+ *  hostnames, which must never be behind Access. */
+export interface ClaimedHosts {
+  readonly app: string | undefined;
+  readonly wildcards: readonly string[];
+}
+
+/**
+ * Which hostnames belong to an environment, from its route patterns.
+ *
+ * Exported and shared, because the Access resource ids and the Access scope
+ * OBSERVATION both have to answer "is this hostname ours" the same way. Two
+ * spellings of that question is how a negative assertion silently stops covering
+ * one host while still reporting a pass.
+ */
+export function claimedHosts(environment: InfraEnvironment): ClaimedHosts {
+  const hosts = environment.routes.map((pattern) => pattern.replace(/\/.*$/u, ''));
+  return {
+    app: hosts.find((host) => !host.startsWith('*.')),
+    wildcards: hosts.filter((host) => host.startsWith('*.')).map((host) => host.slice(2)),
+  };
 }
 
 export interface Infrastructure {
@@ -365,6 +423,31 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + 'manifest can only name by id. Titles are also not unique per account, so a title is '
       + 'not a thing anything may key on.',
     check: 'npx wrangler kv namespace list',
+  },
+  {
+    what: 'The Cloudflare Access application guarding the admin control plane, its Zero Trust '
+      + 'organization and its Allow policy. An account-level Zero Trust object created in a '
+      + 'different product; the only trace of it in this repository is the pair of vars the '
+      + 'Worker pins against it, CONTROL_PLANE_ACCESS_TEAM_DOMAIN and CONTROL_PLANE_ACCESS_AUD.',
+    evidence: 'wrangler has no `access` command at all, so this is invisible to the credential '
+      + 'a deploy normally carries; verification reads it through the Access REST API instead '
+      + '(`/accounts/<id>/access/apps` and `/organizations`), which needs an API token with '
+      + 'Access: Apps and Policies Read. The Worker fails CLOSED without a verifiable '
+      + 'assertion, so a missing application does not break loudly — the admin plane answers '
+      + '404 to its own operators, which is indistinguishable from an allowlist typo.',
+    check: 'bun run gate:infra  (rows access-organization.*, access-application.*, '
+      + 'access-policy.* and access-scope.*)',
+  },
+  {
+    what: 'The ABSENCE of any broader Access application. Nothing in this repository can stop '
+      + 'an operator protecting `kinu.run` or `*.kinu.run` wholesale from the dashboard, and '
+      + 'doing so puts an interactive login in front of every preview URL an agent hands out, '
+      + 'the public landing page, /api/feedback and /api/client-errors.',
+    evidence: 'Access destinations are host+path patterns held account-side, and a broader one '
+      + 'silently WINS over the narrow control-plane application for the paths they share. Every '
+      + 'positive check still passes in that state — the admin plane works perfectly — so the '
+      + '`access-scope.*` row is the only thing that observes it.',
+    check: 'bun run gate:infra  (row access-scope.*)',
   },
 ];
 
@@ -612,6 +695,37 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'the monitor raises no ops alert email. Every other monitor outcome, and every '
       + 'workspace email, is unaffected.',
   }],
+  // The two halves of the OUTER control-plane gate. Both are `config-var`
+  // because both are public identifiers a token carries in the clear — a team
+  // hostname and an audience tag — and a value nobody may read is a value nobody
+  // can audit against the application it names. Both are `pairedWith`
+  // CONTROL_PLANE_ADMINS: an environment that admits no operators needs no Access
+  // application, which is exactly staging's shape, and demanding one there would
+  // be a gate complaining about a deployment deliberately turned off.
+  ['CONTROL_PLANE_ACCESS_TEAM_DOMAIN', {
+    handling: 'config-var',
+    pairedWith: 'CONTROL_PLANE_ADMINS',
+    required: false,
+    absent: 'the admin plane answers 404 to EVERYONE, its own operators included: '
+      + '`verifyControlPlaneAccess` (control-plane/access-gate.ts) has no issuer to pin and no '
+      + 'JWKS origin to fetch, so it can verify nothing and refuses. Nothing else on the '
+      + 'deployment is affected — Access covers `/control*` and `/api/control*` only.',
+    source: 'Zero Trust > Access controls > Applications, on the application protecting '
+      + '`/control*` and `/api/control*`. It is `https://<team-name>.cloudflareaccess.com`, the '
+      + 'same value the dashboard shows as TEAM_DOMAIN when Access is enabled.',
+  }],
+  ['CONTROL_PLANE_ACCESS_AUD', {
+    handling: 'config-var',
+    pairedWith: 'CONTROL_PLANE_ADMINS',
+    required: false,
+    absent: 'the admin plane answers 404 to EVERYONE. Setting the team domain without this is '
+      + 'NOT half a gate that half works: with no audience pinned, a token minted for any other '
+      + 'application in the same Access organization would verify, so the code refuses to run '
+      + 'without it rather than accept the weaker check.',
+    source: 'the same application\'s Application Audience (AUD) Tag — a 64-hex value beside it '
+      + 'in the dashboard. It appears in the `aud` claim of every token that application issues, '
+      + 'so it is an identifier rather than a secret.',
+  }],
 ]);
 
 /* ── Derivation ───────────────────────────────────────────────────────── */
@@ -678,6 +792,7 @@ function environmentRow(key: string, topName: string, config: WranglerEnvironmen
     vars: new Map(Object.entries(config.vars ?? {})),
     migrationTags: (config.migrations ?? []).map((m) => m.tag),
     bindings,
+    routes: (config.routes ?? []).map((route) => route.pattern),
   };
 }
 
@@ -840,6 +955,90 @@ function draftsFor(
     });
   }
 
+  // ── The OUTER control-plane gate: Cloudflare Access ──────────────────────
+  //
+  // Nothing about Access is expressible in wrangler.jsonc: it is an account-level
+  // Zero Trust object, created in a different product, and the only trace of it
+  // in this repository is the pair of vars the Worker pins against it
+  // (control-plane/access-gate.ts). That is precisely why it is declared here.
+  // The Worker fails CLOSED without a verifiable assertion, so a missing
+  // application does not break loudly — it makes the admin plane answer 404 to
+  // its own operators, which looks exactly like an allowlist typo.
+  //
+  // FOUR ROWS, three positive and one NEGATIVE. The negative one is not
+  // symmetry: an Access application whose destination is the bare app host, or
+  // any wildcard under it, would put an interactive corporate login in front of
+  // every preview URL an agent hands out, the public landing page, `/api/feedback`
+  // and `/api/client-errors`. That failure is silent in every positive check —
+  // the admin plane would work perfectly — so the scope row is the only thing
+  // that can catch it, and it is declared for EVERY environment including the one
+  // with no operators.
+  const claimed = claimedHosts(environment);
+  if (claimed.app !== undefined) {
+    const host = claimed.app;
+    drafts.push({
+      kind: 'access-scope',
+      name: host,
+      origin: 'manual',
+      required: true,
+      purpose: `no Access application covers ${host} beyond ${CONTROL_PLANE_ACCESS_PATHS.join(' and ')}`
+        + (claimed.wildcards.length === 0 ? '' : `, and none covers ${claimed.wildcards.map((w) => `*.${w}`).join(' or ')}`),
+      manual: 'an Access application is protecting more of this deployment than the control '
+        + 'plane. Narrow its destinations in Zero Trust > Access controls > Applications to '
+        + `exactly ${CONTROL_PLANE_ACCESS_PATHS.map((path) => `${host}${path}`).join(' and ')}, or `
+        + 'delete it. Left in place it puts an interactive login in front of every preview URL, '
+        + 'the public landing page and the in-product feedback endpoint.',
+    });
+
+    // The positive half exists only where operators do. Staging deliberately
+    // admits nobody (`CONTROL_PLANE_ADMINS: ""`), so demanding a Zero Trust
+    // application for a plane that already 404s everyone would be a gate
+    // complaining about a deployment shaped on purpose.
+    if ((environment.vars.get('CONTROL_PLANE_ADMINS') ?? '').trim().length > 0) {
+      drafts.push({
+        kind: 'access-organization',
+        name: host,
+        origin: 'manual',
+        required: true,
+        purpose: 'the Zero Trust organization whose issuer and signing keys this Worker pins '
+          + '(CONTROL_PLANE_ACCESS_TEAM_DOMAIN)',
+        manual: 'the account has no Zero Trust organization, or its team domain is not the one '
+          + 'CONTROL_PLANE_ACCESS_TEAM_DOMAIN names. Create the organization in Zero Trust > '
+          + 'Settings > Custom pages, or correct the var — a signature proves only that SOME '
+          + 'Access organization signed the token, so the issuer this Worker pins has to be the '
+          + 'one that actually guards it.',
+      });
+      drafts.push({
+        kind: 'access-application',
+        name: host,
+        origin: 'manual',
+        required: true,
+        purpose: 'the self-hosted Access application whose AUD this Worker pins '
+          + `(CONTROL_PLANE_ACCESS_AUD), covering ${CONTROL_PLANE_ACCESS_PATHS.map((path) => `${host}${path}`).join(' and ')}`,
+        manual: 'no single Access application with the AUD in CONTROL_PLANE_ACCESS_AUD covers '
+          + `both ${CONTROL_PLANE_ACCESS_PATHS.map((path) => `${host}${path}`).join(' and ')}. Create `
+          + 'one self-hosted application with BOTH paths as destinations in Zero Trust > Access '
+          + 'controls > Applications, then set CONTROL_PLANE_ACCESS_AUD and '
+          + "CONTROL_PLANE_ACCESS_TEAM_DOMAIN in this environment's `vars`. TWO applications "
+          + 'cannot serve: each has its own AUD, so the Worker would pin one and answer 404 on '
+          + 'the other path.',
+      });
+      drafts.push({
+        kind: 'access-policy',
+        name: host,
+        origin: 'manual',
+        required: true,
+        purpose: 'an Allow policy on that application naming the identities admitted — Access '
+          + 'applications are deny-by-default, so an application with no Allow policy admits '
+          + 'nobody and one with an empty rule set admits everybody',
+        manual: 'the Access application has no Allow policy with a non-empty include rule. Add '
+          + 'one in Zero Trust > Access controls > Applications > (the application) > Policies, '
+          + 'naming the operator email addresses. An Allow policy whose include set is empty is '
+          + 'the dangerous shape: it matches every identity the organization can authenticate.',
+      });
+    }
+  }
+
   const emailDomain = environment.vars.get('EMAIL_DOMAIN');
   if ((config.send_email ?? []).length > 0 && emailDomain !== undefined && emailDomain.length > 0) {
     // Email Routing is a ZONE feature and EMAIL_DOMAIN is a subdomain of one, so
@@ -992,13 +1191,21 @@ export function exclusiveTo(
  * production's OAuth secrets there would report a hole in a deployment that is
  * deliberately shaped that way — and a gate that cries about an intentional
  * absence teaches people to ignore it.
+ *
+ * A PAIRED VAR SET TO THE EMPTY STRING COUNTS AS ABSENT, and that is the whole
+ * of what "supplies" means everywhere else in this repository: `CONTROL_PLANE_ADMINS: ""`
+ * is the line staging relies on to mean NOBODY, and `PREVIEW_HOST_SUFFIX: ""`
+ * means previews are off. Keying on `.has()` instead asked only whether the key
+ * was typed, so a feature explicitly turned off in one environment would drag in
+ * every value its enabled form needs — which for the Access pair means demanding
+ * a Zero Trust application for an admin plane that admits nobody.
  */
 export function requiredIn(name: string, environment: InfraEnvironment): boolean {
   const supply = SUPPLY.get(name);
   if (supply === undefined) return false;
   return supply.pairedWith === undefined
     ? supply.required
-    : environment.vars.has(supply.pairedWith);
+    : (environment.vars.get(supply.pairedWith) ?? '').trim().length > 0;
 }
 
 /**

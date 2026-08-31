@@ -19,6 +19,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { AuthIdentity } from '../src/auth/session';
+import type { AccessIdentity } from '../src/control-plane/access-gate';
 import * as store from '../src/control-plane/store';
 import type { ControlCapability, PresentedCaller } from '../src/control-plane/capability';
 import * as v from 'valibot';
@@ -29,11 +30,11 @@ import { sqlExec } from './helpers/user-do';
 mockAgentsSdk();
 // `routes.ts` reaches the orchestrator's module graph at load, so it is imported
 // after the mock is registered.
-const { handleControlRequest } = await import('../src/control-plane/routes');
+const { handleControlRequest: routeControlRequest } = await import('../src/control-plane/routes');
 const { requireControl } = await import('../src/control-plane/capability');
 /** The bindings the route reads. Named for its role rather than its structure:
  *  it is the environment these routes run in. */
-type ControlRoutesEnv = Parameters<typeof handleControlRequest>[1];
+type ControlRoutesEnv = Parameters<typeof routeControlRequest>[1];
 
 const SECRET = 'routes-test-secret-0123456789';
 const OPERATOR = 'ops@kinu.run';
@@ -303,6 +304,31 @@ function identity(over: Partial<AuthIdentity> = {}): AuthIdentity {
   };
 }
 
+/** The verified Cloudflare Access identity `server.ts` produces before this
+ *  route is reached. Defaults to the SAME address `identity()` carries, because
+ *  the two gates naming one person is the ordinary case and every assertion
+ *  below about the INNER gate would otherwise be answered by a mismatch. */
+function access(over: Partial<AccessIdentity> = {}): AccessIdentity {
+  return { email: OPERATOR, sub: 'access-uuid-1', ...over };
+}
+
+/**
+ * The route under test, with the outer gate's proof defaulted.
+ *
+ * A wrapper rather than a fourth argument at each of thirty-six call sites: the
+ * subject of almost every test here is the inner gate, and an `access()` repeated
+ * thirty-six times is noise that hides the two tests where the Access identity is
+ * the point. Those two pass it explicitly.
+ */
+function handleControlRequest(
+  request: Request,
+  env: ControlRoutesEnv,
+  who: AuthIdentity,
+  outer: AccessIdentity = access(),
+): Promise<Response | null> {
+  return routeControlRequest(request, env, who, outer);
+}
+
 function get(path: string): Request {
   return new Request(`https://kinu.run/api/control${path}`);
 }
@@ -379,6 +405,48 @@ describe('the gate, over HTTP', () => {
     expect((await handleControlRequest(
       new Request('https://kinu.run/api/control/overview', { method: 'DELETE' }), h.env, identity(),
     ))?.status).toBe(405);
+    h.close();
+  });
+
+  test('an Access identity that is not the session identity is refused, and reads nothing', async () => {
+    // THE JOIN BETWEEN THE TWO GATES. Both halves here are individually valid:
+    // Access authenticated a real member of the Zero Trust organization, and the
+    // browser session belongs to a real allowlisted operator. They are different
+    // people, which is what a borrowed session cookie looks like from the origin,
+    // and admitting it would make two gates behave as one.
+    const h = harness();
+    store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
+    const answer = await handleControlRequest(
+      get('/overview'), h.env, identity(), access({ email: 'someone-else@kinu.run' }),
+    );
+    expect(answer?.status).toBe(404);
+    expect(await bodyOf(answer)).toEqual({ error: 'Not found' });
+    h.close();
+  });
+
+  test('an Access identity for a non-operator is still refused by the allowlist', async () => {
+    // The other direction: the two gates agree about WHO, and that person is not
+    // an operator. Access is an outer gate, never a substitute for the allowlist,
+    // so an Access policy that admits the whole company still admits nobody here.
+    const h = harness();
+    const answer = await handleControlRequest(
+      get('/overview'), h.env, identity({ email: 'colleague@kinu.run' }),
+      access({ email: 'colleague@kinu.run' }),
+    );
+    expect(answer?.status).toBe(404);
+    h.close();
+  });
+
+  test('a mutation still needs a fresh sign-in when both gates name the operator', async () => {
+    // Access sessions last hours by configuration; the step-up window is five
+    // minutes and is this deployment's own. A valid assertion must not satisfy it.
+    const h = harness();
+    const answer = await handleControlRequest(
+      post('/actions', { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' }),
+      h.env, identity({ authTime: Date.now() - 6 * 60 * 1000 }), access(),
+    );
+    expect(answer?.status).toBe(403);
+    expect(h.rpc.calls).toEqual([]);
     h.close();
   });
 });

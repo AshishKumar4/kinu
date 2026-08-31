@@ -7,6 +7,12 @@
  *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves an isolated
  *      Workspace or Sandbox preview and nothing else.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
+ *   2b. CLOUDFLARE ACCESS GATE — /control* and /api/control* only. A verified
+ *       `Cf-Access-Jwt-Assertion` before every bypass below it: this Worker's own
+ *       auth, the public path list, its assets, any binding and any Durable
+ *       Object. Path-scoped on purpose — the root app, /api/feedback,
+ *       /api/client-errors, the hashed asset bundles and the preview hostnames
+ *       are NOT behind Access (control-plane/access-gate.ts).
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Kinu session is present.
  *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
@@ -20,8 +26,9 @@
  *       the URL is its gate (events/webhook-route.ts).
  *   8. /api/feedback — in-product feedback; any signed-in user.
  *   8a. /api/client-errors — browser render-failure reports; any signed-in user.
- *   8b. /api/control/* — admin control plane; an allowlisted operator only, and
- *       a fresh sign-in for anything that mutates.
+ *   8b. /api/control/* — admin control plane; a verified Access identity that
+ *       EQUALS an allowlisted session email, and a fresh sign-in for anything
+ *       that mutates.
  *   9. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
  *   10. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
  *   11. /agents/* — Think DOs (chat WebSocket).
@@ -62,11 +69,17 @@ import {
 import { withAppSecurityHeaders } from "./lib/security-headers";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "./user/workspace-capability";
-import { CLI_SCOPES_HEADER } from "./cli/rpc-gate";
+import { CLI_BEARER_HEADER, CLI_SCOPES_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "./lib/http";
 import { handleFeedbackRequest } from "./feedback/routes";
 import { handleControlRequest } from "./control-plane/routes";
+import {
+  isControlPlaneSurface, verifyControlPlaneAccess, type AccessIdentity,
+} from "./control-plane/access-gate";
+import {
+  adminDenialMessage, adminDenialStatus, reportAdminDenial,
+} from "./control-plane/admin-caller";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "./analytics/install";
 
@@ -223,6 +236,12 @@ async function authenticateCliAgentTicketRequest(
         authTime: Date.now(),
     };
     if (verified.scopes) identity.cliScopes = verified.scopes;
+    // The socket's own authority, carried so the DO can persist it on the
+    // connection: without the token hash a revocation has nothing to name, and
+    // without the generation it cannot tell which sockets predate it.
+    if (verified.tokenHash && verified.authGeneration !== undefined) {
+      identity.cliBearer = { tokenHash: verified.tokenHash, generation: verified.authGeneration };
+    }
     return {
       identity,
       request: new Request(url.toString(), request),
@@ -298,6 +317,13 @@ function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   // (or strip) the scope restriction the DO websocket boundary enforces.
   next.delete(CLI_SCOPES_HEADER);
   if (identity.cliScopes) next.set(CLI_SCOPES_HEADER, identity.cliScopes.join(','));
+  // Same rule for the bearer the socket runs on, and for the same reason: it is
+  // what the frame-time revocation check names, so a client that could set it
+  // could name somebody else's live token instead of its own.
+  next.delete(CLI_BEARER_HEADER);
+  if (identity.cliBearer) {
+    next.set(CLI_BEARER_HEADER, `${identity.cliBearer.tokenHash}:${identity.cliBearer.generation}`);
+  }
   return next;
 }
 
@@ -403,6 +429,41 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     return handlePcRequest(request, env);
   }
 
+  // 2b. CLOUDFLARE ACCESS — the OUTER gate on the admin control plane, and the
+  //     reason it is HERE, above every bypass this Worker has: it must run before
+  //     the auth gate, before the public bypass list, before `env.ASSETS`, before
+  //     the index feed's Durable Object write and before any binding is touched.
+  //     Every one of those was a way in. An ungated `/control` reached the AUTH_KV
+  //     session lookup and the SPA document; an ungated `/api/control/x` reached
+  //     both plus `observeIdentity`'s ControlPlaneDO write; and a `/control` entry
+  //     added to `isPublicPath` would have skipped the lot. Placed above them all,
+  //     none of that is reachable without a verified assertion — the gate cannot
+  //     be outranked by a later edit to a bypass list it sits in front of.
+  //
+  //     SCOPED TO TWO PATH PREFIXES, and the narrowness is deliberate rather than
+  //     incremental. `/api/feedback`, `/api/client-errors`, the root app, `/login`,
+  //     the hashed `/assets/*` bundles, the `*.kinu.run` preview hostnames and
+  //     every workspace or sandbox origin stay OUTSIDE Access: a host-wide Access
+  //     application would put an interactive corporate login in front of every
+  //     preview URL an agent hands out and every public landing page. The preview
+  //     hosts cannot reach this line at all — step 1 answered them — and the rest
+  //     are excluded by `isControlPlaneSurface`, which
+  //     `tests/unit-control-plane-access.test.ts` pins from both directions,
+  //     including against `isPublicPath`.
+  //
+  //     The verified identity travels to step 8b as a REQUIRED argument, so it is
+  //     verified exactly once per request and the admin routes cannot be reached
+  //     without it.
+  let controlAccess: AccessIdentity | null = null;
+  if (isControlPlaneSurface(url.pathname)) {
+    const access = await verifyControlPlaneAccess(request, env);
+    if (!access.ok) {
+      reportAdminDenial(access.denial, url.pathname, request.method);
+      return err(adminDenialStatus(access.denial), adminDenialMessage(access.denial));
+    }
+    controlAccess = access.access;
+  }
+
   // 3. OAuth/OIDC login, callback, session, logout.
   const appAuthResp = await handleAuthRequest(request, env, ctx);
   if (appAuthResp) return appAuthResp;
@@ -496,11 +557,18 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (clientErrorResp) return clientErrorResp;
 
   // 8b. /api/control/* — the admin control plane. The allowlist, the
-  //     dev-identity refusal and the step-up window all live inside that module,
-  //     never here: a route whose authorization is performed by its caller is one
-  //     refactor away from being unguarded.
-  const controlResp = await handleControlRequest(authenticatedRequest, env, identity);
-  if (controlResp) return controlResp;
+  //     dev-identity refusal, the Access-to-session email equality and the
+  //     step-up window all live inside that module, never here: a route whose
+  //     authorization is performed by its caller is one refactor away from being
+  //     unguarded. Entered only with the Access identity step 7c verified, which
+  //     is why the call is inside the narrowing rather than beside it — there is
+  //     no `null` to pass.
+  if (controlAccess !== null) {
+    const controlResp = await handleControlRequest(
+      authenticatedRequest, env, identity, controlAccess,
+    );
+    if (controlResp) return controlResp;
+  }
 
   // 9. /api/user/* — user-scoped routes.
   const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);

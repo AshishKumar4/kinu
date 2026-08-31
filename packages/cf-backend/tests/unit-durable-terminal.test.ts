@@ -77,6 +77,34 @@ function takeSets(harness: ActorHarness<HarnessOrchestratorAgent>): number {
   ).n;
 }
 
+/**
+ * What each branch settlement told the workspace, oldest first.
+ *
+ * The oracle for a settlement that writes NO take set: a failed branch has no
+ * answer to compare, so the takes table cannot tell a stated refusal from a
+ * dropped one. `branchSettle` is the durable half of the same broadcast the chip
+ * renders, so it survives the activation that wrote it — which the broadcast,
+ * being a live socket write, does not.
+ */
+function branchSettlements(harness: ActorHarness<HarnessOrchestratorAgent>): string[] {
+  return v.parse(
+    v.array(v.object({ detail: v.string() })),
+    harness.db.query(
+      "SELECT detail FROM activity_log WHERE event = 'branch_settle' ORDER BY created_at, rowid",
+    ).all(),
+  ).map((row) => row.detail);
+}
+
+/** The branch effects this sequence still owes, by key. Empty means every branch
+ *  row reached a disposition — pruned or recorded — rather than being carried. */
+function owedBranchEffects(
+  harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string, messageId: string,
+): string[] {
+  return harness.agent.harnessTerminalEffects(turnId, messageId)
+    .filter((row) => row.effect_key.startsWith('v1:branches:') && row.status !== 'completed')
+    .map((row) => row.effect_key);
+}
+
 /** How many turns the evolution window holds. The duplicate oracle for the
  *  settle spine: its recording mints a fresh row id per append, so a spine that
  *  ran twice for one answer is two rows and nothing else could make it two. */
@@ -565,7 +593,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   test('a branch settled twice writes one take set', async () => {
     const harness = orchestratorHarness();
     harness.agent.declareTurnCheckpoint('u-take');
-    harness.agent.harnessRecordBranchReport('branch-x', 'try the other library', 'the branch answer');
+    await harness.agent.harnessRecordBranchReport('branch-x', 'try the other library', 'the branch answer');
     harness.agent.harnessDeclarePendingBranch('branch-x', 'try the other library');
     // Cut BEFORE the branch effect runs, so its row is claimed and owed. Then the
     // live handles are gone, which is exactly what an eviction leaves: the journal
@@ -600,7 +628,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   test('a branch settled LIVE and then replayed writes one take set', async () => {
     const harness = orchestratorHarness();
     harness.agent.declareTurnCheckpoint('u-live-take');
-    harness.agent.harnessRecordBranchReport('branch-l', 'try the other library', 'the branch answer');
+    await harness.agent.harnessRecordBranchReport('branch-l', 'try the other library', 'the branch answer');
     harness.agent.harnessDeclareLiveBranch('branch-l', 'try the other library', 'the branch answer');
     // AFTER the body: the live comparison has run and written its set, and the
     // row is interrupted before it can record that it did.
@@ -621,6 +649,99 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     }
 
     expect(takeSets(harness)).toBe(1);
+  });
+
+  /**
+   * The SAME eviction, over a branch whose head FAILED.
+   *
+   * A failed branch has no answer to compare, so it writes no take set — which is
+   * why the take table cannot tell a settled refusal from a dropped one, and why
+   * this reads what the settlement TOLD the workspace instead. The replay used to
+   * look the head up under the RUN's id, find nothing (a branch's head is
+   * journalled under a derived id), and report `completed` with "the journal holds
+   * no such branch head": the row was pruned, nothing was said, and the only
+   * record of why the user's redirect produced no take was gone.
+   *
+   * `errored` is not a hypothetical here: it is what `reconcileOrphanedBranches`
+   * stamps onto every reportless branch head at the START of the very activation
+   * that then replays this row, so it is the status a cold settle meets most.
+   */
+  test('a branch whose head failed settles as a stated refusal, not silence', async () => {
+    for (const [branchId, status, message] of [
+      ['branch-e', 'errored', 'workspace restarted before the branch settled'],
+      ['branch-q', 'budget_exceeded', 'the branch ran out of wall clock'],
+    ] as const) {
+      const harness = orchestratorHarness();
+      harness.agent.declareTurnCheckpoint(`u-${branchId}`);
+      await harness.agent.harnessSpawnBranchHead(branchId, 'try the other library', {
+        status, summary: '', errorMessage: message,
+      });
+      harness.agent.harnessDeclarePendingBranch(branchId, 'try the other library');
+      harness.agent.harnessArmTerminalFault('branches', 'before');
+      await harness.agent.onChatResponse(settledResponse(`a-${branchId}`, 'the live answer'));
+      await harness.agent.harnessTerminalReported();
+      harness.agent.harnessDropPendingBranches();
+
+      const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
+        clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
+      });
+      await restarted.agent.harnessResumeTerminalTransitions();
+
+      // The head's OWN cause, under the branch the user started. The status
+      // reaches it through `settleBranchIntoTakes`, which prefers the recorded
+      // message and falls back to naming the status — the fallback the earlier
+      // body could only ever have spelled `errored`.
+      expect(branchSettlements(harness)).toEqual([`error: ${message}`]);
+      // No answer, so no comparison — and the row is discharged rather than owed.
+      expect(takeSets(harness)).toBe(0);
+      expect(owedBranchEffects(restarted, `u-${branchId}`, `a-${branchId}`)).toEqual([]);
+    }
+  });
+
+  /**
+   * The two states that are still OWED, and nothing else.
+   *
+   * A head reaches `completed` when its report lands, which is before any take set
+   * exists — so the effect cannot key on "not running". What it may key on is the
+   * two statuses under which a head is still executing, and this holds the replay
+   * to exactly those: a spawned head with no report keeps the row, an `interrupted`
+   * one keeps it too, and the pass after the report lands settles it.
+   *
+   * Replayed on THIS activation rather than across a restart, because a restart is
+   * the case where neither status survives: `reconcileOrphanedBranches` seals every
+   * reportless branch head `errored` before any row is resumed, which is what makes
+   * the failed-head case above the cold one and this one the live one.
+   */
+  test('a branch head still executing keeps the row owed until it reports', async () => {
+    const harness = orchestratorHarness();
+    harness.agent.declareTurnCheckpoint('u-owed');
+    // Spawned, no report: `running`, exactly as an in-flight head is journalled.
+    await harness.agent.harnessSpawnBranchHead('branch-o', 'try the other library', null);
+    harness.agent.harnessDeclarePendingBranch('branch-o', 'try the other library');
+    harness.agent.harnessArmTerminalFault('branches', 'before');
+    await harness.agent.onChatResponse(settledResponse('a-owed', 'the live answer'));
+    await harness.agent.harnessTerminalReported();
+    // No live handle left, so the replay has only the journal to read.
+    harness.agent.harnessDropPendingBranches();
+    harness.agent.harnessDisarmTerminalFault();
+
+    for (const unsettled of ['running', 'interrupted'] as const) {
+      // The second pass runs over the OTHER unsettled status, written by the
+      // journal's own cold-activation transition.
+      if (unsettled === 'interrupted') harness.agent.harnessMarkHeadsInterrupted();
+      harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
+      await harness.agent.harnessResumeTerminalTransitions();
+      expect(harness.agent.harnessBranchHeadStatus('branch-o')).toBe(unsettled);
+      expect(takeSets(harness)).toBe(0);
+      expect(owedBranchEffects(harness, 'u-owed', 'a-owed')).toEqual(['v1:branches:branch-o']);
+    }
+
+    // The report lands. The kept row is what makes this settle at all.
+    harness.agent.harnessReportBranchHead('branch-o', 'the branch answer');
+    harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
+    await harness.agent.harnessResumeTerminalTransitions();
+    expect(takeSets(harness)).toBe(1);
+    expect(owedBranchEffects(harness, 'u-owed', 'a-owed')).toEqual([]);
   });
 
   /**

@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  createTestUserDO, testOwner, type TestUserDO, type TestUserDOOptions,
+  createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 
 const OVERFLOW = 205;
@@ -156,7 +156,7 @@ describe('a deletion that could not finish', () => {
       destroyWorkspaceError: 'the container refused to go',
     });
     const owner = await testOwner();
-    const { entry } = await harness.userDO.registerWorkspace(owner, 'half-gone');
+    const entry = createdWorkspace(await harness.userDO.registerWorkspace(owner, 'half-gone'));
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
 
     // Recreating over a marked row would hand the owner a workspace wired to
@@ -212,12 +212,12 @@ describe('a deletion that could not finish', () => {
     // owner types the same name again. The create is a read of this registry
     // too, so it drives the retry: they get their name back, not a dead end.
     options.destroyWorkspaceError = undefined;
-    const { existed } = await harness.userDO.registerWorkspace(owner, 'reused');
+    const registered = await harness.userDO.registerWorkspace(owner, 'reused');
 
     expect(harness.destroyedWorkspaces).toEqual(['reused']);
     // A new workspace, not the old one resurrected — the marked row was dropped
     // by the teardown that owned it before this insert ran.
-    expect(existed).toBe(false);
+    expect(registered.status).toBe('created');
     expect(pendingRows(harness)).toEqual([{ name: 'reused', delete_pending: 0 }]);
     expect((await harness.userDO.listWorkspaces(owner)).entries.map((w) => w.name))
       .toEqual(['reused']);

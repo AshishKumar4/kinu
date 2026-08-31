@@ -170,6 +170,13 @@ const SHARED_TRANSPORTS = {
   // now holds that binding, so each side passes only what it alone knows: its
   // turn's memory tail and its own unreachable-MCP roster.
   dynamicContextSnapshot: 'collectDynamicContext',
+  // The precedence — the live turn's profile when a turn is open, else resolve
+  // one now — is the policy, and MODEL_ROUTE_POLICY is read against whatever it
+  // answers. Two backends that disagreed about WHEN an auxiliary lane inherits
+  // the turn would route the same producer differently while each looked correct
+  // alone. What stays per backend is only where a FRESH resolution comes from:
+  // the actor's own profile inputs, the CLI's local profile authority.
+  routingProfile: 'resolveRoutingProfile',
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
   getGepaRuns: 'listGepaRuns',

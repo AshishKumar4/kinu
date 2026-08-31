@@ -93,7 +93,7 @@ function registryStub() {
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
       return {
         entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-        existed: false,
+        status: 'created' as const,
       };
     },
     async releaseWorkspaceReservation() { return true; },
@@ -126,7 +126,7 @@ describe('cloud agent ownership safety', () => {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          existed: false,
+          status: 'created' as const,
         };
       },
       async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
@@ -257,7 +257,7 @@ describe('cloud agent ownership safety', () => {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          existed: false,
+          status: 'created' as const,
         };
       },
       async releaseWorkspaceReservation(_caller: UserCaller, name: string, createdAt: number) {
@@ -437,7 +437,7 @@ describe('cloud agent ownership safety', () => {
         calls.push(`register:${name}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 5, lastVisited: 5, archivedAt: null },
-          existed: false,
+          status: 'created' as const,
         };
       },
       async releaseWorkspaceReservation() { calls.push('release'); return true; },
@@ -475,7 +475,7 @@ describe('cloud agent ownership safety', () => {
     expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf(`claim:${USER_ID}`));
   });
 
-  test('a failed create never destroys a pre-existing (archived) same-name agent', async () => {
+  test('a create over a name this owner already has returns it and touches nothing', async () => {
     const calls: string[] = [];
     const userDO = {
       async getConfig(_caller: UserCaller) { return null; },
@@ -484,45 +484,65 @@ describe('cloud agent ownership safety', () => {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
       async listCredentials(_caller: UserCaller) { return []; },
-      // The roster row exists but is ARCHIVED — registerWorkspace resurrects it
-      // on name conflict and reports existed: true.
-      async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
+      // The name is already a live workspace of this owner's, so the registry
+      // answers `active` with the row it holds — its OWN title and timestamp,
+      // not this request's.
+      async ensureWorkspaceCapability() { calls.push('capability'); },
+      async registerWorkspace(_caller: UserCaller, name: string) {
         calls.push(`register:${name}`);
         return {
-          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          existed: true,
+          entry: { name, displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2, archivedAt: null },
+          status: 'active' as const,
         };
       },
       async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
+    // Every method a birth sequence would reach records itself and then fails,
+    // so "the create did not re-initialize" cannot pass by a double that
+    // silently accepted the call.
     const orchestrator = {
-      async claimOwner() {
-        calls.push('claim');
-        throw new Error('boot failure');
-      },
+      async claimOwner() { calls.push('claim'); throw new Error('claimOwner must not be reached'); },
+      async setInitialDisplayName() { calls.push('initial-title'); throw new Error('unreachable'); },
+      async setSoul() { calls.push('soul'); throw new Error('unreachable'); },
+      async resetWorkspaceBaseline() { calls.push('baseline'); throw new Error('unreachable'); },
+      async beginGenesisTurn() { calls.push('genesis'); throw new Error('unreachable'); },
     };
+    const index = indexFeed();
     const env = testEnv({
       UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
       OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } },
+      ControlPlaneDO: index.namespace,
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    let first;
+    let second;
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis',
-      })).rejects.toThrow('boot failure');
+      first = await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
+        name: 'jarvis', displayName: 'A different title', purpose: 'a different mission',
+      });
+      // The same request again: an idempotent create is a STABLE answer, not
+      // merely a non-destructive one.
+      second = await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
+        name: 'jarvis', displayName: 'A different title', purpose: 'a different mission',
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
 
-    expect(calls).toContain('register:jarvis');
-    expect(calls).toContain('claim');
-    // Pre-fix this destroyed the archived agent's entire DO storage.
-    expect(calls.some((c) => c.startsWith('remove:'))).toBe(false);
+    expect(first).toEqual({
+      name: 'jarvis', displayName: 'Jarvis as it stands', createdAt: 1, lastVisited: 2, archivedAt: null,
+    });
+    expect(second).toEqual(first);
+    // The register is the whole call: no claim, no soul, no baseline reset, no
+    // second genesis turn on a workspace that is already somebody's — and no
+    // rollback either, because nothing was inserted to roll back.
+    expect(calls).toEqual(['register:jarvis', 'register:jarvis']);
+    expect(index.observed).toEqual([]);
+    expect(index.forgotten).toEqual([]);
   });
 
   test('a newly created workspace is given its identity before anything else touches it', async () => {
@@ -538,7 +558,7 @@ describe('cloud agent ownership safety', () => {
         calls.push(`register:${name}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          existed: false,
+          status: 'created' as const,
         };
       },
       async ensureWorkspaceCapability(name: string, presentedHash: string | null) {

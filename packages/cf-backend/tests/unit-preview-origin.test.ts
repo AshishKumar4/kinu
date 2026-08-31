@@ -21,7 +21,7 @@ import {
   previewHostSuffix,
 } from '../src/lib/preview-origin';
 import { appDocumentCsp, publicHtmlHeaders, withAppSecurityHeaders } from '../src/lib/security-headers';
-import { crossSiteRejection } from '../src/auth/session';
+import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection } from '../src/auth/session';
 import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
@@ -316,7 +316,12 @@ describe('serving the preview host', () => {
     sdkRequest = null;
     const res = await servePreviewRequest(new Request(PREVIEW_URL, {
       headers: {
-        cookie: '__Host-kinu_session=owner; guest_session=guest; __Host-kinu_d1_bookmark=bookmark',
+        cookie: [
+          `${SESSION_COOKIE_NAME}=owner`,
+          'guest_session=guest',
+          '__Host-kinu_d1_bookmark=bookmark',
+          `${OAUTH_STATE_COOKIE_NAME}=handoff`,
+        ].join('; '),
         authorization: `Bearer pdt_${'a'.repeat(32)}`,
         'proxy-authorization': 'Basic c2VjcmV0',
         'x-kinu-user-id': OWNER,
@@ -525,7 +530,12 @@ describe('serving a Nimbus preview host', () => {
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}api/items?x=1`, {
       method: 'POST',
       headers: {
-        cookie: '__Host-kinu_session=owner; guest_session=guest; __Host-kinu_d1_bookmark=bookmark',
+        cookie: [
+          `${SESSION_COOKIE_NAME}=owner`,
+          'guest_session=guest',
+          '__Host-kinu_d1_bookmark=bookmark',
+          `${OAUTH_STATE_COOKIE_NAME}=handoff`,
+        ].join('; '),
         authorization: ['Bearer pta_', '0123456789abcdef0123456789abcdef_secret'].join(''),
         'proxy-authorization': 'Basic c2VjcmV0',
         'x-kinu-user-id': OWNER,

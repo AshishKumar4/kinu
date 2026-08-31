@@ -13,8 +13,9 @@
   `chunk_reassembly` and `writes_commute` axioms are now theorems. (The old
   String-based chunk_reassembly axiom was in fact false — it mixed char-count
   String.length with byte-offset String.Pos; see
-  scratch-verification/Boom.lean counterexample 4. The TS slices bytes, so the
-  faithful model below chunks a byte list.)
+  scratch-verification/BoomChunkReassembly.lean, which still tries to state that
+  counterexample against the theorem below and must never compile. The TS slices
+  bytes, so the faithful model below chunks a byte list.)
 -/
 
 namespace Kinu.Storage.SqliteFSCorrectness

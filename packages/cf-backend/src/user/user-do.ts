@@ -93,7 +93,8 @@ import * as v from 'valibot';
 import { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './schema';
 import {
   CapabilityDeniedError,
-  mintWorkspaceCapability,
+  commitWorkspaceCapability,
+  freshWorkspaceCapability,
   ownerCaller,
   requireTier,
   revokeWorkspaceCapability,
@@ -295,6 +296,15 @@ export interface WorkspaceList {
   nextCursor: string | null;
 }
 
+/** What {@link UserDO.registerWorkspace} found under a name: the row it just
+ *  inserted, the live workspace already there, or a name an uncommitted fork
+ *  transfer is holding. `reserved` carries no entry on purpose — a half-written
+ *  fork target is not a workspace any caller may act on, and leaving the field
+ *  out is what makes acting on it unrepresentable rather than merely wrong. */
+export type WorkspaceRegistration =
+  | { readonly status: 'created' | 'active'; readonly entry: WorkspaceEntry }
+  | { readonly status: 'reserved' };
+
 /** Thrown when a publish is asked to commit something that is not an open
  *  reservation — a wrong timestamp, a name nothing reserved, or a name already
  *  published. Its own class because a fork transfer treats it as its own
@@ -304,6 +314,18 @@ export class WorkspaceReservationNotPendingError extends Error {
   constructor(name: string, why: string) {
     super(`Workspace "${name}" cannot be published: ${why}.`);
     this.name = 'WorkspaceReservationNotPendingError';
+  }
+}
+
+/** Thrown when a CLI device-code approval is redeemed twice. Its own class
+ *  because the poll route answers it as the already-delivered outcome the flow
+ *  already has words for, and because the alternative — a bare SQL uniqueness
+ *  violation — is not something a caller can read. Crosses the DO RPC boundary
+ *  as its message, the same way `CapabilityDeniedError` does. */
+export class CliAuthorizationSpentError extends Error {
+  constructor(options: ErrorOptions) {
+    super('That CLI authorization has already been redeemed.', options);
+    this.name = 'CliAuthorizationSpentError';
   }
 }
 
@@ -380,7 +402,34 @@ export interface CliAgentConnectTicketVerification {
    *  token — the websocket boundary pins the connection to these scopes.
    *  Interactive session tickets are unscoped. */
   scopes?: AccessTokenScope[];
+  /** The account's authorization generation this connection is admitted under.
+   *  It rides the connection's own tags, so a later revocation can name every
+   *  socket that predates it — including one restored from hibernation, which
+   *  is where the bearer's identity used to be lost entirely. */
+  authGeneration?: number;
   error?: string;
+}
+
+/** What a browser session cookie stands for, as it stood at the sign-in that
+ *  minted it. Written once with the row and never updated: a rename lands on
+ *  the next sign-in, because this is what the cookie has always meant. */
+export interface BrowserSessionIdentity {
+  email: string;
+  displayName: string | null;
+  provider: string;
+  /** Provider subject — `sub`, or the provider's own stable user id. */
+  sub: string;
+  /** Interactive-auth time in epoch ms, which step-up checks read. */
+  authTime: number;
+}
+
+/** One browser session as its authority sees it. Being answered at all IS the
+ *  liveness answer: a revoked or lapsed session has no row and reads as null.
+ *
+ *  `identity` is null only for a row registered before the row carried one,
+ *  where the KV projection is still the only copy of it. */
+export interface LiveBrowserSession {
+  identity: BrowserSessionIdentity | null;
 }
 
 export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
@@ -531,6 +580,13 @@ export class UserDO extends Agent<Env> {
    * reservation is deliberately absent from the registry read that gates every
    * other caller, so it cannot go through the same front door. One body, so the
    * coalescing map and the re-mint rule cannot drift between the two.
+   *
+   * THE ADMISSION IS RE-CHECKED AT THE WRITE, not only at the entrance. Minting
+   * hashes, hashing is an await, and a delete that lands during it revokes an
+   * identity this call was already carrying — so the check below and the write
+   * next to it are one synchronous turn, and a reconcile that was already in
+   * flight when a teardown began cannot bring the dead workspace's identity
+   * back.
    */
   private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
     if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) return;
@@ -538,12 +594,29 @@ export class UserDO extends Agent<Env> {
     const inFlight = this._provisioning.get(workspaceName);
     if (inFlight) return inFlight;
     const task = (async () => {
-      const { token } = await mintWorkspaceCapability(this.ctx.storage.sql, workspaceName);
+      const { token, tokenHash } = await freshWorkspaceCapability();
+      if (!this.workspaceMintable(workspaceName)) {
+        throw new Error(`Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
+      }
+      commitWorkspaceCapability(this.ctx.storage.sql, workspaceName, tokenHash);
       const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
       await workspace.installWorkspaceCapability(token);
     })();
     this._provisioning.set(workspaceName, task);
     try { await task; } finally { this._provisioning.delete(workspaceName); }
+  }
+
+  /** Whether this registry still holds a name an identity may be issued for.
+   *
+   *  Looser than {@link workspaceRegistered} in exactly one direction, and it
+   *  has to be: a fork reservation (`create_pending = 1`) is invisible to every
+   *  owner-facing read and is still a name {@link publishWorkspaceReservation}
+   *  mints for. What it refuses is the case that matters — a row whose teardown
+   *  has started, and a name this registry no longer holds at all. */
+  private workspaceMintable(name: string): boolean {
+    return this.sqlx(
+      `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 0`, name,
+    ).length > 0;
   }
 
   private releases() {
@@ -642,42 +715,80 @@ export class UserDO extends Agent<Env> {
     ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
   }
 
-  /** Insert-or-resurrect a roster row. `existed` reports whether ANY row
-   *  (archived included — a name conflict un-archives) was already there, so
-   *  a failed create can roll back ONLY rows it actually inserted.
+  /**
+   * Claim a roster name for a new workspace, and say what was found.
    *
-   *  `create_pending = 0` is written rather than left to the column default:
-   *  this is the path whose workspace exists by the time the row does, so it is
-   *  published the moment it lands. The conflict branch deliberately does NOT
-   *  publish, so an open fork reservation keeps the name it is holding. */
-  async registerWorkspace(caller: UserCaller, name: string, displayName?: string, purpose?: string): Promise<{ entry: WorkspaceEntry; existed: boolean }> {
+   * THE STATUS IS A CLOSED WORD, not a boolean, because the three answers need
+   * three different acts from the caller and `existed` conflated two of them.
+   * `created` is an EXCLUSIVE claim: the read and the insert below are one
+   * synchronous turn, so of two creates racing on one name exactly one is told
+   * `created` and is the only one that may initialize the workspace or roll the
+   * row back. `active` is the name's live workspace, returned as it stands —
+   * the create that gets it must not re-seed a soul, reset a baseline or open a
+   * second genesis turn on a workspace that is already somebody's. `reserved`
+   * carries no entry at all: a name an uncommitted fork transfer is holding is
+   * not a workspace this caller has, and the row IS that reservation, so it is
+   * neither taken nor written.
+   *
+   * `create_pending = 0` is written rather than left to the column default:
+   * this is the path whose workspace exists by the time the row does, so it is
+   * published the moment it lands.
+   */
+  async registerWorkspace(
+    caller: UserCaller, name: string, displayName?: string, purpose?: string,
+  ): Promise<WorkspaceRegistration> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
     const now = Date.now();
-    const explicit = displayName?.trim() ?? '';
-    const existing = this.sqlx<{ display_name: string; name_origin: 'user' | 'auto' | null }>(
-      `SELECT display_name, name_origin FROM user_workspaces WHERE name = ?`, name,
+    const existing = this.sqlx<{
+      display_name: string;
+      created_at: number;
+      archived_at: number | null;
+      create_pending: number;
+    }>(
+      `SELECT display_name, created_at, archived_at, create_pending
+       FROM user_workspaces WHERE name = ?`,
+      name,
     )[0];
-    const title = resolveWorkspaceTitle({
-      explicit, existing: existing?.display_name, purpose, slug: name,
-    });
-    const origin: 'user' | 'auto' = explicit !== '' ? 'user' : (existing?.name_origin ?? 'auto');
+    if (existing && existing.create_pending !== 0) return { status: 'reserved' };
+    if (existing) {
+      // The owner asked for this name, so the workspace behind it has been
+      // visited; nothing else about it is this call's to rewrite. Returning the
+      // row's OWN timestamp is what makes the answer stable across retries —
+      // and what lets a rollback match the row it actually inserted, which a
+      // freshly generated `createdAt` silently prevented.
+      this.sqlx(
+        `UPDATE user_workspaces SET last_visited = ?, archived_at = NULL WHERE name = ?`,
+        now, name,
+      );
+      return {
+        status: 'active',
+        entry: {
+          name,
+          displayName: existing.display_name,
+          createdAt: existing.created_at,
+          lastVisited: now,
+          archivedAt: null,
+        },
+      };
+    }
+    const explicit = displayName?.trim() ?? '';
+    const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
+    // No ON CONFLICT clause: the read above and this write are one turn, so a
+    // conflict here is unreachable — and if the two were ever separated by an
+    // await, a silent upsert is exactly the wrong answer.
     this.sqlx(
       `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
-       VALUES (?, ?, ?, ?, ?, 0)
-       ON CONFLICT(name) DO UPDATE SET
-         display_name = excluded.display_name,
-         name_origin  = excluded.name_origin,
-         last_visited = excluded.last_visited,
-         archived_at  = NULL`,
-      name, title, origin, now, now,
+       VALUES (?, ?, ?, ?, ?, 0)`,
+      name, title, explicit !== '' ? 'user' : 'auto', now, now,
     );
     return {
+      status: 'created',
       entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
-      existed: !!existing,
     };
   }
+
   /**
    * Hold a name for a fork transfer that has not happened yet.
    *
@@ -830,12 +941,22 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
-    this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
   /**
-   * The teardown itself, from a marked row to no row.
+   * The teardown itself, from a live workspace to no row.
+   *
+   * THE FENCE COMES FIRST, IN ONE SYNCHRONOUS TURN. Marking the row and
+   * revoking the workspace's capability are the same act — an authority the
+   * owner has withdrawn must not survive into the teardown — and the destroy
+   * below is an await, during which this object accepts other calls. Revoking
+   * afterwards left the dying workspace holding a token its own registry still
+   * honoured, so for the whole length of the destroy it could still read the
+   * owner's credentials, list their other workspaces and spend their devices.
+   * The mark is what every other read already excludes; the revoke is what the
+   * capability gate reads. Neither is any use without the other, so they are
+   * written together, before anything can interleave.
    *
    * Tear the agent's Durable Object down (storage, alarm, sandbox) BEFORE
    * dropping it from the registry — otherwise the DO's SQLite (conversation,
@@ -843,9 +964,13 @@ export class UserDO extends Agent<Env> {
    * state, and its alarm keeps firing. A real teardown failure is fail-closed:
    * the marked row stays, so a same-name recreation cannot reconnect to
    * resources that were not actually destroyed, and the failure reaches the
-   * caller.
+   * caller. The revoke is not undone by that failure either: a workspace whose
+   * delete the owner has asked for does not get its authority back because its
+   * container refused to stop.
    */
   private async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
+    this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    revokeWorkspaceCapability(this.ctx.storage.sql, name);
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent(ownerUserId);
@@ -855,8 +980,8 @@ export class UserDO extends Agent<Env> {
       if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
     }
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
-    // The workspace's identity dies with it, so a same-name recreate is issued
-    // a fresh secret rather than inheriting this one's.
+    // Re-run for the row this teardown resumed from an earlier attempt, whose
+    // identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }
 
@@ -1004,34 +1129,73 @@ export class UserDO extends Agent<Env> {
 
   // ── Browser sessions ───────────────────────────────────────────────
   //
-  // The authority behind a session cookie. The cookie's KV record carries the
-  // identity as it stood at sign-in and the user id that routes here; whether
-  // the session is still LIVE is only this table's answer, because a KV delete
-  // takes up to a minute to reach every colo and a stolen cookie replayed at a
-  // lagging colo used to outlive logout by that window.
+  // The authority behind a session cookie: whether it is still live, and what
+  // it stands for. KV holds a projection of the identity for the fast path and
+  // is trusted for nothing, because a KV write and a KV delete both take up to
+  // a minute to reach every colo — so KV can neither say a session was revoked
+  // (a stolen cookie replayed at a lagging colo used to outlive logout by that
+  // window) nor say one exists yet (the first request after a sign-in redirect
+  // used to read as signed out at a colo the write had not reached, and bounce
+  // the browser into a sign-in that would lose the same race). This table
+  // answers both, from every colo, in one round trip.
 
-  /** Publish a browser session as active. Called before the sign-in response
-   *  hands the browser its cookie, so no cookie is ever outstanding without
-   *  authority behind it. A hash already present is a real fault and throws:
-   *  the caller compensates rather than adopting a row it did not create. */
-  async registerBrowserSession(caller: UserCaller, tokenHash: string, expiresAt: number): Promise<void> {
+  /** Publish a browser session as active, with the identity it was minted for.
+   *  Called before the sign-in response hands the browser its cookie, so no
+   *  cookie is ever outstanding without authority behind it. A hash already
+   *  present is a real fault and throws: the caller compensates rather than
+   *  adopting a row it did not create. */
+  async registerBrowserSession(
+    caller: UserCaller,
+    tokenHash: string,
+    expiresAt: number,
+    identity: BrowserSessionIdentity,
+  ): Promise<void> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(
-      `INSERT INTO user_browser_sessions (token_hash, expires_at) VALUES (?, ?)`,
+      `INSERT INTO user_browser_sessions
+         (token_hash, expires_at, email, display_name, provider, provider_sub, auth_time)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       tokenHash, expiresAt,
+      identity.email, identity.displayName, identity.provider, identity.sub, identity.authTime,
     );
   }
 
-  /** Whether this cookie is still a live session. Expired rows are dropped in
-   *  the same transaction as the read, so a lapsed session reads as ABSENT and
-   *  expiry needs no sweeper, no alarm and no second lifecycle column. */
-  async verifyBrowserSession(caller: UserCaller, tokenHash: string): Promise<boolean> {
+  /** This cookie's session, or null when it is not a live one. Expired rows are
+   *  dropped in the same transaction as the read, so a lapsed session reads as
+   *  ABSENT and expiry needs no sweeper, no alarm and no second lifecycle
+   *  column. The identity comes back with the liveness answer rather than
+   *  behind a second round trip, so a caller whose KV projection has not
+   *  arrived yet still has something true to answer with. */
+  async verifyBrowserSession(caller: UserCaller, tokenHash: string): Promise<LiveBrowserSession | null> {
     await this.requireTier(caller, 'auth_tokens');
     return this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(`DELETE FROM user_browser_sessions WHERE expires_at <= ?`, Date.now());
-      return this.ctx.storage.sql.exec(
-        `SELECT 1 AS live FROM user_browser_sessions WHERE token_hash = ? LIMIT 1`, tokenHash,
-      ).toArray().length === 1;
+      const row = this.ctx.storage.sql.exec<{
+        email: string | null;
+        display_name: string | null;
+        provider: string | null;
+        provider_sub: string | null;
+        auth_time: number | null;
+      }>(
+        `SELECT email, display_name, provider, provider_sub, auth_time
+           FROM user_browser_sessions WHERE token_hash = ? LIMIT 1`, tokenHash,
+      ).toArray()[0];
+      if (!row) return null;
+      // All five were written by one INSERT, so they are present together or
+      // absent together; a row from before they existed carries no identity at
+      // all rather than a half of one.
+      if (row.email === null || row.provider === null || row.provider_sub === null || row.auth_time === null) {
+        return { identity: null };
+      }
+      return {
+        identity: {
+          email: row.email,
+          displayName: row.display_name,
+          provider: row.provider,
+          sub: row.provider_sub,
+          authTime: row.auth_time,
+        },
+      };
     });
   }
 
@@ -1046,21 +1210,43 @@ export class UserDO extends Agent<Env> {
 
   // ── CLI auth tokens ────────────────────────────────────────────────
 
-  /** Mint a CLI bearer token after browser approval. The raw token is returned
-   *  once to the CLI; only its hash is stored. The userId is embedded solely so
-   *  edge routes can route directly to the correct UserDO before verification. */
-  async mintCliToken(caller: UserCaller, userId: string, label?: string): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
+  /**
+   * Mint a CLI bearer token against one browser approval. The raw token is
+   * returned once to the CLI; only its hash is stored. The userId is embedded
+   * solely so edge routes can route directly to the correct UserDO before
+   * verification.
+   *
+   * `authorizationHash` IS THE APPROVAL, and it is what makes this mint
+   * single-use. The device-code flow's record lives in KV, which has no
+   * compare-and-swap and answers reads from each colo's cache, so the flow
+   * cannot enforce "mint once" itself: two polls of one approved request both
+   * read `approved` and both were handed a 180-day token. This object is the
+   * one that mints, so the claim belongs in the same INSERT as the token —
+   * atomic, strongly consistent, and unique by index rather than by luck. A
+   * second attempt against the same approval finds the row and is refused.
+   */
+  async mintCliToken(
+    caller: UserCaller, userId: string, authorizationHash: string, label?: string,
+  ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
     await this.requireTier(caller, 'auth_tokens');
     if (!/^[a-f0-9]{32}$/.test(userId)) throw new Error('invalid user id');
+    if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new Error('invalid authorization hash');
     const token = `ptc_${userId}_${nanoid(44)}`;
     const tokenHash = await sha256Hex(token);
     const now = Date.now();
     const expiresAt = now + CLI_TOKEN_TTL_MS;
-    this.sqlx(
-      `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at)
-       VALUES (?, ?, ?, ?)`,
-      tokenHash, cleanCliTokenLabel(label), now, expiresAt,
-    );
+    try {
+      this.sqlx(
+        `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at, authorization_hash)
+         VALUES (?, ?, ?, ?, ?)`,
+        tokenHash, cleanCliTokenLabel(label), now, expiresAt, authorizationHash,
+      );
+    } catch (cause) {
+      // The unique index owns the message, exactly as `claimMcpServerName`'s
+      // does: the refusal is a fact about the approval, not a SQL constraint
+      // the caller can act on.
+      throw new CliAuthorizationSpentError({ cause });
+    }
     return { token, tokenHash, expiresAt };
   }
 
@@ -1106,7 +1292,84 @@ export class UserDO extends Agent<Env> {
   async revokeCliTokenHash(caller: UserCaller, tokenHash: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
+    await this.retireCliAuthority();
     return { ok: true };
+  }
+
+  // ── The authorization generation ────────────────────────────────────
+
+  /**
+   * This account's authorization generation: one number that rises with every
+   * CLI or access-token revocation.
+   *
+   * A websocket authenticated by a bearer records the generation it was
+   * admitted under, which is what lets a revocation name every socket that
+   * predates it without enumerating token hashes — including sockets that are
+   * merely LISTENING, which a per-frame check by itself can never reach because
+   * a client that says nothing sends no frames while it keeps receiving the
+   * workspace's stream.
+   */
+  private authGeneration(): number {
+    const row = this.sqlx<{ generation: number }>(
+      `SELECT generation FROM user_auth_generation WHERE id = 1`,
+    )[0];
+    return row?.generation ?? 0;
+  }
+
+  /**
+   * Record that authority was withdrawn, then tell this account's workspaces.
+   *
+   * THE WRITE COMES FIRST AND THE FAN-OUT SECOND, and the order is the point:
+   * the revocation is durable in this object before any cross-DO await, so a
+   * fan-out that fails cannot leave a socket believing it is still authorized —
+   * the frame-time check reads this store and refuses the next frame either
+   * way. The push is what makes revocation immediate rather than
+   * next-frame-immediate; it is not what makes it true.
+   */
+  private async retireCliAuthority(): Promise<void> {
+    this.sqlx(
+      `INSERT INTO user_auth_generation (id, generation, updated_at) VALUES (1, 1, ?)
+       ON CONFLICT(id) DO UPDATE SET generation = generation + 1, updated_at = excluded.updated_at`,
+      Date.now(),
+    );
+    const generation = this.authGeneration();
+    const workspaces = this.sqlx<{ name: string }>(
+      `SELECT name FROM user_workspaces
+       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
+    ).map((row) => row.name);
+    const settled = await Promise.allSettled(workspaces.map((name) => this.env.OrchestratorAgent
+      .get(this.env.OrchestratorAgent.idFromName(name))
+      .closeRevokedCliSockets(generation)));
+    for (const [index, outcome] of settled.entries()) {
+      if (outcome.status === 'fulfilled') continue;
+      diagnostics.failure('auth.socket_revocation_push_failed', toKinuError({
+        doing: 'closing a workspace websocket whose CLI bearer was revoked',
+        cause: outcome.reason,
+        otherwise: 'unavailable',
+      }), { workspace: workspaces[index], generation });
+    }
+  }
+
+  /**
+   * Whether a bearer that authenticated a live websocket may still act, and
+   * the generation it must be holding.
+   *
+   * Read at FRAME TIME by the workspace the socket is attached to. A connect
+   * ticket is checked once, at the upgrade; without this the socket outlived
+   * every revocation, and hibernation made it worse — the connection came back
+   * from its tags with its scopes intact and nothing that named the bearer at
+   * all. This is the gate that cannot be bypassed: it reads the same rows the
+   * revocation writes, in the object that owns them.
+   */
+  async verifyCliSocketBearer(caller: UserCaller, tokenHash: string): Promise<{
+    live: boolean; generation: number; error?: string;
+  }> {
+    await this.requireTier(caller, 'auth_tokens.socket');
+    const generation = this.authGeneration();
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) return { live: false, generation, error: 'invalid token hash' };
+    const scopes = this.cliBearerScopes(tokenHash, Date.now());
+    if (!scopes) return { live: false, generation, error: 'the CLI token behind this connection is no longer valid' };
+    return { live: true, generation };
   }
 
   // ── CI access tokens (long-lived, scoped `pta_…` bearers) ──────────
@@ -1142,7 +1405,13 @@ export class UserDO extends Agent<Env> {
 
   async revokeAccessToken(caller: UserCaller, ref: string): Promise<{ ok: true; revoked: boolean }> {
     await this.requireTier(caller, 'auth_tokens');
-    return revokeAccessTokenRow(this.ctx.storage.sql, ref);
+    const result = revokeAccessTokenRow(this.ctx.storage.sql, ref);
+    // Unconditionally, not only when a row changed: `revoked: false` also
+    // covers an already-revoked token, and a generation that rises on a no-op
+    // costs one comparison while one that skips a real revocation costs the
+    // socket it should have closed.
+    await this.retireCliAuthority();
+    return result;
   }
 
   async issueCliAgentConnectTicket(caller: UserCaller, input: {
@@ -1235,6 +1504,7 @@ export class UserDO extends Agent<Env> {
       tokenHash: row.cli_token_hash,
       expiresAt: row.expires_at,
       capabilities,
+      authGeneration: this.authGeneration(),
     };
     if (bearerScopes !== 'all') verification.scopes = bearerScopes;
     return verification;
@@ -2370,7 +2640,7 @@ export class UserDO extends Agent<Env> {
   async deleteCredential(caller: UserCaller, key: string): Promise<void> {
     await this.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
-    this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, key);
+    this.dropCredential(key);
   }
 
   // ── Credentials at rest ─────────────────────────────────────────────
@@ -2419,16 +2689,96 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** Internal write of a credential, sealed under the current key. Preserves
-   *  `created_at` on update, exactly as the previous upsert did. */
-  private async writeCredential(key: string, cred: Credential): Promise<void> {
+  /** Seal a credential for storage. Asynchronous and writes NOTHING, so that
+   *  {@link commitCredential} can be paired with a fence read in one turn. */
+  private async sealCredential(key: string, cred: Credential): Promise<string> {
     await this.rewrapCredentials();
+    return (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred));
+  }
+
+  /**
+   * Commit a sealed credential and move its revision on. Preserves
+   * `created_at` on update, exactly as the original upsert did.
+   *
+   * SYNCHRONOUS, so `expectRevision` is a real compare-and-swap: nothing can
+   * interleave between the revision read and the write. `false` means the store
+   * moved under this caller while it was sealing or waiting on a provider, so
+   * the value it is holding is the stale one and was not written.
+   */
+  private commitCredential(input: {
+    key: string; kind: Credential['kind']; sealed: string; expectRevision?: number;
+  }): boolean {
+    if (input.expectRevision !== undefined && this.credentialRevision(input.key) !== input.expectRevision) {
+      return false;
+    }
     const now = Date.now();
     this.sqlx(
       `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, value = excluded.value, updated_at = excluded.updated_at`,
-      key, cred.kind, await (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred)), now, now,
+      input.key, input.kind, input.sealed, now, now,
     );
+    this.bumpCredentialRevision(input.key);
+    return true;
+  }
+
+  /** Internal write of a credential, sealed under the current key. */
+  private async writeCredential(key: string, cred: Credential): Promise<void> {
+    this.commitCredential({ key, kind: cred.kind, sealed: await this.sealCredential(key, cred) });
+  }
+
+  /** Drop a credential and move its revision on, so a refresh already in the
+   *  air cannot land a rotated token over the absence the owner just created. */
+  private dropCredential(key: string): void {
+    this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, key);
+    this.bumpCredentialRevision(key);
+  }
+
+  /** The revision of one credential key — every write of it AND every deletion.
+   *  0 for a key this store has never held, so a first write needs no seeding. */
+  private credentialRevision(key: string): number {
+    const row = v.safeParse(v.object({ revision: v.number() }), this.sqlx(
+      `SELECT revision FROM user_credential_revisions WHERE key = ?`, key,
+    )[0]);
+    return row.success ? row.output.revision : 0;
+  }
+
+  private bumpCredentialRevision(key: string): void {
+    this.sqlx(
+      `INSERT INTO user_credential_revisions (key, revision, updated_at) VALUES (?, 1, ?)
+       ON CONFLICT(key) DO UPDATE SET revision = revision + 1, updated_at = excluded.updated_at`,
+      key, Date.now(),
+    );
+  }
+
+  /**
+   * Write a credential this call rotated, unless the owner moved it while the
+   * provider was answering.
+   *
+   * Returns what the caller may act on: its own rotated credential, or
+   * `'revoked'` when the store no longer holds a usable one. THAT is the fence
+   * these three lines exist for — a rotation reply arriving after a disconnect
+   * used to reconnect the account by writing itself back, and one arriving
+   * after the owner pasted a replacement used to overwrite it with a token
+   * derived from the credential they had just retired.
+   */
+  private async commitRefreshedCredential(
+    key: string, next: OAuthCredential, expectRevision: number,
+  ): Promise<OAuthCredential | 'revoked'> {
+    const sealed = await this.sealCredential(key, next);
+    if (this.commitCredential({ key, kind: next.kind, sealed, expectRevision })) return next;
+    diagnostics.event('credential.refresh_superseded', { outcome: 'denied', credentialKey: key });
+    // The store is the authority, so the answer comes from it and never from
+    // the token this call was carrying.
+    const current = await this.readCredential(key);
+    return current?.kind === 'oauth' ? current : 'revoked';
+  }
+
+  /** Retire a credential its provider rejected outright — unless the owner has
+   *  already replaced it, in which case the rejection belongs to a credential
+   *  that no longer exists and must not take its successor down. */
+  private retireRejectedCredential(key: string, expectRevision: number): void {
+    if (this.credentialRevision(key) !== expectRevision) return;
+    this.dropCredential(key);
   }
 
   /**
@@ -2768,16 +3118,21 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Returns the rotated credential, `'revoked'` when Cloudflare rejected
-   *  the refresh token outright (`invalid_grant`), or null on transient
+   *  the refresh token outright (`invalid_grant`) or the owner retired the
+   *  credential while this refresh was in the air, or null on transient
    *  failure (the current credential stays in place). On `invalid_grant`
    *  the dead refresh token is stripped from storage so the credential
    *  stops counting as usable and the connect CTA resurfaces, instead of
-   *  advertising a provider whose every call would 401. */
+   *  advertising a provider whose every call would 401.
+   *
+   *  The revision is read BEFORE the network call and every write below is
+   *  fenced on it, because this method's only awaits are the ones during which
+   *  the owner can disconnect or reconnect. */
   private async refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthCredential | 'revoked' | null> {
+    const revision = this.credentialRevision(CLOUDFLARE_OAUTH_CRED_KEY);
     try {
       const next = await refreshCloudflareCredential(this.env, current);
-      await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, next);
-      return next;
+      return await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, next, revision);
     } catch (err) {
       if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
         diagnostics.failure('credential.cloudflare_refresh_revoked', toKinuError({
@@ -2786,7 +3141,11 @@ export class UserDO extends Agent<Env> {
           otherwise: 'denied',
         }));
         const { refreshToken: _dead, ...rest } = current;
-        await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest);
+        // Stripping the dead token is itself a write of the credential this
+        // call read, so it carries the same fence: a login the owner completed
+        // during the round trip must not be demoted by its predecessor's
+        // rejection.
+        await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest, revision);
         return 'revoked';
       }
       diagnostics.failure('credential.cloudflare_refresh_failed', toKinuError({
@@ -2799,13 +3158,15 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Returns the rotated credential, `'revoked'` when OpenAI rejected the
-   *  refresh token outright (`invalid_grant`), or null on transient failure
-   *  (the current credential stays in place). On `invalid_grant` the whole
-   *  row is deleted — nothing but model calls reads it, unlike the Cloudflare
-   *  credential whose token still serves the management APIs — so the
-   *  credential stops counting as connected and the connect CTA resurfaces,
-   *  instead of advertising a provider whose every call would 401. */
+   *  refresh token outright (`invalid_grant`) or the owner disconnected while
+   *  this refresh was in the air, or null on transient failure (the current
+   *  credential stays in place). On `invalid_grant` the whole row is deleted —
+   *  nothing but model calls reads it, unlike the Cloudflare credential whose
+   *  token still serves the management APIs — so the credential stops counting
+   *  as connected and the connect CTA resurfaces, instead of advertising a
+   *  provider whose every call would 401. */
   private async refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | 'revoked' | null> {
+    const revision = this.credentialRevision(CODEX_CRED_KEY);
     const client = createCodexOAuthClient();
     try {
       const fresh = await client.refresh(current.refreshToken);
@@ -2816,8 +3177,7 @@ export class UserDO extends Agent<Env> {
         expiresAt: fresh.expiresAt,
         metadata: current.metadata,
       };
-      await this.writeCredential(CODEX_CRED_KEY, next);
-      return next;
+      return await this.commitRefreshedCredential(CODEX_CRED_KEY, next, revision);
     } catch (err) {
       if (err instanceof CodexOAuthTokenError && err.oauthError === 'invalid_grant') {
         diagnostics.failure('credential.codex_refresh_revoked', toKinuError({
@@ -2825,7 +3185,10 @@ export class UserDO extends Agent<Env> {
           cause: err,
           otherwise: 'denied',
         }));
-        this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, CODEX_CRED_KEY);
+        // Fenced like every other write here: a sign-in the owner completed
+        // during the round trip is not deleted by the rejection of the
+        // credential it replaced.
+        this.retireRejectedCredential(CODEX_CRED_KEY, revision);
         return 'revoked';
       }
       diagnostics.failure('credential.codex_refresh_failed', toKinuError({
@@ -2838,15 +3201,35 @@ export class UserDO extends Agent<Env> {
   }
 
   // ── Codex device flow ──────────────────────────────────────────────
+  //
+  // ONE ROW, A RISING GENERATION, AND A SETTLEMENT. Every call here waits on
+  // OpenAI, and this object accepts other calls while it waits: a second
+  // `start` supersedes the first, a `disconnect` closes whatever is open, and
+  // both used to be invisible to a poll that was already in flight — which then
+  // wrote its tokens over the attempt the owner was actually approving, or
+  // reconnected an account that had just been disconnected. The generation
+  // names the attempt a poll belongs to and `settled_at` says whether it is
+  // still the owner's live intent, so a superseded reply has something to fail
+  // against instead of a row that merely happens to be there.
 
   async startCodexDeviceFlow(caller: UserCaller): Promise<DeviceCodeStart> {
     await this.requireTier(caller, 'codex_auth');
     const client = createCodexOAuthClient();
     const result = await client.startDeviceFlow();
-    this.sqlx(`DELETE FROM codex_device_flow`);
+    // The generation rises in the write itself rather than from a value read
+    // before it, so two starts that raced cannot land on the same number.
     this.sqlx(
-      `INSERT INTO codex_device_flow (id, device_auth_id, user_code, poll_interval, portal_url, started_at)
-       VALUES (1, ?, ?, ?, ?, ?)`,
+      `INSERT INTO codex_device_flow
+         (id, device_auth_id, user_code, poll_interval, portal_url, started_at, generation, settled_at)
+       VALUES (1, ?, ?, ?, ?, ?, 1, NULL)
+       ON CONFLICT(id) DO UPDATE SET
+         device_auth_id = excluded.device_auth_id,
+         user_code      = excluded.user_code,
+         poll_interval  = excluded.poll_interval,
+         portal_url     = excluded.portal_url,
+         started_at     = excluded.started_at,
+         generation     = generation + 1,
+         settled_at     = NULL`,
       result.deviceAuthId, result.userCode, result.pollIntervalSec, result.portalURL, Date.now(),
     );
     return result;
@@ -2854,10 +3237,15 @@ export class UserDO extends Agent<Env> {
 
   async pollCodexDeviceFlow(caller: UserCaller): Promise<{ connected: boolean; accountId?: string; error?: string }> {
     await this.requireTier(caller, 'codex_auth');
-    const row = this.sqlx<{ device_auth_id: string; user_code: string }>(
-      `SELECT device_auth_id, user_code FROM codex_device_flow WHERE id = 1`,
+    const row = this.sqlx<{ device_auth_id: string; user_code: string; generation: number }>(
+      `SELECT device_auth_id, user_code, generation FROM codex_device_flow
+       WHERE id = 1 AND settled_at IS NULL`,
     )[0];
     if (!row) return { connected: false, error: 'No device flow in progress — call startCodexDeviceFlow first.' };
+    // Both fences are read here, BEFORE the provider wait that is the whole
+    // reason they exist.
+    const generation = row.generation;
+    const revision = this.credentialRevision(CODEX_CRED_KEY);
 
     const client = createCodexOAuthClient();
     try {
@@ -2865,25 +3253,64 @@ export class UserDO extends Agent<Env> {
       if (!tokens) return { connected: false }; // still pending
       const accountId = decodeCodexAccountId(tokens.accessToken);
       const cred = tokensToCredential(tokens, accountId ? { accountId } : undefined);
-      await this.writeCredential(CODEX_CRED_KEY, cred);
-      this.sqlx(`DELETE FROM codex_device_flow`);
+      const sealed = await this.sealCredential(CODEX_CRED_KEY, cred);
+      if (!this.commitCodexDeviceFlow({ generation, revision, kind: cred.kind, sealed })) {
+        diagnostics.event('credential.codex_device_flow_superseded', { outcome: 'denied' });
+        return {
+          connected: false,
+          error: 'That Codex sign-in was superseded before it completed — start the connection again.',
+        };
+      }
       return { connected: true, accountId: accountId ?? undefined };
     } catch (err) {
       return { connected: false, error: renderThrownChain({ cause: err }) };
     }
   }
 
+  /**
+   * Commit an approved device-code sign-in: the credential and the flow's
+   * settlement, together.
+   *
+   * SYNCHRONOUS, and both fences are checked before either write, so a poll
+   * either lands whole against the attempt it belongs to or lands not at all.
+   * Splitting the two would leave the case each fence exists to refuse: a flow
+   * settled without its credential, or a credential written into an account
+   * that had already disconnected.
+   */
+  private commitCodexDeviceFlow(input: {
+    generation: number; revision: number; kind: Credential['kind']; sealed: string;
+  }): boolean {
+    const open = this.sqlx(
+      `SELECT 1 AS x FROM codex_device_flow
+       WHERE id = 1 AND generation = ? AND settled_at IS NULL`,
+      input.generation,
+    ).length > 0;
+    if (!open) return false;
+    if (!this.commitCredential({
+      key: CODEX_CRED_KEY, kind: input.kind, sealed: input.sealed, expectRevision: input.revision,
+    })) return false;
+    this.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1`, Date.now());
+    return true;
+  }
+
   async disconnectCodex(caller: UserCaller): Promise<void> {
     await this.requireTier(caller, 'codex_auth');
-    this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, CODEX_CRED_KEY);
-    this.sqlx(`DELETE FROM codex_device_flow`);
+    this.dropCredential(CODEX_CRED_KEY);
+    // Settled, not deleted: the generation has to keep rising, and a poll that
+    // is already waiting on OpenAI has to find this attempt closed rather than
+    // find no row and read that as nothing to fence against.
+    this.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1 AND settled_at IS NULL`, Date.now());
   }
 
   async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
     await this.requireTier(caller, 'codex_auth');
     const cred = await this.readCredential(CODEX_CRED_KEY);
+    // Only an OPEN attempt is a flow the owner is in the middle of. A settled
+    // row is the record that keeps the generation rising, not a prompt to go
+    // back to a portal page that has already been used.
     const flow = this.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
-      `SELECT user_code, portal_url, poll_interval FROM codex_device_flow WHERE id = 1`,
+      `SELECT user_code, portal_url, poll_interval FROM codex_device_flow
+       WHERE id = 1 AND settled_at IS NULL`,
     )[0];
     if (cred?.kind === 'oauth') {
       return {

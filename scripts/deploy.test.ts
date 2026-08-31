@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { EXCLUSION_GROUPS, SERIAL_GATES, deployExclusions, deployWaves } from "./ladder";
+import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
+import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
 import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
 
@@ -38,6 +40,7 @@ const REQUIRED_GATES = [
   "bun run check",
   "bun test scripts/deploy.test.ts",
   "bun run test",
+  "bun run gate:python-suites",
   "bun run test:mutation",
   "bun test packages/devbox/",
   "bun test packages/test-utils/",
@@ -52,7 +55,7 @@ const REQUIRED_GATES = [
   "bun scripts/schema-drift.ts",
   "bun scripts/tracing-gate.ts",
   "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts",
-  "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts",
+  "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/wired.test.ts",
   "bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts",
@@ -131,6 +134,14 @@ function commandStub(name: string): string {
   return `#!/usr/bin/bash
 command_line="${name} $*"
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
+# WHAT THE INFRASTRUCTURE GATE ACTUALLY SAW. The phase travels in the
+# environment because the gate line has to stay one string for ladder.ts to
+# parse, so the only way to assert which phase a deploy ran is to record it from
+# inside the gate. Written to its own file: the log above is compared for set
+# equality against REQUIRED_GATES and an extra line there is a dropped gate.
+if [ "$command_line" = "bun run gate:infra" ]; then
+  printf '%s\\n' "\${KINU_INFRA_PHASE:-unset}" > "$KINU_DEPLOY_PHASE_LOG"
+fi
 if [ "$KINU_DEPLOY_KILL" = "$command_line" ]; then
   # SIGKILL the process the runner is waiting on: the timeout wrapper, which is
   # this stub's parent. The gate then ends having published nothing about itself,
@@ -150,13 +161,18 @@ exit 0
  *
  *  `failingGate` exits 47; `killGate` SIGKILLs the process the runner waits on,
  *  so that gate settles with no verdict of its own. `tmpdir` points the gate log
- *  directory somewhere, including somewhere that cannot exist. */
+ *  directory somewhere, including somewhere that cannot exist. `option` is the
+ *  script's second word, and `ambientPhase` is a KINU_INFRA_PHASE already on the
+ *  environment — the one thing that must never decide how strictly a deploy is
+ *  checked. */
 interface DeployRun {
   readonly failingGate?: string;
   readonly killGate?: string;
   readonly dirty?: boolean;
   readonly environment?: string;
   readonly tmpdir?: string;
+  readonly option?: string;
+  readonly ambientPhase?: string;
 }
 
 function runDeploy({
@@ -165,11 +181,14 @@ function runDeploy({
   dirty = false,
   environment = "production",
   tmpdir: temporaryRoot,
+  option,
+  ambientPhase = "",
 }: DeployRun = {}) {
   const fixture = mkdtempSync(join(tmpdir(), "kinu-deploy-gate-"));
   temporaryDirectories.push(fixture);
   const log = join(fixture, "events.log");
   const buildEnvironmentLog = join(fixture, "build-environment.log");
+  const phaseLog = join(fixture, "infra-phase.log");
 
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules"));
@@ -207,7 +226,9 @@ printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 exit 87
 `);
 
-  const run = Bun.spawnSync(["/usr/bin/bash", "scripts/deploy.sh", environment], {
+  const argv = ["/usr/bin/bash", "scripts/deploy.sh", environment];
+  if (option !== undefined) argv.push(option);
+  const run = Bun.spawnSync(argv, {
     cwd: fixture,
     env: {
       ...process.env,
@@ -219,6 +240,10 @@ exit 87
       TMPDIR: temporaryRoot ?? tmpdir(),
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
+      KINU_DEPLOY_PHASE_LOG: phaseLog,
+      // Always set, so the assertion that the script overrides it is about the
+      // script rather than about whichever shell ran the suite.
+      KINU_INFRA_PHASE: ambientPhase,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
     },
@@ -231,7 +256,10 @@ exit 87
   const buildEnvironment = existsSync(buildEnvironmentLog)
     ? readFileSync(buildEnvironmentLog, "utf8").trim()
     : null;
-  return { status: run.exitCode, events, stdout: run.stdout.toString(), buildEnvironment };
+  const infraPhase = existsSync(phaseLog) ? readFileSync(phaseLog, "utf8").trim() : null;
+  return {
+    status: run.exitCode, events, stdout: run.stdout.toString(), buildEnvironment, infraPhase,
+  };
 }
 
 describe("deploy gate", () => {
@@ -427,6 +455,180 @@ describe("deploy gate", () => {
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging>");
+  });
+
+  // ── The bootstrap option and the phase it selects ──────────────
+  //
+  // A deploy that DECLARES a resource only a deploy can create used to refuse
+  // itself: `ControlPlaneDO` landed in `migrations`, staging's 55 source gates
+  // passed, and the infrastructure gate then blocked the one upload that could
+  // have created the namespace — telling the operator to run
+  // `bun run infra:provision`, which cannot create a Durable Object namespace and
+  // is forbidden from trying.
+  //
+  // `--bootstrap` answers that, and these tests are about the two properties that
+  // keep it from being a bypass: it changes the PRE-DEPLOY PHASE and nothing else
+  // (no gate is added, dropped or softened), and it cannot be reached by
+  // accident, ambient environment, or a typo.
+  test("bootstrap changes the phase and not one gate", () => {
+    const bootstrap = runDeploy({ environment: "staging", option: "--bootstrap" });
+
+    // Same gates, same set, same failure semantics as any other deploy. This is
+    // the assertion that would catch a future `--bootstrap` that skipped a check
+    // rather than re-scoping one.
+    expect([...bootstrap.events].sort())
+      .toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
+    expect(bootstrap.infraPhase).toBe("bootstrap");
+    // The operator is told what is deferred and what is not, before the gates run.
+    expect(bootstrap.stdout).toContain("BOOTSTRAP");
+    expect(bootstrap.stdout).toContain("Still refused before the upload");
+
+    const normal = runDeploy({ environment: "staging" });
+    expect(normal.infraPhase).toBe("full");
+    expect([...normal.events].sort()).toEqual([...bootstrap.events].sort());
+    expect(normal.stdout).not.toContain("BOOTSTRAP");
+  });
+
+  test("an ambient phase variable cannot relax a deploy nobody bootstrapped", () => {
+    // The bypass this design refuses. The phase travels in the environment
+    // because the gate line has to stay one string for ladder.ts to parse, so the
+    // script assigns it in BOTH arms rather than reading whatever was exported —
+    // otherwise `export KINU_INFRA_PHASE=bootstrap` in a shell would quietly
+    // weaken every deploy launched from it.
+    const inherited = runDeploy({ environment: "staging", ambientPhase: "bootstrap" });
+
+    expect(inherited.infraPhase).toBe("full");
+    expect(inherited.stdout).not.toContain("BOOTSTRAP");
+
+    // And the flag still wins when it is actually passed, ambient value or not.
+    const asked = runDeploy({
+      environment: "staging", option: "--bootstrap", ambientPhase: "post-deploy",
+    });
+    expect(asked.infraPhase).toBe("bootstrap");
+  });
+
+  test("an unknown option deploys nothing", () => {
+    // Refused rather than ignored. A silently-dropped `--bootstrp` would fail the
+    // deploy at the infrastructure gate with a diagnostic about a Durable Object
+    // namespace, which is the wrong thing to debug.
+    const run = runDeploy({ environment: "staging", option: "--bootstrp" });
+
+    expect(run.status).toBe(2);
+    expect(run.events).toEqual([]);
+    expect(run.infraPhase).toBeNull();
+    expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging> [--bootstrap]");
+  });
+
+  // ── The post-deploy phase ──────────────────────────────────────
+  //
+  // Asserted as TEXT, for the reason the version-annotation test above is: the
+  // fixture's build stub fails on purpose, which is what every behavioural test
+  // in this file depends on, so no run here reaches step 5. The properties that
+  // matter are structural anyway — that the invocation exists, that it is
+  // unconditional, that it names the strictest phase, and that its failure ends
+  // the deploy.
+  test("the post-deploy infrastructure phase is unconditional and fails the deploy", () => {
+    // EXECUTABLE lines, whole-line comments dropped — the same reading the "no
+    // shell script but the deploy script publishes" rule below takes, and for the
+    // same reason: this script's prose names every command it runs, so a claim
+    // about what it RUNS cannot be made against its comments.
+    const lines = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"));
+    const source = lines.join("\n");
+
+    // At column zero, and after the upload: nested inside any `if`, this would be
+    // a phase some deploys skip, which is the whole thing `--bootstrap` must not
+    // become.
+    const invocation = 'if bun scripts/infra-verify.ts "$KINU_ENV" --phase=post-deploy; then';
+    const upload = 'if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then';
+    expect(lines).toContain(invocation);
+    expect(lines).toContain(upload);
+    expect(lines.indexOf(invocation)).toBeGreaterThan(lines.indexOf(upload));
+
+    // Its failure arm exits. A phase that reported and continued would print
+    // findings above a "deployed and verified" summary.
+    const arm = lines.slice(lines.indexOf(invocation));
+    expect(arm.slice(0, arm.indexOf("fi"))).toContain("  exit 1");
+
+    // `post-deploy` is the only phase spelled on an argv here, and it is the
+    // strictest. `bootstrap` reaches the pre-deploy gate through the environment,
+    // because that gate line has to stay one string for ladder.ts to parse; a
+    // second argv spelling would be a second place for the two to disagree.
+    const argvPhases = [...source.matchAll(/--phase=(\S+?)(?=[\s;]|$)/gu)].map(([, phase]) => phase);
+    expect(argvPhases).toEqual(["post-deploy"]);
+
+    // The pre-deploy phase is one of exactly two literals, both assigned here, so
+    // an ambient value is never what decides it.
+    expect(source).toContain('export KINU_INFRA_PHASE="bootstrap"');
+    expect(source).toContain('export KINU_INFRA_PHASE="full"');
+    expect([...source.matchAll(/KINU_INFRA_PHASE=/gu)]).toHaveLength(2);
+  });
+
+  // ── The control plane's outer gate ─────────────────────────────
+  //
+  // The admin plane fails CLOSED without a verifiable Cloudflare Access
+  // assertion, which means a production deploy carrying no Access application
+  // does not break loudly — it makes `/control` answer 404 to its own operators,
+  // indistinguishable from an allowlist typo. So the proof has to be a gate, and
+  // the gate has to be one no deploy can proceed past.
+  test("no deploy can proceed without the gate that proves Access covers the admin plane", () => {
+    // The declaration, from the manifest rather than from prose: production
+    // declares the organization, the application, its Allow policy and the
+    // NEGATIVE scope assertion, and every one of them is required — so an absent
+    // or unreadable row is a finding and `gate:infra` exits non-zero.
+    const infrastructure = deriveInfrastructure();
+    const access = infrastructure.resources.filter((resource) =>
+      resource.id.startsWith('access-') && resource.environments.includes('production'));
+    expect(access.map((resource) => resource.id).sort()).toEqual([
+      'access-application.kinu.run',
+      'access-organization.kinu.run',
+      'access-policy.kinu.run',
+      'access-scope.kinu.run',
+    ]);
+    for (const resource of access) expect(resource.required).toBe(true);
+
+    // And the gate that observes them is a REQUIRED gate of this pipeline,
+    // running in its own wave after every source gate. Both halves matter: a
+    // declared-and-unobserved resource proves nothing, and an observed-but-
+    // optional gate is a warning.
+    expect(REQUIRED_GATES).toContain('bun run gate:infra');
+    const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
+    expect(waves.at(-1)).toEqual(['bun run gate:infra']);
+    expect(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")).toContain(
+      'run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra',
+    );
+  });
+
+  test("the Worker demands an assertion for a subset of what Access is told to cover", () => {
+    // The containment direction is the whole correctness argument, and it is
+    // checkable here because both sides are in this repository: the paths the
+    // manifest tells an operator to protect, and the paths the Worker refuses
+    // without an assertion.
+    //
+    // Access covering LESS than the Worker demands is a permanent 404 no operator
+    // can clear — there is no way to obtain an assertion for a path the
+    // application does not cover. Covering MORE puts an interactive login in
+    // front of the public product.
+    expect(CONTROL_PLANE_ACCESS_PATHS).toEqual(['/control*', '/api/control*']);
+    const covered = (path: string): boolean => CONTROL_PLANE_ACCESS_PATHS.some((pattern) =>
+      path.startsWith(pattern.slice(0, -1)));
+
+    for (const path of [
+      '/control', '/control/', '/control/users', '/api/control', '/api/control/overview',
+    ]) {
+      expect(isControlPlaneSurface(path)).toBe(true);
+      expect(covered(path)).toBe(true);
+    }
+    // The routes that must NOT be behind Access, and are not: the public product,
+    // the two authenticated write endpoints any signed-in user reaches, and the
+    // asset paths a preview app loads.
+    for (const path of [
+      '/', '/login', '/api/health', '/api/feedback', '/api/client-errors', '/api/user/profile',
+      '/assets/index-abc123.js', '/downloads/kinu', '/controlpanel', '/api/controllers/list',
+    ]) {
+      expect(isControlPlaneSurface(path)).toBe(false);
+    }
   });
 });
 

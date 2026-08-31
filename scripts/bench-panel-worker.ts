@@ -32,6 +32,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
   HeadController, HeadJournal, MissionGovernor,
+  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
   initSearchTables, initScaffoldTables, initCraftQualityColumns,
   type LLMProviderConfig, type MergeResult, type WebSearchProvider,
 } from '../packages/core/src/index';
@@ -46,6 +47,41 @@ import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protoco
  *  name: the bench talks to explicit provider configs rather than a credential
  *  store, and an index cannot accidentally resolve to an operator's own model. */
 const forkSpec = (i: number): string => `panel-${i}`;
+
+/** The spec the MERGE resolves to, in the same explicit vocabulary the forks use.
+ *
+ *  The merge's model is core's `judge` route off a turn profile, and this bench
+ *  has no profile authority and no credential store — so it DECLARES a profile
+ *  whose `deep` tier is the analyst. The routed policy stays in force rather than
+ *  being bypassed: the binder below honours whatever spec the route hands it and
+ *  fails loudly on anything else, so the experiment states which model synthesises
+ *  the panel instead of inheriting an operator's account. */
+const ANALYST_SPEC = 'analyst';
+
+/** The profile the merge routes against: every tier is the analyst, so `judge`
+ *  resolves to it by the ordinary route rather than by an exception. */
+function analystProfile() {
+  const catalog = {
+    ...BUILTIN_PROFILE_CATALOG,
+    tiers: {
+      default: { model: ANALYST_SPEC, reasoningEffort: 'low' as const },
+      deep: { model: ANALYST_SPEC, reasoningEffort: 'low' as const },
+    },
+  };
+  return resolveTurnProfile({
+    envelope: {
+      authority: { kind: 'account', accountId: 'bench' },
+      version: 1,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    },
+    provider: { revision: 'bench', availableModels: [ANALYST_SPEC] },
+    roleId: 'general',
+    workMode: 'build',
+    availableTools: [],
+    activeSkills: [],
+  });
+}
 
 async function main(): Promise<void> {
   const input = parsePanelWorkerInput(await Bun.stdin.text());
@@ -103,6 +139,24 @@ async function main(): Promise<void> {
       if (!cfg) throw new Error(`panel worker: no provider for fork spec "${spec}"`);
       return benchChatModel(cfg);
     },
+    // The analyst synthesises the panel, through the same routed policy both
+    // backends use rather than a second merge path this instrument maintains.
+    profile: async () => analystProfile(),
+    bindMergeModel: (route) => {
+      if (route.model !== ANALYST_SPEC) {
+        throw new Error(`panel worker: the merge route resolved "${route.model}", not the analyst`);
+      }
+      return { model: benchChatModel(analyst) };
+    },
+    // No provider options: this bench addresses explicit base URLs rather than
+    // provider families, so there is no family whose reasoning knob to set — and
+    // the merge got none before either, because the family it derived from was
+    // the empty string.
+    //
+    // Nothing to report to: token accounting for this experiment comes from the
+    // inference proxy, which meters every request that crosses it. The workspace
+    // spend ledger is not part of the instrument.
+    reportModelCall: () => {},
     webSearch: noWeb,
     codemodeExtras: () => [],
     governor: () => governor,

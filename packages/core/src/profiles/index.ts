@@ -11,7 +11,7 @@ export type {
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './catalog';
 export {
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile,
 } from './resolve';
 export type {
   ProfileAuthorityInputs, ProviderCatalogSnapshot, TierSource,

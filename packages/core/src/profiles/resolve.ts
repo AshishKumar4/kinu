@@ -367,3 +367,28 @@ export function resolveAgentTurnProfile(
   const { activeRoleId, ...turn } = input;
   return resolveTurnProfile({ ...turn, roleId: activeRoleId });
 }
+
+/**
+ * The profile a NON-TURN producer routes against: the live turn's when a turn is
+ * open, else one resolved now.
+ *
+ * The PRECEDENCE is the policy, and it is the same on both backends for the same
+ * reason: an auxiliary lane — the head merge, a titling call, a reflection, a
+ * recovered fiber, a background job's wake — can be asked between turns, when
+ * there is no live profile to inherit, and must resolve one rather than fall back
+ * to a default tier nobody chose. `MODEL_ROUTE_POLICY` is read against whatever
+ * this answers, so a producer that got its profile any other way has bypassed the
+ * one routing table.
+ *
+ * Shared rather than written twice, because two backends that disagreed about
+ * WHEN a lane inherits the turn would route the same producer differently while
+ * both looked correct in isolation.
+ */
+export async function resolveRoutingProfile(deps: {
+  /** The open turn's profile, or null between turns. */
+  readonly live: () => ResolvedTurnProfile | null;
+  /** This backend's own resolution, asked only when there is no live turn. */
+  readonly resolve: () => Promise<ResolvedTurnProfile>;
+}): Promise<ResolvedTurnProfile> {
+  return deps.live() ?? await deps.resolve();
+}

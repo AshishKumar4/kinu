@@ -277,6 +277,32 @@
     // addresses are not credentials. EMPTY MEANS NOBODY, and the admin plane
     // then answers 404 to every caller including this owner — which is the
     // right default for any deployment that has not decided its operators.
+    //
+    // THIS IS THE INNER HALF OF A TWO-PART GATE. The outer half is Cloudflare
+    // Access, and it needs two more vars THAT ARE DELIBERATELY NOT WRITTEN HERE
+    // because nobody may invent their values:
+    //
+    //   "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com"
+    //   "CONTROL_PLANE_ACCESS_AUD":         "<the application's 64-hex AUD tag>"
+    //
+    // Both are read from the Access application after it is created in Zero
+    // Trust > Access controls > Applications, as ONE self-hosted application
+    // whose destinations are exactly `kinu.run/control*` and
+    // `kinu.run/api/control*` with an Allow policy naming these same operator
+    // addresses. ONE application, because the Worker pins one AUD and two
+    // applications would give the two paths two different ones. EXACTLY those
+    // two destinations, because a broader one — `kinu.run` bare, or
+    // `*.kinu.run` — puts an interactive Access login in front of every preview
+    // URL an agent hands out, the public landing page, /api/feedback and
+    // /api/client-errors.
+    //
+    // Until both vars are set the admin plane answers 404 to everyone, including
+    // this owner: `verifyControlPlaneAccess` (src/control-plane/access-gate.ts)
+    // has no issuer to pin and refuses rather than trusting a header. A
+    // PRODUCTION DEPLOY IS BLOCKED while they are absent or while the Access
+    // application does not match them — `bun run gate:infra` reads the account's
+    // real Access applications and policies and fails the deploy, which is why
+    // leaving them out of this file is safe rather than merely tidy.
     "CONTROL_PLANE_ADMINS": "me@ashishkumarsingh.com",
     // Account the Analytics Engine SQL API is queried against. The same id as
     // `account_id` above; a plain var because it is in this file already, and
@@ -557,6 +583,16 @@
         // The admin gate independently refuses a `provider: 'dev'` identity, so
         // this is the second of two locks rather than the only one — but it is
         // the one a reader of this file can check.
+        //
+        // It is now the THIRD lock as well, and the reason staging needs no
+        // Cloudflare Access application: with no operators, the two
+        // CONTROL_PLANE_ACCESS_* vars are not required here (`requiredIn` in
+        // scripts/infra-manifest.ts pairs them with a NON-EMPTY value of this
+        // one), and the admin surface stays disabled rather than half-gated.
+        // Filling this in for staging without also creating a staging Access
+        // application and setting both vars is refused by `bun run gate:infra`
+        // before the deploy — which is deliberate: the eval identity must never
+        // become an operator, on any environment.
         "CONTROL_PLANE_ADMINS": "",
         "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
         // Staging binds its own `*_staging` datasets and shares production's

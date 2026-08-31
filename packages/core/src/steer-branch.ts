@@ -13,7 +13,8 @@
  */
 
 import type { SqlExecutor } from './types/primitives';
-import type { HeadInput, HeadReport, SerializedMessage } from './heads/types';
+import type { HeadInput, HeadReport, HeadRunHeadView, SerializedMessage } from './heads/types';
+import { headStatusUnsettled, storedHeadReportStatus } from './heads/types';
 import { raceWithTimeout, type HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
@@ -267,6 +268,45 @@ export async function settlePendingBranches(
  * unchanged.
  */
 export type BranchOutcome = Pick<HeadReport, 'status' | 'summary' | 'errorMessage'>;
+
+/**
+ * Read a branch head's journal row as the outcome a settlement needs, or null
+ * while that row is still claiming to execute.
+ *
+ * THE COLD PATH'S ONLY READING OF A STORED STATUS, and it exists because both
+ * backends wrote their own. A cold replay settles a branch from the journal —
+ * the sole record of a head whose live handle died with its isolate — and it has
+ * to decide two things from one `TEXT` column: whether the comparison is still
+ * owed, and which terminal status to report when it is not. Both copies decided
+ * the first with a hand-written list and the second with `status === 'completed'
+ * ? 'completed' : 'errored'`, so a head that blew its budget was reported as
+ * having thrown, and the two backends had already drifted on how they carry
+ * `errorMessage`.
+ *
+ * Null means OWED and never means "settled": the two unsettled statuses are the
+ * only ones a later activation can still change, and neither is permanent — the
+ * resume gate re-drives the run, or `abandonRunning` settles it `aborted`. A
+ * status this journal never writes is reported `errored` rather than owed, so a
+ * corrupt row cannot wedge a settlement forever.
+ */
+export function branchOutcomeFromJournal(
+  head: Pick<HeadRunHeadView, 'status' | 'summary' | 'errorMessage'>,
+): BranchOutcome | null {
+  if (headStatusUnsettled(head.status)) return null;
+  const summary = head.summary ?? '';
+  const status = storedHeadReportStatus(head.status);
+  if (status === null) {
+    return {
+      status: 'errored',
+      summary,
+      errorMessage: head.errorMessage
+        ?? `the branch head's journal row carries an unrecognized status "${head.status}"`,
+    };
+  }
+  return head.errorMessage === null
+    ? { status, summary }
+    : { status, summary, errorMessage: head.errorMessage };
+}
 
 export function settleBranchIntoTakes(
   sql: SqlExecutor,

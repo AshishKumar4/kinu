@@ -17,7 +17,7 @@ import { makeVfsError } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
-import type { ExecutorCapability, ExecutorProvider } from './types';
+import type { ExecutorCapability, ExecutorProvider, PortAnsweringExecutor } from './types';
 import { readExecSignal } from './signal';
 import { formatExecResult, refusalText } from './exec-result';
 import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
@@ -291,7 +291,7 @@ function formatStartResult(result: NimbusStartResult, namespace: string): string
   return lines.join('\n');
 }
 
-export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorProvider {
+export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweringExecutor {
   const box = opts.box;
   const configured = box != null;
   const root = opts.root ?? '/home/user';
@@ -451,8 +451,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'nimbus mkdir: path must be a string'));
         }
+        const mkdir = box.files.mkdir?.bind(box.files);
         try {
-          if (box.files.mkdir) await touch(() => box.files.mkdir!(path));
+          if (mkdir) await touch(() => mkdir(path));
           else await touch(() => box.exec(`mkdir -p ${shellQuote(path)}`));
           return `Created ${path}`;
         } catch (err) {
@@ -497,7 +498,14 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
       description: 'Kill a Nimbus process by pid.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
-        if (!box.processes?.kill) return handleLacks('process control');
+        const processes = box.processes;
+        if (!processes?.kill) return handleLacks('process control');
+        // Bound HERE, at the guard, for the reason every optional SDK surface
+        // below repeats: the call happens inside a closure, and TypeScript drops
+        // a property narrowing at that boundary — which is what the
+        // `box.processes!.kill!` assertions were standing in for. Binding keeps
+        // the receiver too, so the SDK method still reads its own `this`.
+        const kill = processes.kill.bind(processes);
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
         if (pid === undefined || !Number.isFinite(pid)) {
@@ -505,7 +513,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
             `nimbus killProcess: invalid pid ${stringifyResult({ value: args[0] })}`));
         }
         try {
-          return stringifyResult({ value: await touch(() => box.processes!.kill!(pid)) });
+          return stringifyResult({ value: await touch(() => kill(pid)) });
         } catch (err) {
           return refusalText(nimbusFailure({ doing: `nimbus killProcess ${pid}`, cause: err }));
         }
@@ -515,7 +523,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
       description: 'Read Nimbus process logs.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
-        if (!box.processes?.logs) return handleLacks('process logs');
+        const processes = box.processes;
+        if (!processes?.logs) return handleLacks('process logs');
+        const readLogs = processes.logs.bind(processes);
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
         if (pid === undefined || !Number.isFinite(pid)) {
@@ -526,7 +536,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
           ? { lines: input.lines, bytes: input.bytes }
           : undefined;
         try {
-          return stringifyResult({ value: await touch(() => box.processes!.logs!(pid, options)) });
+          return stringifyResult({ value: await touch(() => readLogs(pid, options)) });
         } catch (err) {
           return refusalText(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
         }
@@ -536,7 +546,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
       description: 'Expose an HTTP-like port from Nimbus and return its preview URL.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
-        if (!box.ports?.expose) return handleLacks('ports');
+        const ports = box.ports;
+        if (!ports?.expose) return handleLacks('ports');
+        const expose = ports.expose.bind(ports);
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
         if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
@@ -544,8 +556,8 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
             `nimbus exposePort: invalid port ${stringifyResult({ value: args[0] })}`));
         }
         try {
-          const result = await touch(() => box.ports!.expose!(port));
-          return result.url ?? box.ports?.url?.(port) ?? stringifyResult({ value: result });
+          const result = await touch(() => expose(port));
+          return result.url ?? ports.url?.(port) ?? stringifyResult({ value: result });
         } catch (err) {
           return refusalText(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
         }
@@ -555,7 +567,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
       description: 'Stop exposing a Nimbus port.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
-        if (!box.ports?.unexpose) return handleLacks('ports');
+        const ports = box.ports;
+        if (!ports?.unexpose) return handleLacks('ports');
+        const unexpose = ports.unexpose.bind(ports);
         const input = parseInput(PortInputSchema, { value: args[0] });
         const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
         if (port === undefined || !Number.isFinite(port)) {
@@ -563,7 +577,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
             `nimbus unexposePort: invalid port ${stringifyResult({ value: args[0] })}`));
         }
         try {
-          await touch(() => box.ports!.unexpose!(port));
+          await touch(() => unexpose(port));
           return `unexposed ${port}`;
         } catch (err) {
           return refusalText(nimbusFailure({ doing: `nimbus unexposePort ${port}`, cause: err }));
@@ -577,10 +591,12 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         // `'[]'` claimed this session has no exposed ports. It has no port API at
         // all, which is a different fact — an empty read must stay
         // distinguishable from a read that could not be made (AGENTS.md).
-        if (!box.ports?.list) return handleLacks('ports');
+        const ports = box.ports;
+        if (!ports?.list) return handleLacks('ports');
+        const list = ports.list.bind(ports);
         try {
-          const ports = await touch(() => box.ports!.list!());
-          return JSON.stringify(ports.map((p) => ({ ...p, url: p.url ?? box.ports?.url?.(p.port) })));
+          const exposed = await touch(() => list());
+          return JSON.stringify(exposed.map((p) => ({ ...p, url: p.url ?? ports.url?.(p.port) })));
         } catch (err) {
           return refusalText(nimbusFailure({ doing: 'nimbus listPorts', cause: err }));
         }
@@ -594,9 +610,12 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         if (spec === undefined) {
           return refusalText(new KinuError('bad_input', 'nimbus installRuntime: spec must be a string'));
         }
+        const runtimes = box.runtimes;
+        const install = runtimes?.install?.bind(runtimes);
+        const ensure = runtimes?.ensure?.bind(runtimes);
         try {
-          if (box.runtimes?.install) await touch(() => box.runtimes!.install!(spec));
-          else if (box.runtimes?.ensure) await touch(() => box.runtimes!.ensure!(spec));
+          if (install) await touch(() => install(spec));
+          else if (ensure) await touch(() => ensure(spec));
           else return handleLacks('runtime installation');
           return `installed ${spec}`;
         } catch (err) {
@@ -608,9 +627,11 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
       description: 'List Nimbus runtimes.',
       execute: async (): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
-        if (!box.runtimes?.list) return handleLacks('runtime listing');
+        const runtimes = box.runtimes;
+        if (!runtimes?.list) return handleLacks('runtime listing');
+        const list = runtimes.list.bind(runtimes);
         try {
-          return stringifyResult({ value: await touch(() => box.runtimes!.list!()) });
+          return stringifyResult({ value: await touch(() => list()) });
         } catch (err) {
           return refusalText(nimbusFailure({ doing: 'nimbus listRuntimes', cause: err }));
         }
@@ -681,24 +702,30 @@ declare namespace ${namespace} {
 }`,
     positionalArgs: true,
     async exposePort(port: number) {
-      if (!box?.ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
-      const result = await touch(() => box.ports!.expose!(port));
+      const ports = box?.ports;
+      if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
+      const expose = ports.expose.bind(ports);
+      const result = await touch(() => expose(port));
       return {
         supported: true,
         port,
-        url: result.url ?? box.ports?.url?.(port) ?? '',
+        url: result.url ?? ports.url?.(port) ?? '',
         verified_listening: result.listening ?? false,
       };
     },
     async unexposePort(port: number) {
-      if (box?.ports?.unexpose) await touch(() => box.ports!.unexpose!(port));
+      const ports = box?.ports;
+      if (!ports?.unexpose) return;
+      const unexpose = ports.unexpose.bind(ports);
+      await touch(() => unexpose(port));
     },
     async listExposedPorts() {
-      if (!box?.ports?.list) return [];
-      const ports = await touch(() => box.ports!.list!());
-      return ports.map((p) => ({
+      const ports = box?.ports;
+      if (!ports?.list) return [];
+      const list = ports.list.bind(ports);
+      return (await touch(() => list())).map((p) => ({
         port: p.port,
-        url: p.url ?? box.ports?.url?.(p.port) ?? '',
+        url: p.url ?? ports.url?.(p.port) ?? '',
         status: 'unknown' as const,
       })).filter((p) => p.url);
     },
@@ -710,7 +737,7 @@ declare namespace ${namespace} {
  * surface of the same Nimbus session. Hosted runtimes register this provider
  * once as `workspace`; there is no second Nimbus namespace or filesystem.
  */
-export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): ExecutorProvider {
+export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): PortAnsweringExecutor {
   const inline = createInlineExecutor(opts.inline);
   const session = createNimbusExecutor({ ...opts, namespace: 'workspace' });
   const {
@@ -749,9 +776,12 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
     disconnect: session.disconnect,
     tools: { ...inline.tools, ...sessionTools },
     types: (inline.types ?? '').replace(/\n}\s*$/, `${sessionTypes}\n}`),
-    exposePort: session.exposePort!.bind(session),
-    unexposePort: session.unexposePort!.bind(session),
-    listExposedPorts: session.listExposedPorts!.bind(session),
+    // Straight through, no assertion: `createNimbusExecutor` answers for its
+    // ports by type, so all three are declared present. Nothing to bind either —
+    // each closes over the session handle rather than reading `this`.
+    exposePort: session.exposePort,
+    unexposePort: session.unexposePort,
+    listExposedPorts: session.listExposedPorts,
   };
 }
 

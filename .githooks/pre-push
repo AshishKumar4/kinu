@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 #
-# Push tier: the commit tier plus 3,105 shared-spine tests, the Cloudflare
+# Push tier: the commit tier plus the shared-spine suites, the Cloudflare
 # composition root, and the gates whose cost only makes sense once — dead code,
-# secret scan, schema drift, and every gate's own self-test. ~62s declared.
+# secret scan, schema drift, and every gate's own self-test.
+#
+# NO TEST COUNT AND NO TIER COST HERE. This header said "3,105 shared-spine
+# tests ... ~62s declared". `scripts/ladder.ts` records 3,105 as the figure that
+# had drifted against a measured 3,917 and refuses to quote a count at all, and
+# the push tier's own declared seconds now sum to ~97s on top of the commit
+# tier's ~12s. `bun scripts/ladder.ts --matrix` prints both, derived, which is
+# the only form of either number that stays true.
 #
 # Why the secret scan is HERE and not later: push is the last tier at which a
 # leaked credential is still recoverable without a rotation.

@@ -2,16 +2,50 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import * as v from 'valibot';
 import { isPlaceholderMission } from './soul';
 import { tolerate } from '../obs/index';
+import { nanoid } from '../utils/nanoid';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
 
-/** URL-safe slug for stable workspace ids. */
-export function slugifyName(text: string): string {
+/** URL-safe slug for a stable id: lowercased, hyphenated, trimmed, capped at 24
+ *  characters.
+ *
+ *  Module-private, because the 24 is a MECHANISM and not a contract. It had two
+ *  external callers, both minting a subordinate name, and both wrote
+ *  `.slice(0, 48)` after it in the belief that the cap was theirs to widen — a
+ *  bound that had already been applied and could not be. {@link
+ *  mintSubordinateName} is the seam those callers actually wanted, so the slug
+ *  stops being something a caller can half-apply. */
+function slugifyName(text: string): string {
   return text.toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 24)
     .replace(/-+$/, '');
+}
+
+/**
+ * The name a newly created subordinate is addressed by: its slugified role, plus
+ * a random suffix so two children of one role never collide.
+ *
+ * ONE rule and ONE entropy source, because there were two of each. Both backends
+ * inlined this same slug-and-suffix shape and then disagreed on the suffix —
+ * `nanoid(6)` over 36 characters on Cloudflare, six hex digits of a UUID
+ * locally — so identical roles minted names of two different collision
+ * strengths depending on where the agent happened to run, and the weaker of the
+ * two was nobody's decision. `nanoid` is core's own generator and the stronger
+ * suffix, so it is the one that survives.
+ *
+ * Both call sites also cut the slug at 48 AFTER {@link slugifyName} had already
+ * cut it at 24, so that bound never bounded anything; it is gone rather than
+ * reconciled, and the 24 the callers were really getting is the 24 they keep.
+ *
+ * The result satisfies the contract `spawnSubordinate` enforces on a name —
+ * lowercase, URL-safe, at most 64 characters — because `nanoid`'s alphabet is
+ * lowercase alphanumeric and a role that slugifies to nothing is named for what
+ * it is instead of arriving as a bare suffix.
+ */
+export function mintSubordinateName(role: string): string {
+  return `${slugifyName(role) || 'subordinate'}-${nanoid(6)}`;
 }
 
 export interface SuggestedWorkspaceIdentity {

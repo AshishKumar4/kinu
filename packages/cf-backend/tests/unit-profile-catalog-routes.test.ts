@@ -82,7 +82,7 @@ async function setup() {
   const harness = createTestUserDO({ durableObjectId: USER_ID });
   const owner = await testOwner();
   await harness.userDO.ensureProfile(owner, IDENTITY.email, IDENTITY.displayName ?? undefined);
-  const session = await harness.userDO.mintCliToken(owner, USER_ID, 'profile route test');
+  const session = await harness.userDO.mintCliToken(owner, USER_ID, "a".repeat(64), "profile route test");
   return { harness, owner, token: session.token, env: routeEnv(harness.userDO) };
 }
 

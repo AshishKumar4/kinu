@@ -128,6 +128,15 @@ export const WORKSPACE_CAPABILITY_TIERS = {
   /** CLI bearer tokens, CI access tokens, agent websocket tickets. Minting one
    *  of these is account takeover. */
   'auth_tokens': 'full',
+  /** Asking whether a bearer that authenticated a websocket ON THIS WORKSPACE
+   *  may still act. `shared` on purpose, and it is not a hole in the line
+   *  above: the answer is a yes/no about a socket the workspace is already
+   *  holding, it names no token and mints nothing, and the only thing a caller
+   *  can do with it is CLOSE that socket. A tainted workspace that could not
+   *  ask would either keep serving a revoked CLI or lose its CLI entirely, so
+   *  refusing here would make revocation unenforceable exactly where the
+   *  workspace is least trusted. */
+  'auth_tokens.socket': 'shared',
   /** The Codex OAuth device flow. */
   'codex_auth': 'full',
 } as const satisfies Record<string, WorkspaceTier>;
@@ -289,16 +298,30 @@ export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): st
   return row.success ? row.output.token_hash : null;
 }
 
-/** Mint (or re-mint) the capability token for `workspaceName` and ensure it has
- *  a tier. Re-minting replaces the previous secret, which is how a workspace
- *  whose Durable Object storage was reset recovers; the tier is preserved so a
- *  re-mint can never launder a tainted workspace back to `full`. */
-export async function mintWorkspaceCapability(
-  sql: SqlExec,
-  workspaceName: string,
-): Promise<{ token: string; tokenHash: string }> {
+/** A fresh capability secret and its hash, written NOWHERE.
+ *
+ *  Hashing is asynchronous, and a Durable Object serializes nothing across an
+ *  await: a mint that hashed and wrote in one call had a delete land between the
+ *  two, and the write then revived the identity of a workspace whose teardown
+ *  had already revoked it. Splitting the async half out is what lets the caller
+ *  re-check its admission and write in ONE synchronous turn — see
+ *  {@link commitWorkspaceCapability}. */
+export async function freshWorkspaceCapability(): Promise<{ token: string; tokenHash: string }> {
   const token = `pwc_${nanoid(44)}`;
-  const tokenHash = await sha256Hex(token);
+  return { token, tokenHash: await sha256Hex(token) };
+}
+
+/** Register (or re-register) a freshly minted capability hash for
+ *  `workspaceName` and ensure it has a tier. Re-minting replaces the previous
+ *  secret, which is how a workspace whose Durable Object storage was reset
+ *  recovers; the tier is preserved so a re-mint can never launder a tainted
+ *  workspace back to `full`.
+ *
+ *  SYNCHRONOUS, and it must stay that way: the caller's admission check and
+ *  this write are one uninterruptible turn, which is what makes a revoked
+ *  workspace impossible to re-mint from a reconcile already in flight.
+ */
+export function commitWorkspaceCapability(sql: SqlExec, workspaceName: string, tokenHash: string): void {
   const now = Date.now();
   sql.exec(
     `INSERT INTO workspace_capability_tokens (workspace_name, token_hash, created_at)
@@ -311,7 +334,6 @@ export async function mintWorkspaceCapability(
      ON CONFLICT(workspace_name) DO NOTHING`,
     workspaceName, now,
   );
-  return { token, tokenHash };
 }
 
 /** Drop a workspace's identity and tier — called when the workspace itself is

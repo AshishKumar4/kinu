@@ -211,6 +211,68 @@ export function declaredName(node: SyntaxNode): string | undefined {
   return undefined;
 }
 
+/**
+ * The name of the nearest ENCLOSING declaration, or undefined at the top level.
+ *
+ * What a member is called by a reader who has to say where it lives: `models`
+ * inside `SwarmConfig` is `SwarmConfig.models`, which is how prose names it and
+ * therefore how a cross-file reference to it resolves. Undefined for a top-level
+ * declaration, which needs no qualifier.
+ */
+export function ownerName(node: SyntaxNode): string | undefined {
+  let up = node.parent;
+  while (up !== undefined) {
+    const named = declaredName(up);
+    if (named !== undefined && named !== declaredName(node)) return named;
+    up = up.parent;
+  }
+  return undefined;
+}
+
+/** Nodes ESTree puts between a declaration and the statement a docblock sits
+ *  above. `export const X = …` is three nodes deep, and the docblock is above the
+ *  first. */
+const DECLARATION_WRAPPER: ReadonlySet<string> = new Set([
+  'VariableDeclaration', 'ExportNamedDeclaration', 'ExportDefaultDeclaration',
+]);
+
+/**
+ * The comment immediately above `node`'s own statement, or undefined when it
+ * carries none.
+ *
+ * Two questions in one because neither is answerable alone. WHICH OFFSET to look
+ * above is the wrapper walk: a docblock sits above the STATEMENT, and ESTree hangs
+ * `export const X = …`'s declarator two nodes below it, so a reader that took
+ * `node.start` would look inside the declaration and find nothing. WHAT COUNTS as
+ * the comment is positional: is the nearest non-whitespace thing above that offset
+ * a comment that ends where the statement begins.
+ *
+ * Read from OFFSETS rather than from a comment table, because the offsets are what
+ * a parsed tree already carries and the question is purely positional.
+ *
+ * BOTH SYNTAXES, by the rule an author states by writing: a block comment's
+ * closing delimiter ends it, and a run of line comments is one block while nothing
+ * but whitespace separates the lines. Reading only `/** *\/` was the first draft
+ * and it under-reported itself — `unit-checkpoint-format.test.ts` declares a
+ * quotation over a `//` run, and the citation gate counted zero uncompared
+ * quotations while that one sat unread.
+ */
+export function docComment(text: string, node: SyntaxNode): string | undefined {
+  let statement = node;
+  while (statement.parent !== undefined && DECLARATION_WRAPPER.has(statement.parent.type)) {
+    statement = statement.parent;
+  }
+  const before = text.slice(0, statement.start).replace(/\s+$/, '');
+  if (before.endsWith('*/')) {
+    const open = before.lastIndexOf('/**');
+    return open < 0 ? undefined : before.slice(open);
+  }
+  const lines = before.split('\n');
+  let first = lines.length;
+  while (first > 0 && /^[ \t]*\/\//.test(lines[first - 1] ?? '')) first -= 1;
+  return first === lines.length ? undefined : lines.slice(first).join('\n');
+}
+
 /** `MethodDefinition.kind`, which is how a constructor is told from a method,
  *  getter or setter. */
 export const methodKind = (node: SyntaxNode): string | undefined =>

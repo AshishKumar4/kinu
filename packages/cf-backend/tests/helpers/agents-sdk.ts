@@ -543,6 +543,23 @@ export function mockAgentsSdk(): void {
           createdAt: Number(row.created_at),
         }));
       }
+      /** The registry half of `deleteSubAgent`, which in the real SDK is
+       *  `_cf_cleanupFacetPrefix` + `ctx.facets.delete` + `_forgetSubAgent`
+       *  (`agents/dist/index.js`, `async deleteSubAgent`). Only the last of the
+       *  three has an observable here, and it is the one every reclamation sweep
+       *  is read through: a facet whose row is gone from
+       *  `cf_agents_sub_agents` no longer occupies the root's quota.
+       *
+       *  Idempotent for the reason the SDK's is — it swallows a delete of an
+       *  already-gone facet — so a raced abort and settle both landing here is
+       *  safe. */
+      async deleteSubAgent(cls: { name: string }, name: string): Promise<void> {
+        await Promise.resolve();
+        this.#subAgentRegistry().exec(
+          `DELETE FROM cf_agents_sub_agents WHERE class = ? AND name = ?`,
+          cls.name, name,
+        );
+      }
       /** The SDK declares a second overload taking the class, and reduces it
        *  to `cls.name` (:5868); the registry key is the class NAME either way.
        *  Only the name form is modelled, because that is the form the code

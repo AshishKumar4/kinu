@@ -3,11 +3,20 @@
 # Commit tier: 12s of total static analysis, no test suite.
 #
 # It runs no tests on purpose. At commit time you can afford something TOTAL —
-# every file, every line — and 12s buys exactly that: the 8-project typecheck,
-# the 15 anti-slop rules, and four structural gates that each name a defect
+# every file, every line — and 12s buys exactly that: the typecheck across every
+# project `bun run check` names, every enabled anti-slop rule, and four
+# structural gates that each name a defect
 # class this repo has actually shipped. A test suite at this tier would be a
 # sample, would cost 25s at minimum, and would push the hook into the range
 # where people start reaching for --no-verify.
+#
+# NO COUNTS. This header carried "the 8-project typecheck, the 15 anti-slop
+# rules" against a `check` script that names 16 tsconfig projects and an
+# `.oxlintrc.json` that enables 26 `anti-slop/` rules — and `scripts/ladder.ts`
+# derives that rule count from the config precisely because a hardcoded 21 had
+# already drifted to 22. A number copied into a frozen comment has nothing that
+# re-runs it, so the two authoritative places are named instead: `package.json`'s
+# `check` for the projects, `.oxlintrc.json` for the rules.
 #
 # This tier was unaffordable until TypeScript 7. Measured 2026-08-17, cold,
 # 8 projects: 64.9s under 5.8.3, 6.9s under 7.0.2. That single number is why

@@ -27,8 +27,29 @@ const USER_WORKSPACE_ADDED_COLUMNS = {
   create_pending: 'INTEGER NOT NULL DEFAULT 0',
 } as const;
 
+const CODEX_DEVICE_FLOW_ADDED_COLUMNS = {
+  generation: 'INTEGER NOT NULL DEFAULT 1',
+  settled_at: 'INTEGER',
+} as const;
+
+const USER_CLI_TOKEN_ADDED_COLUMNS = {
+  authorization_hash: 'TEXT',
+} as const;
+
 const USER_CONFIG_ADDED_COLUMNS = {
   version: 'INTEGER NOT NULL DEFAULT 0',
+} as const;
+
+// Nullable, and they have to be: SQLite cannot ADD a NOT NULL column without a
+// default, and a default here would be a fabricated identity where the truth is
+// an absent one. A row registered before these columns existed reports NULL and
+// its KV projection stays the only copy of what it stands for.
+const USER_BROWSER_SESSION_ADDED_COLUMNS = {
+  email: 'TEXT',
+  display_name: 'TEXT',
+  provider: 'TEXT',
+  provider_sub: 'TEXT',
+  auth_time: 'INTEGER',
 } as const;
 
 export function initUserTables(sql: SqlExec): void {
@@ -108,6 +129,34 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  // The monotonic revision of each credential key, INCLUDING its absences: a
+  // write bumps it and so does a delete, and no row is ever removed. That is
+  // what a provider refresh compares against when its network round trip
+  // returns — a refresh that started before the owner disconnected finds the
+  // revision moved and drops its rotated token instead of writing it back,
+  // which is the only thing that stops a disconnect from being undone by a
+  // reply that was already in the air. A revision the store has never seen
+  // reads as 0, so a first write needs no seeding.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_credential_revisions (
+      key        TEXT PRIMARY KEY,
+      revision   INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+
+  // This account's authorization generation: one number, bumped by every CLI
+  // and access-token revocation. A websocket authenticated by a bearer records
+  // the generation it was admitted under, so a revocation can name every socket
+  // that predates it in one comparison instead of enumerating token hashes.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_auth_generation (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      generation INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+
   // Egress secrets: the owner's per-host secrets, spent by an agent's
   // container without ever entering it. Same DO, same cipher, same key as
   // `user_credentials` — a different row shape, because a binding carries a
@@ -130,7 +179,13 @@ export function initUserTables(sql: SqlExec): void {
   reconcileSqlExecColumns(sql, 'user_config', USER_CONFIG_ADDED_COLUMNS);
 
   // In-flight Codex device-code state (deviceAuthId + userCode), one per
-  // attempt. Cleared on successful poll or disconnect.
+  // attempt. SETTLED, never deleted: `generation` has to keep rising across
+  // attempts, so the row survives its own completion and `settled_at` is what
+  // makes it invisible. A poll captures the generation before its network wait
+  // and commits only if the row still carries it and is still open — otherwise
+  // a reply from a superseded attempt would write its tokens over the attempt
+  // the owner is actually approving, and a reply arriving after `disconnect`
+  // would reconnect an account that had just been disconnected.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS codex_device_flow (
       id              INTEGER PRIMARY KEY CHECK (id = 1),
@@ -138,9 +193,12 @@ export function initUserTables(sql: SqlExec): void {
       user_code       TEXT NOT NULL,
       poll_interval   INTEGER NOT NULL,
       portal_url      TEXT NOT NULL,
-      started_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      started_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      generation      INTEGER NOT NULL DEFAULT 1,
+      settled_at      INTEGER
     )
   `);
+  reconcileSqlExecColumns(sql, 'codex_device_flow', CODEX_DEVICE_FLOW_ADDED_COLUMNS);
 
   // User-level MCP server registry. Tokens + dynamic client registrations
   // live under separate keys written by DurableObjectOAuthClientProvider into
@@ -226,30 +284,51 @@ export function initUserTables(sql: SqlExec): void {
   initDeviceInflightTable(sql);
 
   // Browser sessions, as the ONE authority on whether a session cookie is
-  // still live. The cookie's own record lives in KV, where a delete reaches
-  // other colos within a minute, so KV cannot answer "was this revoked?" —
-  // a cookie copied off the browser replayed at another colo outlived logout
-  // by that window. This row does answer it: presence is active, deletion is
-  // revoked, and every cookie verification reads it in this user's own
-  // Durable Object, which is one place from every colo.
+  // still live AND on what it stands for. KV holds a projection of the same
+  // fields, and only a projection, because a KV write and a KV delete both
+  // take up to a minute to reach every colo: KV cannot answer "was this
+  // revoked?" (a cookie copied off the browser and replayed at a lagging colo
+  // outlived logout by that window) and it cannot answer "does this session
+  // exist yet?" either (the first request after a sign-in redirect, at a colo
+  // the write had not reached, read as signed out and sent the browser back
+  // into a sign-in that would lose the same race). This row answers both from
+  // every colo: presence is active, deletion is revoked.
   //
-  // Two columns and no more. Revocation is the row's absence, so there is no
-  // `revoked_at` bit to disagree with it, and nothing reads a creation time.
-  // The index makes the lazy expiry delete on the verify path an indexed range
-  // delete, so it stays cheap on an account with a long sign-in history and
-  // there is no sweeper and no alarm.
+  // The identity columns are written once, with the row, and never updated —
+  // they are what this cookie has meant since it was minted, so a rename lands
+  // on the next sign-in rather than rewriting history here. Revocation is the
+  // row's absence, so there is no `revoked_at` bit to disagree with it, and
+  // nothing reads a creation time. The index makes the lazy expiry delete on
+  // the verify path an indexed range delete, so it stays cheap on an account
+  // with a long sign-in history and there is no sweeper and no alarm.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_browser_sessions (
-      token_hash TEXT PRIMARY KEY,
-      expires_at INTEGER NOT NULL
+      token_hash   TEXT PRIMARY KEY,
+      expires_at   INTEGER NOT NULL,
+      email        TEXT,
+      display_name TEXT,
+      provider     TEXT,
+      provider_sub TEXT,
+      auth_time    INTEGER
     )
   `);
+  reconcileSqlExecColumns(sql, 'user_browser_sessions', USER_BROWSER_SESSION_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_browser_sessions_exp
             ON user_browser_sessions (expires_at)`);
 
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is
   // stored. The CLI presents the raw token as Authorization: Bearer <token>.
+  //
+  // `authorization_hash` IS THE ONE-TIME PROPERTY OF THE APPROVAL. The device
+  // flow's own record lives in KV, which has no compare-and-swap and serves
+  // reads from each colo's cache, so "mark it consumed, then mint" is not a
+  // check: two polls could both read `approved` and both be handed a 180-day
+  // token. The row below is the check, because this Durable Object is the thing
+  // that mints — the claim and the mint are one INSERT, and the unique index
+  // makes a second mint against the same approval unrepresentable rather than
+  // merely unlikely. NULL for tokens minted outside that flow, and SQLite
+  // treats NULLs in a unique index as distinct, so those never collide.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_cli_tokens (
       token_hash  TEXT PRIMARY KEY,
@@ -257,9 +336,16 @@ export function initUserTables(sql: SqlExec): void {
       created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       expires_at  INTEGER NOT NULL,
       last_used_at INTEGER,
-      revoked_at  INTEGER
+      revoked_at  INTEGER,
+      authorization_hash TEXT
     )
   `);
+  reconcileSqlExecColumns(sql, 'user_cli_tokens', USER_CLI_TOKEN_ADDED_COLUMNS);
+  // A UNIQUE INDEX rather than a UNIQUE column: ALTER TABLE cannot add one, and
+  // this table predates the claim, so the constraint has to be reachable by a
+  // UserDO that already holds rows.
+  sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_cli_tokens_authorization
+            ON user_cli_tokens (authorization_hash)`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_cli_tokens_active ON user_cli_tokens (expires_at, revoked_at)`);
 
   // Long-lived, scoped CI access tokens (`pta_…`) — table shape owned by the

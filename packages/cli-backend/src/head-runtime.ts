@@ -13,14 +13,15 @@
 // allowedTools maps onto real tools) + record_evidence/record_decision +
 // split_subheads (recursive nested HeadController, depth-budgeted).
 
-import { generateText, type LanguageModel } from 'ai';
+import { type LanguageModel } from 'ai';
 import {
-  type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
+  type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport,
   type WebSearchProvider, type CodemodeProvider,
   type HeadSplitRequest, type HeadSplitResult,
+  type HeadMergeModelBinder, type ResolvedTurnProfile,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-  HeadCapture, beginModelOperation, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
-  extractJsonObject, MergeOutputSchema, normalizeUsage, reasoningEffortOptions,
+  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
+  headMergeLLM,
   localMissionScope,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
@@ -30,7 +31,6 @@ import { join } from 'node:path';
 import { makeSql, makeExecRaw, buildCLIHeadRuntime, type CLIRuntime } from './runtime';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
 import { kinuHome } from './home';
-import * as v from 'valibot';
 
 export interface CLIHeadRuntimeDeps {
   /** The session's model for a head that names none or cannot resolve theirs —
@@ -38,8 +38,12 @@ export interface CLIHeadRuntimeDeps {
    *  on first turn, so the session model may simply not exist yet when the
    *  runtime is built. */
   model: () => LanguageModel;
-  /** Provider prefix from the normalized model spec. */
-  providerFamily?: string;
+  /** The profile the merge's `judge` route resolves against — the same seam the
+   *  Cloudflare backend hands `createHeadRuntime`. A thunk, read per merge. */
+  profile: () => Promise<ResolvedTurnProfile>;
+  /** How this session turns that routed (spec, effort) pair into a client. The
+   *  only merge decision left locally; core owns the rest. */
+  bindMergeModel: HeadMergeModelBinder;
   /** Resolve a per-fork model spec (`HeadInput.model`) to a model. Without it
    *  every head runs `model` above, which made the per-fork `model` field —
    *  advertised on the `agents` fork schema and honoured by the cf backend —
@@ -79,10 +83,10 @@ export interface CLIHeadRuntimeDeps {
    *  instead, and two writers for one call is how a total learns to
    *  double-count. The merge is neither of those: `summarizeCost` (core
    *  heads/controller.ts:611-624) folds only the HEADS' reports, so this call —
-   *  made by the parent, in the parent's process, on the parent's model — is
-   *  counted nowhere else. It reports as `judge`, which is what it is: one
-   *  grading/synthesis pass over what the forks came back with. */
-  reportModelCall?: ModelCallSink;
+   *  made by the parent, in the parent's process — is counted nowhere else.
+   *  REQUIRED for exactly that reason: core's policy takes a sink rather than an
+   *  optional one, because an unreported merge is spend no total ever sees. */
+  reportModelCall: ModelCallSink;
   /** Where the merge call's operation lifecycle — its start/end rows — is
    *  filed. Rides beside `reportModelCall` for the same reason core's
    *  `generateJson` keeps them on one `spend`: two facts about ONE call, and
@@ -106,7 +110,12 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
         async abort(reason: string) { flag.aborted = true; flag.reason = reason; },
       };
     },
-    mergeLLM: (prompt) => mergeViaLLM(deps, prompt),
+    mergeLLM: headMergeLLM({
+      profile: deps.profile,
+      bindMergeModel: deps.bindMergeModel,
+      reportModelCall: deps.reportModelCall,
+      operations: deps.operations,
+    }),
   };
   return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
 }
@@ -252,39 +261,4 @@ async function runLocalSplit(
     childHeadIds: result.headIds,
     headCount: result.costSummary.headCount,
   };
-}
-
-/** The merge synthesis call — return parsed JSON; the HeadController validates it
- *  against MergeOutputSchema and falls back on a bad/throwing response. */
-async function mergeViaLLM(deps: CLIHeadRuntimeDeps, prompt: string): Promise<MergeOutput> {
-  const providerOptions = reasoningEffortOptions('low', deps.providerFamily ?? '');
-  const request: Parameters<typeof generateText>[0] = {
-    model: deps.model(),
-    prompt,
-  };
-  if (providerOptions) request.providerOptions = providerOptions;
-  // The frame opens BEFORE the request, so a call that never returns leaves a
-  // start row naming the merge rather than nothing at all.
-  const operation = beginModelOperation(
-    { source: 'judge', operations: deps.operations },
-    'generate_json',
-  );
-  let result;
-  try {
-    result = await generateText(request);
-  } catch (err) {
-    operation.failed({ cause: err });
-    throw err;
-  }
-  // Reported BEFORE the schema check, and deliberately: a reply that arrived and
-  // was billed still cost what it cost, even when the merge then rejects it as
-  // unparseable. The OPERATION also ends here for the same reason — it
-  // succeeded; what the output turns out to be is the controller's verdict. A
-  // call that THREW reports nothing — it produced no usage and, as far as this
-  // seam can see, was not billed; its frame closes failed above instead.
-  const usage = normalizeUsage(result.totalUsage);
-  const modelId = result.response.modelId;
-  operation.completed({ usage, modelId });
-  deps.reportModelCall?.({ source: 'judge', usage, modelId });
-  return v.parse(MergeOutputSchema, extractJsonObject(result.text));
 }

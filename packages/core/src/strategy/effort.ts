@@ -15,7 +15,10 @@ import type { streamText } from 'ai';
 export const REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
-type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+/** Provider-namespaced request options, as the AI SDK declares them. Named here
+ *  because this file is where an effort BECOMES one, and every caller that
+ *  carries a derived set across a seam needs to say so in a type. */
+export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 
 export function isReasoningEffort<Value>(value: Value): value is Value & ReasoningEffort {
   return value === 'low' || value === 'medium' || value === 'high';

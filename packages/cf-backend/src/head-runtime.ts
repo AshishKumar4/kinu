@@ -15,20 +15,20 @@
  * and where the spend is filed (a root writes its own log; a facet's SQLite is one
  * Durable Object away from the total, so it reports over RPC).
  *
- * The merge MODEL is not one of those parameters, and used to be. Both call
- * sites passed their own stored chat spec, so a synthesis filed as `judge`
- * spend ran on whatever model the conversation was set to. It resolves through
- * `MODEL_ROUTE_POLICY` now — one route, one effort, both from the profile the
- * caller hands in.
+ * The merge MODEL, EFFORT and SPEND LABEL are not among those parameters, and
+ * they are no longer decided here at all. `headMergeLLM` in core owns them, so
+ * this backend and the local one resolve one policy rather than two agreeing by
+ * inspection — they did not agree: the local merge ran the session's chat model
+ * at a hardcoded effort and filed it as `judge` anyway. All that is left on this
+ * side is `bindMergeModel`, which turns the routed (spec, effort) pair into a
+ * client through the owner's provider registry, because normalising a spec
+ * against that registry is genuinely this backend's job and nothing else here is.
  */
 
 import {
-  generateJson,
-  MergeOutputSchema,
-  resolveModelRoute,
+  headMergeLLM,
   type HeadGrounding,
   type HeadRuntime,
-  type MergeOutput,
   type ModelCallSink,
   type ModelOperationSink,
   type ResolvedTurnProfile,
@@ -46,7 +46,8 @@ interface HeadRuntimeDeps {
    *  tree's workspace. */
   readonly identity: () => Promise<ExplorationFacetIdentity>;
   /** The owner-scoped model services this actor already owns. Never a second
-   *  registry — that was the duplication. */
+   *  registry — that was the duplication. The merge's only use of them is
+   *  binding the route core resolved. */
   readonly models: Pick<OwnedModelServices, 'resolveModelWithEffort'>;
   /** The profile the merge's `judge` route resolves against.
    *
@@ -60,9 +61,9 @@ interface HeadRuntimeDeps {
   /** Where the merge call's cost is filed. */
   readonly reportModelCall: ModelCallSink;
   /** Where the merge call's operation lifecycle — its start/end rows — is
-   *  filed. Rides `spend` beside `report`: two facts about ONE call, and a
-   *  caller that wired them separately could report a cost for an operation
-   *  it never opened. */
+   *  filed. Rides `spend` beside the cost sink inside the policy: two facts
+   *  about ONE call, and a caller that wired them separately could report a
+   *  cost for an operation it never opened. */
   readonly operations?: ModelOperationSink;
   /** Omit ⇒ n=1 merge and empty head scores (`HeadRuntime.grounding`). */
   readonly grounding?: HeadGrounding;
@@ -71,26 +72,20 @@ interface HeadRuntimeDeps {
 export function createHeadRuntime(deps: HeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     spawnHead: async (input) => spawnHeadFacet(deps.host, input, await deps.identity()),
-    mergeLLM: async (prompt) => {
-      // The `'judge'` literal appears once and feeds BOTH the route and the
-      // spend label below, so the model and its attribution cannot drift apart.
-      // `reasoningEffort` comes from the resolution too: the tier that chose the
-      // model chose how hard to run it, where a constant here was a second
-      // decision nobody made.
-      const route = resolveModelRoute('judge', await deps.profile());
-      if (!route) throw new Error('the head merge cannot use the fixed platform model route');
-      const { model, providerOptions } = deps.models.resolveModelWithEffort(
+    mergeLLM: headMergeLLM({
+      profile: deps.profile,
+      // The one backend-local decision: a spec is normalised against the
+      // OWNER's provider registry before its family decides the provider
+      // options, which is why core hands the route over instead of resolving
+      // the client itself. Effort included, from the same resolution — the tier
+      // that chose the model chose how hard to run it, and a constant here was a
+      // second decision nobody made.
+      bindMergeModel: (route) => deps.models.resolveModelWithEffort(
         route.model, route.reasoningEffort,
-      );
-      const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
-        model,
-        schema: MergeOutputSchema,
-        prompt,
-        spend: { source: 'judge', report: deps.reportModelCall, operations: deps.operations },
-      };
-      if (providerOptions) options.providerOptions = providerOptions;
-      return generateJson(options);
-    },
+      ),
+      reportModelCall: deps.reportModelCall,
+      operations: deps.operations,
+    }),
   };
   if (deps.grounding) runtime.grounding = deps.grounding;
   return runtime;

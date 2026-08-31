@@ -155,8 +155,30 @@ declare global {
      *  allowlist nobody can audit, and these are addresses rather than
      *  credentials. Unset or empty ⇒ the control plane is unreachable, which is
      *  the correct default for a deployment that has not named its operators.
-     *  A `provider: 'dev'` identity is refused whatever this contains. */
+     *  A `provider: 'dev'` identity is refused whatever this contains.
+     *  It is the INNER half of the gate: `CONTROL_PLANE_ACCESS_*` below is the
+     *  outer one, and both must admit the same address. */
     CONTROL_PLANE_ADMINS?: string;
+    /** The Cloudflare Access organization guarding `/control*` and
+     *  `/api/control*`: `https://<team-name>.cloudflareaccess.com`. Becomes both
+     *  the JWKS origin the assertion's signature is checked against and the
+     *  pinned `iss` — a signature alone proves only that SOME Access org signed
+     *  the token, so without this any Cloudflare customer's org is a valid signer
+     *  for this admin plane. A var, not a secret: it is a public hostname that
+     *  appears in every token, and one nobody can read is one nobody can audit.
+     *  Unset or empty ⇒ the admin plane answers 404 to everyone, including its
+     *  operators. Read from the Zero Trust dashboard when the Access application
+     *  is created; `scripts/infra-verify.ts` blocks a production deploy without
+     *  it. See control-plane/access-gate.ts. */
+    CONTROL_PLANE_ACCESS_TEAM_DOMAIN?: string;
+    /** The audience (AUD) tag of that Access application — the 64-hex value the
+     *  dashboard shows beside it. Pinned as the assertion's `aud`, because within
+     *  one organization a token minted for a DIFFERENT application is still
+     *  validly signed by the same keys; the AUD is the only thing that scopes it
+     *  to this one. A var for the same reason as the team domain: it is an
+     *  identifier carried in the clear by every token, not a credential. Unset or
+     *  empty ⇒ the admin plane answers 404 to everyone. */
+    CONTROL_PLANE_ACCESS_AUD?: string;
   }
 }
 

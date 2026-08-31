@@ -4389,7 +4389,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     await session.end();
   });
 
-  test('both CLI head-runtime roots hand the session\'s operation sink over', () => {
+  test('both CLI head-runtime roots hand over the same sinks and the same merge policy', () => {
     // The runtime is constructed inside this module at exactly two sites; each
     // must pass the session sink, or a head's non-turn calls strand uncounted.
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'local-session.ts'), 'utf8');
@@ -4399,8 +4399,19 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     // before calling; the model-rebind root inlines them. Each assertion ends
     // at that root's own call, so neither can pass for the other.
     const ctorRoot = source.slice(source.indexOf('const headRuntimeOptions'), calls[0]!);
-    expect(ctorRoot).toContain('operations: this.modelOperations');
     const rebindRoot = source.slice(calls[1]!, source.indexOf('});', calls[1]!));
-    expect(rebindRoot).toContain('operations: this.modelOperations');
+    for (const root of [ctorRoot, rebindRoot]) {
+      expect(root).toContain('operations: this.modelOperations');
+      // The merge routes off the profile through the ONE local binder both
+      // routed lanes share. A root that named its own model or its own effort
+      // here is how this backend came to run the session's chat model at a
+      // constant `'low'` while filing the call as `judge` spend.
+      expect(root).toContain('profile: () => this.routingProfile()');
+      expect(root).toContain('bindMergeModel: (route) => this.bindRouteModel(route)');
+      expect(root).not.toContain('providerFamily');
+      // And derives no effort of its own: the tier that chose the model chose
+      // how hard to run it, and `bindRouteModel` is the one place that reads it.
+      expect(root).not.toContain('reasoningEffortOptions');
+    }
   });
 });

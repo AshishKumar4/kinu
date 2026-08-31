@@ -11,6 +11,7 @@ import { RateLimitError } from '../src/cli/auth-store';
 import { handleCliRequest } from '../src/cli/routes';
 import type { KvStore } from '../src/lib/kv';
 import type { UserCaller } from '../src/user/workspace-capability';
+import { sha256Hex } from '../src/lib/crypto';
 import * as v from 'valibot';
 
 const ErrorResponseSchema = v.object({ error: v.string() });
@@ -42,9 +43,20 @@ function handled(response: Response | null): Response {
 function setupEnv() {
   const kv = makeKv();
   const minted: string[] = [];
+  const claimed: string[] = [];
   const userDO = {
     async ensureProfile() {},
-    async mintCliToken(_caller: UserCaller, userId: string, label?: string) {
+    async mintCliToken(_caller: UserCaller, userId: string, authorizationHash: string, label?: string) {
+      // The real UserDO makes a second mint against one approval impossible
+      // with a unique index (unit-user-authority-races.test.ts drives that
+      // against the real object). This double refuses the same way, in the same
+      // words, so what is exercised HERE is the flow's half of the contract:
+      // that the poll names the approval at all, and that it turns the DO's
+      // refusal into the answer the CLI already understands.
+      if (claimed.includes(authorizationHash)) {
+        throw new Error('That CLI authorization has already been redeemed.');
+      }
+      claimed.push(authorizationHash);
       const token = `ptc_${userId}_testtoken`;
       minted.push(`${label ?? ''}:${token}`);
       return { token, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
@@ -53,6 +65,7 @@ function setupEnv() {
   return {
     kv,
     minted,
+    claimed,
     env: testEnv({
       AUTH_KV: kv,
       UserDO: {
@@ -74,7 +87,7 @@ function brokenKv(): KvStore {
 
 describe('KV-backed CLI auth store', () => {
   test('approves and consumes a CLI auth request exactly once', async () => {
-    const { env, kv, minted } = setupEnv();
+    const { env, kv, minted, claimed } = setupEnv();
     const userId = '0123456789abcdef0123456789abcdef';
 
     const started = await startCliAuth(env, 'https://kinu.example.com', 'https://kinu.example.com', 'Ashish terminal', '127.0.0.1');
@@ -101,6 +114,34 @@ describe('KV-backed CLI auth store', () => {
     expect(second.status).toBe('expired');
     expect(second.message).toContain('already delivered');
     expect(minted).toHaveLength(1);
+
+    // ONE APPROVAL, ONE TOKEN, and the claim that holds it to that is the
+    // mint's own: the KV record it was read from cannot enforce this — no
+    // compare-and-swap, and colo-cached reads — so the poll names the approval
+    // and the Durable Object refuses the second redemption. Here the KV record
+    // is deliberately rewound to `approved` first, which is exactly what a
+    // stale colo read looks like.
+    await kv.put(
+      `cli-auth:device:${await sha256Hex(started.deviceToken)}`,
+      JSON.stringify({
+        userCode: started.userCode,
+        deviceName: 'Ashish terminal',
+        status: 'approved',
+        origin: 'https://kinu.example.com',
+        userId,
+        userEmail: 'ashish@example.com',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+        approvedAt: Date.now(),
+      }),
+      { expirationTtl: 600 },
+    );
+    const replayed = await pollCliAuth(env, started.deviceToken, '127.0.0.1');
+    expect(replayed.status).toBe('expired');
+    expect(replayed.message).toContain('already delivered');
+    expect(replayed.token).toBeUndefined();
+    expect(minted).toHaveLength(1);
+    expect(claimed).toEqual([await sha256Hex(started.deviceToken)]);
   });
 
   test('the advertised polling cadence remains permitted for the full auth lifetime', async () => {

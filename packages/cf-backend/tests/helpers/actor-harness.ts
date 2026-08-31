@@ -28,7 +28,9 @@ import {
   projectJsonValue,
   type BackgroundJobStore, type JsonValue,
   type DeviceConsentDecision, type DeviceConsentRequest, type DeviceStatus,
-  type WorkMode, DEFAULT_MERGE_STRATEGY, type JsonObject,
+  type WorkMode, type JsonObject,
+  startBranchHead, branchHeadId,
+  type HeadInput, type HeadReport, type HeadRuntime,
   type ShellApprovalRequest,
   type FactsStore, type SleepTimeUpdate,
   type AgentSignal, type SignalOutcome,
@@ -346,20 +348,96 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  whose head never reports is exactly the case the durable journal path
    *  exists for. A REJECTED handle would be an unhandled rejection the moment it
    *  was created, before any effect ever read it. */
+  /**
+   * Spawn one branch head THROUGH ITS OWN PRODUCER — `startBranchHead` over a
+   * HeadRuntime that stands in for the facet transport and nothing else.
+   *
+   * The journal rows are therefore production's, including the one thing a
+   * hand-written row cannot get right: a branch run's single head is journalled
+   * under a DERIVED id (`branchHeadId(runId)`), not under the run id. Seeding
+   * `id: runId` normalised that away, and a cold replay reading the wrong id
+   * passed against the fake exactly as it failed against production.
+   *
+   * `report` null leaves the head RUNNING — spawned, with no report — which is
+   * the state an eviction mid-flight really leaves. Otherwise the head reports it
+   * at once, whatever status it carries.
+   *
+   * The facet is registered too, because `spawnHeadFacet` registers one before it
+   * runs anything and the reclamation sweep reads exactly that registry. The
+   * facet's RPCs are workerd-only, so what stands in for the run is the report;
+   * the registration is real.
+   */
+  async harnessSpawnBranchHead(
+    id: string, task: string,
+    report: Pick<HeadReport, 'status' | 'summary' | 'errorMessage'> | null,
+  ): Promise<void> {
+    const runtime: HeadRuntime = {
+      spawnHead: async (input: HeadInput) => {
+        await this.subAgent(this.explorationFacet(), input.id);
+        return {
+          id: input.id,
+          run: async () => {
+            if (report === null) return new Promise<HeadReport>(() => { /* never reports */ });
+            const reported: HeadReport = {
+              id: input.id, status: report.status, summary: report.summary,
+              evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
+              toolCalls: [], stepCount: 1, usage: {}, wallClockMs: 1,
+            };
+            return report.errorMessage === undefined
+              ? reported
+              : { ...reported, errorMessage: report.errorMessage };
+          },
+          abort: async () => { await Promise.resolve(); },
+        };
+      },
+      mergeLLM: () => { throw new Error('a steer branch is one head and never merges'); },
+    };
+    const handle = await startBranchHead(runtime, this.headJournal, { id, task, inheritedContext: [] });
+    if (report !== null) await handle.result;
+  }
+
   /** Record one branch head as having REPORTED, the way its own run does. The
    *  journal is the authority a cold replay reads, so a settlement test needs a
    *  head that reported rather than one that merely existed. */
-  harnessRecordBranchReport(id: string, task: string, summary: string): void {
-    this.headJournal.insertSpawn({
-      id, parentId: null, rootId: id, depth: 0, task, mode: 'build',
-      rationale: 'a steer branch', inheritedContext: [],
-      budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: DEFAULT_MERGE_STRATEGY,
-    });
+  async harnessRecordBranchReport(id: string, task: string, summary: string): Promise<void> {
+    await this.harnessSpawnBranchHead(id, task, { status: 'completed', summary });
+  }
+
+  /** Land the report of a head spawned by {@link harnessSpawnBranchHead} with
+   *  none — the journal write its own run makes when it finishes, addressed by
+   *  the same derived head id the spawn used. */
+  harnessReportBranchHead(id: string, summary: string): void {
     this.headJournal.recordReport({
-      id, status: 'completed', summary,
+      id: branchHeadId(id), status: 'completed', summary,
       evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
       toolCalls: [], stepCount: 1, usage: {}, wallClockMs: 1,
     });
+  }
+
+  /** The journalled status of a branch run's single head, or null when no row
+   *  exists — the authority a cold replay reads, under the id it reads it by. */
+  harnessBranchHeadStatus(id: string): string | null {
+    return this.headJournal.readHeadView(branchHeadId(id))?.status ?? null;
+  }
+
+  /** Mark every head spawned so far `interrupted`, through the journal's own
+   *  cold-activation transition — the non-terminal status a reconciliation
+   *  writes before the resume gate decides anything. The bound is what keeps it
+   *  from touching a head seeded after this call. */
+  harnessMarkHeadsInterrupted(): void {
+    this.headJournal.markInterrupted({ spawnedBefore: Date.now() + 1 });
+  }
+
+  /** The facet reclamation pass `onStart` detaches, AWAITED — the sweep that
+   *  decides which exploration facet keeps its storage. */
+  harnessReclaimSettledExplorationFacets(): Promise<void> {
+    return this.reclaimSettledExplorationFacets();
+  }
+
+  /** The exploration facets this workspace still holds storage for, by name.
+   *  Read through the SDK's own registry, which is what the sweep deletes from. */
+  harnessExplorationFacets(): string[] {
+    return this.listSubAgents(this.explorationFacet()).map((facet) => facet.name);
   }
 
   /** Forget the live handles, leaving only the durable journal — the state a
@@ -382,8 +460,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       id, task,
       handle: Promise.resolve({
         id, task,
+        // The report a real head resolves with carries the HEAD's id, which a
+        // branch derives from the run id — the same shape the journal holds.
         result: Promise.resolve({
-          id, status: 'completed' as const, summary,
+          id: branchHeadId(id), status: 'completed' as const, summary,
           evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
           toolCalls: [], stepCount: 1, usage: {}, wallClockMs: 1,
         }),

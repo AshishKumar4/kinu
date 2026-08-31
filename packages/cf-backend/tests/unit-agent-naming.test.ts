@@ -1,16 +1,9 @@
-// Agent naming — the P1a single-prompt-box flow: slug for the DO id, a
-// deterministic provisional title, and the roster title-precedence rule.
+// Agent naming — the P1a single-prompt-box flow: a deterministic provisional
+// title, and the roster title-precedence rule. The DO id's slug is core's, and
+// its only caller-visible form is `mintSubordinateName`, tested there
+// (packages/core/tests/unit-agent-identity-naming.test.ts).
 import { describe, test, expect } from "bun:test";
-import { slugifyName, deriveWorkspaceTitle, resolveWorkspaceTitle } from "../src/lib/agent-naming";
-
-describe("slugifyName", () => {
-  test("lowercases, hyphenates, trims, caps at 24 chars", () => {
-    expect(slugifyName("Research Rust Frameworks")).toBe("research-rust-frameworks");
-    expect(slugifyName("  Build a Benchmark!!  ")).toBe("build-a-benchmark");
-    expect(slugifyName("A".repeat(40))).toBe("a".repeat(24));
-    expect(slugifyName("!!!")).toBe("");
-  });
-});
+import { deriveWorkspaceTitle, resolveWorkspaceTitle } from "../src/lib/agent-naming";
 
 describe("deriveWorkspaceTitle", () => {
   test("takes the first non-empty line, collapses whitespace, caps at 60", () => {

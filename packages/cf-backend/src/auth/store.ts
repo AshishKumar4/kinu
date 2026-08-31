@@ -1,16 +1,29 @@
-// Browser auth state: one-time OAuth handoff state and browser sessions.
+// Browser auth state: the OAuth handoff, and browser sessions.
 //
-// OAuth handoff state is one-time and short-lived, so KV is the whole of it.
+// The handoff is one-time, short-lived, and half of it is in the browser. KV
+// holds the record a callback spends; the browser holds a random binding
+// cookie whose HASH is in that record. Both halves are burned by the callback
+// that spends them, so a callback URL is worth nothing away from the browser
+// that started the sign-in. Without that half, the URL is bearer authority:
+// an attacker completes a sign-in in their own browser, hands the resulting
+// `?code=&state=` link to a victim, and the victim's browser comes back
+// holding the attacker's session.
 //
-// A session is not. Its KV record carries the identity as it stood at sign-in,
-// and that is all it is trusted for: a KV delete reaches other colos only
-// within a minute, so KV cannot say whether a session was REVOKED. A cookie
-// copied off the browser and replayed at a lagging colo outlived logout by
-// exactly that window. One row in the user's own Durable Object says it
-// instead, every cookie verification reads that row, and the token carries the
-// user id that addresses it — so neither verification nor logout depends on a
-// cached read to find the authority. There is no remembered verdict and no
-// KV-only fallback: a request that cannot reach the authority is refused.
+// A session is not one-time. What it stands for is written ONCE, at sign-in,
+// into a row in the user's own Durable Object — the email, provider, subject
+// and auth time the cookie has meant ever since — and that same row is the
+// only thing that says the session is still live. KV carries a projection of
+// those fields, and only a projection: a KV delete reaches other colos within
+// a minute, so KV cannot say a session was REVOKED (a cookie copied off the
+// browser and replayed at a lagging colo outlived logout by exactly that
+// window), and a KV write is no faster, so KV cannot say a session EXISTS
+// either (the first request after a sign-in redirect, at a colo the write had
+// not reached, read as signed out and sent the browser back into a sign-in
+// that would lose the same race). Every verification reads the row, and the
+// token carries the user id that addresses it — so neither verification nor
+// logout depends on a cached read to find the authority. There is no
+// remembered verdict and no KV-only pass: a request that cannot reach the
+// authority is refused.
 //
 // The durable half of an identity is not here. It lives in the user's own
 // Durable Object, addressed by a userId DERIVED from the verified email
@@ -23,8 +36,8 @@
 
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from './providers';
-import type { UserDO } from '../user/user-do';
-import { randomToken, sha256Hex } from '../lib/crypto';
+import type { BrowserSessionIdentity, LiveBrowserSession, UserDO } from '../user/user-do';
+import { randomToken, sha256Hex, timingSafeEqual } from '../lib/crypto';
 import { readKvJson, writeKvJson, type KvStore } from '../lib/kv';
 import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
 import { classify, diagnostics, toKinuError, type KinuError } from '@kinu.run/core/obs';
@@ -39,6 +52,16 @@ export interface OAuthStateInput {
   nonce?: string | null;
   returnTo: string;
   redirectUri: string;
+}
+
+/** A started sign-in. The provider echoes `state` back; the browser carries
+ *  `binding` in its own cookie. Both are needed to spend the record, and
+ *  neither is derivable from the other. Minted together here so no caller can
+ *  start a handoff that is bound to nothing. */
+export interface OAuthHandoff {
+  state: string;
+  binding: string;
+  expiresAt: number;
 }
 
 export interface OAuthProfile {
@@ -66,11 +89,19 @@ const OAuthStateSchema = v.object({
   nonce: v.nullable(v.string()),
   returnTo: v.string(),
   redirectUri: v.string(),
+  /** SHA-256 of the binding the initiating browser was handed. The record
+   *  never holds the binding itself, exactly as it never holds the state. */
+  bindingHash: v.string(),
   createdAt: v.number(),
   expiresAt: v.number(),
 });
 export type OAuthStateRecord = v.InferOutput<typeof OAuthStateSchema>;
 
+/** The projection of a session row that KV carries. Written from the row's own
+ *  value, so every field but the last two is the row's; `userId` is written so
+ *  a record is self-describing to whoever reads the namespace, and read from
+ *  the TOKEN on the verify path, where the addressed object is the authority
+ *  for it. */
 const SessionSchema = v.object({
   userId: v.string(),
   email: v.string(),
@@ -91,9 +122,10 @@ export async function deriveUserId(email: string): Promise<string> {
 export async function createOAuthState(
   kv: KvStore,
   input: OAuthStateInput,
-): Promise<{ state: string; expiresAt: number }> {
+): Promise<OAuthHandoff> {
   const now = Date.now();
   const state = randomToken(32);
+  const binding = randomToken(32);
   const expiresAt = now + OAUTH_STATE_TTL_MS;
   const record: OAuthStateRecord = {
     provider: input.provider,
@@ -101,26 +133,38 @@ export async function createOAuthState(
     nonce: input.nonce ?? null,
     returnTo: sanitizeReturnTo(input.returnTo),
     redirectUri: input.redirectUri,
+    bindingHash: await sha256Hex(binding),
     createdAt: now,
     expiresAt,
   };
   await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, expiresAt);
-  return { state, expiresAt };
+  return { state, binding, expiresAt };
 }
 
 /** Read and burn the state a `/auth/<provider>/start` redirect handed out.
  *  Deleted before it is judged, so a second callback carrying the same state
- *  finds nothing even if it is already in flight. */
+ *  finds nothing even if it is already in flight — and the binding is spent
+ *  with it, because the only copy of its hash was in the record.
+ *
+ *  `binding` is what the handoff cookie carried on THIS callback. A callback
+ *  that presents none, or one from another browser, is refused before
+ *  anything in the record is acted on: the record names the provider, the
+ *  PKCE verifier and the place to land, and none of that is owed to a browser
+ *  that did not start the sign-in. */
 export async function consumeOAuthState(
   kv: KvStore,
   state: string,
   provider: OAuthProviderId,
+  binding: string | null,
 ): Promise<OAuthStateRecord> {
   const key = `oauth-state:${await sha256Hex(state)}`;
   const record = await readKvJson(kv, key, OAuthStateSchema);
   await kv.delete(key);
 
   if (!record) throw new Error('OAuth state is invalid or already used.');
+  if (!binding || !timingSafeEqual(await sha256Hex(binding), record.bindingHash)) {
+    throw new Error('OAuth state was not issued to this browser. Start sign-in again.');
+  }
   if (record.provider !== provider) throw new Error('OAuth state provider mismatch.');
   if (record.expiresAt <= Date.now()) throw new Error('OAuth state expired. Start sign-in again.');
 
@@ -144,18 +188,23 @@ export async function createSession(env: AuthStoreEnv, profile: OAuthProfile): P
   const expiresAt = now + SESSION_TTL_MS;
   const caller = await ownerCaller(env);
   const authority = sessionAuthority(env, identity.userId);
+  // ONE value for both stores, so the authority's row and the projection of it
+  // cannot come to disagree about what this cookie stands for.
+  const minted: BrowserSessionIdentity = {
+    email: identity.email,
+    displayName: identity.displayName ?? null,
+    provider: identity.provider ?? profile.provider,
+    sub: identity.sub,
+    authTime: now,
+  };
 
   // The authority goes first, so a cookie is never outstanding against a
   // session nothing can revoke.
-  await authority.registerBrowserSession(caller, tokenHash, expiresAt);
+  await authority.registerBrowserSession(caller, tokenHash, expiresAt, minted);
   try {
     await writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
       userId: identity.userId,
-      email: identity.email,
-      displayName: identity.displayName ?? null,
-      provider: identity.provider ?? profile.provider,
-      sub: identity.sub,
-      authTime: now,
+      ...minted,
       expiresAt,
     }, expiresAt);
   } catch (writeFailed) {
@@ -200,11 +249,14 @@ export class SessionAuthorityUnavailableError extends Error {
  *  {@link SessionAuthorityUnavailableError} when the answer cannot be obtained,
  *  which is never the same as "not signed in".
  *
- *  The KV record is the identity as it stood at sign-in: email and display name
- *  are snapshotted there rather than read from the user's Durable Object, so a
- *  rename lands on next sign-in and no request pays a second round trip for a
- *  name. Whether the session still EXISTS is the authority's answer, on every
- *  request, with nothing cached in front of it. */
+ *  Whether the session still EXISTS is the authority's answer, on every
+ *  request, with nothing cached in front of it. The identity is the one written
+ *  at sign-in — a rename lands on the next sign-in — read from the KV
+ *  projection when that has arrived at this colo and from the authority's own
+ *  row when it has not, which is what the first request after a sign-in
+ *  redirect can get. Both copies were written from one value, so neither can
+ *  contradict the other, and neither can revive a revoked session: revocation
+ *  deletes the row, and the row is what is read here. */
 export async function verifySession(env: AuthStoreEnv, token: string): Promise<AuthIdentity | null> {
   const userId = parseSessionTokenUserId(token);
   if (!userId) return null;
@@ -230,13 +282,18 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
     }));
     return null;
   }
-  if (!record || record.expiresAt <= Date.now()) return null;
+  // A projection past the deadline it carries is no projection: kv.ts floors a
+  // TTL at a minute, so a record can outlive its own deadline by that much.
+  // Nothing about lifetime is DECIDED here — the row drops lapsed sessions in
+  // the same transaction as the read below — this only picks which copy of the
+  // identity is read.
+  const projected = record && record.expiresAt > Date.now() ? record : null;
 
   // The caller is resolved outside the try: a deployment holding no owner
   // secret is a misconfiguration with its own answer, not a Durable Object
   // that cannot be reached.
   const caller = await ownerCaller(env);
-  let live: boolean;
+  let live: LiveBrowserSession | null;
   try {
     live = await sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash);
   } catch (unreachable) {
@@ -244,13 +301,23 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
   }
   if (!live) return null;
 
+  // The projection normally answers. When it has not reached this colo yet, the
+  // row that just answered for liveness carries the same fields, so the first
+  // request after a sign-in is served rather than sent back to a sign-in that
+  // would only lose the same race. `identity` is null only on a row registered
+  // before the row carried one, where the projection is still its only copy.
+  const snapshot = projected ?? live.identity;
+  if (!snapshot) return null;
+
   return {
-    userId: record.userId,
-    email: record.email,
-    sub: record.sub,
-    provider: record.provider,
-    displayName: record.displayName,
-    authTime: record.authTime,
+    // From the token, which is the object just consulted — never from a
+    // record, so no stored field can point an accepted cookie at another user.
+    userId,
+    email: snapshot.email,
+    sub: snapshot.sub,
+    provider: snapshot.provider,
+    displayName: snapshot.displayName,
+    authTime: snapshot.authTime,
   };
 }
 

@@ -1,5 +1,10 @@
+// Every cookie the Kinu app itself sets, and the one list of them. The names
+// are owned by the modules that set them — `auth/session.ts` for the two
+// authority cookies — and a cookie added there without an entry here reaches
+// agent-controlled guest code.
 const KINU_COOKIE_NAMES = new Set([
   '__Host-kinu_session',
+  '__Host-kinu_oauth_state',
   '__Host-kinu_d1_bookmark',
 ]);
 

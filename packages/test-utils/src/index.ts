@@ -5,6 +5,7 @@ export * from './scratch';
 export * from './vfs';
 export * from './llm';
 export * from './turn-model';
+export * from './merge-policy';
 export * from './network';
 export * from './runtime';
 export * from './provider';

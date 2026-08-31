@@ -239,6 +239,21 @@ export interface ExecutorProvider {
   listExposedPorts?(): Promise<ExposedPortInfo[]>;
 }
 
+/**
+ * An executor that ANSWERS for its ports — all three methods present, so a
+ * composer over one needs no presence check.
+ *
+ * The optionality on {@link ExecutorProvider} is about executors that have no
+ * port surface to describe at all, not about executors that decline: `inline`,
+ * `parent` and the device tunnel all implement the trio and answer
+ * `supported: false`. A builder whose implementation always does the same
+ * returns this instead, because the alternative is a caller asserting away an
+ * absence its own module ruled out.
+ */
+export type PortAnsweringExecutor =
+  ExecutorProvider
+  & Required<Pick<ExecutorProvider, 'exposePort' | 'unexposePort' | 'listExposedPorts'>>;
+
 /** Result of attempting to expose a port. Discriminated by `supported`. */
 export type PortExposureResult =
   | {

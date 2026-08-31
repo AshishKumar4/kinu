@@ -101,11 +101,11 @@ export {
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
   isPlaceholderWorkspaceTitle,
+  mintSubordinateName,
   parseWorkspaceTitle,
   planWorkspaceTitle,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
-  slugifyName,
   workspaceSlug,
   workspaceTitleFromMission,
   type SuggestedWorkspaceIdentity,
@@ -826,6 +826,7 @@ export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
   newBranchId, isSteerBranchRunId, branchHeadId,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
+  branchOutcomeFromJournal,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
@@ -1361,7 +1362,7 @@ export { isoDate, today, nowMs } from './utils/date';
 // synthesis. Distinct from sub-agents (isolated context, structured return)
 // and MCTS branches (single short LLM call for evaluation).
 export type {
-  HeadId, HeadBudget, HeadInput, HeadReport,
+  HeadId, HeadBudget, HeadInput, HeadReport, HeadReportStatus, HeadUnsettledStatus,
   HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
   Evidence, Decision, ArtifactRef,
   SplitRequest, MergeResult, HeadScore, MergeStrategy,
@@ -1371,6 +1372,8 @@ export type {
 export {
   DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
   deriveChildBudget, budgetExhausted,
+  HEAD_REPORT_STATUSES, HEAD_UNSETTLED_STATUSES,
+  headStatusUnsettled, storedHeadReportStatus,
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
   LiveHeadJournal, type AnnounceHeadActivity,
@@ -1382,6 +1385,10 @@ export {
   type SplitPhaseEvent,
   type HeadJournalPort,
   MergeOutputSchema, DecisionSchema, type MergeOutput,
+  // The head merge's model/effort/spend policy — resolved here so both backends
+  // resolve it identically
+  headMergeLLM,
+  type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
@@ -1778,7 +1785,7 @@ export type {
 } from './profiles';
 export {
   resolveModelRoute,
-  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile,
+  loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile,
   type ProfileAuthorityInputs, type ProviderCatalogSnapshot, type TierSource,
   type ResolveTurnProfileInput, type ResolveAgentTurnProfileInput, type ResolvedTurnProfile,
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,

@@ -39,8 +39,16 @@
 # Usage:
 #   bun run deploy                           # production
 #   bun run deploy:staging                   # staging
-#   bash scripts/deploy.sh <production|staging>
+#   bash scripts/deploy.sh <production|staging> [--bootstrap]
 #   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh staging
+#
+# `--bootstrap` is for the deploy that DECLARES something only a deploy can
+# create — a Durable Object class new to `migrations`, a new container, a new
+# route. It moves the pre-deploy infrastructure phase to `bootstrap`, which
+# defers exactly those and nothing else. It skips no verification: every
+# external prerequisite still refuses the deploy before the upload, and step 5
+# below re-checks everything with no tolerance whatever, in both environments,
+# whether this flag was passed or not.
 #
 # Idempotent: safe to re-run. Exits on first failure.
 set -uo pipefail
@@ -73,7 +81,37 @@ case "$KINU_ENV" in
     ;;
   *)
     echo -e "${RED}Unknown environment '$KINU_ENV'.${NC}"
-    echo "Usage: scripts/deploy.sh <production|staging>"
+    echo "Usage: scripts/deploy.sh <production|staging> [--bootstrap]"
+    exit 2
+    ;;
+esac
+
+# ── Bootstrap, or not ─────────────────────────────────────────
+#
+# EXPLICIT, and only ever about the PRE-DEPLOY phase.
+#
+# A deploy that declares a resource only a deploy can create cannot pass a
+# pre-deploy check demanding that resource already exist, and no provisioning
+# command can close the gap: wrangler has no verb that creates a Durable Object
+# namespace, a container application or a route. Measured: `ControlPlaneDO` was
+# added to `migrations`, staging's 55 pre-deploy gates passed, and `gate:infra`
+# then refused the only deploy that could have created the namespace — naming
+# `bun run infra:provision` as the fix, which cannot.
+#
+# WHAT THIS FLAG DOES NOT DO. It skips no verification and it cannot. It moves
+# the pre-deploy phase to `bootstrap`, which defers ONLY resources the
+# infrastructure manifest marks `wrangler-deploy`; every external prerequisite —
+# secrets, KV, R2, Vectorize, DNS, the AI Gateway — still refuses the deploy
+# before the upload, and so does any lookup that merely failed. Step 5 below
+# runs the full phase with no tolerance at all, unconditionally, in both
+# environments, and its findings fail the deployment.
+KINU_BOOTSTRAP=0
+case "${2:-}" in
+  "") ;;
+  --bootstrap) KINU_BOOTSTRAP=1 ;;
+  *)
+    echo -e "${RED}Unknown option '$2'.${NC}"
+    echo "Usage: scripts/deploy.sh <production|staging> [--bootstrap]"
     exit 2
     ;;
 esac
@@ -81,6 +119,16 @@ esac
 # the `bun run gate:infra` line below stays one string for scripts/ladder.ts to
 # parse while still checking the environment being deployed.
 export KINU_DEPLOY_ENV="$KINU_ENV"
+# The pre-deploy phase, travelling beside that same line for that same reason.
+# ALWAYS ASSIGNED, in both arms: an ambient KINU_INFRA_PHASE from whatever shell
+# launched this must never decide how strictly a deploy nobody asked to
+# bootstrap is checked. There is no third value, and no value of it reaches the
+# upload without step 5 behind it.
+if [ "$KINU_BOOTSTRAP" = "1" ]; then
+  export KINU_INFRA_PHASE="bootstrap"
+else
+  export KINU_INFRA_PHASE="full"
+fi
 # The Cloudflare Vite plugin resolves named Wrangler environments at build
 # time. Passing `--env` only to the generated deploy config is too late: that
 # config already carries the root Worker's name, bindings, routes and assets.
@@ -401,6 +449,15 @@ fi
 
 # ── Step 1: Required pre-deploy gates ────────────────────────────
 echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
+if [ "$KINU_BOOTSTRAP" = "1" ]; then
+  echo -e "${BOLD}BOOTSTRAP: the pre-deploy infrastructure phase will DEFER resources this deploy creates.${NC}"
+  echo "  Deferred: only what the manifest marks \`wrangler-deploy\` — Durable Object namespaces,"
+  echo "            container applications, routes, crons, inert bindings, the Worker itself."
+  echo "  Still refused before the upload: every secret, KV namespace, R2 bucket, Vectorize index,"
+  echo "            DNS record and AI Gateway, and any lookup that merely failed."
+  echo "  Step 5 re-checks all of it after the upload with no tolerance, and fails this deploy if"
+  echo "            anything deferred did not appear."
+fi
 
 # Keep the commands explicit and unconditional. These are the same strict,
 # credential-free gates used by the repository workflows, plus the complete
@@ -409,6 +466,7 @@ echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
 run_required_gate "Strict lint and TypeScript" bun run check
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
+run_required_gate "Bench Python suites" bun run gate:python-suites
 run_required_gate "Exploration policy mutations" bun run test:mutation
 run_required_gate "Devbox durability decisions" bun test packages/devbox/
 run_required_gate "Test-utils suite" bun test packages/test-utils/
@@ -434,7 +492,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts
-run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts
+run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
 run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts
@@ -483,6 +541,12 @@ flush_gates
 # not refused for staging drift. `npx wrangler whoami` above is its precondition —
 # without a session it reports BLOCKED and non-zero rather than skipping. See
 # SERIAL_GATES in scripts/ladder.ts.
+#
+# It runs the phase KINU_INFRA_PHASE names: `full` normally, `bootstrap` when the
+# operator passed `--bootstrap`. The line itself stays ONE string because
+# scripts/ladder.ts parses these lines and holds them equal to LADDER, which is
+# why what varies per run travels in the environment beside it — exactly as
+# KINU_DEPLOY_ENV already does.
 run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra
 
 # BARRIER.
@@ -684,7 +748,38 @@ if [ "$SMOKE_FAIL" -ne 0 ]; then
   exit 1
 fi
 
-# ── Step 5: Summary ──────────────────────────────────────────────
+# ── Step 5: Post-deploy infrastructure verification ──────────────
+#
+# UNCONDITIONAL, IN BOTH ENVIRONMENTS, AND RELAXED BY NOTHING. This is the other
+# half of the pre-deploy phase and the reason `--bootstrap` is allowed to defer
+# anything at all: the upload has run, so every resource the deployed version
+# declares — Durable Object namespaces, the container application, the routes,
+# the cron, the Worker itself — exists now or this deployment failed. No flag, no
+# environment variable and no argument reaches this line with a weaker phase;
+# `--phase=post-deploy` is spelled here, on the argv, and it is the strictest of
+# the three.
+#
+# It runs AFTER the smoke test because the two ask different questions and this
+# one is the slower to settle: a route and a custom domain need a moment at the
+# edge, while the smoke test above only needs the origin to answer. And a green
+# smoke test does not answer this question at all — the site answered 200 with
+# the bindings it already had, and a namespace the new version declares while the
+# account never created it throws on the FIRST request down its own path, which
+# no public route touches.
+echo ""
+echo -e "${BOLD}Step 5: Post-deploy infrastructure verification${NC}"
+if bun scripts/infra-verify.ts "$KINU_ENV" --phase=post-deploy; then
+  echo -e "${GREEN}✅ Every declared resource exists and is bound${NC}"
+else
+  echo ""
+  echo -e "${RED}❌ Post-deploy infrastructure verification failed for $KINU_ENV.${NC}"
+  echo "   The Worker uploaded and the smoke test passed, and a resource the deployed version"
+  echo "   declares is not in this account. The findings above name each one. Whatever the"
+  echo "   public route answers, this deployment is not good."
+  exit 1
+fi
+
+# ── Step 6: Summary ──────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Deploy complete — $KINU_ENV.${NC}"
 echo "================================="

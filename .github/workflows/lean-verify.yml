@@ -4,23 +4,45 @@ name: Lean 4 Verification
 permissions:
   contents: read
 
+# NO `paths:` FILTER, and its absence is the gate.
+#
+# `scripts/verify-lean.sh` runs four things, and only two of them read `lean/`:
+#
+#   lake build              lean/**
+#   check-no-false.sh       lean/**
+#   check-traceability.mjs  lean/traceability.yaml, lean/**, AND every `.ts` file
+#                           a tsRef names — measured 143 cited declarations,
+#                           including packages/core/tests/ and
+#                           scripts/fixtures/storage-matrix/
+#   lean-citations.ts       EVERY tracked text source. Measured: 1,987 files, 95
+#                           module / 47 theorem / 1 line citations.
+#
+# The filter used to be `lean/**`, `packages/**/src/**/*.ts`, `scripts/verify-lean.sh`,
+# `.github/actions/setup-lean/**` and the two workflow files. That is a strict
+# SUBSET of what the gates read, and the gap was not hypothetical: Lean citations
+# live in `docs/` (3 files), `scripts/` (5), `packages/core/tests/` (6) and
+# `tests/bench/patches/` (1), and the traceability manifest cites
+# `packages/core/tests/` and `scripts/fixtures/storage-matrix/` directly. Neither
+# `scripts/lean-citations.ts` nor `lean/check-traceability.mjs` — two of the four
+# gates, including the one that reads the widest corpus — was a trigger path at
+# all, so editing a gate did not run it. On a pull request, `ci.yml`'s
+# `verify-lean` job is skipped (`push` to `main` only), so this workflow was the
+# ONLY thing standing behind those files, and it did not fire for them: a broken
+# citation added to `docs/FORMAL-SPEC.md` reached `main` with no Lean gate having
+# run.
+#
+# Enumerating the real union is the same thing as not filtering — the citation
+# corpus is every tracked text file — so the filter is gone rather than widened
+# into a list nobody could keep true. It is affordable because
+# `.github/actions/setup-lean` caches `lean/.lake` keyed on
+# `hashFiles('lean/lean-toolchain', 'lean/**/*.lean')`: a change outside `lean/`
+# is an exact cache hit and `lake build` replays in seconds instead of rebuilding
+# 330 theorems. `scripts/lean-citations.test.ts` asserts this file declares no
+# path filter narrower than the corpus, so re-adding one is a test failure that
+# names the files it would drop.
 on:
   push:
-    paths:
-      - 'lean/**'
-      - 'packages/**/src/**/*.ts'
-      - 'scripts/verify-lean.sh'
-      - '.github/actions/setup-lean/**'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/lean-verify.yml'
   pull_request:
-    paths:
-      - 'lean/**'
-      - 'packages/**/src/**/*.ts'
-      - 'scripts/verify-lean.sh'
-      - '.github/actions/setup-lean/**'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/lean-verify.yml'
 
 jobs:
   verify:

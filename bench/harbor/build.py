@@ -18,7 +18,9 @@ import asyncio
 import atexit
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +45,51 @@ async def build_kinu_binary(repo_root: Path) -> Path:
         return binary
 
 
+BUILD_SCRATCH_PREFIX = ".harbor-build-"
+
+#: A sweep only removes a leaked directory once nothing can still be using it.
+#: One hour is far longer than a `bun build --compile` (seconds) and far shorter
+#: than the interval between bench runs, so a concurrent build is never touched.
+BUILD_SCRATCH_MAX_AGE_SECONDS = 3600.0
+
+
+def sweep_build_scratch(
+    repo_root: Path, now: float, max_age_seconds: float = BUILD_SCRATCH_MAX_AGE_SECONDS
+) -> list[Path]:
+    """Remove `.harbor-build-*` directories this repo leaked, and name them.
+
+    The mint below registers an ``atexit`` removal, which covers a normal exit
+    and nothing else: a SIGKILL, an OOM kill, or a container torn down mid-build
+    leaves the directory behind. It is minted INSIDE the repository root on
+    purpose — ``bun build --compile`` writes a sparse file that does not survive
+    landing on another device, and ``/tmp`` is usually a separate mount — so it
+    is also outside every existing sweeper: ``SCRATCH_PREFIXES`` in
+    ``packages/test-utils/src/scratch.ts`` catalogues ``$TMPDIR`` prefixes and
+    ``scripts/preflight.ts`` reclaims from there, neither of which can see a
+    sibling of ``package.json``. ``.gitignore`` hides the leak rather than
+    removing it, which is why it accumulated unnoticed.
+
+    Age-based, and it never touches the directory the caller is about to mint:
+    this runs BEFORE the mint. Errors are swallowed per entry — a sweep that
+    aborts a bench run because someone else's leftovers are unreadable has made
+    things worse — but every removal is returned so the caller can report it.
+    """
+    swept: list[Path] = []
+    for candidate in sorted(repo_root.glob(f"{BUILD_SCRATCH_PREFIX}*")):
+        if not candidate.is_dir():
+            continue
+        try:
+            if now - candidate.stat().st_mtime < max_age_seconds:
+                continue
+            shutil.rmtree(candidate, ignore_errors=True)
+        except OSError:
+            continue
+        if not candidate.exists():
+            swept.append(candidate)
+    return swept
+
+
+
 def _compile(repo_root: Path) -> Path:
     entrypoint = repo_root / CLI_ENTRYPOINT
     if not entrypoint.exists():
@@ -59,7 +106,13 @@ def _compile(repo_root: Path) -> Path:
     # Emit into the repo's own filesystem: bun's --compile writes a sparse file
     # that does not survive landing on a different device, and /tmp is often a
     # separate mount.
-    out_dir = Path(tempfile.mkdtemp(prefix=".harbor-build-", dir=repo_root))
+    #
+    # Sweep BEFORE minting, so a directory this repo leaked to a SIGKILL is gone
+    # and the one we are about to create is never a candidate. `atexit` alone
+    # covers a normal exit and nothing else.
+    for leaked in sweep_build_scratch(repo_root, time.time()):
+        print(f"harbor: swept stale build scratch {leaked.name}", file=sys.stderr)
+    out_dir = Path(tempfile.mkdtemp(prefix=BUILD_SCRATCH_PREFIX, dir=repo_root))
     atexit.register(shutil.rmtree, out_dir, True)
     binary = out_dir / "kinu"
 

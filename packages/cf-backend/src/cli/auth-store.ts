@@ -11,6 +11,7 @@ import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { readKvJson, writeKvJson, type KvStore } from '../lib/kv';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store';
 import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
 import * as v from 'valibot';
@@ -23,6 +24,11 @@ export class RateLimitError extends Error {
     this.name = 'RateLimitError';
   }
 }
+
+/** `UserDO.mintCliToken`'s refusal when an approval has already been redeemed.
+ *  Matched rather than typed because it crosses a Durable Object RPC boundary,
+ *  where an error class does not survive and the message is the contract. */
+const AUTHORIZATION_SPENT = /already been redeemed/i;
 
 /** Caller-correctable auth-code failure (unknown / expired / already used)
  *  — routes map this to HTTP 400. Infra failures stay plain errors (500). */
@@ -242,15 +248,32 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
     return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
   }
 
-  // Consume BEFORE minting, so a token that was minted was always minted
-  // against a request already marked spent.
+  // KV IS THE TRANSPORT, NOT THE GATE. Marking the record consumed here is
+  // still worth doing — it is what a later poll of the same request reads back
+  // and what the approval page shows — but it cannot be the one-time check: KV
+  // has no compare-and-swap and serves reads from each colo's cache, so two
+  // polls of one approved request can both arrive here having read `approved`.
+  // The claim that actually holds is the mint's own, in the Durable Object that
+  // owns CLI tokens, keyed by this request's device hash.
   await writeKvJson(
     env.AUTH_KV, deviceKey(hash), { ...record, status: 'consumed' }, record.expiresAt + RETENTION_MS,
   );
 
   // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
   const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId)) as DurableObjectStub<UserDO>;
-  const minted = await userDO.mintCliToken(await ownerCaller(env), record.userId, record.deviceName);
+  let minted: { token: string; expiresAt: number };
+  try {
+    minted = await userDO.mintCliToken(await ownerCaller(env), record.userId, hash, record.deviceName);
+  } catch (cause) {
+    // The DO refused a second redemption of this approval. Error classes do not
+    // survive the RPC boundary, so the message is the contract — the same
+    // reading `workspace-create.ts` does of `claimOwner`'s refusal.
+    if (!AUTHORIZATION_SPENT.test(renderThrownChain({ cause }))) throw cause;
+    return {
+      status: 'expired',
+      message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.',
+    };
+  }
   return {
     status: 'approved',
     origin: record.origin,

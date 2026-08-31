@@ -6,10 +6,12 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes';
-import { createOAuthState } from '../src/auth/store';
+import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';
+import { calculatePKCECodeChallenge } from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
 import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
+import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
 
 const ORIGIN = 'https://kinu.example.com';
@@ -42,7 +44,9 @@ function setupEnv() {
   const config = new Map<string, string>();
   const userDO = {
     async ensureProfile(_caller: UserCaller) {},
-    async registerBrowserSession(_caller: UserCaller, _tokenHash: string, _expiresAt: number) {},
+    async registerBrowserSession(
+      _caller: UserCaller, _tokenHash: string, _expiresAt: number, _identity: BrowserSessionIdentity,
+    ) {},
     async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {
       credentials.push({ key, credential });
     },
@@ -98,25 +102,56 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
   return { fetchFake, tokenRequests };
 }
 
-async function loginViaCloudflare(env: Env, kv: FakeKv): Promise<Response> {
-  const { state } = await createOAuthState(kv, {
-    provider: 'cloudflare',
-    codeVerifier: 'test-code-verifier-test-code-verifier-test-1',
-    nonce: null,
-    returnTo: '/',
-    redirectUri: `${ORIGIN}/auth/cloudflare/callback`,
-  });
+/** One handoff as the `/start` redirect hands it out. */
+interface CloudflareHandoff {
+  /** What the provider will echo back on the callback. */
+  state: string;
+  /** What PKCE pinned this authorization to. */
+  codeChallenge: string;
+  /** The `Set-Cookie` the redirect gave the browser, verbatim — the half of
+   *  the handoff that never travels through the provider. */
+  setCookie: string;
+}
+
+async function startCloudflareLogin(env: Env): Promise<CloudflareHandoff> {
+  const response = await handleAuthRequest(new Request(`${ORIGIN}/auth/cloudflare/start`), env);
+  if (!response) throw new Error('auth route did not handle the sign-in start');
+  const location = response.headers.get('location');
+  if (!location) throw new Error(`sign-in start did not redirect: HTTP ${response.status}`);
+  const authorize = new URL(location);
+  const state = authorize.searchParams.get('state');
+  const codeChallenge = authorize.searchParams.get('code_challenge');
+  const setCookie = response.headers.getSetCookie()
+    .find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`));
+  if (!state || !codeChallenge || !setCookie) {
+    throw new Error(`sign-in start handed out no bound handoff: ${location}`);
+  }
+  return { state, codeChallenge, setCookie };
+}
+
+/** The provider's callback, as the browser carrying `setCookie` makes it —
+ *  or as one carrying none does, which is what a planted callback link is. */
+async function completeCloudflareLogin(
+  env: Env,
+  handoff: { state: string; setCookie?: string },
+): Promise<Response> {
   const callback = new URL(`${ORIGIN}/auth/cloudflare/callback`);
-  callback.searchParams.set('state', state);
+  callback.searchParams.set('state', handoff.state);
   callback.searchParams.set('code', 'auth-code-1');
-  const response = await handleAuthRequest(new Request(callback.toString()), env);
+  const response = await handleAuthRequest(new Request(callback.toString(), {
+    headers: handoff.setCookie === undefined ? {} : { cookie: handoff.setCookie.split(';')[0] },
+  }), env);
   if (!response) throw new Error('auth route did not handle the callback');
   return response;
 }
 
+function sessionCookieIn(response: Response): string | undefined {
+  return response.headers.getSetCookie().find((value) => value.startsWith('__Host-kinu_session='));
+}
+
 describe('Cloudflare IdP login attaches the Workers AI credential', () => {
   test('one login grants both the app session and a refreshable AI credential', async () => {
-    const { env, kv, credentials, config } = setupEnv();
+    const { env, credentials, config } = setupEnv();
     const { fetchFake, tokenRequests } = fakeCloudflareNetwork({
       access_token: 'cf-access-1',
       refresh_token: 'cf-refresh-1',
@@ -124,16 +159,20 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fetchFake;
     try {
-      const response = await loginViaCloudflare(env, kv);
+      const handoff = await startCloudflareLogin(env);
+      const response = await completeCloudflareLogin(env, handoff);
       expect(response.status).toBe(302);
       expect(response.headers.get('location')).toBe(`${ORIGIN}/`);
-      expect(response.headers.get('set-cookie')).toContain('__Host-kinu_session=');
+      expect(sessionCookieIn(response)).toContain('__Host-kinu_session=');
 
-      // The token exchange carried PKCE + the authorization code.
+      // The token exchange carried the authorization code and the verifier the
+      // challenge in the authorization request was derived from — PKCE end to
+      // end, over a verifier that never left this Worker.
       expect(tokenRequests).toHaveLength(1);
       expect(tokenRequests[0].get('grant_type')).toBe('authorization_code');
       expect(tokenRequests[0].get('code')).toBe('auth-code-1');
-      expect(tokenRequests[0].get('code_verifier')).toBe('test-code-verifier-test-code-verifier-test-1');
+      const verifier = tokenRequests[0].get('code_verifier') ?? '';
+      expect(await calculatePKCECodeChallenge(verifier)).toBe(handoff.codeChallenge);
 
       // The same authorization attached the Workers AI credential.
       expect(credentials).toHaveLength(1);
@@ -152,15 +191,98 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
   });
 
   test('re-login re-attaches a fresh credential over the stored one', async () => {
-    const { env, kv, credentials } = setupEnv();
+    const { env, credentials } = setupEnv();
     const originalFetch = globalThis.fetch;
     try {
       globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1', refresh_token: 'cf-refresh-1' }).fetchFake;
-      await loginViaCloudflare(env, kv);
+      await completeCloudflareLogin(env, await startCloudflareLogin(env));
       globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-2', refresh_token: 'cf-refresh-2' }).fetchFake;
-      await loginViaCloudflare(env, kv);
+      await completeCloudflareLogin(env, await startCloudflareLogin(env));
       expect(credentials.map((c) => c.credential.accessToken)).toEqual(['cf-access-1', 'cf-access-2']);
       expect(credentials[1].credential.refreshToken).toBe('cf-refresh-2');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+/**
+ * Login CSRF: an attacker who finishes a sign-in in their own browser holds a
+ * callback URL that used to be bearer authority. Handed to a victim — a link,
+ * an image, a redirect — it signed the victim's browser in as the attacker,
+ * who then read whatever the victim did in a session they own.
+ *
+ * The callback is only half the handoff now. The other half never travels
+ * through the provider, so it is only ever in the browser that started the
+ * sign-in.
+ */
+describe('a sign-in cannot be planted in another browser', () => {
+  test('a callback link carrying no handoff cookie signs nobody in', async () => {
+    const { env, credentials } = setupEnv();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+    try {
+      const attacker = await startCloudflareLogin(env);
+      const planted = await completeCloudflareLogin(env, { state: attacker.state });
+
+      expect(planted.status).toBe(400);
+      expect(sessionCookieIn(planted)).toBeUndefined();
+      expect(credentials).toEqual([]);
+
+      // The refusal spent the state on the way in, so the attacker cannot
+      // finish the sign-in they primed either.
+      expect((await completeCloudflareLogin(env, attacker)).status).toBe(400);
+      expect(credentials).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('a browser holding its own sign-in cannot spend somebody else\'s', async () => {
+    const { env } = setupEnv();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+    try {
+      const attacker = await startCloudflareLogin(env);
+      const victim = await startCloudflareLogin(env);
+
+      const planted = await completeCloudflareLogin(env, {
+        state: attacker.state, setCookie: victim.setCookie,
+      });
+      expect(planted.status).toBe(400);
+      expect(sessionCookieIn(planted)).toBeUndefined();
+
+      // Scoped to the handoff it belongs to: the victim's own sign-in, which
+      // the same cookie IS bound to, still completes.
+      const own = await completeCloudflareLogin(env, victim);
+      expect(own.status).toBe(302);
+      expect(sessionCookieIn(own)).toContain('__Host-kinu_session=');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('the handoff cookie is host-scoped, script-invisible, and burned by the callback', async () => {
+    const { env } = setupEnv();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+    try {
+      const handoff = await startCloudflareLogin(env);
+      expect(handoff.setCookie).toContain('HttpOnly');
+      expect(handoff.setCookie).toContain('Secure');
+      // `Lax`, because the provider's callback IS a cross-site top-level
+      // navigation and `Strict` would withhold the cookie from it.
+      expect(handoff.setCookie).toContain('SameSite=Lax');
+      expect(handoff.setCookie).toContain('Path=/');
+      // `__Host-` forbids a Domain, which is what keeps a subdomain from
+      // writing the binding a callback would then be accepted with.
+      expect(handoff.setCookie).not.toContain('Domain=');
+
+      const done = await completeCloudflareLogin(env, handoff);
+      expect(done.status).toBe(302);
+      expect(done.headers.getSetCookie()).toContain(
+        `${OAUTH_STATE_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

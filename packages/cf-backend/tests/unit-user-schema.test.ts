@@ -51,7 +51,7 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
-  test('repairs UserDO tables created before workspace lifecycle and catalog CAS columns', () => {
+  test('repairs UserDO tables created before workspace lifecycle, catalog CAS and session identity columns', () => {
     const db = new Database(':memory:');
     db.exec(`
       CREATE TABLE user_workspaces (
@@ -70,6 +70,11 @@ describe('UserDO schema bootstrap', () => {
         updated_at INTEGER NOT NULL
       );
       INSERT INTO user_config (key, value, updated_at) VALUES ('default_model', 'workers-ai/example', 1);
+      CREATE TABLE user_browser_sessions (
+        token_hash TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+      );
+      INSERT INTO user_browser_sessions (token_hash, expires_at) VALUES ('legacy-hash', 4102444800000);
     `);
 
     initUserTables(sqlExec(db));
@@ -92,6 +97,16 @@ describe('UserDO schema bootstrap', () => {
     expect(required(db.query<{ version: number }, []>(
       `SELECT version FROM user_config WHERE key = 'default_model'`,
     ).get())).toEqual({ version: 0 });
+    expect(columns(db, 'user_browser_sessions')).toEqual([
+      'token_hash', 'expires_at', 'email', 'display_name', 'provider', 'provider_sub', 'auth_time',
+    ]);
+    // A session registered before the row carried an identity keeps its
+    // liveness — a deploy must not sign everybody out — and reports NULL rather
+    // than a fabricated identity. SQLite cannot ADD a NOT NULL column without a
+    // default, and a default here would be exactly that fabrication.
+    expect(required(db.query<{ email: string | null; auth_time: number | null }, []>(
+      `SELECT email, auth_time FROM user_browser_sessions WHERE token_hash = 'legacy-hash'`,
+    ).get())).toEqual({ email: null, auth_time: null });
     db.close();
   });
 

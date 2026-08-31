@@ -2,18 +2,21 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { isRunnableSuite, trackedFiles } from "../../../scripts/sources.ts";
+import { ANTI_SLOP_RULES, isAntiSlopRuleSuite, trackedFiles } from "../../../scripts/sources.ts";
 
-const RULES = "tools/oxlint/anti-slop/rules/";
-const rulesDirectory = join(process.cwd(), RULES);
+const rulesDirectory = join(process.cwd(), ANTI_SLOP_RULES);
 
-// From the ONE enumeration, filtered — not a `readdirSync` of its own. A second
-// walk is a second answer to "which rule suites exist", and this one would have
-// counted a stray editor temp file or a build artefact as a suite while the lint
-// that governs the directory ignores both.
+// From the ONE enumeration, narrowed by the predicate `sources.ts` exports — not
+// a `readdirSync` and not a `startsWith` of its own. A second walk is a second
+// answer to "which rule suites exist", and this one would have counted a stray
+// editor temp file or a build artefact as a suite while the lint that governs the
+// directory ignores both. The predicate is shared with `scripts/ladder.test.ts`,
+// which holds the 41 suites here equal to the 12 the command line names plus the
+// set this loop imports: the two consumers cannot disagree about which files this
+// runner reaches.
 const suites = trackedFiles()
-  .filter((file) => file.startsWith(RULES) && isRunnableSuite(file))
-  .map((file) => file.slice(RULES.length))
+  .filter(isAntiSlopRuleSuite)
+  .map((file) => file.slice(ANTI_SLOP_RULES.length))
   .sort();
 
 assert.ok(

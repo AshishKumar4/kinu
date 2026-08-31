@@ -50,7 +50,7 @@ import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from
 import { err, json, safeJson } from '../lib/http';
 import { retryTransientDO } from '../lib/do-rpc';
 import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
-import { authorizeAdmin } from '../control-plane/admin-caller';
+import { isControlPlaneOperator } from '../control-plane/admin-caller';
 import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
@@ -121,12 +121,20 @@ export async function handleUserRequest(
   // ── Profile ────────────────────────────────────────────────────────
   if (path === '/profile' && method === 'GET') {
     const profile = await stub.getProfile(await ownerCaller(env));
-    // Whether this session may reach the admin control plane, decided by the
-    // SAME function that guards `/api/control/*` rather than by a second reading
-    // of the allowlist — so the nav entry and the gate cannot disagree, and the
-    // link is absent for everyone the gate would 404. It is not authorization:
-    // the gate answers for itself on every request.
-    const controlPlane = authorizeAdmin(env, identity, { mutating: false }).ok;
+    // Whether this session's email is an operator address, read through the SAME
+    // allowlist function `authorizeAdmin` uses rather than by a second reading of
+    // the var — so the nav entry and the gate cannot disagree about who is on the
+    // list, and the link is absent for everyone the gate would 404.
+    //
+    // It is NOT authorization, and it cannot be: the gate's outer half is a
+    // Cloudflare Access assertion, and Access covers `/control*` and
+    // `/api/control*` only — this profile read carries none. So the flag answers
+    // the one half it can see and the gate answers both on every control-plane
+    // request. An operator who is on the allowlist but outside the Access policy
+    // sees the link and gets a 404 behind it, which is the correct failure: the
+    // remedy is an Access policy change, and hiding the link would hide the
+    // problem.
+    const controlPlane = isControlPlaneOperator(env, identity);
     return json(profile === null ? null : { ...profile, controlPlane });
   }
 

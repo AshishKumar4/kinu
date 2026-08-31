@@ -356,7 +356,7 @@ Classification is narrow: 429 and 529 always count; a 503 counts only when statu
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `KinuSandbox` (@cloudflare/sandbox); one container per agent |
 | `ControlPlaneDO` | Durable Object | The admin surface's singleton (one instance, `site`): a fleet index and an audit log. It holds no business logic, and every action it exposes proxies an existing `@callable` on the object that already owns that state |
-| `AUTH_KV` | KV namespace | Sessions, one-time OAuth state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`, and so does the one row that says a session is still live. `kinu-auth`, and `kinu-auth-staging` in staging |
+| `AUTH_KV` | KV namespace | Sessions, one-time OAuth handoff state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`, and so does the one row that says a session is still live and what it stands for — the KV session record is a projection of that row. `kinu-auth`, and `kinu-auth-staging` in staging |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
 | `MEMORY_VECTORS` | Vectorize | `kinu-memory`, and `kinu-memory-staging` in staging (384-dim, cosine); optional hybrid recall on top of FTS5 |

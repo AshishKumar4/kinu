@@ -2,10 +2,12 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import {
   consumeOAuthState, createOAuthState, createSession, deriveUserId, revokeSession, verifySession,
-  type OAuthProfile,
+  type OAuthProfile, type OAuthStateInput,
 } from '../src/auth/store';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { makeKv, type FakeKv } from './helpers/kv';
+import { sha256Hex } from '../src/lib/crypto';
+import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
 
 interface TestNamespace<Stub> {
@@ -32,18 +34,21 @@ function setupEnv() {
   const ensuredProfiles: string[] = [];
   // The authority behind a cookie, at the RPC seam. The real table is
   // exercised against the real UserDO in unit-auth-session-revocation.
-  const rows = new Map<string, number>();
+  const rows = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
   const userDO = {
     async ensureProfile(_caller: UserCaller, email: string, displayName?: string) {
       ensuredProfiles.push(`${email}:${displayName ?? ''}`);
       return { email, displayName: displayName ?? null, createdAt: 1, lastSeenAt: 1 };
     },
-    async registerBrowserSession(_caller: UserCaller, tokenHash: string, expiresAt: number) {
-      rows.set(tokenHash, expiresAt);
+    async registerBrowserSession(
+      _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
+    ) {
+      rows.set(tokenHash, { expiresAt, identity });
     },
     async verifyBrowserSession(_caller: UserCaller, tokenHash: string) {
-      for (const [hash, expiresAt] of rows) if (expiresAt <= Date.now()) rows.delete(hash);
-      return rows.has(tokenHash);
+      for (const [hash, row] of rows) if (row.expiresAt <= Date.now()) rows.delete(hash);
+      const row = rows.get(tokenHash);
+      return row ? { identity: row.identity } : null;
     },
     async revokeBrowserSession(_caller: UserCaller, tokenHash: string) {
       rows.delete(tokenHash);
@@ -142,53 +147,97 @@ describe('the browser auth store', () => {
     expect(liveSessions()).toHaveLength(1);
     expect(await verifySession(env, 'not-a-kinu-token')).toBeNull();
   });
+
+  test('the authority answers when no KV projection has arrived, and stops the moment it is revoked', async () => {
+    const { env, kv } = setupEnv();
+    const created = await createSession(env, profile('cloudflare', 'cf-1', 'person@example.com'));
+    // What a colo the sign-in's KV write has not reached sees: no projection of
+    // the identity, and a row that is strongly consistent from everywhere.
+    await kv.delete(`session:${await sha256Hex(created.token)}`);
+
+    expect(await verifySession(env, created.token)).toEqual(created.identity);
+
+    // The same absence must not read as "trust the row" once the row is gone.
+    await revokeSession(env, created.token);
+    expect(await verifySession(env, created.token)).toBeNull();
+  });
 });
 
 describe('OAuth handoff state', () => {
-  test('state round-trips once and only once', async () => {
-    const kv = makeKv();
-    const { state } = await createOAuthState(kv, {
-      provider: 'cloudflare',
-      codeVerifier: 'verifier',
-      nonce: null,
-      returnTo: '/workspaces/jarvis',
-      redirectUri: 'https://kinu.example.com/auth/cloudflare/callback',
-    });
+  const started = (kv: FakeKv, overrides: Partial<OAuthStateInput> = {}) => createOAuthState(kv, {
+    provider: 'cloudflare',
+    codeVerifier: 'verifier',
+    nonce: null,
+    returnTo: '/',
+    redirectUri: 'https://kinu.example.com/auth/cloudflare/callback',
+    ...overrides,
+  });
 
-    const consumed = await consumeOAuthState(kv, state, 'cloudflare');
+  test('state round-trips once, and only for the browser it was issued to', async () => {
+    const kv = makeKv();
+    const { state, binding } = await started(kv, { returnTo: '/workspaces/jarvis' });
+
+    const consumed = await consumeOAuthState(kv, state, 'cloudflare', binding);
     expect(consumed).toMatchObject({
       provider: 'cloudflare',
       codeVerifier: 'verifier',
       returnTo: '/workspaces/jarvis',
     });
 
-    expect(consumeOAuthState(kv, state, 'cloudflare')).rejects.toThrow(/invalid or already used/);
+    await expect(consumeOAuthState(kv, state, 'cloudflare', binding))
+      .rejects.toThrow(/invalid or already used/);
+  });
+
+  test('a callback carrying no handoff cookie spends the state and signs nobody in', async () => {
+    const kv = makeKv();
+    const { state, binding } = await started(kv);
+
+    // This is the login-CSRF attempt: the attacker has a working `state` and
+    // hands the callback link to a browser that holds no binding for it.
+    await expect(consumeOAuthState(kv, state, 'cloudflare', null))
+      .rejects.toThrow(/not issued to this browser/);
+    // Burned before it was judged, so the refusal is not a free probe that
+    // leaves the link workable for whoever does hold the cookie.
+    await expect(consumeOAuthState(kv, state, 'cloudflare', binding))
+      .rejects.toThrow(/invalid or already used/);
+  });
+
+  test('a browser holding its own live handoff still cannot spend another', async () => {
+    const kv = makeKv();
+    const victim = await started(kv);
+    const attacker = await started(kv);
+
+    await expect(consumeOAuthState(kv, victim.state, 'cloudflare', attacker.binding))
+      .rejects.toThrow(/not issued to this browser/);
+    await expect(consumeOAuthState(kv, attacker.state, 'cloudflare', victim.binding))
+      .rejects.toThrow(/not issued to this browser/);
   });
 
   test('a callback from another provider cannot spend this state', async () => {
     const kv = makeKv();
-    const { state } = await createOAuthState(kv, {
-      provider: 'cloudflare',
-      codeVerifier: 'verifier',
-      nonce: null,
-      returnTo: '/',
-      redirectUri: 'https://kinu.example.com/auth/cloudflare/callback',
-    });
+    const { state, binding } = await started(kv);
 
-    expect(consumeOAuthState(kv, state, 'github')).rejects.toThrow(/provider mismatch/);
+    await expect(consumeOAuthState(kv, state, 'github', binding))
+      .rejects.toThrow(/provider mismatch/);
   });
 
   test('a hostile return_to is neutralised on the way in, not just on the way out', async () => {
     const kv = makeKv();
-    const { state } = await createOAuthState(kv, {
-      provider: 'cloudflare',
-      codeVerifier: 'verifier',
-      nonce: null,
-      returnTo: '//evil.example.com/steal',
-      redirectUri: 'https://kinu.example.com/auth/cloudflare/callback',
-    });
+    const { state, binding } = await started(kv, { returnTo: '//evil.example.com/steal' });
 
-    expect((await consumeOAuthState(kv, state, 'cloudflare')).returnTo).toBe('/');
+    expect((await consumeOAuthState(kv, state, 'cloudflare', binding)).returnTo).toBe('/');
+  });
+
+  test('neither half of the handoff is stored, so a KV dump replays nothing', async () => {
+    const kv = makeKv();
+    const { state, binding } = await started(kv);
+
+    const keys = kv.keys();
+    expect(keys).toEqual([`oauth-state:${await sha256Hex(state)}`]);
+    const stored = await kv.get(keys[0]) ?? '';
+    expect(stored).not.toContain(state);
+    expect(stored).not.toContain(binding);
+    expect(stored).toContain(await sha256Hex(binding));
   });
 });
 

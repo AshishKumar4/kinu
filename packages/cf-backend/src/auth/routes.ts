@@ -1,5 +1,8 @@
 import * as oauth from 'oauth4webapi';
-import { AuthError, SESSION_COOKIE_NAME, authenticateRequest, readSessionToken } from './session';
+import {
+  AuthError, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, authenticateRequest, readCookie,
+  readSessionToken,
+} from './session';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
   type OAuthProfile,
@@ -125,7 +128,7 @@ async function startOAuth(request: Request, env: Env, providerId: string): Promi
   const codeVerifier = oauth.generateRandomCodeVerifier();
   const codeChallenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
   const nonce = provider.kind === 'oidc' ? oauth.generateRandomNonce() : null;
-  const { state } = await createOAuthState(env.AUTH_KV, {
+  const { state, binding, expiresAt: handoffExpiresAt } = await createOAuthState(env.AUTH_KV, {
     provider: provider.id,
     codeVerifier,
     nonce,
@@ -147,12 +150,28 @@ async function startOAuth(request: Request, env: Env, providerId: string): Promi
     addProviderPrompt(authorizationUrl, provider);
   }
 
-  return redirect(authorizationUrl.toString(), {
-    headers: { 'cache-control': 'no-store' },
-  });
+  // The binding half of the handoff goes to the browser and nowhere else: the
+  // record in KV holds only its hash, so this cookie is what the callback
+  // proves the sign-in with.
+  const headers = new Headers({ 'cache-control': 'no-store' });
+  headers.append('set-cookie', cookie(OAUTH_STATE_COOKIE_NAME, binding, handoffExpiresAt));
+  return redirect(authorizationUrl.toString(), { headers });
 }
 
+/**
+ * A provider callback, and then the handoff cookie burned whatever the outcome.
+ *
+ * The state record it pairs with is deleted the moment it is read, so leaving
+ * the cookie in the browser would leave one spent half of a one-time pair
+ * behind — and a browser that keeps it is a browser that keeps offering it.
+ */
 async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | undefined, providerId: string): Promise<Response> {
+  const response = await completeOAuth(request, env, ctx, providerId);
+  response.headers.append('set-cookie', cookie(OAUTH_STATE_COOKIE_NAME, '', 0));
+  return response;
+}
+
+async function completeOAuth(request: Request, env: Env, ctx: ExecutionContext | undefined, providerId: string): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
   if (!provider) return html('Sign in unavailable', '<p>This sign-in provider is not configured.</p>', { status: 404 });
   if (!env.AUTH_KV) return html('Sign in unavailable', '<p>Browser auth storage is not configured.</p>', { status: 503 });
@@ -163,7 +182,9 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
 
   let stage = 'state';
   try {
-    const savedState = await consumeOAuthState(env.AUTH_KV, state, provider.id);
+    const savedState = await consumeOAuthState(
+      env.AUTH_KV, state, provider.id, readCookie(request, OAUTH_STATE_COOKIE_NAME),
+    );
     stage = 'metadata';
     const as = await getAuthorizationServer(provider);
     const client: oauth.Client = { client_id: provider.clientId };
@@ -189,7 +210,7 @@ async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | u
     }
     const destination = new URL(savedState.returnTo, url.origin).toString();
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', sessionCookie(session.token, session.expiresAt));
+    headers.append('set-cookie', cookie(SESSION_COOKIE_NAME, session.token, session.expiresAt));
     return redirect(destination, {
       headers,
     });
@@ -297,7 +318,7 @@ async function logout(request: Request, env: Env): Promise<Response> {
   }
 
   const headers = new Headers({ 'cache-control': 'no-store' });
-  headers.append('set-cookie', clearSessionCookie());
+  headers.append('set-cookie', cookie(SESSION_COOKIE_NAME, '', 0));
   return redirect(new URL(returnTo, url.origin).toString(), {
     headers,
   });
@@ -488,13 +509,15 @@ function addProviderPrompt(url: URL, provider: OAuthProviderConfig): void {
   }
 }
 
-function sessionCookie(token: string, expiresAt: number): string {
+/** Every cookie this app sets, and the one recipe it sets them with. `__Host-`
+ *  requires `Secure` and `Path=/` and forbids a `Domain`, so the cookie is
+ *  this exact origin's and no subdomain can write it. `Lax` rather than
+ *  `Strict`: an OAuth callback IS a cross-site top-level navigation, and
+ *  `Strict` would withhold the handoff cookie from the one request that has to
+ *  present it. An `expiresAt` already past clears the cookie. */
+function cookie(name: string, value: string, expiresAt: number): string {
   const maxAge = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
-  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
-}
-
-function clearSessionCookie(): string {
-  return `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 function stringClaim<Value>(value: Value): string | null {

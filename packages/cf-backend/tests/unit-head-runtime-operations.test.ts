@@ -2,58 +2,32 @@
  * The CF head runtime's merge synthesis: what model it runs on, and that it
  * files its operation lifecycle.
  *
- * `createHeadRuntime` passes the caller's operation sink through `spend`, so
- * core's `generateJson` opens and closes the frame around the merge call. The
- * MODEL comes from `MODEL_ROUTE_POLICY` — the merge files `judge` spend, and
- * `judge` is the account-wide `deep` tier — so the route and the spend label are
- * two readings of one decision. These tests drive `mergeLLM` directly; the spawn
- * substrate beside it is inert by construction.
+ * `createHeadRuntime` hands core's `headMergeLLM` a profile thunk and a model
+ * binder and nothing else, so the MODEL, the EFFORT and the SPEND LABEL are one
+ * decision made in core: the merge files `judge` spend, `judge` is the
+ * account-wide `deep` tier, and a tier is a (model, effort) pair.
+ *
+ * The route assertions compare against `MERGE_POLICY_BINDING` from
+ * `@kinu.run/test-utils` — the SAME value the local backend's suite compares
+ * against, over the same catalog — so "both backends resolve one policy" is an
+ * equality between two suites rather than two expectations maintained apart.
+ * These tests drive `mergeLLM` directly; the spawn substrate beside it is inert
+ * by construction.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import {
-  BUILTIN_PROFILE_CATALOG,
   MergeOutputSchema,
-  profileCatalogDigest,
-  resolveTurnProfile,
   type ModelCallReport,
   type ModelOperationEvent,
   type ReasoningEffort,
-  type ResolvedTurnProfile,
 } from '@kinu.run/core';
+import {
+  MERGE_POLICY_BINDING, MERGE_POLICY_SPEND_SOURCE, mergePolicyProfile,
+} from '@kinu.run/test-utils';
 import { createHeadRuntime } from '../src/head-runtime';
 import type { FacetHost } from '../src/facet-spawn';
-
-const DEFAULT_MODEL = 'fake/chat-default';
-const DEEP_MODEL = 'fake/deep-grader';
-
-/** A catalog whose `deep` slot is a DIFFERENT model at a DIFFERENT effort from
- *  `default`, so "did the merge take the deep route" has an observable answer.
- *  A catalog where every tier agrees could not distinguish a routed merge from
- *  one that simply used whatever it was handed. */
-function profileFixture(): ResolvedTurnProfile {
-  const catalog = {
-    ...BUILTIN_PROFILE_CATALOG,
-    tiers: {
-      default: { model: DEFAULT_MODEL, reasoningEffort: 'low' as const },
-      deep: { model: DEEP_MODEL, reasoningEffort: 'high' as const },
-    },
-  };
-  return resolveTurnProfile({
-    envelope: {
-      authority: { kind: 'account', accountId: 'acct-1' },
-      version: 1,
-      digest: profileCatalogDigest(catalog),
-      catalog,
-    },
-    provider: { revision: 'rev-1', availableModels: [DEFAULT_MODEL, DEEP_MODEL] },
-    roleId: 'general',
-    workMode: 'build',
-    availableTools: [],
-    activeSkills: [],
-  });
-}
 
 /** A scripted merge model: valid JSON unless the test says otherwise. */
 function mergeModel(text: string): MockLanguageModelV3 {
@@ -96,7 +70,7 @@ function runtimeWith(text: string) {
         return { model: mergeModel(text), providerOptions: undefined };
       },
     },
-    profile: async () => profileFixture(),
+    profile: async () => mergePolicyProfile(),
     reportModelCall: (report) => reports.push(report),
     operations: (event) => operations.push(event),
   });
@@ -139,13 +113,14 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
 
     await runtime.mergeLLM('merging the findings', MergeOutputSchema);
 
-    // The DEEP model, not the turn's chat model. The old wiring passed the
-    // caller's stored spec, so a synthesis reported as deep-tier grading ran on
-    // whatever the conversation was set to.
-    expect(resolved).toEqual([{ spec: DEEP_MODEL, effort: 'high' }]);
+    // The DEEP model at the DEEP tier's effort, not the turn's chat model at a
+    // constant. Compared against the shared binding rather than against local
+    // literals: the local backend's suite compares against this same value, so
+    // one of them drifting from the policy is a failure here.
+    expect(resolved).toEqual([MERGE_POLICY_BINDING]);
     // And the spend label agrees with the route it resolved, because one
-    // `'judge'` literal produced both.
-    expect(reports.map((r) => r.source)).toEqual(['judge']);
+    // `'judge'` literal in core produced both.
+    expect(reports.map((r) => r.source)).toEqual([MERGE_POLICY_SPEND_SOURCE]);
   });
 
   test('the route is read per call, so a rebound tier lands on the next merge', async () => {
@@ -156,7 +131,6 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
 
     // A thunk, not a captured value: `profile()` is asked again each time, so an
     // account that moves its deep tier does not need a new runtime to take effect.
-    expect(resolved).toHaveLength(2);
-    expect(resolved.every((r) => r.spec === DEEP_MODEL && r.effort === 'high')).toBe(true);
+    expect(resolved).toEqual([MERGE_POLICY_BINDING, MERGE_POLICY_BINDING]);
   });
 });

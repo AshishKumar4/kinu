@@ -16,7 +16,8 @@ import type { HeadRuntime, SpawnedHead } from '../src/heads/controller';
 import type { HeadInput, HeadReport } from '../src/heads/types';
 import {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, startBranchHead, settleBranchIntoTakes,
-  settlePendingBranches, type BranchStatusEvent, type PendingBranch,
+  settlePendingBranches, branchHeadId, branchOutcomeFromJournal,
+  type BranchStatusEvent, type PendingBranch,
 } from '../src/steer-branch';
 
 function setup() {
@@ -103,6 +104,74 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     expect(aborts).toEqual(['live turn did not complete']);
     release();
     await handle.result;
+  });
+});
+
+/**
+ * What a COLD settle reads, and the two things it has to get right: whether the
+ * comparison is still owed, and which status to report when it is not.
+ *
+ * Driven through a real journal row rather than a literal, because the row's ID
+ * is half the defect this reading exists for — a branch's head is journalled
+ * under `branchHeadId(runId)`, and both backends' replays used to look it up
+ * under the run id and find nothing at all.
+ */
+describe('branchOutcomeFromJournal — the journal read a cold settle makes', () => {
+  /** One real branch run, left with the status a caller wants to read back. */
+  async function journalled(
+    status: HeadReport['status'] | null, summary = 'the branch answer', errorMessage?: string,
+  ) {
+    const { sql } = setup();
+    const journal = new HeadJournal(sql);
+    const { runtime } = fakeRuntime(async (input) => {
+      if (status === null) return new Promise<HeadReport>(() => { /* spawned, never reports */ });
+      const reported = completedReport(input.id, summary, status);
+      return errorMessage === undefined ? reported : { ...reported, errorMessage };
+    });
+    const handle = await startBranchHead(runtime, journal, { task: 'try the other way', inheritedContext: [] });
+    if (status !== null) await handle.result;
+    return { journal, runId: handle.id };
+  }
+
+  /** The row a replay reads, addressed the way a replay addresses it. */
+  function readBack(journal: HeadJournal, runId: string) {
+    const head = journal.readHeadView(branchHeadId(runId));
+    if (head === null) throw new Error(`no journal row for the head of ${runId}`);
+    return branchOutcomeFromJournal(head);
+  }
+
+  test('a reported head comes back under its OWN status, not flattened to errored', async () => {
+    for (const status of ['completed', 'budget_exceeded', 'aborted', 'errored'] as const) {
+      const { journal, runId } = await journalled(status, 'what it found', 'the stated cause');
+      expect(readBack(journal, runId)).toEqual({
+        status, summary: 'what it found', errorMessage: 'the stated cause',
+      });
+    }
+  });
+
+  test('a reported head with no failure message carries none', async () => {
+    const { journal, runId } = await journalled('completed');
+    expect(readBack(journal, runId)).toEqual({ status: 'completed', summary: 'the branch answer' });
+  });
+
+  test('a head still executing is owed — under both unsettled statuses', async () => {
+    const { journal, runId } = await journalled(null);
+    // Spawned, no report.
+    expect(readBack(journal, runId)).toBeNull();
+    // And after a cold activation's first transition, which is not a settlement.
+    journal.markInterrupted();
+    expect(journal.readHeadView(branchHeadId(runId))?.status).toBe('interrupted');
+    expect(readBack(journal, runId)).toBeNull();
+  });
+
+  test('a status no journal writes is reported errored rather than owed forever', async () => {
+    const { journal, runId } = await journalled(null);
+    expect(branchOutcomeFromJournal({ status: 'teleported', summary: null, errorMessage: null })).toEqual({
+      status: 'errored', summary: '',
+      errorMessage: 'the branch head\'s journal row carries an unrecognized status "teleported"',
+    });
+    // The real row is untouched by that reading, and is still owed.
+    expect(readBack(journal, runId)).toBeNull();
   });
 });
 

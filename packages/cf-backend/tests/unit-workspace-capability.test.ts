@@ -4,13 +4,15 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
+import type { SqlExec } from '@kinu.run/core';
 import {
   CapabilityDeniedError,
   WORKSPACE_CAPABILITY_TIERS,
   ownerCaller,
   getWorkspaceTier,
   initWorkspaceCapabilityTables,
-  mintWorkspaceCapability,
+  commitWorkspaceCapability,
+  freshWorkspaceCapability,
   requireTier,
   revokeWorkspaceCapability,
   setWorkspaceTier,
@@ -24,6 +26,18 @@ function setup() {
   const sql = sqlExec(db);
   initWorkspaceCapabilityTables(sql);
   return { db, sql };
+}
+
+/** The two phases the UserDO drives, composed. These tests are about what the
+ *  store holds; the fence the UserDO puts BETWEEN them — its re-check that the
+ *  workspace is still mintable — is exercised where that fence lives, in
+ *  unit-user-authority-races.test.ts. */
+async function mintWorkspaceCapability(
+  sql: SqlExec, workspaceName: string,
+): Promise<{ token: string; tokenHash: string }> {
+  const fresh = await freshWorkspaceCapability();
+  commitWorkspaceCapability(sql, workspaceName, fresh.tokenHash);
+  return fresh;
 }
 
 function isWorkspaceCapability(value: string): value is WorkspaceCapability {
@@ -188,7 +202,13 @@ describe('the attenuation matrix', () => {
 
   test('the surviving capabilities are only the agent-function ones', () => {
     const kept = CAPABILITIES.filter((c) => WORKSPACE_CAPABILITY_TIERS[c] === 'shared');
-    expect(kept.sort()).toEqual(['credentials.model', 'profile.resolve', 'workspaces.rename_self']);
+    // `auth_tokens.socket` is not an exception to that rule: it grants a
+    // workspace nothing except the ability to close a socket ON ITSELF, and a
+    // tainted workspace that could not ask would be the one place a revocation
+    // could not be enforced.
+    expect(kept.sort()).toEqual([
+      'auth_tokens.socket', 'credentials.model', 'profile.resolve', 'workspaces.rename_self',
+    ]);
   });
 
   test('an owner session is never attenuated', async () => {

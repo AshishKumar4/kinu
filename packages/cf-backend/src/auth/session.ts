@@ -18,6 +18,15 @@ import type { AccessTokenScope } from '../cli/access-token-store';
 
 export const SESSION_COOKIE_NAME = '__Host-kinu_session';
 
+/** The handoff cookie that binds ONE OAuth sign-in to the browser that started
+ *  it. `__Host-` and HttpOnly so no subdomain and no script can plant a value
+ *  the callback would accept, random so nothing can guess one, and paired with
+ *  a server-side state record that holds only its hash. Without it a callback
+ *  URL is bearer authority: an attacker completes a sign-in in their own
+ *  browser, hands the resulting `?code=&state=` link to a victim, and the
+ *  victim's browser is signed in as the attacker. */
+export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
+
 export interface AuthIdentity {
   /** Stable Kinu user id. */
   userId: string;
@@ -33,6 +42,11 @@ export interface AuthIdentity {
    *  access token — the agent websocket pins the connection to these scopes.
    *  Absent for browser sessions and interactive CLI session tokens. */
   cliScopes?: AccessTokenScope[];
+  /** Present only for connect-ticket identities: the bearer the upgrade
+   *  authenticated, and the account authorization generation it was admitted
+   *  under. The agent websocket persists this on the connection, so a
+   *  revocation can still name the socket after hibernation. */
+  cliBearer?: { tokenHash: string; generation: number };
 }
 
 /** Step-up (fresh-auth) window for sensitive operations — creating webhook
@@ -58,11 +72,32 @@ export class AuthError extends Error {
 }
 
 export function readSessionToken(request: Request): string | null {
+  return readCookie(request, SESSION_COOKIE_NAME);
+}
+
+/** One cookie by name, or null when the request carries no such cookie.
+ *
+ *  Values are written percent-encoded, so they are decoded back here — and a
+ *  value that is not valid percent-encoding is not one this app wrote, which
+ *  is an absent cookie rather than a thrown request. */
+export function readCookie(request: Request, name: string): string | null {
   const cookie = request.headers.get('cookie');
   if (!cookie) return null;
   for (const part of cookie.split(';')) {
-    const [name, ...rest] = part.trim().split('=');
-    if (name === SESSION_COOKIE_NAME) return decodeURIComponent(rest.join('=') || '');
+    const [candidate, ...rest] = part.trim().split('=');
+    if (candidate !== name) continue;
+    const raw = rest.join('=');
+    if (!raw) return null;
+    try {
+      return decodeURIComponent(raw);
+    } catch (malformed) {
+      // A cookie this app did not write can carry anything, and a broken
+      // percent escape is the one failure that reaches here: that value is not
+      // one of ours, so there is no cookie of ours in the request. Anything
+      // else is not a cookie problem and is not this function's to answer.
+      if (!(malformed instanceof URIError)) throw malformed;
+      return null;
+    }
   }
   return null;
 }

@@ -23,13 +23,25 @@ import { defineConfig } from 'vitest/config';
  * vitest version, disjoint includes.
  *
  * WHY `*.eval.ts` AND NOT `*.eval.test.ts`. `bun test` matches only
- * `*.test.*` / `*_test.*` / `*.spec.*`, verified empirically — a directory
- * holding `sample.eval.ts` and `sample.test.ts` runs ONE file. So this tier is
- * disjoint from `bun test ./tests/` by FILE EXTENSION rather than by a second
- * `bunfig.toml` ignore pattern somebody has to maintain in step. That also keeps
- * the four existing bun eval suites under `tests/evals/` exactly where they are,
- * and leaves `ladder.ts`'s `TEST_FILE` (`/\.test\.(ts|tsx|js)$/`) blind to these
- * files, so they create no orphan gate and do not move its pinned file count.
+ * `*.test.*` / `*_test.*` / `*.spec.*` / `*_spec.*`, verified empirically — a
+ * directory holding `a.test.ts`, `c.spec.ts`, `d_test.ts`, `e_spec.ts`,
+ * `g.test.tsx`, `b.eval.ts` and `f.eval.tsx` runs FIVE files under bun 1.4.0,
+ * and neither `.eval.` one is among them. So this tier is disjoint from
+ * `bun test ./tests/` by FILE EXTENSION rather than by a second `bunfig.toml`
+ * ignore pattern somebody has to maintain in step. That also keeps the existing
+ * bun eval suites under `tests/evals/` exactly where they are.
+ *
+ * IT IS NOT INVISIBLE TO THE LADDER, and the note that said it was cost four
+ * suites their coverage. This file used to claim `ladder.ts`'s `TEST_FILE` was
+ * `/\.test\.(ts|tsx|js)$/` and therefore blind to `*.eval.ts`. `ladder.ts` holds
+ * no pattern of its own any more: its denominator is `isRunnableSuite`, one arm
+ * of the anti-slop rule's `TEST_SUFFIX`, which matches `.eval.` deliberately —
+ * so these files ARE in the ladder's denominator, and a `claims()` that swept a
+ * directory prefix credited `bun test ./tests/` with all four of them. Four live
+ * eval suites read as covered by a ci-tier bun gate that cannot select any of
+ * them. `claims()` now narrows by `isBunDiscoverableSuite`, `bun run test:eval`
+ * claims this tier's files, and `scripts/ladder.test.ts` pins both halves of the
+ * partition by equality.
  *
  * NO REPLAY. `VITEST_EVALS_REPLAY_MODE` defaults to `auto`, which RECORDS when no
  * recording exists, and a recording serialises tool `input` and `output`

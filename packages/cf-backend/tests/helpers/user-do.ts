@@ -9,6 +9,7 @@ import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk } from './agents-sdk';
 import { sha256Hex } from '../../src/lib/crypto';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
+import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/user-do';
 import {
   DeviceConsentRegistry,
   JsonValueSchema,
@@ -62,6 +63,10 @@ export interface TestUserDO {
   installed: Map<string, string>;
   /** Workspace DOs the UserDO tore down (workspace delete). */
   destroyedWorkspaces: string[];
+  /** Socket-revocation pushes the UserDO fanned out, as `workspace:generation`
+   *  — how a test reads that a revocation reached the workspaces holding the
+   *  sockets, rather than only the row it wrote. */
+  revokedSocketPushes: string[];
   /** Consent cards the UserDO raised, as raised — the workspace it asked on,
    *  the method, the words the owner would read. */
   consentPrompts: Array<{
@@ -132,6 +137,11 @@ export interface TestUserDOOptions {
   durableObjectId?: string;
   /** Make workspace teardown fail at the real UserDO -> Orchestrator seam. */
   destroyWorkspaceError?: string;
+  /** Hold the workspace teardown open at the real UserDO → Orchestrator seam.
+   *  The only way to observe what a workspace marked for deletion can still do
+   *  while its destroy is in flight, which is exactly the window the fence
+   *  around that await exists to close. */
+  destroyWorkspaceGate?: (name: string) => Promise<void>;
   /** Bring a new Durable Object up over storage a retired one wrote, which is
    *  what an eviction and the next request really are. Ownership of the handle
    *  stays with the caller: this harness's `close` leaves it open. */
@@ -161,6 +171,7 @@ interface TestUserEnvironment {
       installWorkspaceCapability(token: string): Promise<{ readonly ok: true }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
       awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
+      closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
     };
   };
 }
@@ -210,6 +221,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
+  const revokedSocketPushes: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const deviceFrames: DeviceFrame[] = [];
@@ -326,6 +338,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       idFromName: (name: string) => name,
       get: (name: string) => ({
         async destroyAgent() {
+          if (options.destroyWorkspaceGate) await options.destroyWorkspaceGate(name);
           if (options.destroyWorkspaceError) throw new Error(options.destroyWorkspaceError);
           destroyedWorkspaces.push(name);
         },
@@ -336,6 +349,10 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         },
         awaitDeviceConsent(request: DeviceConsentRequest) {
           return registryFor(name).request(request);
+        },
+        async closeRevokedCliSockets(generation: number) {
+          revokedSocketPushes.push(`${name}:${generation}`);
+          return { closed: 0 };
         },
       }),
     },
@@ -356,7 +373,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const userDO = new UserDO(agentContext, userEnv);
   hub.current = userDO;
   return {
-    userDO, db, sql, installed, destroyedWorkspaces, consentPrompts, raisedConsentIds, deviceFrames,
+    userDO, db, sql, installed, destroyedWorkspaces, revokedSocketPushes,
+    consentPrompts, raisedConsentIds, deviceFrames,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },
     answerConsent: (answer) => {
@@ -379,4 +397,14 @@ export async function provisionTestWorkspace(harness: TestUserDO, name: string, 
   const token = harness.installed.get(name);
   if (!token) throw new Error(`workspace ${name} was not provisioned`);
   return token;
+}
+
+/** The entry a register INSERTED. A status other than `created` fails here,
+ *  where the register happened, instead of surfacing as an undefined read
+ *  further down a test. */
+export function createdWorkspace(registration: WorkspaceRegistration): WorkspaceEntry {
+  if (registration.status !== 'created') {
+    throw new Error(`expected registerWorkspace to insert a row, got "${registration.status}"`);
+  }
+  return registration.entry;
 }

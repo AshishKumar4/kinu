@@ -15,7 +15,7 @@
 // never registered anything.
 import { describe, expect, test } from 'bun:test';
 import {
-  createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO,
+  createTestUserDO, createdWorkspace, provisionTestWorkspace, testOwner, type TestUserDO,
 } from './helpers/user-do';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -202,7 +202,7 @@ describe('a reservation the fork transfer has not committed', () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();
 
-    const { entry } = await harness.userDO.registerWorkspace(owner, 'ordinary', 'Ordinary');
+    const entry = createdWorkspace(await harness.userDO.registerWorkspace(owner, 'ordinary', 'Ordinary'));
 
     expect(rowOf(harness, 'ordinary')?.create_pending).toBe(0);
     expect((await harness.userDO.listWorkspaces(owner)).entries.map((row) => row.name))
@@ -258,7 +258,7 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
   test('a name that is already published', async () => {
     const harness = createTestUserDO();
     const owner = await testOwner();
-    const { entry } = await harness.userDO.registerWorkspace(owner, 'ordinary');
+    const entry = createdWorkspace(await harness.userDO.registerWorkspace(owner, 'ordinary'));
 
     const refusal = await refusalOf(
       harness.userDO.publishWorkspaceReservation(owner, 'ordinary', entry.createdAt, null),

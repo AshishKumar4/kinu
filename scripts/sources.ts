@@ -80,6 +80,35 @@ const TEXT_SOURCE = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|ya?ml|toml|sh|env|pe
  *  code — which is why `doc-claims` needs it separately from `isTextSource`. */
 const DOCUMENT = /\.md$/;
 
+/**
+ * What `bun test` ITSELF selects, measured rather than assumed: a directory
+ * holding `a.test.ts`, `c.spec.ts`, `d_test.ts`, `e_spec.ts`, `g.test.tsx`,
+ * `b.eval.ts` and `f.eval.tsx` runs FIVE files under bun 1.4.0, and the two
+ * `.eval.` ones are not among them.
+ *
+ * Strictly narrower than `TEST_SUFFIX`, and the gap is load bearing. The
+ * ladder's denominator is `isRunnableSuite`, which counts `.eval.` because the
+ * lint rule governs those files too — so `bun test ./tests/` was CREDITED with
+ * the four `tests/evals/*.eval.ts` suites bun cannot see, and `ladder.test.ts`
+ * asserted that exact wrong set by equality. Four live eval suites read as
+ * covered by a bun gate at the ci tier while only the eval tier's vitest arms
+ * ever ran them.
+ */
+const BUN_DISCOVERED = /(?:\.|_)(?:test|spec)\.[jt]sx?$/;
+
+/**
+ * A Python suite, by the basename pattern `unittest discover -p 'test_*.py'`
+ * selects with.
+ *
+ * Its own pattern because `TEST_SUFFIX` is a JS/TS basename rule and cannot
+ * reach another language: before this existed the 77 tests under
+ * `bench/tests/`, `bench/harbor/tests/` and `bench/clbench/tests/` were outside
+ * every gate's denominator, so "every test file is claimed by some runner" was
+ * a statement about TypeScript alone and three Python suites ran in no
+ * pipeline at all.
+ */
+const PYTHON_SUITE = /(?:^|\/)(?:test_[^/]*|[^/]*_test)\.py$/;
+
 let enumerated: readonly string[] | undefined;
 
 export interface Enumeration {
@@ -185,6 +214,58 @@ export const isTestScaffold = (file: string): boolean => file.startsWith('packag
  *  the helpers beside them — derived from `TEST_SUFFIX`, one named arm of the
  *  rule's own pattern, rather than from a fourth spelling of it. */
 export const isRunnableSuite = (file: string): boolean => TEST_SUFFIX.test(file);
+
+/**
+ * The half of {@link isRunnableSuite} a `bun test` invocation can actually
+ * select. What a bun gate is allowed to be CREDITED with, rather than what a
+ * path prefix would sweep up.
+ */
+export const isBunDiscoverableSuite = (file: string): boolean => BUN_DISCOVERED.test(file);
+
+/**
+ * The other half, by construction rather than by a second list: a runnable
+ * suite no `bun test` invocation can reach. Today that is exactly the
+ * `tests/evals/*.eval.ts` family the eval tier runs under vitest.
+ *
+ * A COMPLEMENT so the partition is TOTAL. A third naming convention — a
+ * `.eval.tsx`, or a `.eval.ts` outside `tests/evals/` — cannot appear in
+ * neither set and slip past both runners' claims; it lands here and the ladder
+ * demands a gate for it by name.
+ */
+export const isVitestEvalSuite = (file: string): boolean =>
+  isRunnableSuite(file) && !isBunDiscoverableSuite(file);
+
+/** A Python suite `unittest discover` selects. The ladder's Python denominator,
+ *  so `bun scripts/python-suites.ts` is measured against the files on disk
+ *  rather than against the discovery roots someone remembered to name. */
+export const isPythonSuite = (file: string): boolean => PYTHON_SUITE.test(file);
+
+/** Where the anti-slop plugin lives, and where its per-rule suites live. */
+export const ANTI_SLOP_ROOT = 'tools/oxlint/anti-slop/';
+export const ANTI_SLOP_RULES = `${ANTI_SLOP_ROOT}rules/`;
+
+/**
+ * A suite under the anti-slop plugin. Bun cannot run any of them — oxlint's
+ * RuleTester needs Node's raw transfer — so `bunfig.toml` excludes the whole
+ * directory and `bun run test:anti-slop` is the runner.
+ *
+ * The ladder's denominator for that runner, and it needs to be TOTAL rather than
+ * a directory excuse: the ladder used to exempt this prefix outright, which
+ * claimed every future file under it on the strength of one witness. Measured
+ * 2026-08-30, the 41 suites here are the disjoint union of 12 named on the
+ * `test:anti-slop` command line and 29 the aggregator discovers — and a new
+ * top-level `tools/oxlint/anti-slop/foo.test.ts` would have been claimed by the
+ * prefix and executed by neither.
+ */
+export const isAntiSlopSuite = (file: string): boolean =>
+  file.startsWith(ANTI_SLOP_ROOT) && isRunnableSuite(file);
+
+/** The per-rule suites `rules.test.ts` aggregates by dynamic import. Exported
+ *  so the aggregator and the ladder ask the same question: the aggregator held
+ *  its own `startsWith` copy, which is the second spelling this module exists to
+ *  prevent. */
+export const isAntiSlopRuleSuite = (file: string): boolean =>
+  file.startsWith(ANTI_SLOP_RULES) && isRunnableSuite(file);
 
 /** Parseable by `syntax.ts`. */
 export const isParseable = (file: string): boolean => PARSEABLE.test(file);

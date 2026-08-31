@@ -8,6 +8,7 @@ import {
   planWorkspaceTitle,
   renderSoulMarkdown,
   summarizeSoul,
+  mintSubordinateName,
   workspaceSlug,
   type WorkspaceTitleState,
 } from '../src/index';
@@ -233,5 +234,53 @@ describe('automatic workspace titling — applying it', () => {
 
     expect(await applyWorkspaceTitle(stored, { persist })).toBe('Audit the OAuth callback flow');
     expect(persisted).toEqual(['Audit the OAuth callback flow']);
+  });
+});
+
+/**
+ * The ONE minting rule both backends call, and the slug bound they used to
+ * believe was theirs.
+ *
+ * Each backend inlined the same slug-and-suffix shape and then disagreed on the
+ * suffix — `nanoid(6)` over 36 characters on Cloudflare, six hex digits of a UUID
+ * locally — so identical roles minted names of two different collision strengths
+ * depending on where the agent ran. Both also cut the slug at 48 AFTER the
+ * slugifier had already cut it at 24, so the bound they wrote could never take
+ * effect; the slug is module-private now for exactly that reason, and these
+ * assertions read it where a caller does.
+ */
+describe('a minted subordinate name', () => {
+  /** The slug half, with the random suffix removed. */
+  const slugOf = (name: string): string => name.slice(0, name.lastIndexOf('-'));
+
+  test('lowercases, hyphenates, trims and caps the role at 24 characters', () => {
+    expect(slugOf(mintSubordinateName('Research Rust Frameworks'))).toBe('research-rust-frameworks');
+    expect(slugOf(mintSubordinateName('  Build a Benchmark!!  '))).toBe('build-a-benchmark');
+    // 24, not 48: the bound both call sites wrote after the slugifier was dead
+    // code, and the 24 they were really getting is the 24 they keep.
+    expect(slugOf(mintSubordinateName('A'.repeat(40)))).toBe('a'.repeat(24));
+  });
+
+  test('a role that slugifies to nothing is named for what it is', () => {
+    // Never a bare suffix: the name is what a roster shows and what an operator
+    // addresses, and `-a1b2c3` says nothing about who it is.
+    expect(mintSubordinateName('!!!')).toMatch(/^subordinate-[a-z0-9]{6}$/);
+    expect(mintSubordinateName('')).toMatch(/^subordinate-[a-z0-9]{6}$/);
+  });
+
+  test('satisfies the name contract spawnSubordinate enforces', () => {
+    // Lowercase, URL-safe, at most 64 — the same predicate core/subordinates
+    // applies, restated here because this is the only producer of these names.
+    for (const role of ['Research Rust Frameworks', 'ask-auditor', 'A'.repeat(40), '!!!']) {
+      expect(mintSubordinateName(role)).toMatch(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/);
+    }
+  });
+
+  test('two children of one role do not collide', () => {
+    const minted = new Set(Array.from({ length: 64 }, () => mintSubordinateName('auditor')));
+    expect(minted.size).toBe(64);
+    // One entropy source, and it is the 36-character alphabet rather than the
+    // 16 of the hex suffix the local backend used to mint.
+    for (const name of minted) expect(name).toMatch(/^auditor-[a-z0-9]{6}$/);
   });
 });

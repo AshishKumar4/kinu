@@ -7,6 +7,8 @@ export type {
   HeadBudget,
   HeadInput,
   HeadReport,
+  HeadReportStatus,
+  HeadUnsettledStatus,
   HeadStep,
   HeadStepToolCall,
   HeadRunView,
@@ -30,6 +32,10 @@ export {
   budgetExhausted,
   HEAD_BUILTIN_TOOLS,
   keepBuiltins,
+  HEAD_REPORT_STATUSES,
+  HEAD_UNSETTLED_STATUSES,
+  headStatusUnsettled,
+  storedHeadReportStatus,
 } from './types';
 
 export {
@@ -51,6 +57,10 @@ export {
   type RunEventLedger,
 } from './reconcile';
 export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema';
+export {
+  headMergeLLM,
+  type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
+} from './merge-policy';
 export {
   HeadController,
   type HeadRuntime,

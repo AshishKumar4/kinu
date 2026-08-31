@@ -12,6 +12,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   mergeReports, parseJUnit, readSkipLock, reconcileSkips, skipDebt, unmatchedTargets,
   ALL_SKIP_RATCHET_TARGETS, SKIP_RATCHET_TARGETS, SKIP_RATCHET_VITEST_TARGETS, SKIP_LOCK_PATH,
+  type TestReport,
 } from './skip-ratchet';
 
 /** The exact shape Bun's junit reporter emits: a passing testcase is
@@ -288,15 +289,41 @@ describe('unmatchedTargets', () => {
     expect(unmatchedTargets(empty, ['./tests/'])).toEqual(['./tests/']);
   });
 
+  /** The two bun targets added after `./tests/`: a directory nothing else claims
+   *  and a named file. Both are needed here because the default list is what
+   *  `unmatchedTargets` proves, and a fixture short of it would make the
+   *  all-arms assertion below pass over a target nobody reported. */
+  const CORE_E2E_REPORT = `<?xml version="1.0"?>
+<testsuites name="bun test" tests="1" failures="0" skipped="1">
+  <testsuite name="packages/core/tests/e2e/mcts-e2e.test.ts" file="packages/core/tests/e2e/mcts-e2e.test.ts" tests="1">
+    <testcase name="full search cycle" classname="E2E MCTS with real LLM" file="packages/core/tests/e2e/mcts-e2e.test.ts" line="122">
+      <skipped />
+    </testcase>
+  </testsuite>
+</testsuites>`;
+  const BENCH_EXTERNAL_REPORT = `<?xml version="1.0"?>
+<testsuites name="bun test" tests="1" failures="0" skipped="0">
+  <testsuite name="scripts/bench-external.test.ts" file="scripts/bench-external.test.ts" tests="1">
+    <testcase name="the corpus it looks for is inside the tree it runs from" classname="the Terminal-Bench arm before it spends anything" file="scripts/bench-external.test.ts" line="340" />
+  </testsuite>
+</testsuites>`;
+
   // RED BEFORE: `./tests/` is satisfied by the bun arm alone, so a run that
   // reported only bun looked complete while the whole vitest arm went unmeasured.
-  test('a bun-only report leaves every vitest target unmatched', () => {
-    expect(unmatchedTargets(parseJUnit(REPORT))).toEqual([...SKIP_RATCHET_VITEST_TARGETS]);
+  // The two later bun targets are unmatched here for the same reason: a report
+  // from the root suites says nothing about `packages/core/tests/e2e/` or the
+  // bench rig, which is exactly why each is its own target.
+  test('a report from the root suites alone leaves every other target unmatched', () => {
+    expect(unmatchedTargets(parseJUnit(REPORT))).toEqual([
+      './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
+      ...SKIP_RATCHET_VITEST_TARGETS,
+    ]);
   });
 
   test('every arm reporting satisfies every target', () => {
     const merged = mergeReports(
-      [REPORT, VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT]
+      [REPORT, CORE_E2E_REPORT, BENCH_EXTERNAL_REPORT,
+        VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT]
         .map((xml) => parseJUnit(xml)),
     );
     expect(unmatchedTargets(merged)).toEqual([]);
@@ -387,5 +414,82 @@ describe('skipDebt', () => {
     for (const expectLive of [true, false]) {
       expect(skipDebt({ added: ['x'], stale: [] }, { expectLive })).toEqual(['x']);
     }
+  });
+});
+
+/**
+ * The two properties `evals:cloud` needed and did not have: a target set that
+ * follows the RUN, and a directory target only a file `bun test` can select may
+ * answer for.
+ */
+describe('the target set is the executed set', () => {
+  const cloudReport = (): TestReport => parseJUnit(`<?xml version="1.0"?>
+<testsuites name="bun test" tests="1" failures="0" skipped="0">
+  <testsuite name="tests/live-smoke.test.ts" file="tests/live-smoke.test.ts" tests="1">
+    <testcase name="reaches the deployment" classname="Live Smoke" file="tests/live-smoke.test.ts" line="4" />
+  </testsuite>
+</testsuites>`);
+
+  test('the full target list refuses a run that measured a deliberate subset', () => {
+    // The defect: `bun run evals:cloud` runs two of five arms ON PURPOSE, and
+    // the default list demanded reports from all five. Three targets came back
+    // unmatched and the tier exited 1 having done exactly what it was told, so
+    // every reachable "fix" was a weakening.
+    const missing = unmatchedTargets(cloudReport(), ALL_SKIP_RATCHET_TARGETS);
+    expect(missing).toContain('./tests/evals/behaviour.eval.ts');
+    expect(missing).toContain('./tests/evals/research.eval.ts');
+    expect(missing).toContain('./tests/evals/optimization.eval.ts');
+  });
+
+  test('naming the arms that ran clears it without weakening anything', () => {
+    expect(unmatchedTargets(cloudReport(), ['tests/live-smoke.test.ts'])).toEqual([]);
+  });
+
+  test('a named target the run did not produce is still refused', () => {
+    // The other direction, and the one that keeps `--target` from being an
+    // escape hatch: a caller may narrow the CLAIM, never the proof. An arm
+    // named and absent from the report is a crash, not a decision.
+    expect(unmatchedTargets(cloudReport(), ['tests/live-smoke.test.ts', './tests/evals/swarm.eval.ts']))
+      .toEqual(['./tests/evals/swarm.eval.ts']);
+  });
+
+  test('a vitest-only file cannot answer for a bun directory target', () => {
+    // Narrowest-claim protects the four `*.eval.ts` files that have targets of
+    // their own and reopens the hole for a fifth: a new
+    // `tests/evals/planning.eval.ts` sits under `./tests/`, has no target, and
+    // would have satisfied the BUN arm — so a bun arm that collected nothing
+    // could look complete on the strength of a vitest file.
+    const vitestOnly = parseJUnit(`<?xml version="1.0"?>
+<testsuites name="vitest" tests="1" failures="0" skipped="0">
+  <testsuite name="tests/evals/planning.eval.ts" tests="1">
+    <testcase name="plans" classname="tests/evals/planning.eval.ts" />
+  </testsuite>
+</testsuites>`);
+    expect(unmatchedTargets(vitestOnly, ['./tests/'])).toEqual(['./tests/']);
+  });
+
+  test('and a bun-discoverable file does', () => {
+    expect(unmatchedTargets(cloudReport(), ['./tests/'])).toEqual([]);
+  });
+
+  test('every bun target is a path form bun actually selects with', () => {
+    // `bun test tests` and `bun test tests/` both match NOTHING here; only the
+    // leading `./` selects. A directory target must carry the trailing slash too,
+    // because that is what marks it as a bun argv rather than a named file.
+    for (const target of SKIP_RATCHET_TARGETS) {
+      expect(target.startsWith('./')).toBe(true);
+      expect(target.endsWith('/') || target.endsWith('.test.ts')).toBe(true);
+    }
+    expect(SKIP_RATCHET_TARGETS.length).toBeGreaterThan(1);
+  });
+
+  test('every locked key sits under some target, so no entry governs nothing', () => {
+    // A lock entry whose file no target reaches can never go stale and can never
+    // be reconciled: it is a reason nobody will ever have to defend again.
+    const prefixes = ALL_SKIP_RATCHET_TARGETS.map((target) => target.replace(/^\.\//, ''));
+    const orphans = readSkipLock(SKIP_LOCK_PATH)
+      .filter((entry) => !prefixes.some((prefix) => entry.key.startsWith(prefix)))
+      .map((entry) => entry.key);
+    expect(orphans).toEqual([]);
   });
 });

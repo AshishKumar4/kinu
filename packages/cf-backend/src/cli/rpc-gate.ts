@@ -47,6 +47,50 @@ export const CLI_SCOPES_HEADER = 'x-kinu-cli-scopes';
 /** Connection tag persisting the scope restriction across hibernation. */
 const CLI_SCOPES_TAG_PREFIX = 'cli-scopes:';
 
+/** Worker→DO header naming the bearer behind a CLI websocket: the token hash
+ *  the upgrade authenticated, and the account authorization generation it was
+ *  admitted under. Always rewritten by the edge after authentication, exactly
+ *  like the scopes header, so clients cannot smuggle either. */
+export const CLI_BEARER_HEADER = 'x-kinu-cli-bearer';
+
+/** Connection tag persisting that bearer, so a socket restored from
+ *  hibernation still knows WHOSE authority it is running on. Without it the
+ *  connection came back with its scopes intact and nothing that named the
+ *  bearer at all, which made revocation unenforceable rather than merely
+ *  unenforced. */
+const CLI_BEARER_TAG_PREFIX = 'cli-bearer:';
+
+/** The bearer a CLI connection is running on. `readable: false` is a CLI
+ *  connection whose recorded bearer cannot be parsed — a state no edge writes,
+ *  and one that must refuse rather than read as "no bearer to check". */
+export type CliSocketBearer =
+  | { readonly readable: true; readonly tokenHash: string; readonly generation: number }
+  | { readonly readable: false };
+
+const CLI_BEARER_RE = /^([a-f0-9]{64}):(\d{1,15})$/;
+
+/** Build the connection tag for a verified bearer header; null when the
+ *  connection carries no CLI bearer at all (a browser session). */
+export function cliBearerConnectionTag(headerValue: string | null): string | null {
+  if (!headerValue) return null;
+  // A malformed value still gets a tag: the header's PRESENCE is what says this
+  // is a CLI connection, so dropping it here would turn an unreadable bearer
+  // into an unchecked one.
+  return `${CLI_BEARER_TAG_PREFIX}${CLI_BEARER_RE.test(headerValue) ? headerValue : ''}`;
+}
+
+/** The bearer persisted on a connection's tags; null when the connection never
+ *  carried one. */
+export function cliBearerFromTags(tags: Iterable<string>): CliSocketBearer | null {
+  for (const tag of tags) {
+    if (!tag.startsWith(CLI_BEARER_TAG_PREFIX)) continue;
+    const match = CLI_BEARER_RE.exec(tag.slice(CLI_BEARER_TAG_PREFIX.length));
+    if (!match) return { readable: false };
+    return { readable: true, tokenHash: match[1], generation: Number(match[2]) };
+  }
+  return null;
+}
+
 export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 
 /**

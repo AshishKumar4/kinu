@@ -15,8 +15,10 @@ import { Database } from 'bun:sqlite';
 import type { Page, PageRequest } from '@kinu.run/core';
 import type { ControlPlaneSql } from '../src/control-plane/sql';
 import type { AuthIdentity } from '../src/auth/session';
+import type { AccessIdentity } from '../src/control-plane/access-gate';
 import {
-  adminCaller, adminDenialStatus, authorizeAdmin, internalCaller,
+  adminCaller, adminDenialStatus, authorizeAdmin as authorizeAdminGate, internalCaller,
+  type AdminAuthorization, type AdminGateEnv,
 } from '../src/control-plane/admin-caller';
 import { requireControl } from '../src/control-plane/capability';
 import * as store from '../src/control-plane/store';
@@ -46,6 +48,25 @@ function identity(over: Partial<AuthIdentity> = {}): AuthIdentity {
     authTime: Date.now(),
     ...over,
   };
+}
+
+/** The verified Cloudflare Access identity the outer gate hands `authorizeAdmin`.
+ *  The SAME address `identity()` carries: the two gates naming one person is the
+ *  ordinary case, and the mismatch arm has its own file
+ *  (`unit-control-plane-access.test.ts`) where real signed assertions produce it. */
+const ACCESS: AccessIdentity = { email: 'ops@kinu.run', sub: 'access-uuid-1' };
+
+/** `authorizeAdmin` with the outer gate's proof defaulted. Every assertion in
+ *  this file is about the INNER gate — the allowlist, the identity shapes, the
+ *  step-up window — so passing the same verified Access identity at each call
+ *  site would hide which tests are actually about it. */
+function authorizeAdmin(
+  env: AdminGateEnv,
+  who: AuthIdentity,
+  options: { readonly mutating: boolean; readonly now?: number },
+  outer: AccessIdentity = ACCESS,
+): AdminAuthorization {
+  return authorizeAdminGate(env, who, outer, options);
 }
 
 /** A schema'd store over a real SQLite database, and the handle that closes it. */

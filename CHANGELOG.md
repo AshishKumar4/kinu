@@ -502,6 +502,66 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Withdrawn authority now takes effect across the await it was withdrawn
+  during.** A Durable Object serializes nothing across an outbound call, so
+  between a call's read and its write another call runs to completion — and five
+  paths in the user plane were reading before that gap and writing after it.
+
+  Deleting a workspace revoked its capability token AFTER tearing its Durable
+  Object down, so for the whole length of that teardown the dying workspace
+  still held an identity the owner's registry honoured: it could read
+  credentials, list the owner's other workspaces and spend their devices. A
+  teardown that failed closed was worse — the marked row deliberately survives,
+  and it survived holding a live token indefinitely. The mark and the revoke are
+  now one synchronous act before the teardown begins, and the mint re-checks its
+  admission in the same turn as its write, so a provisioning call already in
+  flight cannot re-issue the identity of a workspace that is being deleted.
+
+  A provider refresh wrote its rotated tokens back unconditionally. Disconnect a
+  provider while a refresh was in the air and the reply reconnected the account;
+  paste a new credential and the reply overwrote it with a token derived from the
+  one just retired; let the provider answer `invalid_grant` and the rejection
+  deleted whichever credential was current by then. Each credential key now
+  carries a monotonic revision — its writes AND its deletions — and every write
+  on a refresh path is a compare-and-swap against the revision read before the
+  network call, so the store is the authority and a late reply is dropped.
+
+  The Codex device flow kept one row and deleted it on completion, which left a
+  poll nothing to fail against: a reply from an abandoned attempt wrote its own
+  tokens over the attempt the owner was actually approving and destroyed that
+  attempt's row, and a reply arriving after `disconnect` reconnected the account.
+  The row is now settled rather than deleted and carries a generation that rises
+  with every `start`, and a poll commits its credential and its settlement
+  together under both fences or not at all.
+
+  Creating a workspace whose name was already taken ran the whole birth sequence
+  on the live workspace — re-seeding `SOUL.md` from the new request's mission,
+  resetting the Output baseline, and opening a second genesis turn beside
+  whatever it was already doing. Two creates racing on one name did it to each
+  other and a retried request did it to itself. `registerWorkspace` now answers
+  with a closed word (`created` / `active` / `reserved`) instead of a boolean:
+  `created` is an exclusive claim, `active` returns the workspace as it stands
+  with its own title and birth timestamp, and a name an uncommitted fork
+  transfer is holding is refused with a 409 instead of being written into.
+
+  A CLI websocket was authorized once, at the upgrade. Revoking the token left
+  the established socket holding the workspace's whole `@callable` surface until
+  the client chose to disconnect, and hibernation restored the connection from
+  its tags with its scopes intact and nothing that named the bearer at all. The
+  bearer's token hash and the account's authorization generation now ride the
+  connection tags, every frame from such a connection is checked against the
+  UserDO that owns revocation before it is dispatched, and a revocation also
+  pushes a close to the workspaces holding those sockets so a client that only
+  listens stops receiving too.
+
+  One browser approval could mint more than one 180-day CLI token. The flow's
+  record lives in KV, which has no compare-and-swap and answers reads from each
+  colo's cache, so "mark it consumed, then mint" is not a check — two polls of
+  one approved request could both be handed a token. The approval's identity is
+  now stored on the token row itself under a unique index, in the same Durable
+  Object and the same statement as the mint, so a second redemption is
+  unrepresentable rather than unlikely.
+
 - **A public webhook URL is now a capability, so a workspace name is no longer a
   door.** `POST /api/workspaces/<name>/webhook/<trigger>` resolved the workspace
   object for whatever name the caller typed, before anything knew whether that
@@ -704,6 +764,25 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - A provider rejection no longer reaches the terminal as a raw object dump
   followed by `error [object Object]`.
 - A failed `kinu create` no longer reports itself with a green check.
+
+- **A mid-turn branch that outlives its workspace now settles into Alternate
+  Takes, and a failed head no longer keeps its storage forever.** Steer-as-Branch
+  journals a branch run's single head under an id derived from the run id, and the
+  durable settle both backends replay after an eviction looked that head up under
+  the RUN's id instead. It found no row, reported "the journal holds no such branch
+  head", and pruned itself — so the comparison the user was owed was dropped
+  silently every time the workspace restarted between the branch answering and the
+  takes being written, which for a hosted branch is the ordinary case rather than
+  the rare one. The replay now reads the head's own id, and reports the head's own
+  terminal status: a branch that ran out of wall clock says so instead of being
+  recorded as having thrown.
+
+  The same misread status list retained facet storage. The exploration-facet sweep
+  classified a facet as finished on `completed` or `aborted` alone, so a head that
+  errored or blew its budget was treated as resumable and kept its SQLite storage
+  inside the root object — permanently, since a facet id is never reused. Every
+  terminal report status is now reclaimable and only `running` and `interrupted`
+  are held, which is exactly the pair under which work can still continue.
 
 ## [0.2.0] - 2026-08-07
 

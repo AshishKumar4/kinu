@@ -71,6 +71,7 @@ const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
 const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
 const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'prompts', 'structured.ts'), 'utf8');
+const mergePolicy = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'heads', 'merge-policy.ts'), 'utf8');
 
 /** Every cf-backend source that turns a reasoning-effort level into provider
  *  options. Core owns the function; this names its callers, so a second
@@ -277,9 +278,18 @@ describe('turn-pipeline correctness wiring', () => {
     expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
     expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).not.toContain('reasoningEffortOptions');
-    // The recursive-split merge asks through the one HeadRuntime, over the same
-    // services object, on the tier its `judge` spend label routes to.
-    expect(headRuntime).toContain("resolveModelRoute('judge', await deps.profile())");
+    // The merge's ROUTE is no longer decided in this backend at all — core's
+    // `headMergeLLM` resolves `judge` and the tier's own effort, and both
+    // backends call it, which is what stops the local merge from running the
+    // session's chat model at a constant while filing `judge` spend. So the
+    // route lookup and the spend label must be there and NOT here.
+    expect(mergePolicy).toContain("const HEAD_MERGE_SOURCE = 'judge'");
+    expect(mergePolicy).toContain('resolveModelRoute(HEAD_MERGE_SOURCE, profile)');
+    expect(headRuntime).not.toContain('resolveModelRoute');
+    // What is left here is the one backend-local decision: binding the routed
+    // pair through the OWNER's provider registry. Effort still comes from the
+    // resolution, never from a constant beside it.
+    expect(headRuntime).toContain('bindMergeModel: (route) => deps.models.resolveModelWithEffort(');
     expect(headRuntime).toContain('route.model, route.reasoningEffort,');
     // Chat and all auxiliary profile lanes derive provider options at the
     // point where their resolved concrete model is known.

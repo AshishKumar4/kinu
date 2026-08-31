@@ -1,5 +1,21 @@
 [
   {
+    "key": "scripts/bench-external.test.ts › the Terminal-Bench arm before it spends anything › the seeded sample reproduces the pre-registered task list",
+    "reason": "needs the Terminal-Bench 2.1 corpus on disk, which is 89 task directories / 60 MB and gitignored: the ORDINARY state of a worktree. Point TBENCH_CORPUS at a shared copy — the same variable scripts/tbench-arm.sh reads — and it runs. It is declared here rather than left in stdout because the ci-tier bench row emits no JUnit, so this skip was invisible to every report while the assertion it guards is the only thing holding the corpus on disk equal to the one the design was pre-registered against."
+  },
+  {
+    "key": "packages/core/tests/e2e/mcts-e2e.test.ts › E2E MCTS with real LLM › full search cycle",
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: one real MCTS search over a live provider and judge, gated by describe.skipIf(!isE2EConfigured()). scripts/test-scratch-home.ts strips both variables at preload unless KINU_EVAL_LIVE=1, so this skips deterministically outside the eval tier rather than depending on whose shell ran it. NO ARM RUNS IT LIVE TODAY: eval-tier.sh's bun arm is ./tests/ and does not reach packages/, so this entry records a live suite with no live tier — which is the argument someone has to answer, not a fact the exit code should hide."
+  },
+  {
+    "key": "packages/core/tests/e2e/scaffold-e2e.test.ts › E2E scaffold evolution › LLM generates valid scaffold code that passes 4-gate",
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: the model must emit scaffold code that survives the 4-gate, which is the measurement, so a mock cannot stand in. Same preload strip and the same missing live arm as the MCTS entry above."
+  },
+  {
+    "key": "packages/core/tests/e2e/scaffold-e2e.test.ts › E2E scaffold evolution › full scaffold lifecycle: bootstrap -> modify -> rollback",
+    "reason": "needs a live model through AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH: bootstrap, a model-authored modification, then rollback across real versions. Same preload strip and the same missing live arm as the MCTS entry above."
+  },
+  {
     "key": "tests/deep-evolution.test.ts › Deep Evolution — 8 Algorithmic Challenges › scorecard and evolution summary",
     "reason": "needs a live model: reports the 8-problem scorecard the preceding test produces. Runs in the eval tier with KINU_ORIGIN + KINU_TOKEN."
   },

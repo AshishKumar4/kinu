@@ -754,9 +754,19 @@ describe('a denial is a row that says denied', () => {
   test('every admin denial reason reaches the slot as itself', () => {
     // The vocabulary is closed and small, so it is checked whole rather than
     // sampled: a value the grammar rejected would silently read as no reason.
+    //
+    // The `access_*` arms MATTER MOST HERE and are the reason this list is
+    // exhaustive rather than representative. Every one of them answers an
+    // indistinguishable 404 on the wire by design, so this row is the only place
+    // "somebody probed the admin path", "requests are reaching the origin around
+    // Access", "this deployment never configured Access" and "a token we reject"
+    // are told apart. A value the classification grammar silently dropped would
+    // collapse all four into an empty reason.
     const denials: readonly AdminDenial[] = [
       'unconfigured', 'no_admins_configured', 'not_admin',
       'dev_identity', 'token_identity', 'stale_auth',
+      'access_unconfigured', 'access_missing', 'access_invalid', 'access_no_email',
+      'access_mismatch',
     ];
     for (const denial of denials) {
       const plane = fakeEnv();
