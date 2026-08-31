@@ -623,8 +623,19 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * marker vanished. So the container carries an id that dies with it, and the
    * object keeps a copy; a mismatch is a replacement, and it is the only
    * reliable signal there is.
+   *
+   * FENCED, like every other write a restoration makes. The stamp is the last
+   * phase and the one with the most awaits before its writes: the previous-id
+   * read, the container read, the replacement count, and the exec itself. A
+   * stale attempt that parked at any of them used to run its writes anyway —
+   * overwriting the SUCCESSOR's boot id with one naming a container that no
+   * longer exists, which the heartbeat's replacement detector then read as a
+   * mismatch on a healthy container and answered with a spurious replacement.
+   * The replacement count is fenced for the same reason: the successor counts
+   * the replacement it sees, so a stale attempt counting again is the same
+   * event measured twice.
    */
-  async #stampBootId(): Promise<string> {
+  async #stampBootId(generation: number): Promise<string> {
     // COUNT THE REPLACEMENT HERE, where the evidence is, not where it happens to
     // be noticed. Every restoration passes through this method, whether it was
     // driven by the container-start hook or by a heartbeat that spotted the
@@ -632,14 +643,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // case worth measuring: a replacement handled through `onStart` incremented
     // nothing, so a box could be replaced repeatedly and report zero.
     const previous = await this.ctx.storage.get<string>(BOOT_ID_KEY);
-    if (previous !== undefined && (await this.#readBootId()) !== previous) {
+    if (this.#owns(generation) && previous !== undefined && (await this.#readBootId()) !== previous) {
       const replaced = (await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0) + 1;
-      await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
+      if (this.#owns(generation)) await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
       console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
     }
     const bootId = crypto.randomUUID();
     await this.#rawExec(`printf %s ${bootId} > ${BOOT_ID_PATH}`);
-    await this.ctx.storage.put(BOOT_ID_KEY, bootId);
+    if (this.#owns(generation)) await this.ctx.storage.put(BOOT_ID_KEY, bootId);
     return bootId;
   }
 
@@ -728,7 +739,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // attached and unready, not replaced.
     const stamped = await runRestoreStep(
       budget.nextAllowanceMs(),
-      async () => await this.#stampBootId(),
+      async () => await this.#stampBootId(generation),
       (failure) => {
         console.error(
           '[devbox] the boot-id stamp outran its allowance; it later settled with: '
@@ -934,7 +945,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const restored = await this.#restartWorkloads(generation, budget);
     if (!this.#owns(generation)) return;
     const stamped = expected === undefined && retryBootStamp
-      ? await runRestoreStep(budget.nextAllowanceMs(), async () => await this.#stampBootId(), () => undefined)
+      ? await runRestoreStep(budget.nextAllowanceMs(), async () => await this.#stampBootId(generation), () => undefined)
       : expected === undefined ? { kind: 'pending' as const } : { kind: 'done' as const };
     if (!this.#owns(generation)) return;
     const incomplete = stamped.kind === 'done'
