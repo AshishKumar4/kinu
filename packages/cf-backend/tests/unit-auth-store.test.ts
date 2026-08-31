@@ -155,7 +155,11 @@ describe('the browser auth store', () => {
     // the identity, and a row that is strongly consistent from everywhere.
     await kv.delete(`session:${await sha256Hex(created.token)}`);
 
-    expect(await verifySession(env, created.token)).toEqual(created.identity);
+    // The row-backed answer carries the session's own hash — the socket
+    // revocation tag needs it — beside the identity the sign-in minted.
+    expect(await verifySession(env, created.token)).toEqual({
+      ...created.identity, sessionTokenHash: await sha256Hex(created.token),
+    });
 
     // The same absence must not read as "trust the row" once the row is gone.
     await revokeSession(env, created.token);

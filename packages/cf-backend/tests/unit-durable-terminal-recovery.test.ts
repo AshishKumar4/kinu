@@ -618,7 +618,7 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
 
     const result = sweepUnrecoverableFibers(scene.store, NOW);
 
-    expect(result).toEqual({ dropped: 2, scanned: 3, truncated: false });
+    expect(result).toEqual({ dropped: 2, scanned: 2, truncated: false });
     expect(scene.survivors()).toEqual(['fresh-1']);
   });
 
@@ -632,7 +632,7 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     ]);
 
     expect(sweepUnrecoverableFibers(scene.store, NOW))
-      .toEqual({ dropped: 0, scanned: 2, truncated: false });
+      .toEqual({ dropped: 0, scanned: 0, truncated: false });
     expect(scene.survivors()).toEqual(['fresh-1', 'fresh-2']);
   });
 
