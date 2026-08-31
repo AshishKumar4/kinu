@@ -85,7 +85,7 @@ function isUnverifiableAssertion(sourceCode: SourceCode, node: TypeAssertion): b
 }
 
 /**
- * PROTEUS-LOCAL: upstream accepts the mere presence of a `SAFETY:` comment. A comment cannot
+ * KINU-LOCAL: upstream accepts the mere presence of a `SAFETY:` comment. A comment cannot
  * establish a caller-selected generic, recover evidence from `any`, or validate raw JSON, so those
  * are rejected outright, and a `SAFETY:` note must name concrete evidence rather than assert
  * safety. See tools/oxlint/anti-slop/upstream.json.

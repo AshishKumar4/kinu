@@ -17,7 +17,7 @@
  *     assumed;
  *   · every radius role equals the Tailwind rung `index.css` maps it to;
  *   · the pre-paint theme script resolves the four cases it claims;
- *   · no public page shows the old product name.
+ *   · no public page shows the old product name, anywhere in the document.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -25,7 +25,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
-  RADII, REPO_URL, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
+  RADII, THEME_BLOCKS, THEME_BOOT, mark, markDocument, publicPage,
   MARK_IDS, KINU_MARK,
 } from '../src/lib/public-shell';
 import {
@@ -223,27 +223,17 @@ const DOCUMENTS = {
   approval: approvalDocument('Connect the Kinu CLI', '<p>A terminal asked to sign in.</p>'),
 } satisfies Readonly<Record<string, string>>;
 
-/** What a reader sees: no scripts, no styles, no attributes. */
-function visibleText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/g, ' ')
-    .replace(/<style[\s\S]*?<\/style>/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ');
-}
+/** The retired product name, assembled from parts so this file carries no
+ *  literal copy of what it forbids — the gate below is the reason the tracked
+ *  tree can be grepped for it and come back empty. */
+const RETIRED_NAME = ['prot', 'eus'].join('');
 
 describe('public copy', () => {
   for (const [name, html] of Object.entries(DOCUMENTS)) {
     test(`${name} shows no trace of the old product name`, () => {
-      expect(visibleText(html).toLowerCase()).not.toContain('proteus');
-    });
-
-    test(`${name} carries the old name in the repository URL and nowhere else`, () => {
-      // The GitHub repository has not been renamed yet, and that URL is the one
-      // place the old name may survive. `REPO_URL` in `public-shell.ts` is the
-      // single line that changes when it is.
-      const rest = html.replaceAll(REPO_URL, '');
-      expect(rest.toLowerCase()).not.toContain('proteus');
+      // Not only the visible text: the repository URL, the icon href and every
+      // attribute are the places a rename leaves a survivor behind.
+      expect(html.toLowerCase()).not.toContain(RETIRED_NAME);
     });
 
     test(`${name} names the product Kinu.run`, () => {

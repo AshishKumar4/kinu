@@ -1,4 +1,4 @@
-// Proteus-local rule; see upstream.json's `proteusRules`. The repo-level corpus count and the
+// Kinu-local rule; see upstream.json's `kinuRules`. The repo-level corpus count and the
 // seeded red->green run through the real `oxlint` binary live in ../no-swallow.gate.test.ts,
 // including the historical `workspace_capability` read this rule exists for.
 import { RuleTester } from "oxlint/plugins-dev";

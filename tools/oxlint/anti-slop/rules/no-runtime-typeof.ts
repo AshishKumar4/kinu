@@ -24,7 +24,7 @@ function isInsideTypeGuard(node: ESTree.Node): boolean {
 }
 
 /**
- * PROTEUS-LOCAL: `instanceof Object` is the same evasion as `typeof`, so it is rejected here too.
+ * KINU-LOCAL: `instanceof Object` is the same evasion as `typeof`, so it is rejected here too.
  * Upstream has never carried this check; see tools/oxlint/anti-slop/upstream.json.
  */
 function isGlobalObjectConstructor(

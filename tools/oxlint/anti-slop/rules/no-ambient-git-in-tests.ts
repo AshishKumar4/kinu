@@ -16,7 +16,7 @@ import type { ESTree } from "@oxlint/plugins";
  * Measured 2026-08-17, not hypothetical. `core/tests/unit-workspace-diff.test.ts`
  * ran `git init`, `git config user.email`, `git config user.name` and
  * `git commit -qm seed` against the real repository during `git push`. It left
- * commits named `seed` on the branch being pushed, set `user.name=Proteus Test`
+ * commits named `seed` on the branch being pushed, overwrote `user.name`
  * repo-wide, and set `core.bare=true` alongside `core.worktree`, which made the
  * primary checkout answer `fatal: unable to set up work tree using invalid
  * config` to every command. Ten commits reached main under the wrong author

@@ -1,4 +1,4 @@
-// Proteus-authored: upstream ships no test for this rule.
+// Kinu-authored: upstream ships no test for this rule.
 import { RuleTester } from "oxlint/plugins-dev";
 
 import { noChainedTypeAssertionsRule } from "./no-chained-type-assertions.ts";

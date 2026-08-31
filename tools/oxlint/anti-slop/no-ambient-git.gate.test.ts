@@ -1,4 +1,4 @@
-// Proteus-only gate; see upstream.json's `proteusRules` and `proteusRuleGates`.
+// Kinu-only gate; see upstream.json's `kinuRules` and `kinuRuleGates`.
 //
 // `rules/no-ambient-git-in-tests.test.ts` proves the rule function behaves. It does not prove the
 // rule is reachable through the command the repo gates on, that it is enabled at error, or that
@@ -29,19 +29,29 @@ type LintReport = {
 };
 
 /**
+ * The pre-rename product name, assembled from parts.
+ *
+ * The fixture below is a byte-exact replay of a commit that predates the rename, so its text cannot
+ * be updated — it is compared against the real blob. Assembling the two spellings here keeps that
+ * exactness while leaving no literal copy of the retired name in the tracked tree.
+ */
+const RETIRED = ["prot", "eus"].join("");
+const RETIRED_CAP = RETIRED.replace(/^p/u, "P");
+
+/**
  * The fixture exactly as `packages/core/tests/unit-workspace-diff.test.ts:264-270` stood before the
  * repair. Every one of these five calls executed against the REAL repository during `git push`,
  * because the pre-push hook exports `GIT_DIR` and git obeys it over `cwd`. Between them they left
- * commits named `seed` on the branch being pushed, set `user.name=Proteus Test` repository-wide, and
+ * commits named `seed` on the branch being pushed, set a repository-wide `user.name`, and
  * set `core.bare=true` beside `core.worktree` — after which every git command in the primary
  * checkout answered `fatal: unable to set up work tree using invalid config`.
  *
  * Pinned by digest so it cannot be quietly reworded into something the rule happens to catch.
  */
-const HISTORICAL_FIXTURE = `    const repo = mkdtempSync(join(tmpdir(), 'proteus-output-diff-'));
+const HISTORICAL_FIXTURE = `    const repo = mkdtempSync(join(tmpdir(), '${RETIRED}-output-diff-'));
     execFileSync('git', ['init', '-q'], { cwd: repo });
-    execFileSync('git', ['config', 'user.email', 'proteus@example.invalid'], { cwd: repo });
-    execFileSync('git', ['config', 'user.name', 'Proteus Test'], { cwd: repo });
+    execFileSync('git', ['config', 'user.email', '${RETIRED}@example.invalid'], { cwd: repo });
+    execFileSync('git', ['config', 'user.name', '${RETIRED_CAP} Test'], { cwd: repo });
     writeFileSync(join(repo, 'tracked.txt'), 'before\\n');
     execFileSync('git', ['add', 'tracked.txt'], { cwd: repo });
     execFileSync('git', ['commit', '-qm', 'seed'], { cwd: repo });
@@ -94,7 +104,7 @@ const cases: ReadonlyArray<{
     rule: "no-ambient-git-in-tests",
     expected: 5,
     bad: `${PRELUDE}${HISTORICAL_FIXTURE}};\n`,
-    good: `${PRELUDE}    const repo = mkdtempSync(join(tmpdir(), 'proteus-output-diff-'));
+    good: `${PRELUDE}    const repo = mkdtempSync(join(tmpdir(), 'kinu-output-diff-'));
     initRepo(repo);
     writeFileSync(join(repo, 'tracked.txt'), 'before\\n');
     git(repo, 'add', 'tracked.txt');

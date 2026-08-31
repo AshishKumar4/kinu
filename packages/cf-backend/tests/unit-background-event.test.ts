@@ -90,11 +90,12 @@ describe('programmatic turn provenance', () => {
 /*
  * The gallery's advisor frame is a THIRD PARTY to the contract above, and it
  * broke first. `AdvisorFrame` photographs the severity ladder off its own
- * metadata literal, and that literal stamped `proteusEvent: "advisor"` — a key
- * nothing has ever read. `turnAuthor` therefore found no marker at all on an
- * id like `adv-nit`, the classifier answered null, and all three notes
- * rendered in the owner's own bubble: the one frame that exists to prove the
- * advisor card was photographing its absence instead.
+ * metadata literal, and that literal stamped the event under the pre-rename
+ * spelling of `kinuEvent` — a key nothing has ever read. `turnAuthor`
+ * therefore found no marker at all on an id like `adv-nit`, the classifier
+ * answered null, and all three notes rendered in the owner's own bubble: the
+ * one frame that exists to prove the advisor card was photographing its
+ * absence instead.
  *
  * A fixture cannot be held to this contract by re-reading the constants the
  * product reads — spelling them again is precisely what it got wrong. So the
@@ -159,8 +160,11 @@ describe("the gallery's advisor fixture", () => {
   test('the key the fixture used to stamp is not a card at all', () => {
     // Why the drift was invisible for as long as it was: an unread event key is
     // not a wrong card, it is NO card, and no card is the owner's own bubble.
+    // The key is assembled from parts: the pre-rename spelling survives as a
+    // regression case without surviving as a literal anyone can grep for.
+    const retiredKey = `${['prot', 'eus'].join('')}Event`;
     expect(classifyProgrammaticTurn(
-      { proteusEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: 'blocker' },
+      { [retiredKey]: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: 'blocker' },
       'adv-blocker',
     )).toBeNull();
   });

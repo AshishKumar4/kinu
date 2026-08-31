@@ -1,4 +1,4 @@
-// Proteus-authored: upstream ships no test for this rule, and this copy is deliberately stronger
+// Kinu-authored: upstream ships no test for this rule, and this copy is deliberately stronger
 // than upstream's (it resolves aliases and unions, and grants no `cause` exemption). The cases
 // below pin both differences. See tools/oxlint/anti-slop/upstream.json.
 import { RuleTester } from "oxlint/plugins-dev";

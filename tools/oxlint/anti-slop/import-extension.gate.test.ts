@@ -1,4 +1,4 @@
-// Proteus-only gate; see upstream.json's `proteusRules` and `proteusRuleGates`.
+// Kinu-only gate; see upstream.json's `kinuRules` and `kinuRuleGates`.
 //
 // `rules/require-runtime-import-extension.test.ts` proves the rule function behaves. Three things
 // it cannot prove live here.
@@ -43,7 +43,7 @@ const manifest = JSON.parse(
 );
 
 assert.deepEqual(
-  [...manifest.proteusRuleGates["import-extension.gate.test.ts"]],
+  [...manifest.kinuRuleGates["import-extension.gate.test.ts"]],
   [RULE],
   "this gate must prove exactly the rules upstream.json assigns to it, and only those",
 );

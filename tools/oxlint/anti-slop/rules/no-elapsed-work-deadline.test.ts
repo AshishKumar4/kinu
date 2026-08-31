@@ -1,4 +1,4 @@
-// Proteus-local rule. The repository-level historical replay, live denominator, and isolated
+// Kinu-local rule. The repository-level historical replay, live denominator, and isolated
 // red-to-green Oxlint proof are in ../no-elapsed-deadline.gate.test.ts.
 import { RuleTester } from "oxlint/plugins-dev";
 

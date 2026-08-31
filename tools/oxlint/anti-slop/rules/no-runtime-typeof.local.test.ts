@@ -1,4 +1,4 @@
-// Proteus-local coverage on top of the vendored upstream suite in ./no-runtime-typeof.test.ts.
+// Kinu-local coverage on top of the vendored upstream suite in ./no-runtime-typeof.test.ts.
 // Pins the `objectInstanceof` check, which upstream has never carried at any commit.
 // See tools/oxlint/anti-slop/upstream.json.
 import { RuleTester } from "oxlint/plugins-dev";
@@ -8,7 +8,7 @@ import { noRuntimeTypeofRule } from "./no-runtime-typeof.ts";
 const tester = new RuleTester({ languageOptions: { parserOptions: { lang: "ts" } } });
 const error = { messageId: "objectInstanceof" };
 
-tester.run("anti-slop/no-runtime-typeof (Proteus-local)", noRuntimeTypeofRule, {
+tester.run("anti-slop/no-runtime-typeof (Kinu-local)", noRuntimeTypeofRule, {
   valid: [
     "function check(Object: new () => Owner, value: Owner) { return value instanceof Object; }",
     "class Object {} const owned = value instanceof Object;",

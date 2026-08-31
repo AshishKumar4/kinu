@@ -10,7 +10,7 @@ type VendoredFile = {
   readonly upstream?: string;
   readonly local?: string;
   readonly reason?: string;
-  readonly proteusOnly?: true;
+  readonly kinuOnly?: true;
 };
 
 type Manifest = {
@@ -21,10 +21,10 @@ type Manifest = {
   readonly upstreamSourceRoot: string;
   readonly upstreamTestRoot: string;
   /** Rules authored here rather than vendored. Exact complement of the upstream-pinned rules. */
-  readonly proteusRules: readonly string[];
-  /** Which `*.gate.test.ts` proves each Proteus-authored rule red->green through the real oxlint
-   *  binary. An exact partition of `proteusRules`, asserted below. */
-  readonly proteusRuleGates: Readonly<Record<string, readonly string[]>>;
+  readonly kinuRules: readonly string[];
+  /** Which `*.gate.test.ts` proves each Kinu-authored rule red->green through the real oxlint
+   *  binary. An exact partition of `kinuRules`, asserted below. */
+  readonly kinuRuleGates: Readonly<Record<string, readonly string[]>>;
   readonly vendored: Readonly<Record<string, VendoredFile>>;
 };
 
@@ -74,8 +74,8 @@ if (process.argv.includes("--update")) {
   for (const path of vendoredPaths()) {
     if (path === "upstream.json") continue;
     const declared = manifest.vendored[path];
-    if (declared?.proteusOnly === true) {
-      refreshed[path] = { proteusOnly: true };
+    if (declared?.kinuOnly === true) {
+      refreshed[path] = { kinuOnly: true };
       continue;
     }
     const upstream = digest(join(checkout, upstreamPathFor(path)));
@@ -121,10 +121,10 @@ const undocumented: string[] = [];
 let comparedAgainstUpstream = 0;
 
 for (const [path, declared] of Object.entries(manifest.vendored)) {
-  if (declared.proteusOnly === true) continue;
+  if (declared.kinuOnly === true) continue;
   assert.ok(
     declared.upstream !== undefined,
-    `${path}: needs either an upstream digest or proteusOnly`,
+    `${path}: needs either an upstream digest or kinuOnly`,
   );
   comparedAgainstUpstream += 1;
   const actual = digest(join(pluginRoot, path));
@@ -148,12 +148,12 @@ assert.deepEqual(
 );
 
 const registeredRules = Object.keys(antiSlopPlugin.rules ?? {}).sort();
-const proteusRules = [...manifest.proteusRules].sort();
+const kinuRules = [...manifest.kinuRules].sort();
 assert.ok(registeredRules.length > 0, "the plugin registered no rules");
 
 // An exact partition of the registered rules, asserted in both directions. Accepting
-// "upstream digest OR proteusOnly" here instead would let any vendored rule be demoted to
-// {proteusOnly:true} and escape byte comparison forever — a manifest rewritten that way leaves
+// "upstream digest OR kinuOnly" here instead would let any vendored rule be demoted to
+// {kinuOnly:true} and escape byte comparison forever — a manifest rewritten that way leaves
 // every file present and nothing compared. Naming the local rules makes adding one a visible
 // two-line act and demoting an upstream one impossible without a reviewer seeing the name.
 const unpinned = registeredRules.filter(
@@ -161,26 +161,26 @@ const unpinned = registeredRules.filter(
 );
 assert.deepEqual(
   unpinned,
-  proteusRules,
-  "every registered rule must either carry an upstream digest or be named in proteusRules",
+  kinuRules,
+  "every registered rule must either carry an upstream digest or be named in kinuRules",
 );
 assert.deepEqual(
-  proteusRules.filter((rule) => manifest.vendored[`rules/${rule}.ts`]?.upstream !== undefined),
+  kinuRules.filter((rule) => manifest.vendored[`rules/${rule}.ts`]?.upstream !== undefined),
   [],
-  "a rule named in proteusRules must not also claim an upstream digest",
+  "a rule named in kinuRules must not also claim an upstream digest",
 );
 assert.deepEqual(
-  proteusRules.filter((rule) => !registeredRules.includes(rule)),
+  kinuRules.filter((rule) => !registeredRules.includes(rule)),
   [],
-  "proteusRules names a rule the plugin does not register",
+  "kinuRules names a rule the plugin does not register",
 );
 assert.ok(
-  proteusRules.length > 0,
-  "proteusRules is empty; the Proteus-authored rules would then be unaccounted for rather than declared",
+  kinuRules.length > 0,
+  "kinuRules is empty; the Kinu-authored rules would then be unaccounted for rather than declared",
 );
 assert.ok(
-  proteusRules.length < registeredRules.length,
-  `proteusRules claims ${proteusRules.length} of ${registeredRules.length} rules; declaring the whole plugin Proteus-authored would disable drift comparison entirely`,
+  kinuRules.length < registeredRules.length,
+  `kinuRules claims ${kinuRules.length} of ${registeredRules.length} rules; declaring the whole plugin Kinu-authored would disable drift comparison entirely`,
 );
 
 // The rule -> gate partition. A per-rule RuleTester suite proves the rule function behaves; only a
@@ -188,12 +188,12 @@ assert.ok(
 // exactly once, every gate file present, no gate empty) is what stops a rule being added with a
 // suite and no red->green proof — the shape that has produced nine gates in this repo that existed
 // and never ran.
-const gateEntries = Object.entries(manifest.proteusRuleGates);
-assert.ok(gateEntries.length > 0, "proteusRuleGates is empty; no Proteus rule would be proven to fire at all");
+const gateEntries = Object.entries(manifest.kinuRuleGates);
+assert.ok(gateEntries.length > 0, "kinuRuleGates is empty; no Kinu rule would be proven to fire at all");
 for (const [gate, rules] of gateEntries) {
   assert.ok(
     onDisk.includes(gate),
-    `proteusRuleGates names ${gate}, which is not a file in this plugin`,
+    `kinuRuleGates names ${gate}, which is not a file in this plugin`,
   );
   assert.ok(rules.length > 0, `${gate} is assigned no rules; a gate that proves nothing must not be listed`);
 }
@@ -205,13 +205,13 @@ assert.equal(
 );
 assert.deepEqual(
   [...gatedRules].sort(),
-  proteusRules,
-  "every Proteus-authored rule must be proven red->green by exactly one gate, and only those",
+  kinuRules,
+  "every Kinu-authored rule must be proven red->green by exactly one gate, and only those",
 );
 
 assert.ok(
-  comparedAgainstUpstream >= registeredRules.length - proteusRules.length,
-  `compared ${comparedAgainstUpstream} files against upstream for ${registeredRules.length - proteusRules.length} vendored rules; a drift check that compares nothing reports no drift`,
+  comparedAgainstUpstream >= registeredRules.length - kinuRules.length,
+  `compared ${comparedAgainstUpstream} files against upstream for ${registeredRules.length - kinuRules.length} vendored rules; a drift check that compares nothing reports no drift`,
 );
 
 assert.deepEqual(

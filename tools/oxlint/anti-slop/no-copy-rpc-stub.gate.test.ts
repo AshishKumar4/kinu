@@ -1,4 +1,4 @@
-// Proteus-only gate; see upstream.json's `proteusRules` and `proteusRuleGates`.
+// Kinu-only gate; see upstream.json's `kinuRules` and `kinuRuleGates`.
 //
 // `rules/no-copy-rpc-stub.test.ts` proves the rule function behaves. It does not prove the rule is
 // reachable through the command the repo gates on, and it does not prove the repo contains any JSRPC
@@ -80,7 +80,7 @@ const manifest = JSON.parse(
 );
 assert.deepEqual(
   cases.map((entry) => entry.rule).sort(),
-  [...manifest.proteusRuleGates["no-copy-rpc-stub.gate.test.ts"]].sort(),
+  [...manifest.kinuRuleGates["no-copy-rpc-stub.gate.test.ts"]].sort(),
   "this gate must prove exactly the rules upstream.json assigns to it, and only those",
 );
 for (const { rule } of cases) {

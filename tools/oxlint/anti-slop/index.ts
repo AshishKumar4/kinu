@@ -29,7 +29,7 @@ import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety
 
 /**
  * Generic Oxlint rules that reject low-evidence and low-signal implementation patterns, plus the
- * Proteus-local rules (see upstream.json's `proteusRules`): the no-swallow family,
+ * Kinu-local rules (see upstream.json's `kinuRules`): the no-swallow family,
  * no-wait-until-in-durable-object, no-copy-rpc-stub, no-untyped-console, and
  * require-runtime-import-extension.
  */

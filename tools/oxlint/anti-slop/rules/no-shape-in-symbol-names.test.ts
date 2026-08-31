@@ -1,4 +1,4 @@
-// Proteus-authored: upstream ships no test for this rule. The invalid cases pin the
+// Kinu-authored: upstream ships no test for this rule. The invalid cases pin the
 // case-insensitive substring ban; a previous session narrowed it to a lexical-word ban and hid 30
 // real violations, so these cases exist to make that narrowing fail loudly.
 import { RuleTester } from "oxlint/plugins-dev";

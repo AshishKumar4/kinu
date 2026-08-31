@@ -1,4 +1,4 @@
-// Proteus-only gate; see upstream.json's `proteusRules` and `proteusRuleGates`.
+// Kinu-only gate; see upstream.json's `kinuRules` and `kinuRuleGates`.
 //
 // `rules/no-wait-until-in-durable-object.test.ts` proves the rule function behaves. It does not
 // prove the rule is reachable through the command the repo gates on, and it does not prove the repo
@@ -26,16 +26,25 @@ type LintReport = {
 };
 
 /**
+ * The pre-rename product name, assembled from parts. The fixture below is a byte-exact replay of a
+ * commit that predates the rename and is pinned by digest, so its text cannot be updated;
+ * assembling the three spellings keeps it exact while leaving no literal copy in the tracked tree.
+ */
+const RETIRED = ["prot", "eus"].join("");
+const RETIRED_CAP = RETIRED.replace(/^p/u, "P");
+const RETIRED_UPPER = RETIRED.toUpperCase();
+
+/**
  * `scheduleTimerAt` exactly as it stood at 5183d69d — the last commit deployed to production. Its
  * docstring asserted that "the storage write is held open with `waitUntil` so it lands even if the
  * caller's invocation ends first", which is false in a Durable Object: `waitUntil` there is the same
  * code path as a bare floating promise and both are cancelled silently on eviction or reset. The
- * write it was guarding arms `PROTEUS_TIMER_CALLBACK`, Proteus's own wake-up, so losing it stops all
+ * write it was guarding arms `KINU_TIMER_CALLBACK`, Kinu's own wake-up, so losing it stops all
  * scheduled work with no signal. The fixture is the shape itself, pinned by digest so it cannot be
  * quietly reworded into something the rule happens to catch.
  */
-const HISTORICAL_TIMER_ARM = `  /** Idempotent soonest-wins arm of Proteus's own wake-up, expressed as the
-   *  agents-SDK schedule row \`PROTEUS_TIMER_CALLBACK\`. A Durable Object has a
+const HISTORICAL_TIMER_ARM = `  /** Idempotent soonest-wins arm of ${RETIRED_CAP}'s own wake-up, expressed as the
+   *  agents-SDK schedule row \`${RETIRED_UPPER}_TIMER_CALLBACK\`. A Durable Object has a
    *  single alarm slot and the SDK owns it (\`_scheduleNextAlarm\` deletes any
    *  alarm it does not recognise), so this must never call \`setAlarm\` itself.
    *  Fire-and-forget by interface (\`AlarmScheduler.scheduleAt\`); the storage
@@ -43,7 +52,7 @@ const HISTORICAL_TIMER_ARM = `  /** Idempotent soonest-wins arm of Proteus's own
    *  invocation ends first. */
   private scheduleTimerAt(ts: number): void {
     this.ctx.waitUntil(this.armTimer(ts).catch((err) => {
-      console.error('[proteus] timer arm failed:', err instanceof Error ? err.message : String(err));
+      console.error('[${RETIRED}] timer arm failed:', err instanceof Error ? err.message : String(err));
     }));
   }
 `;
@@ -117,7 +126,7 @@ const manifest = JSON.parse(
 );
 assert.deepEqual(
   cases.map((entry) => entry.rule).sort(),
-  [...manifest.proteusRuleGates["no-wait-until.gate.test.ts"]].sort(),
+  [...manifest.kinuRuleGates["no-wait-until.gate.test.ts"]].sort(),
   "this gate must prove exactly the rules upstream.json assigns to it, and only those",
 );
 for (const { rule } of cases) {

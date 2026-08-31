@@ -53,7 +53,7 @@ function referencedAliasName(type: ESTree.TSType): string | null {
 }
 
 /**
- * PROTEUS-LOCAL: upstream flags only a literal `unknown` annotation and exempts a parameter named
+ * KINU-LOCAL: upstream flags only a literal `unknown` annotation and exempts a parameter named
  * `cause`. Both carve-outs let unparsed input through, so this copy resolves aliases, unions and
  * parentheses and exempts nothing. See tools/oxlint/anti-slop/upstream.json.
  */

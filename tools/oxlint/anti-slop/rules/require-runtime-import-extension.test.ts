@@ -1,4 +1,4 @@
-// Proteus-local rule; see upstream.json's `proteusRules`. There is no upstream suite beside this
+// Kinu-local rule; see upstream.json's `kinuRules`. There is no upstream suite beside this
 // one. The repo-wide census, the boundary-equality proof and the seeded red->green run through the
 // real `oxlint` binary live in ../import-extension.gate.test.ts.
 //

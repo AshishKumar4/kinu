@@ -34,7 +34,7 @@ Link the adapter in as a system. CL-Bench discovers systems from
 stays here and the checkout stays clean:
 
 ```bash
-ln -s /path/to/Proteus/bench/clbench/kinu src/systems/kinu
+ln -s /path/to/Kinu/bench/clbench/kinu src/systems/kinu
 clbench inspect system kinu     # confirms registration + every parameter
 ```
 
@@ -96,7 +96,7 @@ benchmark adapters share: it refuses an unset or relative home, your real
 clbench smoke exploitable_poker --system kinu
 
 # The smallest slice with a real reward and a real baseline: 5 hands.
-clbench run --config /path/to/Proteus/bench/clbench/configs/exploitable_poker_kinu_quick_test.json \
+clbench run --config /path/to/Kinu/bench/clbench/configs/exploitable_poker_kinu_quick_test.json \
   --runs 1 --max-workers 3
 ```
 

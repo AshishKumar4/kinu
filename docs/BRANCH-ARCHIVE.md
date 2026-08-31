@@ -101,10 +101,11 @@ index, and 272 of 1,179 files at `df014c73`. Its work had landed:
 
 ### The 2026-08-30 credential redaction
 
-A local history scan found two expired Proteus access tokens in one old owner-message
-record. No remote ref reached that blob. Four local refs did: one branch and three
-archive tags. An isolated `filter-repo` pass replaced only those two token strings
-with `[REDACTED-PROTEUS-ACCESS-TOKEN]`.
+A local history scan found two expired access tokens for this deployment in one old
+owner-message record. No remote ref reached that blob. Four local refs did: one branch
+and three archive tags. An isolated `filter-repo` pass replaced only those two token
+strings with a bracketed `REDACTED-*-ACCESS-TOKEN` marker carrying the then-current
+product name — search the rewritten blobs by that prefix, not by the name.
 
 The rewrite produced 1,871 old-to-new commit mappings. Every rewritten commit kept
 its parent topology, author, committer, message, and every non-target path. No commit
@@ -139,7 +140,7 @@ The integration landed on `consolidate/final-history` (`5d98f3973`), the
 gitignored valuables moved to the primary checkout, and every remaining
 worktree was pruned: 102 worktrees removed, 100 branches deleted, each tip
 tagged first. Dirty residue was exported per worktree to
-`~/Proteus-backups/worktree-residue/` as a tracked-diff patch plus an
+`~/Kinu-backups/worktree-residue/` as a tracked-diff patch plus an
 untracked-files tarball before removal.
 
 Novel-object counts against `consolidate/final-history` are dominated by the
@@ -185,7 +186,7 @@ to delete while its count is nonzero; re-measure after any tag deletion.
 | `archive/archive-store` | `archive-store` | 3 |
 | `archive/vfs-mounts` | `feat/vfs-mounts` | 1 |
 
-The full 102-row manifest with head SHAs: `~/Proteus-backups/worktree-residue/prune-manifest-20260828.json`.
+The full 102-row manifest with head SHAs: `~/Kinu-backups/worktree-residue/prune-manifest-20260828.json`.
 ## Reproduce the test
 
 `git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none

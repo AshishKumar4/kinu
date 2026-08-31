@@ -116,7 +116,7 @@ edit lands in the primary, no error anywhere. So:
 - Every `edit`/`write` path is absolute, under YOUR worktree, and an edit's
   section header carries the SAME absolute path the tag was read from.
 - After the first edit of any file, `git -C <your-worktree> status` must show
-  it changed; if `git -C ~/Proteus status` shows your file instead, stop,
+  it changed; if `git -C ~/Kinu status` shows your file instead, stop,
   extract your diff with `git diff -- <paths>`, apply it in your worktree,
   and revert the primary path-scoped. Never a bare checkout or reset there —
   other agents' work may be in flight beside yours.

@@ -1,4 +1,4 @@
-// Proteus-only gate; see upstream.json's `proteusRules`.
+// Kinu-only gate; see upstream.json's `kinuRules`.
 //
 // The four no-swallow rules own RuleTester suites, but a suite proves only that the rule function
 // behaves — not that the rule is reachable through the command the repo actually gates on. This
@@ -192,9 +192,9 @@ export class Corrected {
 `,
   },
 ];
-/** Ensures the five rules are exactly the ones this gate is assigned. `proteusRuleGates` is the
+/** Ensures the five rules are exactly the ones this gate is assigned. `kinuRuleGates` is the
  *  source of truth rather than a list here, and drift.test.ts asserts those slices partition
- *  `proteusRules` exactly — so a Proteus rule with no gate still fails, and this gate still cannot
+ *  `kinuRules` exactly — so a Kinu rule with no gate still fails, and this gate still cannot
  *  quietly stop covering one of its own. */
 const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
 const manifest = JSON.parse(
@@ -202,7 +202,7 @@ const manifest = JSON.parse(
 );
 assert.deepEqual(
   cases.map((entry) => entry.rule).sort(),
-  [...manifest.proteusRuleGates["no-swallow.gate.test.ts"]].sort(),
+  [...manifest.kinuRuleGates["no-swallow.gate.test.ts"]].sort(),
   "this gate must prove exactly the rules upstream.json assigns to it, and only those",
 );
 for (const { rule } of cases) {

@@ -1,4 +1,4 @@
-// Proteus-only gate; see upstream.json's `proteusRules` and `proteusRuleGates`.
+// Kinu-only gate; see upstream.json's `kinuRules` and `kinuRuleGates`.
 //
 // `rules/no-untyped-console.test.ts` proves the rule function behaves. It does not prove the rule is
 // reachable through the command the repo gates on, and — more importantly for THIS rule — it does not
@@ -77,7 +77,7 @@ const manifest = JSON.parse(
 );
 assert.deepEqual(
 	cases.map((entry) => entry.rule).sort(),
-	[...manifest.proteusRuleGates["no-untyped-console.gate.test.ts"]].sort(),
+	[...manifest.kinuRuleGates["no-untyped-console.gate.test.ts"]].sort(),
 	"this gate must prove exactly the rules upstream.json assigns to it, and only those",
 );
 for (const { rule } of cases) {

@@ -1,6 +1,6 @@
-// Proteus-only gate. NOT a plugin-rule gate: `typescript/no-explicit-any` and
+// Kinu-only gate. NOT a plugin-rule gate: `typescript/no-explicit-any` and
 // `typescript/ban-ts-comment` are oxlint BUILT-INS, so they carry no rule file, no RuleTester suite
-// and no entry in `upstream.json`'s `proteusRules`/`proteusRuleGates` — those two lists partition
+// and no entry in `upstream.json`'s `kinuRules`/`kinuRuleGates` — those two lists partition
 // the rules authored in this plugin, and naming a built-in there would claim authorship of upstream
 // code. What is local here is the POLICY in `.oxlintrc.json`, and policy is exactly what can be
 // weakened without deleting anything, so it needs a gate of its own.

@@ -6,8 +6,8 @@
   "commitSubject": "Ignore agent tooling when installing anti-slop",
   "upstreamSourceRoot": "skills/install-anti-slop/assets/anti-slop",
   "upstreamTestRoot": "src/rules",
-  "$proteusComment": "Rules authored here, not vendored: they encode Proteus policy and have no upstream counterpart. Named explicitly rather than inferred from `proteusOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `proteusRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails. Both lists cover PLUGIN rules only. `typescript-escapes.gate.test.ts` is deliberately absent from them: it gates `.oxlintrc.json` policy for two oxlint BUILT-INS (typescript/no-explicit-any, typescript/ban-ts-comment), which have no rule file here to author or pin, and naming a built-in in proteusRules would claim authorship of upstream code and break the partition drift.test.ts asserts. It is listed under `vendored` as proteusOnly because every file in this directory must be declared.",
-  "proteusRules": [
+  "$kinuComment": "Rules authored here, not vendored: they encode Kinu policy and have no upstream counterpart. Named explicitly rather than inferred from `kinuOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `kinuRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails. Both lists cover PLUGIN rules only. `typescript-escapes.gate.test.ts` is deliberately absent from them: it gates `.oxlintrc.json` policy for two oxlint BUILT-INS (typescript/no-explicit-any, typescript/ban-ts-comment), which have no rule file here to author or pin, and naming a built-in in kinuRules would claim authorship of upstream code and break the partition drift.test.ts asserts. It is listed under `vendored` as kinuOnly because every file in this directory must be declared.",
+  "kinuRules": [
     "no-ambient-git-in-tests",
     "no-elapsed-work-deadline",
     "no-copy-rpc-stub",
@@ -20,7 +20,7 @@
     "require-cause-on-rethrow",
     "require-runtime-import-extension"
   ],
-  "proteusRuleGates": {
+  "kinuRuleGates": {
     "import-extension.gate.test.ts": [
       "require-runtime-import-extension"
     ],
@@ -49,54 +49,54 @@
   },
   "vendored": {
     "drift.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "import-extension.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "index.ts": {
       "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "1896db590fb5f344c792bae35a02b5a78082abc1904b808045bb732acb9a3f12",
-      "reason": "Registers the Proteus-authored rules (see proteusRules) alongside the vendored ones: the five no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, require-runtime-import-extension, and the dormant no-elapsed-work-deadline registration. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
+      "local": "6c0fe2e4d8bca5cbfcde8dd2fab528a3ff6140de60305ed3cb36bcaacee674e0",
+      "reason": "Registers the Kinu-authored rules (see kinuRules) alongside the vendored ones: the five no-swallow rules, no-wait-until-in-durable-object, no-ambient-git-in-tests, no-copy-rpc-stub, no-untyped-console, require-runtime-import-extension, and the dormant no-elapsed-work-deadline registration. Upstream has no equivalent, so index.ts must diverge for a local rule to exist at all."
     },
     "no-ambient-git.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "no-copy-rpc-stub.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "no-swallow.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "no-wait-until.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "package.json": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-ambient-git-in-tests.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-elapsed-work-deadline.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-elapsed-work-deadline.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "no-elapsed-deadline.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-ambient-git-in-tests.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-chained-type-assertions.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-chained-type-assertions.ts": {
       "upstream": "72f8e981520f94adac0ffbdab8f8e84e5f2a4595f14e4a6471be917a85a20a15"
@@ -108,22 +108,22 @@
       "upstream": "33f044030d208fcc10be73bb19c8172c275c5229df4b0ca8ec10f069bbe60062"
     },
     "rules/no-copy-rpc-stub.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-copy-rpc-stub.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-ddl-in-catch.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-ddl-in-catch.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-empty-catch.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-empty-catch.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-known-value-widening.test.ts": {
       "upstream": "76a329551293d02f53b7390c8bf9cf35c32d6860ffc154c539a3ebd972da78da"
@@ -156,40 +156,40 @@
       "upstream": "95c5aa0f8e23b10d9345b1776082e08704ec6590298176a8ede8dfdb6e7cb56f"
     },
     "rules/no-runtime-typeof.local.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-runtime-typeof.test.ts": {
       "upstream": "d30878a27737afebe6f3653cd9de98b0f84c8651cc8a7abcd40874b613eec264"
     },
     "rules/no-runtime-typeof.ts": {
       "upstream": "eed63d5667763ddbc48a6b83662e446f100c444cddefc3d066ac0015670590b8",
-      "local": "dfb2d5b1d37f9467c505d99e04973ca845cdae258b52e34bf08d177553aab6b1",
+      "local": "7e52fdc34155f6cfb1b73b47c6df5664da029fa01df41627fb7f8f828a5e0e2a",
       "reason": "Adds the objectInstanceof check with scope-aware resolution of the global Object binding. `x instanceof Object` is the same evasion as typeof and upstream has never rejected it at any commit. Upstream's allowInTypeGuards option is vendored as-is and .oxlintrc.json does not set it, so no typeof exception is active."
     },
     "rules/no-sentinel-catch.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-sentinel-catch.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-unaccounted-catch.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-unaccounted-catch.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-shape-in-symbol-names.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-shape-in-symbol-names.ts": {
       "upstream": "54aebfebb25c1f8f2ce181f8f82fd05413a0a63f7cdac52e9d570ea1cd284510"
     },
     "rules/no-unknown-parameters.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-unknown-parameters.ts": {
       "upstream": "ab5cd31a9a464dd12e4e930298fcd773c1c1badfaf66619915d5435b5d57db61",
-      "local": "e5580b03a1d9944eeffd341020c71ec34a76e64efb357820f37e7aa6ad780211",
+      "local": "63ff1a3358680f271575a6f7396ccc66bda99122b1bbc4f6c3001e490c65dc7b",
       "reason": "Resolves type aliases, unions and parenthesised types to unknown instead of matching only a literal unknown annotation, and grants no exemption to a parameter named `cause`. Upstream's two carve-outs both let unparsed boundary input through unflagged."
     },
     "rules/no-unknown-returns.test.ts": {
@@ -199,7 +199,7 @@
       "upstream": "fca7a61334b902ec76736b6d8ad5b95a84a0d4366dcc7ae1bc44492523052f3b"
     },
     "rules/no-unknown-type-aliases.local.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-unknown-type-aliases.test.ts": {
       "upstream": "f8802e00e5f99b656880d8401e2145d78d6e3e1c252d8a6be36f8963d5b886c3"
@@ -214,10 +214,10 @@
       "upstream": "bec8e540e05a749e06474b1c7bd93879747b3330f0b9c87fd1a3ffe959ace075"
     },
     "rules/no-wait-until-in-durable-object.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-wait-until-in-durable-object.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-widen-then-assert.test.ts": {
       "upstream": "02de3e9fffc63e32a742420e9e614a6808f68fdf7f76828474107b4d90033bc5"
@@ -226,26 +226,26 @@
       "upstream": "63f2c07cc42b8ad60a7e868efbd7b29e462b9ba960fbd07bbc8f590ef9e3f879"
     },
     "rules/require-cause-on-rethrow.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/require-cause-on-rethrow.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/require-runtime-import-extension.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/require-runtime-import-extension.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/require-safety-comment-for-type-assertion.local.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/require-safety-comment-for-type-assertion.test.ts": {
       "upstream": "0fbe9f3337315e137670467b90873e53a82394b027669d74a926aab7e4069f43"
     },
     "rules/require-safety-comment-for-type-assertion.ts": {
       "upstream": "78bad368fcc137f0ed9d6f21626baed5c980fe3ea6d093c93ac4ed9858b9a309",
-      "local": "74f20864deb48627126ed9cc4a3a32690a772f5a75fe73c7c54d66679be53dab",
+      "local": "e6369ef9320881ec35e3ada96326927010bd70f2d8957b0d57a901803166275d",
       "reason": "Adds unverifiableAssertion (a comment cannot establish a caller-selected generic, recover evidence from `any`, or validate raw JSON.parse output) and insufficientSafetyComment (a SAFETY note must name concrete evidence). Upstream accepts the mere presence of the comment."
     },
     "shared/dictionary-types.ts": {
@@ -258,22 +258,22 @@
       "upstream": "318f56b17d9063134860fe4c51c2e22cb0a55e7f421a0ff4ccedb5a9e9c2b2d9"
     },
     "tsconfig.json": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "no-untyped-console.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-untyped-console.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "rules/no-untyped-console.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "type-aware.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     },
     "typescript-escapes.gate.test.ts": {
-      "proteusOnly": true
+      "kinuOnly": true
     }
   }
 }

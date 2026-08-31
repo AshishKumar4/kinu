@@ -57,7 +57,7 @@ tester.run("anti-slop/no-ambient-git-in-tests", noAmbientGitInTestsRule, {
     // The five calls that actually damaged the repository, one per shape.
     { code: "execFileSync('git', ['init', '-q'], { cwd: repo });", filename: test, errors: [error] },
     {
-      code: "execFileSync('git', ['config', 'user.name', 'Proteus Test'], { cwd: repo });",
+      code: "execFileSync('git', ['config', 'user.name', 'Kinu Test'], { cwd: repo });",
       filename: test,
       errors: [error],
     },

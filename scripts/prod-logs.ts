@@ -12,12 +12,13 @@
  *    -> My Profile -> API Tokens -> Create Token.
  *
  * `--worker` is the SERVICE name the account files events under, not the
- * project's name. Measured over 48h on 2026-08-21, the account carried
- * `proteus` (288,797 events — the live deployment, still on its pre-rename
- * script name), `kinu-staging` (186) and `proteus-staging` (1). So the default
- * below answers nothing until the rename reaches a deploy, and asking for a
- * service that has no events is indistinguishable from asking wrongly — hence
- * the census is written down here.
+ * project's name: `kinu` for the live deployment and `kinu-staging` for
+ * staging, exactly as `packages/cf-backend/wrangler.jsonc` declares them. A
+ * service the account holds no events for is indistinguishable from a name
+ * asked wrongly, so the census is worth re-reading before concluding a window
+ * is empty: measured over 48h on 2026-08-21 the live deployment carried
+ * 288,797 events and staging 186, under whichever script names were deployed
+ * at the time.
  *
  * Grouping and percentiles, for anyone extending this: the operator set is
  * `count`, `avg`, `min`, `max`, `sum`, `stddev`, `uniq`, `median`, `p25`,
@@ -27,8 +28,8 @@
  * latency question has to exclude the upgrades before it means anything.
  *
  * Usage:
- *   bun scripts/prod-logs.ts live [--worker proteus] [--seconds 120] [--grep swarm]
- *   bun scripts/prod-logs.ts query [--worker proteus] [--since 6h] [--grep head.]
+ *   bun scripts/prod-logs.ts live [--worker kinu] [--seconds 120] [--grep swarm]
+ *   bun scripts/prod-logs.ts query [--worker kinu] [--since 6h] [--grep head.]
  */
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';

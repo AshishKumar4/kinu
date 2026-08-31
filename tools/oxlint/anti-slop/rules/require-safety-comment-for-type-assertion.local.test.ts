@@ -1,4 +1,4 @@
-// Proteus-local coverage on top of the vendored upstream suite in
+// Kinu-local coverage on top of the vendored upstream suite in
 // ./require-safety-comment-for-type-assertion.test.ts. Upstream accepts the mere presence of a
 // `SAFETY:` comment; these cases pin the two rejections upstream has never carried.
 // See tools/oxlint/anti-slop/upstream.json.
@@ -9,7 +9,7 @@ import { requireSafetyCommentForTypeAssertionRule } from "./require-safety-comme
 const tester = new RuleTester({ languageOptions: { parserOptions: { lang: "ts" } } });
 
 tester.run(
-  "anti-slop/require-safety-comment-for-type-assertion (Proteus-local)",
+  "anti-slop/require-safety-comment-for-type-assertion (Kinu-local)",
   requireSafetyCommentForTypeAssertionRule,
   {
     valid: [
