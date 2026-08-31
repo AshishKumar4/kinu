@@ -15,42 +15,83 @@
  * The dist modules and their `.d.ts` files are real and shipped; reaching them
  * through the installed tree is the only way to hold them today.
  *
+ * WHY THE VALUES LOAD LAZILY. These modules' static graphs carry isomorphic-git,
+ * tarball handling and the substrate's wasm-adjacent machinery. Every consumer
+ * already awaits the workspace host before calling any of them, so the import
+ * belongs to that first await: module eval stays clean for the Worker's cold
+ * start and for the workerd test pool's SSR loader, which cannot shim the CJS
+ * and wasm assets the deep graph reaches.
+ *
  * The reach is HERE and nowhere else. When upstream exports these subpaths,
  * this file's import specifiers change and no other module notices.
- * cf-backend's unit tests already reach the same dist files the same way, and a
- * workerd fixture (tests/fixtures/nimbus-capability-websocket-worker.ts) proves
- * a real bundle resolves them.
  */
 
-export {
-  ensureProgrammaticReady,
-  rpcEnsureRuntimes,
-  rpcExec,
-  rpcExposePort,
-  rpcInstallRuntime,
-  rpcKillProcess,
-  rpcListPorts,
-  rpcListProcesses,
-  rpcListRuntimes,
-  rpcProcessLogs,
-  rpcRouteCapabilityPort,
-  rpcRunCode,
-  rpcStartProcess,
-  rpcUnexposePort,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import type * as programmaticModule from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import type * as routesModule from '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
+import type * as gitModule from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
+
 export type {
   ProgrammaticExecOptions,
   ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
 
-/** The interactive session's fetch route for a capability-bearing port. Used
- *  for WebSocket previews only: `rpcRouteCapabilityPort` answers an upgrade
- *  with 409 because a 101 cannot cross a Durable Object RPC boundary, and this
- *  one keeps fetch semantics. */
-export { routeCapabilityPort } from '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
+type Programmatic = typeof programmaticModule;
+type Routes = typeof routesModule;
+type Git = typeof gitModule;
 
-/** `git` over a Nimbus filesystem — isomorphic-git against SqliteVFS, with no
- *  child process and nothing reaching a host's git. Registered by the session
- *  worker's own `initSession` in Nimbus; registered by the workspace host here,
- *  because Kinu composes the workspace itself. */
-export { registerGitCommands } from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
+export interface NimbusProgrammatic {
+  readonly ensureProgrammaticReady: Programmatic['ensureProgrammaticReady'];
+  readonly rpcEnsureRuntimes: Programmatic['rpcEnsureRuntimes'];
+  readonly rpcExec: Programmatic['rpcExec'];
+  readonly rpcExposePort: Programmatic['rpcExposePort'];
+  readonly rpcInstallRuntime: Programmatic['rpcInstallRuntime'];
+  readonly rpcKillProcess: Programmatic['rpcKillProcess'];
+  readonly rpcListPorts: Programmatic['rpcListPorts'];
+  readonly rpcListProcesses: Programmatic['rpcListProcesses'];
+  readonly rpcListRuntimes: Programmatic['rpcListRuntimes'];
+  readonly rpcProcessLogs: Programmatic['rpcProcessLogs'];
+  readonly rpcRouteCapabilityPort: Programmatic['rpcRouteCapabilityPort'];
+  readonly rpcRunCode: Programmatic['rpcRunCode'];
+  readonly rpcStartProcess: Programmatic['rpcStartProcess'];
+  readonly rpcUnexposePort: Programmatic['rpcUnexposePort'];
+  /** The interactive session's fetch route for a capability-bearing port. Used
+   *  for WebSocket previews only: `rpcRouteCapabilityPort` answers an upgrade
+   *  with 409 because a 101 cannot cross a Durable Object RPC boundary, and
+   *  this one keeps fetch semantics. */
+  readonly routeCapabilityPort: Routes['routeCapabilityPort'];
+  /** `git` over a Nimbus filesystem — isomorphic-git against SqliteVFS, with no
+   *  child process and nothing reaching a host's git. Registered by the
+   *  workspace host here, because Kinu composes the workspace itself. */
+  readonly registerGitCommands: Git['registerGitCommands'];
+}
+
+let loading: Promise<NimbusProgrammatic> | null = null;
+
+export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
+  loading ??= (async () => {
+    const [programmatic, routes, git] = await Promise.all([
+      import('../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js'),
+      import('../../../node_modules/@nimbus-sh/worker/dist/session/routes.js'),
+      import('../../../node_modules/@nimbus-sh/worker/dist/git/commands.js'),
+    ]);
+    return {
+      ensureProgrammaticReady: programmatic.ensureProgrammaticReady,
+      rpcEnsureRuntimes: programmatic.rpcEnsureRuntimes,
+      rpcExec: programmatic.rpcExec,
+      rpcExposePort: programmatic.rpcExposePort,
+      rpcInstallRuntime: programmatic.rpcInstallRuntime,
+      rpcKillProcess: programmatic.rpcKillProcess,
+      rpcListPorts: programmatic.rpcListPorts,
+      rpcListProcesses: programmatic.rpcListProcesses,
+      rpcListRuntimes: programmatic.rpcListRuntimes,
+      rpcProcessLogs: programmatic.rpcProcessLogs,
+      rpcRouteCapabilityPort: programmatic.rpcRouteCapabilityPort,
+      rpcRunCode: programmatic.rpcRunCode,
+      rpcStartProcess: programmatic.rpcStartProcess,
+      rpcUnexposePort: programmatic.rpcUnexposePort,
+      routeCapabilityPort: routes.routeCapabilityPort,
+      registerGitCommands: git.registerGitCommands,
+    };
+  })();
+  return loading;
+}

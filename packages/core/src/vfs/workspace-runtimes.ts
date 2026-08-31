@@ -49,19 +49,9 @@
 
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
-import { makeBashRunnerFactory } from '@nimbus-sh/core/runtime/bash-runner.js';
-import { makeCPythonRunnerFactory } from '@nimbus-sh/core/runtime/cpython-runner.js';
-import {
-  rehydrateInstalledRuntimesView,
-  runtimeEntrypoints,
-  type RunnerFactory,
-} from '@nimbus-sh/core/runtime/installed-runtimes.js';
-import { seedRuntimePackage, type RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
-import {
-  createNpmCommand,
-  createNpxCommand,
-  type ShellExecuteFn,
-} from '@nimbus-sh/core/substrate/lifo/commands/system/npm.js';
+import type { RunnerFactory } from '@nimbus-sh/core/runtime/installed-runtimes.js';
+import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import type { ShellExecuteFn } from '@nimbus-sh/core/substrate/lifo/commands/system/npm.js';
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { CommandRegistry } from '@nimbus-sh/core/substrate/lifo/commands/registry.js';
@@ -103,7 +93,48 @@ export function workspaceToolchainCapabilities(
  * first command runs. Idempotent registrations only — no bytes are written
  * unless a provisioned command is actually invoked.
  */
-export function provisionWorkspaceRuntimes(deps: {
+/**
+ * The runner and package machinery, loaded on first provisioning rather than at
+ * module eval: the bash and cpython runner modules statically reach wasm
+ * assets, and the npm command sits in the same substrate graph. Evaluating them
+ * with the module would put a WebAssembly import into every consumer's static
+ * graph — the Worker's cold start and the workerd test pool alike — for
+ * machinery only a BOOTING workspace uses.
+ */
+interface RuntimeToolkit {
+  readonly makeBashRunnerFactory: typeof import('@nimbus-sh/core/runtime/bash-runner.js')['makeBashRunnerFactory'];
+  readonly makeCPythonRunnerFactory: typeof import('@nimbus-sh/core/runtime/cpython-runner.js')['makeCPythonRunnerFactory'];
+  readonly rehydrateInstalledRuntimesView: typeof import('@nimbus-sh/core/runtime/installed-runtimes.js')['rehydrateInstalledRuntimesView'];
+  readonly runtimeEntrypoints: typeof import('@nimbus-sh/core/runtime/installed-runtimes.js')['runtimeEntrypoints'];
+  readonly seedRuntimePackage: typeof import('@nimbus-sh/core/runtime/runtime-package.js')['seedRuntimePackage'];
+  readonly createNpmCommand: typeof import('@nimbus-sh/core/substrate/lifo/commands/system/npm.js')['createNpmCommand'];
+  readonly createNpxCommand: typeof import('@nimbus-sh/core/substrate/lifo/commands/system/npm.js')['createNpxCommand'];
+}
+
+let toolkitOnce: Promise<RuntimeToolkit> | null = null;
+const runtimeToolkit = (): Promise<RuntimeToolkit> => {
+  toolkitOnce ??= (async () => {
+    const [bash, cpython, installed, pkg, npm] = await Promise.all([
+      import('@nimbus-sh/core/runtime/bash-runner.js'),
+      import('@nimbus-sh/core/runtime/cpython-runner.js'),
+      import('@nimbus-sh/core/runtime/installed-runtimes.js'),
+      import('@nimbus-sh/core/runtime/runtime-package.js'),
+      import('@nimbus-sh/core/substrate/lifo/commands/system/npm.js'),
+    ]);
+    return {
+      makeBashRunnerFactory: bash.makeBashRunnerFactory,
+      makeCPythonRunnerFactory: cpython.makeCPythonRunnerFactory,
+      rehydrateInstalledRuntimesView: installed.rehydrateInstalledRuntimesView,
+      runtimeEntrypoints: installed.runtimeEntrypoints,
+      seedRuntimePackage: pkg.seedRuntimePackage,
+      createNpmCommand: npm.createNpmCommand,
+      createNpxCommand: npm.createNpxCommand,
+    };
+  })();
+  return toolkitOnce;
+};
+
+export async function provisionWorkspaceRuntimes(deps: {
   workspace: NimbusWorkspace;
   runtimes: readonly RuntimePackage[];
   /**
@@ -119,7 +150,8 @@ export function provisionWorkspaceRuntimes(deps: {
    * than an absent one: `provisioningStub` says so itself.
    */
   facets?: FacetHost;
-}): void {
+}): Promise<void> {
+  const kit = await runtimeToolkit();
   const { workspace, runtimes } = deps;
   const registry = workspace.registry;
   const home = workspace.env.HOME ?? WORKSPACE_ROOT;
@@ -137,13 +169,13 @@ export function provisionWorkspaceRuntimes(deps: {
   const runnerDeps = deps.facets ? { facets: deps.facets, vfs: workspace.vfs } : null;
   const runners: Record<string, RunnerFactory> = runnerDeps
     ? {
-      'bash-runner': makeBashRunnerFactory(runnerDeps),
-      'cpython-runner': makeCPythonRunnerFactory(runnerDeps),
+      'bash-runner': kit.makeBashRunnerFactory(runnerDeps),
+      'cpython-runner': kit.makeCPythonRunnerFactory(runnerDeps),
     }
     : {};
   const runnerFor = (key: string): RunnerFactory | undefined => runners[key];
 
-  const installed = rehydrateInstalledRuntimesView(kernelFs, registry, home, runnerFor);
+  const installed = kit.rehydrateInstalledRuntimesView(kernelFs, registry, home, runnerFor);
   const alreadyRegistered = new Set(installed.bins);
 
   const shellExecute: ShellExecuteFn = async (command, ctx) => (await workspace.shell.execute(command, {
@@ -155,12 +187,12 @@ export function provisionWorkspaceRuntimes(deps: {
   // Nimbus's own npm: it resolves against registry.npmjs.org, extracts tarballs
   // into this filesystem and registers each package's bins as commands. Free to
   // register — nothing is fetched until a subcommand runs.
-  registry.register('npm', createNpmCommand(registry, shellExecute, workspace.kernel));
-  registry.register('npx', createNpxCommand(registry, shellExecute));
+  registry.register('npm', kit.createNpmCommand(registry, shellExecute, workspace.kernel));
+  registry.register('npx', kit.createNpxCommand(registry, shellExecute));
 
   for (const runtimePackage of runtimes) {
-    const install = provisionOnce({ kernelFs, home, registry, runnerFor, runtimePackage });
-    for (const entrypoint of runtimeEntrypoints(runtimePackage.manifest)) {
+    const install = provisionOnce({ kit, kernelFs, home, registry, runnerFor, runtimePackage });
+    for (const entrypoint of kit.runtimeEntrypoints(runtimePackage.manifest)) {
       // Installed already, or a name the workspace answers for other reasons.
       if (alreadyRegistered.has(entrypoint.binName) || registry.has(entrypoint.binName)) continue;
       registry.register(entrypoint.binName, provisioningStub({
@@ -182,6 +214,7 @@ export function provisionWorkspaceRuntimes(deps: {
  * build writes its files and registers nothing.
  */
 function provisionOnce(deps: {
+  kit: RuntimeToolkit;
   kernelFs: CredentialedVfs;
   home: string;
   registry: CommandRegistry;
@@ -192,8 +225,8 @@ function provisionOnce(deps: {
   return () => {
     running ??= (async () => {
       try {
-        await seedRuntimePackage(deps.kernelFs, deps.home, deps.runtimePackage);
-        return rehydrateInstalledRuntimesView(deps.kernelFs, deps.registry, deps.home, deps.runnerFor).bins;
+        await deps.kit.seedRuntimePackage(deps.kernelFs, deps.home, deps.runtimePackage);
+        return deps.kit.rehydrateInstalledRuntimesView(deps.kernelFs, deps.registry, deps.home, deps.runnerFor).bins;
       } catch (error) {
         // A failed install must not become a permanently poisoned command: clear
         // the memo so the next invocation tries again, and re-raise with the

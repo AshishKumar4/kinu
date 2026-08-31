@@ -56,22 +56,8 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import {
-  ensureProgrammaticReady,
-  registerGitCommands,
-  routeCapabilityPort,
-  rpcEnsureRuntimes,
-  rpcExec,
-  rpcExposePort,
-  rpcInstallRuntime,
-  rpcKillProcess,
-  rpcListPorts,
-  rpcListProcesses,
-  rpcListRuntimes,
-  rpcProcessLogs,
-  rpcRouteCapabilityPort,
-  rpcRunCode,
-  rpcStartProcess,
-  rpcUnexposePort,
+  nimbusProgrammatic,
+  type NimbusProgrammatic,
   type ProgrammaticExecOptions,
   type ProgrammaticHost,
 } from './nimbus-programmatic';
@@ -278,6 +264,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // context and env are what the NETWORK subcommands (clone/fetch/pull/push)
         // reach through the git-network facet; local history needs neither, and
         // both are real here.
+        const { registerGitCommands } = await nimbusProgrammatic();
         registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
         return programmaticHost(session, portRegistry, deps);
       } catch (cause) {
@@ -337,9 +324,9 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.
       if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-        return await routeCapabilityPort(self, port, capability, request, pathname);
+        return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, capability, request, pathname);
       }
-      return await rpcRouteCapabilityPort(self, port, capability, request, pathname);
+      return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, capability, request, pathname);
     },
     destroy: () => bundle.destroy(),
   };
@@ -444,33 +431,33 @@ function workspaceBox(deps: {
 }): NimbusSandboxHandle {
   const { host, shellId } = deps;
   return {
-    ready: async () => { await ensureProgrammaticReady(await host()); },
+    ready: async () => { await (await nimbusProgrammatic()).ensureProgrammaticReady(await host()); },
     exec: async (command, options): Promise<NimbusExecResult> =>
-      await rpcExec(await host(), command, execOptions(shellId, options)),
+      await (await nimbusProgrammatic()).rpcExec(await host(), command, execOptions(shellId, options)),
     startProcess: async (command, options): Promise<NimbusStartResult> =>
-      await rpcStartProcess(await host(), command, execOptions(shellId, options)),
+      await (await nimbusProgrammatic()).rpcStartProcess(await host(), command, execOptions(shellId, options)),
     runCode: async (code, options): Promise<NimbusExecResult> => {
-      const runOptions: Parameters<typeof rpcRunCode>[2] = execOptions(shellId, options);
+      const runOptions: Parameters<NimbusProgrammatic['rpcRunCode']>[2] = execOptions(shellId, options);
       if (options?.language !== undefined) runOptions.language = options.language;
       if (options?.install !== undefined) runOptions.install = options.install;
-      return await rpcRunCode(await host(), code, runOptions);
+      return await (await nimbusProgrammatic()).rpcRunCode(await host(), code, runOptions);
     },
     files: deps.files,
     runtimes: {
       ensure: async (specs, options) => await json(
-        rpcEnsureRuntimes(await host(), Array.isArray(specs) ? [...specs] : [specs], options),
+        (await nimbusProgrammatic()).rpcEnsureRuntimes(await host(), Array.isArray(specs) ? [...specs] : [specs], options),
       ),
-      install: async (spec, options) => await json(rpcInstallRuntime(await host(), spec, options)),
-      list: async () => await json(rpcListRuntimes(await host())),
+      install: async (spec, options) => await json((await nimbusProgrammatic()).rpcInstallRuntime(await host(), spec, options)),
+      list: async () => await json((await nimbusProgrammatic()).rpcListRuntimes(await host())),
     },
     processes: {
-      list: async () => await json(rpcListProcesses(await host())),
-      kill: async (pid) => await json(rpcKillProcess(await host(), pid)),
-      logs: async (pid, options) => await json(rpcProcessLogs(await host(), pid, options)),
+      list: async () => await json((await nimbusProgrammatic()).rpcListProcesses(await host())),
+      kill: async (pid) => await json((await nimbusProgrammatic()).rpcKillProcess(await host(), pid)),
+      logs: async (pid, options) => await json((await nimbusProgrammatic()).rpcProcessLogs(await host(), pid, options)),
     },
     ports: {
       expose: async (port) => {
-        const exposed = await rpcExposePort(await host(), port);
+        const exposed = await (await nimbusProgrammatic()).rpcExposePort(await host(), port);
         if (!exposed.capability) throw new Error(`No process is listening on workspace port ${port}`);
         const url = deps.previewUrl(port, exposed.capability);
         if (!url) {
@@ -481,8 +468,8 @@ function workspaceBox(deps: {
         }
         return { ...exposed, url };
       },
-      unexpose: async (port) => await json(rpcUnexposePort(await host(), port)),
-      list: async () => (await rpcListPorts(await host())).map((entry): NimbusPortInfo & { url?: string } => {
+      unexpose: async (port) => await json((await nimbusProgrammatic()).rpcUnexposePort(await host(), port)),
+      list: async () => (await (await nimbusProgrammatic()).rpcListPorts(await host())).map((entry): NimbusPortInfo & { url?: string } => {
         const url = deps.previewUrl(entry.port, entry.capability);
         return url === undefined ? entry : { ...entry, url };
       }),

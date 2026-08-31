@@ -28,7 +28,13 @@
  * shell that could walk it, which is exactly the split this module removes.
  */
 
-import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+// TYPE-ONLY at module scope. The VALUE loads inside the boot closure: the
+// workspace module's static graph carries Nimbus's whole substrate (lifo
+// command registry, runtime runners, wasm assets), and evaluating that at
+// module eval would put a WebAssembly import into every consumer's collection
+// graph — the Worker pays it at cold start and the workerd test pool cannot
+// load it at all. The boot is already lazy; the import belongs to it.
+import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
@@ -357,6 +363,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     if (!booting) {
       booting = (async (): Promise<NimbusWorkspace> => {
         try {
+          const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
           const workspace = await NimbusWorkspace.create({
             sql: opts.sql,
             transactions: opts.transactions,
@@ -371,7 +378,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             runtimes: opts.runtimes ?? [],
           };
           if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
-          provisionWorkspaceRuntimes(provisioning);
+          await provisionWorkspaceRuntimes(provisioning);
           return workspace;
         } catch (cause) {
           // Clear the cache BEFORE rethrowing: this bundle lives for the whole
@@ -436,6 +443,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           // of the two would serve a stale read. `runAs` is the origin shell's,
           // or this shell loses the identity-transition path `sudo` and `su`
           // dispatch on.
+          const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
           const asAgent = await NimbusWorkspace.create({
             sql: opts.sql,
             transactions: opts.transactions,
