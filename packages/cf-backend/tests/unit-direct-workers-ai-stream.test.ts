@@ -328,28 +328,31 @@ describe('direct Workers AI binding — incremental streaming', () => {
       body: chatBody({ stream: true }),
       headers: { 'x-session-affinity': 'kinu-beta' },
     });
-    alpha.push(sse({ response: 'AAA' }));
-    beta.push(sse({ response: 'BBB' }));
+    // Sentinels carry a non-hex letter ON PURPOSE: the adapter mints random
+    // chunk ids (`chatcmpl-<uuid>`), and a hex uuid can spell any [0-9a-f]
+    // run — the hammer caught `chatcmpl-4faaa370…` satisfying a bare 'aaa'.
+    alpha.push(sse({ response: 'AXAXA' }));
+    beta.push(sse({ response: 'BXBXB' }));
 
     const alphaFrames = frames((await alphaPending).body);
     const betaFrames = frames((await betaPending).body);
 
     // Interleave the reads, which is what two turns in one isolate really do.
-    expect(deltaOf(await alphaFrames.next())?.content).toBe('AAA');
-    expect(deltaOf(await betaFrames.next())?.content).toBe('BBB');
-    alpha.push(sse({ response: 'aaa' }));
-    beta.push(sse({ response: 'bbb' }));
-    expect(deltaOf(await betaFrames.next())?.content).toBe('bbb');
-    expect(deltaOf(await alphaFrames.next())?.content).toBe('aaa');
+    expect(deltaOf(await alphaFrames.next())?.content).toBe('AXAXA');
+    expect(deltaOf(await betaFrames.next())?.content).toBe('BXBXB');
+    alpha.push(sse({ response: 'axaxa' }));
+    beta.push(sse({ response: 'bxbxb' }));
+    expect(deltaOf(await betaFrames.next())?.content).toBe('bxbxb');
+    expect(deltaOf(await alphaFrames.next())?.content).toBe('axaxa');
 
     alpha.close();
     beta.close();
     const alphaText = (await alphaFrames.rest()).join('');
     const betaText = (await betaFrames.rest()).join('');
-    expect(alphaText).not.toContain('BBB');
-    expect(alphaText).not.toContain('bbb');
-    expect(betaText).not.toContain('AAA');
-    expect(betaText).not.toContain('aaa');
+    expect(alphaText).not.toContain('BXBXB');
+    expect(alphaText).not.toContain('bxbxb');
+    expect(betaText).not.toContain('AXAXA');
+    expect(betaText).not.toContain('axaxa');
 
     expect(runs.map((run) => run.options?.extraHeaders?.['x-session-affinity']))
       .toEqual(['kinu-alpha', 'kinu-beta']);
