@@ -73,11 +73,11 @@ const SWARM_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
 </testsuites>`;
 
 /**
- * The RESEARCH and OPTIMIZATION arms' reports, verbatim from a credential-free
- * run of each single-family file: the credential-free half runs, the MEASURED
- * half skips. One fixture each for the reason the swarm arm has its own — all
- * four vitest arms share one reporter shape and differ only in the file they
- * name, which is exactly what a shared fixture would hide.
+ * The RESEARCH, OPTIMIZATION and TRAJECTORY arms' reports, verbatim from a
+ * credential-free run of each single-family file: the credential-free half runs,
+ * the MEASURED half skips. One fixture each for the reason the swarm arm has its
+ * own — all five vitest arms share one reporter shape and differ only in the
+ * file they name, which is exactly what a shared fixture would hide.
  */
 const RESEARCH_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
 <testsuites name="vitest tests" tests="3" failures="0" errors="0" time="0.5">
@@ -98,6 +98,30 @@ const OPTIMIZATION_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
         <testcase classname="tests/evals/optimization.eval.ts" name="Optimization evals — a measured challenge with a pre-registered threshold &gt; the threshold is a bar something can clear and something can miss" time="0.002">
         </testcase>
         <testcase classname="tests/evals/optimization.eval.ts" name="Optimization evals — a measured challenge with a pre-registered threshold &gt; MEASURED: the agent attains the threshold on the metered instrument" time="0">
+            <skipped/>
+        </testcase>
+    </testsuite>
+</testsuites>`;
+
+/** The TRAJECTORY arm, which is CLOUD ONLY: `eval-tier.sh` runs it under
+ *  `--backend cloud` alone, so a local run names no `--target` for it and this
+ *  fixture is what proves the target is satisfiable when the arm DOES run. */
+const TRAJECTORY_REPORT = `<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="6" failures="0" errors="0" time="0.1">
+    <testsuite name="tests/evals/trajectory.eval.ts" tests="6" failures="0" errors="0" skipped="3" time="0.1">
+        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; every case is multi-turn, uniquely named, and machine-checkable" time="0.002">
+        </testcase>
+        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; a closed turn with no tool call is refused, and a real trajectory is not" time="0.001">
+        </testcase>
+        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; a partial run is inadmissible, and a complete one carries the primary metric" time="0.001">
+        </testcase>
+        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; MEASURED: public-file-artifact" time="0">
+            <skipped/>
+        </testcase>
+        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; MEASURED: public-steer-correction" time="0">
+            <skipped/>
+        </testcase>
+        <testcase classname="tests/evals/trajectory.eval.ts" name="Trajectory evals — multi-turn episodes through the public API &gt; MEASURED: public-failure-recovery" time="0">
             <skipped/>
         </testcase>
     </testsuite>
@@ -323,13 +347,14 @@ describe('unmatchedTargets', () => {
   test('every arm reporting satisfies every target', () => {
     const merged = mergeReports(
       [REPORT, CORE_E2E_REPORT, BENCH_EXTERNAL_REPORT,
-        VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT]
+        VITEST_REPORT, SWARM_REPORT, RESEARCH_REPORT, OPTIMIZATION_REPORT,
+        TRAJECTORY_REPORT]
         .map((xml) => parseJUnit(xml)),
     );
     expect(unmatchedTargets(merged)).toEqual([]);
   });
 
-  // ONE ARM AT A TIME, both directions, because the four vitest arms are the set a
+  // ONE ARM AT A TIME, both directions, because the five vitest arms are the set a
   // single target could not tell apart: they run under one config and differ only in
   // the file they select, so a report from any one must leave every OTHER owing one.
   test('a report from one vitest arm leaves the bun target and every other arm unmatched', () => {
@@ -338,6 +363,7 @@ describe('unmatchedTargets', () => {
       { file: './tests/evals/swarm.eval.ts', xml: SWARM_REPORT },
       { file: './tests/evals/research.eval.ts', xml: RESEARCH_REPORT },
       { file: './tests/evals/optimization.eval.ts', xml: OPTIMIZATION_REPORT },
+      { file: './tests/evals/trajectory.eval.ts', xml: TRAJECTORY_REPORT },
     ];
     // The fixture set and the target list are the same set, or an arm added to
     // one and not the other would silently shrink this proof.

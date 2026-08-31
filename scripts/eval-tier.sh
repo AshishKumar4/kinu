@@ -182,14 +182,27 @@ SWARM_EVAL=tests/evals/swarm.eval.ts
 RESEARCH_EVAL=tests/evals/research.eval.ts
 OPTIMIZATION_EVAL=tests/evals/optimization.eval.ts
 
+# The CLOUD-ONLY arm: multi-turn trajectories through the PUBLIC API — the REST
+# the web app creates a workspace with, the chat frames its socket speaks, and
+# the run-event and file routes its panes read (tests/evals/public-session.ts).
+#
+# An arm for the reason the three above are: its own spend file, so its silent
+# zero is its own failure. `--backend local` DOES NOT RUN IT, and that is a
+# property of the subject rather than a cost decision — there is no public REST
+# or WebSocket surface in front of an in-process `CLIRuntime`, so the suite
+# refuses that backend before it consults a credential and prints the remedy.
+# Running it under a local banner would report an in-process measurement as a
+# public-API one, which is the confusion this block exists to prevent.
+TRAJECTORY_EVAL=tests/evals/trajectory.eval.ts
+
 # The BEHAVIOUR arm's identity. It is the only arm that SELECTS BY EXCLUSION —
 # the config's `include` minus the three files above — so it passes no path to
 # vitest and this string is never argv. It is here because the skip ratchet
 # proves one target per arm non-empty, and an arm with no name cannot be proven:
 # before the arms carried their targets, this file's path lived only inside
 # `SKIP_RATCHET_VITEST_TARGETS` and the two could disagree about which arm
-# existed. `scripts/ladder.test.ts` holds the four names here equal to the
-# `*.eval.ts` files on disk, so a fifth cannot join the behaviour arm silently.
+# existed. `scripts/ladder.test.ts` holds the five names here equal to the
+# `*.eval.ts` files on disk, so a sixth cannot join the behaviour arm silently.
 BEHAVIOUR_EVAL=tests/evals/behaviour.eval.ts
 
 # ── WHICH ARMS THIS BACKEND CAN MEASURE ───────────────────────────────────────
@@ -226,6 +239,9 @@ if [[ "$BACKEND" == cloud ]]; then
   RUN_SWARM_ARM=1
   RUN_RESEARCH_ARM=0
   RUN_OPTIMIZATION_ARM=0
+  # The trajectory arm runs HERE AND NOWHERE ELSE: its whole subject is the
+  # deployed public API, so this backend is the only one that has one.
+  RUN_TRAJECTORY_ARM=1
   SKIPPED_ARMS="behaviour evals, research, optimization (not on the target seam yet); \
 e2e-lifecycle and the swarm suite's in-process arms (they drive a CLIRuntime, which no \
 deployed workspace hands out)"
@@ -234,7 +250,10 @@ else
   RUN_SWARM_ARM=1
   RUN_RESEARCH_ARM=1
   RUN_OPTIMIZATION_ARM=1
-  SKIPPED_ARMS=""
+  RUN_TRAJECTORY_ARM=0
+  SKIPPED_ARMS="trajectory (its subject is the DEPLOYED public API — REST, the web client's \
+chat frames, the run-event and file routes — and no such surface stands in front of an \
+in-process runtime; run \`bun run evals:cloud\`)"
 fi
 
 # Per ARM, because "what did the tier cost" is not one number and reporting it as
@@ -251,17 +270,20 @@ JUNIT_EVALS="$REPORT_DIR/junit-vitest-$BACKEND.xml"
 JUNIT_SWARM="$REPORT_DIR/junit-swarm-$BACKEND.xml"
 JUNIT_RESEARCH="$REPORT_DIR/junit-research-$BACKEND.xml"
 JUNIT_OPTIMIZATION="$REPORT_DIR/junit-optimization-$BACKEND.xml"
+JUNIT_TRAJECTORY="$REPORT_DIR/junit-trajectory-$BACKEND.xml"
 SPEND_BUN="$REPORT_DIR/spend-bun-$BACKEND.jsonl"
 SPEND_EVALS="$REPORT_DIR/spend-vitest-$BACKEND.jsonl"
 SPEND_SWARM="$REPORT_DIR/spend-swarm-$BACKEND.jsonl"
 SPEND_RESEARCH="$REPORT_DIR/spend-research-$BACKEND.jsonl"
 SPEND_OPTIMIZATION="$REPORT_DIR/spend-optimization-$BACKEND.jsonl"
+SPEND_TRAJECTORY="$REPORT_DIR/spend-trajectory-$BACKEND.jsonl"
 SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_BUN"
 : > "$SPEND_EVALS"
 : > "$SPEND_SWARM"
 : > "$SPEND_RESEARCH"
 : > "$SPEND_OPTIMIZATION"
+: > "$SPEND_TRAJECTORY"
 trap 'rm -rf "$REPORT_DIR"' EXIT
 
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
@@ -398,8 +420,15 @@ if [[ $RUN_EVALS_ARM -eq 1 ]]; then
   # config's own `include` selects them, and without the exclusions each would
   # run in this arm as well as its own — one episode, two bills, and a spend file
   # per arm that double-counts. The arms below are where they run.
+  #
+  # The trajectory file is excluded HERE EVEN THOUGH this arm only runs under
+  # `--backend local`, where the trajectory arm is off: without the exclusion
+  # that suite would be collected by THIS arm on the local backend, resolve no
+  # public plan, skip its three cases, and leave three undeclared skips in the
+  # behaviour arm's report — a suite billed to an arm that cannot run it.
   bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts \
     --exclude "$SWARM_EVAL" --exclude "$RESEARCH_EVAL" --exclude "$OPTIMIZATION_EVAL" \
+    --exclude "$TRAJECTORY_EVAL" \
     --reporter=default --reporter=junit --outputFile="$JUNIT_EVALS"
   EVAL_STATUS=$?
   EVALS_SECONDS=$((SECONDS - ARM_STARTED))
@@ -460,6 +489,23 @@ if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then
   if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$OPTIMIZATION_STATUS; fi
 fi
 
+# The trajectory arm: multi-turn episodes driven through the PUBLIC surfaces —
+# REST create, the web client's chat frames, the run-event and file routes,
+# `removeWorkspace` in a `finally`. Cloud only, because that is where the only
+# public API is; under `--backend local` the suite refuses and says so, and this
+# block does not run it at all so the refusal cannot be mistaken for a crash.
+ARM_STARTED=$SECONDS
+TRAJECTORY_STATUS=0
+TRAJECTORY_SECONDS=0
+export KINU_EVAL_SPEND_FILE="$SPEND_TRAJECTORY"
+if [[ $RUN_TRAJECTORY_ARM -eq 1 ]]; then
+  bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$TRAJECTORY_EVAL" \
+    --reporter=default --reporter=junit --outputFile="$JUNIT_TRAJECTORY"
+  TRAJECTORY_STATUS=$?
+  TRAJECTORY_SECONDS=$((SECONDS - ARM_STARTED))
+  if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$TRAJECTORY_STATUS; fi
+fi
+
 # THE ACTIVE ARMS, as one indexed list.
 #
 # Five arms used to be spelled five times each in the three blocks below — a
@@ -513,6 +559,7 @@ if [[ $RUN_EVALS_ARM -eq 1 ]]; then arm 'behaviour evals' "$JUNIT_EVALS" "$SPEND
 if [[ $RUN_SWARM_ARM -eq 1 ]]; then arm 'live swarm' "$JUNIT_SWARM" "$SPEND_SWARM" "$SWARM_SECONDS" "./$SWARM_EVAL"; fi
 if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then arm 'research' "$JUNIT_RESEARCH" "$SPEND_RESEARCH" "$RESEARCH_SECONDS" "./$RESEARCH_EVAL"; fi
 if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then arm 'optimization' "$JUNIT_OPTIMIZATION" "$SPEND_OPTIMIZATION" "$OPTIMIZATION_SECONDS" "./$OPTIMIZATION_EVAL"; fi
+if [[ $RUN_TRAJECTORY_ARM -eq 1 ]]; then arm 'trajectory' "$JUNIT_TRAJECTORY" "$SPEND_TRAJECTORY" "$TRAJECTORY_SECONDS" "./$TRAJECTORY_EVAL"; fi
 
 for index in "${!ARM_NAMES[@]}"; do
   if [[ ! -f "${ARM_JUNITS[$index]}" ]]; then

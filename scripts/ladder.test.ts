@@ -83,6 +83,7 @@ const AFTER_CI_SUITES = {
   'tests/evals/optimization.eval.ts': 'bun run test:eval',
   'tests/evals/research.eval.ts': 'bun run test:eval',
   'tests/evals/swarm.eval.ts': 'bun run test:eval',
+  'tests/evals/trajectory.eval.ts': 'bun run test:eval',
 } satisfies Record<string, string>;
 
 /**
@@ -473,7 +474,9 @@ describe('every test file is claimed by some runner', () => {
     expect(script).toContain('for target in "${ARM_TARGETS[@]}"; do RATCHET_ARGS+=(--target "$target"); done');
     // Each arm's target must be spelled from the one variable that also names the
     // path vitest selects, so a rename moves both at once.
-    for (const name of ['BEHAVIOUR_EVAL', 'SWARM_EVAL', 'RESEARCH_EVAL', 'OPTIMIZATION_EVAL']) {
+    for (const name of [
+      'BEHAVIOUR_EVAL', 'SWARM_EVAL', 'RESEARCH_EVAL', 'OPTIMIZATION_EVAL', 'TRAJECTORY_EVAL',
+    ]) {
       expect(script).toContain(`"./$${name}"`);
     }
   });
