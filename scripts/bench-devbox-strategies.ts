@@ -95,6 +95,12 @@ interface AttachOutcome { kind: string; detail: string }
 
 interface StartupState {
   restoration?: 'unstarted' | 'attached' | 'unattached';
+  /** Is the container up? A stopped container has NOTHING in flight for a
+   * later poll to observe: `/state` re-arms a startup row and deliberately
+   * never drives the restoration inline, while every real operation drives it
+   * through `ensureReady()`. Declared because the driver reads it — an absent
+   * field proves nothing and is treated as such. */
+  running?: boolean;
   unready?: string;
   lastAttach?: AttachOutcome;
   /** The container generation that supplied this attach. The warm `/create`
@@ -122,6 +128,7 @@ const StateReplySchema: v.GenericSchema<StateReply> = v.looseObject({
   storePrefix: v.optional(v.string()),
   state: v.optional(v.looseObject({
     restoration: v.optional(v.picklist(['unstarted', 'attached', 'unattached'])),
+    running: v.optional(v.boolean()),
     unready: v.optional(v.string()),
     lastAttach: v.optional(v.looseObject({ kind: v.string(), detail: v.string() })),
     bootId: v.optional(v.string()),
@@ -136,12 +143,24 @@ const StateReplySchema: v.GenericSchema<StateReply> = v.looseObject({
 
 export type StartupPollVerdict =
   | { readonly kind: 'pending' }
+  /** The container is DOWN and this generation never started a restoration:
+   *  no scheduled work exists for a later poll to observe. */
+  | { readonly kind: 'stopped'; readonly detail: string }
   | { readonly kind: 'attached'; readonly attach: AttachOutcome }
   | { readonly kind: 'failed'; readonly reason: string };
 
 /** The durable attach record belongs to a restoration only after that
  * restoration declares itself attached. This rejects the previous generation's
- * record while a fresh generation is still waiting for its scheduled callback. */
+ * record while a fresh generation is still waiting for its scheduled callback.
+ *
+ * `pending` CLAIMS something is in flight, and there is exactly one reading
+ * where that claim is false: a stopped container whose restoration is
+ * `unstarted`. Nothing is running, nothing has started, and a `/state` poll
+ * only re-arms a row it cannot execute — so every later reply is the same one,
+ * which is the hour the startup redrive test records. That reading is
+ * classified `stopped` so the driver can take it to the readiness boundary a
+ * real operation goes through. A reply that does not report `running` proves
+ * nothing about the container and stays `pending`. */
 export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
   const state = reply.state;
   if (state?.restoration === 'unattached') {
@@ -149,6 +168,12 @@ export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
   }
   if (state?.restoration === 'attached' && state.lastAttach !== undefined) {
     return { kind: 'attached', attach: state.lastAttach };
+  }
+  if (state?.running === false && state.restoration === 'unstarted') {
+    return {
+      kind: 'stopped',
+      detail: state.unready ?? 'the container is stopped and no restoration has started for it',
+    };
   }
   return { kind: 'pending' };
 }
@@ -1488,18 +1513,72 @@ const STARTUP_POLL_INTERVAL_MS = 250;
 interface StartupPoll {
   readonly attach: AttachOutcome;
   readonly state: StateReply;
+  /** How many times this poll had to drive the readiness boundary itself. It
+   *  travels with the measurement because a startup the DRIVER completed is not
+   *  the same quantity as one the fixture's own schedule completed, and a
+   *  number nobody can attribute is worse than an absent one. */
+  readonly redrives: number;
 }
 
 interface StartupCompletion extends StartupPoll {
   readonly ms: number;
 }
 
-async function pollForAttach(
+/**
+ * The command a readiness drive runs, and the reason it is this command.
+ *
+ * `true` reads nothing, writes nothing, touches no measured path and moves no
+ * bytes a checkpoint would price, so driving twice cannot double-apply an
+ * effect or contaminate a phase. Everything that makes the drive work is in the
+ * REQUEST rather than the command: `/exec` is the ordinary operation path, and
+ * an ordinary operation waits on `ensureReady()`.
+ */
+const READINESS_DRIVE_COMMAND = 'true';
+
+/**
+ * Take this startup through the boundary a real operation goes through.
+ *
+ * `/state` does not drive a restoration inline — it re-arms the startup row and
+ * reports what the last generation left behind — while `ensureReady()` starts a
+ * stopped container and finishes the attach inside the caller's own request. A
+ * driver holding only `/state` is therefore waiting on a callback that a
+ * consumed row will never deliver, and one authenticated no-op exec is the
+ * entire repair.
+ *
+ * A refusal from that boundary ends the startup here, in the boundary's own
+ * words. Transient container capacity is not a refusal: the poll re-observes
+ * the state and drives again, exactly as the kick loop below re-kicks.
+ */
+async function driveReadiness(fixture: Fixture, box: string, operation: string): Promise<void> {
+  const driven = await retryTransient(`${operation} readiness drive`, async () =>
+    await sh(fixture, box, READINESS_DRIVE_COMMAND),
+  );
+  if (driven.ok === true) return;
+  const detail = driven.error ?? `the readiness probe exited ${driven.exitCode ?? -1}`;
+  if (isTransientContainerCreateError(detail)) {
+    log(`${operation}: the readiness drive found no container instance yet: ${detail}`);
+    return;
+  }
+  throw new Error(`${operation} refused: ${detail}`);
+}
+
+/**
+ * Wait for THIS startup's attach, and drive it when the state proves nobody
+ * else will.
+ *
+ * The classification is `startupPollVerdict`'s and every arm of it is honoured
+ * here: an attach of an unexpected kind and a definitive refusal both still
+ * throw. The one addition is the `stopped` reading, which is not a wait at all
+ * — see the startup redrive test for the deployed run that waited on it for an
+ * hour while repeated `/create` kicks kept answering `{ ok: true }`.
+ */
+export async function pollForAttach(
   fixture: Fixture,
   box: string,
   operation: string,
   allowedKinds: readonly string[],
 ): Promise<StartupPoll> {
+  let redrives = 0;
   for (;;) {
     let reply: StateReply;
     try {
@@ -1513,11 +1592,22 @@ async function pollForAttach(
     }
     const verdict = startupPollVerdict(reply);
     if (verdict.kind === 'attached') {
-      if (allowedKinds.includes(verdict.attach.kind)) return { attach: verdict.attach, state: reply };
+      if (allowedKinds.includes(verdict.attach.kind)) {
+        return { attach: verdict.attach, state: reply, redrives };
+      }
       throw new Error(`${operation} restored ${verdict.attach.kind}, expected ${allowedKinds.join(' or ')}`);
     }
     if (verdict.kind === 'failed') throw new Error(`${operation} refused: ${verdict.reason}`);
-    if (reply.error !== undefined) log(`${operation}: state poll retrying: ${reply.error}`);
+    if (verdict.kind === 'stopped') {
+      redrives += 1;
+      log(`${operation}: ${verdict.detail}; driving readiness through one no-op exec (drive ${redrives})`);
+      await driveReadiness(fixture, box, operation);
+    } else if (reply.error !== undefined) {
+      log(`${operation}: state poll retrying: ${reply.error}`);
+    }
+    // ONE cadence for every unsettled reading, a drive included: the next poll
+    // is what accepts the attach, and the drive above already blocked on the
+    // readiness gate, so nothing here can spin.
     await delay(STARTUP_POLL_INTERVAL_MS);
   }
 }
@@ -1953,10 +2043,29 @@ async function measureArm(
     return result;
   };
 
+  /** Every startup this arm measures, with the driver's own contribution to the
+   *  number recorded beside it. A startup the driver had to drive is a real
+   *  startup cost and stays in the row, but a reader has to be able to see that
+   *  the fixture's schedule was not what completed it. */
+  const startup = async (
+    path: '/create' | '/wake',
+    operation: string,
+    allowedKinds: readonly string[],
+  ): Promise<StartupCompletion> => {
+    const completed = await kickAndPoll(fixture, box, path, operation, allowedKinds);
+    if (completed.redrives > 0) {
+      notes.push(
+        `${operation}: the driver drove readiness ${completed.redrives}x through a no-op exec `
+        + 'because /state reported the container stopped with no restoration started',
+      );
+    }
+    return completed;
+  };
+
   log(`${strategy}: create (cold attach)`);
   let cold: StartupCompletion;
   try {
-    cold = await kickAndPoll(fixture, box, '/create', 'cold attach', ['empty', 'attached']);
+    cold = await startup('/create', 'cold attach', ['empty', 'attached']);
   } catch (error) {
     // Logged as well as noted. A create failure ends this arm and the run
     // continues to the next one, so an operator watching the log otherwise sees
@@ -2028,7 +2137,7 @@ async function measureArm(
     await call(fixture, 'POST', `/stop?box=${box}`, StopReplySchema, {}),
   );
   result.stopMs = stopped.ms ?? null;
-  const woke = await kickAndPoll(fixture, box, '/wake', 'wake', ['attached']);
+  const woke = await startup('/wake', 'wake', ['attached']);
   result.wakeMs = woke.ms;
   result.wakeKind = woke.attach.kind;
   result.wakeBootId = woke.state.state?.bootId ?? null;
@@ -2203,7 +2312,7 @@ async function measureArm(
 
 
   // Warm attach: a second kick observes the already attached generation.
-  const warm = await kickAndPoll(fixture, box, '/create', 'warm attach', ['attached']);
+  const warm = await startup('/create', 'warm attach', ['attached']);
   result.attachWarmMs = warm.ms;
   result.attachWarmKind = warm.attach.kind;
   result.attachWarmBootId = warm.state.state?.bootId ?? null;

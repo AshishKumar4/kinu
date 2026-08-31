@@ -34,6 +34,7 @@ import {
   isTransientContainerCreateError,
   parseFrozenControlArtifact,
   parseOptions,
+  pollForAttach,
   postLiveTeardown,
   rankableTicks,
   renderFrozenControls,
@@ -120,6 +121,149 @@ describe('startup polling contract', () => {
     expect(startupPollVerdict({
       state: { restoration: 'unattached', unready: 'the recovery ladder refused' },
     })).toEqual({ kind: 'failed', reason: 'the recovery ladder refused' });
+  });
+
+  test('a definitive refusal outranks a stopped container: a refusal is never driven', () => {
+    expect(startupPollVerdict({
+      state: { running: false, restoration: 'unattached', unready: 'the recovery ladder refused' },
+    })).toEqual({ kind: 'failed', reason: 'the recovery ladder refused' });
+  });
+
+  test('a stopped container with no restoration is not something to wait for', () => {
+    expect(startupPollVerdict({
+      state: {
+        running: false,
+        restoration: 'unstarted',
+        unready: 'no restoration has run for this container yet',
+      },
+    })).toEqual({ kind: 'stopped', detail: 'no restoration has run for this container yet' });
+  });
+
+  test('a RUNNING unstarted generation is still pending: the poll itself re-arms that row', () => {
+    expect(startupPollVerdict({ state: { running: true, restoration: 'unstarted' } }))
+      .toEqual({ kind: 'pending' });
+  });
+
+  test('a reply that does not report the container proves nothing and stays pending', () => {
+    expect(startupPollVerdict({ state: { restoration: 'unstarted' } }))
+      .toEqual({ kind: 'pending' });
+  });
+});
+
+/**
+ * A fixture that answers the two routes a startup uses and records what it was
+ * asked, in order.
+ *
+ * It answers BYTES, because bytes are what the driver decodes: a reply built as
+ * a typed object here would be one the driver's own schema never had to accept.
+ * `typeof globalThis.fetch` carries a `preconnect` member beside its call
+ * signature, so the stub is COMPLETED with the real one's rather than asserted
+ * into shape.
+ */
+function fixtureAnswering(body: (method: string, path: string) => string) {
+  const asked: string[] = [];
+  const real = globalThis.fetch;
+  const answer = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    const method = init?.method ?? 'GET';
+    asked.push(`${method} ${url.pathname}`);
+    return new Response(body(method, url.pathname));
+  };
+  globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+  return { asked, restore: () => { globalThis.fetch = real; } };
+}
+
+const BENCH_FIXTURE = { origin: 'https://bench.invalid', token: 'bench-token' };
+
+describe('startup readiness redrive', () => {
+  /**
+   * DEPLOYED INCIDENT, run 20260831002524, worker version
+   * 17395333-bc63-4872-94e1-02587822caf0, the `r2fs` arm. `/state` answered
+   * `running: false, restoration: 'unstarted', ready: false` for over an hour
+   * with no incident recorded, and every repeated `/create` returned
+   * `{ ok: true }` without starting a restoration. One authenticated
+   * `/exec { command: 'true' }` then completed in 3449 ms and left the box
+   * `running: true, restoration: 'attached', lastAttach.kind: 'attached'`.
+   *
+   * The old driver had no verdict for that reading, called it `pending`, and
+   * polled `/state` forever: it never reaches the assertions below at all.
+   */
+  test('the startup nobody else will drive is driven here (deployed run 20260831002524 waited an hour)', async () => {
+    let attached = false;
+    const fixture = fixtureAnswering((method, path) => {
+      if (method === 'POST' && path === '/exec') {
+        attached = true;
+        // What the fixture really answers for `true`, with the 3449 ms the
+        // deployed drive cost.
+        return JSON.stringify({ ok: true, exitCode: 0, stdout: '', stderr: '', ms: 3449 });
+      }
+      if (method === 'GET' && path === '/state') {
+        return JSON.stringify(attached
+          ? {
+            ok: true,
+            state: {
+              running: true,
+              restoration: 'attached',
+              lastAttach: { kind: 'attached', detail: 'the work directory is mounted' },
+              bootId: 'boot-after-the-drive',
+            },
+          }
+          : {
+            ok: true,
+            state: {
+              running: false,
+              restoration: 'unstarted',
+              ready: false,
+              unready: 'no restoration has run for this container yet',
+            },
+          });
+      }
+      throw new Error(`the driver asked for ${method} ${path}`);
+    });
+    try {
+      const poll = await pollForAttach(
+        BENCH_FIXTURE, 'ab-r2fs-20260831002524', 'cold attach', ['empty', 'attached'],
+      );
+      // The attach still comes from the STATE the restoration published, not
+      // from the drive's own reply.
+      expect(poll.attach).toEqual({ kind: 'attached', detail: 'the work directory is mounted' });
+      expect(poll.state.state?.bootId).toBe('boot-after-the-drive');
+      // Recorded rather than silent: this is what tells a reader of the artifact
+      // that the fixture's own schedule is not what completed the startup.
+      expect(poll.redrives).toBe(1);
+    } finally {
+      fixture.restore();
+    }
+    // ONE exec, only for the reading that proved nobody was starting the
+    // container, and the state poll still owns the verdict either side of it.
+    expect(fixture.asked).toEqual(['GET /state', 'POST /exec', 'GET /state']);
+  });
+
+  test('a readiness boundary that refuses ends the startup instead of driving again', async () => {
+    const fixture = fixtureAnswering((method, path) => {
+      if (method === 'POST' && path === '/exec') {
+        return JSON.stringify({
+          ok: false,
+          error: 'this devbox has no attached work directory: the recovery ladder refused. '
+            + 'Operations are refused until an attach succeeds.',
+        });
+      }
+      if (method === 'GET' && path === '/state') {
+        return JSON.stringify({ ok: true, state: { running: false, restoration: 'unstarted' } });
+      }
+      throw new Error(`the driver asked for ${method} ${path}`);
+    });
+    try {
+      await expect(pollForAttach(
+        BENCH_FIXTURE, 'ab-merkle-pack-20260831002524', 'wake', ['attached'],
+      )).rejects.toThrow(/wake refused: this devbox has no attached work directory/);
+    } finally {
+      fixture.restore();
+    }
+    expect(fixture.asked).toEqual(['GET /state', 'POST /exec']);
   });
 });
 
