@@ -702,9 +702,27 @@ function chainExec(disk: ContainerDisk, deaths: DeathWatch) {
     const exists = /^test -e '(?<path>[^']+)'/.exec(command)?.groups?.path;
     if (exists !== undefined) return ok(disk.exists(exists) ? 'yes' : 'no');
 
-    if (command.startsWith('/usr/bin/fusermount3 -u')) {
-      const point = unquote(/-u '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '');
-      disk.unmount(point);
+    // The BOUNDED visibility probe: one command that asks the store mount for a
+    // layer and, when it never appears, reports what the subtree holds.
+    if (command.includes('printf ready')) {
+      const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
+      if (disk.readFile(awaited) !== undefined) return ok('ready');
+      return ok(`missing ${disk.entries(CHAIN_STORE_MOUNT).join(' ')}`);
+    }
+    // Releasing every delta layer this container serves, whichever generation
+    // mounted it.
+    if (command.includes('awk -v r=')) {
+      const root = unquote(/awk -v r='(?<root>[^']+)'/.exec(command)?.groups?.root ?? '');
+      for (const point of [...disk.mounts.keys()].filter((path) => path.startsWith(root))) {
+        disk.unmount(point);
+      }
+      return ok();
+    }
+    // The BOUNDED release: the loop is the strategy's, the unmount is this
+    // container's, and the path is still the one the command names.
+    const released = /\/usr\/bin\/fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
+    if (released !== undefined) {
+      disk.unmount(unquote(released));
       return ok();
     }
 

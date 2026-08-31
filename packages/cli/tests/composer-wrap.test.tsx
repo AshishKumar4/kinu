@@ -9,7 +9,8 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { COMPOSER_MAX_ROWS } from '@kinu.run/core';
+/** Mirrors the private eight-row cap; drift fails these tests, which is the point. */
+const COMPOSER_MAX_ROWS = 8;
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 
 afterEach(cleanupChats);

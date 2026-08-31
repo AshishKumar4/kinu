@@ -35,6 +35,14 @@ import {
   type ChangeStatus,
   type SnapshotChainPorts,
 } from '../src/snapshot-chain';
+
+/** Mirrors of the strategy's private layer vocabulary; drift fails these
+ *  tests, which is the point. */
+const deltaLayerMountPoint = (chainId: string): string => ['/var/tmp/devbox', 'lower-delta', chainId].join('/');
+const deltaLayerServed = (procMounts: string, chainId: string): boolean =>
+  procMounts.split('\n').some((line) => line.split(' ')[1] === deltaLayerMountPoint(chainId));
+const LAYER_VISIBILITY_PROBES = 20;
+
 import {
   ATTACH_OUTCOME_KINDS,
   CHECKPOINT_OUTCOME_KINDS,
@@ -57,6 +65,8 @@ const INTERVAL_MS = 5 * 60_000;
 const STAGE_NEED_BYTES = 1_000;
 
 const UPPER = `${DEVBOX_RUNTIME_DIR}/upper`;
+/** The overlay's bottom lower: the base layer's mount point. */
+const LOWER_BASE = `${DEVBOX_RUNTIME_DIR}/lower-base`;
 
 /** What the PRODUCTION image reports: fuse-overlayfs, with NO dir options. */
 const MOUNTED = [
@@ -181,8 +191,29 @@ function shellLabel(
       stdout: missingPaths.includes(exists) ? 'no' : 'yes',
     };
   }
+  // The BOUNDED visibility probe: one command that asks the store mount for one
+  // layer up to `LAYER_VISIBILITY_PROBES` times and, when it never appears,
+  // reports what the subtree does hold. A path this test declares missing is
+  // missing however many times it is asked.
+  if (command.includes('printf ready')) {
+    const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
+    return {
+      call: `awaitLayer:${awaited}`,
+      stdout: missingPaths.includes(awaited) ? 'missing data.sqsh delta.sqsh' : 'ready',
+    };
+  }
+  // Releasing every delta layer this container serves, whichever generation
+  // mounted it: one command over /proc/mounts rather than one path.
+  if (command.includes('awk -v r=')) return { call: 'releaseDeltaLayers', stdout: '' };
   const unmounted = /fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
   if (unmounted !== undefined) return { call: `unmountPath:${unmounted}`, stdout: '' };
+  const reset = /^rm -rf (?<paths>.+?) && mkdir -p /.exec(command)?.groups?.paths;
+  if (reset !== undefined) {
+    return {
+      call: `resetDirs:${reset.split(' ').map(unquote).join(',')}`,
+      stdout: '',
+    };
+  }
   const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
   if (layer !== undefined) {
     return { call: `mountLayer:${layer.archive!}:${layer.point!}`, stdout: '' };
@@ -195,10 +226,10 @@ function shellLabel(
       stdout: '',
     };
   }
-  const seed = /^cp -a '(?<lower>[^']+)\/\.' '(?<upper>[^']+)\//.exec(command)?.groups;
-  if (seed !== undefined) {
-    return { call: `seedUpper:${seed.lower!}->${seed.upper!}`, stdout: '' };
-  }
+  // NO ARM FOR A SEEDING COPY, deliberately. The strategy no longer has one —
+  // the delta is a layer — so a `cp -a` reaching this fake would fall through to
+  // `exec:cp` and show up in the recorded calls, which is what the assertions
+  // below check for by name.
   const squash = /mksquashfs '(?<source>[^']+)'/.exec(command)?.groups?.source;
   if (squash !== undefined) {
     // The build, its exclude list and its measurement are ONE command, so the
@@ -242,8 +273,9 @@ function harness(overrides: {
    *  happens after a record is already published. */
   rejectWrites?: readonly number[];
   refuseOverlay?: boolean;
-  /** The FIRST delta copy into the upper dies, which is the window under test. */
-  failSeed?: boolean;
+  /** The FIRST attempt to mount the delta layer dies, which is the window under
+   *  test: an attach that cannot compose its own delta must leave no overlay. */
+  failDeltaLayer?: boolean;
   /** What the changed set fingerprints to. Empty means the probe failed. */
   upperMark?: string;
   /** What the archiver reports as `<exit> <bytes>`. `'0 0'` is the shape that
@@ -284,7 +316,7 @@ function harness(overrides: {
   const mounts = (): string => (staged instanceof Function ? staged() : staged);
   let extractSeq = 3;
   let seedStamp = overrides.seedStamp;
-  let seedDied = false;
+  let deltaLayerDied = false;
   let liveMark = overrides.upperMark ?? '7:4096:1700000000';
   let writes = 0;
 
@@ -339,12 +371,15 @@ function harness(overrides: {
         overrides.stagedReport ?? `0 ${DELTA_BYTES}`,
       );
       calls.push(label.call);
-      if (label.call.startsWith('seedUpper') && overrides.failSeed === true && !seedDied) {
-        // ONE-SHOT: the first copy dies, a retry on the same container succeeds.
-        // That is the sequence the defect lived in, so the fake has to be able
-        // to express it rather than failing forever.
-        seedDied = true;
-        return Promise.resolve({ stdout: '', stderr: 'cp: cannot stat: I/O error', exitCode: 1 });
+      if (label.call.startsWith('mountLayer:') && label.call.includes('/lower-delta/')
+        && overrides.failDeltaLayer === true && !deltaLayerDied) {
+        // ONE-SHOT: the first mount dies, a retry on the same container
+        // succeeds. That is the sequence a transient layer failure lives in, so
+        // the fake has to be able to express it rather than failing forever.
+        deltaLayerDied = true;
+        return Promise.resolve({
+          stdout: '', stderr: 'squashfuse: unable to read squashfs_super_block', exitCode: 1,
+        });
       }
       if (label.call.startsWith('overlayAttach') && overrides.refuseOverlay === true) {
         return Promise.resolve({
@@ -583,38 +618,64 @@ describe('attach — the mount must be observed to have landed', () => {
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
   });
 
-  test('a production attach mounts base and delta lazily, seeds the upper, releases both',
+  test('a production attach composes base and delta as layers and copies nothing',
     async () => {
       const calls: string[] = [];
       const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
       const outcome = await attachOf(record);
       expect(outcome.kind).toBe('attached');
 
-      // A BOUNDED number of layers, whatever the chain's history — which is the
-      // property this pins, and its NUMBER changed when the seed moved ahead of
-      // the mount. Two archives are still mounted (base and delta), but the
-      // delta is copied into the upper and released BEFORE the overlay lands,
-      // so the overlay itself carries one lower plus a pre-seeded upper.
-      expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
+      // A BOUNDED number of layers, whatever the chain's history: two archives
+      // mounted, and the overlay composed over BOTH with a fresh upper on top.
       expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
-      // ZERO bytes moved: no stream is opened and no object is downloaded.
+      expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
+      // ZERO bytes moved: no stream is opened, no object is downloaded, and —
+      // the point of this change — nothing is copied into the upper.
       expect(record.calls.filter(call => call.startsWith('readFileStream'))).toEqual([]);
-      // The delta's contents move into the fresh upper, and only then is the
-      // delta mount released. From here the upper alone is the changed set.
-      const seeded = record.calls.indexOf(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
-      // `lastIndexOf`: the delta path is also unmounted defensively BEFORE the
-      // layers are mounted, and the release that matters is the one after the
-      // seed.
-      const released = record.calls.lastIndexOf(`unmountPath:${DEVBOX_RUNTIME_DIR}/lower-delta`);
-      expect(seeded).toBeGreaterThan(-1);
-      expect(released).toBeGreaterThan(seeded);
-      // AND THE SEED PRECEDES THE OVERLAY. This is the ordering that makes a
-      // mounted overlay PROVE the seeding finished, so a re-driven attach can
-      // trust its own `already-attached` early return.
-      const mounted = record.calls.indexOf(`overlayAttach:${DEVBOX_WORKDIR}:1`);
-      expect(seeded).toBeLessThan(mounted);
-      expect(released).toBeLessThan(mounted);
+      expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
+      // BOTH LAYERS EXIST BEFORE THE OVERLAY TAKES THEM. An overlay is composed
+      // from mount points it is handed; a mounted overlay therefore proves the
+      // whole composition landed, which is what the `already-attached` early
+      // return assumes.
+      const base = record.calls.indexOf(`mountLayer:${CHAIN_STORE_MOUNT}/data.sqsh:${LOWER_BASE}`);
+      const delta = record.calls.indexOf(
+        `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+      );
+      const mounted = record.calls.indexOf(`overlayAttach:${DEVBOX_WORKDIR}:2`);
+      expect(base).toBeGreaterThan(-1);
+      expect(delta).toBeGreaterThan(-1);
+      expect(mounted).toBeGreaterThan(delta);
+      expect(mounted).toBeGreaterThan(base);
+      // The delta layer is NOT released after the overlay: it is one of its
+      // lowers now, and releasing it would empty the merged view of everything
+      // the changed set holds.
+      expect(record.calls.slice(mounted)).not.toContain('releaseDeltaLayers');
       expect(outcome.detail).toContain(`${BASE_BYTES + DELTA_BYTES}B`);
+      expect(outcome.detail).toContain('base+delta layered');
+    });
+
+  test('NEWEST LOWER FIRST: the delta precedes the base, or the base would win every path',
+    async () => {
+      // `lowerdir` resolves left to right, so the order IS the composition. With
+      // the base first, every path the delta rewrote would resolve to its
+      // pre-delta content and every file the delta deleted would come back —
+      // a workspace silently rolled back to its last rebase.
+      const calls: string[] = [];
+      const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
+      const raw: string[] = [];
+      const inner = record.ports.exec;
+      record.ports.exec = async (command) => {
+        raw.push(command);
+        return await inner(command);
+      };
+
+      expect((await attachOf(record)).kind).toBe('attached');
+
+      const composed = raw.find(command => command.includes('fuse-overlayfs -o lowerdir='));
+      expect(composed).toBeDefined();
+      expect(composed).toContain(
+        `lowerdir='${deltaLayerMountPoint(CHAIN_ID)}':'${LOWER_BASE}'`,
+      );
     });
 
   test('attach cost is independent of the bytes stored: fixed mounts, zero streams', async () => {
@@ -645,34 +706,33 @@ describe('attach — the mount must be observed to have landed', () => {
       });
       record.objects.set(deltaObjectKey(CHAIN_ID), DELTA_BYTES);
       expect((await attachOf(record)).kind).toBe('attached');
-      // Adopted means SEEDED: the orphan delta is copied into the upper before
-      // the overlay lands, exactly like a referenced one.
-      expect(record.calls).toContain(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
-      expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
+      // Adopted means COMPOSED: the orphan delta becomes a layer under the fresh
+      // upper, exactly like a referenced one.
+      expect(record.calls).toContain(
+        `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+      );
+      expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
     });
 
-  test('LIVE WINDOW: a kill between the mount and the seed cannot leave a mounted overlay',
+  test('LIVE WINDOW: a delta layer that will not mount leaves no overlay behind',
     async () => {
-      // THE EXACT WINDOW. In the old order the overlay was mounted first and the
-      // delta copied into the upper after it, so a throw here left the overlay
-      // UP and the upper HALF-SEEDED — and the retry asked the container, saw an
-      // overlay, took `already-attached`, and never finished the copy.
-      //
-      // The new order makes that state unrepresentable: if the seed dies, the
-      // overlay was never mounted, so the retry cannot mistake a partial
-      // restoration for a finished one. Killed AT the seed, the container is
-      // still plain and the attach refuses.
+      // THE WINDOW THE COMPOSITION INHERITS. Both layers are mounted before the
+      // overlay takes them, so a delta that will not mount means no overlay was
+      // ever composed — the retry cannot mistake a half-composed restoration for
+      // a finished one, because a mounted overlay is the proof that both lowers
+      // existed. Killed AT the delta mount, the container is still plain and the
+      // attach refuses in the container's own words.
       const calls: string[] = [];
       const record = harness({
         state: chainState(),
         mounts: mountsAfterAttach(calls),
         calls,
-        failSeed: true,
+        failDeltaLayer: true,
       });
-      await expect(attachOf(record)).rejects.toThrow(/upper seeding/);
+      await expect(attachOf(record)).rejects.toThrow(/squashfs_super_block/);
       // Nothing was mounted over the work directory, so the next attach starts
-      // from scratch rather than early-returning over a half-seeded upper.
-      expect(record.calls).not.toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
+      // from scratch rather than early-returning over half a composition.
+      expect(record.calls.filter(call => call.startsWith('overlayAttach'))).toEqual([]);
       expect(isOverlayMounted(mountsAfterAttach(calls)(), DEVBOX_WORKDIR)).toBe(false);
 
       // And the retry, on the same container, completes the whole restoration.
@@ -695,9 +755,9 @@ describe('attach — the mount must be observed to have landed', () => {
         state: chainState(),
         mounts: mountsAfterAttach(calls),
         calls,
-        failSeed: true,
+        failDeltaLayer: true,
       });
-      await expect(attachOf(record)).rejects.toThrow(/upper seeding/);
+      await expect(attachOf(record)).rejects.toThrow(/squashfs_super_block/);
 
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('failed');
@@ -909,29 +969,31 @@ describe('attach — the mount must be observed to have landed', () => {
 
 // ── checkpoint ──────────────────────────────────────────────────────────────
 
-// ── the seed, across a stop that kept the container ─────────────────────────
+// ── the delta across a stop, and what serves it ─────────────────────────────
 //
-// MEASURED, TWICE. The deployed `snapshot-chain` arm of runs 20260831031426 and
-// 20260831143544 died with
+// MEASURED. The deployed `snapshot-chain` arm died with
 //
 //   ContainerStartOverrun: Devbox.attach exceeded its 300000ms budget
 //
-// on the wake after a stop, while the COLD attach of the same box passed
-// comfortably. The difference between the two is this copy: a cold box has no
-// delta, and a woken one has the whole cumulative changed set to seed — read
-// through squashfuse over the mounted store, which is the only full read of an
+// on the wake after a stop, while the COLD attach of the same box passed. The
+// difference between the two used to be a COPY: a cold box has no delta, and a
+// woken one had the whole cumulative changed set copied into a fresh upper —
+// read through squashfuse over the mounted store, the only full read of an
 // archive anywhere on this path. The header's claim that "an attach moves NO
-// bytes" was true of everything except the one step that moves all of them.
+// bytes" was true of everything except the one step that moved all of them.
 //
-// A stop does not necessarily take the container with it. When the same instance
-// comes back, its upper already holds exactly what the last publication
-// archived, and the stamp is what makes that provable rather than hopeful.
+// So the delta is a LAYER now, and there are exactly two shapes. A stop does not
+// necessarily take the container with it: when the same instance comes back its
+// upper already holds what the last publication archived, the stamp proves it,
+// and the base alone is mounted under it. When the instance CHANGED — a blank
+// disk, no stamp — the delta is composed as a lower and nothing is copied at
+// all.
 
 describe('a wake whose upper already holds this delta', () => {
   const stampFor = (chainId = CHAIN_ID, bytes = DELTA_BYTES): string =>
     `${chainId}:${bytes}:${versionOf(deltaObjectKey(chainId), bytes)}`;
 
-  test('copies nothing, and still lands the overlay over the base', async () => {
+  test('mounts the base alone over the upper it kept', async () => {
     const calls: string[] = [];
     const record = harness({
       state: chainState(),
@@ -943,9 +1005,8 @@ describe('a wake whose upper already holds this delta', () => {
     const outcome = await attachOf(record);
 
     expect(outcome.kind).toBe('attached');
-    expect(record.calls.filter(call => call.startsWith('seedUpper'))).toEqual([]);
-    // ONE layer mount, not two: the delta is not mounted either, because the
-    // only reason to mount it was to copy it.
+    // ONE layer mount, not two: the delta needs no layer, because the changed
+    // set it holds is already in this upper.
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(1);
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
     expect(outcome.detail).toContain('already in this upper');
@@ -960,12 +1021,11 @@ describe('a wake whose upper already holds this delta', () => {
 
       await attachOf(record);
 
-      expect(record.calls).not.toContain(`resetDirs:${UPPER}`);
       expect(record.calls.some(call => call.startsWith('resetDirs') && call.includes(UPPER)))
         .toBe(false);
     });
 
-  test('a stamp naming another delta is not this delta: the copy happens', async () => {
+  test('a stamp naming another delta is not this delta: the layer is composed', async () => {
     const calls: string[] = [];
     const record = harness({
       state: chainState(),
@@ -977,31 +1037,265 @@ describe('a wake whose upper already holds this delta', () => {
     });
 
     expect((await attachOf(record)).kind).toBe('attached');
-    expect(record.calls).toContain(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
+    expect(record.calls).toContain(
+      `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+    );
+    expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
+  });
+});
+
+// ── THE WAKE THAT COST THE BUDGET ───────────────────────────────────────────
+//
+// A stop yields a FRESH container instance often enough that this is the
+// ordinary wake, not the exotic one: a blank disk carries no upper and no stamp,
+// so nothing about the previous instance can be claimed. What that wake must NOT
+// do is copy the changed set: the copy is proportional to everything written
+// since the base, it runs against the container-start budget, and at the size a
+// deployed ladder leaves it does not finish.
+
+describe('a wake whose container instance changed', () => {
+  test('composes the delta as a layer and copies NOTHING', async () => {
+    const calls: string[] = [];
+    // A blank disk: no seed stamp, and a delta far too large to copy inside any
+    // start budget.
+    const record = harness({
+      state: chainState({ delta: { bytes: 512 << 20 } }),
+      mounts: mountsAfterAttach(calls),
+      calls,
+    });
+
+    const outcome = await attachOf(record);
+
+    expect(outcome.kind).toBe('attached');
+    // THE ASSERTION THIS DESCRIBE EXISTS FOR: no copy, in any spelling. The
+    // strategy's shell has no seeding command at all now, so a `cp` would reach
+    // the container as a raw command and be recorded as one.
+    expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
+    expect(record.calls.filter(call => call.startsWith('seedUpper'))).toEqual([]);
+    // What replaced it: the delta mounted at its own generation's layer path,
+    // and an overlay composed over two lowers.
+    expect(record.calls).toContain(
+      `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+    );
+    expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
+    expect(outcome.detail).toContain('base+delta layered');
   });
 
-  test('a blank container disk has no stamp, so a replacement is seeded in full', async () => {
+  test('claims nothing about the upper: an attach writes no seed stamp', async () => {
+    // The stamp means "this upper HOLDS that delta", and after a composed attach
+    // it does not: the layer does. A stamp written here would tell the next
+    // commit it may archive the upper as the whole changed set, which is exactly
+    // the publication that would drop everything the layer holds.
     const calls: string[] = [];
     const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
 
     expect((await attachOf(record)).kind).toBe('attached');
-    expect(record.calls).toContain(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
-    // And the copy stamps what it seeded, so the NEXT attach on this disk can
-    // skip it.
-    expect(record.calls).toContain(`writeSeedStamp:${stampFor()}`);
+
+    expect(record.calls.filter(call => call.startsWith('writeSeedStamp'))).toEqual([]);
   });
 
-  test('the stamp is written after the copy and before the overlay', async () => {
+  test('the layer path names its own generation, so a later commit can see it', async () => {
     const calls: string[] = [];
     const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
 
     await attachOf(record);
 
-    const seeded = record.calls.indexOf(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
-    const stamped = record.calls.findIndex(call => call.startsWith('writeSeedStamp:'));
-    const mounted = record.calls.indexOf(`overlayAttach:${DEVBOX_WORKDIR}:1`);
-    expect(stamped).toBeGreaterThan(seeded);
-    expect(stamped).toBeLessThan(mounted);
+    const mounts = [
+      'sysfs /sys sysfs rw,relatime 0 0',
+      `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw 0 0`,
+      `${deltaObjectKey(CHAIN_ID)} ${deltaLayerMountPoint(CHAIN_ID)} fuse.squashfuse ro 0 0`,
+    ].join(`\n`);
+    expect(deltaLayerServed(mounts, CHAIN_ID)).toBe(true);
+    // A DIFFERENT generation's layer is not this generation's changed set, and
+    // reading it as one is what would make every commit after a collapse
+    // collapse again.
+    expect(deltaLayerServed(mounts, FALLBACK_ID)).toBe(false);
+  });
+});
+
+// ── the collapse that keeps a delta object whole ────────────────────────────
+//
+// THE INVARIANT THE COMPOSITION PUTS AT RISK, and the rule that keeps it. Every
+// delta commit archives the upper, and that is the whole cumulative changed set
+// only while nothing else is holding part of it. A composed attach breaks that:
+// the layer holds everything up to the last publication and the upper holds
+// everything since. Archiving the upper THERE would replace the one delta object
+// the next attach reads with a fragment of itself — silent, durable loss of
+// every byte the layer was serving.
+//
+// So a commit that finds a layer serving its own generation's delta collapses
+// the chain onto a fresh base instead. The merged view is the one tree that
+// expresses both, and archiving it is an operation this file already had.
+
+describe('a commit whose upper is not the whole changed set collapses the chain', () => {
+  /** Mounts that hold the composed shape a wake leaves: an overlay over the
+   *  base and the generation's own delta layer. */
+  function composedMounts(chainId = CHAIN_ID): string {
+    return [
+      'sysfs /sys sysfs rw,relatime 0 0',
+      `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+      `${baseObjectKey(chainId)} ${LOWER_BASE} fuse.squashfuse ro 0 0`,
+      `${deltaObjectKey(chainId)} ${deltaLayerMountPoint(chainId)} fuse.squashfuse ro 0 0`,
+    ].join('\n');
+  }
+
+  test('archives the merged view as a fresh base instead of the upper as a delta', async () => {
+    const record = harness({
+      state: chainState({ at: 1 }),
+      mounts: composedMounts(),
+      now: 10 * INTERVAL_MS,
+      upperMark: 'written-since-the-wake',
+    });
+
+    const outcome = await checkpointOf(record, 'tick');
+
+    expect(outcome.kind).toBe('committed');
+    // THE ARCHIVE IS THE WORK DIRECTORY, not the upper: the merged view is what
+    // holds the layer and the upper together.
+    expect(record.calls.some(call => call.startsWith(`makeSquashfs:${DEVBOX_WORKDIR}:`))).toBe(true);
+    expect(record.calls.some(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toBe(false);
+    // A FRESH GENERATION with no delta, so the next attach mounts one layer.
+    expect(record.state?.base.id).not.toBe(CHAIN_ID);
+    expect(record.state?.delta).toBeUndefined();
+    // And the delta object of the generation being served is never rewritten,
+    // which is the loss this rule exists to prevent.
+    expect(record.calls).not.toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+    // The superseded generation is RETAINED as the fallback rather than dropped:
+    // its layers are what the live overlay is still serving from.
+    expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
+  });
+
+  test('collapses ONCE: the next commit is an ordinary delta again', async () => {
+    const record = harness({
+      state: chainState({ at: 1 }),
+      mounts: composedMounts(),
+      now: 10 * INTERVAL_MS,
+      upperMark: 'written-since-the-wake',
+    });
+    const storage = snapshotChainStorage(record.ports);
+
+    expect((await storage.checkpoint('tick')).kind).toBe('committed');
+    const collapsed = record.state!.base.id;
+    record.upperMark = 'written-after-the-collapse';
+
+    // A quiesce, so the interval gate the collapse just reset is not what this
+    // case is about: the question is which SHAPE the second commit takes.
+    expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
+
+    // The layer is STILL mounted — it is a lower of a live overlay and cannot be
+    // released — but it serves a generation the record no longer names, so it is
+    // no longer a reason to collapse. A rule keyed on a fixed mount path rather
+    // than on the generation would rebase here forever.
+    expect(record.state?.base.id).toBe(collapsed);
+    expect(record.state?.delta).toBeDefined();
+    expect(record.calls).toContain(`putObject:${deltaObjectKey(collapsed)}`);
+  });
+
+  test('an ORPHAN delta the record does not name still forces the collapse', async () => {
+    // The crash-window delta: a previous run landed the object and died before
+    // the state write, so the record names none and the attach adopts it as a
+    // layer. Archiving the upper here would PUT over that object — the one copy
+    // of a changed set nothing else holds.
+    const record = harness({
+      state: chainState({ delta: undefined, at: 1 }),
+      mounts: composedMounts(),
+      now: 10 * INTERVAL_MS,
+      upperMark: 'written-since-the-wake',
+    });
+    record.objects.set(deltaObjectKey(CHAIN_ID), DELTA_BYTES);
+
+    const outcome = await checkpointOf(record, 'tick');
+
+    expect(outcome.kind).toBe('committed');
+    expect(record.state?.base.id).not.toBe(CHAIN_ID);
+    expect(record.calls).not.toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+  });
+
+  test('a wake that wrote nothing pays for nothing', async () => {
+    // The collapse archives the whole workspace, so a box that woke and did
+    // nothing must not trigger one: the durable chain already holds every byte
+    // the layers serve. An empty upper is the proof — a deletion leaves a
+    // whiteout in it and a metadata change copies its file up, so "empty"
+    // cannot hide a change.
+    const record = harness({
+      state: chainState({ at: 1 }),
+      mounts: composedMounts(),
+      now: 10 * INTERVAL_MS,
+      upperMark: 'the-empty-upper',
+      entriesAfterExtract: 0,
+    });
+
+    const outcome = await checkpointOf(record, 'quiesce');
+
+    expect(outcome.kind).toBe('skipped');
+    expect(outcome.reason).toContain('nothing has been written since the attach');
+    expect(record.calls.filter(call => call.startsWith('putObject'))).toEqual([]);
+  });
+
+  test('an upper that HOLDS the delta commits a delta, layer or no layer', async () => {
+    // The same-instance shape: the stamp proves the upper is the whole changed
+    // set, no layer was composed, and the ordinary delta commit is correct.
+    const record = harness({
+      state: chainState({ at: 1 }),
+      mounts: MOUNTED,
+      now: 10 * INTERVAL_MS,
+      upperMark: 'written-since-the-publication',
+      seedStamp: `${CHAIN_ID}:${DELTA_BYTES}:${versionOf(deltaObjectKey(CHAIN_ID), DELTA_BYTES)}`,
+    });
+
+    const outcome = await checkpointOf(record, 'tick');
+
+    expect(outcome.kind).toBe('committed');
+    expect(record.state?.base.id).toBe(CHAIN_ID);
+    expect(record.calls).toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls.some(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toBe(true);
+  });
+});
+
+// ── waits that end ──────────────────────────────────────────────────────────
+//
+// Both of these used to be unbounded loops, and an unbounded loop on the attach
+// path spends the whole container-start budget and reports nothing: the
+// restoration is abandoned mid-mount, the box records an overrun, and nobody
+// learns which step never finished.
+
+describe('an attach that cannot see or cannot release says so', () => {
+  test('a store subtree that never exposes the base refuses by count, naming what it holds',
+    async () => {
+      const record = harness({
+        state: chainState(),
+        mounts: NOT_MOUNTED,
+        missingPaths: [`${CHAIN_STORE_MOUNT}/data.sqsh`],
+      });
+
+      const refusal = attachOf(record);
+
+      await expect(refusal).rejects.toThrow(
+        new RegExp(`does not expose ${CHAIN_STORE_MOUNT}/data.sqsh after ${String(LAYER_VISIBILITY_PROBES)} probes`),
+      );
+      // WHAT THE SUBTREE DOES HOLD travels with the refusal: an operator reading
+      // it can tell "the mount is empty" from "the mount holds another
+      // generation's archives" without a second deployment.
+      await expect(refusal).rejects.toThrow(/holds: data.sqsh delta.sqsh/);
+    });
+
+  test('a mount that will not release is a named failure, not a hang', async () => {
+    const record = harness({ state: chainState(), mounts: NOT_MOUNTED });
+    const inner = record.ports.exec;
+    record.ports.exec = async (command) => {
+      if (command.includes('fusermount3 -u') && command.includes(LOWER_BASE)) {
+        return {
+          stdout: '',
+          stderr: 'still mounted after 20 release attempts',
+          exitCode: 1,
+        };
+      }
+      return await inner(command);
+    };
+
+    await expect(attachOf(record)).rejects.toThrow(/releasing the mount at .*lower-base/);
+    // Nothing was mounted on top of a mount this attach could not release.
+    expect(record.calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
   });
 });
 
@@ -2522,13 +2816,18 @@ describe('a restore that refuses the newest generation recovers from the older o
 });
 
 describe('a restore stays inside the tree it is restoring', () => {
-  test('the seed target is emptied before any archive content is copied into it', async () => {
-    // The only content a restore writes is the delta, copied out of a mounted
-    // squashfs with `cp -a`, which recreates symlinks instead of following them.
-    // So the one way an archive could write outside the upper is through a
-    // symlink ALREADY sitting at a path the copy walks — and the reset in this
-    // same attach is what guarantees there is none. A squashfs cannot express a
-    // `..` escape at all: it is a tree, and mksquashfs strips the source prefix.
+  test('nothing is copied out of an archive at all, and the upper is emptied first', async () => {
+    // WHAT USED TO CARRY THIS PROPERTY, and what carries it now. The restore's
+    // only write into the workspace was `cp -a` out of a mounted squashfs, so
+    // the containment argument was about that copy: `-a` recreates symlinks
+    // instead of following them, and the reset in the same attach guaranteed no
+    // symlink was already sitting at a path the copy walked.
+    //
+    // A composed attach writes NO archive content anywhere. An archive is
+    // reachable only through its own mount point, which is inside this
+    // strategy's private runtime directory, and the overlay's upper starts
+    // empty. There is no copy to escape through, which is a stronger statement
+    // than a careful copy — so this pins the absence.
     const calls: string[] = [];
     const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
     const raw: string[] = [];
@@ -2540,15 +2839,22 @@ describe('a restore stays inside the tree it is restoring', () => {
 
     expect((await attachOf(record)).kind).toBe('attached');
 
+    // No extraction, in any spelling the image offers.
+    expect(raw.filter(command => /^(cp|tar|rsync|unsquashfs)\b/.test(command))).toEqual([]);
+    // The upper is emptied BEFORE anything is mounted over it, so a composed
+    // attach's writable layer holds exactly what is written after it.
     const emptied = raw.findIndex(command =>
-      command.startsWith('resetting directories') || (command.startsWith('rm -rf')
-        && command.includes(UPPER) && command.includes('mkdir -p')));
-    const copied = raw.findIndex(command => command.startsWith('cp -a'));
+      command.startsWith('rm -rf') && command.includes(UPPER) && command.includes('mkdir -p'));
+    const mounted = raw.findIndex(command => command.includes('squashfuse'));
     expect(emptied).toBeGreaterThan(-1);
-    expect(copied).toBeGreaterThan(emptied);
-    // `-a` implies `--no-dereference`; nothing may turn that off.
-    expect(raw[copied]).toContain(`cp -a '${DEVBOX_RUNTIME_DIR}/lower-delta/.' '${UPPER}/'`);
-    expect(raw[copied]).not.toMatch(/--dereference|\s-L\b/);
+    expect(mounted).toBeGreaterThan(emptied);
+    // And every archive is reachable only under this strategy's own runtime
+    // directory: a layer cannot be mounted over the workspace or anywhere a
+    // caller writes.
+    for (const command of raw.filter(line => line.includes('squashfuse'))) {
+      expect(command).toContain(`${DEVBOX_RUNTIME_DIR}/`);
+      expect(command).not.toContain(`${DEVBOX_WORKDIR} `);
+    }
   });
 });
 

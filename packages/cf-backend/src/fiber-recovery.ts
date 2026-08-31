@@ -76,7 +76,7 @@ export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * indexed reads; a backlog deeper than this waits for the next activation
  * rather than holding this one hostage to a stopwatch.
  */
-export const FIBER_SWEEP_MAX_ROWS = 4096;
+const FIBER_SWEEP_MAX_ROWS = 4096;
 
 /**
  * One metadata row per read. This is not a policy cap: the framework's own
@@ -269,7 +269,7 @@ export const TERMINAL_LANE_FIBER = 'terminal:effects';
  *  terminal writes and the notice landing replays the DELIVERY, not the
  *  reconcile. The signal rides the checkpoint whole, and its idempotency key
  *  makes the replay collide with a delivery that already landed. */
-export const FORK_NOTICE_LANE_FIBER = 'fork:notice';
+const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 
 /** The transports one actor supplies to its lanes' recovery. Every member is
  *  something an activation re-resolves for itself — a stub call, a fresh model
@@ -529,21 +529,35 @@ function redriveForkNoticeLane(
     };
   }
   const signal = parsed.output;
-  const dispatch = (): void => {
-    transports.redrive(FORK_NOTICE_LANE_FIBER, checkpoint, async () => {
-      // `undelivered` = the enqueue was pre-empted, so the notice is still
-      // owed: a FRESH fiber row carries the retry, and the pacing is inherent
-      // — a delivery attempt resolves with the turn slot that pre-empted it,
-      // never in a hot loop. The idempotency key makes any landed duplicate
-      // collide.
-      if (await transports.deliverSignal(signal) === 'undelivered') {
-        diagnostics.event('fiber.notice_redelivery_owed', { key: signal.idempotencyKey ?? '(none)' });
-        dispatch();
-      }
-    });
-  };
-  dispatch();
+  dispatchRecoveredNotice(transports, signal, signal.attempts ?? 0);
   return { status: 'completed', snapshot: { lane: FORK_NOTICE_LANE_FIBER, redrive: 'signal-delivery' } };
+}
+
+/**
+ * Dispatch one notice on a fresh carrier, retrying an `undelivered` outcome
+ * forever at a capped pace.
+ *
+ * `undelivered` = the enqueue was pre-empted or refused, so the notice is
+ * still owed: a FRESH fiber row carries each retry (durable across evictions,
+ * with the attempt count in its checkpoint so the backoff resumes where it
+ * left off), and the idempotency key makes any landed duplicate collide. The
+ * sleep is PACING, not a deadline — nothing is abandoned at any attempt.
+ */
+export function dispatchRecoveredNotice(
+  transports: Pick<FiberLaneTransports, 'redrive' | 'deliverSignal'>,
+  signal: RecoveredNotice,
+  attempts: number,
+): void {
+  const checkpoint: JsonValue = { ...signal, attempts };
+  transports.redrive(FORK_NOTICE_LANE_FIBER, checkpoint, async () => {
+    if (await transports.deliverSignal(signal) === 'undelivered') {
+      diagnostics.event('fiber.notice_redelivery_owed', {
+        key: signal.idempotencyKey ?? '(none)', attempts: attempts + 1,
+      });
+      await new Promise((resolve) => { setTimeout(resolve, noticeBackoffMs(attempts + 1)); });
+      dispatchRecoveredNotice(transports, signal, attempts + 1);
+    }
+  });
 }
 
 /** The shape a recovered notice must still have to be deliverable. Structural
@@ -554,7 +568,21 @@ const RecoveredSignalSchema = v.object({
   text: v.string(),
   idempotencyKey: v.optional(v.string()),
   metadata: v.optional(JsonObjectSchema),
+  /** Delivery attempts so far — rides the checkpoint so the capped backoff
+   *  survives an eviction mid-retry. */
+  attempts: v.optional(v.number()),
 });
+
+/** One notice as the carrier hands it around — the named owner contract for
+ *  every dispatch site. */
+export type RecoveredNotice = v.InferOutput<typeof RecoveredSignalSchema>;
+
+/** Capped backoff for a pre-empted notice enqueue: unbounded ATTEMPTS — a cap
+ *  that gives up loses the notice this lane exists to keep — with a bounded
+ *  PACE, per the retry doctrine every provider path here follows. */
+function noticeBackoffMs(attempts: number): number {
+  return Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000);
+}
 
 /**
  * The MCP warmup lane, which has NOTHING to re-enter.

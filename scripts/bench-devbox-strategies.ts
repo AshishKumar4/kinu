@@ -832,63 +832,7 @@ export interface R2ResiduePlane {
   bucketExists(bucket: string): Promise<boolean>;
 }
 
-/** S3 XML carries entity-escaped text; a key read raw would be deleted under
- *  the wrong name and read as still present forever. */
-export function xmlText(escaped: string): string {
-  return escaped
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
-    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-}
 
-/** RFC 3986 for an S3 key path segment set: everything but the separators. */
-const rfc3986Key = (key: string): string =>
-  key.split('/').map((part) => encodeURIComponent(part)
-    .replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
-
-export interface ObjectsPage { keys: string[]; next: string | null }
-
-/** One ListObjectsV2 page: keys plus the continuation cursor, honoring
- *  IsTruncated so a >1000-key bucket cannot silently read partial. */
-export function parseObjectsPage(body: string): ObjectsPage {
-  const keys: string[] = [];
-  for (const block of body.split('<Contents>').slice(1)) {
-    const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
-    if (key !== undefined) keys.push(xmlText(key));
-  }
-  const truncated = /<IsTruncated>true<\/IsTruncated>/.test(body);
-  const token = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(body)?.[1];
-  if (truncated && token === undefined) {
-    throw new Error('ListObjectsV2 reported IsTruncated with no NextContinuationToken');
-  }
-  return { keys, next: truncated && token !== undefined ? xmlText(token) : null };
-}
-
-export interface UploadsPage {
-  uploads: { key: string; uploadId: string }[];
-  next: { keyMarker: string; uploadIdMarker: string } | null;
-}
-
-/** One ListMultipartUploads page, with its own marker pair — >1000 open
- *  uploads is exactly the residue shape two aborted runs left this account. */
-export function parseUploadsPage(body: string): UploadsPage {
-  const uploads: { key: string; uploadId: string }[] = [];
-  for (const block of body.split('<Upload>').slice(1)) {
-    const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
-    const uploadId = /<UploadId>([^<]*)<\/UploadId>/.exec(block)?.[1];
-    if (key !== undefined && uploadId !== undefined) {
-      uploads.push({ key: xmlText(key), uploadId: xmlText(uploadId) });
-    }
-  }
-  if (!/<IsTruncated>true<\/IsTruncated>/.test(body)) return { uploads, next: null };
-  const keyMarker = /<NextKeyMarker>([^<]*)<\/NextKeyMarker>/.exec(body)?.[1];
-  const uploadIdMarker = /<NextUploadIdMarker>([^<]*)<\/NextUploadIdMarker>/.exec(body)?.[1];
-  if (keyMarker === undefined || uploadIdMarker === undefined) {
-    throw new Error('ListMultipartUploads reported IsTruncated with no marker pair');
-  }
-  return { uploads, next: { keyMarker: xmlText(keyMarker), uploadIdMarker: xmlText(uploadIdMarker) } };
-}
 export function r2ResiduePlane(deps: {
   accountId: string;
   accessKeyId: string;
@@ -918,37 +862,34 @@ export function r2ResiduePlane(deps: {
         const cursor: string = token === null ? '' : `&continuation-token=${encodeURIComponent(token)}`;
         const { status, body } = await ask(`/${bucket}?list-type=2&max-keys=1000${cursor}`);
         if (status !== 200) throw new Error(`ListObjectsV2 on ${bucket} answered ${String(status)}`);
-        const page = parseObjectsPage(body);
-        keys.push(...page.keys);
-        token = page.next;
+        for (const block of body.split('<Contents>').slice(1)) {
+          const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
+          if (key !== undefined) keys.push(key);
+        }
+        token = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(body)?.[1] ?? null;
       } while (token !== null);
       return keys;
     },
     deleteObject: async (bucket, key) => {
-      const { status } = await ask(`/${bucket}/${rfc3986Key(key)}`, 'DELETE');
+      const { status } = await ask(`/${bucket}/${encodeURIComponent(key)}`, 'DELETE');
       if (status !== 204 && status !== 404) {
         throw new Error(`DeleteObject ${bucket}/${key} answered ${String(status)}`);
       }
     },
     listUploads: async (bucket) => {
+      const { status, body } = await ask(`/${bucket}?uploads=`);
+      if (status !== 200) throw new Error(`ListMultipartUploads on ${bucket} answered ${String(status)}`);
       const uploads: { key: string; uploadId: string }[] = [];
-      let marker: { keyMarker: string; uploadIdMarker: string } | null = null;
-      do {
-        const cursor: string = marker === null
-          ? ''
-          : `&key-marker=${encodeURIComponent(marker.keyMarker)}`
-            + `&upload-id-marker=${encodeURIComponent(marker.uploadIdMarker)}`;
-        const { status, body } = await ask(`/${bucket}?uploads=&max-uploads=1000${cursor}`);
-        if (status !== 200) throw new Error(`ListMultipartUploads on ${bucket} answered ${String(status)}`);
-        const page = parseUploadsPage(body);
-        uploads.push(...page.uploads);
-        marker = page.next;
-      } while (marker !== null);
+      for (const block of body.split('<Upload>').slice(1)) {
+        const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
+        const uploadId = /<UploadId>([^<]*)<\/UploadId>/.exec(block)?.[1];
+        if (key !== undefined && uploadId !== undefined) uploads.push({ key, uploadId });
+      }
       return uploads;
     },
     abortUpload: async (bucket, key, uploadId) => {
       const { status } = await ask(
-        `/${bucket}/${rfc3986Key(key)}?uploadId=${encodeURIComponent(uploadId)}`, 'DELETE',
+        `/${bucket}/${encodeURIComponent(key)}?uploadId=${encodeURIComponent(uploadId)}`, 'DELETE',
       );
       if (status !== 204 && status !== 404) {
         throw new Error(`AbortMultipartUpload ${bucket}/${key} answered ${String(status)}`);
@@ -1025,6 +966,10 @@ interface DriverRequest {
   readonly path?: string;
   readonly content?: string;
   readonly kind?: 'tick' | 'quiesce';
+  /** One semantic operation's id, carried by the two armed routes. Reused
+   *  across every retry of that operation, which is what stops a re-posted
+   *  request from arming a second publication. */
+  readonly op?: string;
   readonly purge?: boolean;
   readonly prefix?: string;
   readonly whole?: boolean;
@@ -1308,6 +1253,11 @@ interface HeadReply {
   key?: string;
   exists?: boolean;
   size?: number;
+  /** The store's own name for the bytes at this key. A size cannot answer
+   *  "does this key hold different bytes than before" — two archives of one
+   *  length are the same size — and that question is the whole of the
+   *  `mutable-delta` witness cell. */
+  etag?: string;
   error?: string;
 }
 
@@ -1316,6 +1266,7 @@ const HeadReplySchema: v.GenericSchema<HeadReply> = v.looseObject({
   key: v.optional(v.string()),
   exists: v.optional(v.boolean()),
   size: v.optional(v.number()),
+  etag: v.optional(v.string()),
   error: v.optional(v.string()),
 });
 
@@ -1841,6 +1792,9 @@ async function kickAndPoll(
   return { ...attached, ms: Date.now() - started };
 }
 
+/** What one settled checkpoint reports. Its wire form is the poll reply below:
+ *  the fixture answers a checkpoint's outcome by token, never inside the
+ *  request that asked for it. */
 interface CheckpointReply {
   ok?: boolean;
   outcome?: { kind: string; reason?: string; bytes?: number; movedBytes?: number };
@@ -1848,8 +1802,53 @@ interface CheckpointReply {
   error?: string;
 }
 
-const CheckpointReplySchema: v.GenericSchema<CheckpointReply> = v.looseObject({
+interface StopReply { ok?: boolean; ms?: number; error?: string }
+
+// ── the async operation protocol ────────────────────────────────────────────
+//
+// THE DRIVER'S OWN DOCTRINE, APPLIED TO THE TWO ROUTES THAT BROKE IT.
+// `runPhase` already backgrounds anything minute-scale and polls a sentinel
+// "because the blocking path is bounded by a ceiling that no timeout option
+// raises". `POST /checkpoint` and `POST /stop` were posted as BLOCKING requests
+// anyway, and both deployed decisive runs lost `bounded-layers` and
+// `merkle-pack` to exactly that ceiling: `AbortSignal.timeout(180_000)` fired
+// mid-publication, `call` re-posted the same checkpoint, the fixture's
+// checkpoint lane serialised the two, and the retry ran a SECOND full
+// publication against a box already saturated — the container 502s in those
+// artifacts. Raising the deadline moves the wall to the next tree size, so the
+// fixture arms a durable one-shot and the driver polls it here.
+//
+// ONE `op` PER SEMANTIC OPERATION, generated by the CALLER and reused across
+// every retry of it. That is what makes a re-posted request structurally unable
+// to start a second publication: arming is idempotent by `op`, and a poll is the
+// only other request in the protocol.
+
+/** What an arming request answers: a token to poll, never an outcome. */
+interface OperationArmedReply {
+  ok?: boolean;
+  token?: string;
+  state?: string;
+  error?: string;
+}
+
+const OperationArmedReplySchema: v.GenericSchema<OperationArmedReply> = v.looseObject({
   ok: v.optional(v.boolean()),
+  token: v.optional(v.string()),
+  state: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+
+/** One poll of an armed operation. `state` is the whole protocol; `outcome` and
+ *  `ms` are the fixture's own, so a poll cadence never enters a measurement. */
+interface OperationPollReply extends CheckpointReply {
+  state?: string;
+  token?: string;
+}
+
+const OperationPollReplySchema: v.GenericSchema<OperationPollReply> = v.looseObject({
+  ok: v.optional(v.boolean()),
+  state: v.optional(v.string()),
+  token: v.optional(v.string()),
   outcome: v.optional(v.looseObject({
     kind: v.string(),
     // Bytes THIS tick moved, reported by the strategy rather than derived.
@@ -1872,13 +1871,147 @@ const CheckpointReplySchema: v.GenericSchema<CheckpointReply> = v.looseObject({
   error: v.optional(v.string()),
 });
 
-interface StopReply { ok?: boolean; ms?: number; error?: string }
+/**
+ * How long an armed operation may take, and how often it is asked.
+ *
+ * The deadline is `PROCESS_DEADLINE_MS`, deliberately the same number the
+ * backgrounded workload phases already use: both bound work whose duration is
+ * set by a remote service rather than by this driver, and a second number for
+ * the same class of wait would drift from it.
+ *
+ * THE CADENCE BACKS OFF because the two operations differ by two orders of
+ * magnitude. A ladder tick settles in a second or two and a candidate barrier
+ * takes minutes: one fixed interval either adds itself to every small
+ * checkpoint's wall time or asks a five-minute publication three hundred times.
+ * So the first ask is prompt and each later one waits half again as long, up to
+ * a ceiling. Nothing a poll costs enters a measurement — the fixture reports the
+ * operation's own duration — but the run's own clock is real.
+ */
+const OPERATION_DEADLINE_MS = PROCESS_DEADLINE_MS;
+const OPERATION_FIRST_POLL_MS = 250;
+const OPERATION_POLL_CEILING_MS = 5_000;
+const OPERATION_POLL_GROWTH = 1.5;
 
-const StopReplySchema: v.GenericSchema<StopReply> = v.looseObject({
-  ok: v.optional(v.boolean()),
-  ms: v.optional(v.number()),
-  error: v.optional(v.string()),
-});
+/**
+ * Arm one operation and wait for its own outcome, bounded by a deadline.
+ *
+ * The POST is re-asked on transport loss with the SAME `op`, because a lost
+ * reply leaves the caller unable to tell whether the arm landed — and under an
+ * idempotent arm that question stops mattering. Every later request is a poll,
+ * so nothing here can publish twice however often it is retried.
+ */
+async function awaitArmedOperation(
+  fixture: Fixture,
+  box: string,
+  route: '/checkpoint' | '/stop',
+  body: DriverRequest & { readonly op: string },
+  bounds: { readonly pollMs?: number; readonly deadlineMs?: number } = {},
+): Promise<OperationPollReply> {
+  // An explicit cadence is FIXED at that value, so a test asking for a 1 ms
+  // cadence gets one instead of a backoff it then has to wait out.
+  const firstPollMs = bounds.pollMs ?? OPERATION_FIRST_POLL_MS;
+  const pollCeilingMs = bounds.pollMs ?? OPERATION_POLL_CEILING_MS;
+  const deadline = Date.now() + (bounds.deadlineMs ?? OPERATION_DEADLINE_MS);
+  let armed: OperationArmedReply | null = null;
+  for (let attempt = 1; armed === null; attempt += 1) {
+    try {
+      armed = await call(
+        fixture, 'POST', `${route}?box=${box}`, OperationArmedReplySchema, body, STATE_POLL_REQUEST_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (!isTransportLoss(parseThrown({ cause: error })) || Date.now() > deadline) throw error;
+      log(`${route}: arming lost its reply on attempt ${attempt}; asking again under the same op`);
+      await delay(firstPollMs);
+    }
+  }
+  const token = armed.token;
+  if (armed.ok !== true || token === undefined || token.length === 0) {
+    // A refusal from the arming edge is the operation's own answer: it names a
+    // route that will not run, so there is nothing to poll for.
+    return { ok: false, error: armed.error ?? `${route} did not arm an operation` };
+  }
+  let pollMs = firstPollMs;
+  for (;;) {
+    await delay(pollMs);
+    pollMs = Math.min(pollCeilingMs, pollMs * OPERATION_POLL_GROWTH);
+    let poll: OperationPollReply;
+    try {
+      poll = await call(
+        fixture,
+        'GET',
+        `/operation?box=${box}&token=${encodeURIComponent(token)}`,
+        OperationPollReplySchema,
+        undefined,
+        STATE_POLL_REQUEST_TIMEOUT_MS,
+      );
+    } catch (error) {
+      // A poll that could not be asked proves nothing about the operation. It
+      // is re-asked until the deadline, exactly as the startup poll re-asks
+      // `/state`, because the work continues whether or not this request landed.
+      const detail = describeThrown({ cause: error });
+      if (Date.now() > deadline) {
+        throw new Error(
+          `${route} outcome could not be read before its deadline: ${detail}`,
+          { cause: error },
+        );
+      }
+      log(`${route}: outcome poll retrying: ${detail}`);
+      continue;
+    }
+    if (poll.state === 'done' || poll.state === 'failed') return poll;
+    if (poll.state !== 'pending') {
+      throw new Error(`${route} answered state "${poll.state ?? 'none'}": ${poll.error ?? 'no reason given'}`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `${route} did not settle within the ${OPERATION_DEADLINE_MS} ms operation deadline `
+        + `(token ${token} still pending)`,
+      );
+    }
+  }
+}
+
+/** How long one armed operation may take and how often to ask, overridable so
+ *  the protocol's own tests do not wait out a production cadence. */
+export interface OperationBounds {
+  readonly pollMs?: number;
+  readonly deadlineMs?: number;
+}
+
+/** One measured checkpoint, through the async protocol. `op` is generated here
+ *  so a caller's own retry of THIS call re-asks one operation rather than
+ *  starting another. */
+export async function checkpointOperation(
+  fixture: Fixture,
+  box: string,
+  kind: 'tick' | 'quiesce',
+  what: string,
+  bounds: OperationBounds = {},
+): Promise<CheckpointReply> {
+  const op = `${what}-${crypto.randomUUID()}`;
+  return await retryTransient(what, async () =>
+    await awaitArmedOperation(fixture, box, '/checkpoint', { kind, op }, bounds),
+  );
+}
+
+/** One stop, through the same protocol. A stop's final checkpoint is the
+ *  largest publication an arm takes, which is why it is armed too. */
+export async function stopOperation(
+  fixture: Fixture,
+  box: string,
+  what: string,
+  bounds: OperationBounds = {},
+): Promise<StopReply> {
+  const op = `${what}-${crypto.randomUUID()}`;
+  const settled = await retryTransient(what, async () =>
+    await awaitArmedOperation(fixture, box, '/stop', { op }, bounds),
+  );
+  return {
+    ok: settled.state === 'done' && settled.outcome?.kind !== 'failed',
+    ms: settled.ms,
+    error: settled.error ?? settled.outcome?.reason,
+  };
+}
 
 /** What `/teardown` discarded and purged. The report prints this row whole and
  *  the artifact keeps it, so nothing here is read by name. */
@@ -2013,6 +2146,16 @@ export interface ArmResult {
   treeBytes: Record<string, number>;
   ops: OpTally | null;
   teardown: TeardownReply | null;
+  /**
+   * What this arm's preregistered red witnesses DID, cell by cell.
+   *
+   * Empty for a candidate, which preregisters none. For a control it is the
+   * whole of G2's evidence: `observed` true is the defect the control exists to
+   * catch, showing up where it was predicted, and `observed` false is either a
+   * cell that could not run or a defect that has silently vanished — both of
+   * which refuse the run rather than passing quietly.
+   */
+  witnessChecks: WitnessCheck[];
   notes: string[];
 }
 
@@ -2163,7 +2306,7 @@ async function runDecisive(
 
     await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
     const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-    const cp = await call(fixture, 'POST', `/checkpoint?box=${box}`, CheckpointReplySchema, { kind: 'tick' });
+    const cp = await checkpointOperation(fixture, box, 'tick', `${spec.id} tick ${segmentName}`);
     await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
     const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
 
@@ -2197,6 +2340,626 @@ async function runDecisive(
   return { ticks, treeBytes, notes };
 }
 
+// ── the control witness cells ───────────────────────────────────────────────
+//
+// The three shipped strategies are MANDATORY HISTORICAL CONTROLS, never
+// production winners. Each preregisters the red witnesses its own documented
+// defects must produce, and G2 refuses a run on either drift: a witness nobody
+// observed (the defect went away, or the cell could not run) and an observed
+// failure nobody predicted.
+//
+// WHY THESE CELLS EXIST AT ALL. `observedRedChecks` was hardcoded `[]`, so every
+// run carrying a control was refused for eight witnesses that nothing had ever
+// tried to observe — the G2 block in both 2026-08-31 artifacts. The expectations
+// were right and the observation was missing, so this is where the observing
+// happens: one cell per witness, each probing the defect through the ordinary
+// routes, each recording RAW facts that `controlWitnessChecks` — and nothing
+// else — turns into a verdict.
+//
+// WHERE THEY RUN, AND WHY IT MATTERS. After the arm's own `/ops` tally is read.
+// A cell writes files and takes checkpoints of its own, and an arm's operation
+// count is a priced column: cells inside the measured window would bill this
+// arm for operations the comparison is not about. The one exception is the
+// r2fs open-write holder, which must exist BEFORE the recycle it survives.
+
+/** One preregistered witness cell's result. `observed` is the DEFECT showing
+ *  up where it was predicted — a control is REQUIRED to produce it — never a
+ *  test passing. */
+export interface WitnessCheck {
+  readonly name: string;
+  readonly observed: boolean;
+  readonly detail: string;
+}
+
+/**
+ * The red witnesses each control must produce, preregistered before the run.
+ *
+ * Every name is a defect its own strategy's header states in prose:
+ *
+ *   `cumulative-delta-seed` — "after an attach that had a delta, the delta's
+ *     contents are copied into the fresh upper", so an attach costs O(cumulative
+ *     change) whatever the change since the last one was.
+ *   `mutable-delta` — "a single DELTA object that each checkpoint replaces
+ *     atomically": the durable archive is a mutable object rewritten in place,
+ *     not an immutable generation.
+ *   `unbounded-pending-replay` — "replay the journal entries newer than the
+ *     folded cursor": recovery is O(pending change) with no bound on pending,
+ *     which is the `unbounded` restore class this arm CLAIMS.
+ *   `O(u)-scan` — "scan the upper" on every tick, so an unchanged checkpoint
+ *     still costs the whole writable layer.
+ *   `open-write-loss` — "a file still open when the container stops loses
+ *     whatever had not been closed".
+ *   `non-atomic-rename` — "rename is a copy followed by a delete. It is not
+ *     atomic and it costs the object's bytes".
+ *   `POSIX-gap` — "there is no flush-to-store primitive": `sync` reaches s3fs
+ *     and s3fs uploads on close, so a synced file is not yet durable.
+ */
+const CONTROL_WITNESSES = {
+  'snapshot-chain': ['cumulative-delta-seed', 'mutable-delta'],
+  'overlay-cas': ['unbounded-pending-replay', 'O(u)-scan'],
+  r2fs: ['open-write-loss', 'non-atomic-rename', 'POSIX-gap'],
+  'bounded-layers': [],
+  'merkle-pack': [],
+} as const satisfies Record<Strategy, readonly string[]>;
+
+/**
+ * What the cells OBSERVED, as raw facts, one group per witness.
+ *
+ * A group is absent when its cell could not run, and absence is never a pass:
+ * the classifier reports the witness unobserved and G2 refuses. Nothing here is
+ * a verdict, so a reader can disagree with the classification while still
+ * holding the measurement.
+ */
+export interface ControlWitnessFacts {
+  readonly cumulativeDeltaSeed?: {
+    /** Bytes the store holds for the cumulative delta the wake had to serve. */
+    readonly deltaBytes: number;
+    /** Whether the pre-stop marker's bytes are IN the upper after the wake,
+     *  which they can only be because the attach copied the delta into it: the
+     *  delta layer is unmounted once the seed finishes. */
+    readonly markerInUpper: boolean;
+    /** The container's own seed stamp, which names the delta a completed copy
+     *  read (`<chain>:<bytes>:<upload version>`). */
+    readonly seedStamp: string;
+    /** The chain generation that stamp must name for the seed to be this
+     *  delta's rather than an older one's. */
+    readonly chainId: string;
+  };
+  readonly mutableDelta?: {
+    readonly key: string;
+    readonly etagBefore: string;
+    readonly etagAfter: string;
+    readonly bytesBefore: number;
+    readonly bytesAfter: number;
+  };
+  readonly unboundedPendingReplay?: {
+    readonly smallPending: number;
+    readonly smallReplayed: number;
+    readonly largePending: number;
+    readonly largeReplayed: number;
+  };
+  readonly upperScan?: {
+    readonly smallEntries: number;
+    readonly smallMs: number;
+    readonly largeEntries: number;
+    readonly largeMs: number;
+  };
+  readonly openWriteLoss?: {
+    readonly wroteBytes: number;
+    /** Bytes readable after the recycle, or null when the path is gone. */
+    readonly survivedBytes: number | null;
+  };
+  readonly nonAtomicRename?: {
+    readonly fileBytes: number;
+    /** Store operations the rename itself cost, across a flushed window. */
+    readonly storeOps: number;
+    readonly sourcePresent: boolean;
+    readonly destinationBytes: number | null;
+  };
+  readonly posixGap?: {
+    /** Whether the store holds the object for a path whose only writer has
+     *  written and `sync`ed it and not yet closed it. */
+    readonly syncedKeyPresent: boolean;
+    readonly key: string;
+  };
+}
+
+/** How much bigger the large scan cell's layer must be before its duration is
+ *  read as scaling, and how much slower the unchanged tick over it must be. A
+ *  tick proportional to the CHANGE — which is zero in both cells — would be
+ *  flat, so the growth is the whole signal. */
+const SCAN_ENTRY_GROWTH = 4;
+const SCAN_COST_GROWTH = 2;
+
+/**
+ * Turn the cells' raw facts into this arm's witness verdicts.
+ *
+ * Pure and exported, so every direction is provable against hand-built facts:
+ * the defect observed, the defect vanished, and the cell that never ran. The
+ * order and the names come from `CONTROL_WITNESSES`, so a witness can never be
+ * answered by a cell that was not preregistered for this arm.
+ */
+export function controlWitnessChecks(
+  strategy: Strategy,
+  facts: ControlWitnessFacts,
+): WitnessCheck[] {
+  return CONTROL_WITNESSES[strategy].map((name): WitnessCheck => {
+    switch (name) {
+      case 'cumulative-delta-seed': {
+        const cell = facts.cumulativeDeltaSeed;
+        if (cell === undefined) return absentCell(name);
+        const stamped = cell.seedStamp.startsWith(`${cell.chainId}:`);
+        return {
+          name,
+          observed: cell.deltaBytes > 0 && cell.markerInUpper && stamped,
+          detail: `delta ${cell.deltaBytes}B; the upper ${cell.markerInUpper ? 'holds' : 'does NOT hold'} `
+            + `the pre-stop marker; seed stamp ${cell.seedStamp || '(none)'} `
+            + `${stamped ? 'names' : 'does NOT name'} generation ${cell.chainId}`,
+        };
+      }
+      case 'mutable-delta': {
+        const cell = facts.mutableDelta;
+        if (cell === undefined) return absentCell(name);
+        const rewritten = cell.etagBefore.length > 0
+          && cell.etagAfter.length > 0
+          && cell.etagBefore !== cell.etagAfter;
+        return {
+          name,
+          observed: cell.key.length > 0 && rewritten,
+          detail: `${cell.key}: ${cell.bytesBefore}B etag ${cell.etagBefore || '(none)'} then `
+            + `${cell.bytesAfter}B etag ${cell.etagAfter || '(none)'} — one key, `
+            + `${rewritten ? 'rewritten in place' : 'NOT rewritten'}`,
+        };
+      }
+      case 'unbounded-pending-replay': {
+        const cell = facts.unboundedPendingReplay;
+        if (cell === undefined) return absentCell(name);
+        // UNBOUNDED means the replay follows the pending set rather than a
+        // constant: more pending, strictly more replayed.
+        const grew = cell.largePending > cell.smallPending
+          && cell.largeReplayed > cell.smallReplayed
+          && cell.smallReplayed > 0;
+        return {
+          name,
+          observed: grew,
+          detail: `${cell.smallPending} pending replayed ${cell.smallReplayed} entries, `
+            + `${cell.largePending} pending replayed ${cell.largeReplayed} — `
+            + `${grew ? 'the replay follows the pending set' : 'the replay did NOT follow the pending set'}`,
+        };
+      }
+      case 'O(u)-scan': {
+        const cell = facts.upperScan;
+        if (cell === undefined) return absentCell(name);
+        const layerGrew = cell.largeEntries >= cell.smallEntries * SCAN_ENTRY_GROWTH;
+        const costGrew = cell.largeMs >= cell.smallMs * SCAN_COST_GROWTH;
+        return {
+          name,
+          observed: layerGrew && costGrew && cell.smallMs > 0,
+          detail: `an unchanged tick cost ${cell.smallMs}ms over ${cell.smallEntries} entries and `
+            + `${cell.largeMs}ms over ${cell.largeEntries} — layer ${layerGrew ? 'grew' : 'did NOT grow'} `
+            + `${String(SCAN_ENTRY_GROWTH)}x, cost ${costGrew ? 'grew' : 'did NOT grow'} with it`,
+        };
+      }
+      case 'open-write-loss': {
+        const cell = facts.openWriteLoss;
+        if (cell === undefined) return absentCell(name);
+        const lost = cell.wroteBytes > 0
+          && (cell.survivedBytes === null || cell.survivedBytes < cell.wroteBytes);
+        return {
+          name,
+          observed: lost,
+          detail: `${cell.wroteBytes}B written through a handle held open across the stop; `
+            + `${cell.survivedBytes === null ? 'the path is gone after the wake' : `${cell.survivedBytes}B survived`}`,
+        };
+      }
+      case 'non-atomic-rename': {
+        const cell = facts.nonAtomicRename;
+        if (cell === undefined) return absentCell(name);
+        // A rename that costs the store anything is a copy: the object arrives
+        // under a new key and the old key is deleted, which is not an atomic
+        // metadata move however fast it is.
+        const copied = cell.storeOps > 0
+          && !cell.sourcePresent
+          && cell.destinationBytes !== null
+          && cell.destinationBytes > 0;
+        return {
+          name,
+          observed: copied,
+          detail: `renaming ${cell.fileBytes}B cost ${cell.storeOps} store operation(s); source `
+            + `${cell.sourcePresent ? 'still present' : 'deleted'}, destination `
+            + `${cell.destinationBytes === null ? 'absent' : `${cell.destinationBytes}B`}`,
+        };
+      }
+      case 'POSIX-gap': {
+        const cell = facts.posixGap;
+        if (cell === undefined) return absentCell(name);
+        return {
+          name,
+          observed: !cell.syncedKeyPresent,
+          detail: `${cell.key} was written and \`sync\`ed with its handle still open and the store `
+            + `${cell.syncedKeyPresent ? 'HOLDS it, so a flush-to-store primitive exists' : 'holds nothing: there is no flush-to-store primitive'}`,
+        };
+      }
+      default:
+        return absentCell(name);
+    }
+  });
+}
+
+/** A cell that produced no facts proves nothing, so its witness is unobserved
+ *  and G2 refuses. Named rather than inlined at eight sites so the reason a
+ *  refusal gives is one sentence rather than eight. */
+function absentCell(name: string): WitnessCheck {
+  return {
+    name,
+    observed: false,
+    detail: 'this witness cell produced no observation, so nothing was witnessed',
+  };
+}
+
+/** Paths the cells read INSIDE the container. Each is the constant its own
+ *  strategy publishes (`CHAIN_UPPER_DIR` and `CHAIN_SEED_STAMP_PATH` in
+ *  `packages/devbox/src`), restated here for the same reason the lifecycle
+ *  checks above restate `/var/tmp/devbox/upper`: this driver reads a deployed
+ *  container over HTTP and imports nothing from the box it measures. */
+const CHAIN_UPPER_DIR = '/var/tmp/devbox/upper';
+const CHAIN_SEED_STAMP = '/var/tmp/devbox/upper.seed-stamp';
+
+/** Entry counts the two scan cells run at, and pending sizes the two replay
+ *  cells leave. Small enough to cost seconds, far enough apart that a cost
+ *  following the layer is unmistakable. */
+const SCAN_CELL_ENTRIES = [200, 2_000] as const;
+const PENDING_CELL_ENTRIES = [50, 500] as const;
+/** A rename big enough that a copy is not free and small enough to be quick. */
+const RENAME_CELL_KIB = 1_024;
+
+/** The holder an r2fs arm leaves running across its recycle, and what the store
+ *  already said about the path it holds. Named because two cells consume it. */
+interface OpenWriteHolder {
+  readonly path: string;
+  readonly wroteBytes: number;
+  /** Whether the store held the object while the writer's handle was open and
+   *  its bytes had been `sync`ed — the `POSIX-gap` observation. */
+  readonly syncedKeyPresent: boolean;
+  readonly key: string;
+  readonly notes: readonly string[];
+}
+
+/**
+ * What an r2fs arm must have in place BEFORE the recycle it is measured across.
+ *
+ * A detached writer holds a handle open over bytes it has written and `sync`ed,
+ * which is the state both r2fs semantic witnesses are about: the store holds
+ * nothing for that path while the handle is open (`POSIX-gap`), and the bytes do
+ * not survive the container that dies holding it (`open-write-loss`). It must be
+ * spawned before the stop, so it is the one cell that cannot wait until the
+ * arm's tally has been read.
+ */
+async function armOpenWriteHolder(
+  fixture: Fixture,
+  box: string,
+): Promise<OpenWriteHolder> {
+  const notes: string[] = [];
+  const path = '/workspace/witness-open-write.bin';
+  const payload = `witness-open-write-${crypto.randomUUID()}`;
+  // ONE detached shell, holding fd 9 open for longer than the arm's remaining
+  // lifetime: `printf` writes, `sync` pushes the kernel's dirty pages into
+  // s3fs, and the handle is never closed. `nohup … &` because `/exec` waits for
+  // the command it runs.
+  await sh(
+    fixture,
+    box,
+    `nohup sh -c 'exec 9>${path}; printf %s ${payload} >&9; sync; sleep 1800' >/dev/null 2>&1 & echo spawned`,
+  );
+  // Long enough for the write and the sync to have happened, short enough that
+  // nothing in the arm waits on it. The claim under test is that neither makes
+  // the bytes durable, so a delay cannot manufacture the observation.
+  await delay(3_000);
+  const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+  const prefix = state.storePrefix ?? '';
+  const key = prefix.length === 0 ? '' : `${prefix}witness-open-write.bin`;
+  let syncedKeyPresent = false;
+  if (key.length === 0) {
+    notes.push('the POSIX-gap cell could not run: /state reported no store prefix for this arm');
+  } else {
+    const head = await call(
+      fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
+    );
+    syncedKeyPresent = head.exists === true && (head.size ?? 0) >= payload.length;
+  }
+  return { path, wroteBytes: payload.length, syncedKeyPresent, key, notes };
+}
+
+/** The pending entries an overlay-cas attach replayed, as the strategy's own
+ *  attach detail publishes them (`overlay-cas folded <cursor> <pending>P`).
+ *  Parsed rather than inferred: the count is the restore receipt's, and a detail
+ *  this driver cannot read is a cell that did not run rather than a zero. */
+function replayedEntries(detail: string): number | null {
+  const matched = /folded \d+ (\d+)P/.exec(detail);
+  return matched === null ? null : Number.parseInt(matched[1]!, 10);
+}
+
+/**
+ * One pending-replay point: write `entries` files, journal them WITHOUT folding,
+ * kill the container, and read what the healing attach replayed.
+ *
+ * A tick journals and does not fold; only a quiesce folds. So a kill after a
+ * tick leaves exactly the state a platform replacement leaves — staged entries,
+ * an unadvanced cursor, no boot marker — and the next commit heals the box,
+ * which is the attach whose replay is being counted.
+ */
+async function pendingReplayPoint(
+  fixture: Fixture,
+  box: string,
+  entries: number,
+): Promise<{ replayed: number | null; detail: string }> {
+  const root = `/workspace/witness-pending-${String(entries)}`;
+  await sh(
+    fixture,
+    box,
+    `mkdir -p ${root} && i=1; while [ $i -le ${String(entries)} ]; do `
+    + `printf %s pending-$i > ${root}/f$i.txt; i=$((i+1)); done; sync`,
+  );
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+  await checkpointOperation(fixture, box, 'tick', `pending cell ${String(entries)} journal`);
+  await call(fixture, 'POST', `/kill?box=${box}`, AckReplySchema, {});
+  // The commit is what heals a replaced container, and healing is what runs the
+  // attach whose replay this cell counts.
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+  await checkpointOperation(fixture, box, 'tick', `pending cell ${String(entries)} heal`);
+  const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+  const detail = state.state?.lastAttach?.detail ?? '';
+  return { replayed: replayedEntries(detail), detail };
+}
+
+/**
+ * One scan point: bring the writable layer to `entries` files, commit them, then
+ * time a tick that changes NOTHING.
+ *
+ * An unchanged tick is the whole cell: overlay-cas decides "unchanged" BY
+ * scanning the upper, so what it costs is the scan and nothing else. The
+ * duration is the fixture's own measurement of that checkpoint.
+ */
+async function upperScanPoint(
+  fixture: Fixture,
+  box: string,
+  entries: number,
+): Promise<{ entries: number; ms: number }> {
+  const root = '/workspace/witness-scan';
+  await sh(
+    fixture,
+    box,
+    `mkdir -p ${root} && i=1; while [ $i -le ${String(entries)} ]; do `
+    + `printf %s scan-$i > ${root}/f$i.txt; i=$((i+1)); done; sync`,
+  );
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+  await checkpointOperation(fixture, box, 'tick', `scan cell ${String(entries)} commit`);
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+  const unchanged = await checkpointOperation(fixture, box, 'tick', `scan cell ${String(entries)} unchanged`);
+  const counted = await sh(fixture, box, 'find /workspace -type f | wc -l');
+  return {
+    entries: Number.parseInt((counted.stdout ?? '0').trim(), 10) || 0,
+    ms: unchanged.ms ?? -1,
+  };
+}
+
+/**
+ * Run this control arm's witness cells and answer what they observed.
+ *
+ * Every cell is bounded and independent: one that throws records its reason and
+ * leaves its own facts absent, which the classifier reads as an unobserved
+ * witness and G2 refuses. A cell is never allowed to take the arm down with it —
+ * the rows this arm already measured are worth more than the cell.
+ */
+async function runControlWitnessCells(
+  fixture: Fixture,
+  box: string,
+  strategy: ControlStrategy,
+  input: {
+    /** The marker file the arm wrote before its stop, relative to the work
+     *  directory, and the holder the pre-stop hook left behind. */
+    readonly markerFile: string;
+    readonly openWrite: OpenWriteHolder | null;
+  },
+): Promise<{ facts: ControlWitnessFacts; notes: string[] }> {
+  const notes: string[] = [...(input.openWrite?.notes ?? [])];
+  const facts: {
+    -readonly [Key in keyof ControlWitnessFacts]: ControlWitnessFacts[Key];
+  } = {};
+  const cell = async (name: string, run: () => Promise<void>): Promise<void> => {
+    try {
+      await run();
+    } catch (error) {
+      notes.push(`the ${name} witness cell did not complete: ${describeThrown({ cause: error }).slice(0, 240)}`);
+    }
+  };
+  const headKey = async (key: string): Promise<HeadReply> =>
+    await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
+
+  if (strategy === 'snapshot-chain') {
+    await cell('cumulative-delta-seed', async () => {
+      const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+      const chainId = state.state?.chain?.base?.id ?? '';
+      if (chainId.length === 0) throw new Error('/state reported no chain generation');
+      const delta = await headKey(`backups/${chainId}/delta.sqsh`);
+      const inUpper = await sh(
+        fixture, box, `test -f ${CHAIN_UPPER_DIR}/${input.markerFile} && echo yes || echo no`,
+      );
+      const stamp = await sh(fixture, box, `cat ${CHAIN_SEED_STAMP} 2>/dev/null || true`);
+      facts.cumulativeDeltaSeed = {
+        deltaBytes: delta.exists === true ? delta.size ?? 0 : 0,
+        markerInUpper: (inUpper.stdout ?? '').trim() === 'yes',
+        seedStamp: (stamp.stdout ?? '').trim(),
+        chainId,
+      };
+    });
+    await cell('mutable-delta', async () => {
+      const before = await deltaAfterOneChange(fixture, box, 'a');
+      const after = await deltaAfterOneChange(fixture, box, 'b');
+      if (before.chainId !== after.chainId) {
+        throw new Error(
+          `the chain rebased between the two heads (${before.chainId} then ${after.chainId}), so the `
+          + 'cell compared two generations rather than one key',
+        );
+      }
+      facts.mutableDelta = {
+        key: after.key,
+        etagBefore: before.etag,
+        etagAfter: after.etag,
+        bytesBefore: before.bytes,
+        bytesAfter: after.bytes,
+      };
+    });
+  }
+
+  if (strategy === 'overlay-cas') {
+    await cell('O(u)-scan', async () => {
+      const small = await upperScanPoint(fixture, box, SCAN_CELL_ENTRIES[0]);
+      const large = await upperScanPoint(fixture, box, SCAN_CELL_ENTRIES[1]);
+      facts.upperScan = {
+        smallEntries: small.entries,
+        smallMs: small.ms,
+        largeEntries: large.entries,
+        largeMs: large.ms,
+      };
+    });
+    await cell('unbounded-pending-replay', async () => {
+      const small = await pendingReplayPoint(fixture, box, PENDING_CELL_ENTRIES[0]);
+      const large = await pendingReplayPoint(fixture, box, PENDING_CELL_ENTRIES[1]);
+      if (small.replayed === null || large.replayed === null) {
+        throw new Error(
+          `the healing attach published no replay count (details: "${small.detail}", "${large.detail}")`,
+        );
+      }
+      facts.unboundedPendingReplay = {
+        smallPending: PENDING_CELL_ENTRIES[0],
+        smallReplayed: small.replayed,
+        largePending: PENDING_CELL_ENTRIES[1],
+        largeReplayed: large.replayed,
+      };
+    });
+  }
+
+  if (strategy === 'r2fs') {
+    await cell('open-write-loss', async () => {
+      const holder = input.openWrite;
+      if (holder === null) throw new Error('no open-write holder was armed before the stop');
+      const read = await sh(fixture, box, `wc -c < ${holder.path} 2>/dev/null || echo MISSING`);
+      const text = (read.stdout ?? '').trim();
+      facts.openWriteLoss = {
+        wroteBytes: holder.wroteBytes,
+        survivedBytes: text === 'MISSING' || text.length === 0 ? null : Number.parseInt(text, 10),
+      };
+    });
+    await cell('POSIX-gap', async () => {
+      const holder = input.openWrite;
+      if (holder === null) throw new Error('no open-write holder was armed before the stop');
+      if (holder.key.length === 0) throw new Error('the arm published no store prefix to head');
+      facts.posixGap = { syncedKeyPresent: holder.syncedKeyPresent, key: holder.key };
+    });
+    await cell('non-atomic-rename', async () => {
+      const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+      const prefix = state.storePrefix ?? '';
+      if (prefix.length === 0) throw new Error('/state reported no store prefix for this arm');
+      const source = 'witness-rename-src.bin';
+      const destination = 'witness-rename-dst.bin';
+      await sh(
+        fixture,
+        box,
+        `dd if=/dev/urandom of=/workspace/${source} bs=1024 count=${String(RENAME_CELL_KIB)} 2>/dev/null && sync`,
+      );
+      // A FLUSHED WINDOW AROUND THE RENAME ALONE. The tally batches in the
+      // proxy isolate, so an unflushed boundary would price the write before it
+      // against the rename.
+      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+      const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+      await sh(fixture, box, `mv /workspace/${source} /workspace/${destination} && sync`);
+      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+      const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+      const sourceHead = await headKey(`${prefix}${source}`);
+      const destinationHead = await headKey(`${prefix}${destination}`);
+      facts.nonAtomicRename = {
+        fileBytes: RENAME_CELL_KIB * 1024,
+        storeOps: (after.total ?? 0) - (before.total ?? 0),
+        sourcePresent: sourceHead.exists === true,
+        destinationBytes: destinationHead.exists === true ? destinationHead.size ?? 0 : null,
+      };
+    });
+  }
+
+  return { facts, notes };
+}
+
+/** One change, one tick, and the delta object's identity afterwards. Two of
+ *  these either side of a change are what the `mutable-delta` cell compares. */
+async function deltaAfterOneChange(
+  fixture: Fixture,
+  box: string,
+  label: string,
+): Promise<{ chainId: string; key: string; etag: string; bytes: number }> {
+  await sh(fixture, box, `printf %s mutable-delta-${label} > /workspace/witness-delta-${label}.txt && sync`);
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+  await checkpointOperation(fixture, box, 'tick', `mutable-delta cell ${label}`);
+  const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+  const chainId = state.state?.chain?.base?.id ?? '';
+  if (chainId.length === 0) throw new Error('/state reported no chain generation');
+  const key = `backups/${chainId}/delta.sqsh`;
+  const head = await call(
+    fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
+  );
+  return { chainId, key, etag: head.etag ?? '', bytes: head.size ?? 0 };
+}
+
+/**
+ * What the store must hold for the generation a chain record names — and what it
+ * must NOT hold.
+ *
+ * MEASURED INSTRUMENT DEFECT THIS REPAIRS. The chain arm's post-wake check asked
+ * for `backups/<generation>/delta.sqsh` whatever the record said, so a record
+ * with no delta failed it. That is not an exotic state: `shouldRebase` collapses
+ * the chain onto a fresh base as soon as the delta outgrows the base, and the
+ * ladder's own 64 MiB rung does exactly that — run 20260831184750 published a
+ * bare base of 71,389,184 bytes as its last commit, which is the whole tree and
+ * not a base plus a delta. The arm then reported a failed verify for holding the
+ * shape its strategy documents, and G1 refused it.
+ *
+ * BOTH DIRECTIONS, because "the object the record names is there" is only half
+ * of the contract. A delta object under a generation whose record names none is
+ * an archive nothing points at: either a publication that lost its record or a
+ * sweep that never ran, and both are findings rather than noise.
+ */
+export interface ChainArchiveExpectation {
+  readonly name: string;
+  readonly key: string;
+  /** Must the store hold this object, or must it not? */
+  readonly present: boolean;
+}
+
+export function chainArchiveExpectations(
+  chainId: string | undefined,
+  recordNamesDelta: boolean,
+): ChainArchiveExpectation[] {
+  if (chainId === undefined || chainId.length === 0) return [];
+  return [
+    {
+      name: 'the base object the record names exists in the store with non-zero size',
+      key: `backups/${chainId}/data.sqsh`,
+      present: true,
+    },
+    recordNamesDelta
+      ? {
+          name: 'the delta object the record names exists in the store with non-zero size',
+          key: `backups/${chainId}/delta.sqsh`,
+          present: true,
+        }
+      : {
+          name: 'the store holds no delta for a generation whose record names none',
+          key: `backups/${chainId}/delta.sqsh`,
+          present: false,
+        },
+  ];
+}
+
 export function isTransientContainerCreateError(error: string | undefined): boolean {
   return /no container instance|container service is unreachable|try again later|ContainerUnavailable|OperationInterrupted/i
     .test(error ?? '');
@@ -2216,7 +2979,7 @@ function unmeasuredArm(strategy: Strategy, box: string, notes: string[]): ArmRes
     checkpoints: [], stopMs: null, wakeMs: null, wakeKind: '',
     phases: [], decisiveTicks: [], quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
     generationBeforeLadder: null, generationAfterLadder: null,
-    treeBytes: {}, ops: null, teardown: null, notes,
+    treeBytes: {}, ops: null, teardown: null, witnessChecks: [], notes,
   };
 }
 
@@ -2225,6 +2988,16 @@ async function measureArm(
   strategy: Strategy,
   options: Options,
   noteLiveBox: (box: string) => void,
+  /** Hand the arm's own row to the caller BEFORE anything is measured into it.
+   *
+   *  MEASURED DEFECT THIS REPAIRS. A refusal at the wake or the warm attach
+   *  threw out of here, and the run loop's catch then replaced the whole arm
+   *  with `unmeasuredArm` — so both 2026-08-31 artifacts carry five arms of
+   *  nulls and one note each, while the cold attach, the checkpoint ladder and
+   *  the workload phases those runs really measured were discarded with the
+   *  exception. The row is a single mutable object filled in as the arm
+   *  proceeds, so a caller holding it keeps every step that completed. */
+  observe: (row: ArmResult) => void = () => {},
 ): Promise<ArmResult> {
   // ONE BOX PER ARM: mountBucket refuses a second mount of one binding at a
   // different prefix or readOnly value, so the arms cannot share an instance.
@@ -2232,6 +3005,7 @@ async function measureArm(
   let box = boxBase;
   const notes: string[] = [];
   const result = unmeasuredArm(strategy, box, notes);
+  observe(result);
   noteLiveBox(box);
   const teardown = async (): Promise<ArmResult> => {
     if (result.teardown === null) {
@@ -2313,9 +3087,7 @@ async function measureArm(
     );
     for (const kind of ['quiesce', 'tick'] as const) {
       if (kind === 'quiesce') result.quiescesBeforeDecisive++;
-      const cp = await retryTransient(`ladder ${kib}KiB ${kind}`, async () =>
-        await call(fixture, 'POST', `/checkpoint?box=${box}`, CheckpointReplySchema, { kind }),
-      );
+      const cp = await checkpointOperation(fixture, box, kind, `ladder ${kib}KiB ${kind}`);
       result.checkpoints.push({
         changeKiB: kib,
         kind,
@@ -2333,12 +3105,23 @@ async function measureArm(
       }
     }
   }
+  // THE ONE CELL THAT CANNOT WAIT. `open-write-loss` and `POSIX-gap` are both
+  // about a handle held open across a container's death, so the holder has to
+  // exist before the stop that kills it. Everything else this arm witnesses
+  // runs after its operation tally is read — see `runControlWitnessCells`.
+  let openWrite: OpenWriteHolder | null = null;
+  if (strategy === 'r2fs') {
+    try {
+      openWrite = await armOpenWriteHolder(fixture, box);
+    } catch (error) {
+      notes.push(`the r2fs open-write holder was not armed: ${describeThrown({ cause: error }).slice(0, 240)}`);
+    }
+  }
+
   // The normal recycle follows the normal ladder. Each request is independently
   // retryable if a replacement interrupts it; nothing reruns the whole proof.
   log(`${strategy}: stop then wake`);
-  const stopped = await retryTransient('stop', async () =>
-    await call(fixture, 'POST', `/stop?box=${box}`, StopReplySchema, {}),
-  );
+  const stopped = await stopOperation(fixture, box, 'stop');
   result.stopMs = stopped.ms ?? null;
   const woke = await startup('/wake', 'wake', ['attached']);
   result.wakeMs = woke.ms;
@@ -2383,6 +3166,24 @@ async function measureArm(
       name,
       found.exists === true && (found.size ?? 0) > 0,
       found.error ?? `${key} -> ${found.exists === true ? `${found.size ?? 0}B` : 'missing'}`,
+    );
+  };
+
+  /** One expectation about the store, in whichever direction the record set. */
+  const archive = async (expectation: ChainArchiveExpectation): Promise<void> => {
+    if (expectation.present) {
+      await head(expectation.name, expectation.key);
+      return;
+    }
+    const found = await retryTransient(`${expectation.name} head`, async () =>
+      await call(
+        fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(expectation.key)}`, HeadReplySchema,
+      ),
+    );
+    verify(
+      expectation.name,
+      found.exists !== true,
+      `${expectation.key} -> ${found.exists === true ? `${found.size ?? 0}B, which the record does not name` : 'absent'}`,
     );
   };
 
@@ -2442,11 +3243,21 @@ async function measureArm(
     );
     await writableLayer('/var/tmp/devbox/upper');
     await lowerLayer('the base layer is present and mounted at its lower path', '/var/tmp/devbox/lower-base');
-    const chainId = afterWake.state?.chain?.base?.id;
-    await head(
-      'the delta object exists in the store with non-zero size',
-      chainId === undefined ? undefined : `backups/${chainId}/delta.sqsh`,
+    // WHAT THE RECORD NAMES, IN BOTH DIRECTIONS. This asked for `delta.sqsh`
+    // unconditionally, and a chain that has just collapsed onto a fresh base
+    // names no delta and has no such object — so the arm failed its own verify
+    // for holding exactly the shape its strategy documents. `shouldRebase`
+    // makes that the ORDINARY end of a ladder whose delta outgrows its base,
+    // and it is what the last quiesce of run 20260831184750 published.
+    const chain = afterWake.state?.chain;
+    const expectations = chainArchiveExpectations(
+      chain?.base?.id,
+      chain?.delta !== undefined && chain?.delta !== null,
     );
+    if (expectations.length === 0) {
+      verify('the record names a generation to check the store against', false, '(no chain generation recorded)');
+    }
+    for (const expectation of expectations) await archive(expectation);
   } else {
     // The chain in EXTRACTION mode, which is the only arm this branch can now
     // hold: r2fs, overlay-cas and both candidates are dispatched above.
@@ -2524,6 +3335,26 @@ async function measureArm(
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
 
+  // THE WITNESS CELLS, after the tally and before the teardown.
+  //
+  // A control arm is here to prove the instrument can still SEE the defects its
+  // strategy is known to have; G2 refuses a run whose control produced none of
+  // them. The cells write their own files and take their own checkpoints, so
+  // they run past the priced window on purpose: an arm billed for its witness
+  // cells would report a cost the comparison is not about.
+  if (strategy === 'snapshot-chain' || strategy === 'r2fs' || strategy === 'overlay-cas') {
+    log(`${strategy}: witness cells`);
+    const witnessed = await runControlWitnessCells(fixture, box, strategy, { markerFile, openWrite });
+    result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts);
+    notes.push(...witnessed.notes);
+    const unobserved = result.witnessChecks.filter((witness) => !witness.observed);
+    if (unobserved.length > 0) {
+      notes.push(
+        `WITNESS DRIFT: ${unobserved.map((witness) => `${witness.name} (${witness.detail})`).join('; ')}`,
+      );
+    }
+  }
+
   // Everything below is CLEANUP, and a cleanup failure is not a measurement
   // failure. The 2026-08-29 02:42 run lost a fully measured `bounded-layers`
   // arm and never started `merkle-pack` because the release below timed out and
@@ -2555,12 +3386,75 @@ async function measureArm(
   // fails therefore costs the NEXT arm its instance, which that arm reports as
   // its own create refusal — a localized, named failure instead of a dead run.
   await cleanupStep('box release', async () => {
-    const released = await call(fixture, 'POST', `/stop?box=${box}`, StopReplySchema, {});
+    const released = await stopOperation(fixture, box, 'box release');
     if (released.ok !== true) {
       notes.push(`the box was not released after the arm: ${released.error ?? 'stop did not confirm'}`);
     }
   });
   return result;
+}
+
+/** How long a release is given after an arm already failed. Short on purpose:
+ *  the box is being handed back so the NEXT arm can have an instance, and a
+ *  stop that cannot settle must not spend the run's remaining time proving it. */
+const FAILED_ARM_RELEASE_DEADLINE_MS = 120_000;
+
+/**
+ * A failed arm keeps every row it measured, and ranks nothing.
+ *
+ * The refusal is written down TWICE, in the two places that read for different
+ * reasons: a note, which the report prints under "What did not hold", and a
+ * failed verify row, which is what `verifyPassed` — and therefore ranking,
+ * `armCompletedTheCell` and G1 — is derived from. Setting the flag without the
+ * row would leave a reader with a false arm and no failing check to point at.
+ */
+export function refuseFailedArm(arm: ArmResult, reason: string): ArmResult {
+  arm.notes.push(reason);
+  arm.verifyChecks.push({ name: 'the arm completed every measured step', pass: false, detail: reason });
+  arm.verifyPassed = false;
+  return arm;
+}
+
+/**
+ * Measure one arm, and keep what it measured when it fails.
+ *
+ * TWO THINGS A MID-MEASUREMENT FAILURE USED TO COST, and this is where both are
+ * paid back. The rows: the run loop replaced the arm with `unmeasuredArm`, so
+ * every measured number was nulled and one note survived — the shape of every
+ * arm in both 2026-08-31 artifacts. The instance: nothing released the box, so
+ * the failed arm kept the class's only container instance and the NEXT arm's
+ * create refused with `Maximum number of instances`, which is how one arm's
+ * death took the arms behind it.
+ */
+export async function runArm(
+  fixture: Fixture,
+  strategy: Strategy,
+  options: Options,
+  noteLiveBox: (box: string) => void,
+): Promise<ArmResult> {
+  let partial: ArmResult | null = null;
+  try {
+    return await measureArm(fixture, strategy, options, noteLiveBox, (row) => { partial = row; });
+  } catch (error) {
+    const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
+    log(`${strategy}: ${reason}`);
+    const measured = partial ?? unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, []);
+    try {
+      const released = await stopOperation(fixture, measured.box, 'release after failure', {
+        deadlineMs: FAILED_ARM_RELEASE_DEADLINE_MS,
+      });
+      if (released.ok !== true) {
+        measured.notes.push(
+          `the failed arm's box was not released: ${released.error ?? 'stop did not confirm'}`,
+        );
+      }
+    } catch (releaseError) {
+      measured.notes.push(
+        `the failed arm's box could not be released: ${describeThrown({ cause: releaseError })}`,
+      );
+    }
+    return refuseFailedArm(measured, reason);
+  }
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
@@ -3022,25 +3916,19 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
     + wakeNote;
 }
 
-/**
- * The three shipped strategies are MANDATORY HISTORICAL CONTROLS, never
- * production winners, so each preregisters the red witnesses its known defects
- * must produce once the scaling/semantic cells exist. Observed witnesses may
- * only come from those explicit cells — never from source assertions — and
- * until they run, `observedRedChecks` stays empty and admission refuses.
- */
-const CONTROL_WITNESSES = {
-  'snapshot-chain': ['cumulative-delta-seed', 'mutable-delta'],
-  'overlay-cas': ['unbounded-pending-replay', 'O(u)-scan'],
-  r2fs: ['open-write-loss', 'non-atomic-rename', 'POSIX-gap'],
-  'bounded-layers': [],
-  'merkle-pack': [],
-} as const satisfies Record<Strategy, readonly string[]>;
-
 /** The admission evidence one devbox arm contributes. Exported so the gate's
- *  red tests can prove a current-only run cannot recommend without a deploy. */
+ *  red tests can prove a current-only run cannot recommend without a deploy.
+ *
+ *  The witnesses are preregistered in `CONTROL_WITNESSES` and OBSERVED by the
+ *  cells `runControlWitnessCells` runs; this only carries what those cells saw.
+ *  A witness the cells did not observe is absent here, and G2 refuses the run —
+ *  which is the correct answer both when a cell could not run and when the
+ *  defect it exists to catch has silently gone away. */
 export function devboxArmEvidence(
-  arm: Pick<ArmResult, 'strategy' | 'verifyPassed' | 'verifyChecks' | 'phases' | 'checkpoints' | 'decisiveTicks'>,
+  arm: Pick<
+    ArmResult,
+    'strategy' | 'verifyPassed' | 'verifyChecks' | 'phases' | 'checkpoints' | 'decisiveTicks' | 'witnessChecks'
+  >,
 ): ArmEvidence {
   const candidate = arm.strategy === 'bounded-layers' || arm.strategy === 'merkle-pack';
   return {
@@ -3048,7 +3936,11 @@ export function devboxArmEvidence(
     kind: candidate ? 'candidate' : 'control',
     rankEligible: candidate,
     expectedRedChecks: [...CONTROL_WITNESSES[arm.strategy]],
-    observedRedChecks: [],
+    // OBSERVED, not asserted: every name here comes from a cell that RAN
+    // against the deployed arm and saw the defect. A witness the cells could
+    // not observe is missing from this list on purpose, and `witnessProblems`
+    // refuses the run for it.
+    observedRedChecks: arm.witnessChecks.filter((witness) => witness.observed).map((witness) => witness.name),
     attachedVerified: arm.verifyPassed,
     semanticsPassed: arm.verifyPassed,
     failedChecks: arm.verifyChecks.filter((check) => !check.pass).map((check) => check.name),
@@ -3784,17 +4676,10 @@ async function main(): Promise<number> {
       // Per arm, so one arm's death costs only that arm. A single `await` for
       // the whole loop meant an exception anywhere took the arms measured after
       // it as well as the one that threw, and the run reported a bare
-      // `TimeoutError` for all of them. An arm that dies is recorded with its
-      // reason and refused by admission on its own merits; the arms behind it
-      // still get measured.
-      let arm: ArmResult;
-      try {
-        arm = await measureArm(started.fixture, strategy, options, (box) => liveArmBoxes.add(box));
-      } catch (error) {
-        const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
-        log(`${strategy}: ${reason}`);
-        arm = unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, [reason]);
-      }
+      // `TimeoutError` for all of them. `runArm` owns the failure: it keeps the
+      // rows the arm did measure, releases its container instance so the next
+      // arm can have one, and refuses the arm on its own merits.
+      const arm = await runArm(started.fixture, strategy, options, (box) => liveArmBoxes.add(box));
       arms.push(arm);
       for (const [name, count] of Object.entries(arm.ops?.calls ?? {})) {
         teardownManifest.counters[name] = (teardownManifest.counters[name] ?? 0) + count;

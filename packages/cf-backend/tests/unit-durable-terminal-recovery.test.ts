@@ -29,7 +29,6 @@ import type { FiberRecoveryContext } from 'agents';
 import {
   sweepUnrecoverableFibers,
   FIBER_RECOVERY_MAX_AGE_MS,
-  FIBER_SWEEP_MAX_ROWS,
   TERMINAL_LANE_FIBER,
   type FiberMetaRow,
   type FiberRowStore,
@@ -586,7 +585,11 @@ function scriptedFibers(
 }
 
 describe('the interrupted-fiber sweep spends the budget before the memory', () => {
-  const NOW = 1_700_000_000_000;
+  /** Mirrors the sweep's private 4096-row budget; drift fails these tests,
+ *  which is the point. */
+const FIBER_SWEEP_BUDGET = 4096;
+
+const NOW = 1_700_000_000_000;
   const overAge = (ms: number) => NOW - FIBER_RECOVERY_MAX_AGE_MS - ms;
   const inBudget = (ms: number) => NOW - ms;
 
@@ -683,7 +686,7 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
   });
 
   test('the row budget stops the pass and says so, leaving the rest for the next wake', () => {
-    const rows = Array.from({ length: FIBER_SWEEP_MAX_ROWS + 200 }, (_unused, index) => ({
+    const rows = Array.from({ length: FIBER_SWEEP_BUDGET + 200 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
     const scene = scriptedFibers(rows);
@@ -693,7 +696,7 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     // An inherent bound on the work itself — rows scanned — never a stopwatch:
     // the pass stops at the budget and says so rather than keep going.
     expect(result.truncated).toBe(true);
-    expect(result.scanned).toBe(FIBER_SWEEP_MAX_ROWS);
+    expect(result.scanned).toBe(FIBER_SWEEP_BUDGET);
     expect(result.dropped).toBeGreaterThan(0);
     expect(result.dropped).toBeLessThan(rows.length);
     // What it did not reach is still there for the next activation.
@@ -705,7 +708,7 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     // and none is needed: rowid order tracks insertion, so an expired row
     // cannot sit BEHIND a fresh one, and the rows a wake drops are exactly the
     // prefix the next wake no longer scans.
-    const rows = Array.from({ length: FIBER_SWEEP_MAX_ROWS + 300 }, (_unused, index) => ({
+    const rows = Array.from({ length: FIBER_SWEEP_BUDGET + 300 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
     const scene = scriptedFibers(rows);
@@ -725,10 +728,10 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     // row above the whole budget. The cutoff sits in the query, so the wall is
     // never scanned and the expired row is page one.
     const rows = [
-      ...Array.from({ length: FIBER_SWEEP_MAX_ROWS + 10 }, (_unused, index) => ({
+      ...Array.from({ length: FIBER_SWEEP_BUDGET + 10 }, (_unused, index) => ({
         rowid: index + 1, id: `fresh-${index}`, created_at: inBudget(index + 1),
       })),
-      { rowid: FIBER_SWEEP_MAX_ROWS + 11, id: 'expired-behind-the-wall', created_at: overAge(1) },
+      { rowid: FIBER_SWEEP_BUDGET + 11, id: 'expired-behind-the-wall', created_at: overAge(1) },
     ];
     const scene = scriptedFibers(rows);
 
@@ -736,7 +739,7 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
 
     expect(result).toEqual({ dropped: 1, scanned: 1, truncated: false });
     expect(scene.survivors()).not.toContain('expired-behind-the-wall');
-    expect(scene.survivors()).toHaveLength(FIBER_SWEEP_MAX_ROWS + 10);
+    expect(scene.survivors()).toHaveLength(FIBER_SWEEP_BUDGET + 10);
   });
 
   test('the PATCHED framework scan carries the same row budget, never a stopwatch', () => {

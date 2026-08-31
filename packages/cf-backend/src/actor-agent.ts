@@ -6322,6 +6322,10 @@ export abstract class ActorAgent extends Think<Env> {
    * still a workspace that must activate.
    */
   protected sweepUnrecoverableFiberRows(): boolean {
+    // A failed pass is UNFINISHED work, not a clean tree: it answers truncated
+    // so the caller arms the wake and the next tick retries the same bounded
+    // sweep — the value a caller can tell apart from "swept and found nothing".
+    let truncated = true;
     try {
       const result = sweepUnrecoverableFibers(fiberRowStore(this.boundSql), Date.now());
       if (result.dropped > 0 || result.truncated) {
@@ -6331,15 +6335,15 @@ export abstract class ActorAgent extends Think<Env> {
           truncated: result.truncated,
         });
       }
-      return result.truncated;
+      truncated = result.truncated;
     } catch (err) {
       diagnostics.failure('fiber.unrecoverable_sweep_failed', toKinuError({
         doing: 'dropping the interrupted-fiber rows the recovery budget refused',
         cause: err,
         otherwise: 'io',
       }), { workspace: this.name });
-      return false;
     }
+    return truncated;
   }
 
   /** The asynchronous half of maintenance — recovery work that may queue turns

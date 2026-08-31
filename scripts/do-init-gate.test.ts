@@ -606,16 +606,16 @@ describe('DO init-gate purity, against the real tree', () => {
     // The defect this rule exists for, restored against the real file. The block
     // was deleted from `onStart` and its work now runs from the workspace-open
     // @callable; put it back and the gate must refuse it — while the
-    // fork-journal reconcile spawned immediately above it stays legal, which is
+    // delivery reconcile spawned immediately above it stays legal, which is
     // the discrimination the whole rule rests on.
     const file = 'packages/cf-backend/src/orchestrator.ts';
     const real = SOURCES.get(file);
     expect(real).toBeDefined();
 
-    const tail = '        this._backgroundTasks.delete(forkJournalReconcileTask);\n'
-      + '      }\n    })();\n  }\n';
+    const tail = '        this._backgroundTasks.delete(eventDeliveryReconcileTask);\n'
+      + '      }\n    })();\n';
     expect(real).toContain(tail);
-    const respawned = real!.replace(tail, `${tail.slice(0, -4)}    if (this.getOwnerUserId()) {
+    const respawned = real!.replace(tail, `${tail}    if (this.getOwnerUserId()) {
       const autoTitleTask: AsyncTaskOwner = { promise: null };
       this._backgroundTasks.add(autoTitleTask);
       autoTitleTask.promise = (async () => {
@@ -624,7 +624,6 @@ describe('DO init-gate purity, against the real tree', () => {
         await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
       })();
     }
-  }
 `);
     expect(respawned).not.toBe(real);
     const { violations } = auditFile(file, respawned);

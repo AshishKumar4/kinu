@@ -359,15 +359,26 @@ export class FakeSandbox {
     return new Response();
   }
 
-  /** The SDK runs the class's own start hook as part of starting a container. */
+  /** The SDK runs the class's own start hook as part of starting a container.
+   *
+   *  ASKING A RUNNING CONTAINER TO START IS A HEALTH PROBE, not a second
+   *  instance: the SDK returns once the container is up and its port answers, so
+   *  a caller that always asks — which is how a restoration proves the instance
+   *  it is about to run commands on — must not read as a container start. The
+   *  ask is still recorded in `startWaitOptions`, and an injected fault still
+   *  fires, because "the probe was made" and "the probe failed" are both facts a
+   *  test needs. */
   async start(...args: unknown[]): Promise<void> {
     this.startWaitOptions.push(args[1]);
     const beforeRunning = this.startFaultBeforeRunning;
     this.startFaultBeforeRunning = undefined;
     if (beforeRunning !== undefined) throw beforeRunning;
+    const wasRunning = this.running.running;
     this.running.running = true;
-    this.containerStarts += 1;
-    await this.onStart();
+    if (!wasRunning) {
+      this.containerStarts += 1;
+      await this.onStart();
+    }
     const fault = this.startFaultAfterRunning;
     this.startFaultAfterRunning = undefined;
     if (fault !== undefined) throw fault;

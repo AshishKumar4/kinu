@@ -1,6 +1,9 @@
 // How many rows of a wrapped draft the composer shows, and where it stops.
 import { describe, expect, test } from 'bun:test';
-import { COMPOSER_MAX_ROWS, composerVisibleRows } from '@kinu.run/core';
+import { composerVisibleRows } from '@kinu.run/core';
+
+/** Mirrors the private eight-row cap; drift fails these tests, which is the point. */
+const COMPOSER_MAX_ROWS = 8;
 
 describe('composer rows', () => {
   test('an empty draft still owns a row for its placeholder', () => {

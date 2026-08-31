@@ -871,35 +871,66 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * resetting the object.
    */
   async devboxStartup(): Promise<void> {
-    if (this.ctx.container?.running !== true) {
-      // The schedule callback owns admission. Starting from a caller let the
-      // caller cross the readiness gate before the callback attached storage.
-      this.#invalidateGeneration();
-      let admissionRefusal: string | null = null;
-      try {
-        await this.start(undefined, {
-          portToCheck: this.defaultPort,
-          retries: 1,
-          waitInterval: 100,
-          signal: AbortSignal.timeout(this.policy.portWaitMs),
-        });
-      } catch (error) {
-        // Capacity and a container that did not become healthy are both
-        // admission failures, not failed attachments. Leave the next scheduled
-        // attempt to ask the platform again; no recovery ladder applies to an
-        // identity that was never admitted.
-        const failure = classifyRecovery({ cause: error });
-        admissionRefusal = `[${failure} → retry] ${describe({ cause: error })}`;
-        await this.#record('attach', admissionRefusal);
-        await this.#arm(STARTUP_CALLBACK, this.policy.heartbeatSeconds);
-      }
-      // THE ADMITTED-NOTHING EXIT, keyed on the named outcome the catch
-      // classified: the container was never admitted, so there is no
-      // restoration to report and no ladder to climb — the incident record and
-      // the successor row are the whole answer, and every later caller
-      // re-enters through `ensureReady()` → this callback.
-      if (admissionRefusal !== null) return;
+    // ADMISSION IS OBSERVED, NEVER ASSUMED, and it is asked on every attempt.
+    //
+    // MEASURED DEFECT THIS REPAIRS. The question used to be skipped whenever
+    // `ctx.container.running` was true, and that flag says the platform holds an
+    // instance — not that anything inside it answers. So the sequence a cold
+    // start really produces was: attempt one asks the platform, gives up when
+    // the port has not answered inside `portWaitMs`, and records an admission
+    // refusal; the platform brings the container up regardless; attempt two sees
+    // `running` and goes straight to the attach — against a container whose RPC
+    // server may still be starting. Every exec the attach then makes retries
+    // inside the SDK for up to two minutes apiece, which is how a restoration
+    // consumed a 300 s container-start budget and reported nothing but the
+    // overrun. Measured on the deployed benchmark, run 20260831184750.
+    //
+    // `start` IS the observation: it asks the platform for the instance and
+    // proves the default port answers before returning, and it is idempotent on
+    // a container already running — so asking again costs one health probe and
+    // buys the guarantee that nothing below runs commands on a container that
+    // has never answered one.
+    //
+    // ONLY A CONTAINER THAT WAS DOWN TURNS THE GENERATION OVER. A probe against
+    // a running container observes the instance an in-flight attempt is already
+    // restoring, so invalidating here would supersede that attempt and the
+    // caller meant to JOIN it would open a second restoration against the same
+    // container instead.
+    if (this.ctx.container?.running !== true) this.#invalidateGeneration();
+    let admissionRefusal: string | null = null;
+    try {
+      await this.start(undefined, {
+        portToCheck: this.defaultPort,
+        retries: 1,
+        waitInterval: 100,
+        // The PORT policy bounds the port probe, which is the question it is
+        // named for. It is not the container's admission deadline: a container
+        // still coming up has not failed, so the answer to a probe that did not
+        // land in that window is another probe, not a longer one.
+        signal: AbortSignal.timeout(this.policy.portWaitMs),
+      });
+    } catch (error) {
+      // Capacity and a container that has not answered yet are both admission
+      // outcomes, not failed attachments. No recovery ladder applies to an
+      // identity that was never admitted.
+      const failure = classifyRecovery({ cause: error });
+      admissionRefusal = `[${failure} → retry] ${describe({ cause: error })}`;
+      await this.#record('attach', admissionRefusal);
+      // ASK AGAIN ON THE STARTUP CADENCE, not the heartbeat's. The re-arm used
+      // to be `heartbeatSeconds`, so a container that needed a few more seconds
+      // than one port probe allows was left unattached for a full heartbeat —
+      // the dominant term in a 44,189 ms cold attach whose container was up
+      // within seconds. This is the same row `kickStartup` arms, so the retry
+      // rides machinery that already exists, and it cannot spin: each attempt
+      // spends its own port probe before it can fail again.
+      await this.#arm(STARTUP_CALLBACK, 1);
     }
+    // THE ADMITTED-NOTHING EXIT, keyed on the named outcome the catch
+    // classified: the container was never admitted, so there is no restoration
+    // to report and no ladder to climb — the incident record and the successor
+    // row are the whole answer, and every later caller re-enters through
+    // `ensureReady()` → this callback.
+    if (admissionRefusal !== null) return;
     const generation = this.#generation;
     if (this.#restoration.phase === 'attached') return;
     // Only candidates can prove and repair their live mount graph. Every other
@@ -2817,15 +2848,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
       exec: async (command) => await this.#rawExec(command),
       containerGeneration: async () => await this.#readBootId(),
-      waitForPath: async (path, generation) => {
-        for (;;) {
-          if (await this.#pathExists(path)) return 'ready';
-          if (generation !== undefined && await this.#readBootId() !== generation) {
-            return 'replaced';
-          }
-          await scheduler.wait(100);
-        }
-      },
       mountStore: async (chainId) => {
         await this.mountBucket(store.binding, CHAIN_STORE_MOUNT, {
           prefix: `/backups/${assertChainId(chainId)}`,

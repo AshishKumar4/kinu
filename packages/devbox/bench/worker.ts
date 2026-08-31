@@ -29,6 +29,14 @@
  * result of 0 of 24 files intact across a restart against 24 of 24 on R2. The
  * container keeps nothing, and a wake is only measurable on a deployed Worker.
  *
+ * THE TWO MINUTE-SCALE ROUTES ARE ASYNCHRONOUS. `POST /checkpoint` and
+ * `POST /stop` arm a durable one-shot, answer 202 with a token, and publish
+ * their outcome into this object's storage for `GET /operation?token=` to read.
+ * A request that stayed open for the operation put a 180 s client deadline in
+ * front of a publication with no bound, and the retry that followed ran a
+ * SECOND publication over a box already saturated. `armBenchOperation` records
+ * the deployed runs that proved it.
+ *
  * SECURITY. Every route execs commands inside a container, so an absent token
  * refuses everything and the comparison is constant-time. A fixture that
  * outlives its run is inert rather than an open exec endpoint.
@@ -48,6 +56,7 @@ import {
   describeThrown,
   parseDevboxStrategyName,
   type CheckpointKind,
+  type CheckpointOutcome,
   type DevboxPolicy,
   type DevboxStore,
   type DevboxStrategyName,
@@ -320,6 +329,56 @@ class CountingContainerProxy extends ContainerProxy {
 
 export { CountingContainerProxy as ContainerProxy };
 
+// ── the async operation protocol ────────────────────────────────────────────
+//
+// Two operations in this fixture are minute-scale and neither fits inside one
+// HTTP request: a checkpoint that publishes a generation, and a stop that takes
+// a final checkpoint before it releases the container. Both are armed as a
+// durable one-shot and answered by a token the driver polls. See
+// `BenchBox.armBenchOperation` for the deployed failure that made this the only
+// shape available.
+
+type BenchOperation = 'checkpoint' | 'stop';
+
+/** One armed operation, its terminal state, and what it did. `state` is the
+ *  whole protocol: `pending` means a schedule row owns it, and both settled
+ *  states are final — nothing re-enters a settled row. */
+interface BenchOperationRow {
+  readonly token: string;
+  /** The driver's own id for this operation, which is what makes arming
+   *  idempotent under a re-posted request. */
+  readonly op: string;
+  readonly operation: BenchOperation;
+  readonly kind: CheckpointKind;
+  readonly state: 'pending' | 'done' | 'failed';
+  readonly armedAt: number;
+  /** When the scheduled callback picked it up, absent until then. */
+  readonly startedAt?: number;
+  /** How long the operation itself took, measured inside the callback rather
+   *  than across the driver's polling, so a poll cadence cannot inflate a
+   *  measured checkpoint. */
+  readonly ms?: number;
+  readonly outcome?: CheckpointOutcome;
+  readonly error?: string;
+}
+
+const OPERATION_PREFIX = 'bench:operation:';
+const OPERATION_ID_PREFIX = 'bench:operation-id:';
+
+/** One second, matching the startup row: the delay exists so the request can
+ *  return, not to defer the work. */
+const OPERATION_DELAY_SECONDS = 1;
+
+/** The two key spellings, in one place each: four call sites read or write
+ *  these rows, and a key spelled twice is a row nobody can find. */
+const operationKey = (token: string): string => `${OPERATION_PREFIX}${token}`;
+const operationIdKey = (op: string): string => `${OPERATION_ID_PREFIX}${op}`;
+
+/** What an armed schedule row carries to its callback: the token naming the
+ *  outcome row to settle, and nothing else. */
+const OperationPayloadSchema = v.object({ token: v.string() });
+type BenchOperationPayload = v.InferOutput<typeof OperationPayloadSchema>;
+
 // ── the two boxes ───────────────────────────────────────────────────────────
 //
 // Two Durable Object classes rather than one with a runtime switch, because a
@@ -399,6 +458,136 @@ class BenchBox extends Devbox<BenchEnv> {
    * deleting that state and must free the class's only instance first. */
   async stopForTeardown(): Promise<void> {
     await this.stop('SIGTERM');
+    while (this.ctx.container?.running === true) await scheduler.wait(100);
+  }
+
+  /**
+   * Arm one durable one-shot for a minute-scale operation, and answer its token.
+   *
+   * WHY THE HTTP REQUEST MUST NOT BE THE OPERATION'S CLOCK. A candidate barrier
+   * publishes a whole generation through the journal daemon and the store mount,
+   * and the driver's own per-attempt deadline is 180 s. Both deployed decisive
+   * runs (20260831031426 and 20260831143544) lost `bounded-layers` and
+   * `merkle-pack` to that ceiling: the request timed out, the driver re-posted a
+   * checkpoint the fixture was still running, the checkpoint lane serialised the
+   * two, and the retry then ran a SECOND full publication against a box already
+   * saturated — which is what produced the container 502s in the same artifacts.
+   * Raising the deadline only moves the wall to the next tree size.
+   *
+   * So the request arms a schedule row — the same seam the startup and heartbeat
+   * rows already use, durable across eviction and holding no request open — and
+   * the outcome lands in this object's storage where a poll can read it.
+   *
+   * IDEMPOTENT BY THE CALLER'S OWN ID. `op` is the driver's name for ONE
+   * semantic operation, so a re-post after transport loss resolves to the token
+   * already armed instead of arming a second publication. That is the structural
+   * half of the repair: arming is the only thing a post does, and a second arm
+   * for the same `op` does not exist.
+   */
+  async armBenchOperation(request: {
+    readonly op: string;
+    readonly operation: BenchOperation;
+    readonly kind: CheckpointKind;
+  }): Promise<BenchOperationRow> {
+    const armed = await this.ctx.storage.get<string>(operationIdKey(request.op));
+    if (armed !== undefined) {
+      const existing = await this.ctx.storage.get<BenchOperationRow>(operationKey(armed));
+      if (existing !== undefined) return existing;
+    }
+    const token = `${request.operation}-${crypto.randomUUID()}`;
+    const row: BenchOperationRow = {
+      token,
+      op: request.op,
+      operation: request.operation,
+      kind: request.kind,
+      state: 'pending',
+      armedAt: Date.now(),
+    };
+    await this.ctx.storage.put(operationKey(token), row);
+    await this.ctx.storage.put(operationIdKey(request.op), token);
+    await this.schedule(
+      OPERATION_DELAY_SECONDS,
+      request.operation === 'checkpoint' ? 'benchCheckpointOperation' : 'benchStopOperation',
+      { token },
+    );
+    return row;
+  }
+
+  /** The outcome row a poll reads. Durable, so the answer survives the eviction
+   *  a minute-scale operation makes likely rather than exotic. */
+  async readBenchOperation(token: string): Promise<BenchOperationRow | undefined> {
+    return await this.ctx.storage.get<BenchOperationRow>(operationKey(token));
+  }
+
+  /** Public because `Container.schedule` calls back by name. The payload is the
+   *  one this class wrote when it armed the row; the alarm loop round-trips it
+   *  through JSON, and `#runBenchOperation` re-parses it for that reason. */
+  async benchCheckpointOperation(payload: BenchOperationPayload): Promise<void> {
+    await this.#runBenchOperation(payload, async (row) => await this.checkpointNow(row.kind));
+  }
+
+  async benchStopOperation(payload: BenchOperationPayload): Promise<void> {
+    await this.#runBenchOperation(payload, async () => await this.quiesce());
+  }
+
+  /**
+   * Run one armed operation and persist what it did, whatever it does.
+   *
+   * A THROW IS AN OUTCOME HERE. The alarm loop reduces a thrown scheduled
+   * callback to a console line, so a failure travelling as an exception would
+   * leave the row `pending` forever and the driver polling to its deadline with
+   * no reason to report. Both settled states are terminal, and the driver's own
+   * retry — a NEW `op`, posted after it read a failure — is the only thing that
+   * publishes again.
+   *
+   * ONE-SHOT AGAINST REDELIVERY: the alarm loop deletes a row only after its
+   * callback returns, so an eviction mid-publication re-delivers it. A row that
+   * has already settled is left alone; a row still `pending` is re-run, which is
+   * the same at-least-once contract every other schedule row in this class has.
+   */
+  async #runBenchOperation(
+    payload: BenchOperationPayload,
+    run: (row: BenchOperationRow) => Promise<CheckpointOutcome>,
+  ): Promise<void> {
+    const parsed = v.safeParse(OperationPayloadSchema, payload);
+    if (!parsed.success) {
+      console.error('[bench] a scheduled operation carried no token and was dropped');
+      return;
+    }
+    const key = operationKey(parsed.output.token);
+    const row = await this.ctx.storage.get<BenchOperationRow>(key);
+    if (row === undefined || row.state !== 'pending') return;
+    const startedAt = Date.now();
+    await this.ctx.storage.put(key, { ...row, startedAt });
+    try {
+      const outcome = await run(row);
+      await this.ctx.storage.put(key, {
+        ...row, startedAt, state: 'done', ms: Date.now() - startedAt, outcome,
+      });
+    } catch (error) {
+      await this.ctx.storage.put(key, {
+        ...row,
+        startedAt,
+        state: 'failed',
+        ms: Date.now() - startedAt,
+        error: describeThrown({ cause: error }),
+      });
+    }
+  }
+
+  /**
+   * Stop the container WITHOUT a final checkpoint, the way a platform
+   * replacement does.
+   *
+   * The witness instrument for a recovery replay, and the only way to reach it
+   * from outside: `quiesce` folds the journal, so after an ordinary stop nothing
+   * is pending for an attach to replay and the recovery path this box's restore
+   * claim is about never runs. A container the platform replaced left exactly
+   * this state — staged journal entries, no fold, no boot marker — and the next
+   * commit heals it, which is what makes the replay observable.
+   */
+  async killWithoutQuiesce(): Promise<void> {
+    await this.stop('SIGKILL');
     while (this.ctx.container?.running === true) await scheduler.wait(100);
   }
 
@@ -807,6 +996,9 @@ const DriverBodySchema = v.object({
   path: v.optional(v.string()),
   content: v.optional(v.string()),
   kind: v.optional(v.picklist(['tick', 'quiesce'])),
+  /** The driver's own id for one semantic operation, which is what makes
+   *  arming a checkpoint or a stop idempotent under a re-posted request. */
+  op: v.optional(v.string()),
   purge: v.optional(v.boolean()),
   prefix: v.optional(v.string()),
   whole: v.optional(v.boolean()),
@@ -879,6 +1071,12 @@ export default {
             key,
             exists: object !== null,
             size: object?.size ?? 0,
+            // THE STORE'S OWN NAME FOR THESE BYTES. A witness cell asks whether
+            // one KEY holds different bytes than it did before, and a size
+            // cannot answer that: two archives of the same length are the same
+            // size and different objects. The etag changes when the object is
+            // replaced, which is exactly the fact `mutable-delta` turns on.
+            etag: object?.etag ?? '',
             ms: Date.now() - started,
           }, object === null ? 404 : 200);
         }
@@ -911,18 +1109,61 @@ export default {
           return json({ ok: true, path, bytes: content.length, ms: Date.now() - started });
         }
 
+        // BOTH MINUTE-SCALE ROUTES ARM AND ANSWER 202. The operation runs from a
+        // durable schedule row and its outcome is read back by token through
+        // `GET /operation`. `armBenchOperation` records the deployed runs this
+        // repairs and why the request could not stay the operation's clock.
         case 'POST /checkpoint': {
+          const op = input.op ?? '';
+          if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
           const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
-          const outcome = await box.checkpointNow(kind);
-          return json({ ok: outcome.kind !== 'failed', kind, outcome, ms: Date.now() - started });
+          const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
+          return json({
+            ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started,
+          }, 202);
         }
 
         case 'POST /stop': {
-          // The real quiesce path: final checkpoint, keepAlive off, SIGTERM.
-          const outcome = await box.quiesce();
+          // The real quiesce path — final checkpoint, keepAlive off, SIGTERM —
+          // armed rather than awaited: a final checkpoint over a large tree is
+          // exactly the work that outlived the request deadline.
+          const op = input.op ?? '';
+          if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+          const row = await box.armBenchOperation({ op, operation: 'stop', kind: 'quiesce' });
           return json({
-            ok: outcome.kind !== 'failed', checkpoint: outcome, ms: Date.now() - started,
+            ok: true, token: row.token, state: row.state, ms: Date.now() - started,
+          }, 202);
+        }
+
+        case 'GET /operation': {
+          const token = url.searchParams.get('token') ?? '';
+          if (token.length === 0) return json({ ok: false, error: 'token is required' }, 400);
+          const row = await box.readBenchOperation(token);
+          // AN UNKNOWN TOKEN IS DEFINITIVE, not a slow answer: the row is
+          // written before the request that armed it returns, so a token this
+          // box never armed names an operation nobody is running and the poll
+          // must stop rather than wait out its deadline.
+          if (row === undefined) {
+            return json({ ok: false, token, error: 'no operation is armed under this token' }, 404);
+          }
+          return json({
+            ok: row.state !== 'failed',
+            token,
+            state: row.state,
+            kind: row.kind,
+            outcome: row.outcome,
+            error: row.error,
+            // The operation's OWN duration, measured inside the callback, so the
+            // driver's poll cadence never enters a measured number.
+            ms: row.ms,
           });
+        }
+
+        case 'POST /kill': {
+          // A container stop with NO final checkpoint: the witness instrument
+          // for a recovery replay. See `killWithoutQuiesce`.
+          await box.killWithoutQuiesce();
+          return json({ ok: true, strategy, box: name, ms: Date.now() - started });
         }
 
         case 'POST /wake': {

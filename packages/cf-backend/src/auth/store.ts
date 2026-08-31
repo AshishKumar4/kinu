@@ -309,7 +309,9 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
   const snapshot = projected ?? live.identity;
   if (!snapshot) return null;
 
-  return {
+  // Annotated, not inferred, so the field-supply census sees the one site
+  // that connects `sessionTokenHash` to its readers.
+  const identity: AuthIdentity = {
     // From the token, which is the object just consulted — never from a
     // record, so no stored field can point an accepted cookie at another user.
     userId,
@@ -324,6 +326,7 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
     // the same reason `userId` is.
     sessionTokenHash: tokenHash,
   };
+  return identity;
 }
 
 /** Whether a failed read is the record refusing to decode rather than KV

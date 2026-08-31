@@ -78,7 +78,7 @@ export function notifyWorkspacesCredentialsChanged(
     throw new Error('Credential fanout requires the request ExecutionContext owner');
   }
   ctx.waitUntil((async (): Promise<void> => {
-    let workspaces: Array<{ name: string }>;
+    let workspaces: Array<{ name: string }> | null;
     try {
       workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
     } catch (cause) {
@@ -87,8 +87,12 @@ export function notifyWorkspacesCredentialsChanged(
         cause,
         otherwise: 'unavailable',
       }));
-      return;
+      workspaces = null;
     }
+    // A roster that could not be read is a fan-out that reaches nobody — the
+    // credential write itself already landed, and the next workspace touch
+    // reconciles its own copy.
+    if (workspaces === null) return;
     const settled = await Promise.allSettled(workspaces
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
     for (const [index, outcome] of settled.entries()) {

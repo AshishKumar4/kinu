@@ -82,7 +82,7 @@ export const TUI_ADVERTISED_HINTS = [
 
 /** Rows of a wrapped draft the chat composer grows to before it scrolls
  *  instead. Eight keeps a long paste readable without burying the transcript. */
-export const COMPOSER_MAX_ROWS = 8;
+const COMPOSER_MAX_ROWS = 8;
 
 /** Rows the composer shows for a draft the editor wrapped to `virtualLines`
  *  visual rows.

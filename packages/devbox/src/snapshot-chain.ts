@@ -12,18 +12,43 @@
  *   have happened, and an attach mounts a fixed number of layers rather than a
  *   growing number.
  *
- *   An attach moves NO bytes in production. The store's own subtree for this
- *   chain is mounted read-only, `squashfuse` mounts the base (and the delta, if
- *   there is one) straight out of it, and `fuse-overlayfs` lays a fresh
- *   writable upper over them. Bytes arrive when something reads them. That is
- *   what makes an attach fit inside the container-start budget for a work
- *   directory of any size.
+ *   An attach moves NO bytes in production, the delta included. The store's own
+ *   subtree for this chain is mounted read-only, `squashfuse` mounts the base
+ *   and the delta straight out of it, and `fuse-overlayfs` lays a fresh writable
+ *   upper over BOTH: `lowerdir=<delta>:<base>`, newest first. Bytes arrive when
+ *   something reads them. That is what makes an attach fit inside the
+ *   container-start budget for a work directory of any size.
  *
- *   After an attach that had a delta, the delta's contents are copied into the
- *   fresh upper and the delta mount is released. From that moment the upper
- *   alone is the whole cumulative changed set, which is the property every
- *   later checkpoint relies on: archiving the upper archives everything since
- *   the base, so the delta object is freely replaceable.
+ *   THE DELTA USED TO BE COPIED INTO THAT UPPER, and the copy was the one step
+ *   that moved every byte this file claims not to move: it reads the whole
+ *   cumulative changed set through squashfuse over the mounted store, on the
+ *   attach path, against the container-start budget. Measured on the deployed
+ *   benchmark at the size a ladder leaves behind, it did not finish inside a
+ *   300 s budget. A stacked lower serves the same content in mount time, and it
+ *   is equivalent rather than merely similar: a delta's deletions travel as
+ *   `0/0` character devices and its emptied directories as an opaque xattr, and
+ *   fuse-overlayfs honours both in ANY layer rather than only in the upper — a
+ *   name whited out in the delta is gone from the merged view whatever the base
+ *   still holds.
+ *
+ *   WHAT THE COMPOSITION COSTS, STATED RATHER THAN HIDDEN. While a delta is
+ *   served as a layer the upper holds only what was written since the attach, so
+ *   it is NOT the cumulative changed set and a delta commit may not archive it:
+ *   that would publish a changed set missing everything the layer holds, over
+ *   the one key the next attach reads. So the first commit with something to say
+ *   COLLAPSES the chain onto a fresh base instead — the merged view is the one
+ *   tree that expresses what is spread across two layers, and archiving it is an
+ *   operation this file already performs. The record then names no delta, the
+ *   upper accumulates against the new base, and delta commits resume. Whether a
+ *   delta is being served as a layer is asked of `/proc/mounts`: the layer is
+ *   mounted at a path named after its own generation, so the answer is the
+ *   container's own fact rather than a note about one.
+ *
+ *   THE SAME-INSTANCE PATH IS UNCHANGED, and it is still the cheapest one. A
+ *   stop does not necessarily take the container with it; when the same instance
+ *   comes back, its upper already holds exactly what the last publication
+ *   archived, the seed stamp proves it, and the attach mounts the base alone
+ *   over the upper it kept.
  *
  * ORDERING UNDER CRASH. Two rules, both load-bearing:
  *
@@ -732,12 +757,6 @@ export interface SnapshotChainPorts {
   exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Ephemeral generation id, when the host can observe one. */
   containerGeneration?(): Promise<string | undefined>;
-  /** Wait until an object appears through the store mount, or report that the
-   * container generation changed while the mount warmed. */
-  waitForPath?(
-    path: string,
-    generation: string | undefined,
-  ): Promise<'ready' | 'replaced'>;
   /** Mount this chain's store subtree read-only at `CHAIN_STORE_MOUNT`.
    *  Credentials never leave the Durable Object. */
   mountStore(chainId: string): Promise<void>;
@@ -846,15 +865,76 @@ const upperDir = `${DEVBOX_RUNTIME_DIR}/upper`;
 const workDir = `${DEVBOX_RUNTIME_DIR}/work`;
 /** Where an archive is built before it is streamed into the store. */
 const stageDir = `${DEVBOX_RUNTIME_DIR}/stage`;
-/** Mount point for the base layer while an attach is in progress. */
+/** Mount point for the base layer. It stays mounted for as long as the overlay
+ *  above it does: it is that overlay's bottom lower, not a staging path. */
 const lowerBase = `${DEVBOX_RUNTIME_DIR}/lower-base`;
-/** Mount point for the delta layer while an attach is in progress. */
-const lowerDelta = `${DEVBOX_RUNTIME_DIR}/lower-delta`;
+/** Where delta layers are mounted, one directory per generation. */
+const lowerDeltaRoot = `${DEVBOX_RUNTIME_DIR}/lower-delta`;
 /** The lower a box with no chain yet attaches over: an empty directory.
  *
  *  See {@link snapshotChainStorage}'s attach. It exists so that "this box is in
  *  chain mode" and "`/workspace` is a plain directory" can never both be true. */
 const lowerEmpty = `${DEVBOX_RUNTIME_DIR}/lower-empty`;
+
+/**
+ * Where THIS generation's delta layer is mounted.
+ *
+ * NAMED AFTER THE GENERATION, because the name is what a later checkpoint reads
+ * to answer "is the changed set this record names being served as a layer, or
+ * does the upper hold it?". One fixed path could not tell those apart: after the
+ * collapse that ends a composition, the same mount is still there serving a
+ * generation the record no longer names, and every commit afterwards would read
+ * it as a reason to collapse again.
+ *
+ * The id is a validated UUID — see {@link assertChainId} — so it contributes no
+ * path syntax of its own.
+ */
+function deltaLayerMountPoint(chainId: string): string {
+  return `${lowerDeltaRoot}/${assertChainId(chainId)}`;
+}
+
+/**
+ * Is `chainId`'s delta being served as a layer under this container's overlay?
+ *
+ * THE ONE QUESTION A COMMIT MUST ASK BEFORE ARCHIVING THE UPPER. True means the
+ * cumulative changed set is spread across the layer and the upper, so archiving
+ * the upper alone would publish a delta missing everything the layer holds; the
+ * chain collapses onto a fresh base instead. False means the upper is the whole
+ * changed set, which is what every delta commit relies on.
+ *
+ * Asked of `/proc/mounts` rather than of a durable note, for the same reason the
+ * overlay itself is: the mount is the fact, and a note about it can outlive the
+ * container that made it true.
+ */
+function deltaLayerServed(procMounts: string, chainId: string): boolean {
+  return findMount(procMounts, deltaLayerMountPoint(chainId)) !== undefined;
+}
+
+/**
+ * How many times an attach asks the store mount for a layer it cannot see yet.
+ *
+ * A COUNT, NEVER A DEADLINE. The mount itself is already established when this
+ * runs — the SDK proves the FUSE mount before returning — so the only thing
+ * outstanding is the store's first metadata answer for one key. That either
+ * arrives promptly or is being served from a negative cache, and neither is
+ * improved by waiting longer against a budget that belongs to the whole
+ * restoration. An attach that has asked this many times says which layer it
+ * cannot see and what the subtree does hold, and the ordinary recovery ladder
+ * asks again on a fresh mount.
+ */
+const LAYER_VISIBILITY_PROBES = 20;
+
+/**
+ * How many times a release is attempted before the mount is called stuck.
+ *
+ * The loop used to be unbounded — `while grep -qs …; do fusermount3 -u; done` —
+ * inside a single container command, so a mount something still held turned an
+ * attach into a hang with no diagnosis, and the container-start budget was the
+ * only thing that ended it. A release either succeeds or is refused by
+ * something holding the mount, and that is not a condition more attempts fix on
+ * the attach path.
+ */
+const MOUNT_RELEASE_ATTEMPTS = 20;
 
 // ── the container shell ─────────────────────────────────────────────────────
 //
@@ -884,16 +964,69 @@ function chainShell(exec: ContainerExec) {
      *  is a box whose writes have nowhere to land. */
     pathExists: async (path: string): Promise<boolean> =>
       (await exec(`test -e ${shellPath(path)} && echo yes || echo no`)).stdout.trim() === 'yes',
-    /** Release a FUSE mount this strategy made itself. Lazy, and tolerant of the
-     *  mount being absent. The squashfuse layers only: the SDK did not create
-     *  those and has no registry entry for them, and releasing a mount the SDK
-     *  DID make this way leaves its registry claiming the path forever. */
+    /** Release a FUSE mount this strategy made itself, or say it is stuck.
+     *
+     *  The squashfuse layers only: the SDK did not create those and has no
+     *  registry entry for them, and releasing a mount the SDK DID make this way
+     *  leaves its registry claiming the path forever.
+     *
+     *  BOUNDED — see {@link MOUNT_RELEASE_ATTEMPTS}. Absent is success; still
+     *  mounted after the last attempt is a NAMED failure, because an attach that
+     *  proceeds over a mount it could not release would mount on top of it, and
+     *  one that waits forever spends a budget belonging to the whole
+     *  restoration and reports nothing. */
     unmountPath: async (path: string): Promise<void> => {
-      await exec(
-        `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; `
-          + `while grep -qs ${shellPath(` ${path} `)} /proc/mounts; do `
-          + `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done`,
+      await must(`releasing the mount at ${path}`,
+        `for _ in $(seq 1 ${String(MOUNT_RELEASE_ATTEMPTS)}); do `
+          + `grep -qs ${shellPath(` ${path} `)} /proc/mounts || exit 0; `
+          + `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done; `
+          + `grep -qs ${shellPath(` ${path} `)} /proc/mounts || exit 0; `
+          + `echo "still mounted after ${String(MOUNT_RELEASE_ATTEMPTS)} release attempts" >&2; exit 1`);
+    },
+    /** Release every delta layer this container is still serving, whichever
+     *  generation mounted it.
+     *
+     *  ONE COMMAND OVER `/proc/mounts`, because the mount points are named after
+     *  generations and a container that was re-driven can hold one this attach
+     *  did not make. Deepest first, so a nested path is released before its
+     *  parent. Reached only where `/workspace` is NOT an overlay — the attach
+     *  early-returns otherwise — so nothing can still be reading them. */
+    releaseDeltaLayers: async (): Promise<void> => {
+      await must('releasing delta layers',
+        `for p in $(awk -v r=${shellPath(`${lowerDeltaRoot}/`)} `
+          + `'index($2, r) == 1 {print $2}' /proc/mounts | sort -r); do `
+          + `for _ in $(seq 1 ${String(MOUNT_RELEASE_ATTEMPTS)}); do `
+          + `grep -qs " $p " /proc/mounts || break; `
+          + `/usr/bin/fusermount3 -u "$p" 2>/dev/null || true; sleep 0.1; done; `
+          + `if grep -qs " $p " /proc/mounts; then `
+          + `echo "delta layer $p is still mounted" >&2; exit 1; fi; done`);
+    },
+    /**
+     * Wait for one layer to become visible through the store mount, BY COUNT.
+     *
+     * The mount is established before this runs, so what is outstanding is the
+     * store's first metadata answer for one key. Each probe re-lists the mounted
+     * subtree, because a listing is what repopulates a stat cache that answered
+     * "no such object" once and would otherwise keep saying so.
+     *
+     * ONE container command rather than a poll over RPC: the pacing happens
+     * inside the container, so a slow answer costs one round trip instead of one
+     * per probe, and the count cannot become an unbounded wait. What comes back
+     * when it never appears is what the subtree DOES hold, which is the sentence
+     * an operator needs.
+     */
+    awaitLayer: async (path: string): Promise<{ ready: boolean; holds: string }> => {
+      const probed = await exec(
+        `for _ in $(seq 1 ${String(LAYER_VISIBILITY_PROBES)}); do `
+          + `if test -e ${shellPath(path)}; then printf ready; exit 0; fi; `
+          + `ls -1A ${shellPath(CHAIN_STORE_MOUNT)} >/dev/null 2>&1; sleep 0.25; done; `
+          + `printf 'missing '; ls -1A ${shellPath(CHAIN_STORE_MOUNT)} 2>&1 | head -20 | tr '\n' ' '`,
       );
+      const answer = probed.stdout.trim();
+      return {
+        ready: answer === 'ready',
+        holds: answer.startsWith('missing') ? answer.slice('missing'.length).trim() : answer,
+      };
     },
     /**
      * Mount one squashfs layer read-only. squashfuse reads lazily THROUGH the
@@ -923,13 +1056,6 @@ function chainShell(exec: ContainerExec) {
         + `${shellPath(workDir)} && /usr/bin/fuse-overlayfs `
         + `-o lowerdir=${lowers.map(shellPath).join(':')}`
         + `,upperdir=${shellPath(upperDir)},workdir=${shellPath(workDir)} ${shellPath(dir)}`);
-    },
-    /** Copy a lower layer's contents into the upper directory. `cp -a` preserves
-     *  whiteout device nodes and symlinks, which is what makes a seeded upper
-     *  equivalent to the delta it came from. */
-    seedUpper: async (lower: string, upper: string): Promise<void> => {
-      await must('upper seeding',
-        `cp -a ${shellPath(`${lower}/.`)} ${shellPath(`${upper}/`)} && sync ${shellPath(upper)}`);
     },
     /**
      * Build a squashfs of `sourceDir` at `archivePath` and answer its size.
@@ -1136,8 +1262,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   /**
-   * The identity of the delta a seeded upper holds: this chain's generation and
-   * the exact object the seed was copied from.
+   * The identity of the delta an upper holds: this chain's generation and the
+   * exact object whose content is in it.
    *
    * All three halves are load-bearing. A generation id alone would match after a
    * rebase onto a new base; a size alone would match a different archive of the
@@ -1154,16 +1280,21 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const seedStampOf = (chainId: string, delta: ChainLayer): string =>
     `${chainId}:${delta.bytes}:${delta.objectVersion ?? 'no-version'}`;
 
-  /** Record what the upper now holds, and treat a stamp this container will not
-   *  write as a slow next attach rather than a failed one: an unstamped upper is
-   *  re-seeded, which is correct, only wasteful. */
+  /** Record what the upper now holds.
+   *
+   *  BEST EFFORT, because everything a missing stamp costs is work, never
+   *  correctness: the next attach on this container cannot prove the upper holds
+   *  the delta, so it composes the delta as a layer instead of serving it from
+   *  the upper, and the first commit after that collapses the chain onto a fresh
+   *  base. Both are correct; both are more expensive than the stamp. */
   const stampSeededUpper = async (chainId: string, delta: ChainLayer): Promise<void> => {
     try {
       await ports.writeSeedStamp(seedStampOf(chainId, delta));
     } catch (error) {
       ports.log(
         `${upperDir} holds delta ${chainId} and the seed stamp could not be written, so the `
-        + `next attach on this container will copy it again: ${describe({ cause: error })}`,
+        + `next attach on this container composes it as a layer instead: `
+        + `${describe({ cause: error })}`,
       );
     }
   };
@@ -1206,49 +1337,57 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       throw new LayerUnreadable(layer, generation.base.id, thrown);
     };
     const mountedBase = `${CHAIN_STORE_MOUNT}/data.sqsh`;
-    const visible = ports.waitForPath === undefined
-      ? (await shell.pathExists(mountedBase)) ? 'ready' : 'missing'
-      : await ports.waitForPath(mountedBase, mountedGeneration);
-    if (visible === 'replaced') throw new ContainerChangedDuringAttach();
-    if (visible !== 'ready') {
-      throw new Error(`chain ${generation.base.id} store mount does not expose ${mountedBase}`);
+    // WAIT BY COUNT, THEN SAY WHAT IS THERE. The wait used to be an unbounded
+    // poll in the host adapter: one `test -e` per RPC, every 100 ms, with no
+    // exit except the path appearing — and its container-replacement exit was
+    // disabled on exactly the container that needs it, because a fresh instance
+    // has no generation id to compare yet. A store subtree that never exposes
+    // the base then consumed the whole container-start budget and reported
+    // nothing at all. See {@link LAYER_VISIBILITY_PROBES}.
+    const visible = await shell.awaitLayer(mountedBase);
+    if (!visible.ready) {
+      if ((await ports.containerGeneration?.()) !== mountedGeneration) {
+        throw new ContainerChangedDuringAttach();
+      }
+      throw new Error(
+        `chain ${generation.base.id} store mount does not expose ${mountedBase} after `
+        + `${LAYER_VISIBILITY_PROBES} probes; ${CHAIN_STORE_MOUNT} holds: `
+        + `${visible.holds.length === 0 ? '(nothing)' : visible.holds}`,
+      );
     }
-    // The delta this generation would seed from, as the STORE describes it: the
-    // seed copies the stored object, so the stored object's identity is the one
-    // a stamp may claim. An unreferenced but complete delta — a previous run
-    // crashed between the atomic PUT and the state write — is adopted, as this
-    // file's header describes.
+    // The delta this generation would serve, as the STORE describes it: the
+    // layer is mounted from the stored object, so the stored object's identity
+    // is the one a stamp may claim. An unreferenced but complete delta — a
+    // previous run crashed between the atomic PUT and the state write — is
+    // adopted, as this file's header describes.
     const storedDelta = await ports.objectFacts(deltaObjectKey(generation.base.id));
     const haveDelta = generation.delta !== undefined || storedDelta !== undefined;
 
     // IS THIS UPPER ALREADY THIS DELTA?
     //
-    // MEASURED COST THIS REMOVES. The seeding copy below reads the whole
-    // cumulative delta through squashfuse over the mounted store — the only
-    // full read of an archive on this path — and it ran on EVERY attach. On the
-    // deployed benchmark the ladder leaves a ~68 MiB delta and the post-stop
-    // wake spent the entire 300 s attach budget on that copy, twice
-    // (20260831031426 and 20260831143544, `snapshot-chain` arm): the box was
-    // abandoned mid-attach and the arm died, while the cold attach of the same
-    // box — which has no delta to seed — passed comfortably. The file header
-    // promises an attach that "moves NO bytes"; the copy was the one thing that
-    // broke that promise.
-    //
     // A stop does not necessarily take the container with it, and when the same
     // instance comes back its upper still holds exactly the bytes the last
     // publication archived. The stamp is what makes that provable: it is written
-    // only after a copy completes and only names the delta object that copy read,
-    // so a half-seeded upper has no stamp, a superseded delta never matches one,
-    // and a replaced container — a blank disk — has none at all and is seeded in
-    // full. The upper is asked for as well as the stamp, because a stamp beside
-    // a missing upper claims nothing.
-    const seeded = storedDelta !== undefined
+    // only by the commit that archived this upper, or by a copy that finished,
+    // and it names the delta object it describes — so a superseded delta never
+    // matches one, and a replaced container, a blank disk, has none at all. The
+    // upper is asked for as well as the stamp, because a stamp beside a missing
+    // upper claims nothing.
+    //
+    // A MATCH IS THE ONLY WAY THE UPPER SURVIVES AN ATTACH, and it is the only
+    // shape in which the delta needs no layer of its own: the changed set is
+    // already in the writable layer, which is what every delta commit relies on.
+    const held = storedDelta !== undefined
       && (await ports.readSeedStamp()) === seedStampOf(generation.base.id, storedDelta)
       && (await shell.pathExists(upperDir));
+    const composing = haveDelta && !held;
 
     await shell.unmountPath(DEVBOX_WORKDIR);
     await shell.unmountPath(lowerBase);
-    await shell.unmountPath(lowerDelta);
+    // EVERY delta layer, not one path: the mount points are named after the
+    // generations that made them, and a re-driven attach on a live container can
+    // find one this attempt did not mount.
+    await shell.releaseDeltaLayers();
     // CHAIN_STORE_MOUNT is deliberately NOT here. mountStore owns that
     // mountpoint, and it is already mounted read-only by the time this runs:
     // `rm -rf` on it exits non-zero, which used to short-circuit the `&&` so
@@ -1256,80 +1395,69 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // re-creating its own path. Worse, had the mount ever been read-write,
     // rm -rf would have deleted the chain's archives through it.
     //
-    // THE UPPER IS EMPTIED HERE, BEFORE ANY ARCHIVE CONTENT IS COPIED INTO IT,
-    // and that is also what keeps a hostile archive inside its own tree: the
-    // seeding copy below preserves symlinks instead of following them, so the
-    // only way out of the upper would be a symlink ALREADY sitting at a path
-    // the copy writes through. This reset is what guarantees there is none.
+    // THE UPPER IS EMPTIED HERE, before anything is mounted over it, so the
+    // writable layer of a composed attach holds exactly what is written after
+    // it — which is what makes "the upper is not the cumulative changed set"
+    // a statement with a boundary rather than a guess.
     //
-    // AN ALREADY-SEEDED UPPER IS THE ONE EXCEPTION, and it is not an exception
-    // to that guarantee: the copy that filled it ran under this same reset, and
-    // the stamp proving it exists only because that copy finished. Emptying it
-    // would throw away the delta AND every change made since the publication
-    // that stamped it, then buy both back over the network.
-    await shell.resetDirs(seeded
-      ? [lowerBase, lowerDelta, workDir]
-      : [lowerBase, lowerDelta, upperDir, workDir]);
+    // AN UPPER THAT HOLDS THIS DELTA IS THE ONE EXCEPTION. Emptying it would
+    // throw away the delta AND every change made since the publication that
+    // stamped it, then buy both back over the network.
+    await shell.resetDirs(held
+      ? [lowerBase, lowerDeltaRoot, workDir]
+      : [lowerBase, lowerDeltaRoot, upperDir, workDir]);
     try {
       await shell.mountLayer(baseObjectKey(generation.base.id), lowerBase);
     } catch (error) {
       await layerFailed('base', { cause: error });
     }
 
-    // SEED BEFORE THE OVERLAY LANDS, and this order is the whole correctness of
-    // a re-driven attach.
+    // THE DELTA IS A LAYER, NOT A COPY.
     //
-    // The overlay used to be mounted first and the delta copied into the upper
-    // after it. A throw, an eviction or a container replacement in that window
-    // left the overlay UP and the upper HALF-SEEDED — and the retry then asked
-    // the container, saw an overlay, took the `already-attached` early return,
-    // and never finished the copy. The box served a workspace missing part of
-    // its own delta while reporting success, and the next checkpoint archived
-    // that partial upper as the new delta, so the missing content left the
-    // durable chain permanently.
+    // MEASURED COST THIS REMOVES. The copy that used to be here read the whole
+    // cumulative delta through squashfuse over the mounted store — the only full
+    // read of an archive anywhere on this path — and it ran on every attach a
+    // replaced container made. On the deployed benchmark the ladder leaves tens
+    // of megabytes, and a wake spent its entire 300 s attach budget inside that
+    // copy. Mounting the archive instead costs one `squashfuse` call whatever it
+    // holds, and the bytes arrive when something reads them, which is the
+    // promise the rest of this file already makes.
     //
-    // Copying first makes the bad state unrepresentable rather than merely
-    // unlikely: the upper is an ordinary directory that the mount only takes as
-    // a parameter, so nothing ever required the overlay to exist during the
-    // copy. With this order a mounted overlay PROVES the seeding finished,
-    // which is what the early return already assumed — and it needs no durable
-    // marker, so idempotence is still asked of the container, not stored.
+    // A LAYER CARRIES EVERYTHING THE COPY CARRIED. `cp -a` was preserving
+    // whiteout device nodes and symlinks; a mount preserves them because they
+    // are simply what the archive holds, and fuse-overlayfs resolves a `0/0`
+    // character device or an opaque directory in any layer it is given, not only
+    // in the upper. The composition is therefore the same merged view, without
+    // the pass over every byte.
     //
-    // IT IS ALSO WHERE THE DELTA IS READ END TO END, which is the only full
-    // read of an archive anywhere on this path: a delta that mounts and then
-    // fails mid-copy is a delta this generation cannot serve, and it says so
-    // through `layerFailed` rather than as a bare host failure.
-    if (haveDelta && !seeded) {
+    // MOUNTED BEFORE THE OVERLAY, like the base: the overlay takes its lowers as
+    // parameters, so both have to exist before the mount that composes them, and
+    // a mounted overlay then proves the whole composition landed. That is what
+    // the `already-attached` early return assumes, and it needs no durable
+    // marker — idempotence is still asked of the container, not stored.
+    const deltaLayer = deltaLayerMountPoint(generation.base.id);
+    if (composing) {
       try {
-        await shell.mountLayer(deltaObjectKey(generation.base.id), lowerDelta);
-        await shell.seedUpper(lowerDelta, upperDir);
+        await shell.mountLayer(deltaObjectKey(generation.base.id), deltaLayer);
       } catch (error) {
         await layerFailed('delta', { cause: error });
       }
-      await shell.unmountPath(lowerDelta);
-      // Only the DELTA's mount point is removable. `lowerBase` becomes an ACTIVE
-      // lower of the overlay below, so removing it would be refused by the
-      // kernel — and would break the overlay if it were not.
-      await ports.exec(`rm -rf ${shellPath(lowerDelta)}`);
-      // STAMPED AFTER THE COPY AND BEFORE THE OVERLAY, which is the window the
-      // seeding order already relies on: no overlay exists yet, so a stamp can only
-      // describe a copy that finished.
-      if (storedDelta !== undefined) await stampSeededUpper(generation.base.id, storedDelta);
+
     }
-    // ONE lower. The delta is already in the upper, which is what the header
-    // means by "the upper alone is the whole cumulative changed set" — now true
-    // from the instant the overlay exists rather than a step later.
-    await shell.overlayAttach(DEVBOX_WORKDIR, [lowerBase]);
+    // NEWEST LOWER FIRST. fuse-overlayfs resolves `lowerdir` left to right, so
+    // the delta must precede the base: it holds the newer version of every path
+    // it names, and the whiteouts that hide what the base still has.
+    await shell.overlayAttach(DEVBOX_WORKDIR, composing ? [deltaLayer, lowerBase] : [lowerBase]);
     await assertOverlayLanded(`chain ${generation.base.id}`);
     await ports.unmountStore();
 
     const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
-    // One mounted layer, plus the delta if there was one — reported separately
-    // because they are different things now: the layer is lazy and moves no
-    // bytes, the seed is a copy that already happened.
+    // WHICH SHAPE THIS BOX IS IN, because the next commit's behaviour follows
+    // from it: `base+delta layered` means the upper is not the cumulative
+    // changed set and the first commit with anything to say collapses the chain.
     const restored = !haveDelta
       ? 'base'
-      : seeded ? 'base+delta already in this upper' : 'base+seeded delta';
+      : held ? 'base+delta already in this upper' : 'base+delta layered';
     ports.log(
       `${DEVBOX_WORKDIR} attached from ${generation.base.id} `
       + `(chain, ${bytes} bytes, ${restored})`,
@@ -1923,7 +2051,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // answered a forced checkpoint 'unchanged' while its work directory was not
     // attached at all — a broken box wearing a healthy answer. Asked here, that
     // box reports a failure, which is what it is.
-    const overlayMounted = isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR);
+    const procMounts = await shell.readMounts();
+    const overlayMounted = isOverlayMounted(procMounts, DEVBOX_WORKDIR);
     if (state !== null && state.mode === 'chain' && !overlayMounted) {
       return await recordCheckpointFailure(
         ports,
@@ -1968,15 +2097,37 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // the gate falls through to archiving.
     const mark = overlayMounted ? await shell.upperFingerprint() : '';
     if (overlayMounted) {
+      // IS THE CUMULATIVE CHANGED SET SPREAD ACROSS TWO LAYERS?
+      //
+      // A wake that composed the delta as a layer left the upper empty, so the
+      // upper is everything written SINCE the attach and archiving it as the
+      // delta would replace the one durable changed set with a fragment of it.
+      // The layer's own mount point names the generation it serves, so this is
+      // the same `/proc/mounts` read the overlay gate above already made.
+      const layered = state !== null && deltaLayerServed(procMounts, state.base.id);
       if (mark !== '' && mark === state?.upperMark) {
         return { kind: 'skipped', ...idle, reason: 'work directory is unchanged' };
+      }
+      // NOTHING WRITTEN SINCE A COMPOSED ATTACH IS NOTHING TO SAY. The collapse
+      // below archives the merged view, which is the whole workspace, so a box
+      // that woke and did nothing must not pay for one: the durable chain
+      // already holds every byte the layers serve. An empty upper is the proof —
+      // a deletion leaves a whiteout in it, and a metadata change copies its
+      // file up, so "empty" cannot hide a change.
+      if (layered && (await ports.countEntries(upperDir)) === 0) {
+        return { kind: 'skipped', ...idle, reason: 'nothing has been written since the attach' };
       }
       if (kind === 'tick'
         && !shouldCheckpoint('changed', state?.at ?? 0, ports.now(), ports.checkpointIntervalMs())) {
         return { kind: 'skipped', ...idle, reason: 'within the minimum checkpoint interval' };
       }
       try {
-        return await commitChain(state, version, shouldRebase(state, kind), mark);
+        // COLLAPSE RATHER THAN APPEND while a delta is served as a layer. The
+        // merged view is the one tree that expresses what the layer and the
+        // upper hold together, and archiving it as a fresh base is how the
+        // record gets back to a shape whose upper IS the changed set. Every
+        // commit after it is an ordinary delta again.
+        return await commitChain(state, version, layered || shouldRebase(state, kind), mark);
       } catch (error) {
         return await recordCheckpointFailure(ports, state, describe({ cause: error }));
       }

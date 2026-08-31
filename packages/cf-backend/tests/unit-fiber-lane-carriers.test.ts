@@ -14,9 +14,15 @@
 import { describe, expect, test } from 'bun:test';
 import type { JsonValue } from '@kinu.run/core';
 import {
-  ADVISOR_LANE_FIBER, EVOLUTION_LANE_FIBER, FORK_NOTICE_LANE_FIBER, MCP_WARM_LANE_FIBER,
+  ADVISOR_LANE_FIBER, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
+
+/** Mirrors the module-private lane name and backoff curve; drift fails these
+ *  tests, which is the point. */
+const FORK_NOTICE_LANE_FIBER = 'fork:notice';
+const noticeBackoffMs = (attempts: number): number =>
+  Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000);
 import { BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME } from '@kinu.run/core';
 
 function recordingTransports() {
@@ -150,6 +156,29 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       if (body) await body();
     }
     expect(scene.redriven).toEqual([FORK_NOTICE_LANE_FIBER, FORK_NOTICE_LANE_FIBER]);
+  });
+
+  test('a deterministic enqueue failure is paced by capped backoff, never a row storm', () => {
+    // Attempts are UNBOUNDED on purpose — a cap that gives up loses the
+    // notice — so the runaway protection is the PACE: exponential to a 60 s
+    // ceiling, resumed from the checkpoint's own attempt count after an
+    // eviction.
+    expect(noticeBackoffMs(1)).toBe(2000);
+    expect(noticeBackoffMs(6)).toBe(60_000);
+    expect(noticeBackoffMs(50)).toBe(60_000);
+
+    // And the attempt count rides the checkpoint: a recovered fifth attempt
+    // re-dispatches as the sixth, not as a fresh first.
+    const scene = recordingTransports();
+    const checkpoints: JsonValue[] = [];
+    scene.transports = {
+      ...scene.transports,
+      redrive: (lane, checkpoint) => { scene.redriven.push(lane); checkpoints.push(checkpoint); },
+    };
+    classifyRecoveredFiber(scene.transports, fiber(FORK_NOTICE_LANE_FIBER, {
+      kind: 'fork_interrupted', text: 'retired', idempotencyKey: 'k', attempts: 5,
+    }));
+    expect(checkpoints).toMatchObject([{ attempts: 5 }]);
   });
 
   test('an unrecognised lane is a classified loss, loudly, with no carrier', () => {

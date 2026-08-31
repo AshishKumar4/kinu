@@ -228,7 +228,7 @@ import {
   sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
 import { EmailOutbox } from "./email/outbox";
-import { FIBER_RECOVERY_MAX_AGE_MS, FORK_NOTICE_LANE_FIBER } from "./fiber-recovery";
+import { FIBER_RECOVERY_MAX_AGE_MS, dispatchRecoveredNotice, type RecoveredNotice } from "./fiber-recovery";
 import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
@@ -2325,22 +2325,22 @@ export class OrchestratorAgent extends ActorAgent {
    *  ledgers it just settled. Idempotent — every recovery reclaims under a
    *  fresh lease, and a job this isolate already drives is skipped. */
   /** Carry one fork-recovery notice durably until the delivery seam accepts
-   *  it. Each attempt is its own fiber row (durable before this returns), and
-   *  an `undelivered` outcome — a pre-empted enqueue — re-dispatches on a
-   *  fresh row, paced by the turn slot that pre-empted it. The idempotency key
-   *  on the signal makes a replay of a landed delivery collide. */
+   *  it — each attempt its own fiber row, `undelivered` retried forever at the
+   *  capped pace `dispatchRecoveredNotice` owns, the idempotency key colliding
+   *  any landed duplicate. */
   private dispatchForkNotice(signal: AgentSignal): void {
-    this.redriveRecoveredLane(
-      FORK_NOTICE_LANE_FIBER,
-      projectJsonValue({ value: signal }),
-      async () => {
-        if (await this.orch.signals.deliver(signal) === 'undelivered') {
-          diagnostics.event('fiber.notice_redelivery_owed', {
-            key: signal.idempotencyKey ?? '(none)',
-          });
-          this.dispatchForkNotice(signal);
-        }
+    const notice: RecoveredNotice = {
+      kind: signal.kind, text: signal.text,
+    };
+    if (signal.idempotencyKey !== undefined) notice.idempotencyKey = signal.idempotencyKey;
+    if (signal.metadata !== undefined) notice.metadata = signal.metadata;
+    dispatchRecoveredNotice(
+      {
+        redrive: (lane, checkpoint, body) => { this.redriveRecoveredLane(lane, checkpoint, body); },
+        deliverSignal: (recovered) => this.orch.signals.deliver(recovered),
       },
+      notice,
+      0,
     );
   }
 

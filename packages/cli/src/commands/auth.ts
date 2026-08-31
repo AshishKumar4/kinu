@@ -77,6 +77,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
   const config = loadConfigFile();
   const origin = defaultOrigin(opts);
   if (config.accessToken) {
+    let revoked = true;
     try {
       await logout(origin, config.accessToken);
     } catch (error) {
@@ -94,6 +95,9 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
           at: Date.now(),
         };
       });
+      revoked = false;
+    }
+    if (!revoked) {
       bumpProviderRevision();
       console.log(`${OK('✓')} Logged out locally — session NOT revoked`);
       console.log(DIM(`Run \`kinu logout\` again when reachable, or \`kinu sessions\` from any machine to revoke by inventory.`));
@@ -112,7 +116,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
 }
 
 /** Revoke a session by the hash the inventory prints. */
-export async function revokeSessionCommand(hash: string): Promise<void> {
+async function revokeSessionCommand(hash: string): Promise<void> {
   const auth = requireAuthConfig();
   await revokeCliSessionByHash(auth.origin, auth.token, hash);
   console.log(`${OK('✓')} Session ${ACCENT(hash.slice(0, 12))}… revoked`);

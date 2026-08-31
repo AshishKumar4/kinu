@@ -22,33 +22,41 @@ import {
   sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import { refusalText } from './fixtures/storage-matrix/admission';
+import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
 import {
   addressArmRequest,
   benchmarkExitCode,
   CANDIDATE_CONTAINER_CLASSES,
   candidateLifecycleChecks,
+  chainArchiveExpectations,
+  controlWitnessChecks,
   cleanupObservationProbes,
+  checkpointOperation,
   comparablePair,
   devboxAdmission,
+  devboxArmEvidence,
   drainBucketResidue,
+  EXPECTED_LADDER_ROWS,
   fixtureConfigForArms,
   frozenControlStatus,
   isTransientContainerCreateError,
   parseFrozenControlArtifact,
-  parseObjectsPage,
-  parseUploadsPage,
   parseOptions,
   pollForAttach,
   postLiveTeardown,
   rankableTicks,
+  runArm,
   renderFrozenControls,
   resourceNames,
   SANDBOX_IMAGE,
   SANDBOX_IMAGE_DIGEST,
   startupPollVerdict,
+  stopOperation,
   recommend,
   teardownLiveArms,
+  type ArmResult,
+  type ControlWitnessFacts,
   type CandidateFactsReply,
 } from './bench-devbox-strategies';
 const tick = (
@@ -272,6 +280,446 @@ describe('startup readiness redrive', () => {
   });
 });
 
+/** The driver-side fields these fakes read out of a posted body. Parsed rather
+ *  than trusted, because what the driver sends is the thing under test. */
+const PostedBodySchema = v.looseObject({
+  op: v.optional(v.string()),
+  command: v.optional(v.string()),
+});
+
+/**
+ * A fixture that implements the ASYNC operation protocol the deployed one now
+ * implements, and counts the publications it starts.
+ *
+ * `publications` is the quantity the blocking protocol got wrong: a checkpoint
+ * that outlived the driver's 180 s per-attempt deadline was re-posted, and the
+ * fixture then ran a second full publication behind the first — measured on the
+ * 20260831031426 and 20260831143544 decisive runs, on both candidate arms. Here
+ * a publication starts when an `op` is armed for the FIRST time, so a re-post
+ * that resolves to an existing token adds nothing, and a post carrying a fresh
+ * `op` adds one. The counter can therefore fail in both directions.
+ */
+function armingFixture(options: {
+  /** How many polls the operation stays pending for before it settles. */
+  readonly pollsBeforeSettled: number;
+  /** Lose the FIRST arming reply after the arm landed: the deployed shape of a
+   *  transport loss, and the case a non-idempotent arm publishes twice for. */
+  readonly loseFirstArmReply?: boolean;
+  readonly settleAs?: 'done' | 'failed';
+  readonly outcomeKind?: string;
+}) {
+  const tokenByOp = new Map<string, string>();
+  const polls = new Map<string, number>();
+  const asked: string[] = [];
+  let publications = 0;
+  let armPosts = 0;
+  const arm = (op: string): string => {
+    const existing = tokenByOp.get(op);
+    if (existing !== undefined) return existing;
+    publications += 1;
+    const token = `checkpoint-${String(publications)}`;
+    tokenByOp.set(op, token);
+    polls.set(token, 0);
+    return token;
+  };
+  const real = globalThis.fetch;
+  const answer = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    const method = init?.method ?? 'GET';
+    asked.push(`${method} ${url.pathname}`);
+    if (method === 'POST') {
+      armPosts += 1;
+      // PARSED, not narrowed: a post that carries no `op` is what the OLD
+      // protocol sent, and this fixture has to be able to tell the two apart.
+      const posted = v.safeParse(PostedBodySchema, JSON.parse(String(init?.body ?? '{}')));
+      const op = posted.success && posted.output.op !== undefined
+        ? posted.output.op
+        : `anonymous-${String(armPosts)}`;
+      const token = arm(op);
+      if (options.loseFirstArmReply === true && armPosts === 1) {
+        throw Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' });
+      }
+      return new Response(JSON.stringify({ ok: true, token, state: 'pending' }), { status: 202 });
+    }
+    const token = url.searchParams.get('token') ?? '';
+    const seen = (polls.get(token) ?? 0) + 1;
+    polls.set(token, seen);
+    if (seen < options.pollsBeforeSettled) {
+      return new Response(JSON.stringify({ ok: true, token, state: 'pending' }));
+    }
+    const settleAs = options.settleAs ?? 'done';
+    // The failure reason is a field of the settled reply, present only when the
+    // publication failed — which is what `error` means on this route.
+    const failure = settleAs === 'failed' ? 'the publication threw mid-flight' : undefined;
+    return new Response(JSON.stringify({
+      ok: settleAs === 'done',
+      token,
+      state: settleAs,
+      // The FIXTURE's own duration, which is the number a measured row keeps:
+      // it is unaffected by how long the driver polled for it.
+      ms: 41_000,
+      outcome: { kind: options.outcomeKind ?? 'committed', bytes: 4096, movedBytes: 2048 },
+      error: failure,
+    }));
+  };
+  globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+  return {
+    asked,
+    arms: () => armPosts,
+    publications: () => publications,
+    restore: () => { globalThis.fetch = real; },
+  };
+}
+
+/** Fast bounds: the protocol under test is the cadence's client, not the
+ *  cadence. Production values live beside `OPERATION_DEADLINE_MS`. */
+const TEST_BOUNDS = { pollMs: 1, deadlineMs: 2_000 };
+
+describe('the async checkpoint and stop protocol', () => {
+  test('a checkpoint outliving one HTTP attempt publishes once and is read by token', async () => {
+    const fixture = armingFixture({ pollsBeforeSettled: 4 });
+    try {
+      const settled = await checkpointOperation(
+        BENCH_FIXTURE, 'ab-snapshot-chain-20260831', 'quiesce', 'ladder 64KiB quiesce', TEST_BOUNDS,
+      );
+      // The OUTCOME came from the poll, not from the request that armed it, and
+      // the measured millisecond figure is the fixture's own.
+      expect(settled.outcome?.kind).toBe('committed');
+      expect(settled.ms).toBe(41_000);
+    } finally {
+      fixture.restore();
+    }
+    // ONE arm, then polls until it settled: four polls for an operation that
+    // stayed pending through three of them.
+    expect(fixture.publications()).toBe(1);
+    expect(fixture.arms()).toBe(1);
+    expect(fixture.asked).toEqual([
+      'POST /checkpoint', 'GET /operation', 'GET /operation', 'GET /operation', 'GET /operation',
+    ]);
+  });
+
+  test('an arming reply lost in transit re-asks the SAME operation, never a second one', async () => {
+    const fixture = armingFixture({ pollsBeforeSettled: 1, loseFirstArmReply: true });
+    try {
+      const settled = await checkpointOperation(
+        BENCH_FIXTURE, 'ab-merkle-pack-20260831', 'quiesce', 'candidate barrier', TEST_BOUNDS,
+      );
+      expect(settled.outcome?.kind).toBe('committed');
+    } finally {
+      fixture.restore();
+    }
+    // TWO posts, ONE publication. The arm landed before the reply was lost, so a
+    // protocol keyed on anything but the caller's own `op` would have started a
+    // second publication here — which is exactly what the blocking protocol did
+    // with its 180 s deadline and three attempts.
+    expect(fixture.arms()).toBe(2);
+    expect(fixture.publications()).toBe(1);
+  });
+
+  test('the counter this guard rests on rises when an op is NOT reused', async () => {
+    // The failing direction, so `publications() === 1` above is not vacuous: two
+    // posts that do not name one operation are two publications, which is the
+    // pre-fix behaviour of a timed-out retry.
+    const fixture = armingFixture({ pollsBeforeSettled: 1 });
+    try {
+      await checkpointOperation(BENCH_FIXTURE, 'ab-r2fs-1', 'tick', 'first', TEST_BOUNDS);
+      await checkpointOperation(BENCH_FIXTURE, 'ab-r2fs-1', 'tick', 'second', TEST_BOUNDS);
+    } finally {
+      fixture.restore();
+    }
+    expect(fixture.publications()).toBe(2);
+  });
+
+  test('an operation that never settles refuses at its deadline instead of re-posting', async () => {
+    const fixture = armingFixture({ pollsBeforeSettled: Number.MAX_SAFE_INTEGER });
+    try {
+      await expect(checkpointOperation(
+        BENCH_FIXTURE, 'ab-bounded-layers-1', 'quiesce', 'barrier', { pollMs: 1, deadlineMs: 25 },
+      )).rejects.toThrow(/did not settle within the .* operation deadline/);
+    } finally {
+      fixture.restore();
+    }
+    expect(fixture.publications()).toBe(1);
+    expect(fixture.arms()).toBe(1);
+  });
+
+  test('a stop reports the quiesce it armed, and a failed one is not a release', async () => {
+    const failed = armingFixture({ pollsBeforeSettled: 2, settleAs: 'failed', outcomeKind: 'failed' });
+    try {
+      const settled = await stopOperation(BENCH_FIXTURE, 'ab-overlay-cas-1', 'stop', TEST_BOUNDS);
+      expect(settled.ok).toBe(false);
+      expect(settled.error).toContain('threw mid-flight');
+      expect(settled.ms).toBe(41_000);
+    } finally {
+      failed.restore();
+    }
+    expect(failed.publications()).toBe(1);
+
+    const done = armingFixture({ pollsBeforeSettled: 1 });
+    try {
+      expect((await stopOperation(BENCH_FIXTURE, 'ab-overlay-cas-1', 'stop', TEST_BOUNDS)).ok).toBe(true);
+    } finally {
+      done.restore();
+    }
+  });
+
+  test('no minute-scale route is posted as a blocking request any more', () => {
+    const source = readFileSync(new URL('./bench-devbox-strategies.ts', import.meta.url), 'utf8');
+    // The two routes now travel through `awaitArmedOperation`; a `call` that
+    // posts either of them is a request holding a publication open again.
+    expect(source).not.toContain("'POST', `/checkpoint?box=");
+    expect(source).not.toContain("'POST', `/stop?box=");
+    expect(source).toContain('awaitArmedOperation');
+  });
+});
+
+/**
+ * A fixture that measures a whole arm and then refuses its WAKE.
+ *
+ * The shape of both 2026-08-31 decisive runs: a cold attach that landed, a
+ * checkpoint ladder that committed, and a refusal at the recycle. Every route
+ * an arm touches before that point answers here, so what the artifact keeps is
+ * decided by the driver rather than by how far the fake got.
+ */
+function wakeRefusingFixture(refusal: string) {
+  const asked: string[] = [];
+  let woken = false;
+  const real = globalThis.fetch;
+  const answer = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    const method = init?.method ?? 'GET';
+    const route = `${method} ${url.pathname}`;
+    asked.push(route);
+    if (route === 'POST /wake') {
+      woken = true;
+      return new Response(JSON.stringify({ ok: true, ms: 12 }));
+    }
+    if (route === 'GET /state') {
+      return new Response(JSON.stringify(woken
+        ? { ok: true, state: { running: true, restoration: 'unattached', unready: refusal } }
+        : {
+            ok: true,
+            storePrefix: 'boxes/probe/',
+            state: {
+              running: true,
+              restoration: 'attached',
+              lastAttach: { kind: 'attached', detail: 'the work directory is mounted' },
+              bootId: 'boot-before-the-stop',
+              chain: { base: { id: 'chain-1' }, delta: { bytes: 4096 }, mode: 'chain', rev: 3 },
+            },
+          }));
+    }
+    if (route === 'POST /checkpoint' || route === 'POST /stop') {
+      return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
+        status: 202,
+      });
+    }
+    if (route === 'GET /operation') {
+      return new Response(JSON.stringify({
+        ok: true,
+        state: 'done',
+        ms: 1_234,
+        outcome: { kind: 'committed', bytes: 65_536, movedBytes: 32_768 },
+      }));
+    }
+    if (route === 'POST /exec') {
+      // Whatever is asked, answered as a success carrying its own stdout: the
+      // marker read is the only exec whose OUTPUT the arm reads before the wake.
+      const posted = v.safeParse(PostedBodySchema, JSON.parse(String(init?.body ?? '{}')));
+      const command = posted.success ? posted.output.command ?? '' : '';
+      const marker = /printf %s (devbox-verify-[0-9a-f-]+)/.exec(command)?.[1] ?? '';
+      return new Response(JSON.stringify({ ok: true, exitCode: 0, stdout: marker, stderr: '', ms: 3 }));
+    }
+    if (route === 'GET /ops') {
+      return new Response(JSON.stringify({ calls: { put: 4 }, classA: 4, classB: 1, classFree: 0, total: 5 }));
+    }
+    return new Response(JSON.stringify({ ok: true, ms: 1 }));
+  };
+  globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+  return { asked, restore: () => { globalThis.fetch = real; } };
+}
+
+describe('an arm that fails mid-measurement', () => {
+  test('keeps its cold attach and its ladder instead of being replaced by nulls', async () => {
+    const refusal = 'S3FS mount failed: s3fs: MOUNTPOINT directory /workspace is not empty';
+    const fixture = wakeRefusingFixture(refusal);
+    let arm: ArmResult;
+    try {
+      arm = await runArm(
+        BENCH_FIXTURE,
+        'snapshot-chain',
+        { ...parseOptions([]), arms: ['snapshot-chain'], runId: 'preserve-probe' },
+        () => {},
+      );
+    } finally {
+      fixture.restore();
+    }
+
+    // WHAT WAS MEASURED IS STILL THERE. Pre-fix every one of these was null.
+    expect(arm.attachColdKind).toBe('attached');
+    expect(arm.attachColdMs).not.toBeNull();
+    expect(arm.attachColdBootId).toBe('boot-before-the-stop');
+    expect(arm.checkpoints).toHaveLength(EXPECTED_LADDER_ROWS);
+    expect(arm.checkpoints.every((row) => row.outcome.startsWith('committed'))).toBe(true);
+    expect(arm.stopMs).toBe(1_234);
+    expect(arm.generationBeforeLadder).toEqual({ baseId: 'chain-1', hasDelta: true, rev: 3 });
+
+    // AND THE REFUSAL TRAVELS WITH THEM, in the fixture's own words.
+    expect(arm.notes.join(' ')).toContain(refusal);
+    expect(arm.notes.join(' ')).toContain('arm failed mid-measurement');
+
+    // THE FAILED ARM RANKS NOTHING: the wake never happened, so the rows above
+    // describe a box whose recycle was never proven.
+    expect(arm.wakeKind).toBe('');
+    expect(arm.wakeMs).toBeNull();
+    expect(arm.verifyPassed).toBe(false);
+    expect(arm.verifyChecks.some((check) => !check.pass && check.detail.includes(refusal))).toBe(true);
+    expect(rankableTicks([arm], arm.decisiveTicks)).toEqual([]);
+
+    // AND ITS INSTANCE WAS HANDED BACK, which is what stops one arm's death
+    // from refusing the next arm's create with `Maximum number of instances`.
+    expect(fixture.asked.filter((route) => route === 'POST /stop')).toHaveLength(2);
+  }, 20_000);
+});
+
+/** Facts in which every control's documented defect DID show up. */
+const WITNESSED: ControlWitnessFacts = {
+  cumulativeDeltaSeed: {
+    deltaBytes: 71_303_168, markerInUpper: true, seedStamp: 'chain-7:71303168:v4', chainId: 'chain-7',
+  },
+  mutableDelta: {
+    key: 'backups/chain-7/delta.sqsh', etagBefore: 'e1', etagAfter: 'e2',
+    bytesBefore: 65_536, bytesAfter: 131_072,
+  },
+  unboundedPendingReplay: { smallPending: 50, smallReplayed: 50, largePending: 500, largeReplayed: 500 },
+  upperScan: { smallEntries: 210, smallMs: 900, largeEntries: 2_010, largeMs: 7_400 },
+  openWriteLoss: { wroteBytes: 41, survivedBytes: null },
+  nonAtomicRename: { fileBytes: 1_048_576, storeOps: 3, sourcePresent: false, destinationBytes: 1_048_576 },
+  posixGap: { syncedKeyPresent: false, key: 'boxes/probe/witness-open-write.bin' },
+};
+
+const witnessNames = (checks: readonly { name: string; observed: boolean }[]): string[] =>
+  checks.filter((check) => check.observed).map((check) => check.name);
+
+describe('the control witness cells', () => {
+  test('every preregistered witness is answered, by name and in order', () => {
+    expect(controlWitnessChecks('snapshot-chain', WITNESSED).map((check) => check.name))
+      .toEqual(['cumulative-delta-seed', 'mutable-delta']);
+    expect(controlWitnessChecks('overlay-cas', WITNESSED).map((check) => check.name))
+      .toEqual(['unbounded-pending-replay', 'O(u)-scan']);
+    expect(controlWitnessChecks('r2fs', WITNESSED).map((check) => check.name))
+      .toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
+    // A candidate preregisters none, so it can never carry an observed red check.
+    expect(controlWitnessChecks('bounded-layers', WITNESSED)).toEqual([]);
+    expect(controlWitnessChecks('merkle-pack', WITNESSED)).toEqual([]);
+  });
+
+  test('facts in which the defects showed up observe every witness', () => {
+    expect(witnessNames(controlWitnessChecks('snapshot-chain', WITNESSED)))
+      .toEqual(['cumulative-delta-seed', 'mutable-delta']);
+    expect(witnessNames(controlWitnessChecks('overlay-cas', WITNESSED)))
+      .toEqual(['unbounded-pending-replay', 'O(u)-scan']);
+    expect(witnessNames(controlWitnessChecks('r2fs', WITNESSED)))
+      .toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
+  });
+
+  test('a cell that never ran witnesses nothing, and says so', () => {
+    const checks = controlWitnessChecks('r2fs', {});
+    expect(witnessNames(checks)).toEqual([]);
+    expect(checks.every((check) => check.detail.includes('produced no observation'))).toBe(true);
+  });
+
+  test('a delta the attach no longer copies is drift, not a pass', () => {
+    const [seed] = controlWitnessChecks('snapshot-chain', {
+      ...WITNESSED,
+      cumulativeDeltaSeed: { ...WITNESSED.cumulativeDeltaSeed!, markerInUpper: false },
+    });
+    expect(seed?.observed).toBe(false);
+    expect(seed?.detail).toContain('does NOT hold');
+  });
+
+  test('a seed stamp naming an older generation does not witness THIS delta', () => {
+    const [seed] = controlWitnessChecks('snapshot-chain', {
+      ...WITNESSED,
+      cumulativeDeltaSeed: { ...WITNESSED.cumulativeDeltaSeed!, seedStamp: 'chain-6:71303168:v3' },
+    });
+    expect(seed?.observed).toBe(false);
+  });
+
+  test('one key holding the same bytes twice is no longer a mutable delta', () => {
+    const [, mutable] = controlWitnessChecks('snapshot-chain', {
+      ...WITNESSED,
+      mutableDelta: { ...WITNESSED.mutableDelta!, etagAfter: 'e1' },
+    });
+    expect(mutable?.observed).toBe(false);
+    expect(mutable?.detail).toContain('NOT rewritten');
+  });
+
+  test('a replay capped at a constant is a BOUNDED restore, so the witness vanishes', () => {
+    const [replay] = controlWitnessChecks('overlay-cas', {
+      ...WITNESSED,
+      unboundedPendingReplay: { smallPending: 50, smallReplayed: 8, largePending: 500, largeReplayed: 8 },
+    });
+    expect(replay?.observed).toBe(false);
+    expect(replay?.detail).toContain('did NOT follow the pending set');
+  });
+
+  test('a tick whose cost does not follow the layer is not an O(u) scan', () => {
+    const [, scan] = controlWitnessChecks('overlay-cas', {
+      ...WITNESSED,
+      upperScan: { smallEntries: 210, smallMs: 900, largeEntries: 2_010, largeMs: 950 },
+    });
+    expect(scan?.observed).toBe(false);
+    expect(scan?.detail).toContain('cost did NOT grow');
+  });
+
+  test('bytes that survived an open handle across the stop end the loss witness', () => {
+    const [loss] = controlWitnessChecks('r2fs', {
+      ...WITNESSED,
+      openWriteLoss: { wroteBytes: 41, survivedBytes: 41 },
+    });
+    expect(loss?.observed).toBe(false);
+    expect(loss?.detail).toContain('41B survived');
+  });
+
+  test('a rename costing the store nothing is atomic, and refuses as drift', () => {
+    const [, rename] = controlWitnessChecks('r2fs', {
+      ...WITNESSED,
+      nonAtomicRename: { fileBytes: 1_048_576, storeOps: 0, sourcePresent: false, destinationBytes: 1_048_576 },
+    });
+    expect(rename?.observed).toBe(false);
+  });
+
+  test('a store that holds a synced open file means a flush primitive exists', () => {
+    const [, , gap] = controlWitnessChecks('r2fs', {
+      ...WITNESSED,
+      posixGap: { syncedKeyPresent: true, key: 'boxes/probe/witness-open-write.bin' },
+    });
+    expect(gap?.observed).toBe(false);
+    expect(gap?.detail).toContain('a flush-to-store primitive exists');
+  });
+
+  test('an arm carrying observed witnesses publishes them as its red checks', () => {
+    const evidence = devboxArmEvidence({
+      strategy: 'r2fs',
+      verifyPassed: true,
+      verifyChecks: [],
+      phases: [],
+      checkpoints: [],
+      decisiveTicks: [],
+      witnessChecks: controlWitnessChecks('r2fs', WITNESSED),
+    });
+    expect(evidence.expectedRedChecks).toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
+    expect(evidence.observedRedChecks).toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
+  });
+});
+
 
 /** Ratios of exactly 12x on git and 4x on npm: comfortably over the bar. */
 const clearsTheBar: TickRecord[] = [
@@ -379,7 +827,7 @@ describe('the lifecycle-proof gate at the rule', () => {
       ],
       quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
       generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
-      ops: null, teardown: null, notes: [],
+      ops: null, teardown: null, witnessChecks: [], notes: [],
     };
     const cleanup = {
       attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
@@ -1499,37 +1947,73 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
   });
 });
 
-describe('the S3 residue parsers read escaped names and follow every page', () => {
-  test('an entity-escaped key round-trips, so its delete addresses the real object', () => {
-    const page = parseObjectsPage(
-      '<ListBucketResult><Contents><Key>boxes/a&amp;b &lt;v1&gt;&#x27;s.bin</Key></Contents>'
-      + '<IsTruncated>false</IsTruncated></ListBucketResult>',
-    );
-    expect(page).toEqual({ keys: ["boxes/a&b <v1>'s.bin"], next: null });
+// ── what the store must hold for the generation the record names ────────────
+
+describe('the chain arm asks the store for what its record names', () => {
+  const CHAIN = 'c0ffee00-0000-4000-8000-00000000beef';
+
+  test('a record naming a delta wants both archives present', () => {
+    expect(chainArchiveExpectations(CHAIN, true)).toEqual([
+      {
+        name: 'the base object the record names exists in the store with non-zero size',
+        key: `backups/${CHAIN}/data.sqsh`,
+        present: true,
+      },
+      {
+        name: 'the delta object the record names exists in the store with non-zero size',
+        key: `backups/${CHAIN}/delta.sqsh`,
+        present: true,
+      },
+    ]);
   });
 
-  test('a truncated object listing yields its cursor, and a cursorless one throws', () => {
-    const page = parseObjectsPage(
-      '<r><Contents><Key>a</Key></Contents><IsTruncated>true</IsTruncated>'
-      + '<NextContinuationToken>tok&amp;1</NextContinuationToken></r>',
-    );
-    expect(page.next).toBe('tok&1');
-    expect(() => parseObjectsPage('<r><IsTruncated>true</IsTruncated></r>'))
-      .toThrow(/no NextContinuationToken/);
+  test('RED PROOF: a REBASED record wants its base and NO delta', () => {
+    // The shape the instrument used to refuse. A quiesce whose delta has
+    // outgrown its base collapses the chain onto a fresh generation, which has
+    // a `data.sqsh` and no `delta.sqsh` — the last commit of run
+    // 20260831184750, whose 71,389,184 bytes are a bare base. Asking for a
+    // delta there failed the arm's verify for holding exactly the shape its
+    // strategy documents, and G1 refused the run for it.
+    const expectations = chainArchiveExpectations(CHAIN, false);
+    expect(expectations.map((row) => [row.key, row.present])).toEqual([
+      [`backups/${CHAIN}/data.sqsh`, true],
+      [`backups/${CHAIN}/delta.sqsh`, false],
+    ]);
   });
 
-  test('a truncated upload listing yields its marker pair, and a bare one throws', () => {
-    // The pre-fix shape read ONE page and stopped: a bucket with more than
-    // 1000 open uploads silently read partial, and C3 could certify clean
-    // while residue remained.
-    const page = parseUploadsPage(
-      '<r><Upload><Key>k1</Key><UploadId>u1</UploadId></Upload>'
-      + '<IsTruncated>true</IsTruncated><NextKeyMarker>k1</NextKeyMarker>'
-      + '<NextUploadIdMarker>u1</NextUploadIdMarker></r>',
+  test('the absence is a real expectation: an unnamed delta object is a finding', () => {
+    // The other direction, so the correction is not simply "ask for less". An
+    // archive under a generation whose record names none is a publication that
+    // lost its record or a sweep that never ran.
+    const absent = chainArchiveExpectations(CHAIN, false)
+      .find((row) => row.key.endsWith('delta.sqsh'));
+    expect(absent?.present).toBe(false);
+    expect(absent?.name).toContain('no delta');
+  });
+
+  test('a record with no generation asks nothing, so a caller must say so itself', () => {
+    expect(chainArchiveExpectations(undefined, true)).toEqual([]);
+    expect(chainArchiveExpectations('', false)).toEqual([]);
+  });
+
+  test('the arm checks every expectation the record produced, in both directions', () => {
+    // The wiring, guarded at the source: a branch that only ever called `head`
+    // could not express an absence, which is how the one-directional check
+    // survived. Both the loop and the absence arm have to be there.
+    const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
+    expect(source).toContain('for (const expectation of expectations) await archive(expectation);');
+    expect(source).toContain('found.exists !== true,');
+    // And the chain branch no longer asks for a delta whatever the record says:
+    // the only surviving unconditional delta head is the EXTRACTION branch's,
+    // which is about a record that cannot have collapsed onto a fresh base.
+    const chainBranch = source.slice(
+      source.indexOf("} else if (mode === 'chain') {"),
+      source.indexOf('  } else {\n    // The chain in EXTRACTION mode'),
     );
-    expect(page).toEqual({ uploads: [{ key: 'k1', uploadId: 'u1' }], next: { keyMarker: 'k1', uploadIdMarker: 'u1' } });
-    expect(() => parseUploadsPage('<r><IsTruncated>true</IsTruncated></r>'))
-      .toThrow(/no marker pair/);
-    expect(parseUploadsPage('<r><Upload><Key>k</Key><UploadId>u</UploadId></Upload></r>').next).toBeNull();
+    expect(chainBranch.length).toBeGreaterThan(200);
+    // Comments stripped: the prose in that branch explains the defect by name,
+    // and a guard that could be tripped by its own explanation guards nothing.
+    const code = chainBranch.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
+    expect(code).not.toContain('delta.sqsh');
   });
 });

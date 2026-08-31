@@ -15,14 +15,47 @@ import {
   SANDBOX_IMAGE,
   SANDBOX_IMAGE_DIGEST,
   devboxAdmission,
+  controlWitnessChecks,
   devboxArmEvidence,
   type ArmResult,
   type RunIdentity,
   type Strategy,
+  type ControlWitnessFacts,
 } from './bench-devbox-strategies';
 
 const cell: CellCompletion = { stage: 'blank', tree: 'T0', change: 'C0', cache: 'K0', completed: true };
 const deciding: MeasuredCell = { id: cell, values: [100, 105], wallMs: 1_000 };
+
+/**
+ * Facts in which every control's own documented defect DID show up: the shape a
+ * deployed run's witness cells produce when the instrument still sees what it
+ * was built to see. One set for all three arms, because each classifier only
+ * reads the groups its own witnesses name.
+ */
+const WITNESSED_FACTS: ControlWitnessFacts = {
+  cumulativeDeltaSeed: {
+    deltaBytes: 71_303_168,
+    markerInUpper: true,
+    seedStamp: 'chain-7:71303168:v4',
+    chainId: 'chain-7',
+  },
+  mutableDelta: {
+    key: 'backups/chain-7/delta.sqsh',
+    etagBefore: 'e1',
+    etagAfter: 'e2',
+    bytesBefore: 65_536,
+    bytesAfter: 131_072,
+  },
+  unboundedPendingReplay: {
+    smallPending: 50, smallReplayed: 50, largePending: 500, largeReplayed: 500,
+  },
+  upperScan: { smallEntries: 210, smallMs: 900, largeEntries: 2_010, largeMs: 7_400 },
+  openWriteLoss: { wroteBytes: 41, survivedBytes: null },
+  nonAtomicRename: {
+    fileBytes: 1_048_576, storeOps: 3, sourcePresent: false, destinationBytes: 1_048_576,
+  },
+  posixGap: { syncedKeyPresent: false, key: 'boxes/probe/witness-open-write.bin' },
+};
 
 function candidateArm(overrides: Partial<ArmEvidence> = {}): ArmEvidence {
   return {
@@ -142,7 +175,7 @@ describe('G0-G9 storage run admission', () => {
     expect(evaluateRun(record).admitted).toBe(true);
   });
 
-  test('a current-only devbox run cannot recommend: shipped arms are controls whose cells have not run', () => {
+  test('a devbox run whose witness cells never ran cannot recommend', () => {
     const record: StorageRunRecord = {
       ...validRecord(),
       arms: (['snapshot-chain', 'r2fs', 'overlay-cas'] as const).map((strategy) => devboxArmEvidence({
@@ -152,6 +185,7 @@ describe('G0-G9 storage run admission', () => {
         phases: [],
         checkpoints: [],
         decisiveTicks: [],
+        witnessChecks: [],
       })),
     };
     const verdict = evaluateRun(record);
@@ -159,6 +193,51 @@ describe('G0-G9 storage run admission', () => {
     const g2 = verdict.gates.find((row) => row.gate === 'G2');
     expect(g2?.reasons.join(' ')).toContain('expected failure that vanished');
     expect(() => requireAdmitted(verdict)).toThrow('RECOMMENDATION REFUSED');
+  });
+
+  test('a control whose cells OBSERVED every preregistered witness satisfies G2', () => {
+    // The repair the witness cells exist for: the expectations are unchanged and
+    // the observation now happens, so a control that failed as predicted stops
+    // refusing the run it was meant to validate.
+    const observed = (strategy: 'snapshot-chain' | 'r2fs' | 'overlay-cas'): ArmEvidence =>
+      devboxArmEvidence({
+        strategy,
+        verifyPassed: true,
+        verifyChecks: [],
+        phases: [],
+        checkpoints: [],
+        decisiveTicks: [],
+        witnessChecks: controlWitnessChecks(strategy, WITNESSED_FACTS),
+      });
+    const record: StorageRunRecord = {
+      ...validRecord(),
+      arms: [...validRecord().arms, observed('snapshot-chain'), observed('r2fs'), observed('overlay-cas')],
+    };
+    const g2 = evaluateRun(record).gates.find((row) => row.gate === 'G2');
+    expect(g2?.reasons).toEqual([]);
+    expect(g2?.ok).toBe(true);
+  });
+
+  test('one witness that vanished still refuses, with the others observed', () => {
+    const arm = devboxArmEvidence({
+      strategy: 'r2fs',
+      verifyPassed: true,
+      verifyChecks: [],
+      phases: [],
+      checkpoints: [],
+      decisiveTicks: [],
+      // The rename is atomic now — which would be an improvement, and is exactly
+      // the drift a control exists to notice rather than absorb.
+      witnessChecks: controlWitnessChecks('r2fs', {
+        ...WITNESSED_FACTS,
+        nonAtomicRename: { fileBytes: 1_048_576, storeOps: 0, sourcePresent: false, destinationBytes: 1_048_576 },
+      }),
+    });
+    expectsGate(
+      { ...validRecord(), arms: [...validRecord().arms, arm] },
+      'G2',
+      'did NOT produce its expected red witness "non-atomic-rename"',
+    );
   });
 
   test('an unexpected control failure refuses as instrument drift', () => {
@@ -447,6 +526,10 @@ function measuredArm(strategy: Strategy, overrides: Partial<ArmResult> = {}): Ar
     treeBytes: {},
     ops: { calls: { put: 4, get: 2 }, classA: 4, classB: 2, classFree: 0, total: 6 },
     teardown: null,
+    // A CANDIDATE PREREGISTERS NO WITNESS, so an empty list here is complete
+    // evidence rather than a missing cell. Control arms carry the rows their
+    // cells observed; `controlWitnessChecks` builds those.
+    witnessChecks: [],
     notes: [],
     ...overrides,
   };
