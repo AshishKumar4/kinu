@@ -550,11 +550,17 @@ export function dispatchRecoveredNotice(
 ): void {
   const checkpoint: JsonValue = { ...signal, attempts };
   transports.redrive(FORK_NOTICE_LANE_FIBER, checkpoint, async () => {
+    // SLEEP FIRST for any attempt after the first, because the checkpoint
+    // carries the ATTEMPT COUNT and not the sleep: an eviction mid-backoff
+    // recovers this row and re-enters here with the same count, and pacing
+    // that ran after the refusal would be skipped by exactly that replay.
+    if (attempts > 0) {
+      await new Promise((resolve) => { setTimeout(resolve, noticeBackoffMs(attempts)); });
+    }
     if (await transports.deliverSignal(signal) === 'undelivered') {
       diagnostics.event('fiber.notice_redelivery_owed', {
         key: signal.idempotencyKey ?? '(none)', attempts: attempts + 1,
       });
-      await new Promise((resolve) => { setTimeout(resolve, noticeBackoffMs(attempts + 1)); });
       dispatchRecoveredNotice(transports, signal, attempts + 1);
     }
   });

@@ -168,7 +168,8 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
     expect(noticeBackoffMs(50)).toBe(60_000);
 
     // And the attempt count rides the checkpoint: a recovered fifth attempt
-    // re-dispatches as the sixth, not as a fresh first.
+    // re-dispatches as the fifth — the body sleeps ITS OWN backoff before
+    // delivering, so an eviction mid-backoff cannot skip the pacing.
     const scene = recordingTransports();
     const checkpoints: JsonValue[] = [];
     scene.transports = {
