@@ -2201,9 +2201,15 @@ export class OrchestratorAgent extends ActorAgent {
    *  is that an `await` added here is a compile error (TS1308) and that widening
    *  it is visible in the diff; `scripts/do-init-gate.ts` is what refuses the
    *  widening. */
-  onStart(): void {
+  async onStart(): Promise<void> {
     this.ensureSchema();
-    let sweepsTruncated = false;
+    // The branch seal runs HERE, in the gate, per the bounded-work rule: one
+    // LIMIT-256 pass whose cutoff is this construction instant — and under
+    // `blockConcurrencyWhile` no request can have spawned a head yet, so every
+    // running branch row it can see is stale by definition. A pass that fills
+    // its budget arms the wake below, whose tick re-runs the same fenced seal
+    // for the remainder.
+    let sweepsTruncated = this.reconcileOrphanedBranches();
     // Both sweeps run inside `Agent.alarm()`'s initialization, i.e. before the
     // SDK reads its own tables — so a backlog is pruned rather than paid for in
     // one go, and every sweep carries a ROW BUDGET because this is the init
@@ -2317,6 +2323,33 @@ export class OrchestratorAgent extends ActorAgent {
     // and the delivery reconcile above is what arms that wake: its existence
     // reads cover owed deliveries, interrupted transitions, running heads AND
     // live job rows, so recovery is owed exactly when one of them answers.
+
+    // The workspace BOOTS AT ACTIVATION — detached, owned, off the gate. The
+    // boot is bounded local work (schema DDL, /etc/profile, session compose
+    // over this object's own SQLite; no network, no model), so it belongs to
+    // the start of the object's life: a request arriving mid-boot awaits the
+    // same memoized promise instead of paying the boot serially, and a failed
+    // boot clears the memo so the next touch retries instead of poisoning the
+    // isolate. Detached rather than awaited only because `onStart` runs inside
+    // `blockConcurrencyWhile`, where an await stalls every request on this
+    // object behind work none of them may need first.
+    // The workspace boots INSIDE the gate, awaited — the owner's ruling:
+    // provably bounded work owed once at the start of the object's life stays
+    // in onStart, because anything else adds machinery. The boot is this
+    // object's own SQLite (schema DDL, /etc/profile, session compose; no
+    // network, no model), every request queues behind it exactly once per
+    // activation, and a FAILED boot is classified and clears the memo — the
+    // activation completes and the next workspace touch retries, rather than
+    // wedging the object behind a thrown gate.
+    try {
+      await this.hostedWorkspace().bundle.session();
+    } catch (err) {
+      diagnostics.failure('workspace.activation_boot_failed', toKinuError({
+        doing: 'booting the workspace at activation',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
+    }
   }
 
   /** The orchestrator's asynchronous maintenance: reconcile the fork journal a
@@ -2345,13 +2378,13 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   protected override async maintenanceWork(): Promise<boolean> {
-    // ONCE PER ACTIVATION, on the first tick — and only after the branch seal
-    // ran to completion, because the fork reconcile trusts that every running
-    // head BEFORE THE CUTOFF is stale. Mid-activation terminal retries arm
-    // this same wake; the consumed guard and the cutoff together are what
-    // keep them from marking a LIVE head a request spawned meanwhile.
-    if (!this.activationRecoveryPending) return super.maintenanceWork();
+    // The seal itself runs on EVERY tick — idempotent, budgeted, and fenced by
+    // the construction cutoff, so it only ever finishes what the gate's own
+    // pass could not. Fork recovery stays ONCE per activation behind the
+    // consumed guard, and only after the seal has drained, because the
+    // reconcile trusts that every running head BEFORE THE CUTOFF is stale.
     if (this.reconcileOrphanedBranches()) return true;
+    if (!this.activationRecoveryPending) return super.maintenanceWork();
     this.activationRecoveryPending = false;
     try {
       await reconcileInterruptedForks({

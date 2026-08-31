@@ -49,7 +49,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // The ACTOR's activation, not `agent.onStart()`: the vendor chat base
     // shadows that name, so calling it activates nothing and this assertion
     // would pass or fail on a sweep that never ran.
-    agent.activateActor();
+    await agent.activateActor();
 
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual(['kinu-wake']);
   });
@@ -67,7 +67,7 @@ describe('the workspace keeps exactly one wake row', () => {
     );
     for (let i = 0; i < 4096 + 50; i++) insert.run(`stale-${i}`, '_chatRecovery', 'delayed', overdueSec);
 
-    agent.activateActor();
+    await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
@@ -95,7 +95,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const expired = Date.now() - 25 * 60 * 60 * 1000;
     for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
 
-    agent.activateActor();
+    await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
@@ -122,7 +122,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const expired = Date.now() - 25 * 60 * 60 * 1000;
     for (let i = 0; i < 4096 + 12; i++) insert.run(`sub-fiber-${i}`, 'bg:stale', expired);
 
-    harness.agent.activateActor();
+    await harness.agent.activateActor();
     await harness.agent.harnessSettleBackgroundTasks();
 
     // Seeded rows only: the activation's own terminal-lane fiber writes its
@@ -163,7 +163,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // including the window before the wake's first tick — is live work no
     // recovery may mark, and a second tick must not re-run the seal at all.
     const { agent, db } = orchestratorHarness();
-    agent.activateActor();
+    await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
     const insertBranch = (id: string, spawnedAt: number): void => {
@@ -184,12 +184,14 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(status('stale-head')).toBe('errored');
     expect(status('live-head')).toBe('running');
 
-    // The guard is consumed: even a stale-looking row inserted later is left
-    // for the NEXT activation, because mid-activation nothing can tell it
-    // from live work racing the clock.
+    // The CUTOFF is the live-work guard, not the tick count: a row whose
+    // spawned_at predates construction is stale by definition wherever it
+    // appears, and the seal — which runs fenced on every tick — retires it.
+    // Only a backdated INSERT can manufacture this; production heads are
+    // stamped at spawn and land after the cutoff.
     insertBranch('late-stale-head', Date.now() - 60_000);
     await agent._kinuTerminalRetryTick();
-    expect(status('late-stale-head')).toBe('running');
+    expect(status('late-stale-head')).toBe('errored');
   });
 
   test('a live swarm ledger row created after activation survives the tick', async () => {
@@ -197,7 +199,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // rows the resume gate did not claim, and a row a live request created
     // after construction must not be one of them.
     const { agent, db } = orchestratorHarness();
-    agent.activateActor();
+    await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
     const insertRun = (root: string, createdAt: number): void => {
@@ -222,7 +224,7 @@ describe('the workspace keeps exactly one wake row', () => {
 
   test('a live run-event start after activation is not terminalized by the tick', async () => {
     const { agent, db } = orchestratorHarness();
-    agent.activateActor();
+    await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
     const start = (run: string, ts: number): void => {
@@ -252,7 +254,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // Driven by REAL work — a branch-head backlog past the 256-row seal
     // budget — with no failure injection.
     const { agent, db } = orchestratorHarness();
-    agent.activateActor();
+    await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
     const insert = db.prepare(
       `INSERT INTO head_journal (id, root_id, depth, task, status, spawned_at)

@@ -136,7 +136,7 @@ describe('the Kinu timer rides the SDK scheduler', () => {
     // `memberBody`, not `indexOf` + slice: anchored on a literal signature, a
     // slice silently becomes `slice(-1, …)` the day the method's signature
     // changes, and a wiring test that matches nothing passes.
-    const onStart = memberBody(orchestrator, 'onStart(): void', 'orchestrator.ts');
+    const onStart = memberBody(orchestrator, 'async onStart(): Promise<void>', 'orchestrator.ts');
     expect(onStart).toContain('this.sweepUnrunnableSchedules()');
     // The wake row is derived state, so an activation is where a workspace whose
     // only wake was lost gets it back. Behaviour is in

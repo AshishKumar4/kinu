@@ -104,7 +104,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * asserting the stale sweep could watch the row it seeded survive. Named here
    * because `ensureActorSchema` below already has to reach past the same shadow.
    */
-  activateActor(): void { super.onStart(); }
+  activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
   /** The parent-side roster the facet gate consults. Exposed rather than
    *  wrapped: the production store IS the API a test seeds a subordinate
    *  through, and a hand-written INSERT would be a second copy of its
@@ -679,7 +679,7 @@ export class HarnessSubordinateAgent extends SubordinateAgent {
   harnessSettleBackgroundTasks(): Promise<void> { return this.settleBackgroundTasks(); }
 
   /** The production activation, same bridge the orchestrator harness carries. */
-  activateActor(): void { super.onStart(); }
+  activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
 
   observeRawTools(): ToolSet { return this.getRawTools(); }
   observeRuntime(): AgentRuntime { return this.rt; }
@@ -914,11 +914,15 @@ function instantiate<T extends object>(
 function ensureActorSchema(
   agent: InstanceType<typeof OrchestratorAgent> | InstanceType<typeof SubordinateAgent>,
 ): void {
-  // `onStart` is synchronous on every Kinu Durable Object (it runs inside
-  // `blockConcurrencyWhile`), so the production override can simply be called:
-  // its whole schema is in place when it returns.
+  // The production override can simply be called: the SCHEMA half is in place
+  // synchronously when it returns (DDL is the gate's synchronous prefix). The
+  // orchestrator gate is async — the admitted workspace boot — and its
+  // promise is deliberately dropped: a failed boot classifies inside onStart
+  // and never throws, and suites that need the BOOTED workspace await the
+  // memoized session through ordinary operations.
   if (agent instanceof OrchestratorAgent) {
-    OrchestratorAgent.prototype.onStart.call(agent);
+    const gate: unknown = OrchestratorAgent.prototype.onStart.call(agent);
+    void gate;
   } else {
     SubordinateAgent.prototype.onStart.call(agent);
   }

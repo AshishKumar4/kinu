@@ -703,7 +703,7 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('activation classifies owed deliveries; only the durable wake dispatches', () => {
     // Activation reaches one reconcile…
-    const onStart = memberBody(source, 'onStart(): void', 'orchestrator.ts');
+    const onStart = memberBody(source, 'async onStart(): Promise<void>', 'orchestrator.ts');
     expect(onStart).toContain('this.reconcileEventDeliveries(sweepsTruncated)');
 
     // …and that reconcile is EXISTENCE READS AND ONE ARM — the init ruling

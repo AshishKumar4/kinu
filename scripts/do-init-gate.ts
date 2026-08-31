@@ -312,6 +312,37 @@ export type HookKind = 'per-request' | 'container-start' | 'recovery';
  *  its own scope and cannot extend the gate, so the walk does not descend into
  *  one — descending would report a detached recovery task, which is precisely
  *  the shape the fix uses. */
+/**
+ * The awaits an ASYNC init gate is allowed to hold, verbatim after whitespace
+ * collapse — the owner's 2026-08-31 ruling: bounded, once-per-start work stays
+ * in the gate, and the workspace boot (this object's own SQLite: schema,
+ * profile, session compose) is that work. Everything else still fails by
+ * name, so growing this list is a conscious edit with its own review.
+ */
+const ADMITTED_INIT_AWAITS: readonly string[] = [
+  'await this.hostedWorkspace().bundle.session()',
+];
+
+/** Every own-scope await in `body` that is NOT on
+ *  {@link ADMITTED_INIT_AWAITS}, spelled as written. Callers gate on isAsync. */
+function rejectedInitAwaits(text: string, body: SyntaxNode | undefined): string[] {
+  if (body === undefined) return [];
+  const rejected: string[] = [];
+  const collect = (node: SyntaxNode): void => {
+    for (const child of node.children) {
+      if (child.type === 'AwaitExpression') {
+        const spelled = text.slice(child.start, child.end).replace(/\s+/g, ' ').trim();
+        if (!ADMITTED_INIT_AWAITS.includes(spelled)) rejected.push(spelled);
+        continue;
+      }
+      if (isFunctionLike(child)) continue;
+      collect(child);
+    }
+  };
+  collect(body);
+  return rejected;
+}
+
 function ownScopeAwait(body: SyntaxNode): SyntaxNode | undefined {
   for (const child of body.children) {
     if (child.type === 'AwaitExpression') return child;
@@ -438,8 +469,20 @@ export function auditFile(
       const fail = (reason: string): void => void violations.push({ file, line, owner, member: name, reason });
 
       // Common to all three: `async` is what lets an unbounded await into the
-      // gate, and a nested gate is the same gate by another name.
-      if (isAsync(member)) {
+      // gate, and a nested gate is the same gate by another name. ONE admitted
+      // exception, the owner's ruling of 2026-08-31: work that is provably
+      // bounded and owed once at the start of the object's life STAYS in the
+      // gate — concretely the workspace boot, this object's own SQLite and
+      // nothing else. An async gate is therefore legal exactly when every
+      // await in its own scope is on the pinned list below; any other await
+      // fails by name, so admitting a new one is a conscious edit HERE.
+      const admittedAsyncGate = isAsync(member) && hook !== 'recovery' && hook !== 'container-start';
+      if (admittedAsyncGate) {
+        for (const awaitText of rejectedInitAwaits(text, blockBodyOf(functionOf(member) ?? member))) {
+          fail(`awaits \`${awaitText}\` — not on the admitted init-await list `
+            + '(ADMITTED_INIT_AWAITS); the gate admits the workspace boot alone');
+        }
+      } else if (isAsync(member)) {
         fail('declared `async` — its promise is what `blockConcurrencyWhile` waits on');
       }
       // The annotation is not decoration: the bases accept
@@ -455,7 +498,12 @@ export function auditFile(
       const annotated = returns === undefined
         ? undefined
         : text.slice(returns.start, returns.end).replace(/\s+/g, '');
-      if (hook === 'recovery') {
+      if (admittedAsyncGate) {
+        // An admitted-async gate annotates the promise it now returns.
+        if (annotated !== 'Promise<void>') {
+          fail(`must annotate \`: Promise<void>\` explicitly (found \`${annotated ?? 'no annotation'}\`)`);
+        }
+      } else if (hook === 'recovery') {
         if (annotated === undefined || !annotated.startsWith('Promise<')) {
           fail('must annotate what its promise resolves to, explicitly '
             + `(found \`${annotated ?? 'no annotation'}\`)`);
@@ -468,7 +516,7 @@ export function auditFile(
       }
       const body = blockBodyOf(functionOf(member) ?? member);
       if (body === undefined) continue;
-      if (ownScopeAwait(body) !== undefined) {
+      if (!admittedAsyncGate && ownScopeAwait(body) !== undefined) {
         fail(hook === 'container-start'
           ? `awaits in its own scope — hand the work to \`${START_DEADLINE}\` and return it, `
             + 'so gate occupancy is bounded below do.block_concurrency.cancel_ms'

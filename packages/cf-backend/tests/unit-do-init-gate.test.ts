@@ -39,28 +39,33 @@ const { OrchestratorAgent } = await import('../src/orchestrator');
 const { SubordinateAgent } = await import('../src/subordinate-agent');
 const { ExplorationAgent } = await import('../src/exploration');
 
-/** Every Kinu class whose `onStart` runs inside `blockConcurrencyWhile`.
+/** Every Kinu class whose `onStart` runs inside `blockConcurrencyWhile`,
+ *  with the shape its gate is ALLOWED to have. The orchestrator is async by
+ *  the owner's 2026-08-31 ruling — bounded once-per-start work stays in the
+ *  gate, concretely the workspace boot — and `gate:do-init` holds every await
+ *  in it to the pinned admitted list. The others stay synchronous.
  *  UserDO declares no override, MonitorDO is a plain DurableObject with no
  *  partyserver gate, and KinuSandbox/NimbusSession are third-party bases. */
 const GATED_CLASSES = [
-  ['OrchestratorAgent', OrchestratorAgent],
-  ['SubordinateAgent', SubordinateAgent],
-  ['ExplorationAgent', ExplorationAgent],
+  ['OrchestratorAgent', OrchestratorAgent, 'AsyncFunction'],
+  ['SubordinateAgent', SubordinateAgent, 'Function'],
+  ['ExplorationAgent', ExplorationAgent, 'Function'],
 ] as const;
 
-describe('no Durable Object awaits anything inside its init gate', () => {
-  for (const [name, Actor] of GATED_CLASSES) {
-    test(`${name}.onStart is synchronous`, () => {
+describe('no Durable Object awaits anything unadmitted inside its init gate', () => {
+  for (const [name, Actor, allowedConstructor] of GATED_CLASSES) {
+    test(`${name}.onStart has its allowed gate form`, () => {
       // The real prototype member, not its source: an async override reports
       // 'AsyncFunction' here however it was written.
-      expect(Actor.prototype.onStart.constructor.name).toBe('Function');
+      expect(Actor.prototype.onStart.constructor.name).toBe(allowedConstructor);
     });
   }
 
-  test('a cold activation answers a pure read with no filesystem reachable', async () => {
-    // The harness NIMBUS_SESSION binding is `{}` — using it throws. So this
-    // whole test only completes because the real `onStart` reached neither the
-    // workspace filesystem nor anything else off this object.
+  test('a cold activation answers a pure read, and the boot cannot wedge it', async () => {
+    // The harness NIMBUS_SESSION binding is `{}` — the runtime cache is
+    // unusable. The awaited boot composes the workspace over this object's own
+    // SQLite regardless, and a boot FAILURE is classified rather than thrown,
+    // so the activation always completes and a pure read always answers.
     const harness = orchestratorHarness();
     expect(await harness.agent.listAgentTasks()).toEqual([]);
   });

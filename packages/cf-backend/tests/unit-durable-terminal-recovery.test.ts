@@ -225,7 +225,7 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     persistedDrainTurn(harness, 'evt-answered', 'the build passed');
     persistedDrainTurn(harness, 'evt-unanswered', null);
 
-    harness.agent.activateActor();
+    await harness.agent.activateActor();
     // The reconcile is detached from `onStart` (a bounded sweep plus one
     // schedule write); a macrotask lets that chain settle.
     await new Promise((resolve) => { setTimeout(resolve, 0); });

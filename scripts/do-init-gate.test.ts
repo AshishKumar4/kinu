@@ -42,12 +42,15 @@ const reasons = (src: string): string[] =>
   auditFile('subordinate-agent.ts', src).violations.map((v) => v.reason);
 
 describe('DO init-gate purity', () => {
-  test('the shipped defect is reported, on all three independent grounds', () => {
+  test('the shipped defect is reported: both scaffold awaits fail by name', () => {
+    // Under the admitted-await rule the refusal is SHARPER than the old
+    // three-ground report: each await that is not the pinned workspace boot is
+    // named individually, so the fix is legible from the finding alone.
     const found = reasons(SHIPPED);
-    expect(found).toHaveLength(3);
-    expect(found[0]).toContain('async');
-    expect(found[1]).toContain('must annotate `: void`');
-    expect(found[2]).toContain('awaits in its own scope');
+    expect(found).toHaveLength(2);
+    expect(found[0]).toContain('not on the admitted init-await list');
+    expect(found[0]).toContain('scaffold.exists');
+    expect(found[1]).toContain('bootstrapScaffold');
   });
   test('the landed fix is clean', () => {
     expect(reasons(FIXED)).toEqual([]);
@@ -513,17 +516,22 @@ describe('DO init-gate purity, against the real tree', () => {
     expect(audit(SOURCES).violations).toEqual([]);
   });
 
-  test('cut the wire: re-adding `async` to the real orchestrator goes red', () => {
-    // Against the real file, not a fixture — one token changed in memory.
+  test('cut the wire: an UNADMITTED await in the real async gate goes red', () => {
+    // Against the real file, not a fixture — one await added in memory. The
+    // gate is legitimately async now (the admitted workspace boot), so the
+    // wire to cut is an await that is NOT on the pinned list.
     const file = 'packages/cf-backend/src/orchestrator.ts';
     const real = SOURCES.get(file);
     expect(real).toBeDefined();
 
-    const widened = real!.replace('  onStart(): void {', '  async onStart(): Promise<void> {');
+    const widened = real!.replace(
+      '      await this.hostedWorkspace().bundle.session();',
+      '      await this.hostedWorkspace().bundle.session();\n      await this.runDueSessionEvolution();',
+    );
     expect(widened).not.toBe(real);
     const { violations } = auditFile(file, widened);
     expect(violations.map((v) => v.owner)).toContain('OrchestratorAgent');
-    expect(violations[0]!.reason).toContain('async');
+    expect(violations[0]!.reason).toContain('not on the admitted init-await list');
   });
 
   test('cut the wire: unbounding the real container hook goes red', () => {
