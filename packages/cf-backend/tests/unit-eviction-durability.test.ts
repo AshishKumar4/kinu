@@ -114,16 +114,31 @@ function advisorSnapshot(turnId: string): AdvisorRecoverySnapshot {
 }
 
 interface AdvisorObservation {
-  notes: string[];
-  signals: AgentSignal[];
+  readonly notes: string[];
+  readonly signals: AgentSignal[];
+  /** Settles when the review reaches the provider — the real event a case about
+   *  ORDERING waits on, instead of a guessed number of ticks. */
+  readonly entered: Promise<void>;
+  /** Let the parked model answer. Called up front by the cases that are about
+   *  the outcome rather than the ordering. */
+  readonly release: () => void;
 }
 
-/** The advisor lane's two outputs, captured at the seams the lane itself uses:
- *  a reviewer model that answers one note, the real note store (so the durable
- *  row a recovery guards on is really written), and the signal seam. */
+/**
+ * The advisor lane's two outputs, captured at the seams the lane itself uses: a
+ * reviewer model that answers one note, the real note store (so the durable row
+ * a recovery guards on is really written), and the signal seam.
+ *
+ * The model is PARKED until `release`, which is what makes "the re-drive is
+ * detached" assertable rather than raced: a review that cannot finish is exactly
+ * the state the old in-gate arm held the whole object in, so a hook that answers
+ * while this is parked answered without its lane.
+ */
 function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
   const notes: string[] = [];
   const signals: AgentSignal[] = [];
+  const arrived = Promise.withResolvers<void>();
+  const held = Promise.withResolvers<void>();
   const reply = JSON.stringify({
     note: 'The migration ran before the suite. Confirm a backup exists.',
     severity: 'blocker',
@@ -132,7 +147,12 @@ function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
   Object.defineProperty(agent.observeRuntime(), 'advisorLlm', {
     configurable: true,
     get: () => ({
-      complete: async () => { notes.push(reply); return reply; },
+      complete: async () => {
+        arrived.resolve();
+        await held.promise;
+        notes.push(reply);
+        return reply;
+      },
       stream: () => { throw new Error('the advisor lane completes, it does not stream'); },
     }),
   });
@@ -142,7 +162,28 @@ function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
     configurable: true,
     value: async (signal: AgentSignal) => { signals.push(signal); return await deliver(signal); },
   });
-  return { notes, signals };
+  return { notes, signals, entered: arrived.promise, release: () => { held.resolve(); } };
+}
+
+/** One recovery hook call, with its ANSWER observable separately from the lane
+ *  it classified. */
+interface Recovering {
+  readonly result: Promise<FiberRecoveryResult>;
+  /** Whether the hook's promise has already resolved — flipped in the promise's
+   *  own continuation, so a case can ask "had the hook returned by the time the
+   *  lane reached its provider?" without a clock. */
+  readonly answered: () => boolean;
+}
+
+function recovering(agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext): Recovering {
+  let answered = false;
+  const result = (async () => {
+    const value = await agent.harnessRecoverFiber(ctx);
+    answered = true;
+    if (value === undefined) throw new Error(`onFiberRecovered returned nothing for "${ctx.name}"`);
+    return value;
+  })();
+  return { result, answered: () => answered };
 }
 
 describe('the recovery configuration is declared, not inherited', () => {
@@ -162,7 +203,7 @@ describe('the recovery configuration is declared, not inherited', () => {
 });
 
 describe('a background job whose executor died', () => {
-  test('the recovery re-drives it from the durable row and terminalizes the old fiber', async () => {
+  test('the recovery hands the re-drive to a carrier and terminalizes the old fiber', async () => {
     const { agent } = orchestratorHarness();
     agent.harnessJobs().create({
       id: 'bgjob-evicted', kind: 'search', workMode: 'build',
@@ -178,14 +219,34 @@ describe('a background job whose executor died', () => {
       { phase: 'running', jobId: 'bgjob-evicted', kind: 'search' },
     ));
 
-    // `completed` is the mark that moves a managed row off `interrupted`, and
-    // the snapshot says which job this recovery actually re-drove — so a reader
-    // can tell a re-drive from a no-op without reading the job table.
+    // `completed` is the mark that moves a managed row off `interrupted`, and it
+    // now means "this row's obligation has a carrier" rather than "the job ran":
+    // a settled job's re-drive delivers a WAKE, and a wake resolves only when the
+    // turn it queues ends, so no classification can wait for it.
     expect(result.status).toBe('completed');
-    expect(result).toMatchObject({ snapshot: { redriven: 'bgjob-evicted' } });
+    expect(result).toMatchObject({ snapshot: { lane: 'bg:search', redrive: 'background-job' } });
+    // The carrier itself, durable and visible: a fresh `cf_agents_runs` row under
+    // the same lane name, holding the same checkpoint, so an interruption of the
+    // re-drive re-enters this same arm. `toContain` rather than an equality:
+    // re-driving a RUNNING job opens the job lane's own fiber beside it, which is
+    // the registry doing its normal work.
+    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toContain('bg:search');
+
+    await agent.harnessJoinDetachedFibers();
+    expect(agent.harnessOpenFiberRows()).toEqual([]);
   });
 
-  test('a job whose outcome had landed is not re-driven, and the recovery still terminalizes', async () => {
+  /**
+   * The turn-awaiting half of the P0 defect, in one case.
+   *
+   * A job whose outcome landed but whose WAKE did not is re-driven by delivering
+   * that wake, and `signals.deliver` on an idle agent queues a turn and resolves
+   * only when the turn ENDS. Awaiting that from the recovery hook awaits a whole
+   * agent turn inside `blockConcurrencyWhile`. So the delivery is parked here and
+   * the hook must answer anyway — with the in-gate arm, `answered()` is false at
+   * the assertion below, because the hook is still inside the queued turn.
+   */
+  test("a settled job's wake is delivered DETACHED, not awaited by the hook", async () => {
     const { agent } = orchestratorHarness();
     const jobs = agent.harnessJobs();
     jobs.create({
@@ -195,14 +256,29 @@ describe('a background job whose executor died', () => {
     // The outcome landed and the wake did not — the one case a fiber row knows
     // about and the registry does not.
     jobs.settle('bgjob-settled', jobs.epochOf('bgjob-settled') ?? 0, '"answer"', Date.now());
+    const queued = Promise.withResolvers<void>();
+    const arrived = Promise.withResolvers<void>();
+    agent.harnessSetSignalDeliverer(async () => {
+      arrived.resolve();
+      await queued.promise;
+      return 'queued';
+    });
 
-    const result = await recover(agent, interrupted(
+    const recovery = recovering(agent, interrupted(
       `${BACKGROUND_FIBER_PREFIX}search`,
       { phase: 'running', jobId: 'bgjob-settled', kind: 'search' },
     ));
 
-    expect(result.status).toBe('completed');
-    expect(result).toMatchObject({ snapshot: { redriven: null } });
+    // The real event, awaited rather than approximated: the wake has reached the
+    // delivery seam and is parked inside it.
+    await arrived.promise;
+    expect(recovery.answered()).toBe(true);
+    expect(await recovery.result).toMatchObject({
+      status: 'completed', snapshot: { redrive: 'background-job' },
+    });
+
+    queued.resolve();
+    await agent.harnessJoinDetachedFibers();
     // The recorded outcome is untouched: recovery re-delivers the wake, it does
     // not re-run work that already answered.
     expect(jobs.get('bgjob-settled')?.status).toBe('completed');
@@ -210,7 +286,7 @@ describe('a background job whose executor died', () => {
 });
 
 describe('the post-turn lanes', () => {
-  test('the evolution lane leaves a durable row and re-enters from the queue', async () => {
+  test('the evolution lane leaves a durable row and hands the re-entry to a carrier', async () => {
     const { agent } = orchestratorHarness();
 
     agent.harnessSettleEvolution();
@@ -224,14 +300,27 @@ describe('the post-turn lanes', () => {
     // Re-entry is the DURABLE half only: the session pass, which claims and
     // settles its own window and drains its own trial queue. `settleEvolution`
     // joins promises this activation never dispatched, so it is deliberately
-    // absent from the recovery path.
+    // absent from the recovery path. It re-enters through a carrier rather than
+    // here: the pass spends model calls and real tool loops, and this hook is
+    // awaited inside the init gate.
     expect(result).toEqual({
       status: 'completed',
-      snapshot: { lane: 'evolution:settle', reentered: 'session-evolution' },
+      snapshot: { lane: 'evolution:settle', redrive: 'session-evolution' },
     });
+    await agent.harnessJoinDetachedFibers();
   });
 
-  test('the advisor lane re-drives from its snapshot and lands exactly one note', async () => {
+  /**
+   * The advisor arm, and the P0 property: the review is a MODEL CALL, so the
+   * hook classifies and the carrier reviews.
+   *
+   * The model is parked, so "the hook answered while the lane had not" is a fact
+   * about two observations rather than about a clock. With the in-gate arm
+   * `answered()` is false here — the hook is inside the provider call — which is
+   * precisely the state in which every `fetch`, websocket frame and alarm on the
+   * object was queued behind `blockConcurrencyWhile`.
+   */
+  test('the advisor review runs DETACHED and still lands exactly one note', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const advisor = observeAdvisor(agent);
@@ -239,40 +328,55 @@ describe('the post-turn lanes', () => {
     // Exactly what the interrupted lane stashed: the complete turn plus the
     // three decisions taken at turn end. Nothing is re-derived on recovery, so
     // the review runs against the world the turn ran in.
-    const result = await recover(agent, interrupted(
-      'advisor:review', advisorSnapshot('turn-42'),
-    ));
+    const recovery = recovering(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
 
+    await advisor.entered;
+    expect(recovery.answered()).toBe(true);
+    expect(agent.harnessNotesForTurn('turn-42')).toBe(0);
     // Completed, NOT a terminal error: the review is work, and the eviction was
-    // not a verdict on it.
-    expect(result).toMatchObject({
+    // not a verdict on it. The carrier holds the checkpoint the review needs, so
+    // an interruption of the re-drive is offered this arm again.
+    expect(await recovery.result).toMatchObject({
       status: 'completed',
-      snapshot: { turnId: 'turn-42', reentered: true },
+      snapshot: { turnId: 'turn-42', redrive: 'advisor-review' },
     });
+    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toEqual(['advisor:review']);
+
+    advisor.release();
+    await agent.harnessJoinDetachedFibers();
+
     // One note on the audit stream, one signal spoken, and the signal is keyed
     // on the turn so a re-delivery collapses onto the row it already opened.
     expect(advisor.notes).toHaveLength(1);
     expect(advisor.signals).toHaveLength(1);
     expect(advisor.signals[0]).toMatchObject({ idempotencyKey: 'advisor:turn-42' });
     expect(agent.harnessNotesForTurn('turn-42')).toBe(1);
+    // And the carrier retired with its work: nothing left for the next scan.
+    expect(agent.harnessOpenFiberRows()).toEqual([]);
   });
 
   test('a review that had already landed is NOT re-run, so recovery cannot double it', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const advisor = observeAdvisor(agent);
+    advisor.release();
 
     // The other side of the one durable write: the lane recorded its note and
     // was evicted before the fiber row was released, so recovery is offered the
     // same work again. Re-running here is what would write a second note about
     // one turn and speak it twice.
     await recover(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
+    await agent.harnessJoinDetachedFibers();
     const again = await recover(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
 
     expect(again).toMatchObject({
       status: 'completed',
-      snapshot: { turnId: 'turn-42', reentered: false, alreadyRecorded: true },
+      snapshot: { turnId: 'turn-42', redrive: null, alreadyRecorded: true },
     });
+    // The guard is SYNCHRONOUS and runs before anything is handed to a carrier,
+    // so the refused re-drive leaves no second fiber row either — a detach-first
+    // arm would have opened one and then discovered the note.
+    expect(agent.harnessOpenFiberRows()).toEqual([]);
     // Still one, after two recoveries of the same lane.
     expect(advisor.notes).toHaveLength(1);
     expect(advisor.signals).toHaveLength(1);
@@ -289,7 +393,7 @@ describe('the post-turn lanes', () => {
     }));
 
     expect(result.status).toBe('error');
-    expect(result).toMatchObject({ snapshot: { reentered: false } });
+    expect(result).toMatchObject({ snapshot: { redrive: null } });
   });
 
   test('an interrupted search is recorded for the next turn rather than re-run', async () => {
@@ -298,16 +402,26 @@ describe('the post-turn lanes', () => {
 
     const result = await recover(agent, interrupted(SEARCH_FIBER_NAME, { budget: 3 }));
 
-    expect(result).toEqual({ status: 'completed', snapshot: { lane: 'mcts', recorded: true } });
+    expect(result).toEqual({
+      status: 'completed', snapshot: { lane: 'mcts', recorded: true, redrive: 'memory-note' },
+    });
     // The agent's own record of the interruption: a future turn that finds a
     // half-expanded tree can see why. The search itself is NOT re-driven here —
     // its tree is durable and, when the call was detached, its job row is what
     // re-drives it.
+    //
+    // The audit row lands in the classification because it is this object's own
+    // SQLite; the MEMORY.md line goes through the workspace filesystem, which is
+    // another Durable Object for a hosted workspace, so it rides the carrier.
     const events = harness.db.prepare<{ type: string; message: string }, []>(
       "SELECT type, message FROM evolution_events WHERE type = 'fiber_recovered'",
     ).all();
     expect(events).toHaveLength(1);
     expect(events[0]!.message).toContain('mcts');
+
+    await agent.harnessJoinDetachedFibers();
+    expect(await agent.observeRuntime().memory.read('memory/MEMORY.md'))
+      .toContain('Fiber "mcts" was interrupted');
   });
 });
 
@@ -325,7 +439,7 @@ describe('a fiber nobody defined a recovery for', () => {
     expect(String(result.status === 'error' ? result.error : '')).toContain('some:future-lane');
   });
 
-  test('the scan releases the row it recovered, so it is not offered twice', async () => {
+  test('the scan releases the row it recovered, and the carrier retires its own', async () => {
     const { agent } = orchestratorHarness();
 
     // Exactly what a dead activation leaves: the row `runFiber` wrote, with no
@@ -337,9 +451,12 @@ describe('a fiber nobody defined a recovery for', () => {
     // The alarm's housekeeping pass — no request, no socket, no client.
     await agent.harnessAlarmHousekeeping();
 
-    // Nothing left interrupted after a successful re-drive: the acceptance
-    // property, observed on the row rather than on the return value. A hook
-    // that threw would leave the row here and be re-offered every boot for 24h.
+    // The recovered row is released, and what stands in its place is the
+    // CARRIER's row: the re-drive is durable work of its own, so the scan's
+    // convergence is a claim about two rows now, not one. A hook that threw would
+    // leave the ORIGINAL row here and be re-offered every boot for 24h.
+    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toEqual(['evolution:settle']);
+    await agent.harnessJoinDetachedFibers();
     expect(agent.harnessOpenFiberRows()).toEqual([]);
 
     // And a second pass has nothing to do, which is what "converges" means.

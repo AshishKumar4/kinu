@@ -418,20 +418,21 @@ export class TerminalTransitions {
   /**
    * The whole recovery sweep: every open claim, resumed.
    *
-   * The entry point for a cold start, an alarm and a recovery fiber alike. It
-   * reads the roster from storage rather than from a sequence a caller happens
-   * to name, because the sequences that need it are precisely the ones whose
-   * process is gone.
+   * The entry point for a cold start and for the retry alarm. It reads the
+   * roster from storage rather than from a sequence a caller happens to name,
+   * because the sequences that need it are precisely the ones whose process is
+   * gone.
    *
    * Never throws: one unrecoverable response must not stop the next one.
    */
   async resumeAll(): Promise<void> {
     for (const transition of this.incomplete()) {
-      // ACQUIRED, not merely checked. Three entry points reach this — the
-      // startup reconcile, a recovery fiber and the retry wake — and they
-      // interleave at every await inside the replay. Checking without joining
-      // let all three pass, snapshot the same pending row and invoke the same
-      // external effect concurrently.
+      // ACQUIRED, not merely checked. Two entry points reach this — the startup
+      // reconcile and the retry wake — and so does every wake {@link
+      // armOwedRecovery} arms for an interrupted activation; they interleave at
+      // every await inside the replay. Checking without joining let them all
+      // pass, snapshot the same pending row and invoke the same external effect
+      // concurrently.
       if (!this.enter(transition)) continue;
       try {
         await this.resume(transition);
@@ -449,6 +450,41 @@ export class TerminalTransitions {
         await this.armRecovery(transition, { cause: err });
       }
     }
+  }
+
+  /**
+   * The wake for what an interrupted activation still owes, and NO replay here.
+   *
+   * What a caller that must not await a replay asks for. The other entries — a
+   * cold start's reconcile, the retry alarm — run with no queue behind them and
+   * may spend what a replay costs: an SMTP round trip, a judge's model call, a
+   * wait on another agent's live head. A Durable Object's fiber-recovery hook
+   * may not, because the platform awaits that hook inside the object's init
+   * gate, where every request on the object waits with it.
+   *
+   * So nothing is written and nothing is replayed: the owed rows already ARE the
+   * record of what is due, and this leaves the sanctioned way back to them. The
+   * claim join in {@link resumeAll} is what makes that re-entry safe — the wake
+   * acquires each sequence before resuming it, so an armed wake and a concurrent
+   * sweep cannot both replay one row.
+   */
+  async armOwedRecovery(): Promise<void> {
+    const owed = this.incomplete();
+    if (owed.length === 0) return;
+    // The ledger's own instant when it has one, so a sequence mid-backoff is not
+    // woken early only to defer itself again; the base delay otherwise, which is
+    // what a claim with nothing owed behind it needs in order to be closed.
+    const at = this.nextRetryAt() ?? this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS;
+    const armed = await this.armWake(at);
+    if (armed.armed) {
+      diagnostics.event('turn.terminal_recovery_armed', { owed: owed.length, at });
+      return;
+    }
+    diagnostics.failure('turn.terminal_recovery_unarmed', toKinuError({
+      doing: 'arming the durable wake for the terminal sequences an interruption left owed',
+      cause: armed.refusal,
+      otherwise: 'io',
+    }), { owed: owed.length });
   }
 
   /**
@@ -473,24 +509,33 @@ export class TerminalTransitions {
     transition: TerminalTransition,
     failure: { readonly cause: unknown },
   ): Promise<void> {
-    let refusal: unknown;
-    for (let attempt = 0; attempt < TERMINAL_RECOVERY_ARM_ATTEMPTS; attempt++) {
-      try {
-        await this.deps.scheduleRetry(this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS);
-        return;
-      } catch (err) {
-        refusal = err;
-      }
-    }
+    const armed = await this.armWake(this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS);
+    if (armed.armed) return;
     diagnostics.failure('turn.terminal_recovery_unarmed', toKinuError({
       doing: 'arming a durable wake for a terminal sequence whose ledger could not start',
-      cause: refusal,
+      cause: armed.refusal,
       otherwise: 'io',
     }), {
       turn: transition.turnId,
       message: transition.messageId,
       ledgerCause: renderThrownChain(failure),
     });
+  }
+
+  /** One BOUNDED attempt at the backend's own wake, saying which outcome it
+   *  was. Two callers arm the same wake for different reasons and report the
+   *  refusal differently, so the attempt is shared and the reporting is not. */
+  private async armWake(atMs: number): Promise<{ armed: true } | { armed: false; refusal: unknown }> {
+    let refusal: unknown;
+    for (let attempt = 0; attempt < TERMINAL_RECOVERY_ARM_ATTEMPTS; attempt++) {
+      try {
+        await this.deps.scheduleRetry(atMs);
+        return { armed: true };
+      } catch (err) {
+        refusal = err;
+      }
+    }
+    return { armed: false, refusal };
   }
 
   /**

@@ -23,10 +23,12 @@ import {
   type ActorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import type { FiberRecoveryContext } from 'agents';
 import {
   sweepUnrecoverableFibers,
   FIBER_RECOVERY_MAX_AGE_MS,
   FIBER_RECOVERY_SCAN_DEADLINE_MS,
+  TERMINAL_LANE_FIBER,
   type FiberMetaRow,
   type FiberRowStore,
 } from '../src/fiber-recovery';
@@ -50,6 +52,13 @@ const { Agent: InstalledAgent } = await import(installedAgentModule);
 const InstalledRecoveryMethodsSchema = v.object({ _checkRunFibers: v.function() });
 const installedRecoveryMethods = v.parse(InstalledRecoveryMethodsSchema, InstalledAgent.prototype);
 const installedCheckRunFibers = installedRecoveryMethods._checkRunFibers;
+// The wake's own callback name, from the module that arms it — DYNAMICALLY,
+// after the harness above has replaced `agents`. A static import here would pull
+// the actor module (and the real SDK behind it) in before the stand-in is
+// installed, and every case in this file would construct a vendor Agent with no
+// storage. The name is imported rather than restated because the sweep, the arm
+// and this assertion must agree about which row is the terminal wake.
+const { TERMINAL_RETRY_CALLBACK } = await import('../src/actor-agent');
 
 const FiberRecoveryEventSchema = v.object({
   fiberId: v.string(),
@@ -222,6 +231,81 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     expect(lease(harness, 'ev-answered').consumed_at).toBeNull();
     // Unanswered: back in the pending pool to be asked again.
     expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: null, consumed_at: null });
+  });
+});
+
+/**
+ * The recovery context the SDK builds for the terminal lane's own fiber row.
+ * Only `name` is a decision here; the rest is the shape the hook is handed.
+ */
+const interruptedTerminalFiber: FiberRecoveryContext = {
+  id: 'fiber-terminal',
+  name: TERMINAL_LANE_FIBER,
+  snapshot: { lane: TERMINAL_LANE_FIBER },
+  createdAt: Date.now() - 60_000,
+  recoveryReason: 'interrupted',
+};
+
+/**
+ * The terminal lane's recovery arm, which must NOT replay.
+ *
+ * The replay is the expensive one — `terminal-effects.ts` says so itself: "a
+ * reply makes an SMTP round trip, a branch waits on a live head, and the
+ * between-turn lanes each spend a model call" — and it says the cost is
+ * acceptable because "a recovery runs off an alarm with no queue to block, and
+ * awaits everything". That was true of two of the three entry points. It was
+ * false of this one: the SDK awaits the fiber-recovery hook inside
+ * `blockConcurrencyWhile`, where the whole object's queue is exactly what is
+ * blocked, so a branch wait of a few minutes was the platform's 30s cancellation
+ * and a RESET of the object with the same rows still owed.
+ */
+describe('an interrupted terminal fiber arms the durable wake rather than replaying', () => {
+  test('the hook classifies and arms; the replay happens off the gate', async () => {
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    // A settled response whose sequence was claimed and never closed — what an
+    // isolate that died mid-report leaves on disk.
+    expect(agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
+    expect((await agent.listSchedules()).map((row) => row.callback))
+      .not.toContain(TERMINAL_RETRY_CALLBACK);
+
+    const result = await agent.harnessRecoverFiber(interruptedTerminalFiber);
+
+    // THE property: the claim is still open at the instant the hook answered. The
+    // in-gate arm settled this row before returning, because it had run the whole
+    // replay — every owed reply, branch wait and between-turn model call — inside
+    // `blockConcurrencyWhile` first.
+    expect(agent.harnessTerminalClaims().map((row) => row.result_json)).toEqual([null]);
+    expect(result).toEqual({
+      status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, redrive: 'terminal-wake' },
+    });
+
+    await agent.harnessJoinDetachedFibers();
+    // The wake, durably: the ledger's own retry row, which is the carrier the
+    // module was designed for and the one the stale-schedule sweep spares.
+    expect((await agent.listSchedules()).map((row) => row.callback))
+      .toContain(TERMINAL_RETRY_CALLBACK);
+
+    // Idempotent, and this is the entry the module documents as free to await
+    // everything: it acquires each sequence under the claim join, so the wake and
+    // this activation's own detached reconcile cannot both replay one row.
+    await agent._kinuTerminalRetryTick();
+
+    expect(agent.harnessBeginTerminalTransition('u-owed')).toBe('done');
+  });
+
+  /** Nothing owed, nothing armed. Without this, "recovery arms the wake" would be
+   *  satisfied by an arm that fired on every activation and woke an idle
+   *  workspace for a roster that was already empty. */
+  test('a workspace with no incomplete sequence arms no wake', async () => {
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+
+    await agent.harnessRecoverFiber(interruptedTerminalFiber);
+    await agent.harnessJoinDetachedFibers();
+
+    expect((await agent.listSchedules()).map((row) => row.callback))
+      .not.toContain(TERMINAL_RETRY_CALLBACK);
   });
 });
 

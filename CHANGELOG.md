@@ -502,6 +502,42 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **An interrupted durable lane is classified inside the Durable Object's init
+  gate and re-driven outside it.** Every entry point — `fetch`, a websocket
+  frame, the persisted keepAlive alarm with nobody connected — awaits
+  partyserver's `blockConcurrencyWhile`, and inside it the agents SDK awaits
+  `_checkRunFibers`, which awaits `onFiberRecovered` once per interrupted
+  `cf_agents_runs` row with no timeout of its own. The hook re-drove the lane
+  there: an advisor review is a model call, the evolution pass spends model calls
+  and real tool loops, a settled background job's re-drive delivers a wake that
+  resolves only when the turn it queues ENDS, and the terminal arm replayed every
+  owed effect — an SMTP round trip per reply, a wait on another agent's live head
+  per branch, a model call per between-turn lane. One interrupted lane therefore
+  held every request on that workspace, pure `@callable` reads included; past the
+  platform's cancellation window the runtime reset the object; and because the row
+  is deleted only when the hook RETURNS, the next wake re-ran the same call — a
+  reset loop able to hold a workspace unusable for the whole 24h recovery budget.
+
+  The hook is now synchronous and classification-only. It names the lane, asks
+  that lane's own idempotency guard whether anything is still owed — the advisor
+  note row, the evolution window claim, the job lease — and hands the re-drive to
+  a fresh durable fiber under the same lane name holding the same checkpoint.
+  `runFiber` writes that row in its synchronous prefix, so the obligation has a
+  carrier before the SDK deletes the row it recovered, and an interruption of the
+  re-drive re-enters the same classification with the same inputs. The terminal
+  arm replays nothing at all: the owed rows already are the record, so it arms the
+  ledger's own retry wake and the alarm frame the module was designed for does the
+  replay, under the claim join that makes that re-entry safe.
+
+  `scripts/do-init-gate.ts` audited `onStart` bodies only, which is how a hook the
+  same gate awaits stayed outside the repo's own enforcement while the gate printed
+  `ok`. It now holds three populations, and the recovery rule states what the other
+  two cannot: a method that is neither `async` nor contains an `await` can still
+  hand the gate a promise that resolves when a model call finishes, so what a
+  recovery hook RETURNS must be a call to the pinned classification seam — whose
+  own declaration the gate requires to be synchronous, because a synchronous
+  function cannot await. Its blind spots print on the success path.
+
 - **Withdrawn authority now takes effect across the await it was withdrawn
   during.** A Durable Object serializes nothing across an outbound call, so
   between a call's read and its write another call runs to completion — and five

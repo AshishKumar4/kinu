@@ -4,7 +4,7 @@
  *
  * An ActorAgent runs four kinds of work through `runFiber`, so each writes a
  * `cf_agents_runs` row with its stashed identity before it runs and each is
- * handed back to {@link recoverLaneFiber} on the next activation:
+ * handed back to {@link classifyRecoveredFiber} on the next activation:
  *
  *   • a detached tool call   (`bg:<kind>`, minted by core's BackgroundJobRunner)
  *   • a search               (`mcts`, minted by core's SEARCH_FIBER_NAME)
@@ -18,6 +18,30 @@
  * {@link FiberLaneTransports}. The two cf-minted lane names live here beside the
  * dispatch that matches them — `BACKGROUND_FIBER_PREFIX` and `SEARCH_FIBER_NAME`
  * stay in core, because there core mints and this backend matches.
+ *
+ * ## Every arm CLASSIFIES. No arm re-drives here
+ *
+ * The scan that offers these rows runs INSIDE the Durable Object's init gate:
+ * `fetch`, `webSocketMessage`, `webSocketClose` and `alarm` all await
+ * partyserver's `blockConcurrencyWhile`, and the agents SDK awaits
+ * `_checkRunFibers` — and so this hook — inside it. A re-drive that ran here
+ * would hold every request on the object, pure `@callable` reads included, for
+ * as long as the lane takes: an advisor review is a model call, the evolution
+ * lane spends model calls and real tool loops, a settled background job's wake
+ * resolves only when the turn it queues ENDS, and a terminal sequence replays
+ * SMTP round trips and waits on other agents' live heads. Past
+ * `do.block_concurrency.cancel_ms` the runtime cancels the gate and RESETS the
+ * object, which re-offers the same row on the next wake — a reset loop that can
+ * hold a workspace unusable for {@link FIBER_RECOVERY_MAX_AGE_MS}.
+ *
+ * So each arm does three things, all synchronously: decide what the row means,
+ * ask the lane's own idempotency guard whether anything is still owed, and hand
+ * the re-drive to {@link FiberLaneTransports.redrive} — the actor's detached
+ * durable carrier, a fresh fiber under the same lane name holding the same
+ * checkpoint, so an interruption of the RE-DRIVE re-enters this classification
+ * with the same inputs. Nothing here awaits, which is what makes "the gate
+ * awaits classification only" a property of the code rather than a claim about
+ * it; `scripts/do-init-gate.ts` holds the hook and this seam to that shape.
  */
 import * as v from 'valibot';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
@@ -244,7 +268,9 @@ export interface FiberLaneTransports {
   readonly jobs: Pick<BackgroundJobRunner, 'recover' | 'recoverOrphans'>;
   /** Re-enter every unit the evolution cadence drives from durable storage. */
   readonly runDueSessionEvolution: () => Promise<void>;
-  /** Whether one turn's advisor note already landed — the idempotency guard. */
+  /** Whether one turn's advisor note already landed — the idempotency guard.
+   *  Synchronous storage, because the guard is what decides IN the gate whether
+   *  anything is handed to a carrier at all. */
   readonly hasAdvisorNoteForTurn: (turnId: string) => boolean;
   /** The ONE review body both the live lane and its recovery run. */
   readonly reviewAdvisorSnapshot: (
@@ -254,12 +280,26 @@ export interface FiberLaneTransports {
   readonly sql: SqlExecutor;
   /** The agent's own memory surface — what tells it about the lost turn. */
   readonly appendMemory: (path: string, text: string) => Promise<void>;
-  /** Finish every terminal sequence that still owes an effect, from storage. */
-  readonly replayOwedTerminalSequences: () => Promise<void>;
+  /** Arm the durable wake the terminal ledger already owns, and replay nothing:
+   *  the owed rows are the record, and the alarm frame they were designed for is
+   *  where a replay may await an SMTP round trip. */
+  readonly armOwedTerminalRecovery: () => Promise<void>;
+  /**
+   * Hand one lane's re-drive to the actor's detached durable carrier.
+   *
+   * Returns nothing, and the absence IS the contract: an arm that could await
+   * the re-drive would be back inside the init gate. What the actor supplies is
+   * a fresh fiber under `lane` holding `checkpoint`, so the work is durable
+   * before this hook returns — the SDK deletes the row it recovered as soon as
+   * it does — and an interruption of the re-drive re-enters this classification
+   * with the same inputs.
+   */
+  readonly redrive: (lane: string, checkpoint: JsonValue, body: () => Promise<void>) => void;
 }
 
 /**
- * Decide what to do with one fiber the platform interrupted, and SAY SO.
+ * Decide what to do with one fiber the platform interrupted, SAY SO, and hand
+ * the work itself to a carrier that may take as long as the work takes.
  *
  * The return value is load-bearing. The SDK deletes an interrupted
  * `cf_agents_runs` row when this hook RETURNS and retains it when this hook
@@ -269,36 +309,43 @@ export interface FiberLaneTransports {
  * `FiberRecoveryResult`, and a lane nobody here recognises ends in a classified
  * `error` rather than in a poison row that re-enters for a day. For a managed
  * row the same value is what moves the ledger off `interrupted`, which is why
- * the re-drive paths return `completed` rather than nothing.
+ * the classified paths return `completed` rather than nothing.
+ *
+ * SYNCHRONOUS, which is the whole gate argument (see the module header): the row
+ * the SDK is about to delete is replaced by the carrier's own row before this
+ * returns, so classifying rather than re-driving loses no work and stalls
+ * nobody. A `completed` here therefore means "this row's obligation now has a
+ * carrier", not "the lane finished".
  *
  * One branch per lane, and the branches are not interchangeable: a background
  * job has durable rows to re-drive from, the evolution lane has durable queues
  * to re-enter, the advisor lane has neither, and a search's tree survives but
  * the turn that was reading it does not.
  */
-export async function recoverLaneFiber(
+export function classifyRecoveredFiber(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
-): Promise<FiberRecoveryResult> {
+): FiberRecoveryResult {
   diagnostics.event('fiber.recovered', { fiber: ctx.name, fiberId: ctx.id });
   try {
-    if (ctx.name.startsWith(BACKGROUND_FIBER_PREFIX)) return await recoverBackgroundJobLane(transports, ctx);
-    if (ctx.name === EVOLUTION_LANE_FIBER) return await recoverEvolutionLane(transports);
-    if (ctx.name === ADVISOR_LANE_FIBER) return await recoverAdvisorLane(transports, ctx);
-    if (ctx.name === SEARCH_FIBER_NAME) return await recordInterruptedSearch(transports, ctx);
+    if (ctx.name.startsWith(BACKGROUND_FIBER_PREFIX)) return redriveBackgroundJobLane(transports, ctx);
+    if (ctx.name === EVOLUTION_LANE_FIBER) return redriveEvolutionLane(transports, ctx);
+    if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
+    if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
-    if (ctx.name === TERMINAL_LANE_FIBER) return await recoverTerminalLane(transports);
+    if (ctx.name === TERMINAL_LANE_FIBER) return armTerminalLaneRecovery(transports, ctx);
     return unrecognisedLane(ctx);
   } catch (err) {
     const failure = toKinuError({
-      doing: `recovering the "${ctx.name}" fiber after eviction`,
+      doing: `classifying the "${ctx.name}" fiber after eviction`,
       cause: err,
       otherwise: 'io',
     });
     diagnostics.failure('fiber.recovery_failed', failure, { fiber: ctx.name, fiberId: ctx.id });
-    // Terminal, not rethrown. Whatever this lane's recovery could not do, it
-    // will not do on the fifth attempt either, and re-offering the row is how
-    // one broken lane holds a Durable Object open for a day.
+    // Terminal, not rethrown. A lane whose guard could not be read, or whose
+    // carrier could not write its row, will not classify on the fifth attempt
+    // either, and re-offering the row is how one broken lane holds a Durable
+    // Object open for a day.
     return { status: 'error', error: failure.message, snapshot: { lane: ctx.name, recovered: false } };
   }
 }
@@ -306,16 +353,21 @@ export async function recoverLaneFiber(
 /**
  * A settled turn whose owed effects were still reporting when the isolate died.
  *
- * Every input is already on the ledger's rows, so the recovery is the same
- * replay a cold activation runs — which is why this arm re-enters it rather than
- * reconstructing anything. The ledger's own retry wake covers the case this arm
- * cannot: a fiber row that died with the activation that owned it.
+ * Every input is already on the ledger's rows, so there is nothing to
+ * reconstruct and — here — nothing to replay: the replay awaits an SMTP round
+ * trip, a wait on another agent's live head and a model call per between-turn
+ * lane, and this hook runs in the init gate. The arm hands the ledger's own
+ * retry wake to the carrier instead, and the alarm frame the ledger was designed
+ * for does the replay under the claim join that makes re-entry safe.
  */
-async function recoverTerminalLane(
+function armTerminalLaneRecovery(
   transports: FiberLaneTransports,
-): Promise<FiberRecoveryResult> {
-  await transports.replayOwedTerminalSequences();
-  return { status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, reentered: true } };
+  ctx: FiberRecoveryContext,
+): FiberRecoveryResult {
+  transports.redrive(
+    TERMINAL_LANE_FIBER, fiberSnapshot(ctx), () => transports.armOwedTerminalRecovery(),
+  );
+  return { status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, redrive: 'terminal-wake' } };
 }
 
 /**
@@ -328,20 +380,25 @@ async function recoverTerminalLane(
  * this isolate owns a job yet, so any other row still `running` is an orphan
  * no recovery callback will ever arrive for.
  */
-async function recoverBackgroundJobLane(
+function redriveBackgroundJobLane(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
-): Promise<FiberRecoveryResult> {
-  const redriven = await transports.jobs.recover(fiberSnapshot(ctx));
-  const inFlight = await transports.jobs.recoverOrphans();
-  return {
-    status: 'completed',
-    snapshot: {
-      lane: ctx.name,
-      redriven: redriven?.id ?? null,
-      inFlight: inFlight.map((job) => job.id),
-    },
-  };
+): FiberRecoveryResult {
+  const checkpoint = fiberSnapshot(ctx);
+  transports.redrive(ctx.name, checkpoint, async () => {
+    const redriven = await transports.jobs.recover(checkpoint);
+    const inFlight = await transports.jobs.recoverOrphans();
+    // What the return value used to carry. A settled job's re-drive is a WAKE,
+    // and delivering one queues a turn that resolves only when the turn ends —
+    // so the outcome cannot be part of a classification, and this is the only
+    // place left that can say which job it was.
+    diagnostics.event('fiber.job_lane_redriven', {
+      fiber: ctx.name,
+      redriven: redriven?.id ?? '(none)',
+      inFlight: inFlight.length,
+    });
+  });
+  return { status: 'completed', snapshot: { lane: ctx.name, redrive: 'background-job' } };
 }
 
 /**
@@ -357,13 +414,18 @@ async function recoverBackgroundJobLane(
  * a window is claimed in one tick and retired only once its pass has run, and
  * a trial is dropped only after it is scored.
  */
-async function recoverEvolutionLane(transports: FiberLaneTransports): Promise<FiberRecoveryResult> {
-  await transports.runDueSessionEvolution();
-  return { status: 'completed', snapshot: { lane: EVOLUTION_LANE_FIBER, reentered: 'session-evolution' } };
+function redriveEvolutionLane(
+  transports: FiberLaneTransports,
+  ctx: FiberRecoveryContext,
+): FiberRecoveryResult {
+  transports.redrive(
+    EVOLUTION_LANE_FIBER, fiberSnapshot(ctx), () => transports.runDueSessionEvolution(),
+  );
+  return { status: 'completed', snapshot: { lane: EVOLUTION_LANE_FIBER, redrive: 'session-evolution' } };
 }
 
 /**
- * The advisor lane, re-driven from the snapshot the interrupted lane stashed.
+ * The advisor lane, whose re-drive is a MODEL CALL and therefore leaves here.
  *
  * IDEMPOTENT ON THE NOTE, not on the attempt, and the distinction is the whole
  * correctness argument. A lane can be interrupted on either side of its one
@@ -383,18 +445,24 @@ async function recoverEvolutionLane(transports: FiberLaneTransports): Promise<Fi
  * A snapshot that will not parse is the one genuinely terminal case left, and
  * it is a real terminal rather than a lost review: there is no turn to review,
  * so there is nothing a further attempt could do differently.
+ *
+ * The guard runs HERE, before anything is handed to a carrier, and the ordering
+ * is the point: a review that already landed costs one synchronous row read to
+ * refuse, so recovery cannot double a note by detaching first and checking
+ * later.
  */
-async function recoverAdvisorLane(
+function redriveAdvisorLane(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
-): Promise<FiberRecoveryResult> {
-  const parsed = v.safeParse(AdvisorRecoverySnapshotSchema, fiberSnapshot(ctx));
+): FiberRecoveryResult {
+  const checkpoint = fiberSnapshot(ctx);
+  const parsed = v.safeParse(AdvisorRecoverySnapshotSchema, checkpoint);
   if (!parsed.success) {
     return {
       status: 'error',
       error: 'the interrupted advisor review left no readable snapshot of the turn it was '
         + `about: ${parsed.issues.map((issue) => issue.message).join('; ')}`,
-      snapshot: { lane: ADVISOR_LANE_FIBER, reentered: false },
+      snapshot: { lane: ADVISOR_LANE_FIBER, redrive: null },
     };
   }
   const snapshot = parsed.output;
@@ -402,16 +470,19 @@ async function recoverAdvisorLane(
   if (turnId !== undefined && transports.hasAdvisorNoteForTurn(turnId)) {
     return {
       status: 'completed',
-      snapshot: { lane: ADVISOR_LANE_FIBER, turnId, reentered: false, alreadyRecorded: true },
+      snapshot: { lane: ADVISOR_LANE_FIBER, turnId, redrive: null, alreadyRecorded: true },
     };
   }
-  const disposition = await transports.reviewAdvisorSnapshot(snapshot);
+  transports.redrive(ADVISOR_LANE_FIBER, checkpoint, async () => {
+    const disposition = await transports.reviewAdvisorSnapshot(snapshot);
+    diagnostics.event('fiber.advisor_lane_redriven', {
+      turnId: turnId ?? '(none)',
+      disposition: disposition ?? '(none)',
+    });
+  });
   return {
     status: 'completed',
-    snapshot: {
-      lane: ADVISOR_LANE_FIBER, turnId: turnId ?? null, reentered: true,
-      disposition: disposition ?? null,
-    },
+    snapshot: { lane: ADVISOR_LANE_FIBER, turnId: turnId ?? null, redrive: 'advisor-review' },
   };
 }
 
@@ -424,7 +495,7 @@ async function recoverAdvisorLane(
  * open sockets to third parties on an activation no turn asked anything of, for
  * a turn whose successor is about to warm anyway.
  *
- * It exists because `recoverLaneFiber` is a CLOSED set: a lane nobody names
+ * It exists because `classifyRecoveredFiber` is a CLOSED set: a lane nobody names
  * there is reported as unrecognised, which files a classified error for a fiber
  * whose interruption is not a fault.
  */
@@ -438,24 +509,32 @@ function recoverMcpWarmLane(): FiberRecoveryResult {
  * so this branch does not re-drive anything. What it owns is TELLING the
  * agent: the turn that was reading the search is gone, and a future turn that
  * finds a half-expanded tree needs to know why.
+ *
+ * The notice is two writes with different costs. The audit row is this object's
+ * own SQLite, synchronous, so it lands in the classification; the MEMORY.md line
+ * goes through the workspace filesystem, which for a hosted workspace is another
+ * Durable Object, so it rides the carrier like every other lane's work.
  */
-async function recordInterruptedSearch(
+function recordInterruptedSearch(
   transports: FiberLaneTransports,
   ctx: FiberRecoveryContext,
-): Promise<FiberRecoveryResult> {
+): FiberRecoveryResult {
   const snapshot = fiberSnapshot(ctx);
   void transports.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
     VALUES (${nanoid()}, 'fiber_recovered',
             ${`Fiber "${ctx.name}" recovered after interruption`},
             ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot, createdAt: ctx.createdAt })},
             ${Date.now()})`;
-  await transports.appendMemory(
+  transports.redrive(SEARCH_FIBER_NAME, snapshot, () => transports.appendMemory(
     'memory/MEMORY.md',
     `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n`
     + `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. `
     + `Snapshot at interruption: ${JSON.stringify(snapshot).slice(0, 400)}\n`,
-  );
-  return { status: 'completed', snapshot: { lane: SEARCH_FIBER_NAME, recorded: true } };
+  ));
+  return {
+    status: 'completed',
+    snapshot: { lane: SEARCH_FIBER_NAME, recorded: true, redrive: 'memory-note' },
+  };
 }
 
 /**

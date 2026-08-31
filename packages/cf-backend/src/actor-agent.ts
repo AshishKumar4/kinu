@@ -232,9 +232,9 @@ import {
 } from "./runtime";
 import { cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner } from "./node-home";
 import {
-  // The durable lanes' recovery roster — dispatch, five arms, terminal-result
-  // discipline — and this backend's three cf-minted lane names.
-  recoverLaneFiber, EVOLUTION_LANE_FIBER, ADVISOR_LANE_FIBER, MCP_WARM_LANE_FIBER,
+  // The durable lanes' recovery roster — synchronous classification, six arms,
+  // terminal-result discipline — and this backend's three cf-minted lane names.
+  classifyRecoveredFiber, EVOLUTION_LANE_FIBER, ADVISOR_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER,
   // What the chat roster knows about a turn this isolate is not running.
   openChatTurnResponses,
@@ -2166,9 +2166,9 @@ export abstract class ActorAgent extends Think<Env> {
    * not a wake — once `onChatResponse` returns the runtime may terminate the
    * isolate with email replies, parent RPCs and model lanes still pending — so
    * the close rides a DURABLE FIBER, which holds the object open and writes the
-   * `cf_agents_runs` row that hands the remainder to {@link recoverLaneFiber}.
-   * The ledger's own retry wake is the second, independent path, because a fiber
-   * row can die with the activation that owned it.
+   * `cf_agents_runs` row that hands the remainder to
+   * {@link classifyRecoveredFiber}, which arms the ledger's retry wake for it
+   * rather than replaying inside the init gate.
    *
    * Shared by every actor here: the ordering — hold, join, then dispose — is the
    * guarantee, not a per-actor preference.
@@ -6192,20 +6192,32 @@ export abstract class ActorAgent extends Think<Env> {
   override chatStreamStallTimeoutMs = 0;
 
   /**
-   * Hand each interrupted fiber to the recovery roster with this activation's
-   * own transports. The roster (./fiber-recovery.ts) owns the dispatch, the
-   * per-lane semantics and the terminal-result discipline — it never throws,
-   * because a thrown hook re-offers the row for a day; this override only
-   * supplies what a fresh activation can re-resolve.
+   * Classify each interrupted fiber, and hand its work to a carrier that is
+   * allowed to take as long as the work takes.
+   *
+   * NOT `async`, and that is the enforcement rather than a style. The SDK awaits
+   * this hook from `_checkRunFibers`, which `startAgent` awaits inside
+   * partyserver's `blockConcurrencyWhile` — so a promise this method hands back
+   * is a promise every `fetch`, websocket frame and alarm on this object waits
+   * on, and at `do.block_concurrency.cancel_ms` the runtime cancels the gate and
+   * RESETS the object. A non-async method cannot await, so the only thing the
+   * gate can wait on here is the classification itself, which is synchronous by
+   * construction (./fiber-recovery.ts) and hands every re-drive to
+   * {@link redriveRecoveredLane}. `scripts/do-init-gate.ts` holds both halves of
+   * that shape.
+   *
+   * The roster owns the dispatch, the per-lane semantics and the terminal-result
+   * discipline — it never throws, because a thrown hook re-offers the row for a
+   * day; this override only supplies what a fresh activation can re-resolve.
    */
-  override async onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-    return recoverLaneFiber(this.fiberLanes, ctx);
+  override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+    return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
   }
 
-  /** The transports {@link onFiberRecovered}'s arms re-drive through: stub
-   *  calls, a fresh model route, this activation's own storage. Built fresh
-   *  per recovery rather than captured at interruption time — the whole point
-   *  of a wake is that the world moved. */
+  /** The transports {@link onFiberRecovered}'s arms classify against and hand
+   *  their re-drives to: stub calls, a fresh model route, this activation's own
+   *  storage. Built fresh per recovery rather than captured at interruption time
+   *  — the whole point of a wake is that the world moved. */
   private get fiberLanes(): FiberLaneTransports {
     return {
       jobs: this.jobRunner,
@@ -6214,8 +6226,56 @@ export abstract class ActorAgent extends Think<Env> {
       reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
       sql: this.boundSql,
       appendMemory: (path, text) => this.rt.memory.append(path, text),
-      replayOwedTerminalSequences: () => this.terminal.replayOwedAndRearm(),
+      armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
+      redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
     };
+  }
+
+  /** Detached lane re-drives this activation dispatched and still owns — the
+   *  same ownership every detached chain in this class has, so a re-drive is a
+   *  task something holds rather than a floating promise. One entry per DISPATCH
+   *  rather than per lane: a single scan can offer two rows of one lane, and each
+   *  carries its own checkpoint. */
+  private readonly _laneRedrives = new Set<AsyncTaskOwner>();
+
+  /**
+   * Re-drive one interrupted lane OFF the init gate, durably.
+   *
+   * The half of fiber recovery that may take as long as its work does: a model
+   * call, a turn queued by a job's wake, an SMTP round trip behind a terminal
+   * wake. A `runFiber` rather than a bare promise, for the same reason the
+   * terminal close is one — a JavaScript reference to a pending promise is not
+   * durable, while the fiber's `cf_agents_runs` row is written by the
+   * SYNCHRONOUS prefix of `runFiber`, before this method returns. So the
+   * obligation the SDK is about to delete has a replacement carrier by the time
+   * the hook answers, and an interruption of the re-drive is handed back to the
+   * same classification, under the same lane name, with the same checkpoint.
+   */
+  protected redriveRecoveredLane(
+    lane: string, checkpoint: JsonValue, body: () => Promise<void>,
+  ): void {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._laneRedrives.add(owner);
+    owner.promise = (async () => {
+      try {
+        await this.runFiber(lane, async (ctx) => {
+          // Re-checkpointed as the body's first act. The row exists from the
+          // insert above it, and a recovery that read it before this stash landed
+          // would see a null snapshot — which for the advisor lane is the
+          // difference between a re-drivable review and a terminal one.
+          ctx.stash(checkpoint);
+          await body();
+        });
+      } catch (cause) {
+        diagnostics.failure('fiber.lane_redrive_failed', toKinuError({
+          doing: `re-driving the "${lane}" lane an interruption left behind`,
+          cause,
+          otherwise: 'unavailable',
+        }), { workspace: this.name, lane });
+      } finally {
+        this._laneRedrives.delete(owner);
+      }
+    })();
   }
 
   /** Invalidate every cache that depends on the resolved model so the next
