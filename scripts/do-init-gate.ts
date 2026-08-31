@@ -324,7 +324,10 @@ const ADMITTED_INIT_AWAITS: readonly string[] = [
 ];
 
 /** Every own-scope await in `body` that is NOT on
- *  {@link ADMITTED_INIT_AWAITS}, spelled as written. Callers gate on isAsync. */
+ *  {@link ADMITTED_INIT_AWAITS}, plus every value-carrying `return` — an async
+ *  function ADOPTS a returned promise, so `return this.slowThing()` holds the
+ *  gate with zero AwaitExpression; the approved form returns nothing. Spelled
+ *  as written. Callers gate on isAsync. */
 function rejectedInitAwaits(text: string, body: SyntaxNode | undefined): string[] {
   if (body === undefined) return [];
   const rejected: string[] = [];
@@ -333,6 +336,11 @@ function rejectedInitAwaits(text: string, body: SyntaxNode | undefined): string[
       if (child.type === 'AwaitExpression') {
         const spelled = text.slice(child.start, child.end).replace(/\s+/g, ' ').trim();
         if (!ADMITTED_INIT_AWAITS.includes(spelled)) rejected.push(spelled);
+        continue;
+      }
+      if (child.type === 'ReturnStatement' && child.children.length > 0) {
+        const spelled = text.slice(child.start, child.end).replace(/\s+/g, ' ').trim();
+        rejected.push(spelled);
         continue;
       }
       if (isFunctionLike(child)) continue;
@@ -479,8 +487,8 @@ export function auditFile(
       const admittedAsyncGate = isAsync(member) && hook !== 'recovery' && hook !== 'container-start';
       if (admittedAsyncGate) {
         for (const awaitText of rejectedInitAwaits(text, blockBodyOf(functionOf(member) ?? member))) {
-          fail(`awaits \`${awaitText}\` — not on the admitted init-await list `
-            + '(ADMITTED_INIT_AWAITS); the gate admits the workspace boot alone');
+          fail(`holds the gate with \`${awaitText}\` — not on the admitted init-await list `
+            + '(ADMITTED_INIT_AWAITS); the gate admits the workspace boot alone, returned nothing');
         }
       } else if (isAsync(member)) {
         fail('declared `async` — its promise is what `blockConcurrencyWhile` waits on');

@@ -516,6 +516,24 @@ describe('DO init-gate purity, against the real tree', () => {
     expect(audit(SOURCES).violations).toEqual([]);
   });
 
+  test('an adopted returned promise cannot slip the admitted-async gate', () => {
+    // `async onStart(): Promise<void> { return this.slowThing(); }` carries
+    // ZERO AwaitExpression — the async function ADOPTS the returned promise
+    // and the SDK awaits it all the same. The gate rejects any value-carrying
+    // return in an admitted-async gate by spelling.
+    const found = reasons(`
+export class A extends Agent {
+  async onStart(): Promise<void> {
+    this.ensureSchema();
+    return this.unboundedRemoteThing();
+  }
+}
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('return this.unboundedRemoteThing()');
+    expect(found[0]).toContain('not on the admitted init-await list');
+  });
+
   test('cut the wire: an UNADMITTED await in the real async gate goes red', () => {
     // Against the real file, not a fixture — one await added in memory. The
     // gate is legitimately async now (the admitted workspace boot), so the
