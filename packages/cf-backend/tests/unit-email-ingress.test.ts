@@ -16,7 +16,7 @@ import {
   parseInboundMime, stripQuotedReply,
 } from '../src/email/inbound';
 import {
-  INBOUND_EMAIL_MAX_BYTES, routeInboundEmail, type EmailDeliveryTarget,
+  routeInboundEmail, type EmailDeliveryTarget,
 } from '../src/email/route';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
@@ -492,7 +492,9 @@ describe('routeInboundEmail — the Worker seam', () => {
   test('a message over the byte ceiling is dropped without resolving an agent', async () => {
     let resolves = 0;
     const result = await routeInboundEmail(
-      mockMessage({ rawSize: INBOUND_EMAIL_MAX_BYTES + 1 }),
+      // 2 MiB is the route's raw ceiling; a mirrored literal that drifts
+      // from the contract fails this test, which is the point.
+      mockMessage({ rawSize: 2 * 1024 * 1024 + 1 }),
       DOMAIN,
       async () => { resolves++; return target(); },
     );
@@ -505,7 +507,7 @@ describe('routeInboundEmail — the Worker seam', () => {
     // `rawSize` is the edge's claim and the pre-filter; the gate is the count,
     // so a stream that keeps arriving past the limit is cut off there rather
     // than assembled.
-    const oversize = 'x'.repeat(INBOUND_EMAIL_MAX_BYTES + 1024);
+    const oversize = 'x'.repeat(2 * 1024 * 1024 + 1024);
     const body = new Response(`Subject: big\r\n\r\n${oversize}`).body;
     if (!body) throw new Error('expected response body stream');
     let parsedFor: string | null = null;

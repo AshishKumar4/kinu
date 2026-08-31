@@ -1184,6 +1184,101 @@ export const LADDER: readonly Gate[] = [
       + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
   },
   {
+    run: 'bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts',
+    tier: 'push',
+    seconds: 0.4,
+    catches: 'the two adversarial gates\' own decision boundaries — the half that decides '
+      + 'whether either is worth trusting. For the hammer: an output whose summary is missing '
+      + 'reads as a silent zero rather than a pass, a governed suite file that reported '
+      + 'nothing is a finding, a run killed at its deadline is a finding rather than a red '
+      + 'test, and the parse that decides all three is exercised against bun\'s real output '
+      + 'shapes. For the fences: a snippet that sits zero or twice in its file fails as a '
+      + 'stale fixture, a mutant that PASSES fails naming the fence, a pristine baseline that '
+      + 'fails is reported as a broken owner rather than as a proved fence, and a run that '
+      + 'never settled is neither. Both gates are seeded with the shapes their own red proofs '
+      + 'used, so a refactor that quietly stopped either from failing is caught here.',
+    blind: 'whether the fences and the suite are the RIGHT ones to hammer. That is a '
+      + 'judgement in the declarations, which is why each fence carries a `why` and the '
+      + 'hammer prints its blind spots on the green path.',
+  },
+  {
+    run: 'bun run gate:twin-differential',
+    // PUSH, because it is a source read plus one in-process merge over a shared
+    // fixture: 0.2s, and the drift it catches is cheapest to fix on the machine
+    // that caused it.
+    tier: 'push',
+    seconds: 0.25,
+    catches: 'two backend halves that BOTH delegate to core and still disagree about what '
+      + 'they hand it — the shape the twin inventory beside it cannot see. `headMergeLLM` is '
+      + 'the case in the record: the cf merge resolved the `judge` route off the turn profile '
+      + 'while the local merge passed the SESSION\'S CHAT MODEL at a hardcoded `low` and filed '
+      + 'the result as `judge` spend anyway, so one split was synthesised by the deep tier in '
+      + 'the cloud and by whatever `/model` happened to be set on a laptop. Both bodies called '
+      + 'into core; neither was a twin. Three seams are declared — head-merge policy, '
+      + 'workspace planes, name minting — and each is held to ONE shared fixture that BOTH '
+      + 'sides must pin, because two suites maintaining two expectations is exactly how that '
+      + 'drift survived: each looked correct alone. The fixture is then EXECUTED here, so a '
+      + 'pinned value cannot rot into something core no longer produces. All four directions '
+      + 'proven red: a seam whose core symbol no surface reaches, a side that stops pinning '
+      + 'the shared fixture, and the policy itself moved in core (`HEAD_MERGE_SOURCE` from '
+      + '`judge` to `fast`) each turn it red.',
+    blind: 'it does not construct the CLI session in this process — that would be a '
+      + 'cf-backend suite importing the other adapter\'s composition root, and the two are '
+      + 'deliberately separate programs. So a seam whose two suites both pin the fixture and '
+      + 'both still call it wrongly is outside it, and the CLI half of every seam is measured '
+      + 'in its own package. Three seams of the 60-entry twin inventory carry a differential; '
+      + 'the rest are held only by the inventory and by `gate:capability-parity`.',
+  },
+  {
+    run: 'bun run gate:mutation-fences',
+    tier: 'deploy',
+    // Four fences, each proved twice (pristine green, mutant red) inside one
+    // sparse `git worktree add --detach` copy: 2.5s measured 2026-08-31 on the
+    // 24-thread box, dominated by the eight `bun test` spawns.
+    seconds: 2.5,
+    catches: 'a concurrency fence whose red proof has rotted. A fence is a guard whose two '
+      + 'readings both compile — `this.#owns(gen)` around a stale write, a `spawnedBefore` '
+      + 'bound on a sweep, a terminal/resumable split — so stripping one changes no type, '
+      + 'throws nothing, and leaves the suite green until the interleaving happens in '
+      + 'production. Four are declared with file, snippet and owning test; each is stripped '
+      + 'MECHANICALLY in an isolated copy and its owner is required to fail. Green with the '
+      + 'fence stripped is the finding, because it names a fence nothing guards. A snippet '
+      + 'that no longer sits in its file exactly once fails as a stale fixture rather than '
+      + 'passing, which is the `test:mutation` rule applied to guards instead of policies.',
+    blind: 'a fence nobody declared — the list is hand-written and nothing enumerates the '
+      + 'guards a module contains. It proves ONE named strip per fence, never that the strip '
+      + 'is the worst reading, and only that ONE test catches it. The copy is HEAD, so a '
+      + 'fence in uncommitted work is invisible until it lands, and the owners run under bun, '
+      + 'so an interleaving that needs workerd belongs to `bun run test:workerd`.',
+  },
+  {
+    run: 'bun run gate:hammer',
+    tier: 'deploy',
+    // 6 runs x ~11s contended = 65.8s measured 2026-08-31 (24 threads, 12
+    // burners). SERIAL by construction — see SERIAL_GATES.
+    seconds: 66,
+    catches: 'a test that passes once on an idle box and fails when the machine is busy or '
+      + 'when the suite runs again. Every other tier runs each suite ONCE and reads the exit '
+      + 'code, which answers "does this pass" and cannot answer "does this pass reliably". '
+      + 'This runs `bun test --parallel=4 packages/cf-backend/` six times with nproc/2 CPU '
+      + 'burners alive throughout, keeps EVERY failing block in an artifact whose path is '
+      + 'printed on both paths, and fails on any failure — no retry, no quarantine list, no '
+      + 'known-flake allowance, because a lane that retried until green converts the only '
+      + 'evidence of a race into a slower green. It also holds the set it MEASURES equal to '
+      + 'the set the command GOVERNS, per run and in both directions: a governed suite file '
+      + 'that reports nothing is the silent zero a green exit code hides. Its own fixture '
+      + 'work found a live one — `unit-facet-reconciliation` pinned the facet registry read '
+      + 'ORDER and came back red on 1 isolated run in 3 with `reclaimed: 4` every time.',
+    blind: 'six runs sample six interleavings: greens raise confidence and prove nothing '
+      + 'about absence. Contention is CPU-only — the burners allocate nothing, touch no disk '
+      + 'and open no socket, so allocator pressure, IO starvation and network races are '
+      + 'unperturbed. ONE suite is hammered; every other package runs once on an idle box. '
+      + 'Which four files bun schedules together is bun\'s decision, so an interleaving it '
+      + 'never picks is unmeasured — measured, a deliberately race-prone fixture PAIR passed '
+      + 'because the two files were never co-scheduled, while an intermittently failing '
+      + 'single file was caught on run 2 of 2.',
+  },
+  {
     run: 'bun run verify:lean',
     tier: 'deploy',
     // 2.2s WARM, median of 2.19 / 2.20 on the 24-thread box, 2026-08-21: `lake
@@ -1274,6 +1369,13 @@ export const SERIAL_GATES = {
     + 'unrelated filesystem test, which reads as a code regression and is not one. A gate '
     + 'running beside it could report that regression before the preflight had said the '
     + 'machine was unfit to be reported on.',
+  'bun run gate:hammer':
+    'runs alone, and its SUBJECT is why. It saturates nproc/2 threads with CPU burners on '
+    + 'purpose, so every gate beside it would be measured on a machine this one is '
+    + 'deliberately starving: the five-suite UI batch is 198.5s solo against a 480s '
+    + 'per-gate deadline, and a browser gate that times out under someone else\'s load '
+    + 'fails for a reason unrelated to the change under test. It runs AFTER the source '
+    + 'wave so a cheap source failure still fails first, and before the account gate.',
   'bun run gate:infra':
     'runs alone and LAST. It is the only gate that talks to Cloudflare, `npx wrangler whoami` '
     + 'is its precondition, and its place in the order carries meaning: everything before it '
@@ -1452,6 +1554,17 @@ export const CI_EXEMPT = {
     + 'non-zero rather than skipping, so it cannot be run there and read as a pass — which is '
     + 'why it lives at the deploy tier, immediately after `wrangler whoami` has proved there is '
     + 'a session to use.',
+  'bun run gate:hammer':
+    'is minutes of deliberate CPU starvation. On a shared CI runner it would both take far '
+    + 'longer than its 66s here and perturb every other job on the box, and its findings '
+    + 'would be indistinguishable from runner noise — a gate whose reds cannot be trusted is '
+    + 'a gate somebody disables. It runs at deploy, alone, on a machine whose load is known.',
+  'bun run gate:mutation-fences':
+    'materialises a `git worktree add --detach` copy and runs eight `bun test` processes '
+    + 'inside it. On a CI runner with no local object store that checkout is a fresh clone '
+    + 'per fence, and the proof it makes is about the tree being deployed rather than about '
+    + 'a pull request — so it sits at deploy, beside the other gates that answer for what '
+    + 'ships.',
   'bun run verify:lean':
     'needs the elan toolchain and a 15-minute Lean build. It runs in the path-filtered '
     + 'lean-verify workflow on pull requests and as a main-push gate, which is where '

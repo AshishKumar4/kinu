@@ -16,7 +16,7 @@ import { agentNameFromRecipient, isAutoReplyEmail, parseInboundMime } from './in
  *  must not be able to spend that much memory, plus whatever MIME parsing and
  *  attachment decoding amplifies it to, on the way to being dropped. Generous
  *  for the mail a person writes an agent, far under what the platform carries. */
-export const INBOUND_EMAIL_MAX_BYTES = 2 * 1024 * 1024;
+const INBOUND_EMAIL_MAX_BYTES = 2 * 1024 * 1024;
 
 /** The structural slice of ForwardableEmailMessage this routing consumes —
  *  the mock seam for tests. */

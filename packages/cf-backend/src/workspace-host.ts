@@ -215,7 +215,7 @@ export const PREVIEW_CAPABILITY_HANDLE_LENGTH = 10;
  * anything" from "this link names an exposure that an eviction took and only a
  * re-expose can bring back".
  */
-export const RECYCLED_PREVIEW = {
+const RECYCLED_PREVIEW = {
   status: 410,
   body: JSON.stringify({
     error: 'Preview URL is stale because the workspace was recycled',
@@ -236,7 +236,7 @@ export const RECYCLED_PREVIEW = {
  * the value is the same one `ports.expose` answered with. Only the 24-hex
  * minted shape is accepted, exactly as `readPortCapability` itself does.
  */
-export async function readWorkspacePortCapability(
+async function readWorkspacePortCapability(
   ctx: DurableObjectState,
   port: number,
 ): Promise<string | null> {

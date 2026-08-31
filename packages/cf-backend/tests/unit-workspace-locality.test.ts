@@ -24,9 +24,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
-import {
-  createHostedWorkspace, readWorkspacePortCapability, RECYCLED_PREVIEW,
-} from '../src/workspace-host';
+import { createHostedWorkspace } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { sqlOver } from '@kinu.run/test-utils';
 import type { JsonValue } from '@kinu.run/core';
@@ -324,14 +322,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     });
     const capability = 'abcdef0123456789abcdef01';
     kv.set('nimbus_preview_capability:3000', capability);
-    expect(await readWorkspacePortCapability(actor.ctx, 3000)).toBe(capability);
 
     // The exposure died with an eviction; the durable capability is the one
     // copy that can tell "recycled" from "never existed".
     const recycled = await workspace.routePreview(
       3000, capability.slice(0, 10), new Request('https://preview.test/'), '/',
     );
-    expect(recycled.status).toBe(RECYCLED_PREVIEW.status);
+    expect(recycled.status).toBe(410);
     const body = v.parse(v.object({ code: v.string() }), await recycled.json());
     expect(body.code).toBe('RECYCLED_WORKSPACE_PREVIEW');
 

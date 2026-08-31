@@ -48,6 +48,14 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { MockLanguageModelV3 } from 'ai/test';
+import {
+  agentDynamicContext, headMergeLLM, MergeOutputSchema, mintSubordinateName,
+  renderDynamicContextBlock,
+} from '@kinu.run/core';
+import {
+  MERGE_POLICY_BINDING, MERGE_POLICY_SPEND_SOURCE, mergePolicyProfile,
+} from '@kinu.run/test-utils';
 import { declaredClassMembers } from './helpers/declared-members';
 
 const REPO = resolve(import.meta.dir, '../../..');
@@ -469,4 +477,219 @@ function methodBody(body: string, name: string): string {
     }
   }
   return body.slice(open);
+}
+
+/**
+ * THE TWIN DIFFERENTIAL: for each core seam BOTH backends implement, the two
+ * halves are held to one observable over one shared fixture, and a failure
+ * names the seam.
+ *
+ * The inventory above answers "is this logic duplicated". It cannot answer the
+ * question that actually shipped defects: two halves that BOTH delegate to core
+ * and still disagree about what they hand it. `headMergeLLM` is the case in the
+ * record — the Cloudflare merge resolved the `judge` route off the turn profile
+ * while the local merge passed the SESSION'S CHAT MODEL at a hardcoded `'low'`
+ * and filed the result as `judge` spend anyway, so one split was synthesised by
+ * the deep tier in the cloud and by whatever `/model` happened to be on a
+ * laptop. Both bodies called into core. Neither was a "twin".
+ *
+ * WHAT MAKES THIS DIFFERENTIAL RATHER THAN TWO ASSERTIONS. Each seam declares
+ * ONE shared fixture and ONE expected observable, and the check requires BOTH
+ * backends' suites to pin THAT fixture rather than a local literal. Two suites
+ * with two hand-maintained expectations can agree today and drift tomorrow with
+ * neither going red; two suites pinned to one exported value cannot. The
+ * fixture itself is then EXECUTED here, so the shared expectation cannot rot
+ * into something core no longer produces — which is the half a source scan
+ * alone can never carry.
+ *
+ * WHAT THIS CANNOT DO, stated because a limitation nobody wrote down gets
+ * trusted: it does not construct the CLI session inside this process. That
+ * would mean a cf-backend suite importing the other adapter's composition root,
+ * and the two are deliberately separate programs — the cf half is exercised
+ * here, the CLI half in its own package's suite, and what this gate holds is
+ * that both are measured against the SAME fixture and the same core symbol. A
+ * seam whose two suites both pin the fixture and both still call it wrongly is
+ * outside it; that residual is why `gate:capability-parity` and the inventory
+ * above stay beside this.
+ */
+
+/** One core seam both backends implement, and how a divergence is observable. */
+interface DifferentialSeam {
+  /** The seam's name — what a failure reports. */
+  readonly seam: string;
+  /** The core symbol both backends' halves must reach. */
+  readonly coreSymbol: string;
+  /** The shared fixture both suites must pin, as exported from test-utils. */
+  readonly fixture: readonly string[];
+  /** The suite on each side that pins it. */
+  readonly suites: readonly [cf: string, cli: string];
+}
+
+const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
+  {
+    // The merge's MODEL, its EFFORT and its SPEND LABEL are one decision in
+    // core; a backend's only say is turning the routed pair into a client.
+    seam: 'head-merge policy',
+    coreSymbol: 'headMergeLLM',
+    fixture: ['mergePolicyProfile', 'MERGE_POLICY_BINDING'],
+    suites: [
+      'packages/cf-backend/tests/unit-head-runtime-operations.test.ts',
+      'packages/cli-backend/tests/head-runtime.test.ts',
+    ],
+  },
+  {
+    // Which store answers each live plane of a turn. Both bodies used to state
+    // the binding themselves — two eight-field literals differing only in how
+    // each side named its own fields — and `state/dynamic-context.ts` now holds
+    // it once. The fixture is the assembled snapshot itself.
+    seam: 'workspace planes',
+    coreSymbol: 'collectDynamicContext',
+    // The pin is the BINDING both composition surfaces must name. There is no
+    // CLI-side plane suite to pin a value in — the CLI half is measured
+    // through its session's own tests — so what is held here is that neither
+    // surface assembles the planes itself, and the assembler's own output is
+    // executed below.
+    fixture: ['collectDynamicContext'],
+    suites: [
+      'packages/cf-backend/src/actor-agent.ts',
+      'packages/cli-backend/src/local-session.ts',
+    ],
+  },
+  {
+    // What a hired helper is called. One minter in core, reached by both
+    // backends' hire paths; a backend that minted its own would produce names
+    // core's own readers parse differently.
+    seam: 'name minting',
+    coreSymbol: 'mintSubordinateName',
+    fixture: ['mintSubordinateName'],
+    suites: [
+      'packages/cf-backend/src/actor-agent.ts',
+      'packages/cli-backend/src/agent-host/host.ts',
+    ],
+  },
+] as const;
+
+describe('the twin differential — one seam, one fixture, both backends', () => {
+  const read = (file: string): string => readFileSync(resolve(REPO, file), 'utf8');
+
+  test('every declared seam names a real core symbol, reached from BOTH backends', () => {
+    // The denominator. A seam whose symbol no backend reaches is a stale
+    // declaration, and a seam list nobody can fail is the shape this whole file
+    // exists to refuse.
+    expect(DIFFERENTIAL_SEAMS.length).toBeGreaterThan(0);
+    const unreached: string[] = [];
+    for (const entry of DIFFERENTIAL_SEAMS) {
+      const cf = [...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts')];
+      const cli = [read(CLI_CLASS[0]), read('packages/cli-backend/src/head-runtime.ts'),
+        read('packages/cli-backend/src/agent-host/host.ts')];
+      if (!cf.some((body) => body.includes(entry.coreSymbol))) {
+        unreached.push(`${entry.seam} — no cf surface names \`${entry.coreSymbol}\``);
+      }
+      if (!cli.some((body) => body.includes(entry.coreSymbol))) {
+        unreached.push(`${entry.seam} — no CLI surface names \`${entry.coreSymbol}\``);
+      }
+    }
+    expect(unreached).toEqual([]);
+  });
+
+  test('both sides of every seam pin the SAME shared fixture, never a local literal', () => {
+    // The differential proper. Two suites maintaining two expectations is how
+    // the merge policy drifted: each looked correct alone.
+    const drifted: string[] = [];
+    for (const entry of DIFFERENTIAL_SEAMS) {
+      for (const suite of entry.suites) {
+        const body = read(suite);
+        const pinned = entry.fixture.filter((name) => body.includes(name));
+        if (pinned.length === 0) {
+          drifted.push(
+            `${entry.seam} — ${suite} pins none of [${entry.fixture.join(', ')}], so its `
+            + 'expectation is its own and can drift from the other backend\'s silently',
+          );
+        }
+      }
+    }
+    expect(drifted).toEqual([]);
+  });
+
+  test('the shared merge fixture still resolves to the policy core produces', async () => {
+    // The half a source scan cannot carry: the pinned value EXECUTED. A fixture
+    // that agreed with neither backend would let both suites pass while the
+    // policy underneath them moved.
+    const profile = mergePolicyProfile();
+    const asked: { spec: string | null | undefined; effort: string }[] = [];
+    const reports: { source: string }[] = [];
+    const merge = headMergeLLM({
+      profile: async () => profile,
+      bindMergeModel: (route) => {
+        asked.push({ spec: route.model, effort: route.reasoningEffort });
+        return { model: mergeFixtureModel() };
+      },
+      reportModelCall: (report) => reports.push({ source: report.source }),
+    });
+    const output = await merge('merging two heads', MergeOutputSchema);
+
+    // ONE expectation, exported once, compared here and in both backends'
+    // suites: the deep tier's model AND the deep tier's effort.
+    expect(asked).toEqual([MERGE_POLICY_BINDING]);
+    expect(reports.map((report) => report.source)).toEqual([MERGE_POLICY_SPEND_SOURCE]);
+    expect(output.narrative).toContain('one narrative');
+  });
+
+  test('the shared plane assembler answers every plane a backend hands it', () => {
+    // The workspace-planes seam, executed over one fixture: a plane a backend
+    // supplies and the assembler drops is invisible to both suites, because
+    // each reads only its own rendering.
+    const block = renderDynamicContextBlock(agentDynamicContext({
+      factsBlock: 'FACTS: the parser is sound',
+      memoryTail: 'MEMORY: the reader survives a reopen',
+      recoveryFindings: [],
+      executors: [],
+      runningJobs: { items: [{ id: 'bgjob-1', kind: 'agents', label: 'search: prior art' }], total: 1 },
+      openTasks: {
+        items: [{ id: 'task-1', title: 'finish the differential', status: 'open', subtasks: [] }],
+        total: 1,
+      },
+      liveHeadRuns: { items: [{ rootId: 'root-1', rationale: 'four angles', running: 2, total: 4 }], total: 1 },
+      subordinateDelegates: [{ kind: 'subordinate', name: 'aria', phase: 'active', task: 'read the spec' }],
+      approvals: { items: [], total: 0 },
+      missingCapabilities: [],
+    }));
+    expect(block).not.toBeNull();
+    for (const plane of ['the parser is sound', 'survives a reopen', 'prior art', 'four angles', 'aria']) {
+      expect(String(block)).toContain(plane);
+    }
+  });
+
+  test('the shared minter answers one name shape for every role either backend hires', () => {
+    // The name-minting seam over hostile fixtures. Both backends bind this one
+    // function; the shape it produces is what core's own readers parse.
+    const roles = ['researcher', 'Data Analyst', '', 'ünïcodé', 'a'.repeat(120), 'with/slash'];
+    const minted = roles.map((role) => mintSubordinateName(role));
+    for (const name of minted) {
+      expect(name).toMatch(/^[a-z0-9-]+-[A-Za-z0-9_-]{6}$/);
+    }
+    // Distinct per call, which is what makes a roster row addressable.
+    expect(new Set(minted.map((name) => name)).size).toBe(minted.length);
+    expect(mintSubordinateName('')).toStartWith('subordinate-');
+  });
+});
+
+/** The merge model the differential drives: valid `MergeOutputSchema` JSON, so
+ *  what is measured is the ROUTE and the SPEND rather than a parse. */
+function mergeFixtureModel(): MockLanguageModelV3 {
+  return new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{
+        type: 'text' as const,
+        text: '{"narrative":"Both heads agree: one narrative.","selected_decisions":[],'
+          + '"unresolved_questions":[],"recommendations":["ship it"]}',
+      }],
+      finishReason: { unified: 'stop' as const, raw: undefined },
+      usage: {
+        inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 5, text: 5, reasoning: undefined },
+      },
+      warnings: [],
+    }),
+  });
 }

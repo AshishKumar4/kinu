@@ -198,7 +198,7 @@ export type EmailIngressResult =
 
 /** Which side of the inbox gate a sender falls on — the ONE comparison, so the
  *  pre-parse check the transport makes and the admission below cannot drift. */
-export function classifyEmailSender(
+function classifyEmailSender(
   from: string,
   ownerEmail: string | null,
   allowlist: ReadonlyArray<string>,

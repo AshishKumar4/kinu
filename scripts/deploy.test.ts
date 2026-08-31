@@ -42,6 +42,8 @@ const REQUIRED_GATES = [
   "bun run test",
   "bun run gate:python-suites",
   "bun run test:mutation",
+  "bun run gate:mutation-fences",
+  "bun run gate:twin-differential",
   "bun test packages/devbox/",
   "bun test packages/test-utils/",
   "bun test --parallel=4 packages/cf-backend/",
@@ -54,6 +56,7 @@ const REQUIRED_GATES = [
   "bun scripts/secret-scan.ts",
   "bun scripts/schema-drift.ts",
   "bun scripts/tracing-gate.ts",
+  "bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts",
   "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts",
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
@@ -92,6 +95,7 @@ const REQUIRED_GATES = [
   "bun run layergate",
   "bun run layergate --matrix",
   "bun run verify:lean",
+  "bun run gate:hammer",
   "bun run gate:infra",
 ] as const;
 
@@ -296,18 +300,22 @@ describe("deploy gate", () => {
     const alone = waves.filter((wave) => wave.length === 1).flat();
 
     expect(alone.sort()).toEqual(Object.keys(SERIAL_GATES).sort());
-    // Three waves: preflight, one concurrent source block, then infrastructure.
-    // Barriers around every source gate would satisfy `alone` and make the
-    // pipeline serial, so the middle size is pinned. DERIVED from the two lists
-    // above rather than written as a number: a literal here has to be edited
-    // every time a gate is added, and a number nobody can derive gets edited
-    // without being read. The property is the same either way, because a gate
-    // that leaves the middle wave has to appear in `SERIAL_GATES` to satisfy the
-    // assertion above it.
-    expect(waves.length).toBe(3);
+    // FOUR waves now: preflight, one concurrent source block, the hammer, then
+    // infrastructure. The hammer earned its own barrier by being the one gate
+    // whose subject is contention — it starves nproc/2 threads on purpose, so
+    // anything beside it would be measured on a machine this gate is
+    // deliberately loading. Barriers around every source gate would satisfy
+    // `alone` and make the pipeline serial, so the middle size is pinned.
+    // DERIVED from the two lists above rather than written as a number: a
+    // literal here has to be edited every time a gate is added, and a number
+    // nobody can derive gets edited without being read. The property is the
+    // same either way, because a gate that leaves the middle wave has to appear
+    // in `SERIAL_GATES` to satisfy the assertion above it.
+    expect(waves.length).toBe(4);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
     expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length);
-    expect(waves[2]).toEqual(["bun run gate:infra"]);
+    expect(waves[2]).toEqual(["bun run gate:hammer"]);
+    expect(waves[3]).toEqual(["bun run gate:infra"]);
   });
 
   // The Worker version is what a persisted error names, so it has to name the

@@ -140,6 +140,17 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'that EXECUTES is exactly the set no repository enumerator can produce.',
   ],
   [
+    'scripts/mutation-fences.ts',
+    'enumerates the DONOR `node_modules` to mirror it into an isolated worktree, per the '
+    + 'setup-worktree invariant: every third-party entry linked, the workspace scope rebuilt '
+    + 'against the copy\'s own packages. `git ls-files` has never listed `node_modules`, so '
+    + 'that set is exactly the one no repository enumerator can produce — and borrowing the '
+    + 'directory wholesale instead is the defect `tests/workspace-resolution.test.ts` exists '
+    + 'to catch. Everything about the REPOSITORY it reads comes from `trackedFiles()` and '
+    + '`workspaceScope()`: the fence files, the owning suites, and the package list the scope '
+    + 'is rebuilt from.',
+  ],
+  [
     'scripts/patch-parity.ts',
     "enumerates bun's install cache to find the PRISTINE extraction of each patched dependency "
     + '(`<cache>/<name>@<version>@@@N`, selected by prefix so the `_patch_hash=` sibling can never '

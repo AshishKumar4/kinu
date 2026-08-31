@@ -468,6 +468,8 @@ run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
 run_required_gate "Bench Python suites" bun run gate:python-suites
 run_required_gate "Exploration policy mutations" bun run test:mutation
+run_required_gate "Concurrency fences stay load-bearing" bun run gate:mutation-fences
+run_required_gate "Cross-backend seam differential" bun run gate:twin-differential
 run_required_gate "Devbox durability decisions" bun test packages/devbox/
 run_required_gate "Test-utils suite" bun test packages/test-utils/
 run_required_gate "Cloudflare backend and conformance suite" bun test --parallel=4 packages/cf-backend/
@@ -491,6 +493,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
+run_required_gate "Hammer and fence gate self-tests" bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts
 run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
@@ -531,6 +534,15 @@ run_required_gate "Layergate fault-localization matrix" bun run layergate --matr
 run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean
 
 # BARRIER. Everything above this line is independent and ran concurrently.
+flush_gates
+
+# ALONE, and deliberately so: this gate's SUBJECT is contention. It saturates
+# half the machine's threads on purpose, so a gate running beside it would fail
+# for a reason unrelated to the change under test — which is the one thing a
+# deploy gate must never do. See SERIAL_GATES in scripts/ladder.ts.
+run_required_gate "Contended reruns of the Cloudflare suite" bun run gate:hammer
+
+# BARRIER.
 flush_gates
 
 

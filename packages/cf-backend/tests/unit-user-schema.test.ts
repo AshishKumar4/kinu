@@ -81,7 +81,7 @@ describe('UserDO schema bootstrap', () => {
 
     expect(columns(db, 'user_workspaces')).toEqual([
       'name', 'display_name', 'created_at', 'last_visited', 'archived_at',
-      'name_origin', 'delete_pending', 'create_pending',
+      'name_origin', 'delete_pending', 'create_pending', 'fork_lease_expires_at',
     ]);
     expect(required(db.query<{
       name_origin: string;
