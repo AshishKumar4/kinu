@@ -27,7 +27,7 @@ import type { FiberRecoveryContext } from 'agents';
 import {
   sweepUnrecoverableFibers,
   FIBER_RECOVERY_MAX_AGE_MS,
-  FIBER_RECOVERY_SCAN_DEADLINE_MS,
+  FIBER_SWEEP_MAX_ROWS,
   TERMINAL_LANE_FIBER,
   type FiberMetaRow,
   type FiberRowStore,
@@ -156,7 +156,11 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     // died before the reply left.
     expect(harness.agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
 
+    // Classification arms the wake and dispatches NOTHING — the init ruling
+    // covers spawned work too. The alarm frame is what pays for the reply.
     await harness.agent.harnessReconcileEventDeliveries();
+    expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: 5 });
+    await harness.agent._kinuTerminalRetryTick();
 
     // The delivery is settled: lease closed, BINDING kept, so no later drain can
     // select it and no sweep can re-ask the question.
@@ -221,10 +225,18 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     persistedDrainTurn(harness, 'evt-unanswered', null);
 
     harness.agent.activateActor();
-    // The reconcile is detached from `onStart` (it sends mail, and `onStart` runs
-    // inside the init gate); a macrotask is what lets that chain settle.
+    // The reconcile is detached from `onStart` (a bounded sweep plus one
+    // schedule write); a macrotask lets that chain settle.
     await new Promise((resolve) => { setTimeout(resolve, 0); });
     await new Promise((resolve) => { setTimeout(resolve, 0); });
+
+    // The activation itself dispatched nothing: the answered lease is exactly
+    // as the dead activation left it, while the unanswered one was re-pended
+    // by the bounded sweep. The split IS the contract — classify at
+    // activation, dispatch under the wake.
+    expect(lease(harness, 'ev-answered')).toEqual({ turn_id: 'evt-answered', consumed_at: 5 });
+    expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: null, consumed_at: null });
+    await harness.agent._kinuTerminalRetryTick();
 
     // Answered: finished, binding kept.
     expect(lease(harness, 'ev-answered').turn_id).toBe('evt-answered');
@@ -554,10 +566,10 @@ function scriptedFibers(
       onBoundaryRead?.(table);
       return boundary;
     },
-    page: (after, through) => {
+    page: (after, through, cutoff) => {
       asked.push('page');
       return [...table.values()]
-        .filter((row) => row.rowid > after && row.rowid <= through)
+        .filter((row) => row.rowid > after && row.rowid <= through && row.created_at <= cutoff)
         .sort((a, b) => a.rowid - b.rowid)
         .slice(0, 1);
     },
@@ -591,7 +603,8 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     // `FiberRowStore` can answer with a snapshot — so the property is carried by
     // the interface rather than by a query string a refactor could change.
     expect(new Set(scene.asked)).toEqual(new Set(['present', 'upperBoundary', 'page', 'dropIfExpired']));
-    // One page for two rows, and one drop for the single expired one.
+    // The cutoff lives in the query, so the fresh row is never paged at all:
+    // one drop for the single expired row is the whole conversation.
     expect(scene.asked.filter((question) => question === 'dropIfExpired')).toHaveLength(1);
   });
 
@@ -604,7 +617,7 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
 
     const result = sweepUnrecoverableFibers(scene.store, NOW);
 
-    expect(result).toEqual({ dropped: 2, scanned: 3, deadlineExceeded: false });
+    expect(result).toEqual({ dropped: 2, scanned: 3, truncated: false });
     expect(scene.survivors()).toEqual(['fresh-1']);
   });
 
@@ -618,13 +631,13 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     ]);
 
     expect(sweepUnrecoverableFibers(scene.store, NOW))
-      .toEqual({ dropped: 0, scanned: 2, deadlineExceeded: false });
+      .toEqual({ dropped: 0, scanned: 2, truncated: false });
     expect(scene.survivors()).toEqual(['fresh-1', 'fresh-2']);
   });
 
   test('an empty table is zero rows, not a failure', () => {
     expect(sweepUnrecoverableFibers(scriptedFibers([]).store, NOW))
-      .toEqual({ dropped: 0, scanned: 0, deadlineExceeded: false });
+      .toEqual({ dropped: 0, scanned: 0, truncated: false });
   });
 
   /**
@@ -668,25 +681,60 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     expect(scene.survivors()).toEqual(['started-during']);
   });
 
-  test('the deadline stops the pass and says so, leaving the rest for the next wake', () => {
-    const rows = Array.from({ length: 600 }, (_unused, index) => ({
+  test('the row budget stops the pass and says so, leaving the rest for the next wake', () => {
+    const rows = Array.from({ length: FIBER_SWEEP_MAX_ROWS + 200 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
     const scene = scriptedFibers(rows);
-    // A clock that jumps past the budget once the first page is done: the pass
-    // must stop and say so rather than keep going.
-    let reads = 0;
-    const clock = () => {
-      reads++;
-      return reads <= 2 ? NOW : NOW + FIBER_RECOVERY_SCAN_DEADLINE_MS + 1;
-    };
 
-    const result = sweepUnrecoverableFibers(scene.store, NOW, clock);
+    const result = sweepUnrecoverableFibers(scene.store, NOW);
 
-    expect(result.deadlineExceeded).toBe(true);
+    // An inherent bound on the work itself — rows scanned — never a stopwatch:
+    // the pass stops at the budget and says so rather than keep going.
+    expect(result.truncated).toBe(true);
+    expect(result.scanned).toBe(FIBER_SWEEP_MAX_ROWS);
     expect(result.dropped).toBeGreaterThan(0);
-    expect(result.dropped).toBeLessThan(600);
+    expect(result.dropped).toBeLessThan(rows.length);
     // What it did not reach is still there for the next activation.
     expect(scene.survivors().length).toBeGreaterThan(0);
+  });
+
+  test('deletion is the cursor: the next wake reaches what this one did not', () => {
+    // A backlog deeper than one budget, all expired. No durable cursor exists,
+    // and none is needed: rowid order tracks insertion, so an expired row
+    // cannot sit BEHIND a fresh one, and the rows a wake drops are exactly the
+    // prefix the next wake no longer scans.
+    const rows = Array.from({ length: FIBER_SWEEP_MAX_ROWS + 300 }, (_unused, index) => ({
+      rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
+    }));
+    const scene = scriptedFibers(rows);
+
+    const first = sweepUnrecoverableFibers(scene.store, NOW);
+    expect(first.truncated).toBe(true);
+
+    const second = sweepUnrecoverableFibers(scene.store, NOW);
+    expect(second.truncated).toBe(false);
+    expect(first.dropped + second.dropped).toBe(rows.length);
+    expect(scene.survivors()).toEqual([]);
+  });
+
+  test('an expired row behind a wall of fresh ones is dropped on the FIRST wake', () => {
+    // The adversarial ordering `created_at`-tracks-rowid would starve: imported
+    // rows or a stepped clock put fresh timestamps at LOW rowids and an expired
+    // row above the whole budget. The cutoff sits in the query, so the wall is
+    // never scanned and the expired row is page one.
+    const rows = [
+      ...Array.from({ length: FIBER_SWEEP_MAX_ROWS + 10 }, (_unused, index) => ({
+        rowid: index + 1, id: `fresh-${index}`, created_at: inBudget(index + 1),
+      })),
+      { rowid: FIBER_SWEEP_MAX_ROWS + 11, id: 'expired-behind-the-wall', created_at: overAge(1) },
+    ];
+    const scene = scriptedFibers(rows);
+
+    const result = sweepUnrecoverableFibers(scene.store, NOW);
+
+    expect(result).toEqual({ dropped: 1, scanned: 1, truncated: false });
+    expect(scene.survivors()).not.toContain('expired-behind-the-wall');
+    expect(scene.survivors()).toHaveLength(FIBER_SWEEP_MAX_ROWS + 10);
   });
 });

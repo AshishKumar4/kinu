@@ -402,6 +402,16 @@ export class TerminalTransitions {
     }));
   }
 
+  /** Whether ANY sequence is owed — one indexed LIMIT-1 read, for the
+   *  activation-time arm decision that must not materialize the roster. */
+  hasIncomplete(): boolean {
+    const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
+    return this.deps.sql<{ present: number }>`
+      SELECT 1 AS present FROM tool_effect_claims
+      WHERE normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL LIMIT 1
+    `.length > 0;
+  }
+
   /**
    * Finish what one interrupted sequence still owes, from storage.
    *

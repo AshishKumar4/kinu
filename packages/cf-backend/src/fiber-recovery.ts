@@ -77,6 +77,14 @@ export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export const FIBER_RECOVERY_SCAN_DEADLINE_MS = 10_000;
 
 /**
+ * The most rows one activation's pre-pass scans — the inherent bound the init
+ * ruling requires. Metadata-only pages, so the worst case is a handful of
+ * indexed reads; a backlog deeper than this waits for the next activation
+ * rather than holding this one hostage to a stopwatch.
+ */
+export const FIBER_SWEEP_MAX_ROWS = 4096;
+
+/**
  * One metadata row per read. This is not a policy cap: recovery stays bounded
  * by the SDK's existing scan deadline, while the read is structurally incapable
  * of holding more than one snapshot candidate at a time.
@@ -107,8 +115,12 @@ export interface FiberRowStore {
   present(): boolean;
   /** `MAX(rowid)`, read once and then frozen by the caller. */
   upperBoundary(): number | null;
-  /** Metadata for the rows in `(after, through]`, oldest rowid first. */
-  page(after: number, through: number): readonly FiberMetaRow[];
+  /** Metadata for EXPIRED rows in `(after, through]`, oldest rowid first.
+   *  The cutoff sits in the query: a fresh row is never scanned at all, so a
+   *  backlog of live fibers cannot starve an expired row behind it — the
+   *  ordering `created_at` roughly tracks rowid is a tendency, never the
+   *  guarantee (imported rows and a stepped clock both break it). */
+  page(after: number, through: number, cutoff: number): readonly FiberMetaRow[];
   /** Remove one row, re-checking AT ITS OWN ID that it is still expired.
    *  `false` when a concurrent pass already handled it. */
   dropIfExpired(id: string, cutoff: number): boolean;
@@ -121,9 +133,9 @@ export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cf_agents_runs'`.length > 0,
     upperBoundary: () => sql<{ boundary: number | null }>`
       SELECT MAX(rowid) AS boundary FROM cf_agents_runs`[0]?.boundary ?? null,
-    page: (after, through) => sql<unknown>`
+    page: (after, through, cutoff) => sql<unknown>`
       SELECT rowid, id, created_at FROM cf_agents_runs
-      WHERE rowid > ${after} AND rowid <= ${through}
+      WHERE rowid > ${after} AND rowid <= ${through} AND created_at <= ${cutoff}
       ORDER BY rowid ASC LIMIT ${ONE_FIBER_ROW}`
       .map((row) => v.parse(FiberMetaRowSchema, row)),
     dropIfExpired: (id, cutoff) => sql<{ id: string }>`
@@ -176,7 +188,7 @@ export function openChatTurnResponses(sql: SqlExecutor, turnId: string): string[
 export interface FiberSweepResult {
   readonly dropped: number;
   readonly scanned: number;
-  readonly deadlineExceeded: boolean;
+  readonly truncated: boolean;
 }
 
 /**
@@ -203,8 +215,11 @@ export interface FiberSweepResult {
  *   • REVALIDATE BEFORE ACTING. The delete is guarded on the row still being
  *     over the budget at its own id, so a page — a snapshot of a table a
  *     concurrent framework scan writes to — cannot authorise a stale removal.
- *   • SPEND THE SAME DEADLINE. What the pass does not reach stays for the next
- *     wake, exactly as the framework's own scan leaves it.
+ *   • A ROW BUDGET, NOT A STOPWATCH. One activation scans at most
+ *     {@link FIBER_SWEEP_MAX_ROWS} rows — an inherent bound on the work
+ *     itself, where the wall-clock cutoff this replaces bounded nothing but
+ *     the wait. What the pass does not reach stays for the next wake,
+ *     exactly as the framework's own scan leaves it.
  *
  * Only rows the budget has ALREADY refused are dropped, so no recovery decision
  * changes: past `fiberRecoveryMaxAgeMs` the framework discards the row anyway
@@ -216,11 +231,9 @@ export interface FiberSweepResult {
 export function sweepUnrecoverableFibers(
   store: FiberRowStore,
   now: number,
-  clock: () => number = Date.now,
 ): FiberSweepResult {
-  const startedAt = clock();
   const cutoff = now - FIBER_RECOVERY_MAX_AGE_MS;
-  const nothing: FiberSweepResult = { dropped: 0, scanned: 0, deadlineExceeded: false };
+  const nothing: FiberSweepResult = { dropped: 0, scanned: 0, truncated: false };
   // An actor that has never detached durable work has no table. That is not a
   // failure, it is zero rows, and saying so keeps a fresh workspace quiet.
   if (!store.present()) return nothing;
@@ -230,15 +243,14 @@ export function sweepUnrecoverableFibers(
   let dropped = 0;
   let scanned = 0;
   for (;;) {
-    if (clock() - startedAt > FIBER_RECOVERY_SCAN_DEADLINE_MS) {
-      return { dropped, scanned, deadlineExceeded: true };
+    if (scanned >= FIBER_SWEEP_MAX_ROWS) {
+      return { dropped, scanned, truncated: true };
     }
-    const page = store.page(cursor, boundary);
-    if (page.length === 0) return { dropped, scanned, deadlineExceeded: false };
+    const page = store.page(cursor, boundary, cutoff);
+    if (page.length === 0) return { dropped, scanned, truncated: false };
     for (const row of page) {
       scanned++;
       cursor = row.rowid;
-      if (row.created_at > cutoff) continue;
       if (store.dropIfExpired(row.id, cutoff)) dropped++;
     }
   }

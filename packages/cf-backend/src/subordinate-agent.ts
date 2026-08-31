@@ -497,19 +497,17 @@ export class SubordinateAgent extends ActorAgent {
     // The same budget-first prune the root runs: a subordinate carries the same
     // four durable lanes, so it accumulates the same interrupted-fiber rows.
     this.sweepUnrecoverableFiberRows();
-    // And the same terminal sweep, for the same reason the root has one and for
-    // one more: this is the only carrier a sequence has when the ledger could not
-    // arm its wake at all. The terminal lane owns this asynchronous replay, so a
-    // later eviction re-enters the existing terminal recovery path.
+    // And the same terminal classification the root runs, for the same reason:
+    // an interrupted transition replays SMTP and model work, and an activation
+    // launches no external work. One bounded read decides; a wake due NOW is
+    // one schedule row, and the alarm frame's `owedDeliveryWork` dispatches —
+    // the carrier a sequence has even when the ledger could not arm its wake.
     this._terminalReported = this.runFiber(TERMINAL_LANE_FIBER, async () => {
-      try {
-        await this.terminal.resumeAll();
-      } catch (cause) {
-        diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
-          doing: 'finishing what interrupted terminal transitions still owed',
-          cause,
-          otherwise: 'unavailable',
-        }), { workspace: this.name });
+      // An unseeded subordinate has run no turn and can owe no transition —
+      // and its terminal ledger deps need the parent identity to build at all.
+      if (this.identity.workspaceName() === null) return;
+      if (this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()) {
+        await this.scheduleTerminalRetry(Date.now());
       }
     });
   }

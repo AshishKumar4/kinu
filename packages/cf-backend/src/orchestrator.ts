@@ -536,54 +536,24 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Reconcile the deliveries a dead activation left leased, in the one order
-   * that cannot lose work: FINISH, then RE-ASK.
+   * Classify the deliveries a dead activation left leased, and ARM the wake
+   * that finishes them — dispatching nothing from the activation itself.
    *
-   * An open recovery lease is one of two different things and the sweep alone
-   * cannot tell them apart. Either the question was never answered — re-pend it,
-   * which is what `unbindStale` is for — or it WAS answered and the reply never
-   * left, in which case re-pending asks the sender its own question again while
-   * the answer it is waiting on already exists.
-   *
-   * So the resume runs first and is AWAITED: every reply an interrupted terminal
-   * transition still owed is dispatched, and each dispatched batch closes its own
-   * lease, before the sweep reads anything. The exclusion handed to `unbindStale`
-   * is the invariant BACKUP rather than the mechanism — it holds if a later
-   * caller reverses these two, and it keeps a resume that failed for its own
-   * reasons (an unconfigured mail binding) from having its lease reclaimed
-   * underneath it while the reply is still owed.
-   *
-   * Detached from `onStart` as a whole, because the resume sends mail and
-   * `onStart` runs inside the init gate where an await stalls every request on
-   * this object.
+   * An open recovery lease is one of two different things. Either the question
+   * was never answered — re-pend it, which is what `unbindStale` is for — or it
+   * WAS answered and the reply never left, in which case re-pending asks the
+   * sender its own question again while the answer it is waiting on already
+   * exists. The `stillOwed` exclusion is what tells them apart, and it is the
+   * MECHANISM here, not a backup: the sweep runs at activation (bounded SQL),
+   * and every dispatch — owed replies and interrupted terminal transitions
+   * alike — belongs to {@link owedDeliveryWork} under the durable terminal
+   * wake, because a reply is external mail and an activation launches no
+   * external work. A wake due NOW is one schedule row; the alarm frame pays
+   * for the dispatches inside an invocation, where they belong.
    */
   protected async reconcileEventDeliveries(): Promise<void> {
-    // The owed replies FIRST, and deliberately not gated on a terminal claim
-    // existing. An open lease with a durable answer is a reply this workspace
-    // owes whatever the claim ledger says: the claim may have been released by
-    // an activation that predates it, or by a turn whose detached dispatch died
-    // after the release. The lease and the transcript are the two durable facts,
-    // and they are sufficient on their own.
+    const stillOwed = new Set(this.owedDrainReplies().keys());
     try {
-      await this.dispatchOwedDrainReplies();
-    } catch (err) {
-      diagnostics.failure('event.owed_reply_resume_failed', toKinuError({
-        doing: 'dispatching the event replies a previous activation still owed',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
-    try {
-      await this.terminal.resumeAll();
-    } catch (err) {
-      diagnostics.failure('turn.terminal_resume_sweep_failed', toKinuError({
-        doing: 'finishing what interrupted terminal transitions still owed',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
-    try {
-      const stillOwed = new Set(this.owedDrainReplies().keys());
       const reconciledEventIds = this.eventLog.unbindStale(
         STALE_EVENT_DELIVERY_MS, Date.now(), stillOwed,
       );
@@ -598,6 +568,26 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
+    if (stillOwed.size > 0 || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()) {
+      await this.scheduleTerminalRetry(Date.now());
+    }
+  }
+
+  /** The orchestrator's owed external lanes, prepended to the base terminal
+   *  replay so both ride the ONE durable wake. Replies first: an owed reply is
+   *  an answer somebody is actively waiting on, and the terminal replay's own
+   *  resume closes the same leases when it finishes a transition. */
+  protected override async owedDeliveryWork(): Promise<void> {
+    try {
+      await this.dispatchOwedDrainReplies();
+    } catch (err) {
+      diagnostics.failure('event.owed_reply_resume_failed', toKinuError({
+        doing: 'dispatching the event replies a previous activation still owed',
+        cause: err,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+    }
+    await super.owedDeliveryWork();
   }
 
   private _engine: EvolutionEngine | null = null;
@@ -2241,16 +2231,14 @@ export class OrchestratorAgent extends ActorAgent {
     })();
     // Deliveries a dead activation left leased. An open lease is either a
     // question nobody answered or an ANSWER NOBODY DELIVERED, and only the
-    // transcript tells them apart. The sweep could not: it re-pended every open
-    // lease it found, so a turn that had answered its email batch and died
-    // before the reply left was asked the same question again — while the sender,
-    // still waiting, never got the answer that already existed.
+    // transcript tells them apart: the `stillOwed` exclusion keeps the sweep
+    // from re-asking a question whose answer already exists.
     //
-    // The answered ones are excluded here and finished by the resume below.
-    // Stated as an exclusion rather than an ordering: the sweep stays
-    // synchronous inside the init gate (it is one indexed UPDATE), the resume
-    // sends mail and therefore cannot be, and the invariant must not depend on
-    // which of the two happens to run first.
+    // The activation CLASSIFIES and ARMS — one bounded sweep, one schedule row
+    // when anything is owed. Every dispatch (owed replies, interrupted terminal
+    // transitions) runs under the durable terminal wake in `owedDeliveryWork`,
+    // because a reply is external mail and an activation launches no external
+    // work, awaited or detached.
     const eventDeliveryReconcileTask: AsyncTaskOwner = { promise: null };
     this._backgroundTasks.add(eventDeliveryReconcileTask);
     eventDeliveryReconcileTask.promise = (async () => {

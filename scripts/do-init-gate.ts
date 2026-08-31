@@ -209,8 +209,9 @@ const RECOVERY_HOOKS: readonly string[] = [
 const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
 
 /**
- * Calls that reach a model, pinned by name — the class of work no `onStart` may
- * launch, awaited or not.
+ * Calls that reach OFF the machine, pinned by name — the class of work no
+ * `onStart` may launch, awaited or not: provider round trips and external
+ * delivery dispatch alike.
  *
  * Pinned by equality for the same reason {@link RECOVERY_HOOKS} is: this list
  * IS the rule, so widening it — or failing to widen it when a new model seam
@@ -225,6 +226,11 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  *     directly is refused by the same rule.
  *   • `runDueSessionEvolution`, `reviewCompletedTurn` — the cadence and advisor
  *     passes, each a model call behind one name.
+ *   • `dispatchOwedDrainReplies`, `resumeAll`, `replayOwedAndRearm`,
+ *     `owedDeliveryWork` — the delivery lanes: owed event replies are external
+ *     mail and an interrupted terminal transition replays SMTP and model work.
+ *     An activation CLASSIFIES and ARMS the durable wake; the alarm frame
+ *     dispatches.
  *
  * Names, not a call graph: "Why this shape" above applies unchanged, and the
  * honest limit — a hook that reaches a model under a name not on this list — is
@@ -236,6 +242,7 @@ export const MODEL_SINKS: readonly string[] = [
   'suggestTitle', 'maybeAutoTitle', 'applyAutoTitle',
   'generateText', 'streamText', 'generateJson',
   'runDueSessionEvolution', 'reviewCompletedTurn',
+  'dispatchOwedDrainReplies', 'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',
 ];
 
 /** The marker that opts a container-start hook into the plainly-bounded

@@ -2104,6 +2104,18 @@ export abstract class ActorAgent extends Think<Env> {
    * storage and re-arms from what is left, so a duplicate wake costs one read.
    */
   async _kinuTerminalRetryTick(): Promise<void> {
+    await this.owedDeliveryWork();
+  }
+
+  /**
+   * Everything a wake dispatches, in the one order that cannot lose work.
+   *
+   * A seam rather than the tick body so a subclass with MORE owed external
+   * lanes (the orchestrator's event drain replies) prepends them here and the
+   * whole set rides ONE durable wake — the init gate arms this and never runs
+   * it, per the ruling that an activation launches no external work.
+   */
+  protected async owedDeliveryWork(): Promise<void> {
     await this.terminal.replayOwedAndRearm();
   }
 
@@ -6163,11 +6175,11 @@ export abstract class ActorAgent extends Think<Env> {
   protected sweepUnrecoverableFiberRows(): void {
     try {
       const result = sweepUnrecoverableFibers(fiberRowStore(this.boundSql), Date.now());
-      if (result.dropped > 0 || result.deadlineExceeded) {
+      if (result.dropped > 0 || result.truncated) {
         diagnostics.event('fiber.unrecoverable_rows_dropped', {
           dropped: result.dropped,
           scanned: result.scanned,
-          deadlineExceeded: result.deadlineExceeded,
+          truncated: result.truncated,
         });
       }
     } catch (err) {

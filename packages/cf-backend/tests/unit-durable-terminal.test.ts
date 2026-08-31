@@ -256,6 +256,8 @@ describe('overflow retry delivery is a durable terminal effect', () => {
         });
       },
     });
+    // Reactivation CLASSIFIES and arms; the durable wake is what replays.
+    await restarted.agent._kinuTerminalRetryTick();
 
     expect(delivered).toHaveLength(2);
     expect(delivered[0]?.idempotencyKey).toBe('overflow-retry:a-overflow');
@@ -442,6 +444,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
       sleepTimeAnswer: ['a-decay', decayOne],
     });
+    await restarted.agent._kinuTerminalRetryTick();
 
     // ONE decay for one decision, and the sequence closes. Approximate because
     // the decay is float subtraction; a second one would land near 0.2.
@@ -507,9 +510,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     before.agent.harnessArmTerminalFault('turn_record', 'before');
     await expect(before.agent.onChatResponse(settledResponse('a-rev-b'))).rejects.toThrow();
     expect(owedReviews(before)).toBe(0);
-    await reactivateOrchestratorHarness(before.db, undefined, {
+    const revived = await reactivateOrchestratorHarness(before.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
     });
+    await revived.agent._kinuTerminalRetryTick();
     expect(owedReviews(before)).toBe(1);
 
     const after = orchestratorHarness();
