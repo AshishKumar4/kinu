@@ -306,7 +306,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(stale.error).toContain('unknown field "settle"');
     expect(stale.error).toContain(
       'action "swarm" takes: task, preset, objective, key, config, from, label, name, branches, '
-      + 'depth, nodes, role, tier, budget_usd, budget_tokens, budget_label',
+      + 'depth, nodes, models, role, tier, budget_usd, budget_tokens, budget_label',
     );
   });
 

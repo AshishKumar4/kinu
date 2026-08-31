@@ -38,6 +38,7 @@ import { generateText } from 'ai';
 import { normalizeUsage, type Usage } from '../usage';
 import { readProposalCode } from '../execution/code-fence';
 import { runNodeAgent, type NodeAgentDeps } from './node-agent';
+import type { RoutedNodeModel } from './swarm-setup';
 import type { SwarmBudget } from './swarm-budget';
 import type { BranchAssignment } from './swarm-level';
 
@@ -500,6 +501,17 @@ export interface ExpandChildCtx {
   readonly maxDepth: number;
   /** The model every node of this run runs on - not necessarily the caller's own. */
   readonly nodeModel: LanguageModel;
+  /**
+   * The RESOLVED per-node routing, in the slot order `SwarmInput.models` assigns:
+   * child `i` of a wave runs entry `i % length` when the list is non-empty, and
+   * {@link nodeModel} when it is not. Empty is the unrouted default rather than an
+   * error — the call resolved no list, which is the unchanged behaviour of every
+   * run before this field returned. Entries are RESOLVED at run start (an
+   * unresolvable spec refuses the whole run before any node exists) and each keeps
+   * the caller's own SPEC beside its model: the model drives this isolate's calls,
+   * and the spec is what a hosted facet takes across the wire (`HeadInput.model`).
+   */
+  readonly nodeModels: readonly RoutedNodeModel[];
   readonly signal?: AbortSignal;
   readonly nodeDeps: NodeAgentDeps;
   readonly budget: SwarmBudget;
@@ -543,11 +555,21 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   }): Promise<Expansion> {
   const {
     resolved, mode, languages, measured, baseline, verifier, carriedBest, agentNodes,
-    maxDepth, nodeModel, signal, nodeDeps, budget, rootId, log, charge,
+    maxDepth, nodeModel, nodeModels, signal, nodeDeps, budget, rootId, log, charge,
     reportModelCall,
   } = ctx;
 
   const { parent, id, atDepth } = input;
+  /**
+   * THE MODEL THIS CHILD RUNS ON — the one its slot was assigned where the call
+   * routed per node, and the run's own model where it did not. THE RUNNER LINE THAT
+   * CONSUMES THE ASSIGNMENT: this is where `SwarmInput.models` reaches a model
+   * request, by the slot `planLevel` already decided for this child. A fan-in's
+   * vertex is `index: 0`, so it runs the first spec — decided by its slot rather
+   * than by what it is, exactly as the assignment rule states.
+   */
+  const routed = nodeModels.length > 0 ? nodeModels[input.index % nodeModels.length] : undefined;
+  const assignedModel = routed?.model ?? nodeModel;
   /** The DAG's edges as the row-writing loop needs them: ids, not nodes. */
   const edges = input.aggregated.map((fanned) => fanned.id);
   const prompt = branchPrompt({
@@ -566,7 +588,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   });
   if (!agentNodes) {
     const result = await generateText({
-      model: nodeModel,
+      model: assignedModel,
       system: prompt.system,
       prompt: prompt.user,
       abortSignal: signal,
@@ -614,6 +636,12 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     context: input.context,
     mode,
     settle: resolved.settle,
+    // THE HOSTED HALF OF THE ASSIGNMENT: a facet cannot take a live model over
+    // RPC, so the slot's own SPEC rides the input and lands on
+    // `HeadInput.model`, where `ExplorationAgent.runAsNode` resolves it through
+    // the owner's registry. Undefined on an unrouted run, so the facet keeps
+    // resolving its route default exactly as before.
+    modelSpec: routed?.spec,
     // *Build-time exclusion*: the tool exists only where a branch could be granted.
     // Depth is what cannot change mid-run, so it gates the BUILD; the budget can
     // empty between the invitation and the answer, so it stays a runtime refusal
@@ -623,7 +651,15 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
         config: resolved.config, caps: resolved.caps, atDepth, proposal,
       })
       : null,
-  }, nodeDeps);
+  }, agentNodes && routed !== undefined
+    // THE ASSIGNED MODEL RIDES THE DEPS, per node: `NodeAgentDeps.model` is what the
+    // in-isolate loop builds its turns on, and a shallow copy per child shares every
+    // other seam (journal, arbiter, mission, host) the run already built once. The
+    // copy is assigned rather than mutated, so `nodeDeps` itself still names the
+    // run-level model and nothing downstream can observe one node's routing as
+    // another's.
+    ? { ...nodeDeps, model: assignedModel }
+    : nodeDeps);
   log.event('swarm.node_settled', {
     preset: resolved.preset, node: id, depth: atDepth,
     status: run.report.status, steps: run.report.stepCount,

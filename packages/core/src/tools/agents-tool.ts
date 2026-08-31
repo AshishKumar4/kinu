@@ -43,7 +43,7 @@ import {
   DELEGATION_RUNGS,
   type AgentsToolAction,
 } from './registry';
-import { SwarmConfigSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
+import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
@@ -595,6 +595,13 @@ export interface AgentsToolInput {
    *  with `branches`, whose count-based mode has the engine vary the angle
    *  instead. See {@link SwarmInput.nodes}. */
   nodes?: readonly SwarmNodeAssignment[];
+  /**
+   * Per-node model routing: one spec per expansion child, round-robin by slot.
+   * Omit and every node runs the one model the call resolved to (the tier's,
+   * where a tier was named). Mutually exclusive with `tier` — see
+   * {@link SwarmInput.models} for the assignment rule and the routing seam.
+   */
+  models?: readonly string[];
   /** The role a delegation runs under — the swarm's nodes, the hired
    *  subordinate, or the TEMPORARY agent a role-targeted `ask` creates.
    *  Explicit wins; omitted, a swarm rides the caller's own active role. One
@@ -605,8 +612,8 @@ export interface AgentsToolInput {
   role?: RoleId;
   /** The inference tier the delegation runs at: `tiny|fast|default|slow|deep`.
    *  Explicit wins; omitted resolves through the role's default tier, then
-   *  `default`. This is the ONE routing input — direct model specs are not
-   *  part of this surface. */
+   *  `default`. The one RUN-LEVEL routing input: it names ONE model for the whole
+   *  search, and `models` — per-node routing — is mutually exclusive with it. */
   tier?: TierId;
   // hire / converse
   agent?: string;
@@ -665,7 +672,7 @@ export const AGENTS_ACTION_FIELDS = {
   // ignored. They join this list when something enforces them.
   swarm: [
     'task', 'preset', 'objective', 'key', 'config', 'from', 'label', 'name', 'branches', 'depth',
-    'nodes',
+    'nodes', 'models',
     'role', 'tier',
     'budget_usd', 'budget_tokens', 'budget_label',
   ],
@@ -714,6 +721,7 @@ const AgentsInputEntries = {
   branches: v.optional(v.number()),
   depth: v.optional(v.number()),
   nodes: v.optional(SwarmNodeAssignmentsSchema),
+  models: v.optional(SwarmModelsSchema),
   agent: v.optional(v.string()),
   role: v.optional(v.string()),
   mission: v.optional(v.string()),
@@ -755,6 +763,7 @@ export const AGENTS_FIELD_TS_TYPES = {
   branches: 'number',
   depth: 'number',
   nodes: '{ prompt: string; task: string }[]',
+  models: 'string[]',
   role: 'string',
   tier: `"${TIER_IDS.join('" | "')}"`,
   agent: 'string',
@@ -1441,6 +1450,19 @@ async function runSwarmAction(
     ?? started?.profile.defaultPreset
     ?? 'ideate';
 
+  // THE TWO ROUTING INPUTS ARE EXCLUSIVE, refused here where both live: `tier`
+  // resolves ONE model for the whole run and `models` routes each node to its
+  // own. A call naming both has stated two different routing decisions for one
+  // search and one of the two would be ignored — the same drift the two width
+  // modes are refused over, restated by the caller.
+  if (input.models !== undefined && input.tier !== undefined) {
+    return badInput('`models` routes each node to the model its slot is assigned, and `tier` '
+      + `resolves one model for the whole run — you named both (tier "${String(input.tier)}" and `
+      + `${String(input.models.length)} model spec(s)), and one of the two routing decisions would `
+      + 'be ignored. Route through `tier` for one model across the search, or through `models` '
+      + 'for per-node routing.');
+  }
+
   // One typed literal, not an Object.assign chain: every field is checked
   // against SwarmInput where the assign form checked nothing, and every
   // field is SUPPLIED where a conditional spread reads as absent.
@@ -1456,6 +1478,7 @@ async function runSwarmAction(
     depth: input.depth,
     name: input.name,
     nodes: input.nodes,
+    models: input.models,
   };
 
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
@@ -1669,6 +1692,12 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
         required: ['task', 'prompt'],
       },
       description: 'For action=swarm: assign the first level node by node instead of giving a count. Its length IS the branch count, so do not send `branches` as well. Every `task` must be distinct — two nodes asked the same question pay twice for one answer. Use this when you know what each node should do; use `branches` when you want N takes on one task and will let the engine hand out distinct angles.',
+    },
+    models: {
+      type: 'array',
+      minItems: 1,
+      items: { type: 'string', minLength: 1 },
+      description: 'For action=swarm: per-node model routing, for capability and cost — a cheap model for recon, a strong one for synthesis. Each expansion child runs models[i % models.length] by its slot in the wave, deterministically, so a re-drive routes the same nodes the same way. NOT for diversity: a mixed model ensemble measured WORSE than repeated sampling from one good model when the purpose is variety (Self-MoA, 65.7 vs 59.1) — reach for it when different nodes need different capability or cost, never to vary answers to one question. Omit and every node runs the one model this call resolved to. Mutually exclusive with `tier`. Each spec resolves through the same resolver as a tier\'s model, and one this session cannot build is refused naming it before any node runs.',
     },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
     role: { type: 'string', description: `For action=swarm: the role every node runs under. Omit and the nodes ride your own active role. One swarm is role-homogeneous — there is no per-node role.${roleSummaryText(deps)}` },

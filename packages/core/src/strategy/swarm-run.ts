@@ -143,8 +143,9 @@ import type { ModelCallSink } from '../events/model-call';
 import type { WorkMode } from '../prompting/surface';
 import {
   buildNodeDeps, createRoot, initRunLedgers, prepareMeasurement, prepareParetoMeasurement,
-  readCarryIn, refuseContendedRun, regionRefusal, resolveNodeModel, resolveReentry,
-  seedResumedSearch, unavailable, unsupported, type PreparedParetoMeasurement,
+  readCarryIn, refuseContendedRun, regionRefusal, resolveNodeModel, resolveNodeModels,
+  resolveReentry, seedResumedSearch, unavailable, unsupported,
+  type PreparedParetoMeasurement,
 } from './swarm-setup';
 import { assignedRootGrant, planLevel, resumedWaves } from './swarm-level';
 import {
@@ -336,6 +337,16 @@ export async function runSwarm(
   const measures = resolved.config.score.kind === 'verify';
   const paretoAdvance = resolved.config.advance.kind === 'pareto';
   const judgeSamples = resolved.config.score.kind === 'judge' ? resolved.config.score.samples : null;
+  // THE PER-NODE ROUTING, resolved before anything spends: an unresolvable spec is
+  // refused here, ahead of the baseline measurement, the ledger row and every node —
+  // the "before anything spends" the field's first life lacked and its return must
+  // keep. `resolveNodeModels` owns the seam and the refusal text. `null` resolved to
+  // the empty array is the unrouted default: every node then runs `nodeModel` below.
+  const nodeModelsResult = resolveNodeModels({
+    models: resolved.models, resolveModel: deps.resolveModel,
+  });
+  if ('reason' in nodeModelsResult) return nodeModelsResult;
+  const nodeModels = nodeModelsResult.models;
   if (paretoAdvance && PUBLISHING_CARRIES.some((carry) => carry === resolved.config.carry.kind)) {
     return unsupported('advance:"pareto" keeps its durable frontier in node evidence and cannot '
       + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
@@ -599,6 +610,10 @@ export async function runSwarm(
     agentNodes,
     maxDepth,
     nodeModel,
+    // Per-node routing, empty for the unrouted default: `expandChild` assigns by slot
+    // and falls back to `nodeModel` when the list is empty, so the default and the
+    // routed path are one mechanism with two sources rather than two mechanisms.
+    nodeModels,
     signal: deps.signal,
     nodeDeps,
     budget,

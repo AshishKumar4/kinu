@@ -160,8 +160,7 @@ message.
 
 | Action | Fields its handler reads |
 |---|---|
-| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `role`, `tier`, `budget_usd`, `budget_tokens`, `budget_label` |
-| `hire` | `agent`, `role`, `mission`, `tier`, `scope`, `message` |
+| `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `nodes`, `models`, `role`, `tier`, `budget_usd`, `budget_tokens`, `budget_label` |
 | `ask` | `agent`, `message`, `topic`, `deliverable`, `deadline_hint` |
 | `send` | `agent`, `message`, `topic` |
 | `reply` | `event_id`, `message` |
@@ -170,8 +169,11 @@ message.
 
 `verify` is `{kind, spec}` inside `objective`. The runner enforces `depth`,
 `branches`, `budget_usd`, and `budget_tokens`, with no iteration or wall-clock
-cap. `models` left on 2026-08-19 because no runner read it; `role` and `tier`
-now resolve one immutable profile.
+cap. `models` routes each node to its own model spec round-robin by slot, through
+the same resolver a `tier` names — the field left on 2026-08-19 because no runner
+read it and returned wired: an unresolvable spec is refused naming it before any
+node runs. `role` and `tier` resolve one immutable profile, and `models` and
+`tier` are mutually exclusive.
 
 On 2026-08-18, flat `v.object` changed `{ action:'fork', task:'x',
 budgetUsd:5, wallClockMs:1000 }` to `{ action:'fork', task:'x' }`, losing both

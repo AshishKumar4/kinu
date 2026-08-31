@@ -344,21 +344,17 @@ export interface SwarmConfig {
   readonly pruneThreshold?: number;
   readonly minVisitsForPrune?: number;
   /**
-   * NOTE what is deliberately NOT here: `branches` and `depth`. Both are per-run
-   * choices rather than technique identity — ToT at branches=3 and ToT at
-   * branches=8 are the same TECHNIQUE — so neither spans the coverage matrix. They
-   * live on {@link SwarmInput} where EVERY preset can set them.
+   * NOTE what is deliberately NOT here: `branches`, `depth` and `models`. All three
+   * are per-run choices rather than technique identity — ToT at branches=3 and ToT at
+   * branches=8 are the same TECHNIQUE, and so is ToT routed across a cheap and a
+   * strong model — so none of them spans the coverage matrix. They live on
+   * {@link SwarmInput} where EVERY preset can set them.
    *
-   * Each was moved after being measured missing: with `branches` in `config`, a
-   * named preset (which takes no `config`) could not say "eight candidates", and
-   * models reported that absence unprompted.
-   *
-   * A third field, `models`, sat beside them on {@link SwarmInput} for
-   * capability-and-cost routing and is GONE. It was parsed, assigned, and stored on
-   * the resolved tuple, and no runner ever read it: every node is handed the one
-   * `deps.model`. So its own description promised a router that did not exist, which
-   * is *Accepted and ignored* — the same defect as a spend cap this surface takes
-   * and never applies. It comes back when something routes on it, not before.
+   * Each was moved after being measured missing. Width: with `branches` in `config`,
+   * a named preset (which takes no `config`) could not say "eight candidates", and
+   * models reported that absence unprompted. Model routing: with `models` in
+   * `config`, no named preset could do capability-and-cost routing at all — the one
+   * use of model variety that measured correct 3/3.
    */
 }
 
@@ -488,6 +484,46 @@ export interface SwarmInput {
    * answer, and the caller who wanted that wanted `branches`.
    */
   readonly nodes?: readonly SwarmNodeAssignment[];
+  /**
+   * Per-node model routing, for CAPABILITY AND COST ROUTING — a cheap model for
+   * recon, a strong one for synthesis. Available on EVERY preset, and OPTIONAL:
+   * absent, every node runs the one model the call resolved to, which is the
+   * unchanged default.
+   *
+   * NOT for diversity. Self-MoA (2502.00674) re-ran Mixture-of-Agents' own
+   * ablation over the same six models and found the HOMOGENEOUS ensemble beat the
+   * mixed one 65.7 vs 59.1 with the proposer count and topology held fixed (six
+   * proposals, one aggregator; the paper claims no cost parity), quality
+   * dominating diversity by up to 3.2×. A model zoo is measured WORSE than
+   * repeated sampling from the best model when the purpose is diversity; the
+   * run's diversity is bought with sibling angles and always has been. Cost
+   * routing is understood 3/3 across vendors, so the field earns its place for
+   * that alone.
+   *
+   * ASSIGNMENT IS ROUND-ROBIN OVER THE EXPANSION CHILDREN, by slot: the child at
+   * index `i` of its wave runs `models[i % models.length]`. Two properties fall
+   * out of that rule and both are why it is stated here rather than left to the
+   * implementation. It is DETERMINISTIC — the same call routes the same slot the
+   * same way across every re-entry, because the slot is durable — and it needs no
+   * relation to the width: a list of one names every node's model, and a list
+   * longer than the wave is truncated by the modulo rather than refused, so a
+   * caller tuning one shared list across presets of different widths never meets
+   * a composition rule. A fan-in's vertex is one child of one, so it runs the
+   * first spec — the merge node is graded like any other candidate, and the spec
+   * it runs is decided by its slot rather than by what it is.
+   *
+   * MUTUALLY EXCLUSIVE WITH `tier`: `tier` is the one RUN-level routing input
+   * and `models` routes per node, so a call naming both has stated two different
+   * routing decisions for one search and is refused rather than resolved by
+   * precedence.
+   *
+   * RESOLVED THROUGH THE ONE SEAM the actor already routes a delegation's tier
+   * through (`AgentsForkDeps.resolveModel`), so there is no second resolver and
+   * no provider drift. An unresolvable spec is refused as `bad_input` naming
+   * the spec, BEFORE any node runs — the refusal this field's first life lacked,
+   * which is the whole of what its removal bought and what its return must keep.
+   */
+  readonly models?: readonly string[];
 }
 
 /**
@@ -981,6 +1017,14 @@ export interface ResolvedSwarm {
    * when this is present, so the two can never disagree about width.
    */
   readonly nodes: readonly SwarmNodeAssignment[] | null;
+  /**
+   * The caller's per-node model specs, or null for the unrouted default where every
+   * node runs the one model the call resolved to. Round-robin over the expansion
+   * children by slot — see {@link SwarmInput.models} for the assignment rule — and
+   * digested into the record's `configDigest` so two runs that differ only in their
+   * routing never collide.
+   */
+  readonly models: readonly string[] | null;
 }
 
 /** A validity refusal, built through the one projection every other refusal in the
@@ -1075,6 +1119,18 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
           + 'one answer. Make the tasks distinct, or use `branches` and let the engine vary the angle.');
       }
       seen.add(task);
+    }
+  }
+  // A SPEC LIST, WHERE ONE WAS SUPPLIED, IS NON-EMPTY AND EVERY ENTRY IS. The
+  // wire schema holds the shape (length and string-ness); THIS holds the semantics
+  // the resolution depends on, because an empty spec routes nowhere and a blank one
+  // names no model — both are routing decisions the run would have to silently
+  // substitute a default for, which is the *Accepted and ignored* lie.
+  for (const [index, spec] of (input.models ?? []).entries()) {
+    if (spec.trim().length === 0) {
+      return badInput(`\`models\` entry ${String(index + 1)} is empty, and an empty string names no `
+        + 'model to route this node to — the run would silently fall back to a default the call never '
+        + 'chose. Name a spec the resolver recognises, such as a `<provider>/<modelId>` route.');
     }
   }
   if (composed) {
@@ -1187,6 +1243,7 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
     objective: input.objective ?? null,
     key: input.key ?? null,
     nodes: input.nodes ?? null,
+    models: input.models ?? null,
   };
 }
 
@@ -1234,6 +1291,13 @@ export function configDigestOf(resolved: ResolvedSwarm): string {
     settle: resolved.settle,
     depth: caps.depth?.value ?? null,
     branches: caps.branches?.value ?? null,
+    // THE ROUTING, beside the caps it sits with on the input: two runs that differ
+    // only in which model each node ran on are different runs in every way a record
+    // can be asked about — spend, provenance, comparability — and a digest that
+    // folded it out would make them one. `null` for the unrouted default, because
+    // an absent list and a list naming the run's own model are different facts about
+    // what the caller asked for, even where both run the same model.
+    models: resolved.models === null ? null : [...resolved.models],
   });
 }
 

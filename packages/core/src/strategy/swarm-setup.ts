@@ -669,6 +669,69 @@ export function resolveNodeModel(input: {
 }
 
 /**
+ * THE MODELS A ROUTED RUN'S NODES RUN ON, resolved once, here, and refused BEFORE
+ * anything spends.
+ *
+ * `models` routes each node to the spec its slot is assigned (round-robin, per
+ * `SwarmInput.models`). Every spec crosses the ONE seam the actor already routes a
+ * delegation's tier through — {@link resolveModel}, wired by `agents-tool.ts` from
+ * `AgentsForkDeps.resolveModel` — so a swarm's per-node routing and its tier routing
+ * build models through the same registry, and there is no second resolver to drift.
+ *
+ * REFUSED, not degraded, in both directions, and for the same reason
+ * {@link resolveNodeModel} refuses: a missing seam would put a model the caller never
+ * named into the spend AND the transcript, and a spec the seam cannot build is a
+ * caller error naming a model this session has never had. `bad_input` rather than
+ * `unavailable`, because the spec is the caller's own words on this surface — the
+ * tier arm keeps `unavailable` because a tier is a catalog row the caller only named
+ * indirectly.
+ *
+ * Resolved ONCE for the whole list, not per node mid-run: a run that routes its first
+ * two nodes and then faults on the third has already spent on a routing it then
+ * abandoned, and a re-entry would re-fault the same spec every wave. The whole list
+ * resolves before `createRoot`, which is before the baseline instrument runs, before
+ * any ledger row opens, and before any node expands — the "before anything spends"
+ * the field's first life lacked.
+ *
+ * EACH ENTRY KEEPS THE CALLER'S OWN SPEC beside the model it resolved to, because a
+ * hosted node cannot be handed a live model: the spec string crosses the facet RPC on
+ * `HeadInput.model` and the facet resolves it through the same owner registry
+ * (`facetModelSpec('swarm', …)`), so both transports route from one vocabulary.
+ */
+export interface RoutedNodeModel {
+  readonly spec: string;
+  readonly model: LanguageModel;
+}
+
+export function resolveNodeModels(input: {
+  readonly models: readonly string[] | null;
+  readonly resolveModel: ((spec: string) => LanguageModel) | undefined;
+}): { readonly models: readonly RoutedNodeModel[] } | Refusal {
+  if (input.models === null) return { models: [] };
+  if (!input.resolveModel) {
+    return unsupported(
+      'this search routes each node through `models`, but no model resolver is wired in '
+      + 'this runner — so its nodes could only run the caller\'s own model while the call '
+      + 'names others. Wire AgentsForkDeps.resolveModel on this backend.',
+    );
+  }
+  const resolved: RoutedNodeModel[] = [];
+  for (const [index, spec] of input.models.entries()) {
+    try {
+      resolved.push({ spec, model: input.resolveModel(spec) });
+    } catch (error) {
+      return refusalOf(new KinuError('bad_input',
+        `\`models\` entry ${String(index + 1)} is ${JSON.stringify(spec)}, and this session `
+        + 'cannot build that model — so the node it would be assigned cannot run it. Name a '
+        + 'spec this session resolves, or drop `models` to run every node on the one model '
+        + 'the call resolved to.',
+        { cause: error }));
+    }
+  }
+  return { models: resolved };
+}
+
+/**
  * AND IF IT IS NEITHER, IT IS NOTHING. A call that did not re-enter and finds a search
  * of its own task STILL RUNNING is refused rather than given a second tree.
  *

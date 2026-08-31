@@ -31,6 +31,7 @@ import { initMctsSearchTable, MctsSearchStore } from '../src/mcts/search-store';
 import { initSearchTables } from '../src/mcts/schemas';
 import { insertSearchNode } from '../src/mcts/record-node';
 import { readStartedSwarmProfile } from '../src/strategy/swarm-resume';
+import { configDigestOf, resolveSwarm } from '../src/strategy/swarm';
 import {
   createAgentsTool, profileCatalogDigest, resolveTurnProfile,
   type AgentsForkDeps, type AgentsProfileContext, type AgentsToolDeps, type AgentsToolInput,
@@ -378,5 +379,180 @@ describe('a re-drive continues under the profile it started under', () => {
     // Settled rows are not re-entered, so their profile is not offered either.
     new MctsSearchStore(rt.storage.sql).converge('root-auditor', 0, Date.now());
     expect(readStartedSwarmProfile(rt.storage, task)).toBeNull();
+  });
+});
+
+/* ── per-node model routing (`models`) ────────────────────────────────────── */
+
+/** What one routed node's model was, observed where a node can only get it by
+ * actually running on it: the model's own answer names its id. `scriptedTurnModel`
+ * returns `answered by <modelId>`, so a node running the wrong model says so in
+ * its own words. */
+const PerNodeResultSchema = v.object({
+  preset: v.string(),
+  caps: v.object({ branches: v.object({ value: v.number(), origin: v.string() }) }),
+  candidates: v.array(v.object({
+    id: v.string(),
+    artifact: v.string(),
+    score: v.nullable(v.number()),
+  })),
+});
+
+/** A harness whose resolver knows TWO extra specs besides the caller's model, each
+ * separately countable, plus the ordered specs the runner asked to build. */
+function perNodeHarness() {
+  const { rt } = createTestRuntime();
+  const caller = countingModel('m-default');
+  const a = countingModel('m-alpha');
+  const b = countingModel('m-beta');
+  const resolvedSpecs: string[] = [];
+  const fork: AgentsForkDeps = {
+    rt,
+    model: caller.model,
+    resolveModel: (spec) => {
+      resolvedSpecs.push(spec);
+      if (spec === 'm-alpha') return a.model;
+      if (spec === 'm-beta') return b.model;
+      if (spec === 'm-default') return caller.model;
+      throw new Error(`test fixture has no model for ${spec}`);
+    },
+  };
+  const deps: AgentsToolDeps = { mode: 'build', fork };
+  const entry = createAgentsTool(deps);
+  if (!entry) throw new Error('Expected the agents tool to be created');
+  return {
+    execute: toolExecute<AgentsToolInput, JsonObject>(entry),
+    resolvedSpecs,
+    aCalls: a.calls,
+    bCalls: b.calls,
+    callerCalls: caller.calls,
+  };
+}
+
+describe('`models` routes each node to its own assigned model', () => {
+  test('the default is unchanged: no field, one model for all nodes, seam never asked', async () => {
+    const h = perNodeHarness();
+    const result = v.parse(PerNodeResultSchema, await h.execute({
+      action: 'swarm', preset: 'ideate', task: 'three angles on the cold start',
+      branches: 2, depth: 1,
+    }));
+    expect(result.candidates).toHaveLength(2);
+    // ONE model did the work and the resolver was NEVER consulted: no list, no
+    // routing, and the caller's own model served every node — exactly the run
+    // this surface made before the field returned.
+    expect(h.resolvedSpecs).toEqual([]);
+    expect(h.callerCalls()).toBeGreaterThanOrEqual(2);
+    expect(h.aCalls()).toBe(0);
+    expect(h.bCalls()).toBe(0);
+  }, 30_000);
+
+  test('a supplied list routes each node to its assigned resolved model, by slot', async () => {
+    const h = perNodeHarness();
+    const result = v.parse(PerNodeResultSchema, await h.execute({
+      action: 'swarm', preset: 'ideate', task: 'recon then synthesis',
+      models: ['m-alpha', 'm-beta'],
+      branches: 4, depth: 1,
+    }));
+    expect(result.candidates).toHaveLength(4);
+    // THE SEAM, ONCE PER SPEC: the whole list resolves before any node runs, not
+    // per node mid-run, and not twice for a spec two slots share.
+    expect(h.resolvedSpecs).toEqual(['m-alpha', 'm-beta']);
+    // ROUND-ROBIN BY SLOT over a wave of four: alpha, beta, alpha, beta. Both
+    // models served calls and the caller's own served none.
+    expect(h.aCalls()).toBeGreaterThanOrEqual(2);
+    expect(h.bCalls()).toBeGreaterThanOrEqual(2);
+    expect(h.callerCalls()).toBe(0);
+    // AND THE NODES NAME THEM: each candidate's answer is the model's own
+    // `answered by <id>`, so the routing is observable in the recorded candidates
+    // rather than only in the fixture's counters.
+    const byModel = result.candidates.map((candidate) => candidate.artifact);
+    expect(byModel.filter((text) => text.includes('m-alpha'))).toHaveLength(2);
+    expect(byModel.filter((text) => text.includes('m-beta'))).toHaveLength(2);
+  }, 30_000);
+
+  test('a list shorter than the wave wraps, and one longer than it truncates', async () => {
+    // ONE spec names every node — the degenerate routed run, which must still be
+    // a legal call rather than a demand for list.length === branches.
+    const one = perNodeHarness();
+    const oneResult = v.parse(PerNodeResultSchema, await one.execute({
+      action: 'swarm', preset: 'ideate', task: 'one model everywhere',
+      models: ['m-alpha'], branches: 3, depth: 1,
+    }));
+    expect(oneResult.candidates).toHaveLength(3);
+    expect(one.aCalls()).toBeGreaterThanOrEqual(3);
+    expect(one.bCalls()).toBe(0);
+    expect(one.callerCalls()).toBe(0);
+    // And a list LONGER than the wave: the modulo truncates rather than refusing,
+    // so a caller tuning one shared list across presets of different widths never
+    // meets a composition rule.
+    const long = perNodeHarness();
+    const longResult = v.parse(PerNodeResultSchema, await long.execute({
+      action: 'swarm', preset: 'ideate', task: 'a wide list on a narrow wave',
+      models: ['m-alpha', 'm-beta', 'm-default', 'm-alpha', 'm-beta'],
+      branches: 2, depth: 1,
+    }));
+    expect(longResult.candidates).toHaveLength(2);
+    expect(long.resolvedSpecs).toEqual(['m-alpha', 'm-beta', 'm-default', 'm-alpha', 'm-beta']);
+    expect(long.aCalls()).toBeGreaterThanOrEqual(1);
+    expect(long.bCalls()).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
+  test('an unresolvable spec is refused by name, before any node runs', async () => {
+    const h = perNodeHarness();
+    const refusal = v.parse(RefusalSchema, await h.execute({
+      action: 'swarm', preset: 'ideate', task: 'refuse me cleanly',
+      models: ['m-alpha', 'm-ghost'],
+      branches: 2, depth: 1,
+    }));
+    // bad_input, not unavailable: the spec is the caller's own words on this
+    // surface, the same way a fabricated verifier kind is.
+    expect(refusal.reason).toBe('bad_input');
+    expect(refusal.error).toContain('m-ghost');
+    expect(refusal.error).toContain('models');
+    // NOTHING SPENT: no model served a call, so the refusal landed ahead of the
+    // first node rather than one wave in.
+    expect(h.aCalls()).toBe(0);
+    expect(h.bCalls()).toBe(0);
+    expect(h.callerCalls()).toBe(0);
+    expect(h.resolvedSpecs).toEqual(['m-alpha', 'm-ghost']);
+  }, 30_000);
+
+  test('naming models and tier together is refused rather than resolved by precedence', async () => {
+    const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'lead' });
+    const refusal = v.parse(RefusalSchema, await h.execute({
+      action: 'swarm', preset: 'ideate', task: 'two routing decisions',
+      models: ['m-alpha'], tier: 'deep',
+      branches: 1, depth: 1,
+    }));
+    expect(refusal.reason).toBe('bad_input');
+    expect(refusal.error).toContain('tier');
+    expect(refusal.error).toContain('models');
+    expect(refusal.error).toContain('ignored');
+  }, 30_000);
+
+  test('the identity digest changes when the models change', () => {
+    // TWO CALLS identical except the routing list, resolved through the real
+    // resolver: the digest is the record's identity key, so two runs differing
+    // only in which model each node ran on must not collide in the store.
+    const base = { preset: 'custom' as const, label: 'digest', task: 'same task' };
+    const axes = {
+      unit: { kind: 'answer' as const }, context: 'fresh' as const, expand: 'sample' as const,
+      score: { kind: 'none' as const }, advance: { kind: 'none' as const },
+      carry: { kind: 'none' as const },
+    };
+    const unrouted = resolveSwarm({ ...base, config: axes, branches: 2, depth: 1 });
+    const alpha = resolveSwarm({ ...base, config: axes, branches: 2, depth: 1, models: ['m-alpha'] });
+    const beta = resolveSwarm({
+      ...base, config: axes, branches: 2, depth: 1, models: ['m-alpha', 'm-beta'],
+    });
+    if ('reason' in unrouted || 'reason' in alpha || 'reason' in beta) {
+      throw new Error('the digest suite\'s own composition refused to resolve');
+    }
+    const unroutedDigest = configDigestOf(unrouted);
+    const alphaDigest = configDigestOf(alpha);
+    const betaDigest = configDigestOf(beta);
+    expect(unroutedDigest).not.toBe(alphaDigest);
+    expect(alphaDigest).not.toBe(betaDigest);
+    expect(unroutedDigest).not.toBe(betaDigest);
   });
 });

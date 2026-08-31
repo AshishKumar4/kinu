@@ -389,6 +389,23 @@ Each entry becomes one branch of a `BranchGrant`. `task` is the branch task and
 `prompt` is the branch rationale. `context` stays run-level, because it is what
 makes siblings comparable.
 
+**Per-node model routing.** `models: [spec, …]` assigns one model spec per
+expansion child, ROUND-ROBIN BY SLOT: the child at index `i` of its wave runs
+`models[i % models.length]`. The rule is deterministic — a re-drive routes the
+same slots the same way, because the slot is durable — and needs no relation to
+the width: a list of one names every node, and a list longer than the wave is
+truncated by the modulo rather than refused. A fan-in's vertex is one child of
+one, so it runs the first spec. Each spec resolves through the ONE resolver a
+delegation's tier already uses (`AgentsForkDeps.resolveModel`), an unresolvable
+spec is refused as `bad_input` naming it before any node runs, and the list is
+mutually exclusive with `tier` (run-level routing). Omitted, every node runs the
+one model the call resolved to — the unchanged default. The spec list is
+digested into the record's `configDigest`, so two runs differing only in
+routing never collide in the store. Both transports honor the assignment: an
+in-isolate node runs the resolved model directly, and a hosted node carries its
+slot's spec across the facet RPC on `HeadInput.model`, where the facet resolves
+it through the owner's registry.
+
 A node receives exactly one brief. When a caller or a parent `propose_branch`
 wrote it, that brief occupies the angle slot and the engine sends no angle of its
 own beside it.

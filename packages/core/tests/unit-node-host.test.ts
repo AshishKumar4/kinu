@@ -162,6 +162,7 @@ function fixture(opts?: {
   readonly arbitrate?: NodeAgentInput['arbitrate'];
   readonly host?: NodeAgentDeps['host'];
   readonly nodeId?: string;
+  readonly modelSpec?: string;
   readonly offered?: Set<string>;
   readonly mission?: MissionScope;
   /** How the search this node belongs to settles. Defaults to `best`, which is what
@@ -185,6 +186,7 @@ function fixture(opts?: {
     mode: 'build',
     settle: opts?.settle ?? 'best',
     arbitrate: opts?.arbitrate ?? null,
+    modelSpec: opts?.modelSpec,
   };
   const deps: NodeAgentDeps = {
     rt,
@@ -237,6 +239,45 @@ describe('one runtime, two transports', () => {
     expect(run.report.status).toBe('completed');
     expect(run.reportedItself).toBe(true);
     expect(run.candidate).toContain('sort once');
+  });
+
+  test('a routed slot crosses to the host as the caller\'s own spec', async () => {
+    // The hosted half of `SwarmInput.models`: a facet cannot take a live model
+    // over RPC, so the assignment travels as the spec string on the one field
+    // `ExplorationAgent.runAsNode` already resolves. An unrouted node carries
+    // no key at all — the facet then keeps its route default.
+    const specs: (string | undefined)[] = [];
+    const routed = fixture({
+      modelSpec: 'm-beta',
+      host: async (spec) => {
+        specs.push(spec.headInput.model);
+        const inner = fixture({ nodeId: spec.headInput.id });
+        return await runNodeLoop(spec, {
+          rt: inner.deps.rt,
+          model: inner.deps.model,
+          logger: inner.deps.logger,
+          arbitrate: null,
+        });
+      },
+    });
+    await runNodeAgent(routed.input, routed.deps);
+
+    const unrouted = fixture({
+      host: async (spec) => {
+        specs.push(spec.headInput.model);
+        expect(Object.hasOwn(spec.headInput, 'model')).toBe(false);
+        const inner = fixture({ nodeId: spec.headInput.id });
+        return await runNodeLoop(spec, {
+          rt: inner.deps.rt,
+          model: inner.deps.model,
+          logger: inner.deps.logger,
+          arbitrate: null,
+        });
+      },
+    });
+    await runNodeAgent(unrouted.input, unrouted.deps);
+
+    expect(specs).toEqual(['m-beta', undefined]);
   });
 
   test('the spec a host receives is data only, so it can cross an RPC', async () => {

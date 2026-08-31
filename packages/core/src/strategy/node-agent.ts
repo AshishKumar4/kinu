@@ -175,6 +175,14 @@ export interface NodeAgentInput extends NodeIdentity {
   /** How this search settles, for the journal's own label column. */
   readonly settle: SwarmSettle;
   /**
+   * The model SPEC this node's slot was assigned, where the call routed per node
+   * (`SwarmInput.models`). The engine resolves the same spec to the live model an
+   * in-isolate run uses; this string is the HOSTED half — it lands on
+   * `HeadInput.model` so a facet can resolve it through its own owner registry.
+   * Absent on an unrouted run.
+   */
+  readonly modelSpec?: string | undefined;
+  /**
    * Arbitrate this node's branch request, or null when a branch could not be
    * granted at this node whatever it asked.
    *
@@ -821,6 +829,13 @@ export async function runNodeAgent(
   // amounts depending on which backend ran it. Assigned rather than declared above so
   // an unbudgeted run carries no key at all.
   if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
+  // THE ROUTED SPEC A HOSTED NODE RESOLVES ITSELF. Same rule as the labels above:
+  // a facet takes data, so the slot's assignment crosses as the caller's own spec
+  // on the field `ExplorationAgent.runAsNode` already resolves
+  // (`facetModelSpec('swarm', headInput.model)`) — one vocabulary, resolved by
+  // each transport through its own registry. Assigned rather than declared above
+  // so an unrouted run carries no key at all.
+  if (input.modelSpec !== undefined) Object.assign(headInput, { model: input.modelSpec });
 
   deps.journal.insertSpawn(headInput);
 

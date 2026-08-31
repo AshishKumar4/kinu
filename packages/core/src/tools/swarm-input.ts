@@ -306,3 +306,31 @@ export const SwarmNodeAssignmentsSchema: v.GenericSchema<unknown, readonly Swarm
     // `branches` already expresses as a refusal.
     v.minLength(1),
   );
+
+/**
+ * `models` as it crosses the wire: a list of model specs, assigned ROUND-ROBIN over
+ * the expansion children by slot (`strategy/swarm.ts` — `SwarmInput.models`).
+ *
+ * A MINIMUM LENGTH OF ONE, for the same reason `SwarmNodeAssignmentsSchema` carries
+ * one: an empty list is a search with no routing, which is what omitting the field
+ * already expresses — and a caller who sends `[]` has asked for something the empty
+ * list cannot name. Refused here rather than resolved to the default, because a
+ * routing decision accepted and ignored is the *Accepted and ignored* lie.
+ *
+ * NO SPEC VALIDATION HERE, and that is the split the surface already holds: whether a
+ * spec RESOLVES is a question about the caller's session and its provider registry,
+ * which this schema cannot see. The runner resolves each spec through the one
+ * `AgentsForkDeps.resolveModel` seam the actor routes a tier through, and an
+ * unresolvable spec is refused as `bad_input` naming it — BEFORE any node runs, so a
+ * fabricated spec costs nothing. An empty STRING is rejected here (minLength 1) because
+ * it is a shape question rather than a session one, and `resolveSwarm` restates it as a
+ * semantic refusal so an in-process caller bypassing this schema meets the same rule.
+ *
+ * ANNOTATED WITH THE DOMAIN TYPE rather than inferred, for the same reason as the two
+ * declarations above: one declaration of the shape, one schema that admits it.
+ */
+export const SwarmModelsSchema: v.GenericSchema<unknown, readonly string[]> =
+  v.pipe(
+    v.array(v.pipe(v.string(), v.minLength(1))),
+    v.minLength(1),
+  );

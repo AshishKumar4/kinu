@@ -71,8 +71,10 @@ const AGENTS_CODEMODE_MEMBER_DOCS = {
 ${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
    *  \`role\` puts every node under one catalog role (omit for your own active
    *  role — a swarm is role-homogeneous, never mixed); \`tier\` picks the
-   *  inference tier when the role's default is not what you want. A search
-   *  without \`preset\` takes your role's default preset.
+   *  inference tier when the role's default is not what you want, and
+   *  \`models\` routes each node to its own model spec round-robin by slot —
+   *  one or the other, never both. A search without \`preset\` takes your
+   *  role's default preset.
    *  \`verify\` names a REGISTERED instrument and carries its whole spec: a
    *  script path invented here does not resolve and the call is refused, which
    *  is the one guard that makes a measured number worth anything. A \`floor\`
