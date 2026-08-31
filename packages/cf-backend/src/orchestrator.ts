@@ -145,7 +145,7 @@ import {
   // of them (the DO alarm, the Worker's webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
   acceptContainerEvent, type ContainerEventResult,
-  initWebhookRateLimitTables,
+  initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
@@ -2105,7 +2105,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // ── planes this root alone carries (declared per-root in
     //    core/conformance/manifest.ts, observed against sqlite_master) ──
-    initWebhookRateLimitTables(this.ctx.storage.sql);
+    initWebhookIngressTables(this.ctx.storage.sql);
     this.subordinateRoster.ensureSchema();
 
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
@@ -4549,8 +4549,10 @@ export class OrchestratorAgent extends ActorAgent {
     const routeSecret = webhookRouteSecret(this.env);
     if (routeSecret === null) throw new Error(WEBHOOK_ROUTE_UNAVAILABLE);
     const now = Date.now();
-    const webhook = await registerDurableWebhook(this.triggerRegistry, opts, now);
-    if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
+    // The secret is core's to decide and to store: an hmac/bearer trigger
+    // created without one refuses every delivery for the rest of its life, and
+    // this route used to make exactly that when the caller sent no secret.
+    const webhook = await registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now);
     return {
       trigger_id: webhook.trigger_id,
       url: await webhookRoutePath(routeSecret, {
@@ -4559,7 +4561,7 @@ export class OrchestratorAgent extends ActorAgent {
       auth_mode: webhook.auth_mode,
       // For HMAC/bearer modes, the operator needs the secret once to give
       // to the external system; we return it inline now and never again.
-      secret: opts.secret ?? null,
+      secret: webhook.secret,
     };
   }
 
@@ -4951,6 +4953,15 @@ export class OrchestratorAgent extends ActorAgent {
       onAdmitted: () => { this.orch.scheduleDrain(); },
     });
     return this._emailInbox;
+  }
+
+  /** The pre-parse half of the inbox gate, for the Worker's `email()` seam:
+   *  the same owner/allowlist comparison `acceptEmailDelivery` runs, asked
+   *  before the message is buffered and MIME-parsed so an unauthorized sender
+   *  cannot spend this workspace's parse on a platform-maximum message. It
+   *  admits nothing; the delivery below re-asks. */
+  async authorizeEmailSender(from: string): Promise<{ authorized: boolean; reason?: string }> {
+    return this.emailInbox.authorizes(from);
   }
 
   /** Run an inbound email through the hub from within the agent DO — the

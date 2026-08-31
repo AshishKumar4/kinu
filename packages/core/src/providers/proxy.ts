@@ -132,32 +132,44 @@ export async function providerProxyBaseURL(
 }
 
 /**
- * The endpoints a proxied credential may be spent on, relative to its base URL.
+ * The endpoints a proxied credential may be spent on, relative to its base URL,
+ * and the ONE method each admits.
  *
- * Origin and path-prefix alone are not enough. A provider's API root holds more
- * than inference: `https://openrouter.ai/api/v1/keys` and
+ * Origin and path alone are not enough, in two directions. A provider's API
+ * root holds more than inference: `https://openrouter.ai/api/v1/keys` and
  * `https://api.openai.com/v1/organization/admin_api_keys` sit directly under
  * the same base as `/chat/completions`, and a key with provisioning rights
- * would mint a fresh cleartext key through them. Proxying is for running
- * models, so this is what running models needs and nothing else.
+ * would mint a fresh cleartext key through them. And an inference path is not
+ * one operation: `/models/{id}` reads a model under GET and DELETES it under
+ * DELETE, on providers that support it, with the owner's credential attached
+ * either way. `ai.proxy` is the capability for SPENDING inference, so this is
+ * the closed (method, path) matrix running models needs and nothing else.
  */
-const PROXY_ALLOWED_PATHS: readonly RegExp[] = [
-  /^\/chat\/completions$/,
-  /^\/completions$/,
-  /^\/responses(\/[^/]+)?$/,
-  /^\/messages(\/count_tokens)?$/,
-  /^\/embeddings$/,
-  /^\/models(\/.+)?$/,
+const PROXY_ALLOWED_ENDPOINTS: readonly { readonly method: string; readonly path: RegExp }[] = [
+  { method: 'POST', path: /^\/chat\/completions$/ },
+  { method: 'POST', path: /^\/completions$/ },
+  // Create a response, and cancel one — both POST on the OpenAI Responses API.
+  { method: 'POST', path: /^\/responses(\/[^/]+)?$/ },
+  { method: 'POST', path: /^\/messages(\/count_tokens)?$/ },
+  { method: 'POST', path: /^\/embeddings$/ },
+  // Discovery and retrieval only. A model id under any other verb is model
+  // management, which this scope does not buy.
+  { method: 'GET', path: /^\/models(\/.+)?$/ },
 ];
 
 /**
- * Whether `target` may be reached with the credential whose base URL is
- * `base`: same https origin, under `base`'s path, and one of the inference
- * endpoints above. A base of `https://api.groq.com/openai/v1` therefore admits
- * `/openai/v1/chat/completions` and refuses `/openai/v1x`, another host, and
- * the provider's own account-management routes.
+ * Whether `target` may be reached with `method` and the credential whose base
+ * URL is `base`: same https origin, under `base`'s path, and one of the
+ * (method, endpoint) pairs above. A base of `https://api.groq.com/openai/v1`
+ * therefore admits `POST /openai/v1/chat/completions` and refuses
+ * `/openai/v1x`, another host, the provider's own account-management routes,
+ * and `DELETE /openai/v1/models/{id}`.
+ *
+ * The method is compared case-sensitively against the upper-case verbs above,
+ * which is what HTTP means by a method: `delete` is not a different, unlisted
+ * verb that falls through — `fetch` would send it as `DELETE`.
  */
-export function proxyTargetAllowed(target: string, base: string): boolean {
+export function proxyTargetAllowed(target: string, base: string, method: string): boolean {
   // Asked, not caught: `URL.parse` reports an unparseable URL as null, so a
   // refusal here is always a refusal this predicate decided.
   const targetURL = URL.parse(target);
@@ -171,7 +183,8 @@ export function proxyTargetAllowed(target: string, base: string): boolean {
   const basePath = baseURL.pathname.replace(/\/+$/, '');
   if (targetURL.pathname !== basePath && !targetURL.pathname.startsWith(`${basePath}/`)) return false;
   const endpoint = targetURL.pathname.slice(basePath.length) || '/';
-  return PROXY_ALLOWED_PATHS.some((allowed) => allowed.test(endpoint));
+  const verb = method.toUpperCase();
+  return PROXY_ALLOWED_ENDPOINTS.some((allowed) => allowed.method === verb && allowed.path.test(endpoint));
 }
 
 /** The secret-free `AuthResolution` a proxied credential resolves to: a marker

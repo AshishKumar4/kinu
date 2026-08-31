@@ -256,7 +256,7 @@ export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
  * to re-drive. Empty is the clean-start case and delivers nothing.
  */
 export async function reconcileInterruptedForks(deps: {
-  readonly journal: Pick<HeadJournal, 'markInterrupted' | 'abandonRunning'>;
+  readonly journal: Pick<HeadJournal, 'markInterrupted' | 'unfinishedRoots' | 'abandonRunning'>;
   readonly signals: SignalDeliverer;
   /**
    * The search-run ledger, when the caller has one. A swarm's row in
@@ -266,7 +266,7 @@ export async function reconcileInterruptedForks(deps: {
    * whose every node stopped hours ago. When present, rows the resume gate did
    * not claim are closed `failed` beside the journal sweep.
    */
-  readonly search?: Pick<MctsSearchStore, 'runningSwarmCount' | 'runningSwarmRoots' | 'closeUnclaimed'>;
+  readonly search?: Pick<MctsSearchStore, 'runningSwarmRoots' | 'closeUnclaimed'>;
   /**
    * The resume gate: re-drive what can continue these roots, and name the ones
    * claimed. Absent means a caller with no durable resume path at all, and then
@@ -298,16 +298,18 @@ export async function reconcileInterruptedForks(deps: {
     );
   }
 
-  // THE GATE, ONCE. The callback also sweeps the background-job registry, whose
-  // orphan rows can exist before a head or search row was written. Therefore a
-  // wired resume path runs on every activation, even with no offered roots.
-  // A second call would reclaim a job out from under the executor the first
-  // call started.
-  const gateNeeded = deps.resume !== undefined
-    || interrupted.length > 0
-    || (deps.search !== undefined && deps.search.runningSwarmCount() > 0);
-  const offeredRoots = new Set(interrupted.map((run) => run.rootId));
+  // THE GATE, ONCE, over EVERY unfinished root rather than the ones this
+  // activation happened to transition. A row marked `interrupted` by an earlier
+  // activation is marked no second time, so offering only this call's
+  // transitions left exactly those runs unoffered while the retirement below
+  // still swept them — the re-drive was claimed and the run was retired
+  // underneath it. The callback also sweeps the background-job registry, whose
+  // orphan rows can exist before a head or search row was written, so a wired
+  // resume path runs on every activation even with no offered roots. A second
+  // call would reclaim a job out from under the executor the first call started.
+  const offeredRoots = new Set(deps.journal.unfinishedRoots(startedAt));
   for (const root of deps.search?.runningSwarmRoots() ?? []) offeredRoots.add(root);
+  const gateNeeded = deps.resume !== undefined || offeredRoots.size > 0;
   const outcome: ResumeOutcome = gateNeeded
     ? await resumeOutcome(deps.resume, [...offeredRoots])
     : { kind: 'absent', claimed: new Set<string>() };

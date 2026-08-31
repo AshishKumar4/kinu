@@ -11,7 +11,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   EventLog, ReplyChannelStore, TriggerRegistry,
   acceptWebhookDelivery, createWebhookSecretStore, hmacSha256Hex,
-  initEventsHubTables, initWebhookRateLimitTables, registerDurableWebhook, cancelTrigger,
+  initEventsHubTables, initWebhookIngressTables, registerDurableWebhook, cancelTrigger,
   type SqlExec, type WebhookDelivery,
 } from '../src/index';
 import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
@@ -28,7 +28,7 @@ function hub() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initEventsHubTables(sql);
-  initWebhookRateLimitTables(sql);
+  initWebhookIngressTables(sql);
   const log = new EventLog(sql);
   const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
   const secrets = createWebhookSecretStore(sql);
@@ -42,12 +42,8 @@ function hub() {
 
   /** Register a webhook exactly as a backend's create route does. */
   const register = async (
-    opts: Parameters<typeof registerDurableWebhook>[1] & { secret?: string },
-  ): Promise<string> => {
-    const webhook = await registerDurableWebhook(triggers, opts, NOW);
-    if (opts.secret) secrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, NOW);
-    return webhook.trigger_id;
-  };
+    opts: Parameters<typeof registerDurableWebhook>[2],
+  ): Promise<string> => (await registerDurableWebhook(triggers, secrets, opts, NOW)).trigger_id;
 
   const deliver = (over: Partial<WebhookDelivery> & { trigger_id: string }) =>
     acceptWebhookDelivery(deps, {
@@ -64,7 +60,13 @@ function hub() {
       ...over,
     });
 
-  return { deps, triggers, log, secrets, files, register, deliver, drains: () => drains };
+  /** The durable one-time claims, as rows — the state a replay is refused by. */
+  const claims = () =>
+    db.query<{ claim: string; event_id: string | null; expires_at: number }, []>(
+      'SELECT claim, event_id, expires_at FROM webhook_replay_claims ORDER BY expires_at',
+    ).all();
+
+  return { deps, triggers, log, secrets, files, register, deliver, claims, drains: () => drains };
 }
 
 describe('webhook ingress admits a verified delivery', () => {
@@ -147,6 +149,81 @@ describe('webhook ingress admits a verified delivery', () => {
     if (!path) throw new Error('large webhook body was not spilled');
     expect(await h.files.get(path)).toContain('x'.repeat(4000));
   });
+
+  test('the same signed request is admitted ONCE, across a dedupe-bucket boundary', async () => {
+    // The defect: freshness is not single-use. Admission identity was
+    // `webhook:<trigger>:<body hash>:<receiver's 5-minute bucket>`, so a
+    // capture replayed either side of a bucket boundary — with the SAME signed
+    // timestamp, body and signature, still inside the ±5 minute window —
+    // published a second durable event and woke a second turn from one
+    // authorization.
+    const h = hub();
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
+    const body_text = '{"deploy":"prod"}';
+    const signed = {
+      trigger_id, body_text,
+      hmac_timestamp: String(NOW),
+      hmac_signature: await hmacSha256Hex('k', `${NOW}.${body_text}`),
+    };
+    // Just before an aligned bucket boundary, and just after it: two different
+    // dedupe buckets, one signature.
+    const beforeBoundary = Math.floor((NOW + 5 * 60 * 1000) / (5 * 60 * 1000)) * (5 * 60 * 1000) - 1_000;
+    const afterBoundary = beforeBoundary + 2_000;
+
+    const first = await h.deliver({ ...signed, now: beforeBoundary });
+    const replay = await h.deliver({ ...signed, now: afterBoundary });
+
+    expect(first).toMatchObject({ status: 'admitted', admitted: true });
+    expect(replay).toMatchObject({ status: 'admitted', event_id: first.event_id, admitted: false });
+    expect(h.log.pending({ variant: 'webhook' })).toHaveLength(1);
+    expect(h.drains()).toBe(1);
+  });
+
+  test('a re-signed retry of the same event still dedupes on its body', async () => {
+    // The claim is additive, not a replacement: a sender that re-signs its
+    // retry presents a different artifact, and the body-hash dedupe is what
+    // keeps that from becoming a second event.
+    const h = hub();
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
+    const body_text = '{"deploy":"prod"}';
+
+    const first = await h.deliver({
+      trigger_id, body_text, now: NOW,
+      hmac_timestamp: String(NOW),
+      hmac_signature: await hmacSha256Hex('k', `${NOW}.${body_text}`),
+    });
+    const resigned = await h.deliver({
+      trigger_id, body_text, now: NOW + 1_000,
+      hmac_timestamp: String(NOW + 1_000),
+      hmac_signature: await hmacSha256Hex('k', `${NOW + 1_000}.${body_text}`),
+    });
+
+    expect(first).toMatchObject({ admitted: true });
+    expect(resigned).toMatchObject({ event_id: first.event_id, admitted: false });
+    expect(h.drains()).toBe(1);
+  });
+
+  test('a claim expires with the window it covered, so the table does not grow', async () => {
+    const h = hub();
+    const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
+    const body_text = '{"n":1}';
+    await h.deliver({
+      trigger_id, body_text, now: NOW,
+      hmac_timestamp: String(NOW),
+      hmac_signature: await hmacSha256Hex('k', `${NOW}.${body_text}`),
+    });
+    expect(h.claims()).toHaveLength(1);
+
+    // A later delivery, past the first signature's window: the spent claim is
+    // swept because the proof it stood for can no longer be presented.
+    const later = NOW + 6 * 60 * 1000;
+    await h.deliver({
+      trigger_id, body_text: '{"n":2}', now: later,
+      hmac_timestamp: String(later),
+      hmac_signature: await hmacSha256Hex('k', `${later}.{"n":2}`),
+    });
+    expect(h.claims().map((row) => row.expires_at)).toEqual([later + 5 * 60 * 1000]);
+  });
 });
 
 describe('webhook ingress refuses everything else', () => {
@@ -176,7 +253,7 @@ describe('webhook ingress refuses everything else', () => {
     })).toMatchObject({ status: 'admitted' });
   });
 
-  test('bearer: absent, malformed, wrong, and unstored secrets are all 401', async () => {
+  test('bearer: absent, malformed, wrong, and revoked secrets are all 401', async () => {
     const h = hub();
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
     const rejected = (reason: string) => ({ status: 'rejected' as const, http_status: 401, reason });
@@ -188,8 +265,11 @@ describe('webhook ingress refuses everything else', () => {
     // mismatch, not a partial match.
     expect(await h.deliver({ trigger_id, bearer_header: 'Bearer shh' })).toEqual(rejected('bearer mismatch'));
 
-    const unstored = await h.register({ label: 'no-secret', auth_mode: 'bearer' });
-    expect(await h.deliver({ trigger_id: unstored, bearer_header: 'Bearer shhh' }))
+    // Revoked, not "never stored": registration mints a secret for every
+    // bearer webhook, so the empty-store case is reached only by revocation.
+    const revoked = await h.register({ label: 'revoked-secret', auth_mode: 'bearer', secret: 'shhh' });
+    h.secrets.deleteByTrigger(revoked);
+    expect(await h.deliver({ trigger_id: revoked, bearer_header: 'Bearer shhh' }))
       .toEqual(rejected('secret revoked'));
 
     expect(h.log.pending({ variant: 'webhook' })).toEqual([]);
@@ -237,9 +317,13 @@ describe('webhook ingress refuses everything else', () => {
       trigger_id, body_text, hmac_timestamp: String(NOW), hmac_signature: await hmacSha256Hex('other', `${NOW}.${body_text}`),
     })).toEqual(rejected('signature mismatch'));
 
-    const unstored = await h.register({ label: 'no-secret', auth_mode: 'hmac' });
+    // A REVOKED secret is now the only way an hmac trigger meets a delivery
+    // with none: registration stores one for every hmac/bearer webhook, so
+    // "created without a secret" is no longer a state that exists.
+    const revoked = await h.register({ label: 'revoked-secret', auth_mode: 'hmac', secret: 'k' });
+    h.secrets.deleteByTrigger(revoked);
     expect(await h.deliver({
-      trigger_id: unstored, body_text, hmac_timestamp: String(NOW), hmac_signature: await sign(NOW),
+      trigger_id: revoked, body_text, hmac_timestamp: String(NOW), hmac_signature: await sign(NOW),
     })).toEqual(rejected('secret revoked'));
   });
 
@@ -288,8 +372,7 @@ describe('webhook registration', () => {
     const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
     const secrets = createWebhookSecretStore(sql);
 
-    const webhook = await registerDurableWebhook(triggers, { label: 'ci', auth_mode: 'bearer' }, NOW);
-    secrets.put(webhook.secret_id, webhook.trigger_id, 'shhh', NOW);
+    const webhook = await registerDurableWebhook(triggers, secrets, { label: 'ci', auth_mode: 'bearer', secret: 'shhh' }, NOW);
 
     const row = triggers.get(webhook.trigger_id)!;
     expect(JSON.stringify(row.spec)).not.toContain('shhh');
@@ -299,6 +382,62 @@ describe('webhook registration', () => {
     });
     expect(row.rate_limit_per_min).toBe(60);
     expect(row.creator_trust).toBe('owner');
+    // Stored where only the ingress reads it, and handed back exactly once.
+    expect(await secrets.get(webhook.secret_id)).toBe('shhh');
+    expect(webhook.secret).toBe('shhh');
+  });
+
+  test('an hmac webhook created with no secret gets a minted one, not an unusable trigger', async () => {
+    // The defect: `secret` was optional on every schema and the store was
+    // written only when the caller supplied one, so `kinu triggers … webhook`
+    // (auth_mode defaults to hmac) reported a created webhook whose every
+    // delivery answered `no hmac secret configured`, with no route able to set
+    // one afterwards.
+    const h = hub();
+    const created = await registerDurableWebhook(
+      h.triggers, h.secrets, { label: 'ci', auth_mode: 'hmac' }, NOW,
+    );
+
+    expect(created.secret).toMatch(/^[0-9a-f]{64}$/);
+    expect(await h.secrets.get(created.secret_id)).toBe(created.secret);
+
+    // And the minted secret is the one deliveries are verified against.
+    const body_text = '{"ok":true}';
+    expect(await h.deliver({
+      trigger_id: created.trigger_id, body_text,
+      hmac_timestamp: String(NOW),
+      hmac_signature: await hmacSha256Hex(created.secret!, `${NOW}.${body_text}`),
+    })).toMatchObject({ status: 'admitted', admitted: true });
+  });
+
+  test('a blank secret is a missing one, and mTLS is minted none', async () => {
+    const h = hub();
+    const blank = await registerDurableWebhook(
+      h.triggers, h.secrets, { label: 'blank', auth_mode: 'bearer', secret: '   ' }, NOW,
+    );
+    expect(blank.secret).toMatch(/^[0-9a-f]{64}$/);
+
+    const mtls = await registerDurableWebhook(
+      h.triggers, h.secrets, { label: 'partner', auth_mode: 'mtls' }, NOW,
+    );
+    expect(mtls.secret).toBeNull();
+    expect(await h.secrets.get(mtls.secret_id)).toBeNull();
+  });
+
+  test('a secret that cannot be stored leaves no active trigger behind', async () => {
+    const h = hub();
+    const refusing = {
+      put: () => { throw new Error('disk is unwell'); },
+      deleteByTrigger: h.secrets.deleteByTrigger,
+    };
+
+    await expect(registerDurableWebhook(
+      h.triggers, refusing, { label: 'ci', auth_mode: 'hmac' }, NOW,
+    )).rejects.toThrow(/secret could not be stored/);
+
+    // Fail-closed: what survives is a revoked row, not an ingress nothing can
+    // authenticate against.
+    expect(h.triggers.list().map((row) => row.state)).toEqual(['revoked']);
   });
 
   test('an out-of-range rate limit is refused before a trigger row exists', async () => {
@@ -306,9 +445,10 @@ describe('webhook registration', () => {
     const sql = makeSql(db);
     initEventsHubTables(sql);
     const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
+    const secrets = createWebhookSecretStore(sql);
 
     await expect(registerDurableWebhook(
-      triggers, { label: 'ci', auth_mode: 'bearer', rate_limit_per_min: 0 }, NOW,
+      triggers, secrets, { label: 'ci', auth_mode: 'bearer', rate_limit_per_min: 0 }, NOW,
     )).rejects.toThrow(/rate_limit_per_min/);
     expect(triggers.list()).toEqual([]);
   });
@@ -389,19 +529,16 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     const sql = makeSql(db);
     initEventsHubTables(sql);
     const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
-
-    const live = await registerDurableWebhook(triggers, { label: 'live', auth_mode: 'bearer' }, NOW);
-    const dying = await registerDurableWebhook(triggers, { label: 'old', auth_mode: 'bearer' }, NOW);
-    triggers.revoke(dying.trigger_id, NOW);
-
     const secrets = createWebhookSecretStore(sql);
-    secrets.put(live.secret_id, live.trigger_id, 'keep-me', NOW);
-    secrets.put(dying.secret_id, dying.trigger_id, 'orphan-by-revocation', NOW);
+
+    const live = await registerDurableWebhook(triggers, secrets, { label: 'live', auth_mode: 'bearer' }, NOW);
+    const dying = await registerDurableWebhook(triggers, secrets, { label: 'old', auth_mode: 'bearer' }, NOW);
+    triggers.revoke(dying.trigger_id, NOW);
     secrets.put('webhook_secret_ghost', 'trg-never-existed', 'orphan-by-absence', NOW);
 
     // A fresh activation rebuilds the store; the sweep runs with it.
     createWebhookSecretStore(sql);
-    expect(await secrets.get(live.secret_id)).toBe('keep-me');
+    expect(await secrets.get(live.secret_id)).toBe(live.secret);
     expect(await secrets.get(dying.secret_id)).toBeNull();
     expect(await secrets.get('webhook_secret_ghost')).toBeNull();
   });

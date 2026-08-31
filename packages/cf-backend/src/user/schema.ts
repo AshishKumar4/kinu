@@ -25,6 +25,7 @@ const USER_WORKSPACE_ADDED_COLUMNS = {
   name_origin: "TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user'))",
   delete_pending: 'INTEGER NOT NULL DEFAULT 0',
   create_pending: 'INTEGER NOT NULL DEFAULT 0',
+  fork_lease_expires_at: 'INTEGER',
 } as const;
 
 const CODEX_DEVICE_FLOW_ADDED_COLUMNS = {
@@ -93,7 +94,14 @@ export function initUserTables(sql: SqlExec): void {
       -- workspace it will become does not exist yet, so it is invisible to
       -- every owner-visible read until publishWorkspaceReservation flips it.
       -- DEFAULT 0 because every other create is published the moment it lands.
-      create_pending INTEGER NOT NULL DEFAULT 0
+      create_pending INTEGER NOT NULL DEFAULT 0,
+      -- While a fork transfer holds the reservation above, when its claim on
+      -- the name lapses. The sender renews it as frames land, so a transfer
+      -- that is still running keeps the name and one whose source DIED stops
+      -- holding it: without this a mid-transfer eviction wedged a name that no
+      -- roster read could see and no retry could take back. NULL once the row
+      -- is a published workspace — nothing is streaming into it any more.
+      fork_lease_expires_at INTEGER
     )
   `);
   reconcileSqlExecColumns(sql, 'user_workspaces', USER_WORKSPACE_ADDED_COLUMNS);

@@ -361,6 +361,65 @@ describe('an operator-cancelled fork is not reported as running', () => {
     expect(w.journal.listLive().items.map((run) => run.rootId)).toEqual(['root-resumed']);
     expect(String(agent.enqueued[0]?.text)).not.toContain('root-resumed');
   });
+
+  /**
+   * THE SECOND ACTIVATION, which is where the offered set was wrong.
+   *
+   * `markInterrupted` transitions `running` rows only, so a run an EARLIER
+   * activation already marked is returned by nobody. The gate used to be
+   * offered exactly that return value, while `abandonRunning` swept every
+   * unclaimed `interrupted` row — so the run the job registry was re-driving
+   * right now was retired underneath it, and the agent was sent the
+   * "re-fork the work you still need" wake about work that was executing.
+   */
+  test('a run an EARLIER activation marked is still offered to the resume gate', async () => {
+    const w = workspace();
+    const firstActivation = Date.now();
+    // Activation N: the gate is not wired (a caller with no durable resume), so
+    // the rows are marked interrupted and refused — the state the next
+    // activation inherits.
+    w.journal.markInterrupted({ spawnedBefore: firstActivation }, firstActivation);
+    expect(w.journal.readHeadView('h1')?.status).toBe('interrupted');
+
+    // Activation N+1: the durable job IS re-drivable, and its re-drive claims
+    // this root by task through findResumableRun.
+    const agent = idleAgent();
+    const offered: string[][] = [];
+    const settled = await reconcileInterruptedForks({
+      journal: w.journal,
+      signals: agent.signals,
+      resume: async (roots) => {
+        offered.push([...roots]);
+        return roots.filter((root) => root === ROOT);
+      },
+      now: firstActivation + 1_000,
+    });
+
+    expect(offered).toEqual([[ROOT]]);
+    // Nothing retired, nothing said: the re-drive owns the run.
+    expect(settled).toEqual([]);
+    expect(agent.enqueued).toHaveLength(0);
+    expect(w.journal.readHeadView('h1')?.status).toBe('interrupted');
+    expect(w.journal.readHead('h1')?.error_message).toBeNull();
+  });
+
+  test('and the same run is retired once the gate stops claiming it', async () => {
+    // The denominator for the test above: offering a root is not sparing it.
+    const w = workspace();
+    const firstActivation = Date.now();
+    w.journal.markInterrupted({ spawnedBefore: firstActivation }, firstActivation);
+
+    const agent = idleAgent();
+    const settled = await reconcileInterruptedForks({
+      journal: w.journal, signals: agent.signals,
+      resume: async () => [],
+      now: firstActivation + 1_000,
+    });
+
+    expect(settled.map((run) => run.rootId)).toEqual([ROOT]);
+    expect(w.journal.readHead('h1')?.status).toBe('aborted');
+    expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent)).toEqual([FORK_INTERRUPTED_SIGNAL]);
+  });
 });
 
 describe('the operator cancel of ONE job reaches the agent', () => {

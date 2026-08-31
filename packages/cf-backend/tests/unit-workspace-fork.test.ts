@@ -15,7 +15,9 @@ async function source() {
   return ws;
 }
 
-function harness(options: { conflict?: boolean; publishError?: Error; copyError?: Error } = {}) {
+function harness(options: {
+  conflict?: boolean; publishError?: Error; copyError?: Error; renewed?: boolean;
+} = {}) {
   const calls: string[] = [];
   const registry: CloudForkRegistry = {
     async reserveWorkspace(_caller, name) {
@@ -24,6 +26,10 @@ function harness(options: { conflict?: boolean; publishError?: Error; copyError?
         entry: { name, displayName: name, createdAt: 1, lastVisited: 1, archivedAt: null },
         reserved: !options.conflict,
       };
+    },
+    async renewWorkspaceReservation(_caller, name, createdAt) {
+      calls.push(`renew:${name}:${createdAt}`);
+      return options.renewed ?? true;
     },
     async releaseWorkspaceReservation(_caller, name, createdAt) {
       calls.push(`release:${name}:${createdAt}`);
@@ -87,5 +93,35 @@ describe('cloud fork ownership transaction', () => {
       source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('publish failed');
     expect(publish.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
+  });
+
+  test('each staged frame renews the reservation, so a live transfer keeps its name', async () => {
+    // The reservation is what a source-side eviction used to strand: the loop
+    // holding it lives in the sender's memory, so nothing reported that the
+    // transfer had stopped. The renewals are that report.
+    const src = await source();
+    const h = harness();
+    await deliverCloudFork({
+      registry: h.registry, caller, target: h.target, name: 'source-fork',
+      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+    });
+
+    const staged = h.calls.filter((call) => call.startsWith('frame:') && !call.includes(':commit:'));
+    const renewals = h.calls.filter((call) => call.startsWith('renew:'));
+    expect(staged.length).toBeGreaterThan(0);
+    expect(renewals).toHaveLength(staged.length);
+    expect(renewals[0]).toBe('renew:source-fork:1');
+    // The commit is followed by the publish, not by another renewal.
+    expect(h.calls.at(-1)).toBe('publish:source-fork:1:cap');
+  });
+
+  test('a reservation taken over by someone else stops the transfer and cleans up', async () => {
+    const src = await source();
+    const h = harness({ renewed: false });
+    await expect(deliverCloudFork({
+      registry: h.registry, caller, target: h.target, name: 'source-fork',
+      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+    })).rejects.toThrow('no longer held by this transfer');
+    expect(h.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
   });
 });

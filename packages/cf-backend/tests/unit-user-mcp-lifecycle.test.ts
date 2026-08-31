@@ -18,8 +18,8 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, hangMcpEstablish, liveMcpFetch,
-  liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers,
+  dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, hangMcpEstablish, inheritedMcpManager,
+  liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers,
   resetRecordedMcp, seedMcpTools, seedSdkMcpServer,
 } from './helpers/agents-sdk';
 import { McpToolSurfaceSchema, validateMcpServerInput } from '../src/user/mcp';
@@ -371,6 +371,24 @@ describe('the SDK server rows are derived from the config table', () => {
     seedSdkMcpServer('ghost');
     await h.userDO.userMcp_warmConnections(await testOwner());
     expect(recordedMcpServers()).toEqual([]);
+    h.close();
+  });
+
+  test('an activation dials nothing through the SDK’s own manager', async () => {
+    // The defect: `Agent`'s base constructor builds a SECOND MCPClientManager
+    // over the same `cf_agents_mcp_servers` rows, and the SDK init chain calls
+    // `restoreConnectionsFromStorage` on it unconditionally on every
+    // activation. That manager holds none of this plane's credential closures,
+    // so a UserDO waking up opened an anonymous connection to every MCP
+    // endpoint the user had configured — whether or not anyone touched MCP.
+    const h = harness();
+    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
+    const before = recordedMcpLifecycle().restored;
+
+    await inheritedMcpManager(h.userDO).restoreConnectionsFromStorage('test-user-do');
+
+    expect(recordedMcpLifecycle().restored).toBe(before);
+    expect(Object.keys(inheritedMcpManager(h.userDO).mcpConnections)).toEqual([]);
     h.close();
   });
 });

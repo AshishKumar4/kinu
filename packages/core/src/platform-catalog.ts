@@ -1449,6 +1449,24 @@ export const PLATFORM_CATALOG = {
     conflictsWith: ['rpc.arg_bytes'],
   },
 
+  'email.routing.message_bytes': {
+    subject: 'Maximum size of an inbound message Cloudflare Email Routing delivers to a Worker',
+    limit: { value: 25 * MiB, unit: 'bytes' },
+    origin: 'platform',
+    bounds: 'wire',
+    evidence: 'documented',
+    provenance: 'https://developers.cloudflare.com/email-routing/limits/',
+    date: DOCS_READ,
+    trigger: 'an inbound message larger than 25 MiB addressed to a routed address',
+    onBreach: 'Email Routing rejects the message before the Worker sees it',
+    observable: [],
+    firstPartySignal: true,
+    notes:
+      'The whole message is handed to the email() Worker as a stream. Kinu buffers at most '
+      + 'INBOUND_EMAIL_MAX_BYTES (2 MiB, email/route.ts) and authorizes the sender before '
+      + 'assembling anything, so an unauthorized sender cannot spend the platform ceiling.',
+  },
+
   'websocket.hibernation_state': {
     subject:
       'A hibernated WebSocket keeps its serialized attachment and tags; everything held in '

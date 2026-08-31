@@ -339,6 +339,7 @@ interface UserHubCoreClient {
   readonly getConfig: UserDO['getConfig'];
   readonly registerWorkspace: UserDO['registerWorkspace'];
   readonly reserveWorkspace: UserDO['reserveWorkspace'];
+  readonly renewWorkspaceReservation: UserDO['renewWorkspaceReservation'];
   readonly releaseWorkspaceReservation: UserDO['releaseWorkspaceReservation'];
   readonly publishWorkspaceReservation: UserDO['publishWorkspaceReservation'];
   readonly ensureWorkspaceCapability: UserDO['ensureWorkspaceCapability'];

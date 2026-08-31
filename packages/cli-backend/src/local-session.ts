@@ -55,7 +55,7 @@ import {
   // Ingress — core owns the gates; this session owns the local clock and the
   // process boundary in front of them.
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
-  initWebhookRateLimitTables,
+  initWebhookIngressTables,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
   EvolutionEngine,
   readMemoryTail,
@@ -966,9 +966,10 @@ export class LocalAgentSession implements BackendHost {
     this.replyChannels = new ReplyChannelStore(hubSql);
     this.hubSql = hubSql;
     this.webhookSecrets = createWebhookSecretStore(hubSql);
-    // Webhook + inbound-email deliveries count against a per-minute window
-    // (core events/ingress/rate-limit.ts), which needs its table at boot.
-    initWebhookRateLimitTables(hubSql);
+    // Webhook + inbound-email deliveries count against a per-minute window, and
+    // a verified signature is claimed once against replay (core
+    // events/ingress), which needs both tables at boot.
+    initWebhookIngressTables(hubSql);
 
     // The durable per-run event log (run_events) — the same recorder, table and
     // RunEvent union the cloud backend records, over local SQLite — is written…
@@ -1399,13 +1400,13 @@ export class LocalAgentSession implements BackendHost {
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }): Promise<LocalDurableWebhook> {
-    const now = Date.now();
-    const webhook = await registerDurableWebhook(this.triggerRegistry, opts, now);
-    if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
+    const webhook = await registerDurableWebhook(
+      this.triggerRegistry, this.webhookSecrets, opts, Date.now(),
+    );
     return {
       trigger_id: webhook.trigger_id,
       auth_mode: webhook.auth_mode,
-      secret: opts.secret ?? null,
+      secret: webhook.secret,
     };
   }
 

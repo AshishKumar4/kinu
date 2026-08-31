@@ -196,22 +196,28 @@ export type EmailIngressResult =
     }
   | { admitted: false; reason: string };
 
+/** Which side of the inbox gate a sender falls on — the ONE comparison, so the
+ *  pre-parse check the transport makes and the admission below cannot drift. */
+export function classifyEmailSender(
+  from: string,
+  ownerEmail: string | null,
+  allowlist: ReadonlyArray<string>,
+): 'owner' | 'allowlisted' | null {
+  // Sender identity is the envelope from as delivered by the mail edge, which
+  // enforces SPF/DKIM/DMARC before this ever runs — that upstream reliance is
+  // why even the owner's mail caps at trust `authenticated` (events/hub/trust.ts).
+  const sender = normalizeEmailAddress(from);
+  const owner = ownerEmail ? normalizeEmailAddress(ownerEmail) : null;
+  if (owner && sender === owner) return 'owner';
+  return allowlist.some((a) => normalizeEmailAddress(a) === sender) ? 'allowlisted' : null;
+}
+
 /** Gate + publish an inbound email. Runs inside the agent's storage. */
 export async function acceptInboundEmail(
   deps: EmailIngressDeps,
   msg: IncomingEmail,
 ): Promise<EmailIngressResult> {
-  // Sender identity is the envelope from as delivered by the mail edge, which
-  // enforces SPF/DKIM/DMARC before this ever runs — that upstream reliance is
-  // why even the owner's mail caps at trust `authenticated` (events/hub/trust.ts).
-  const sender = normalizeEmailAddress(msg.from);
-  const owner = deps.owner_email ? normalizeEmailAddress(deps.owner_email) : null;
-  const sender_class: 'owner' | 'allowlisted' | null =
-    owner && sender === owner
-      ? 'owner'
-      : deps.allowlist.some((a) => normalizeEmailAddress(a) === sender)
-        ? 'allowlisted'
-        : null;
+  const sender_class = classifyEmailSender(msg.from, deps.owner_email, deps.allowlist);
   if (!sender_class) {
     return { admitted: false, reason: 'sender not authorized for this agent' };
   }
@@ -370,6 +376,25 @@ export class EmailInbox {
     return {
       admitted: true, duplicate: result.duplicate, event_id: result.event_id, thread: result.thread,
     };
+  }
+
+  /**
+   * Whether this sender may reach the inbox at all — the transport's pre-parse
+   * half of {@link accept}'s own first question, so an unauthorized message is
+   * refused before it is buffered and MIME-parsed rather than after.
+   *
+   * Deliberately not a decision of its own: same owner address, same
+   * allowlist, same comparison. It admits nothing — a yes only buys the sender
+   * the parse, and `accept` asks again with the same rule before anything
+   * durable happens.
+   */
+  async authorizes(from: string): Promise<{ authorized: boolean; reason?: string }> {
+    const ownerEmail = await this.deps.ownerEmail();
+    if (!ownerEmail) return { authorized: false, reason: 'agent owner email unknown' };
+    const sender_class = classifyEmailSender(from, ownerEmail, readEmailAllowlist(this.deps.triggers));
+    return sender_class
+      ? { authorized: true }
+      : { authorized: false, reason: 'sender not authorized for this agent' };
   }
 
   /** The live "I may be deaf right now" line for this turn's context. */

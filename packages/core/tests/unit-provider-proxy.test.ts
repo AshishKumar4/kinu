@@ -145,14 +145,36 @@ describe('providerProxyBaseURL', () => {
 describe('proxyTargetAllowed', () => {
   const base = 'https://api.groq.com/openai/v1';
 
-  test('admits the endpoints running a model needs', () => {
+  test('admits the endpoints running a model needs, under the verb each one is', () => {
     for (const endpoint of [
       '/chat/completions', '/completions', '/responses', '/responses/resp_123',
-      '/messages', '/messages/count_tokens', '/embeddings', '/models', '/models/gpt-5.5',
+      '/messages', '/messages/count_tokens', '/embeddings',
     ]) {
-      expect(proxyTargetAllowed(`${base}${endpoint}`, base)).toBe(true);
+      expect(proxyTargetAllowed(`${base}${endpoint}`, base, 'POST')).toBe(true);
     }
-    expect(proxyTargetAllowed(`${base}/models?x=1`, base)).toBe(true);
+    expect(proxyTargetAllowed(`${base}/models`, base, 'GET')).toBe(true);
+    expect(proxyTargetAllowed(`${base}/models/gpt-5.5`, base, 'GET')).toBe(true);
+    expect(proxyTargetAllowed(`${base}/models?x=1`, base, 'GET')).toBe(true);
+  });
+
+  test('refuses model MANAGEMENT — an inference scope does not buy DELETE', () => {
+    // The defect: the allowlist took no method, so a token holding only
+    // `ai.proxy` could spend the owner's provider credential on
+    // `DELETE /v1/models/{id}` — deleting a fine-tuned model on every provider
+    // that offers the verb.
+    for (const method of ['DELETE', 'POST', 'PUT', 'PATCH', 'delete']) {
+      expect(proxyTargetAllowed(`${base}/models/ft-abc123`, base, method)).toBe(false);
+      expect(proxyTargetAllowed(`${base}/models`, base, method)).toBe(false);
+    }
+  });
+
+  test('refuses an inference endpoint under a verb it is not', () => {
+    // The other direction of the same matrix: a completion is a POST, so GET
+    // and DELETE against it are not this capability's either.
+    for (const method of ['GET', 'DELETE', 'HEAD']) {
+      expect(proxyTargetAllowed(`${base}/chat/completions`, base, method)).toBe(false);
+      expect(proxyTargetAllowed(`${base}/embeddings`, base, method)).toBe(false);
+    }
   });
 
   test("refuses the provider's own account management — the key-minting case", () => {
@@ -160,30 +182,31 @@ describe('proxyTargetAllowed', () => {
       '/keys', '/key', '/organization/admin_api_keys', '/organizations/api_keys',
       '/credits', '/billing/usage', '',
     ]) {
-      expect(proxyTargetAllowed(`${base}${endpoint}`, base)).toBe(false);
+      expect(proxyTargetAllowed(`${base}${endpoint}`, base, 'POST')).toBe(false);
+      expect(proxyTargetAllowed(`${base}${endpoint}`, base, 'GET')).toBe(false);
     }
   });
 
   test('refuses a URL carrying credentials — fetch cannot send it anyway', () => {
-    expect(proxyTargetAllowed('https://user:pass@api.groq.com/openai/v1/chat/completions', base)).toBe(false);
+    expect(proxyTargetAllowed('https://user:pass@api.groq.com/openai/v1/chat/completions', base, 'POST')).toBe(false);
   });
 
   test('refuses another host — the exfiltration case', () => {
-    expect(proxyTargetAllowed('https://attacker.example/openai/v1/chat/completions', base)).toBe(false);
-    expect(proxyTargetAllowed('https://api.groq.com.attacker.example/openai/v1', base)).toBe(false);
+    expect(proxyTargetAllowed('https://attacker.example/openai/v1/chat/completions', base, 'POST')).toBe(false);
+    expect(proxyTargetAllowed('https://api.groq.com.attacker.example/openai/v1', base, 'POST')).toBe(false);
   });
 
   test('refuses a sibling path that merely shares a prefix', () => {
-    expect(proxyTargetAllowed('https://api.groq.com/openai/v1x/chat', base)).toBe(false);
-    expect(proxyTargetAllowed('https://api.groq.com/admin', base)).toBe(false);
+    expect(proxyTargetAllowed('https://api.groq.com/openai/v1x/chat', base, 'POST')).toBe(false);
+    expect(proxyTargetAllowed('https://api.groq.com/admin', base, 'GET')).toBe(false);
   });
 
   test('refuses non-https and unparseable targets', () => {
-    expect(proxyTargetAllowed('http://api.groq.com/openai/v1/chat', base)).toBe(false);
-    expect(proxyTargetAllowed('not a url', base)).toBe(false);
+    expect(proxyTargetAllowed('http://api.groq.com/openai/v1/chat', base, 'POST')).toBe(false);
+    expect(proxyTargetAllowed('not a url', base, 'POST')).toBe(false);
   });
 
   test('a base with a trailing slash admits the same descendants', () => {
-    expect(proxyTargetAllowed(`${base}/chat/completions`, `${base}/`)).toBe(true);
+    expect(proxyTargetAllowed(`${base}/chat/completions`, `${base}/`, 'POST')).toBe(true);
   });
 });

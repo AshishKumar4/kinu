@@ -451,6 +451,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
       cli: WIRED,
     },
+    // One row per signed delivery already spent, so a captured HMAC request
+    // cannot be admitted twice inside its own signature window. Provisioned
+    // beside the rate window by the one ingress init, on every root that has a
+    // webhook gate at all — a host holding the window and not this would still
+    // admit replays.
+    webhook_replay_claims: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
+      cli: WIRED,
+    },
     // The plaintext HMAC/bearer secret a registered webhook was created with.
     // Present on a local session from boot — `local-session.ts` builds the store
     // in its constructor — and only once a webhook is actually registered on cf,

@@ -15,7 +15,9 @@ import {
   agentEmailAddress, agentNameFromRecipient,
   parseInboundMime, stripQuotedReply,
 } from '../src/email/inbound';
-import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route';
+import {
+  INBOUND_EMAIL_MAX_BYTES, routeInboundEmail, type EmailDeliveryTarget,
+} from '../src/email/route';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
@@ -358,7 +360,18 @@ describe('the inbox gate says when it is deaf', () => {
 });
 
 describe('routeInboundEmail — the Worker seam', () => {
-  function mockMessage(opts: { from?: string; to?: string; raw?: string; headers?: Record<string, string> } = {}) {
+  /** A target that accepts whoever asks — the pre-parse gate's happy answer. */
+  function target(over: Partial<EmailDeliveryTarget> = {}): EmailDeliveryTarget {
+    return {
+      authorizeEmailSender: async () => ({ authorized: true }),
+      acceptEmailDelivery: async () => ({ admitted: true, duplicate: false }),
+      ...over,
+    };
+  }
+
+  function mockMessage(opts: {
+    from?: string; to?: string; raw?: string; headers?: Record<string, string>; rawSize?: number;
+  } = {}) {
     const raw = opts.raw ?? [
       'From: owner@example.com',
       `To: ${opts.to ?? `scout-a1b2c3@${DOMAIN}`}`,
@@ -375,29 +388,26 @@ describe('routeInboundEmail — the Worker seam', () => {
       to: opts.to ?? `scout-a1b2c3@${DOMAIN}`,
       headers: new Headers({ 'message-id': '<abc@mail.example.com>', ...opts.headers }),
       raw: body,
+      rawSize: opts.rawSize ?? raw.length,
     };
   }
 
   test('delivers the parsed email to the agent named by the recipient', async () => {
-    const deliveries: Array<{
-      agent: string;
-      opts: Parameters<EmailDeliveryTarget['acceptEmailDelivery']>[0];
-    }> = [];
-    const target: EmailDeliveryTarget = {
-      acceptEmailDelivery: async (opts) => {
-        deliveries.push({ agent: 'scout-a1b2c3', opts });
-        return { admitted: true, duplicate: false };
-      },
-    };
+    const deliveries: Array<Parameters<EmailDeliveryTarget['acceptEmailDelivery']>[0]> = [];
     const resolved: string[] = [];
     const result = await routeInboundEmail(mockMessage(), DOMAIN, async (name) => {
       resolved.push(name);
-      return target;
+      return target({
+        acceptEmailDelivery: async (opts) => {
+          deliveries.push(opts);
+          return { admitted: true, duplicate: false };
+        },
+      });
     }, 42);
 
     expect(result).toEqual({ outcome: 'admitted', agent: 'scout-a1b2c3' });
     expect(resolved).toEqual(['scout-a1b2c3']);
-    expect(deliveries[0].opts).toMatchObject({
+    expect(deliveries[0]).toMatchObject({
       from: 'owner@example.com',
       to: `scout-a1b2c3@${DOMAIN}`,
       subject: 'Check the deploy',
@@ -412,7 +422,7 @@ describe('routeInboundEmail — the Worker seam', () => {
     const result = await routeInboundEmail(
       mockMessage({ to: 'anyone@wrong-domain.example.com' }),
       DOMAIN,
-      async () => { resolves++; return { acceptEmailDelivery: async () => ({ admitted: true }) }; },
+      async () => { resolves++; return target(); },
     );
     expect(result.outcome).toBe('dropped');
     expect(resolves).toBe(0);
@@ -429,7 +439,7 @@ describe('routeInboundEmail — the Worker seam', () => {
     for (const headers of autoReplyHeaders) {
       const result = await routeInboundEmail(mockMessage({ headers }), DOMAIN, async () => {
         resolves++;
-        return { acceptEmailDelivery: async () => ({ admitted: true }) };
+        return target();
       });
       expect(result).toEqual({ outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'auto-reply (RFC 3834)' });
     }
@@ -437,19 +447,77 @@ describe('routeInboundEmail — the Worker seam', () => {
   });
 
   test('Auto-Submitted: no is human mail and still drives a turn', async () => {
-    const target: EmailDeliveryTarget = { acceptEmailDelivery: async () => ({ admitted: true, duplicate: false }) };
     const result = await routeInboundEmail(
-      mockMessage({ headers: { 'auto-submitted': 'no' } }), DOMAIN, async () => target,
+      mockMessage({ headers: { 'auto-submitted': 'no' } }), DOMAIN, async () => target(),
     );
     expect(result).toEqual({ outcome: 'admitted', agent: 'scout-a1b2c3' });
   });
 
   test('a gate rejection surfaces as dropped with the agent reason', async () => {
-    const result = await routeInboundEmail(mockMessage(), DOMAIN, async () => ({
-      acceptEmailDelivery: async () => ({ admitted: false, reason: 'sender not authorized for this agent' }),
+    const result = await routeInboundEmail(mockMessage(), DOMAIN, async () => target({
+      acceptEmailDelivery: async () => ({ admitted: false, reason: 'inbound email rate limit exceeded' }),
     }));
+    expect(result).toEqual({
+      outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'inbound email rate limit exceeded',
+    });
+  });
+
+  test('an unauthorized sender is refused BEFORE the message is read or parsed', async () => {
+    // The defect: the whole raw stream was buffered and PostalMime parsed every
+    // body and attachment before anything asked who the sender was — the first
+    // owner/allowlist comparison ran inside the agent, after the parse.
+    let pulled = false;
+    const message = mockMessage({ from: 'stranger@elsewhere.example' });
+    const watched = {
+      ...message,
+      // `highWaterMark: 0` so nothing is pulled until a READER asks, which is
+      // the thing that must not happen for a sender the agent does not accept.
+      raw: new ReadableStream<Uint8Array>(
+        { pull(controller) { pulled = true; controller.close(); } },
+        { highWaterMark: 0 },
+      ),
+    };
+
+    const result = await routeInboundEmail(watched, DOMAIN, async () => target({
+      authorizeEmailSender: async () => ({ authorized: false, reason: 'sender not authorized for this agent' }),
+      acceptEmailDelivery: async () => { throw new Error('an unauthorized message reached the delivery'); },
+    }));
+
     expect(result).toEqual({
       outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'sender not authorized for this agent',
     });
+    expect(pulled).toBe(false);
+  });
+
+  test('a message over the byte ceiling is dropped without resolving an agent', async () => {
+    let resolves = 0;
+    const result = await routeInboundEmail(
+      mockMessage({ rawSize: INBOUND_EMAIL_MAX_BYTES + 1 }),
+      DOMAIN,
+      async () => { resolves++; return target(); },
+    );
+    expect(result.outcome).toBe('dropped');
+    expect(result.reason).toContain('inbound limit');
+    expect(resolves).toBe(0);
+  });
+
+  test('a message that LIES about its size is refused by the count of arriving bytes', async () => {
+    // `rawSize` is the edge's claim and the pre-filter; the gate is the count,
+    // so a stream that keeps arriving past the limit is cut off there rather
+    // than assembled.
+    const oversize = 'x'.repeat(INBOUND_EMAIL_MAX_BYTES + 1024);
+    const body = new Response(`Subject: big\r\n\r\n${oversize}`).body;
+    if (!body) throw new Error('expected response body stream');
+    let parsedFor: string | null = null;
+    const result = await routeInboundEmail(
+      { ...mockMessage(), raw: body, rawSize: 10 },
+      DOMAIN,
+      async () => target({
+        acceptEmailDelivery: async (opts) => { parsedFor = opts.from; return { admitted: true }; },
+      }),
+    );
+    expect(result.outcome).toBe('dropped');
+    expect(result.reason).toContain('inbound limit');
+    expect(parsedFor).toBeNull();
   });
 });

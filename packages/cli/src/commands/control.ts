@@ -377,7 +377,12 @@ function printJobs(jobs: Array<{ id: string; kind?: string; status: string; erro
 function printCreatedWebhook(created: CloudWebhookTrigger, origin: string): void {
   console.log(`${OK('created')} ${created.trigger_id}`);
   console.log(`${DIM('url')} ${ACCENT(`${origin}${created.url}`)}`);
-  if (created.secret) console.log(`${DIM('secret')} ${created.secret}`);
+  // hmac/bearer webhooks always carry one — supplied with `--secret`, or minted
+  // by the server — and this is the only time it is shown.
+  if (created.secret) {
+    console.log(`${DIM('secret')} ${created.secret}`);
+    console.log(DIM('store it now: the secret is shown once and cannot be read back'));
+  }
 }
 
 function formatTime(value: number | null | undefined): string {

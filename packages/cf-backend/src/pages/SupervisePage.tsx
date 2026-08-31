@@ -554,11 +554,14 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
     if (!label.trim()) { setErr("label required"); return; }
     setSubmitting(true); setErr(null);
     try {
-      const secretToUse = secret.trim() || autoGenSecret(authMode);
+      // Blank means "mint one": the server decides and stores the secret for
+      // every hmac/bearer webhook, so a browser-side generator here would be a
+      // second answer to the same question — and the one that produced nothing
+      // when a different client asked.
       const r = await createDurableWebhook(agentName, {
         label: label.trim(),
         auth_mode: authMode,
-        secret: authMode === "mtls" ? undefined : secretToUse,
+        secret: authMode === "mtls" ? undefined : (secret.trim() || undefined),
         accepted_content_type: contentType.trim() || "application/json",
       });
       onCreated(r);
@@ -629,11 +632,4 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       </p>
     </Modal>
   );
-}
-
-function autoGenSecret(authMode: "hmac" | "bearer" | "mtls"): string {
-  if (authMode === "mtls") return "";
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }

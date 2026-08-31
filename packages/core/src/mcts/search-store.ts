@@ -400,17 +400,10 @@ export class MctsSearchStore {
     const stored = this.readStoredSwarmConfig(rootId);
     return stored?.originContext ?? null;
   }
-  /** How many SWARM rows still claim a live executor. The start-of-life
-   *  reconciliation reads this so a dead search's row reaches its closer even
-   *  when the search journalled no heads of its own (`unit:'thought'` nodes
-   *  write none) — the case the journal sweep cannot see. */
-  runningSwarmCount(): number {
-    return this.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM mcts_search_runs WHERE status='running' AND engine='swarm'`[0]?.n ?? 0;
-  }
-
-  /** Every running swarm root. Activation reconciliation offers these roots to
-   *  the durable-job resume gate even when no head row was written yet. */
+  /** Every running swarm root — the rows still claiming a live executor, and
+   *  the activation reconciliation's offered set for the durable-job resume
+   *  gate even when the search journalled no heads of its own (`unit:'thought'`
+   *  nodes write none), which is the case the journal sweep cannot see. */
   runningSwarmRoots(): readonly string[] {
     return this.sql<{ root_id: string }>`
       SELECT root_id FROM mcts_search_runs

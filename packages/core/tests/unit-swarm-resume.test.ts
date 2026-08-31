@@ -1266,6 +1266,7 @@ describe('the start-of-life sweep reaches registry-only jobs', () => {
     await reconcileInterruptedForks({
       journal: {
         markInterrupted: () => [],
+        unfinishedRoots: () => [],
         abandonRunning: () => [],
       },
       signals: idleAgent().signals,

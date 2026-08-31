@@ -161,6 +161,12 @@ const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
  *  clock rather than living as long as someone keeps using it. */
 const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
+/** How long a fork transfer holds its reserved name without saying it is still
+ *  running. Renewed as each frame lands, so the bound is on the GAP between
+ *  frames rather than on the transfer: minutes of slack for a slow ranged read
+ *  over a large workspace, and still an end for a sender whose Durable Object
+ *  died mid-stream. */
+const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
 /** A device name is a display label, not a hostname — bounded so a UI row
  *  cannot be blown out by one paste. */
 const DEVICE_NAME_MAX_LENGTH = 80;
@@ -475,6 +481,35 @@ function clampRosterLimit(limit?: number): number {
   return Math.min(limit, WORKSPACE_LIST_LIMIT);
 }
 
+/**
+ * Silence the SDK's own MCP manager on this object, before it can dial.
+ *
+ * The Agent base builds a manager of its own and its init chain calls
+ * `restoreConnectionsFromStorage` unconditionally on every activation, with no
+ * subclass opt-out (`agents/dist/index.js:1026-1030`). That manager reads the
+ * SAME `cf_agents_mcp_servers` rows this object's user plane derives from
+ * {@link UserDO.hydrateUserMcp}, but with none of its credential closures — so
+ * every activation opened an anonymous connection to every MCP endpoint the
+ * user configured, whether or not anyone touched MCP: third-party 401 noise,
+ * duplicate sessions churning `server_options`, and an OAuth 401 able to write
+ * a fresh `auth_url` onto the shared row, which the user plane then reads as
+ * authenticating-and-never-connect.
+ *
+ * Marking the manager restored is the whole fix: the SDK's restore is then a
+ * no-op, and this user's connections are made where their credentials are —
+ * `hydrateUserMcp`, on the manager that has them. Set in the constructor, which
+ * runs before any entry point reaches the init chain.
+ */
+function retireInheritedMcpManager(manager: MCPClientManager): void {
+  // The CALL is retired, not the private flag behind it: what this object needs
+  // is that the SDK's restore does nothing on a manager it never uses, and that
+  // is a public method with a stated contract rather than an internal field
+  // whose rename would silently bring the dialing back.
+  manager.restoreConnectionsFromStorage = async (): Promise<void> => {
+    diagnostics.event('mcp.inherited_restore_skipped', { manager: USER_MCP_CLIENT_NAME });
+  };
+}
+
 export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -484,6 +519,7 @@ export class UserDO extends Agent<Env> {
     // capability denials this DO's gate produces are the fleet's authorization
     // signal, and without this they reach Workers Logs and no dataset.
     installAnalyticsDiagnostics(this.env);
+    retireInheritedMcpManager(this.mcp);
   }
 
   private _initialized = false;
@@ -670,8 +706,11 @@ export class UserDO extends Agent<Env> {
   async listWorkspaces(caller: UserCaller, page?: WorkspaceListPageQuery): Promise<WorkspaceList> {
     await this.requireTier(caller, 'workspaces.read');
     // The ordinary read IS the retry: a teardown a previous attempt could not
-    // finish gets another go here, before the listing that must not show it.
+    // finish gets another go here, before the listing that must not show it —
+    // and so does a fork reservation whose sender stopped renewing it, which is
+    // otherwise a name this listing hides and nothing can free.
     await this.resumePendingDeletions();
+    await this.reclaimStaleForkReservations();
     const limit = clampRosterLimit(page?.limit);
     const cursor = decodeRosterCursor(page?.cursor);
     const rows = this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
@@ -799,6 +838,15 @@ export class UserDO extends Agent<Env> {
    * row exists anyway, because the name is what the reservation is FOR — the
    * existence probe below is deliberately blind to the flag, so a pending
    * reservation still refuses a second reservation of the same name.
+   *
+   * IT ALSO CARRIES A LEASE, because "the transfer has not happened yet" used
+   * to have no end. The sender streams frames from another Durable Object; when
+   * that object died between frames nothing ran its cleanup, and the row stayed
+   * `create_pending` forever — invisible to every roster read, so the owner
+   * could not delete it, and refusing every retry of the same name, so they
+   * could not have it back either. A reservation whose lease has lapsed is
+   * therefore ADOPTED here: its half-written target is torn down and the name
+   * is reserved afresh for the caller asking for it now.
    */
   async reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
     await this.requireTier(caller, 'workspaces.write');
@@ -810,12 +858,19 @@ export class UserDO extends Agent<Env> {
       created_at: number;
       last_visited: number;
       archived_at: number | null;
+      create_pending: number;
+      fork_lease_expires_at: number | null;
     }>(
-      `SELECT name, display_name, created_at, last_visited, archived_at
+      `SELECT name, display_name, created_at, last_visited, archived_at,
+              create_pending, fork_lease_expires_at
        FROM user_workspaces WHERE name = ?`,
       name,
     )[0];
-    if (existing) {
+    const abandoned = existing !== undefined
+      && existing.create_pending === 1
+      && (existing.fork_lease_expires_at ?? 0) <= Date.now();
+    if (abandoned) await this.reclaimForkReservation(name);
+    if (existing && !abandoned) {
       return {
         entry: {
           name: existing.name,
@@ -832,14 +887,87 @@ export class UserDO extends Agent<Env> {
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, slug: name });
     this.sqlx(
-      `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
-       VALUES (?, ?, ?, ?, ?, 1)`,
-      name, title, explicit !== '' ? 'user' : 'auto', now, now,
+      `INSERT INTO user_workspaces
+         (name, display_name, name_origin, created_at, last_visited, create_pending, fork_lease_expires_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      name, title, explicit !== '' ? 'user' : 'auto', now, now, now + FORK_RESERVATION_LEASE_MS,
     );
     return {
       entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
       reserved: true,
     };
+  }
+
+  /**
+   * The transfer is still running — hold the name a while longer.
+   *
+   * Called by the sender as each frame lands, so the lease tracks the transfer
+   * rather than a guess about how long one takes. Answers false when this is no
+   * longer the caller's reservation to hold (published, released, or adopted by
+   * someone else), which is how a sender that outlived its own claim learns to
+   * stop.
+   */
+  async renewWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+    if (!Number.isFinite(createdAt)) return false;
+    return this.sqlx(
+      `UPDATE user_workspaces SET fork_lease_expires_at = ?
+       WHERE name = ? AND created_at = ? AND create_pending = 1 AND delete_pending = 0
+       RETURNING name`,
+      Date.now() + FORK_RESERVATION_LEASE_MS, name, createdAt,
+    ).length > 0;
+  }
+
+  /**
+   * Give up a reservation whose transfer stopped renewing it: destroy whatever
+   * the half-finished transfer left in the target Durable Object, then drop the
+   * row. `tearDownWorkspace` is the same teardown a delete runs and is
+   * idempotent, so a target that was never written converges too.
+   */
+  private async reclaimForkReservation(name: string): Promise<void> {
+    const ownerUserId = this.ctx.id.name ?? '';
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
+      // Without the owner id this object cannot prove the destroy is
+      // authorized, and guessing is what that check refuses. The row keeps its
+      // lapsed lease and the next attempt tries again.
+      diagnostics.failure('workspace.fork_reservation_unowned', toKinuError({
+        doing: 'reclaiming a fork reservation whose transfer stopped',
+        cause: new Error('this user object has no user id to authorize the destroy with'),
+        otherwise: 'denied',
+      }), { workspace: name });
+      throw new Error(`Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
+    }
+    await this.tearDownWorkspace(name, ownerUserId);
+  }
+
+  /**
+   * Reclaim every reservation whose transfer stopped renewing it.
+   *
+   * Driven by the owner's own reads, exactly like {@link resumePendingDeletions}
+   * and for the same reason: this object has no timer of its own, and the
+   * answer to "who retries this" is the next person to look at their workspace
+   * list. Without it a wedged name is invisible AND unreachable — the roster
+   * filters `create_pending`, so the owner cannot even see what to delete.
+   */
+  private async reclaimStaleForkReservations(): Promise<void> {
+    const stale = this.sqlx<{ name: string }>(
+      `SELECT name FROM user_workspaces
+       WHERE create_pending = 1 AND delete_pending = 0
+         AND COALESCE(fork_lease_expires_at, 0) <= ?`,
+      Date.now(),
+    );
+    for (const row of stale) {
+      try {
+        await this.reclaimForkReservation(row.name);
+      } catch (err) {
+        diagnostics.failure('workspace.fork_reservation_reclaim_failed', toKinuError({
+          doing: 'reclaiming a fork reservation whose transfer stopped renewing it',
+          cause: err,
+          otherwise: 'io',
+        }), { workspace: row.name });
+      }
+    }
   }
 
   /**
@@ -884,7 +1012,7 @@ export class UserDO extends Agent<Env> {
     await this.reconcileWorkspaceCapability(name, capabilityHash);
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
-        `UPDATE user_workspaces SET create_pending = 0
+        `UPDATE user_workspaces SET create_pending = 0, fork_lease_expires_at = NULL
          WHERE name = ? AND created_at = ? AND create_pending = 1`,
         name, createdAt,
       );

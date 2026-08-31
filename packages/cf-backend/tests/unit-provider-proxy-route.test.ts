@@ -306,6 +306,46 @@ describe('POST /forward', () => {
     expect(seen).toHaveLength(0);
   });
 
+  test('refuses model management — an inference token cannot DELETE a model', async () => {
+    // `ai.proxy` buys inference spend. The target allowlist used to check only
+    // origin and path, so this exact request reached the provider with the
+    // owner's key attached and deleted their fine-tuned model.
+    const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
+    const seen = captureUpstream(() => new Response('should not happen'));
+
+    const res = await handleCliRequest(forwardRequest({
+      token: AI_TOKEN,
+      cred: 'openai.bearer',
+      target: 'https://api.openai.com/v1/models/ft-abc123',
+      method: 'DELETE',
+    }), env);
+
+    expect(res?.status).toBe(403);
+    expect(seen).toHaveLength(0);
+    expect(await handled(res).text()).toContain('DELETE');
+  });
+
+  test('still forwards the two verbs running a model needs', async () => {
+    const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
+    const seen = captureUpstream(() => Response.json({ ok: true }));
+
+    const listed = await handleCliRequest(forwardRequest({
+      token: AI_TOKEN, cred: 'openai.bearer',
+      target: 'https://api.openai.com/v1/models', method: 'GET',
+    }), env);
+    const inferred = await handleCliRequest(forwardRequest({
+      token: AI_TOKEN, cred: 'openai.bearer',
+      target: 'https://api.openai.com/v1/chat/completions',
+    }), env);
+
+    expect(listed?.status).toBe(200);
+    expect(inferred?.status).toBe(200);
+    expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
+      'GET https://api.openai.com/v1/models',
+      'POST https://api.openai.com/v1/chat/completions',
+    ]);
+  });
+
   test('requires both control headers', async () => {
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     captureUpstream(() => new Response('should not happen'));

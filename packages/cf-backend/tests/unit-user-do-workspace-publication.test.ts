@@ -300,3 +300,75 @@ describe('failure cleanup still finds a pending row', () => {
     harness.close();
   });
 });
+
+describe('a reservation whose transfer stopped renewing it is reclaimed', () => {
+  /** Age a live reservation into one whose sender is gone — what a source-side
+   *  eviction leaves behind, since nothing renews the lease after it. */
+  function expireLease(harness: TestUserDO, name: string): void {
+    harness.db.prepare<unknown, [number, string]>(
+      `UPDATE user_workspaces SET fork_lease_expires_at = ? WHERE name = ?`,
+    ).run(Date.now() - 1_000, name);
+  }
+
+  test('a retry of the same name adopts it instead of being refused forever', async () => {
+    // The defect: the sender's loop holds the reservation in memory, so a
+    // source Durable Object that died mid-transfer left `create_pending = 1`
+    // with nothing to clear it. Every retry then hit "agent name already
+    // exists" before the destroy-capable block, while every roster read filtered
+    // the row out — the name was wedged and invisible at once.
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    await harness.userDO.reserveWorkspace(owner, 'in-flight');
+    expireLease(harness, 'in-flight');
+
+    const retry = await harness.userDO.reserveWorkspace(owner, 'in-flight');
+
+    expect(retry.reserved).toBe(true);
+    // The half-written target went with the reservation it belonged to.
+    expect(harness.destroyedWorkspaces).toContain('in-flight');
+    expect(rowOf(harness, 'in-flight')?.create_pending).toBe(1);
+    expect(retry.entry.createdAt).toBeGreaterThanOrEqual(0);
+    harness.close();
+  });
+
+  test('a LIVE reservation is still refused — a renewing transfer keeps its name', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const held = await harness.userDO.reserveWorkspace(owner, 'in-flight');
+
+    expect((await harness.userDO.reserveWorkspace(owner, 'in-flight')).reserved).toBe(false);
+    expect(harness.destroyedWorkspaces).not.toContain('in-flight');
+
+    // And the sender can keep holding it.
+    expect(await harness.userDO.renewWorkspaceReservation(owner, 'in-flight', held.entry.createdAt)).toBe(true);
+    harness.close();
+  });
+
+  test('the owner’s own roster read frees a wedged name with no retry at all', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    await harness.userDO.reserveWorkspace(owner, 'in-flight');
+    expireLease(harness, 'in-flight');
+
+    await harness.userDO.listWorkspaces(owner);
+
+    expect(rowOf(harness, 'in-flight')).toBeNull();
+    expect(harness.destroyedWorkspaces).toContain('in-flight');
+    harness.close();
+  });
+
+  test('a published workspace holds no lease, so no sweep can take it', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const reserved = await harness.userDO.reserveWorkspace(owner, 'landed');
+    await harness.userDO.publishWorkspaceReservation(owner, 'landed', reserved.entry.createdAt, null);
+
+    await harness.userDO.listWorkspaces(owner);
+
+    expect(rowOf(harness, 'landed')?.create_pending).toBe(0);
+    expect(harness.destroyedWorkspaces).not.toContain('landed');
+    // And the sender's late renewal finds nothing of its own left to hold.
+    expect(await harness.userDO.renewWorkspaceReservation(owner, 'landed', reserved.entry.createdAt)).toBe(false);
+    harness.close();
+  });
+});

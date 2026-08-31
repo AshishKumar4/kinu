@@ -8,7 +8,7 @@
 // availability gating (credential usable AND gateway selected), the
 // refresh-on-401 retry, and actionable error mapping for the documented
 // gateway failures (2008 invalid provider / 2021 invalid user credentials).
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, setSystemTime } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -233,6 +233,67 @@ describe('my-gateway model discovery', () => {
       }),
     });
     expect(await reg.registry.get('my-gateway')!.listModels(reg.deps)).toEqual([]);
+  });
+
+  test('a 5xx keeps the last catalog the account was shown, and caches nothing', async () => {
+    // The defect: every non-ok answer was read as "this gateway serves no
+    // providers", and that narrowed menu was written into the 60-second module
+    // cache. One transient upstream failure made connected providers vanish
+    // from the model picker with nothing to say why.
+    const token = `t-${Math.random()}`;
+    let upstream: 'ok' | 'down' = 'ok';
+    const reg = createAgentProviderRegistry({
+      env: {},
+      userDO: gatewayStub({ gatewayId: 'byok-gw', token }),
+      fetch: asFetchFunction(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('https://models.dev/')) {
+          return new Response(modelsDevBody, { headers: { 'content-type': 'application/json' } });
+        }
+        if (upstream === 'down') return new Response('upstream is unwell', { status: 500 });
+        if (url.includes('/provider_configs')) {
+          return new Response(JSON.stringify({ success: true, result: [{ provider_slug: 'openai' }] }), {
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ success: true, result: { balance: 0 } }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    });
+    const provider = reg.registry.get('my-gateway')!;
+
+    expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+
+    // Past the catalog TTL, so the cache is consulted rather than short-circuited.
+    try {
+      upstream = 'down';
+      setSystemTime(new Date(Date.now() + 61_000));
+      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+
+      // And the failure was not published as the new truth: once the gateway
+      // answers again, its own observation is what the menu follows.
+      upstream = 'ok';
+      setSystemTime(new Date(Date.now() + 61_000));
+      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('a 429 with no catalog to keep fails the provider instead of serving an empty menu', async () => {
+    const reg = createAgentProviderRegistry({
+      env: {},
+      userDO: gatewayStub({ gatewayId: 'busy-gw', token: `t-${Math.random()}` }),
+      fetch: asFetchFunction(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('https://models.dev/')) {
+          return new Response(modelsDevBody, { headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('slow down', { status: 429 });
+      }),
+    });
+    await expect(reg.registry.get('my-gateway')!.listModels(reg.deps)).rejects.toThrow(/429/);
   });
 });
 

@@ -284,8 +284,9 @@ export class HeadJournal {
    * `spawnedBefore` bounds it to rows an EARLIER activation spawned, so a head this
    * activation has already started is outside it whichever order the two run in.
    *
-   * Returns the runs it touched, so the caller can hand their roots to the resume
-   * gate. Empty on a clean start, which is the common case.
+   * Returns the runs THIS call touched, which is a log of the transition and not
+   * the resume gate's offered set: a row an earlier activation already marked is
+   * not marked twice. {@link unfinishedRoots} is what the gate is offered.
    */
   markInterrupted(
     scope?: { readonly spawnedBefore?: number },
@@ -300,6 +301,22 @@ export class HeadJournal {
       SET status = 'interrupted', completed_at = ${now}
       WHERE status = 'running' AND (${before} IS NULL OR spawned_at < ${before})`;
     return runs;
+  }
+
+  /**
+   * Every root still holding an unfinished head — `running` or `interrupted` —
+   * spawned before `spawnedBefore`. The resume gate's OFFERED SET.
+   *
+   * Deliberately not {@link markInterrupted}'s return value. That names only the
+   * rows this activation transitioned, so a run an earlier activation marked was
+   * offered to nobody while {@link abandonRunning} swept exactly those rows: the
+   * re-drive the job registry had already claimed was retired underneath it, and
+   * the agent was told to re-fork work that was executing. The unfinished set is
+   * the same population the retirement reads, so what can be spared is what can
+   * be swept.
+   */
+  unfinishedRoots(spawnedBefore: number): HeadId[] {
+    return this.unfinishedRuns('interrupted', null, spawnedBefore).map((run) => run.rootId);
   }
 
   /**

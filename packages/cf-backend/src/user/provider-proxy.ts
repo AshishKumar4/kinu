@@ -15,13 +15,15 @@
  * The client names the credential (`x-kinu-proxy-cred`) and the upstream URL
  * (`x-kinu-proxy-target`); this route decides whether that URL is one the
  * credential may be spent on, by resolving the provider's own base URL and
- * checking the target against it — same https origin, under that path, and one
- * of the inference endpoints (`proxyTargetAllowed`). Without the origin check
- * the route would attach the owner's API key to any host a caller named;
- * without the endpoint list it would reach the provider's own key-minting
- * routes, which sit under the same base as `/chat/completions`. Some
- * credentials are not the proxy's to spend at all — see
- * `PROXY_DENIED_CRED_KEYS` for each one's reason.
+ * checking the target AND the caller's method against it — same https origin,
+ * under that path, and one of the (method, endpoint) pairs running a model
+ * needs (`proxyTargetAllowed`). Without the origin check the route would
+ * attach the owner's API key to any host a caller named; without the endpoint
+ * list it would reach the provider's own key-minting routes, which sit under
+ * the same base as `/chat/completions`; without the method it would reach
+ * `DELETE /models/{id}` with an inference-only capability. Some credentials are
+ * not the proxy's to spend at all — see `PROXY_DENIED_CRED_KEYS` for each one's
+ * reason.
  *
  * Bodies and responses pass through byte-for-byte, so streaming works and the
  * provider's own usage/cost fields reach the caller's `step_finish` accounting
@@ -130,8 +132,8 @@ async function forwardUpstream(
   if (!base) {
     return errorResponse(400, `No upstream endpoint is known for credential "${credKey}", so it cannot be proxied.`);
   }
-  if (!proxyTargetAllowed(target, base)) {
-    return errorResponse(403, `"${target}" is outside the endpoint credential "${credKey}" may be spent on (${base}).`);
+  if (!proxyTargetAllowed(target, base, request.method)) {
+    return errorResponse(403, `${request.method} "${target}" is outside what credential "${credKey}" may be spent on (${base}).`);
   }
 
   const auth = await userDO.getAuthHeaders(owner, credKey);

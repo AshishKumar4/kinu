@@ -163,6 +163,12 @@ export function mockAgentsSdk(): void {
     Agent: class {
       readonly ctx: AgentContext | undefined;
       readonly env: Env | undefined;
+      /** The vendor base builds a manager of its own in its constructor
+       *  (`agents/dist/index.js:803-806`) over the SAME storage a subclass's
+       *  manager uses, and its init chain restores it on every activation. A
+       *  stand-in without it cannot observe what that manager does — which is
+       *  the whole subject of the inherited-restore contract. */
+      readonly mcp = new FakeMCPClientManager({ inherited: true });
       constructor(ctx?: AgentContext, env?: Env) {
         this.ctx = ctx;
         this.env = env;
@@ -823,7 +829,7 @@ export interface RecordedMcpServer {
   readonly transport: RecordedMcpTransport;
 }
 
-interface RecordedMcpConnection {
+export interface RecordedMcpConnection {
   connectionState: string;
   connectionError: string | null;
   tools: { name: string; description?: string; title?: string; inputSchema: unknown }[];
@@ -959,6 +965,23 @@ export function liveMcpTransport(id: string): RecordedMcpTransport | undefined {
   return liveMcpManager?.mcpConnections[id]?.options.transport;
 }
 
+/**
+ * The manager the Agent BASE built for this instance — the one the SDK's init
+ *  chain restores, as distinct from the one a subclass builds for its own
+ *  plane. Asked for by identity rather than asserted: an instance that is not
+ *  on this stand-in has nothing to say about the inherited restore.
+ */
+export function inheritedMcpManager(agent: { mcp: unknown }): {
+  mcpConnections: Record<string, RecordedMcpConnection>;
+  restoreConnectionsFromStorage(clientName: string): Promise<void>;
+} {
+  const manager = agent.mcp;
+  if (!(manager instanceof FakeMCPClientManager)) {
+    throw new Error('this agent was not built on the harness Agent base');
+  }
+  return manager;
+}
+
 /** Give a configured server a live connection with tools, the way discovery
  *  does. Reaches the manager UserDO built, which is private to it — the state
  *  under test is what the manager holds, not who holds a reference. */
@@ -1001,12 +1024,16 @@ export function resetRecordedMcp(): void {
  */
 class FakeMCPClientManager {
   mcpConnections: Record<string, RecordedMcpConnection> = {};
+  /** The vendor's restore-once flag, private to its class and written by a host
+   *  that keeps its rows out of this manager. Mirrored because the write is the
+   *  contract under test. */
+  _isRestored = false;
 
-  constructor() {
-    // Handed over as an ARGUMENT rather than aliased into a variable: what the
-    // tests need is a way to reach the manager UserDO built, and passing the
-    // instance says so without `this` escaping through an assignment.
-    rememberMcpManager(this);
+  /** `inherited` marks the manager the Agent BASE builds. The tests reach for
+   *  the one a subclass built for its own plane, so only that one is
+   *  remembered — passing the instance out rather than aliasing `this`. */
+  constructor(options?: { inherited?: boolean }) {
+    if (!options?.inherited) rememberMcpManager(this);
   }
 
   async registerServer(id: string, options: {
@@ -1043,13 +1070,18 @@ class FakeMCPClientManager {
     mcpServers.delete(id);
   }
 
+  /** The real one returns immediately once it has restored (`_isRestored`,
+   *  `client-zqKcsyFa.js:1533-1534`) — the flag a host sets to keep its rows
+   *  out of a manager that has no credentials for them. */
   async restoreConnectionsFromStorage(): Promise<void> {
+    if (this._isRestored) return;
     mcpRestored += 1;
     for (const row of mcpServers.values()) {
       this.mcpConnections[row.id] ??= {
         connectionState: 'ready', connectionError: null, tools: [], options: { transport: row.transport },
       };
     }
+    this._isRestored = true;
   }
 
   async establishConnection(id: string): Promise<void> {
