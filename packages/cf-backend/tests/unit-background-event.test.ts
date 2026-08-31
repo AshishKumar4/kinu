@@ -5,14 +5,17 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  buildDrainBatch, COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OVERFLOW_RETRY_EVENT,
-  WORKSPACE_CREATED_EVENT, workspaceGenesisSignal,
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch,
+  COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OVERFLOW_RETRY_EVENT,
+  JsonObjectSchema, WORKSPACE_CREATED_EVENT, workspaceGenesisSignal,
 } from '@kinu.run/core';
-import type { JsonValue, KinuEvent } from '@kinu.run/core';
+import type { AdvisorSeverity, JsonObject, JsonValue, KinuEvent } from '@kinu.run/core';
+import * as v from 'valibot';
 import {
   applySignalCard, classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel,
   messageSignalId, parseDrainedEvents, parseSignalCardEvent, type SignalCard,
 } from '../src/components/background-event';
+import { parse, walk, type SyntaxNode } from '../../../scripts/syntax';
 
 describe('programmatic turn provenance', () => {
   test('reactor drains and background-job wakes are not the user talking', () => {
@@ -81,6 +84,85 @@ describe('programmatic turn provenance', () => {
     expect(classifyProgrammaticTurn({ kinuEvent: genesis!.kind, signalId: 'sig-1' }))
       .toEqual({ kind: 'workspace_created' });
     expect(genesis!.kind).toBe(WORKSPACE_CREATED_EVENT);
+  });
+});
+
+/*
+ * The gallery's advisor frame is a THIRD PARTY to the contract above, and it
+ * broke first. `AdvisorFrame` photographs the severity ladder off its own
+ * metadata literal, and that literal stamped `proteusEvent: "advisor"` — a key
+ * nothing has ever read. `turnAuthor` therefore found no marker at all on an
+ * id like `adv-nit`, the classifier answered null, and all three notes
+ * rendered in the owner's own bubble: the one frame that exists to prove the
+ * advisor card was photographing its absence instead.
+ *
+ * A fixture cannot be held to this contract by re-reading the constants the
+ * product reads — spelling them again is precisely what it got wrong. So the
+ * fixture's OWN expression is read out of gallery.tsx and evaluated with the
+ * constants it names: the object classified below is the object the frame
+ * builds.
+ */
+const GALLERY = join(import.meta.dir, '..', 'src', 'gallery.tsx');
+
+/** The `metadata` expression a named gallery fixture builds, verbatim. */
+function fixtureMetadataSource(file: string, fixture: string): string {
+  const text = readFileSync(file, 'utf8');
+  let source: string | null = null;
+  walk(parse(file, text).root, (node: SyntaxNode) => {
+    const raw = node.raw;
+    if (source !== null || raw.type !== 'VariableDeclarator') return;
+    if (raw.id.type !== 'Identifier' || raw.id.name !== fixture) return;
+    walk(node, (inner: SyntaxNode) => {
+      if (source !== null || inner.raw.type !== 'ObjectExpression') return;
+      const owner = inner.parent?.raw;
+      if (owner === undefined || owner.type !== 'Property') return;
+      if (owner.key.type !== 'Identifier' || owner.key.name !== 'metadata') return;
+      source = text.slice(inner.start, inner.end);
+    });
+  });
+  if (source === null) {
+    throw new Error(`${file}'s ${fixture} no longer builds its metadata from an object literal`);
+  }
+  return source;
+}
+
+describe("the gallery's advisor fixture", () => {
+  const metadataSource = fixtureMetadataSource(GALLERY, 'ADVISOR_MESSAGES');
+
+  /** The fixture's metadata for one rung, with the two core constants it
+   *  closes over bound to what the frame binds them to. Parsed on the way out,
+   *  because a fixture whose metadata is not a JSON object is not a row any
+   *  client could carry; a fixture naming some other constant fails here
+   *  rather than passing on a shape nobody renders. */
+  const fixtureMetadata = (severity: AdvisorSeverity): JsonObject => {
+    const build = new Function(
+      'ADVISOR_SIGNAL_KIND', 'ADVISOR_SEVERITY_METADATA_KEY', 'severity',
+      `return (${metadataSource});`,
+    );
+    return v.parse(
+      JsonObjectSchema,
+      build(ADVISOR_SIGNAL_KIND, ADVISOR_SEVERITY_METADATA_KEY, severity),
+    );
+  };
+
+  test('every rung the frame photographs classifies as an advisor card', () => {
+    for (const severity of ADVISOR_SEVERITIES) {
+      // The id is the frame's own and carries no `programmatic:` prefix, so the
+      // event stamp in the metadata is the only thing between an advisor card
+      // and the owner's bubble — and the severity has to survive the trip, or
+      // the ladder photographs as three copies of one rung.
+      expect(classifyProgrammaticTurn(fixtureMetadata(severity), `adv-${severity}`))
+        .toEqual({ kind: 'advisor', severity });
+    }
+  });
+
+  test('the key the fixture used to stamp is not a card at all', () => {
+    // Why the drift was invisible for as long as it was: an unread event key is
+    // not a wrong card, it is NO card, and no card is the owner's own bubble.
+    expect(classifyProgrammaticTurn(
+      { proteusEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: 'blocker' },
+      'adv-blocker',
+    )).toBeNull();
   });
 });
 

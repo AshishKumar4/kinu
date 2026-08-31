@@ -130,10 +130,12 @@ import { AddServerCard } from "@/pages/UserMcpPage";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
+  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   CHARS_PER_TOKEN, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
   profileCatalogDigest, seekPage, sortDirEntries,
-  type JsonValue, type PlanReview, type PlanReviewAnnotation, type ProfileCatalogEnvelope,
+  type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
+  type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
@@ -4459,17 +4461,25 @@ function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
 /** The advisor's one note per finished turn, once per severity — the ladder
  *  the card has to keep legible: `nit` must stay quiet, `blocker` must be the
  *  loudest thing in the column, and the note itself is readable without a
- *  click on all three. Real metadata shape (`proteusEvent` + `advisorSeverity`),
- *  so the frame exercises the classifier, not a mock of it. */
+ *  click on all three. */
 const ADVISOR_NOTES = {
   nit: "The commit message says 'fix typo' but the diff also renames two exported symbols. Split it or say so.",
   concern: "The retry loop in deploy.sh has no backoff cap. A stuck registry keeps it spinning for the whole turn budget.",
   blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
-} as const;
+} satisfies Record<AdvisorSeverity, string>;
 
-const ADVISOR_MESSAGES: UIMessage[] = (["nit", "concern", "blocker"] as const).map((severity) => msg({
+/** One row per rung, in core's own rank order so the ladder is read as one.
+ *
+ *  The metadata is the pair `classifyProgrammaticTurn` reads — the event kind
+ *  and the severity key — taken from core rather than spelled again here. A
+ *  copy of them was spelled here once, under an event key nothing has ever
+ *  read, and a row with no recognisable event stamp is a row the owner appears
+ *  to have typed: all three notes rendered in the owner's own bubble, so the
+ *  one frame that exists to photograph the advisor card photographed its
+ *  absence. Held to the classifier in `tests/unit-background-event.test.ts`. */
+const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
   id: `adv-${severity}`, role: "user",
-  metadata: { proteusEvent: "advisor", advisorSeverity: severity },
+  metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity },
   parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
 }));
 

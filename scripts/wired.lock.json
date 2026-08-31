@@ -183,7 +183,6 @@
   "packages/compaction/src/codec.ts#kinuConventions (unreached-export)",
   "packages/core/src/advisor/review.ts#ADVISOR_HEADER (unreached-export)",
   "packages/core/src/advisor/review.ts#ADVISOR_NOTE_MAX_CHARS (unreached-export)",
-  "packages/core/src/advisor/review.ts#ADVISOR_SEVERITY_METADATA_KEY (unreached-export)",
   "packages/core/src/advisor/review.ts#CONTENT_FREE_NOTES (unreached-export)",
   "packages/core/src/advisor/review.ts#advisorSignalText (unreached-export)",
   "packages/core/src/advisor/review.ts#buildAdvisorPrompt (unreached-export)",
