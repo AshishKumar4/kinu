@@ -465,12 +465,16 @@ describe('fork transfer receiver', () => {
 
   /**
    * One 256 MiB fork, end to end, over generated source bytes and a caller sink.
-   * Frame peaks and receiver staging are exact counters. The buffering control
-   * below proves the same retained-byte channel turns red at the full file size.
+   * Two measurement planes, on purpose: exact seam counters (frame peaks,
+   * receiver staging) catch buffering at the instrumented boundaries, and a
+   * GC-forced retained-heap delta catches buffering ANYWHERE in the process,
+   * including seams the counters do not wrap. `Bun.gc(true)` before every
+   * sample makes the delta a measure of reachable bytes, not of GC timing.
+   * The buffering control below proves both planes turn red at file size.
    */
   async function streamHugeFork(sink: ForkFileSink): Promise<{
-    peakRead: number; peakFrameBytes: number;
-    peakRetained: number; readWholeCalls: number; published: boolean;
+    peakRead: number; peakFrameBytes: number; peakRetained: number;
+    peakRetainedHeapDelta: number; readWholeCalls: number; published: boolean;
   }> {
     let peakRead = 0;
     let readWholeCalls = 0;
@@ -504,16 +508,37 @@ describe('fork transfer receiver', () => {
     let peakRetained = 0;
     let peakFrameBytes = 0;
     let published = false;
+    Bun.gc(true);
+    // heapUsed + external covers both places a runtime may account ArrayBuffer
+    // backing stores. The buffering control proves the domain fires: were the
+    // accounting to move somewhere this sum misses, that control turns red.
+    const retainedBytesNow = () => {
+      const usage = process.memoryUsage();
+      return usage.heapUsed + usage.external;
+    };
+    const baselineRetained = retainedBytesNow();
+    let peakRetainedHeapDelta = 0;
+    const sampleRetainedHeap = () => {
+      Bun.gc(true);
+      peakRetainedHeapDelta = Math.max(peakRetainedHeapDelta, retainedBytesNow() - baselineRetained);
+    };
     for await (const frame of forkTransferFrames({
       sql: src.sql, vfs: plane, untilMessageId: 'm1', transferId: 'tx-256m',
       targetAuthority: 'plain', frameBytes: HUGE_FRAME,
     })) {
-      if (frame.kind === 'file') peakFrameBytes = Math.max(peakFrameBytes, frame.bytes.byteLength);
+      if (frame.kind === 'file') {
+        peakFrameBytes = Math.max(peakFrameBytes, frame.bytes.byteLength);
+        const transferred = frame.offset + frame.bytes.byteLength;
+        // Sample while accumulated ranges are still reachable, before accept
+        // can publish and release them. Halfway detects early accumulation;
+        // the final boundary sees 31 retained frames in the buffering control.
+        if (transferred === HUGE_SIZE / 2 || transferred === HUGE_SIZE) sampleRetainedHeap();
+      }
       const outcome = await receiver.accept(frame);
       published = outcome.status === 'published';
       peakRetained = Math.max(peakRetained, receiver.stagingBytes);
     }
-    return { peakRead, peakFrameBytes, peakRetained, readWholeCalls, published };
+    return { peakRead, peakFrameBytes, peakRetained, peakRetainedHeapDelta, readWholeCalls, published };
   }
 
   test('a 256 MiB logical file crosses end to end without either side holding it', async () => {
@@ -573,8 +598,11 @@ describe('fork transfer receiver', () => {
     // range at a time: 256 MiB verified at an 8 MiB peak.
     expect(peakReadBack).toBe(FORK_FRAME_BYTES);
     expect(run.peakRetained).toBe(0);
-    // The receiver reports zero retained bytes. The negative control below
-    // drives the same channel to the complete 256 MiB file size.
+    // The process-wide plane: reachable bytes above the pre-stream baseline
+    // never approach the file. The buffering control below drives this same
+    // measurement past 192 MiB, so a pass here is a measured bound, not a
+    // sampler that cannot fire.
+    expect(run.peakRetainedHeapDelta).toBeLessThan(64 * 1024 * 1024);
     expect(run.published).toBe(true);
     expect(committed.get(HUGE_PATH)).toEqual({ bytes: HUGE_SIZE, digest: hugeForkDigest() });
     expect(temp.size).toBe(0);
@@ -582,11 +610,10 @@ describe('fork transfer receiver', () => {
 
   test('the bound is measured, not assumed: a sink that keeps the ranges blows it', async () => {
     // The negative control for the test above. Same source, same 256 MiB, and
-    // the ONLY difference is a sink that holds every range. The discriminator
-    // is the same channel the streaming run pins at ZERO — bytes retained
-    // between frames — measured in the sink itself, so it is exact where a
-    // heap sample varies with GC timing (389 MB isolated, ~172 MB under a full
-    // suite: the number moves, the retention does not).
+    // the ONLY difference is a sink that holds every range. Both detectors
+    // must fire: the sink's own exact counter reaches the file size, and the
+    // GC-forced retained-heap delta sees the same bytes from outside the
+    // instrumented seams — proof the process-wide plane can fail.
     const kept: Uint8Array[] = [];
     let retainedPeak = 0;
     const buffering: ForkFileSink = {
@@ -611,6 +638,7 @@ describe('fork transfer receiver', () => {
     // The keeping sink held the WHOLE file at once; the streaming run's twin
     // assertion is `peakRetained === 0` above. One metric, both directions.
     expect(retainedPeak).toBe(HUGE_SIZE);
+    expect(run.peakRetainedHeapDelta).toBeGreaterThanOrEqual(192 * 1024 * 1024);
   });
 
   test('a native sink abort keeps an existing destination and commit replaces it atomically', async () => {
