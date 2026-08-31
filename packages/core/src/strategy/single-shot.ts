@@ -15,12 +15,11 @@ export function createSingleShotStrategy(): ExplorationStrategy {
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
       const result = await generateText({
-        // maxIterations is the LOOP count, NOT the generation length — reusing
-        // it here capped output at ~10 tokens (the old think tool's default budget),
-        // which is why single-shot returned empty text.
+        // No output cap — completion length is the model's. A cap here once did
+        // the opposite of bounding cost: `maxIterations`, the LOOP count, was
+        // read as a generation length and this baseline returned empty text.
         model: ctx.model,
         prompt: ctx.task,
-        maxOutputTokens: ctx.budget?.maxOutputTokens,
         abortSignal: ctx.signal,
       });
       const spent = normalizeUsage(result.usage);

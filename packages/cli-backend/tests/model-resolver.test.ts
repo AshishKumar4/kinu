@@ -9,7 +9,15 @@ import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
 
 describe('createLocalModelResolver', () => {
-  test('local LLM has no default output cap but honors an explicitly configured cap', async () => {
+  /**
+   * An output cap is not a field this seam sets: completion length is the
+   * model's, bounded by the provider. Neither lane may carry one, and the
+   * endpoint config is not a source for one either — the only shape a cap can
+   * still arrive in is an object built before the field was deleted, and it
+   * has to be inert. Both lanes are driven because the cap used to be applied
+   * in each of them separately.
+   */
+  test('neither lane this seam builds carries an output cap, whatever the config holds', async () => {
     const bodies: JsonObject[] = [];
     const server = Bun.serve({
       port: 0,
@@ -17,6 +25,17 @@ describe('createLocalModelResolver', () => {
       async fetch(request) {
         const body = v.parse(JsonObjectSchema, await request.json());
         bodies.push(body);
+        if (body.stream === true) {
+          const chunk = (delta: JsonObject, finish: JsonValue): string => `data: ${JSON.stringify({
+            id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model: String(body.model),
+            choices: [{ index: 0, delta, finish_reason: finish }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })}\n\n`;
+          return new Response(
+            `${chunk({ content: 'ok' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } },
+          );
+        }
         return Response.json({
           id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
@@ -30,11 +49,21 @@ describe('createLocalModelResolver', () => {
       headers: { Authorization: 'Bearer test' },
       model: '@cf/test/model',
     };
+    const staleCap = { maxTokens: 123 };
     try {
       await createLocalProviderLLM({ llm }).complete('uncapped');
-      await createLocalProviderLLM({ llm: { ...llm, maxTokens: 123 } }).complete('capped');
-      expect(bodies[0]?.max_tokens).toBeUndefined();
-      expect(bodies[1]?.max_tokens).toBe(123);
+      await createLocalProviderLLM({ llm: { ...llm, ...staleCap } }).complete('stale cap');
+      let streamed = '';
+      for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap } })
+        .stream({ system: 'be brief', messages: [{ role: 'user', content: 'stream' }] })) {
+        streamed += chunk;
+      }
+      expect(streamed).toBe('ok');
+      expect(bodies).toHaveLength(3);
+      for (const body of bodies) {
+        expect(Object.hasOwn(body, 'max_tokens')).toBe(false);
+        expect(Object.hasOwn(body, 'max_completion_tokens')).toBe(false);
+      }
     } finally {
       await server.stop(true);
     }

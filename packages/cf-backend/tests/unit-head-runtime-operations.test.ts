@@ -17,6 +17,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3CallOptions } from '@ai-sdk/provider';
 import {
   MergeOutputSchema,
   type ModelCallReport,
@@ -29,18 +30,23 @@ import {
 import { createHeadRuntime } from '../src/head-runtime';
 import type { FacetHost } from '../src/facet-spawn';
 
-/** A scripted merge model: valid JSON unless the test says otherwise. */
-function mergeModel(text: string): MockLanguageModelV3 {
+/** A scripted merge model: valid JSON unless the test says otherwise. Every
+ *  call's options are handed back so a suite can read the REQUEST this backend
+ *  built, not just the answer it got. */
+function mergeModel(text: string, calls?: LanguageModelV3CallOptions[]): MockLanguageModelV3 {
   return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: 'text' as const, text }],
-      finishReason: { unified: 'stop' as const, raw: undefined },
-      usage: {
-        inputTokens: { total: 41, noCache: 41, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 7, text: 7, reasoning: undefined },
-      },
-      warnings: [],
-    }),
+    doGenerate: async (options) => {
+      calls?.push(options);
+      return {
+        content: [{ type: 'text' as const, text }],
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 41, noCache: 41, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 7, text: 7, reasoning: undefined },
+        },
+        warnings: [],
+      };
+    },
   });
 }
 
@@ -61,20 +67,22 @@ function runtimeWith(text: string) {
   const reports: ModelCallReport[] = [];
   /** What the merge asked the resolver for — the route it actually took. */
   const resolved: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+  /** The provider requests this backend built, options and all. */
+  const calls: LanguageModelV3CallOptions[] = [];
   const runtime = createHeadRuntime({
     host: neverHost,
     identity: async () => { throw new Error('mergeLLM resolved a facet identity'); },
     models: {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });
-        return { model: mergeModel(text), providerOptions: undefined };
+        return { model: mergeModel(text, calls), providerOptions: undefined };
       },
     },
     profile: async () => mergePolicyProfile(),
     reportModelCall: (report) => reports.push(report),
     operations: (event) => operations.push(event),
   });
-  return { operations, reports, resolved, runtime };
+  return { calls, operations, reports, resolved, runtime };
 }
 
 describe('createHeadRuntime — the merge call carries the operation sink', () => {
@@ -132,5 +140,18 @@ describe('createHeadRuntime — the merge call carries the operation sink', () =
     // A thunk, not a captured value: `profile()` is asked again each time, so an
     // account that moves its deep tier does not need a new runtime to take effect.
     expect(resolved).toEqual([MERGE_POLICY_BINDING, MERGE_POLICY_BINDING]);
+  });
+
+  test('the merge request carries no output cap', async () => {
+    const { calls, runtime } = runtimeWith(GOOD_MERGE);
+
+    await runtime.mergeLLM('merging the findings', MergeOutputSchema);
+
+    // The routed effort is how this call's cost is controlled. An output cap is
+    // not a field any request this backend builds sets: completion length is
+    // the model's, bounded by the provider, and a cap truncates a reasoning
+    // model's answer or starves it before it emits one.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.maxOutputTokens).toBeUndefined();
   });
 });

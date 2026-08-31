@@ -83,7 +83,6 @@ export async function generateJson<TOutput>(opts: {
   model: LanguageModel;
   schema: v.GenericSchema<unknown, TOutput>;
   prompt: string;
-  maxOutputTokens?: number;
   providerOptions?: Parameters<typeof generateText>[0]['providerOptions'];
   /** Where this call is reported, and as whose spend. Four producers share this
    *  one seam — the scaffold JSON judge, both head-merge paths and the GEPA
@@ -101,7 +100,6 @@ export async function generateJson<TOutput>(opts: {
     result = await generateText({
       model: opts.model,
       prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
-      maxOutputTokens: opts.maxOutputTokens,
       providerOptions: opts.providerOptions,
     });
   } catch (err) {

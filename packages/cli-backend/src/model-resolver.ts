@@ -233,7 +233,6 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   // family (or an endpoint chosen later) must still BUILD — an id that cannot
   // resolve fails at the call that names it, with the fixes named.
   const spec = () => resolver.normalizeSpecSync(opts.spec ?? null);
-  const maxOutputTokens = opts.llm?.maxTokens;
   const model = (resolved: string) => resolver.resolveModel(resolved);
   const spend = opts.spend;
   const effortOptions = (resolved: string) => reasoningEffortOptions('low', parseModelSpec(resolved).provider);
@@ -248,7 +247,6 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
           content: m.content,
         })),
       };
-      if (maxOutputTokens !== undefined) request.maxOutputTokens = maxOutputTokens;
       const providerOptions = effortOptions(resolved);
       if (providerOptions) request.providerOptions = providerOptions;
       const result = streamText(request);
@@ -265,7 +263,6 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
         model: model(resolved),
         prompt,
       };
-      if (maxOutputTokens !== undefined) request.maxOutputTokens = maxOutputTokens;
       const providerOptions = effortOptions(resolved);
       if (providerOptions) request.providerOptions = providerOptions;
       const result = await generateText(request);

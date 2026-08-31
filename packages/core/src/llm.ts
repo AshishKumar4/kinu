@@ -29,8 +29,6 @@ export interface LLMProviderConfig {
   headers: Record<string, string>;
   /** Model identifier (e.g., '@cf/deepseek-ai/deepseek-v4-pro-0813') */
   model: string;
-  /** Max tokens for completions (default: 2048) */
-  maxTokens?: number;
   /**
    * Where the calls this LLM makes are reported, and as whose spend.
    *
@@ -56,11 +54,10 @@ export interface LLMProviderConfig {
  */
 export function createVercelAILLM(config: LLMProviderConfig): LLM {
   const model = createModelFromLLMConfig(config);
-  // No default output cap: a reasoning model spends its budget thinking before
-  // it emits anything, so a cap truncates the answer (or starves it entirely).
-  // Cost is controlled by reasoning effort. A cap applies only when the caller
-  // explicitly configured one.
-  const cap = config.maxTokens !== undefined ? { maxOutputTokens: config.maxTokens } : {};
+  // No output cap on either lane: a reasoning model spends its budget thinking
+  // before it emits anything, so a cap truncates the answer or starves it
+  // entirely. Completion length is the model's, bounded by the provider; cost
+  // is controlled by reasoning effort.
   const spend = config.spend;
 
   return {
@@ -78,7 +75,6 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
             role: m.role,
             content: m.content,
           })),
-          ...cap,
         });
         for await (const chunk of result.textStream) {
           yield chunk;
@@ -108,7 +104,6 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
         result = await generateText({
           model,
           prompt,
-          ...cap,
         });
       } catch (err) {
         operation.failed({ cause: err });

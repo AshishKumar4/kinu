@@ -39,9 +39,6 @@ export interface StrategyBudget {
   wallClockMs?: number;
   /** Max recursion depth for strategies that nest (RLM, ToT). */
   depth?: number;
-  /** Max OUTPUT tokens per LLM generation (generation length — NOT the loop
-   *  count; never reuse maxIterations for this). */
-  maxOutputTokens?: number;
 }
 
 export interface StrategyContext {

@@ -70,7 +70,6 @@ const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', '
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
 const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
-const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'prompts', 'structured.ts'), 'utf8');
 const mergePolicy = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'heads', 'merge-policy.ts'), 'utf8');
 
 /** Every cf-backend source that turns a reasoning-effort level into provider
@@ -262,8 +261,10 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).toContain('lastTurnOpts.providerOptions = providerOptions');
   });
 
+  // Output caps are not asserted per seam here: the gate below owns that rule
+  // for every production source at once, and a second, weaker copy of it beside
+  // four hand-picked files is the drift that gate exists to prevent.
   test('provider-agnostic auxiliary calls take their effort from the route, not a constant', () => {
-    expect(exploration).not.toContain('maxOutputTokens');
     // Low effort is no longer DERIVED here. Every auxiliary caller asks the
     // shared owner-scoped services for it, and those services are the single
     // place that turns an effort level into provider options.
@@ -276,7 +277,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(exploration).not.toMatch(/resolveModelWithEffort\([^)]*'(low|medium|high)'\)/);
     expect(exploration.match(/resolveModelWithEffort\(\s*\n?\s*route\.model, route\.reasoningEffort,?\s*\n?\s*\)/g)?.length).toBe(2);
     expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
-    expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).not.toContain('reasoningEffortOptions');
     // The merge's ROUTE is no longer decided in this backend at all — core's
     // `headMergeLLM` resolves `judge` and the tier's own effort, and both
@@ -308,16 +308,26 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('protected get scaffoldControl()'),
       actor.indexOf("/** The scaffold's host.llmStream bridge"),
     );
-    expect(control).not.toContain('maxOutputTokens');
     expect(control).toContain('judge: createJsonJudge(() => this.getModelForReview())');
     expect(control).not.toContain('reasoningEffortOptions');
-    expect(generateJson).not.toContain('opts.maxOutputTokens ??');
   });
 
   // Owner directive: output caps are the wrong mechanism entirely — a reasoning
   // model spends its budget thinking before it emits anything, so a cap
-  // truncates or starves the answer. Cost is controlled by reasoning effort.
-  // An explicitly configured cap is still honoured; a hardcoded literal is not.
+  // truncates or starves the answer. Cost is controlled by reasoning effort,
+  // and completion length is the model's, bounded by the provider. So it is not
+  // only the hardcoded literal that is gone: no production source NAMES the
+  // field, and no config supplies one — `LLMProviderConfig.maxTokens`,
+  // `generateJson`'s cap option and `StrategyBudget.maxOutputTokens` were the
+  // three sources, and all three were deleted rather than defaulted.
+  //
+  // Where the field still legitimately exists is inside a provider adapter that
+  // must send it: Anthropic's Messages API requires `max_tokens`, and
+  // `@ai-sdk/anthropic` fills it with the resolved MODEL's own maximum when the
+  // caller sets nothing (dist/index.mjs, `maxOutputTokens != null ? … :
+  // maxOutputTokensForModel`). That is the provider bounding the completion,
+  // which is exactly the arrangement this gate protects — and it lives in the
+  // adapter, never here.
   //
   // `maxOutputTokens` means exactly one thing in this repo and this gate is why:
   // an output cap on a model REQUEST. Context admission reserves the resolved
@@ -325,7 +335,7 @@ describe('turn-pipeline correctness wiring', () => {
   // prompting/step-prune.ts) precisely so this stays strict — a second meaning
   // for the same identifier would have needed an exception here, and an
   // exception in a gate is the gate.
-  test('no production source hardcodes an output-token cap', () => {
+  test('no production source names an output-token cap', () => {
     const root = join(import.meta.dir, '..', '..');
     const offenders: string[] = [];
     const walk = (dir: string) => {
@@ -335,7 +345,7 @@ describe('turn-pipeline correctness wiring', () => {
           if (entry.name !== 'node_modules') walk(path);
         } else if (/\.tsx?$/.test(entry.name)) {
           const text = readFileSync(path, 'utf8');
-          for (const [line] of text.matchAll(/maxOutputTokens:\s*\d+/g)) {
+          for (const [line] of text.matchAll(/^.*\bmaxOutputTokens\b.*$/gm)) {
             offenders.push(`${path.slice(root.length + 1)}: ${line}`);
           }
         }

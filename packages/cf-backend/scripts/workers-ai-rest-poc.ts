@@ -58,7 +58,6 @@ const response = await fetch(endpoint, {
         content: "Reply with exactly: Kinu Workers AI REST POC OK",
       },
     ],
-    max_tokens: 32,
   }),
 });
 

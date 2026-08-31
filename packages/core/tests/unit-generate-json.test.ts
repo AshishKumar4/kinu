@@ -65,12 +65,15 @@ describe("generateJson", () => {
     expect(out).toEqual({ a: 1, b: ["x", "y"] });
   });
 
-  test("has no implicit output cap but preserves an explicit cap", async () => {
+  test("sends no output cap — completion length is the model's", async () => {
     const seen: Array<number | undefined> = [];
     const model = modelReturning('{"a":1,"b":[]}', (options) => seen.push(options.maxOutputTokens));
-    await generateJson({ model, schema: Schema, prompt: "uncapped" });
-    await generateJson({ model, schema: Schema, prompt: "capped", maxOutputTokens: 321 });
-    expect(seen).toEqual([undefined, 321]);
+    await generateJson({ model, schema: Schema, prompt: "go" });
+    // This substrate carries the heads merge, the scaffold judge and the GEPA
+    // metric, and every one of them asks a model for JSON it must finish. A cap
+    // here truncates that JSON mid-object, which arrives as a parse failure and
+    // a fallback rather than as the cost control it was mistaken for.
+    expect(seen).toEqual([undefined]);
   });
 
   test("throws on schema mismatch so the caller can fall back", async () => {
