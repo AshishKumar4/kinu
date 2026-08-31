@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
 import { hostname, platform } from 'node:os';
-import { defaultOrigin, logout, pollCliAuth, startCliAuth, whoami } from '../cloud-api';
-import { bumpProviderRevision, loadConfigFile, updateConfigFile } from '../config';
+import {
+  defaultOrigin, listCliSessions, logout, pollCliAuth, revokeCliSessionByHash, revokeAllCliSessions, startCliAuth, whoami,
+} from '../cloud-api';
+import { bumpProviderRevision, loadConfigFile, requireAuthConfig, updateConfigFile } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -78,20 +80,77 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
     try {
       await logout(origin, config.accessToken);
     } catch (error) {
-      // The local session is cleared either way, but a server session that
-      // outlived the logout is the one thing the user needs to hear about.
+      // The remote session is the thing that outlives this command when the
+      // revocation cannot land, and the raw token is the ONLY copy of it — the
+      // server stores a hash. Deleting it here would orphan a live 180-day
+      // bearer with nothing able to name it, so it stays as a pending
+      // revocation the next logout (or `kinu sessions revoke --all`) retries.
       const reason = renderThrownChain({ cause: error });
       console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
+      updateConfigFile((current) => {
+        current.pendingRevocation = {
+          token: config.accessToken ?? '',
+          origin,
+          at: Date.now(),
+        };
+      });
+      bumpProviderRevision();
+      console.log(`${OK('✓')} Logged out locally — session NOT revoked`);
+      console.log(DIM(`Run \`kinu logout\` again when reachable, or \`kinu sessions\` from any machine to revoke by inventory.`));
+      return;
     }
   }
   updateConfigFile((current) => {
     delete current.accessToken;
     delete current.tokenExpiresAt;
     delete current.user;
+    delete current.pendingRevocation;
   });
   // The inverse of sign-in: every account-held provider just became unreachable.
   bumpProviderRevision();
   console.log(`${OK('✓')} Logged out`);
+}
+
+/** Revoke a session by the hash the inventory prints. */
+export async function revokeSessionCommand(hash: string): Promise<void> {
+  const auth = requireAuthConfig();
+  await revokeCliSessionByHash(auth.origin, auth.token, hash);
+  console.log(`${OK('✓')} Session ${ACCENT(hash.slice(0, 12))}… revoked`);
+}
+
+/** `kinu sessions` — the inventory every orphaned bearer needed: what is still
+ *  live on the account, and how to end any of it. */
+export async function sessionsCommand(
+  action: string | undefined, hash: string | undefined,
+): Promise<void> {
+  const sub = action ?? 'list';
+  if (sub === 'revoke') {
+    if (hash === undefined || hash === '--all') {
+      const auth = requireAuthConfig();
+      const result = await revokeAllCliSessions(auth.origin, auth.token);
+      console.log(`${OK('✓')} Revoked ${ACCENT(String(result.revoked))} session(s)`);
+      return;
+    }
+    return revokeSessionCommand(hash);
+  }
+  if (sub !== 'list') {
+    throw new Error('Usage: kinu sessions [list | revoke <hash> | revoke --all]');
+  }
+  const auth = requireAuthConfig();
+  const { sessions } = await listCliSessions(auth.origin, auth.token);
+  if (sessions.length === 0) {
+    console.log(DIM('No live CLI sessions. Sign in with: kinu auth'));
+    return;
+  }
+  for (const session of sessions) {
+    console.log(`${ACCENT(session.tokenHash.slice(0, 16))}…  ${DIM(session.label)}`);
+    console.log(`  ${DIM('created')} ${formatWhen(session.createdAt)}  ${DIM('last used')} ${session.lastUsedAt ? formatWhen(session.lastUsedAt) : 'never'}  ${DIM('expires')} ${formatWhen(session.expiresAt)}`);
+  }
+  console.log(DIM('Revoke one: kinu sessions revoke <hash>   All: kinu sessions revoke --all'));
+}
+
+function formatWhen(epochMs: number): string {
+  return new Date(epochMs).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 export function openBrowser(url: string): void {

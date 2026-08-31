@@ -93,9 +93,12 @@ import * as v from 'valibot';
 import { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './schema';
 import {
   CapabilityDeniedError,
+  armCapabilityReconcile,
+  clearCapabilityReconcile,
   commitWorkspaceCapability,
   freshWorkspaceCapability,
   ownerCaller,
+  pendingCapabilityReconcile,
   requireTier,
   revokeWorkspaceCapability,
   workspaceCapabilityHash,
@@ -625,7 +628,23 @@ export class UserDO extends Agent<Env> {
    * back.
    */
   private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) return;
+    if (presentedHash && presentedHash === workspaceCapabilityHash(this.ctx.storage.sql, workspaceName)) {
+      // The root holds the token the registry committed — the state that reads
+      // as "done". It is done only when no rotation is waiting on a replica:
+      // a subtree push that missed a descendant left it presenting the
+      // previous token, and nothing else ever retries that. The root is the
+      // only holder of the plaintext, so the retry asks it to re-push.
+      const pending = pendingCapabilityReconcile(this.ctx.storage.sql, workspaceName);
+      if (pending === null || pending !== presentedHash) return;
+      const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
+      const result = await workspace.repushWorkspaceCapability();
+      if (result.missed === 0) {
+        clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
+        return;
+      }
+      armCapabilityReconcile(this.ctx.storage.sql, workspaceName, presentedHash);
+      return;
+    }
 
     const inFlight = this._provisioning.get(workspaceName);
     if (inFlight) return inFlight;
@@ -635,8 +654,12 @@ export class UserDO extends Agent<Env> {
         throw new Error(`Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
       }
       commitWorkspaceCapability(this.ctx.storage.sql, workspaceName, tokenHash);
+      clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
       const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
-      await workspace.installWorkspaceCapability(token);
+      const result = await workspace.installWorkspaceCapability(token);
+      if (result.missed > 0) {
+        armCapabilityReconcile(this.ctx.storage.sql, workspaceName, tokenHash);
+      }
     })();
     this._provisioning.set(workspaceName, task);
     try { await task; } finally { this._provisioning.delete(workspaceName); }
@@ -1329,12 +1352,56 @@ export class UserDO extends Agent<Env> {
 
   /** Revoke exactly this session. The row's absence IS the revocation, so the
    *  next request carrying that cookie is refused at whatever colo it reaches,
-   *  and the user's other sessions keep their own rows. */
+   *  and the user's other sessions keep their own rows.
+   *
+   *  The write comes first and the fan-out second, exactly as
+   *  {@link retireCliAuthority} does it: the revocation is durable here before
+   *  any cross-DO await, so a fan-out that fails cannot leave a websocket
+   *  believing it is still authorized — the frame-time check reads this store
+   *  and refuses the next frame either way. The push is what makes the revocation
+   *  reach a socket that is only LISTENING, which a per-frame check by itself can
+   *  never reach because a client that says nothing sends no frames. */
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);
+    await this.pushSessionSocketRevocation(tokenHash);
   }
 
+  /** Tell this account's workspaces to close every websocket that named this
+   *  session at its upgrade. Best-effort by construction, and named on each
+   *  failure, for the same reason the CLI socket push is. */
+  private async pushSessionSocketRevocation(tokenHash: string): Promise<void> {
+    const workspaces = this.sqlx<{ name: string }>(
+      `SELECT name FROM user_workspaces
+       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
+    ).map((row) => row.name);
+    const settled = await Promise.allSettled(workspaces.map((name) => this.env.OrchestratorAgent
+      .get(this.env.OrchestratorAgent.idFromName(name))
+      .closeRevokedSessionSockets(tokenHash)));
+    for (const [index, outcome] of settled.entries()) {
+      if (outcome.status === 'fulfilled') continue;
+      diagnostics.failure('auth.session_socket_revocation_push_failed', toKinuError({
+        doing: 'closing a workspace websocket whose browser session was revoked',
+        cause: outcome.reason,
+        otherwise: 'unavailable',
+      }), { workspace: workspaces[index] });
+    }
+  }
+
+  /** Whether a browser session that authenticated a live websocket may still
+   *  act — the session-side twin of {@link verifyCliSocketBearer}. Read at
+   *  FRAME TIME by the workspace the socket is attached to, against the row
+   *  this object owns, so there is no cached verdict to be stale. A workspace
+   *  that cannot be reached is refused by the caller, not answered here. */
+  async verifySocketSession(caller: UserCaller, tokenHash: string): Promise<{ live: boolean }> {
+    await this.requireTier(caller, 'auth_tokens.socket');
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) return { live: false };
+    const row = this.sqlx<{ token_hash: string }>(
+      `SELECT token_hash FROM user_browser_sessions WHERE token_hash = ? AND expires_at > ? LIMIT 1`,
+      tokenHash, Date.now(),
+    )[0];
+    return { live: row !== undefined };
+  }
 
   // ── CLI auth tokens ────────────────────────────────────────────────
 
@@ -1422,6 +1489,22 @@ export class UserDO extends Agent<Env> {
     this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
     await this.retireCliAuthority();
     return { ok: true };
+  }
+
+  /** Revoke every active CLI session token. The recovery path for a logout whose
+   *  remote revocation never landed (or a token copied off a lost machine):
+   *  the caller has no way to name the orphan, so the answer is all of them. The
+   *  owner re-authenticates afterwards — that is the cheap half of an account
+   *  whose every remaining bearer needed to die anyway. One generation rise
+   *  covers every socket at once, exactly as a single revocation does. */
+  async revokeAllCliTokens(caller: UserCaller): Promise<{ revoked: number }> {
+    await this.requireTier(caller, 'auth_tokens');
+    const revoked = this.sqlx<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM user_cli_tokens WHERE revoked_at IS NULL`,
+    )[0]?.n ?? 0;
+    this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE revoked_at IS NULL`, Date.now());
+    await this.retireCliAuthority();
+    return { revoked };
   }
 
   // ── The authorization generation ────────────────────────────────────
@@ -2846,6 +2929,7 @@ export class UserDO extends Agent<Env> {
       input.key, input.kind, input.sealed, now, now,
     );
     this.bumpCredentialRevision(input.key);
+    this.bumpCredentialsRevision();
     return true;
   }
 
@@ -2859,6 +2943,7 @@ export class UserDO extends Agent<Env> {
   private dropCredential(key: string): void {
     this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, key);
     this.bumpCredentialRevision(key);
+    this.bumpCredentialsRevision();
   }
 
   /** The revision of one credential key — every write of it AND every deletion.
@@ -2875,6 +2960,35 @@ export class UserDO extends Agent<Env> {
       `INSERT INTO user_credential_revisions (key, revision, updated_at) VALUES (?, 1, ?)
        ON CONFLICT(key) DO UPDATE SET revision = revision + 1, updated_at = excluded.updated_at`,
       key, Date.now(),
+    );
+  }
+
+  /** This account's credential revision: one number, rising with every
+   *  mutation of the credential store. Read by a workspace before it uses its
+   *  cached provider/model state, so a mutation the fan-out notification failed
+   *  to deliver is still noticed — by comparison, at use, with no clock.
+   *
+   *  `shared` on the same reasoning as `auth_tokens.socket`: the answer is a
+   *  number about state the workspace already depends on, it names no secret
+   *  and mints nothing, and a shared workspace that could not compare would
+   *  keep a stale catalog of exactly the model providers it needs. */
+  async getCredentialsRevision(caller: UserCaller): Promise<number> {
+    await this.requireTier(caller, 'credentials.model');
+    return this.credentialsRevision();
+  }
+
+  private credentialsRevision(): number {
+    const row = v.safeParse(v.object({ revision: v.number() }), this.sqlx(
+      `SELECT revision FROM user_credentials_revision WHERE id = 1`,
+    )[0]);
+    return row.success ? row.output.revision : 0;
+  }
+
+  private bumpCredentialsRevision(): void {
+    this.sqlx(
+      `INSERT INTO user_credentials_revision (id, revision, updated_at) VALUES (1, 1, ?)
+       ON CONFLICT(id) DO UPDATE SET revision = revision + 1, updated_at = excluded.updated_at`,
+      Date.now(),
     );
   }
 

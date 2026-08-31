@@ -4,9 +4,9 @@
 // both app access and AI. Drives the real /auth/cloudflare/callback handler
 // against the real KV auth store, faking only the network seams.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes';
-import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';
+import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/session';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
 import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu.run/core';
@@ -42,11 +42,20 @@ function setupEnv() {
   const kv = makeKv();
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
   const config = new Map<string, string>();
+  /** Sessions this account's authority holds, as the real UserDO holds them:
+   *  the row is what says a cookie is live, and it carries the `authTime` a
+   *  step-up compares against. */
+  const sessions = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
   const userDO = {
     async ensureProfile(_caller: UserCaller) {},
     async registerBrowserSession(
-      _caller: UserCaller, _tokenHash: string, _expiresAt: number, _identity: BrowserSessionIdentity,
-    ) {},
+      _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
+    ) { sessions.set(tokenHash, { expiresAt, identity }); },
+    async verifyBrowserSession(_caller: UserCaller, tokenHash: string) {
+      const row = sessions.get(tokenHash);
+      return row && row.expiresAt > Date.now() ? { identity: row.identity } : null;
+    },
+    async revokeBrowserSession(_caller: UserCaller, tokenHash: string) { sessions.delete(tokenHash); },
     async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {
       credentials.push({ key, credential });
     },
@@ -62,7 +71,7 @@ function setupEnv() {
     CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
-  return { env, kv, credentials, config };
+  return { env, kv, credentials, config, sessions };
 }
 
 function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: string }) {
@@ -111,10 +120,15 @@ interface CloudflareHandoff {
   /** The `Set-Cookie` the redirect gave the browser, verbatim — the half of
    *  the handoff that never travels through the provider. */
   setCookie: string;
+  /** Where the browser was sent, so a step-up can be read off the provider's
+   *  own authorization request rather than inferred. */
+  authorizeUrl: string;
 }
 
-async function startCloudflareLogin(env: Env): Promise<CloudflareHandoff> {
-  const response = await handleAuthRequest(new Request(`${ORIGIN}/auth/cloudflare/start`), env);
+async function startCloudflareLogin(env: Env, prompt?: 'login'): Promise<CloudflareHandoff> {
+  const start = new URL(`${ORIGIN}/auth/cloudflare/start`);
+  if (prompt) start.searchParams.set('prompt', prompt);
+  const response = await handleAuthRequest(new Request(start), env);
   if (!response) throw new Error('auth route did not handle the sign-in start');
   const location = response.headers.get('location');
   if (!location) throw new Error(`sign-in start did not redirect: HTTP ${response.status}`);
@@ -126,7 +140,7 @@ async function startCloudflareLogin(env: Env): Promise<CloudflareHandoff> {
   if (!state || !codeChallenge || !setCookie) {
     throw new Error(`sign-in start handed out no bound handoff: ${location}`);
   }
-  return { state, codeChallenge, setCookie };
+  return { state, codeChallenge, setCookie, authorizeUrl: location };
 }
 
 /** The provider's callback, as the browser carrying `setCookie` makes it —
@@ -285,6 +299,74 @@ describe('a sign-in cannot be planted in another browser', () => {
       );
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ── The step-up recovery URL ────────────────────────────────────────────────
+//
+// A mutation that needs FRESH authentication refuses a stale session with a 401
+// and points the operator at `/login?prompt=login`. That page used to see an
+// active session and redirect straight back to where the 401 came from: the
+// operator bounced between the two forever, with no way to re-authenticate
+// short of clearing cookies by hand.
+describe('a stale session sent to re-authenticate', () => {
+  function loginRequest(token: string, prompt: 'login' | null): Request {
+    const url = new URL(`${ORIGIN}/login`);
+    if (prompt) url.searchParams.set('prompt', prompt);
+    return new Request(url, {
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}` },
+    });
+  }
+
+  function sessionTokenFrom(response: Response): string {
+    const cookie = sessionCookieIn(response) ?? '';
+    return decodeURIComponent(/__Host-kinu_session=([^;]+)/.exec(cookie)?.[1] ?? '');
+  }
+
+  test('prompt=login mints a FRESH authTime instead of redirecting into the 401 that sent it', async () => {
+    const { env, sessions } = setupEnv();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+    try {
+      const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
+      const token = sessionTokenFrom(signedIn);
+      const firstAuthTime = [...sessions.values()][0]?.identity.authTime ?? 0;
+      expect(firstAuthTime).toBeGreaterThan(0);
+
+      // The counterexample, preserved: plain /login with a live session is a
+      // redirect, because a signed-in visitor has nothing to do there.
+      const plain = await handleAuthRequest(loginRequest(token, null), env);
+      expect(plain?.status).toBe(302);
+      expect(plain?.headers.get('location')).toBe(`${ORIGIN}/`);
+
+      // The step-up URL is answered with the provider list, and the links it
+      // renders carry the parameter forward so the provider is asked to
+      // re-authenticate rather than replay its own session.
+      const stepUp = await handleAuthRequest(loginRequest(token, 'login'), env);
+      expect(stepUp?.status).toBe(200);
+      expect(await stepUp?.text() ?? '').toContain('prompt=login');
+
+      // Time moves, so a fresh sign-in is distinguishable from the stale one.
+      setSystemTime(new Date(Date.now() + 10 * 60_000));
+      const handoff = await startCloudflareLogin(env, 'login');
+      // The provider's own reauth parameter, on the authorization request.
+      expect(handoff.authorizeUrl).toContain('prompt=login');
+
+      const restepped = await completeCloudflareLogin(env, handoff);
+      expect(restepped.status).toBe(302);
+      const freshToken = sessionTokenFrom(restepped);
+      expect(freshToken).not.toBe(token);
+
+      // A NEW session row, with a new authTime — which is the whole point: the
+      // mutation that refused the stale one now has a sign-in to compare
+      // against that is genuinely newer than its window.
+      const authTimes = [...sessions.values()].map((row) => row.identity.authTime ?? 0);
+      expect(Math.max(...authTimes)).toBeGreaterThan(firstAuthTime);
+      expect(sessions.size).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+      setSystemTime();
     }
   });
 });

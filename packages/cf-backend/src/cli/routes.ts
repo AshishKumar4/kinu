@@ -19,9 +19,9 @@ import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate'
 import { buildCliInstallCommand } from './install-command';
 import { bunResolutionShell } from './bun-runtime';
 import { listAvailableModels } from '../user/available-models';
-import { handleCreateWorkspaceRequest } from '../user/workspace-access';
-import { claimOwnedWorkspace } from '../user/workspace-ownership';
+import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { handleUserAIProxyRequest } from '../user/ai-proxy';
+import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';
 import * as v from 'valibot';
@@ -139,6 +139,26 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   if (path === '/logout' && method === 'POST') {
     await cli.userDO.revokeCliTokenHash(await ownerCaller(env), cli.tokenHash);
+    return json({ ok: true });
+  }
+
+  // ── Session inventory — the recovery surface for an orphaned bearer ──
+  // A logout whose remote revocation never landed (or a token copied off a
+  // lost machine) left a live 180-day bearer with nothing able to name it,
+  // because the server stores only its hash and the raw token was gone. These
+  // routes let a re-authenticated owner enumerate what is still live and end
+  // any of it — by the hash the inventory prints, or all of it at once.
+  // Interactive sessions only, like every other account-management surface.
+  if (path === '/sessions' && method === 'GET') {
+    return json({ sessions: await cli.userDO.listCliTokens(await ownerCaller(env)) });
+  }
+  if (path === '/sessions' && method === 'DELETE') {
+    const result = await cli.userDO.revokeAllCliTokens(await ownerCaller(env));
+    return json({ ok: true, revoked: result.revoked });
+  }
+  const sessionRevokeMatch = path.match(/^\/sessions\/([a-f0-9]{64})$/);
+  if (sessionRevokeMatch && method === 'DELETE') {
+    await cli.userDO.revokeCliTokenHash(await ownerCaller(env), sessionRevokeMatch[1]);
     return json({ ok: true });
   }
 
@@ -294,11 +314,17 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       const body = await safeJson(request, JsonValueSchema);
       try { await cli.userDO.setCredential(await ownerCaller(env), key, body); }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
+      // The same mutation path the browser routes run: the authoritative write
+      // is done, so the workspaces holding caches of the OLD state are told to
+      // drop them. The CLI-only gap left a newly connected provider invisible
+      // to every live workspace until some unrelated invalidation landed.
+      notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
       return json({ ok: true }, { status: 201 });
     }
     if (method === 'DELETE') {
       try { await cli.userDO.deleteCredential(await ownerCaller(env), key); }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
+      notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
       return json({ ok: true });
     }
   }

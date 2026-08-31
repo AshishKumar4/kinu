@@ -220,6 +220,23 @@ const GATED_CALLS: GatedCall[] = [
     name: 'verifyCliSocketBearer',
     run: (u, c) => u.verifyCliSocketBearer(c, TOKEN_HASH),
   },
+  // The session-side twin of the row above: same tier, same reasoning — a
+  // tainted workspace must still be able to enforce a logout.
+  {
+    capability: 'auth_tokens.socket',
+    name: 'verifySocketSession',
+    run: (u, c) => u.verifySocketSession(c, TOKEN_HASH),
+  },
+  // The orphaned-bearer recovery surface: naming what is still live and ending
+  // it is account administration, exactly as every other auth_tokens write is.
+  { capability: 'auth_tokens', name: 'revokeAllCliTokens', run: (u, c) => u.revokeAllCliTokens(c) },
+  // The credential revision compare a cached provider listing is held against —
+  // a number about state the workspace already depends on, like the socket row.
+  {
+    capability: 'credentials.model',
+    name: 'getCredentialsRevision',
+    run: (u, c) => u.getCredentialsRevision(c),
+  },
 
   { capability: 'codex_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
   { capability: 'codex_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },

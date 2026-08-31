@@ -152,7 +152,6 @@ export function initUserTables(sql: SqlExec): void {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
-
   // This account's authorization generation: one number, bumped by every CLI
   // and access-token revocation. A websocket authenticated by a bearer records
   // the generation it was admitted under, so a revocation can name every socket
@@ -161,6 +160,21 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_auth_generation (
       id         INTEGER PRIMARY KEY CHECK (id = 1),
       generation INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+
+  // This account's credential revision: one number, bumped by every mutation
+  // of the credential store — every set, every delete, every connect and
+  // disconnect. A workspace's cached provider/model state is measured under the
+  // number it was swept at, so a mutation the fan-out notification failed to
+  // deliver is still noticed at the next use, by comparison, rather than left
+  // to an incidental invalidation. The fan-out stays — it makes the change
+  // timely — but it is an optimization over this, never the mechanism.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_credentials_revision (
+      id        INTEGER PRIMARY KEY CHECK (id = 1),
+      revision  INTEGER NOT NULL,
       updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);

@@ -318,6 +318,11 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
     provider: snapshot.provider,
     displayName: snapshot.displayName,
     authTime: snapshot.authTime,
+    // The hash this verification was made against, so a downstream websocket can
+    // name this session on its connection tags — the handle a later logout
+    // needs to reach a socket the cookie no longer gates. From the token for
+    // the same reason `userId` is.
+    sessionTokenHash: tokenHash,
   };
 }
 

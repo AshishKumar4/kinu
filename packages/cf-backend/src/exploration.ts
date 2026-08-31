@@ -82,6 +82,15 @@ import {
   type WorkMode,
   type ResolvedTurnProfile,
 } from "@kinu.run/core";
+import type { UserCaller } from './user/workspace-capability';
+
+/** The one UserDO method an exploration facet's credential compare reads. Named
+ *  as a contract rather than asserted through `unknown`: the namespace binding
+ *  already declares the method, so the narrow shape is a statement about what
+ *  this caller is allowed to reach, and it is checked. */
+interface CredentialsRevisionReader {
+  getCredentialsRevision(caller: UserCaller): Promise<number>;
+}
 import { OwnedModelServices } from "./owned-model-services";
 import { FacetIdentity } from "./facet-identity";
 import { FacetActivation } from "./facet-activation";
@@ -196,6 +205,16 @@ export class ExplorationAgent extends Agent<Env> {
       const workspaceToken = this.identity.capabilityToken();
       if (!workspaceToken) throw new Error('This exploration facet was seeded without a workspace capability token.');
       return { workspaceToken };
+    },
+    // Same revision compare the root runs: an exploration head caches the
+    // provider listing it resolved under, and a rotation the fan-out missed
+    // reaches it here rather than at the next spawn.
+    getCredentialsRevision: async () => {
+      const userId = this.identity.ownerUserId();
+      const workspaceToken = this.identity.capabilityToken();
+      if (!userId || !workspaceToken) return 0;
+      const stub: CredentialsRevisionReader = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
+      return stub.getCredentialsRevision({ workspaceToken });
     },
   });
 

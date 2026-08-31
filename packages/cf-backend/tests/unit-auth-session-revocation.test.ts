@@ -474,7 +474,7 @@ describe('a store that will not answer is refused, never waved through', () => {
     // what an evicted record leaves. The row is still there, so the session is
     // still live — and every path that ENDS a session deletes the row first, so
     // this can never be a revoked one coming back.
-    expect(await verifySession(env, session.token)).toEqual(session.identity);
+    expect(await verifySession(env, session.token)).toMatchObject(session.identity);
 
     // A cookie for a session this deployment has never held is still simply not
     // signed in: refused, with nothing to report about it.
@@ -576,11 +576,11 @@ describe('a sign-in is usable before its KV projection has replicated', () => {
 
     // What comes back is the row's own copy, and it is the identity the
     // projection would have carried, not a thinner stand-in for it.
-    expect(await verifySession(cold, session.token)).toEqual(session.identity);
+    expect(await verifySession(cold, session.token)).toMatchObject(session.identity);
     const request = new Request('https://kinu.example.com/api/workspaces', {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(session.token)}` },
     });
-    expect(await authenticateRequest(request, cold)).toEqual(session.identity);
+    expect(await authenticateRequest(request, cold)).toMatchObject(session.identity);
   });
 
   test('a revoked cookie is refused at a colo with no projection to check', async () => {
@@ -625,7 +625,7 @@ describe('a sign-in is usable before its KV projection has replicated', () => {
 
     // Where the projection replicated, it still answers, so a deploy does not
     // sign everybody out.
-    expect(await verifySession(near, session.token)).toEqual(session.identity);
+    expect(await verifySession(near, session.token)).toMatchObject(session.identity);
     // Where it has not, the cookie is refused. The row is the only other copy,
     // and it has nothing to say.
     expect(await verifySession(envWith(kv.cold, authority.namespace), session.token)).toBeNull();

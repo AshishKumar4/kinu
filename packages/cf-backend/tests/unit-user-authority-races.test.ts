@@ -28,7 +28,12 @@ import {
 } from './helpers/user-do';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { CapabilityDeniedError, type UserCaller } from '../src/user/workspace-capability';
-import { cliBearerConnectionTag, cliBearerFromTags } from '../src/cli/rpc-gate';
+import {
+  cliBearerConnectionTag,
+  cliBearerFromTags,
+  sessionBearerConnectionTag,
+  sessionBearerFromTags,
+} from '../src/cli/rpc-gate';
 import { sha256Hex } from '../src/lib/crypto';
 import type { Connection } from 'agents';
 
@@ -382,32 +387,41 @@ describe('one browser approval mints one CLI token', () => {
   });
 });
 
+/** The connection the platform hands `onMessage`: tags and a wire, which is
+ *  all a restored-from-hibernation connection has. Shared by both socket rails
+ *  below — one token kind per rail, one connection double for both. */
+interface FakeConnection {
+  tags: string[];
+  sent: string[];
+  closed: Array<{ code: number; reason: string }>;
+}
+
+function connection(tags: string[]) {
+  const fake: FakeConnection = { tags, sent: [], closed: [] };
+  const partial: Partial<Connection> = {};
+  Object.assign(partial, {
+    id: 'conn-1',
+    tags,
+    send: (data: string) => { fake.sent.push(data); },
+    close: (code: number, reason: string) => { fake.closed.push({ code, reason }); },
+  });
+  // SAFETY: every member the frame gate touches is constructed above — the
+  // platform's contract for a hibernated connection carries its tags and its
+  // wire and nothing else, so no other part of Connection is reachable from
+  // the code under test.
+  const wire = partial as Connection;
+  return { fake, wire };
+}
+
+/** A frame the SCOPE gate refuses on a scoped connection. It is the probe for
+ *  the ordering under test: the AUTHORITY gate runs FIRST, so a live authority
+ *  reaches this refusal (an rpc-error frame, socket intact) and a revoked one
+ *  never gets that far (a close, with the revocation's own words). Refusing the
+ *  frame downstream is also what keeps this off the agents-SDK dispatcher,
+ *  which under bun is a stub the real Agent constructor would have installed. */
+const scopedFrame = JSON.stringify({ type: 'rpc', id: 'r1', method: 'destroyAgent', args: [] });
+
 describe('a CLI bearer revoked under a live websocket', () => {
-  /** The connection the platform hands `onMessage`: tags and a wire, which is
-   *  all a restored-from-hibernation connection has. */
-  interface FakeConnection {
-    tags: string[];
-    sent: string[];
-    closed: Array<{ code: number; reason: string }>;
-  }
-
-  function connection(tags: string[]) {
-    const fake: FakeConnection = { tags, sent: [], closed: [] };
-    const partial: Partial<Connection> = {};
-    Object.assign(partial, {
-      id: 'conn-1',
-      tags,
-      send: (data: string) => { fake.sent.push(data); },
-      close: (code: number, reason: string) => { fake.closed.push({ code, reason }); },
-    });
-    // SAFETY: every member the frame gate touches is constructed above — the
-    // platform's contract for a hibernated connection carries its tags and its
-    // wire and nothing else, so no other part of Connection is reachable from
-    // the code under test.
-    const wire = partial as Connection;
-    return { fake, wire };
-  }
-
   interface Rail {
     user: TestUserDO;
     actor: ActorHarness<HarnessOrchestratorAgent>;
@@ -428,13 +442,6 @@ describe('a CLI bearer revoked under a live websocket', () => {
     return { user, actor, tokenHash: minted.tokenHash, bearerTag };
   }
 
-  /** A frame the SCOPE gate refuses on a scoped connection. It is the probe for
-   *  the ordering under test: the bearer gate runs FIRST, so a live bearer
-   *  reaches this refusal (an rpc-error frame, socket intact) and a revoked one
-   *  never gets that far (a close, with the revocation's own words). Refusing
-   *  the frame downstream is also what keeps this off the agents-SDK dispatcher,
-   *  which under bun is a stub the real Agent constructor would have installed. */
-  const scopedFrame = JSON.stringify({ type: 'rpc', id: 'r1', method: 'destroyAgent', args: [] });
   const scopedTags = (bearerTag: string): string[] => [bearerTag, 'cli-scopes:workspace.read'];
 
   test('the bearer rides the connection tags, and an unreadable one fails closed', () => {
@@ -542,6 +549,248 @@ describe('a CLI bearer revoked under a live websocket', () => {
     await harness.userDO.revokeAccessToken(owner, 'nothing-by-that-name');
     expect((await harness.userDO.verifyCliSocketBearer(owner, minted.tokenHash)).generation).toBe(2);
     harness.close();
+  });
+});
+
+describe('a capability rotation whose subtree push missed a replica', () => {
+  /** The reconciliation intent as the registry holds it: the workspace, the
+   *  hash the root is expected to be holding, and how many times the retry has
+   *  been attempted. Read from SQL because the row IS the mechanism — nothing
+   *  else remembers that a replica was stranded. */
+  function reconcileIntent(harness: TestUserDO): Array<{ workspace: string; hash: string; attempts: number }> {
+    return harness.db.prepare<{ workspace_name: string; token_hash: string; attempts: number }, []>(
+      `SELECT workspace_name, token_hash, attempts FROM workspace_capability_reconcile
+       ORDER BY workspace_name`,
+    ).all().map((row) => ({ workspace: row.workspace_name, hash: row.token_hash, attempts: row.attempts }));
+  }
+
+  test('the next touch repushes it to convergence, and only then forgets it', async () => {
+    // The push misses one descendant. Pre-fix, `installWorkspaceCapability`
+    // swallowed that as a diagnostics line and answered `{ ok: true }`: the
+    // registry recorded the rotation as landed while a live subordinate went on
+    // presenting a token this account no longer recognizes — no retry existed.
+    let missed = 1;
+    const harness = createTestUserDO({
+      durableObjectId: USER_ID,
+      capabilityPushMissed: () => missed,
+    });
+    const token = await provisionTestWorkspace(harness, 'stranded');
+    const hash = await sha256Hex(token);
+
+    expect(reconcileIntent(harness)).toEqual([{ workspace: 'stranded', hash, attempts: 1 }]);
+    // The root and the registry AGREE on the hash — which is exactly why the
+    // hash comparison alone reads as "done" and why the intent has to exist.
+    expect(harness.installed.get('stranded')).toBe(token);
+
+    // A touch while the replica is still unreachable retries and stays armed,
+    // with the attempt count rising rather than the failure going quiet.
+    await harness.userDO.ensureWorkspaceCapability('stranded', hash);
+    expect(harness.capabilityRepushes).toEqual(['stranded']);
+    expect(reconcileIntent(harness)).toEqual([{ workspace: 'stranded', hash, attempts: 2 }]);
+
+    // The replica comes back. The very next ordinary touch — a claim, an open,
+    // any caller that presents the hash — converges and clears the intent.
+    missed = 0;
+    await harness.userDO.ensureWorkspaceCapability('stranded', hash);
+
+    expect(harness.capabilityRepushes).toEqual(['stranded', 'stranded']);
+    expect(reconcileIntent(harness)).toEqual([]);
+    // Nothing was re-minted: the retry carries the token the registry already
+    // committed, so an old copy stays denied and no live holder is orphaned.
+    expect(harness.installed.get('stranded')).toBe(token);
+    expect(harness.db.prepare<{ token_hash: string }, []>(
+      `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = 'stranded'`,
+    ).all()).toEqual([{ token_hash: hash }]);
+    harness.close();
+  });
+
+  test('a push that reached every replica arms nothing, so the retry costs no round trip', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID, capabilityPushMissed: () => 0 });
+    const token = await provisionTestWorkspace(harness, 'whole');
+    const hash = await sha256Hex(token);
+
+    expect(reconcileIntent(harness)).toEqual([]);
+    await harness.userDO.ensureWorkspaceCapability('whole', hash);
+
+    // The agreeing case is still the cheap case: the hash matched and no intent
+    // was pending, so the root was never asked to do anything.
+    expect(harness.capabilityRepushes).toEqual([]);
+    harness.close();
+  });
+
+  test('a fresh mint clears an intent the previous token left behind', async () => {
+    let missed = 1;
+    const harness = createTestUserDO({
+      durableObjectId: USER_ID,
+      capabilityPushMissed: () => missed,
+    });
+    const first = await provisionTestWorkspace(harness, 'rotating');
+    expect(reconcileIntent(harness)).toHaveLength(1);
+
+    // A caller presenting NOTHING re-mints. The intent names a hash that is
+    // about to stop existing, so carrying it forward would arm the retry
+    // against a token no replica should be holding.
+    missed = 0;
+    await harness.userDO.ensureWorkspaceCapability('rotating', null);
+
+    const second = harness.installed.get('rotating') ?? '';
+    expect(second).not.toBe(first);
+    expect(reconcileIntent(harness)).toEqual([]);
+    harness.close();
+  });
+});
+
+describe('a browser session revoked under a live websocket', () => {
+  /** The wire state a cookie-authenticated upgrade leaves: the edge rewrote the
+   *  session header from the VERIFIED identity (appendIdentityHeaders), the
+   *  actor persisted it as a connection tag (getConnectionTags), and the socket
+   *  now carries the one handle a later logout can reach it by. The scope tag
+   *  rides along so the frame under test lands on the gate downstream of the
+   *  authority check rather than on the agents-SDK dispatcher, which under bun
+   *  is a stub — the same probe the CLI rail above uses. */
+  const sessionTags = (sessionTokenHash: string): string[] =>
+    [sessionBearerConnectionTag(sessionTokenHash) ?? '', 'cli-scopes:workspace.read'];
+
+  /** One registered browser session, and the workspace holding a socket that
+   *  authenticated on it. The session row is REAL — `verifySocketSession` reads
+   *  the same rows `revokeBrowserSession` deletes. */
+  async function browserRail(sessionTokenHash: string): Promise<{
+    user: TestUserDO;
+    actor: ActorHarness<HarnessOrchestratorAgent>;
+  }> {
+    const user = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    const capability = await provisionTestWorkspace(user, 'harness-actor');
+    await user.userDO.registerBrowserSession(owner, sessionTokenHash, Date.now() + 60_000, {
+      email: 'person@example.com',
+      displayName: 'Person',
+      provider: 'cloudflare',
+      sub: 'cf-1',
+      authTime: Date.now(),
+    });
+    const actor = orchestratorHarness(undefined, {
+      userDO: user.userDO, workspace: 'harness-actor', ownerUserId: USER_ID,
+    });
+    actor.agent.harnessHoldsCapability(capability);
+    return { user, actor };
+  }
+
+  test('a frame under a live session is let through, and one under a logged-out session is refused and closed', async () => {
+    const sessionTokenHash = 'e'.repeat(64);
+    const { user, actor } = await browserRail(sessionTokenHash);
+    const owner = await testOwner();
+    const live = connection(sessionTags(sessionTokenHash));
+
+    await actor.agent.onMessage(live.wire, scopedFrame);
+
+    // Past the session gate: the socket is intact and the answer came from the
+    // scope gate downstream of it, exactly as a live CLI bearer reads.
+    expect(live.fake.closed).toEqual([]);
+    expect(JSON.parse(live.fake.sent[0] ?? '{}')).toMatchObject({
+      type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('not remotely invokable'),
+    });
+
+    // Logout. Nothing about the socket changes — same connection, same tags,
+    // mid-session — and the cookie it was admitted under is now deleted.
+    await user.userDO.revokeBrowserSession(owner, sessionTokenHash);
+
+    const after = connection(sessionTags(sessionTokenHash));
+    await actor.agent.onMessage(after.wire, scopedFrame);
+
+    expect(after.fake.closed).toEqual([
+      { code: 1008, reason: 'This session has been signed out. Sign in again.' },
+    ]);
+    // The pending call is answered rather than left hanging on a socket about
+    // to disappear — and answered by the SESSION gate, not the scope one.
+    expect(JSON.parse(after.fake.sent[0] ?? '{}')).toMatchObject({
+      type: 'rpc', id: 'r1', success: false, error: expect.stringContaining('signed out'),
+    });
+    user.close();
+  });
+
+  test('logout closes the socket that is only LISTENING, and nothing beside it', async () => {
+    const sessionTokenHash = 'f'.repeat(64);
+    const { user, actor } = await browserRail(sessionTokenHash);
+    const signedOut = connection(sessionTags(sessionTokenHash));
+    const otherSession = connection(sessionTags('a'.repeat(64)));
+    const cliSocket = connection([cliBearerConnectionTag(`${'c'.repeat(64)}:0`) ?? '']);
+    const untagged = connection(['cli-scopes:workspace.read']);
+    // SAFETY: the platform supplies the connection set; the mocked Agent base
+    // under bun has none, so the sockets this test is about are supplied here.
+    Object.defineProperty(actor.agent, 'getConnections', {
+      configurable: true,
+      value: () => [signedOut.wire, otherSession.wire, cliSocket.wire, untagged.wire],
+    });
+
+    expect(await actor.agent.closeRevokedSessionSockets(sessionTokenHash)).toEqual({ closed: 1 });
+
+    // A copied cookie that says nothing sends no frames, so the frame gate can
+    // never reach it: it would keep RECEIVING this workspace's stream for as
+    // long as it liked. Only the socket that named THIS session closes — the
+    // account's other sign-in, a CLI bearer, and an untagged connection are
+    // each somebody else's authority to end.
+    expect(signedOut.fake.closed).toEqual([
+      { code: 1008, reason: 'This session has been signed out. Sign in again.' },
+    ]);
+    expect(otherSession.fake.closed).toEqual([]);
+    expect(cliSocket.fake.closed).toEqual([]);
+    expect(untagged.fake.closed).toEqual([]);
+    user.close();
+  });
+
+  test('the revocation reaches the workspaces holding the sockets, by session', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    await provisionTestWorkspace(harness, 'workspace-a');
+    await provisionTestWorkspace(harness, 'workspace-b');
+    const sessionTokenHash = 'd'.repeat(64);
+    await harness.userDO.registerBrowserSession(owner, sessionTokenHash, Date.now() + 60_000, {
+      email: 'person@example.com', displayName: null, provider: 'cloudflare', sub: 'cf-1',
+      authTime: Date.now(),
+    });
+
+    expect(await harness.userDO.verifySocketSession(owner, sessionTokenHash)).toEqual({ live: true });
+
+    await harness.userDO.revokeBrowserSession(owner, sessionTokenHash);
+
+    // The row's absence IS the revocation, so the frame-time answer flips
+    // whether or not the push landed...
+    expect(await harness.userDO.verifySocketSession(owner, sessionTokenHash)).toEqual({ live: false });
+    // ...and the push is what reaches a socket that is not speaking, in every
+    // workspace this account holds.
+    expect(harness.revokedSessionPushes).toEqual([
+      `workspace-a:${sessionTokenHash}`, `workspace-b:${sessionTokenHash}`,
+    ]);
+    harness.close();
+  });
+
+  test('a new handshake under the revoked hash is refused too — the denominator of the gate', async () => {
+    const sessionTokenHash = '9'.repeat(64);
+    const { user, actor } = await browserRail(sessionTokenHash);
+    const owner = await testOwner();
+    await user.userDO.revokeBrowserSession(owner, sessionTokenHash);
+
+    // A connection that never held a live frame, restored from tags or freshly
+    // admitted: the authority question is asked per frame against the object
+    // that owns the row, so there is no admitted state to inherit.
+    const fresh = connection(sessionTags(sessionTokenHash));
+    await actor.agent.onMessage(fresh.wire, scopedFrame);
+
+    expect(fresh.fake.closed).toEqual([
+      { code: 1008, reason: 'This session has been signed out. Sign in again.' },
+    ]);
+    user.close();
+  });
+
+  test('the session rides the connection tags, and an unreadable one fails closed', () => {
+    const tag = sessionBearerConnectionTag('e'.repeat(64));
+    expect(sessionBearerFromTags([tag ?? ''])).toEqual({ tokenHash: 'e'.repeat(64) });
+    // No session at all — a CLI ticket connection, which pays for nothing here.
+    expect(sessionBearerFromTags(['cli-scopes:workspace.read'])).toBeNull();
+    // A session header that does not parse is still a browser connection, and
+    // one whose authority cannot be read is refused rather than waved through.
+    expect(sessionBearerFromTags([sessionBearerConnectionTag('garbage') ?? ''])).toEqual({ unreadable: true });
+    expect(sessionBearerConnectionTag(null)).toBeNull();
   });
 });
 

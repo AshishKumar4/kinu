@@ -1,4 +1,6 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import {
+  TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, provisionTestWorkspace, testOwner,
+} from './helpers/user-do';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import {
   approveCliAuth,
@@ -265,5 +267,118 @@ describe('CLI auth route status mapping', () => {
     const res = handled(await handleCliRequest(startRequest(), env));
     expect(res.status).toBe(500);
     expect(v.parse(ErrorResponseSchema, await res.json()).error).toMatch(/namespace unavailable/i);
+  });
+});
+
+// ── The orphaned bearer ─────────────────────────────────────────────────────
+//
+// A CLI session token lives 180 days and the server keeps only its hash. So a
+// logout whose remote revocation never landed — or a token copied off a machine
+// that is gone — left a live bearer that NOTHING could name: the owner had no
+// handle for it, and the only copy of the raw token was on the machine that
+// could not reach the server. These routes are the recovery surface, driven
+// against the real UserDO so the revocation, the generation rise and the socket
+// push are the production ones.
+describe('the CLI session inventory', () => {
+  const USER_ID = '0123456789abcdef0123456789abcdef';
+
+  async function account() {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    await harness.userDO.ensureProfile(owner, 'ashish@example.com', 'Ashish');
+    await provisionTestWorkspace(harness, 'workspace-a');
+    const laptop = await harness.userDO.mintCliToken(owner, USER_ID, 'a'.repeat(64), 'laptop');
+    const lost = await harness.userDO.mintCliToken(owner, USER_ID, 'b'.repeat(64), 'the machine that is gone');
+    const env = testEnv({
+      AUTH_KV: makeKv(),
+      UserDO: { idFromName: () => USER_ID, get: () => harness.userDO },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+    return { harness, owner, env, laptop, lost };
+  }
+
+  function sessionsRequest(token: string, opts: { method?: string; hash?: string } = {}): Request {
+    const path = opts.hash === undefined ? '/api/cli/sessions' : `/api/cli/sessions/${opts.hash}`;
+    return new Request(`https://kinu.example.com${path}`, {
+      method: opts.method ?? 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    });
+  }
+
+  test('another interactive session can name and end a bearer whose raw copy is gone', async () => {
+    const { harness, owner, env, laptop, lost } = await account();
+    // The raw token of the lost machine's session is deliberately not used
+    // again below: the recovery has to work from the INVENTORY, because the
+    // raw copy is exactly what no longer exists.
+    const inventory = v.parse(
+      v.object({ sessions: v.array(v.object({ tokenHash: v.string(), label: v.string() })) }),
+      await handled(await handleCliRequest(sessionsRequest(laptop.token), env)).json(),
+    );
+    expect(inventory.sessions.map((row) => row.label).sort())
+      .toEqual(['laptop', 'the machine that is gone']);
+    const orphan = inventory.sessions.find((row) => row.label === 'the machine that is gone');
+    expect(orphan?.tokenHash).toBe(lost.tokenHash);
+
+    const revoked = await handleCliRequest(
+      sessionsRequest(laptop.token, { method: 'DELETE', hash: orphan?.tokenHash ?? '' }), env,
+    );
+
+    expect(revoked?.status).toBe(200);
+    // Dead by the store's own answer, on the hash alone.
+    expect(await harness.userDO.verifyCliToken(owner, lost.token))
+      .toMatchObject({ ok: false, error: 'invalid token' });
+    // The revoking session is untouched — this is a revocation, not a reset.
+    expect(await harness.userDO.verifyCliToken(owner, laptop.token)).toMatchObject({ ok: true });
+    expect((await harness.userDO.listCliTokens(owner)).map((row) => row.label)).toEqual(['laptop']);
+    // And the generation rose, so the sockets that bearer holds are closed
+    // rather than left listening until it chooses to speak.
+    expect(harness.revokedSocketPushes).toContain('workspace-a:1');
+    harness.close();
+  });
+
+  test('revoke-all is the answer when no hash can name the orphan', async () => {
+    const { harness, owner, env, laptop, lost } = await account();
+
+    const response = await handleCliRequest(sessionsRequest(laptop.token, { method: 'DELETE' }), env);
+
+    expect(v.parse(v.object({ ok: v.boolean(), revoked: v.number() }), await handled(response).json()))
+      .toEqual({ ok: true, revoked: 2 });
+    // Every bearer, including the caller's own: an account whose orphan cannot
+    // be named is an account whose every remaining bearer needed to die. One
+    // generation rise covers all of their sockets at once.
+    expect(await harness.userDO.verifyCliToken(owner, laptop.token)).toMatchObject({ ok: false });
+    expect(await harness.userDO.verifyCliToken(owner, lost.token)).toMatchObject({ ok: false });
+    expect(await harness.userDO.listCliTokens(owner)).toEqual([]);
+    expect(harness.revokedSocketPushes).toContain('workspace-a:1');
+    harness.close();
+  });
+
+  test('a scoped CI token cannot enumerate or end the account\'s sessions', async () => {
+    const { harness, owner, env, laptop } = await account();
+    const ci = await harness.userDO.mintAccessToken(owner, USER_ID, 'ci', ['workspace.read', 'workspace.exec']);
+    if (!ci.ok || !ci.token) throw new Error('the access token was not minted');
+
+    for (const request of [
+      sessionsRequest(ci.token),
+      sessionsRequest(ci.token, { method: 'DELETE' }),
+      sessionsRequest(ci.token, { method: 'DELETE', hash: laptop.tokenHash }),
+    ]) {
+      const refused = await handleCliRequest(request, env);
+      expect(refused?.status).toBe(403);
+      expect(v.parse(ErrorResponseSchema, await handled(refused).json()).error)
+        .toContain('interactive CLI session token');
+    }
+    // Nothing was revoked by the refusals.
+    expect(await harness.userDO.verifyCliToken(owner, laptop.token)).toMatchObject({ ok: true });
+    harness.close();
+  });
+
+  test('a hash that is not 64 hex is not a route at all', async () => {
+    const { harness, env, laptop } = await account();
+    const refused = await handleCliRequest(
+      sessionsRequest(laptop.token, { method: 'DELETE', hash: 'not-a-hash' }), env,
+    );
+    expect(refused?.status).toBe(404);
+    harness.close();
   });
 });

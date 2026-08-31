@@ -5,7 +5,7 @@ import {
   type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type WebSearchProvider,
 } from '@kinu.run/core';
-import { diagnostics } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { buildCfWebSearchProvider } from './lib/web-provider';
 import {
   createAgentProviderRegistry,
@@ -27,6 +27,12 @@ export interface OwnedModelServicesOptions {
    *  call: a facet reads it from its parent, and a workspace only has one once
    *  the Worker has claimed it. */
   readonly getUserCaller: () => Promise<UserCaller>;
+  /** This account's credential revision, from the object that owns the store.
+   *  Resolved lazily and best-effort: an unreachable authority leaves the cache
+   *  as it is (the fan-out and the next successful read still repair it),
+   *  because refusing a turn over a cache-freshness question would trade a
+   *  stale catalog for a dead agent. */
+  readonly getCredentialsRevision: () => Promise<number>;
 }
 
 /** Owner-scoped provider, model, affinity, and web services shared by CF agents. */
@@ -35,6 +41,10 @@ export class OwnedModelServices {
   private webSearchProviderCache: WebSearchProvider | null = null;
   private judgeSpecCache: { key: string; spec: string } | null = null;
   private modelCache: { spec: string; model: LanguageModel } | null = null;
+  /** The account credential revision the provider listing was last swept
+   *  under. Differing from the live one is what invalidates the listing at use,
+   *  without a clock and without depending on the fan-out having landed. */
+  private cachedCredentialsRevision: number | null = null;
   /**
    * The last COMPLETE provider listing, and the sweep currently in flight.
    *
@@ -112,23 +122,30 @@ export class OwnedModelServices {
 
   /**
    * Credential-aware model set used by profile resolution, plus the providers
-   * that could not be asked, plus where the answer came from.
-   *
-   * The failure set is load-bearing, not diagnostics. `listAllModels` never
-   * rejects for one provider — a revoked credential or a 503 costs only that
-   * provider's models and is reported as a failure row. Dropping those rows
-   * made an unanswered provider indistinguishable from one that answered and
-   * genuinely lacks the model, and core's resolver validates EVERY tier slot,
-   * so a single degraded listing refused every turn of any account pinning any
-   * tier to that provider. Passed through verbatim: the row's `provider` is the
-   * same `p.id` that prefixes `availableModels`, so the resolver can match a
-   * tier's spec against it without a mapping that could drift.
-   *
-   * The `cache` outcome travels WITH the snapshot because it is not plumbing —
-   * it is half of what the resolution cost, and it is what core writes into the
-   * `profile_resolution` evidence row.
+   * that could not be read.
    */
   async profileProviderSnapshot(): Promise<ProviderSnapshotRead> {
+    // THE DURABLE RECONCILIATION, before anything is read: the account's
+    // credential revision, compared against the one this cache was last swept
+    // under. The fan-out notification is the fast path and can fail silently;
+    // this comparison is the one that cannot, because it reads the same store
+    // the mutation wrote. Best-effort by design — see the options' declaration
+    // of `getCredentialsRevision` for why an unreachable authority must leave
+    // the cache alone here rather than fail the turn.
+    try {
+      const revision = await this.options.getCredentialsRevision();
+      if (revision !== this.cachedCredentialsRevision) this.invalidate();
+      this.cachedCredentialsRevision = revision;
+    } catch (cause) {
+      // Recorded, not swallowed: the cache is left as it is deliberately, and
+      // what that costs — a listing that may be one mutation stale until the
+      // authority answers again — is only diagnosable if the failure is named.
+      diagnostics.failure('profile.credentials_revision_unreadable', toKinuError({
+        doing: 'reading the account credential revision a cached provider listing is measured against',
+        cause,
+        otherwise: 'unavailable',
+      }), { agent: this.options.agentName() });
+    }
     const { listing, cache } = await this.providerListings.read();
     // The assembly — dedupe, sort, `label ?? provider`, and the failure fold
     // into `revision` — is core's. `revision` is the key every other cache is

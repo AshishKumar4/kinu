@@ -158,6 +158,13 @@ export interface KinuConfig {
    * correct baseline for a machine that has never changed a provider.
    */
   providerRevision?: number;
+  /**
+   * A server-side logout this machine could not complete. The raw token is the
+   * ONLY copy — the server stores a hash — so it stays here until a retry
+   * confirms the revocation, because deleting it would orphan a live 180-day
+   * bearer with nothing able to name it.
+   */
+  pendingRevocation?: { token: string; origin: string; at: number };
   /** Signed-out profile authority: the one local envelope, canonical when
    *  no account session governs this machine. Never holds account data. */
   localProfile?: ProfileCatalogEnvelope;
@@ -227,6 +234,11 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   deviceConnectPromptDismissed: v.optional(v.boolean()),
   checkpointKeep: v.optional(v.number()),
   providerRevision: v.optional(v.number()),
+  pendingRevocation: v.optional(v.object({
+    token: v.string(),
+    origin: v.string(),
+    at: v.number(),
+  })),
   localProfile: v.optional(ProfileCatalogEnvelopeSchema),
 });
 

@@ -38,6 +38,11 @@ export interface AuthIdentity {
   displayName?: string | null;
   /** App-session auth time in epoch ms, used for step-up checks. */
   authTime?: number;
+  /** The hash of the session token this identity was verified against. Present
+   *  only on the cookie path — the one thing a workspace websocket needs to
+   *  name this sign-in on its connection tags, so logout can reach a socket the
+   *  cookie no longer gates. Absent for every synthesized and ticket identity. */
+  sessionTokenHash?: string;
   /** Present only for connect-ticket identities backed by a scoped `pta_…`
    *  access token — the agent websocket pins the connection to these scopes.
    *  Absent for browser sessions and interactive CLI session tokens. */

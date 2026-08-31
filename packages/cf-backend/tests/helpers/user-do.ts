@@ -67,6 +67,13 @@ export interface TestUserDO {
    *  — how a test reads that a revocation reached the workspaces holding the
    *  sockets, rather than only the row it wrote. */
   revokedSocketPushes: string[];
+  /** The same for a browser session, as `workspace:tokenHash`: a logout has to
+   *  reach a socket that is only listening, and the hash is what names it. */
+  revokedSessionPushes: string[];
+  /** Capability re-pushes the UserDO asked a workspace root for, by workspace
+   *  — the reconciliation retry, which only the root can run because only the
+   *  root holds the token's plaintext. */
+  capabilityRepushes: string[];
   /** Consent cards the UserDO raised, as raised — the workspace it asked on,
    *  the method, the words the owner would read. */
   consentPrompts: Array<{
@@ -146,6 +153,10 @@ export interface TestUserDOOptions {
    *  what an eviction and the next request really are. Ownership of the handle
    *  stays with the caller: this harness's `close` leaves it open. */
   storage?: Database;
+  /** How many subtree pushes a capability install (or its re-push) reports it
+   *  MISSED. Asked per call, so a test can strand a replica on the first push
+   *  and let the reconciliation retry converge on the next. */
+  capabilityPushMissed?: () => number;
 }
 
 /** One JSON-RPC frame as the hub's tunnel writes it onto the device socket. */
@@ -168,10 +179,12 @@ interface TestUserEnvironment {
     idFromName(name: string): string;
     get(name: string): {
       destroyAgent(): Promise<void>;
-      installWorkspaceCapability(token: string): Promise<{ readonly ok: true }>;
+      installWorkspaceCapability(token: string): Promise<{ readonly ok: true; missed: number }>;
+      repushWorkspaceCapability(): Promise<{ missed: number }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
       awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
+      closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
     };
   };
 }
@@ -222,6 +235,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
   const revokedSocketPushes: string[] = [];
+  const revokedSessionPushes: string[] = [];
+  const capabilityRepushes: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const deviceFrames: DeviceFrame[] = [];
@@ -342,7 +357,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           if (options.destroyWorkspaceError) throw new Error(options.destroyWorkspaceError);
           destroyedWorkspaces.push(name);
         },
-        async installWorkspaceCapability(token: string) { installed.set(name, token); return { ok: true as const }; },
+        async installWorkspaceCapability(token: string) {
+          installed.set(name, token);
+          return { ok: true as const, missed: options.capabilityPushMissed?.() ?? 0 };
+        },
+        /** The root re-running its own subtree push with the token it already
+         *  holds. Nothing is re-minted, which is the point: the same token, the
+         *  same hash, one more attempt at the replicas that missed it. */
+        async repushWorkspaceCapability() {
+          capabilityRepushes.push(name);
+          return { missed: options.capabilityPushMissed?.() ?? 0 };
+        },
         async getWorkspaceCapabilityHash() {
           const token = installed.get(name);
           return token ? sha256Hex(token) : null;
@@ -352,6 +377,10 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         },
         async closeRevokedCliSockets(generation: number) {
           revokedSocketPushes.push(`${name}:${generation}`);
+          return { closed: 0 };
+        },
+        async closeRevokedSessionSockets(tokenHash: string) {
+          revokedSessionPushes.push(`${name}:${tokenHash}`);
           return { closed: 0 };
         },
       }),
@@ -374,6 +403,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   hub.current = userDO;
   return {
     userDO, db, sql, installed, destroyedWorkspaces, revokedSocketPushes,
+    revokedSessionPushes, capabilityRepushes,
     consentPrompts, raisedConsentIds, deviceFrames,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },

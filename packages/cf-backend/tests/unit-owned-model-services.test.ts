@@ -1,4 +1,4 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
@@ -8,7 +8,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices } from '../src/owned-model-services';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, resolveTurnProfile,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
+  resolveTurnProfile,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
@@ -83,6 +84,7 @@ describe('OwnedModelServices', () => {
       ownerRequired: true,
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
+      getCredentialsRevision: async () => 0,
     });
 
     expect(() => services.providerRegistry()).toThrow(
@@ -98,6 +100,7 @@ describe('OwnedModelServices', () => {
       ownerRequired: false,
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
+      getCredentialsRevision: async () => 0,
     });
 
     expect(services.providerRegistry().registry.list().map((provider) => provider.id)).toEqual([
@@ -117,6 +120,7 @@ describe('OwnedModelServices', () => {
       ownerRequired: false,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
+      getCredentialsRevision: async () => 0,
     });
 
     const model = resolved(services.resolveModel('openrouter/anthropic/claude-sonnet-4'));
@@ -142,6 +146,7 @@ describe('OwnedModelServices', () => {
       ownerRequired: true,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
+      getCredentialsRevision: async () => 0,
     });
 
     // The minimal mock response does not satisfy the AI SDK decoder. Asserted
@@ -177,6 +182,7 @@ describe('OwnedModelServices', () => {
       ownerRequired: false,
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => owner,
+      getCredentialsRevision: async () => 0,
     });
     const web = services.getWebSearchProvider();
     const beforeRegistry = services.providerRegistry();
@@ -208,6 +214,10 @@ describe('OwnedModelServices', () => {
 function snapshotServices(
   owner: string | null,
   credentials: Readonly<Record<string, CredentialHeaders>> = {},
+  /** The account credential revision this cache measures itself against. A
+   *  constant is a world where nothing changed; a reader that moves is a
+   *  mutation the fan-out may or may not have delivered. */
+  getCredentialsRevision: () => Promise<number> = async () => 0,
 ): OwnedModelServices {
   return new OwnedModelServices({
     env: fakeEnv(fakeUserDO(credentials), platformGatewayEnv()),
@@ -216,6 +226,7 @@ function snapshotServices(
     ownerRequired: false,
     getOwnerUserId: () => owner,
     getUserCaller: async () => ({ workspaceToken: 'wt' }),
+    getCredentialsRevision,
   });
 }
 
@@ -330,12 +341,28 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect(mock.matching('models.dev/api.json')).toHaveLength(oneSweep);
   });
 
-  test('a sweep that started before a credential change never populates the cache', async () => {
-    catalogDown();
+  test('a sweep the change landed on top of is answered, and never becomes the next turn\'s answer', async () => {
+    // The interleaving that matters, held open where it really happens: INSIDE
+    // the sweep. `profileProviderSnapshot` now reads the account's credential
+    // revision before it reads the listing, so a change arriving before that
+    // read produces a post-change sweep (which is correct to cache, and is
+    // covered by the revision compare below). What must still never be cached
+    // is a sweep the change landed in the MIDDLE of.
+    const mock = catalogDown();
+    const upstream = globalThis.fetch;
+    const held = Promise.withResolvers<void>();
+    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await upstream(input, init);
+      await held.promise;
+      return response;
+    });
     const services = snapshotServices(null);
 
     const inFlight = services.profileProviderSnapshot();
+    // The sweep is in flight once its first upstream call is parked.
+    while (mock.matching('models.dev/api.json').length === 0) await Promise.resolve();
     services.invalidate();
+    held.resolve();
     const answered = await inFlight;
 
     // Its own caller is answered — the listing really happened — but the result
@@ -343,6 +370,67 @@ describe('OwnedModelServices — the provider snapshot', () => {
     // for every turn after it: the next read sweeps again rather than hitting.
     expect(answered.snapshot.availableModels.length).toBeGreaterThan(0);
     expect((await services.profileProviderSnapshot()).cache).toBe('miss');
+  });
+
+  test('a credential change the fan-out never delivered is caught at the next use', async () => {
+    // THE DURABLE HALF. The notification is a timeliness optimization and can
+    // fail silently — a workspace that was unreachable, a waitUntil that lost
+    // its request. Nothing here calls `invalidate()`: the only signal is the
+    // account's own revision, compared before the cache is read.
+    catalogDown();
+    let revision = 7;
+    const services = snapshotServices(null, {}, async () => revision);
+
+    expect((await services.profileProviderSnapshot()).cache).toBe('miss');
+    expect((await services.profileProviderSnapshot()).cache).toBe('hit');
+
+    revision = 8;
+
+    // Swept again, with no notification anywhere in the story. Before this, a
+    // dropped notification meant the workspace served its stale catalog until
+    // an unrelated invalidation happened to land.
+    expect((await services.profileProviderSnapshot()).cache).toBe('miss');
+    // And it settles: the same revision twice is a hit again, so the compare
+    // costs one round trip rather than a sweep per turn.
+    expect((await services.profileProviderSnapshot()).cache).toBe('hit');
+  });
+
+  test('an authority that cannot answer leaves the cache alone rather than failing the turn', async () => {
+    catalogDown();
+    let refuse = false;
+    const services = snapshotServices(null, {}, async () => {
+      if (refuse) throw new Error('UserDO unreachable');
+      return 1;
+    });
+
+    expect((await services.profileProviderSnapshot()).cache).toBe('miss');
+    refuse = true;
+
+    // A cache-freshness question that cannot be answered must not cost the
+    // turn: the fan-out and the next successful compare still repair it.
+    const answered = await services.profileProviderSnapshot();
+    expect(answered.cache).toBe('hit');
+    expect(answered.snapshot.availableModels.length).toBeGreaterThan(0);
+  });
+
+  test('the account revision the compare reads rises with every credential mutation', async () => {
+    // The write half, in the object that owns the store — so the number the
+    // workspace compares against is the one the mutation actually moved.
+    const harness = createTestUserDO({ durableObjectId: 'owner-1' });
+    const owner = await testOwner();
+
+    const before = await harness.userDO.getCredentialsRevision(owner);
+    await harness.userDO.setCredential(owner, 'openrouter.bearer', { kind: 'bearer', token: 'sk-or-1' });
+    const afterConnect = await harness.userDO.getCredentialsRevision(owner);
+    await harness.userDO.deleteCredential(owner, 'openrouter.bearer');
+    const afterDisconnect = await harness.userDO.getCredentialsRevision(owner);
+
+    expect(afterConnect).toBeGreaterThan(before);
+    // A DISCONNECT moves it too. That direction is the dangerous one: a
+    // workspace holding the old listing would keep offering a provider whose
+    // credential no longer exists.
+    expect(afterDisconnect).toBeGreaterThan(afterConnect);
+    harness.close();
   });
 });
 

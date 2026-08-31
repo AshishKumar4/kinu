@@ -10,7 +10,7 @@ import { createCommand } from './commands/create';
 import { acpCommand } from './commands/acp';
 import { chatCommand } from './commands/chat';
 import { execCommand, runCommand } from './commands/run';
-import { authCommand, logoutCommand, whoamiCommand } from './commands/auth';
+import { authCommand, logoutCommand, sessionsCommand, whoamiCommand } from './commands/auth';
 import { aliasCommand, aliasesCommand, unaliasCommand } from './commands/alias';
 import { desktopCommand } from './commands/desktop';
 import { daemonCommand } from './commands/daemon';
@@ -111,9 +111,16 @@ export function buildProgram(): Command {
   program
     .command('logout')
     .helpGroup(ACCOUNT)
-    .description('Sign out of the Kinu CLI')
+    .description('Sign out and revoke this CLI session')
     .option('--origin <url>', 'Kinu app origin')
     .action(wrapAction(logoutCommand));
+
+  program
+    .command('sessions [action] [hash]')
+    .helpGroup(ACCOUNT)
+    .description('Manage live CLI sessions (list, revoke, revoke --all)')
+    .option('--origin <url>', 'Kinu app origin')
+    .action(wrapAction(sessionsCommand));
 
   program
     .command('tokens [action] [name]')

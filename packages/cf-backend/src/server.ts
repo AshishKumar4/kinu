@@ -69,7 +69,7 @@ import {
 import { withAppSecurityHeaders } from "./lib/security-headers";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "./user/workspace-capability";
-import { CLI_BEARER_HEADER, CLI_SCOPES_HEADER } from "./cli/rpc-gate";
+import { CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "./lib/http";
 import { handleFeedbackRequest } from "./feedback/routes";
@@ -321,6 +321,14 @@ function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   next.delete(CLI_BEARER_HEADER);
   if (identity.cliBearer) {
     next.set(CLI_BEARER_HEADER, `${identity.cliBearer.tokenHash}:${identity.cliBearer.generation}`);
+  }
+  // And the same rule a third time for the browser session: the hash of the
+  // cookie the upgrade authenticated, rewritten from the verified identity so
+  // a browser connection cannot present somebody else's session (or strip its
+  // own) on the way to the workspace websocket boundary.
+  next.delete(SESSION_BEARER_HEADER);
+  if (identity.sessionTokenHash) {
+    next.set(SESSION_BEARER_HEADER, identity.sessionTokenHash);
   }
   return next;
 }

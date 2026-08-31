@@ -91,6 +91,44 @@ export function cliBearerFromTags(tags: Iterable<string>): CliSocketBearer | nul
   return null;
 }
 
+/** Worker→DO header naming the browser session behind a workspace websocket:
+ * the hash of the cookie the upgrade authenticated. Always rewritten by the
+ * edge after authentication, exactly like the CLI bearer header, so clients
+ * cannot smuggle it. */
+export const SESSION_BEARER_HEADER = 'x-kinu-session-bearer';
+
+/** Connection tag persisting that session, so a socket restored from
+ * hibernation still knows WHOSE sign-in it is running on. Without it the
+ * browser connection carried no revocable identity at all, which is what made
+ * logout unenforceable over an already-open socket. */
+const SESSION_BEARER_TAG_PREFIX = 'session-bearer:';
+
+const SESSION_BEARER_RE = /^[a-f0-9]{64}$/;
+
+/** Build the connection tag for a verified session header; null when the
+ *  connection carries no browser session (a CLI ticket connection). */
+export function sessionBearerConnectionTag(headerValue: string | null): string | null {
+  if (!headerValue) return null;
+  // Same rule as the CLI bearer: the header's PRESENCE is what says this is a
+  // browser connection, so an unparseable value still gets a tag and is
+  // refused at frame time rather than read as "no session to check".
+  return `${SESSION_BEARER_TAG_PREFIX}${SESSION_BEARER_RE.test(headerValue) ? headerValue : ''}`;
+}
+
+/** The browser session hash persisted on a connection's tags; null when the
+ * connection never carried one. A present-but-unparseable tag answers
+ * `{ unreadable: true }` so the frame gate can refuse it rather than treat it
+ * as a connection with nothing to check. */
+export function sessionBearerFromTags(tags: Iterable<string>): { tokenHash: string } | { unreadable: true } | null {
+  for (const tag of tags) {
+    if (!tag.startsWith(SESSION_BEARER_TAG_PREFIX)) continue;
+    const value = tag.slice(SESSION_BEARER_TAG_PREFIX.length);
+    if (!SESSION_BEARER_RE.test(value)) return { unreadable: true };
+    return { tokenHash: value };
+  }
+  return null;
+}
+
 export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 
 /**

@@ -35,9 +35,12 @@ import { parseProtocolMessage } from "agents/chat";
 import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
+  SESSION_BEARER_HEADER,
   cliBearerConnectionTag,
   cliBearerFromTags,
   cliScopesConnectionTag,
+  sessionBearerConnectionTag,
+  sessionBearerFromTags,
   rejectOutOfScopeRpc,
   type CliSocketBearer,
 } from "./cli/rpc-gate";
@@ -313,6 +316,13 @@ interface UserHubCoreClient {
    *  still act — asked at frame time, so the answer comes from the object that
    *  owns revocation rather than from a verdict cached at the upgrade. */
   readonly verifyCliSocketBearer: UserDO['verifyCliSocketBearer'];
+  /** Whether the browser session behind a live websocket on this workspace may
+   *  still act — the same question for the other token kind, answered by the
+   *  same authority for the same reason. */
+  readonly verifySocketSession: UserDO['verifySocketSession'];
+  /** The account's credential revision — the number a cached provider listing
+   *  is compared against at use, so a missed fan-out heals instead of standing. */
+  readonly getCredentialsRevision: UserDO['getCredentialsRevision'];
   readonly hasWorkspace: UserDO['hasWorkspace'];
   readonly listActiveWorkspaces: UserDO['listActiveWorkspaces'];
   readonly publishExperience: UserDO['publishExperience'];
@@ -389,6 +399,7 @@ function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
  *  reason instead of retrying a socket it can never hold again. */
 const WEBSOCKET_POLICY_CLOSE = 1008;
 const CLI_AUTHORITY_REVOKED = 'This CLI authorization is no longer valid. Sign in again with: kinu auth';
+const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
 
 function jsonObject<Input>(input: Input): JsonObject {
@@ -695,8 +706,14 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Install the capability token the owner's UserDO minted for this
-   *  workspace. Worker-side DO RPC only — deliberately not `@callable`. */
-  async installWorkspaceCapability(token: string): Promise<{ ok: true }> {
+   *  workspace. Worker-side DO RPC only — deliberately not `@callable`.
+   *
+   *  `missed` counts the subtree pushes that failed. A suppressed push is no
+   *  longer the end of the story: the caller reports it to the UserDO, which
+   *  arms a reconciliation intent, because the child it stranded keeps
+   *  presenting the now-unrecognized token until something retries — and
+   *  nothing else ever did. */
+  async installWorkspaceCapability(token: string): Promise<{ ok: true; missed: number }> {
     if (!token) throw new Error('capability token required');
     // A native DO RPC does not route through partyserver, so it can land before
     // `onStart` has run — the same race `OrchestratorAgent.claimOwner` handles
@@ -710,12 +727,14 @@ export abstract class ActorAgent extends Think<Env> {
     // back out of a DO — nothing name-addressable ever hands the secret to a
     // caller. Recursive by construction: each hire re-enters here for its own
     // hires, so a reissued token reaches the whole tree, not just its first row.
+    let missed = 0;
     const facet = this.subordinateFacet();
     for (const entry of this.subordinateRoster.list()) {
       try {
         const stub = await this.subAgent(facet, entry.name);
         await stub.installWorkspaceCapability(token);
       } catch (err) {
+        missed += 1;
         diagnostics.failure('capability.subordinate_push_failed', toKinuError({
           doing: 'pushing the workspace capability token to a subordinate',
           cause: err,
@@ -734,6 +753,7 @@ export abstract class ActorAgent extends Think<Env> {
           const stub = await this.subAgent(this.explorationFacet(), entry.name);
           await stub.setOwner(ownerUserId, token);
         } catch (err) {
+          missed += 1;
           diagnostics.failure('capability.exploration_push_failed', toKinuError({
             doing: 'pushing the workspace capability token to an exploration facet',
             cause: err,
@@ -742,7 +762,19 @@ export abstract class ActorAgent extends Think<Env> {
         }
       }
     }
-    return { ok: true };
+    return { ok: true, missed };
+  }
+
+  /** Re-run the subtree push with the token this root already holds. The
+   *  recovery half of the reconciliation intent: only the root stores the
+   *  plaintext, so a retry that missed a replica has to be asked of the root.
+   *  Idempotent by construction — the push is the same one `installWorkspaceCapability`
+   *  runs, and the token is the same one the registry already committed. */
+  async repushWorkspaceCapability(): Promise<{ missed: number }> {
+    const token = await this.workspaceCapabilityToken();
+    if (!token) return { missed: 0 };
+    const result = await this.installWorkspaceCapability(token);
+    return { missed: result.missed };
   }
 
   /** The workspace's identity table. Created from the constructor rather than a
@@ -1340,20 +1372,17 @@ export abstract class ActorAgent extends Think<Env> {
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
     getUserCaller: () => this.userCaller(),
+    // The account's credential revision, asked of the same UserDO the registry
+    // reads — one more round trip per profile resolution, and the one that
+    // makes a missed fan-out notification self-healing instead of durable.
+    getCredentialsRevision: async () => {
+      const { stub, caller } = await this.userHub();
+      return stub.getCredentialsRevision(caller);
+    },
   });
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
-    // NO PER-TURN STEP BOUND — owner ruling, and until now it held on the CLI
-    // only. `Think` sets `this.maxSteps = 10` in its own constructor and every
-    // inference it drives composes `stepCountIs(config.maxSteps ?? this.maxSteps)`
-    // as element 0 of an OR-ed stop-condition array, so a caller's `stopWhen`
-    // can only add a way to stop and can never widen that cap. The result was a
-    // cloud turn hard-capped at ten steps while `core/chat.ts` and
-    // `core/config.ts` both documented no cap: four of four production runs that
-    // reached ten steps were cut with the model still emitting tool calls, and
-    // all four sealed 'completed'.
-    //
     // Set on the INSTANCE as well as on each turn's `TurnConfig` (see
     // `beforeTurn`) because the resolution is `config.maxSteps ?? this.maxSteps`:
     // the per-turn value is what production reads, and this is what any Think
@@ -1383,16 +1412,17 @@ export abstract class ActorAgent extends Think<Env> {
     // wrapper by the Agent constructor, hence the re-wrap instead of an
     // onMessage override). Chat frames pass through untouched.
     //
-    // WHETHER the bearer may still act is asked FIRST, because the scope gate
-    // answers a different question: it pins a connection to what its token was
-    // granted, and says nothing about whether that token still exists. A
-    // connect ticket is verified once, at the upgrade, so without the check
-    // below a revoked CLI kept this workspace's whole surface for as long as it
-    // held the socket — across every await, and across hibernation, which
+    // WHETHER the connection's authority may still act is asked FIRST — its
+    // CLI bearer, or the browser session behind its cookie — because the scope
+    // gate answers a different question: it pins a connection to what its token
+    // was granted, and says nothing about whether that token still exists. The
+    // upgrade verifies each once, so without the check below a revoked CLI token
+    // or a logged-out cookie kept this workspace's whole surface for as long as
+    // it held the socket — across every await, and across hibernation, which
     // restored the connection from its tags with its scopes intact.
     const dispatchMessage = this.onMessage;
     this.onMessage = async (connection, message) => {
-      if (await this.refuseRevokedCliBearer(connection, message)) return;
+      if (await this.refuseRevokedSocketAuthority(connection, message)) return;
       const rejection = rejectOutOfScopeRpc(connection.tags, message);
       if (rejection) {
         connection.send(rejection);
@@ -2367,18 +2397,21 @@ export abstract class ActorAgent extends Think<Env> {
     }));
   }
 
-  /** Persist the verified connect-ticket scopes AND the bearer behind them
-   *  (edge-set headers, see appendIdentityHeaders) as connection tags — tags
-   *  ride the WebSocket attachment, so both the rpc gate and the bearer's
-   *  identity survive DO hibernation. */
+  /** Persist the verified connect-ticket scopes, the CLI bearer behind them,
+   *  AND the browser session behind a cookie-authenticated connection (edge-set
+   *  headers, see appendIdentityHeaders) as connection tags — tags ride the
+   *  WebSocket attachment, so the rpc gate and both identities survive DO
+   *  hibernation. */
   override async getConnectionTags(connection: Connection, ctx: ConnectionContext): Promise<string[]> {
     const tags = await super.getConnectionTags(connection, ctx);
     const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
     const bearerTag = cliBearerConnectionTag(ctx.request.headers.get(CLI_BEARER_HEADER));
+    const sessionTag = sessionBearerConnectionTag(ctx.request.headers.get(SESSION_BEARER_HEADER));
     return [
       ...tags,
       ...(scopeTag === null ? [] : [scopeTag]),
       ...(bearerTag === null ? [] : [bearerTag]),
+      ...(sessionTag === null ? [] : [sessionTag]),
     ];
   }
 
@@ -2411,36 +2444,115 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Refuse a frame from a connection whose CLI bearer no longer holds.
+   * Close every websocket that authenticated on the named browser session.
    *
-   * FRAME TIME, AND AGAINST THE AUTHORITY, because a connect ticket is checked
-   * exactly once — at the upgrade — and everything after that used to be
-   * unconditional trust: revoke the token, and the socket kept its full
+   * The session-side twin of {@link closeRevokedCliSockets}, called by the
+   * owner's UserDO the moment a logout deletes the session's row. A copied
+   * cookie that opened this socket keeps RECEIVING the workspace's stream
+   * after the cookie is dead, for exactly as long as it says nothing — the
+   * frame-time check below can never reach it, so the revocation has to push.
+   */
+  async closeRevokedSessionSockets(sessionTokenHash: string): Promise<{ closed: number }> {
+    let closed = 0;
+    for (const connection of this.getConnections()) {
+      const session = sessionBearerFromTags(connection.tags);
+      if (session === null) continue;
+      if (!('tokenHash' in session) || session.tokenHash !== sessionTokenHash) continue;
+      connection.close(WEBSOCKET_POLICY_CLOSE, SESSION_AUTHORITY_REVOKED);
+      closed += 1;
+    }
+    if (closed > 0) {
+      diagnostics.event('auth.session_sockets_closed', { outcome: 'denied', closed });
+    }
+    return { closed };
+  }
+
+  /**
+   * Refuse a frame from a connection whose authority no longer holds — the
+   * CLI bearer it upgraded with, or the browser session behind its cookie.
+   *
+   * FRAME TIME, AND AGAINST THE AUTHORITY, because the upgrade checks each
+   * exactly once and everything after that used to be unconditional trust:
+   * revoke the token or log out the session, and the socket kept its full
    * @callable surface until the client disconnected, which for a CI runner is
    * as long as it likes. Hibernation made it worse, since the connection came
-   * back from its tags with its scopes and no bearer at all.
+   * back from its tags with its scopes and no identity to check at all.
    *
    * The question goes to the UserDO that owns the revocation, so there is no
-   * cached verdict to be stale. Only bearer-tagged connections pay for it:
-   * browser sessions carry no tag and return on the first line. A UserDO that
-   * cannot be reached refuses the frame — the alternative is a socket that
-   * keeps acting precisely when its authority cannot be confirmed.
+   * cached verdict to be stale. Only connections carrying an identity tag pay
+   * for it: an untagged connection is not one this edge ever admitted to a
+   * workspace websocket. A UserDO that cannot be reached refuses the frame —
+   * the alternative is a socket that keeps acting precisely when its authority
+   * cannot be confirmed.
    */
-  private async refuseRevokedCliBearer(connection: Connection, message: WSMessage): Promise<boolean> {
-    const bearer = cliBearerFromTags(connection.tags);
-    if (bearer === null) return false;
-    const denial = await this.cliBearerDenial(bearer);
+  private async refuseRevokedSocketAuthority(connection: Connection, message: WSMessage): Promise<boolean> {
+    const denial = await this.socketAuthorityDenial(connection);
     if (denial === null) return false;
     const rpc = parseClientRpcFrame(message);
-    // Answered in the protocol the client already speaks, so a pending call
-    // fails with a reason instead of hanging until it notices the close.
-    if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial }));
-    connection.close(WEBSOCKET_POLICY_CLOSE, CLI_AUTHORITY_REVOKED);
-    diagnostics.event('auth.cli_frame_denied', { outcome: 'denied', reason: 'bearer_not_live' });
+    // TWO ANSWERS, because they are read by two different things. The rpc reply
+    // carries the authority's own WHY — a pending call fails with a reason
+    // instead of hanging until it notices the close — while the close reason is
+    // the standing instruction for the token kind, which is the line a human
+    // sees when the socket goes away. Collapsing them put a store-level
+    // sentence ('the CLI token behind this connection is no longer valid')
+    // where the client's next step belongs.
+    if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial.why }));
+    connection.close(WEBSOCKET_POLICY_CLOSE, denial.close);
+    diagnostics.event('auth.socket_frame_denied', { outcome: 'denied', reason: 'authority_not_live' });
     return true;
   }
 
-  /** Why this connection's bearer may no longer act, or null when it may.
+  /** Why this connection's authority may no longer act, and what to tell the
+   *  client to do about it — or null when it may act.
+   *
+   *  Names the CLI bearer and the browser session in ONE question, because
+   *  revocation has one design and two token kinds: each check fails closed
+   *  on its own, and a connection carrying both is refused by whichever died.
+   *  The instruction is the kind's, not the store's: `kinu auth` for a bearer,
+   *  a fresh sign-in for a cookie. */
+  private async socketAuthorityDenial(
+    connection: Connection,
+  ): Promise<{ why: string; close: string } | null> {
+    const bearer = cliBearerFromTags(connection.tags);
+    if (bearer !== null) {
+      const denial = await this.cliBearerDenial(bearer);
+      if (denial !== null) return { why: denial, close: CLI_AUTHORITY_REVOKED };
+    }
+    const session = sessionBearerFromTags(connection.tags);
+    if (session !== null) {
+      const denial = await this.sessionBearerDenial(session);
+      // A session denial is already written as an instruction — signed out,
+      // unreadable, unconfirmable — so it is its own close reason.
+      if (denial !== null) return { why: denial, close: denial };
+    }
+    return null;
+  }
+
+  /** The session-side frame check. An unreadable tag is a refusal for the same
+   *  reason an unreadable CLI bearer is; a UserDO that cannot be reached is
+   *  one too, and for the same reason: the socket keeps acting precisely when
+   *  its authority cannot be confirmed. */
+  private async sessionBearerDenial(session: { tokenHash: string } | { unreadable: true }): Promise<string | null> {
+    if ('unreadable' in session) {
+      return 'This connection carries no readable session. Reload the page to sign in again.';
+    }
+    try {
+      const { stub, caller } = await this.userHub();
+      const verified = await retryTransientDO('verifySocketSession',
+        () => stub.verifySocketSession(caller, session.tokenHash));
+      return verified.live ? null : SESSION_AUTHORITY_REVOKED;
+    } catch (cause) {
+      diagnostics.failure('auth.session_bearer_check_failed', toKinuError({
+        doing: 'checking whether a websocket\'s browser session is still live',
+        cause,
+        otherwise: 'unavailable',
+      }), { workspace: this.name });
+      return 'This connection\'s authorization could not be confirmed. Reload the page to sign in again.';
+    }
+  }
+
+  /**
+   * Why this connection's CLI bearer may no longer act, or null when it may.
    *
    *  A generation from the FUTURE is refused as well: this workspace is asking
    *  the object that owns the counter, so a connection claiming to have been

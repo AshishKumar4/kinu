@@ -19,7 +19,8 @@ kinu <command> [options]
 | [`kinu provider [action] [name]`](#kinu-provider-action-name) | List, connect, or disconnect model and account providers |
 | [`kinu auth`](#kinu-auth) | Sign the CLI into your Kinu account |
 | [`kinu whoami`](#kinu-whoami) | Show the signed-in Kinu account |
-| [`kinu logout`](#kinu-logout) | Sign out of the Kinu CLI |
+| [`kinu logout`](#kinu-logout) | Sign out and revoke this CLI session |
+| [`kinu sessions [action] [hash]`](#kinu-sessions-action-hash) | Manage live CLI sessions (list, revoke, revoke --all) |
 | [`kinu tokens [action] [name]`](#kinu-tokens-action-name) | Manage long-lived CI access tokens (list, create, revoke) |
 
 ### Workspaces
@@ -134,7 +135,15 @@ Show the signed-in Kinu account.
 
 ### kinu logout
 
-Sign out of the Kinu CLI.
+Sign out and revoke this CLI session.
+
+| Option | What it does |
+| --- | --- |
+| `--origin <url>` | Kinu app origin |
+
+### kinu sessions [action] [hash]
+
+Manage live CLI sessions (list, revoke, revoke --all).
 
 | Option | What it does |
 | --- | --- |

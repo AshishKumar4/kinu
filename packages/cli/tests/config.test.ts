@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -349,3 +349,87 @@ function runPreferenceWrite(): PreferenceWriteResult {
   expect(proc.exitCode).toBe(0);
   return v.parse(PreferenceWriteResultSchema, JSON.parse(proc.stdout.toString()));
 }
+
+// ── A logout whose revocation could not land ────────────────────────────────
+//
+// The raw CLI token is the ONLY copy — the server stores a hash — so deleting it
+// locally when the revoke call fails orphans a live 180-day bearer that nothing
+// can name. It stays until a retry confirms the revocation.
+describe("a logout the server could not be told about", () => {
+  const TOKEN = `ptc_${"0".repeat(32)}_abcdefghijklmnopqrstuvwxyz`;
+
+  function logoutHome(origin: string): string {
+    const home = mkdtempSync(join(tmpdir(), "kinu-logout-home-"));
+    tempDirs.push(home);
+    writeFileSync(
+      join(home, "config.json"),
+      JSON.stringify({ origin, accessToken: TOKEN, tokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString() }),
+      { mode: 0o600 },
+    );
+    return home;
+  }
+
+  function storedConfig(home: string): JsonObject {
+    return v.parse(JsonObjectSchema, parseJsonValue(readFileSync(join(home, "config.json"), "utf8")));
+  }
+
+  async function runLogout(home: string, origin: string) {
+    const script = `
+      const { logoutCommand } = await import('./packages/cli/src/commands/auth.ts');
+      await logoutCommand({ origin: ${JSON.stringify(origin)} });
+    `;
+    const proc = Bun.spawn({
+      cmd: [process.execPath, "-e", script],
+      cwd: resolve(__dirname, "../../.."),
+      env: { ...process.env, KINU_HOME: home, NO_COLOR: "1", KINU_TOKEN: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return stdout + stderr;
+  }
+
+  test("keeps the only copy of the bearer, records the pending revocation, and clears both on a retry that lands", async () => {
+    let reachable = false;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        if (new URL(request.url).pathname !== "/api/cli/logout") return new Response("no", { status: 404 });
+        return reachable
+          ? Response.json({ ok: true })
+          : new Response('{"error":"the session store is unavailable"}', { status: 503 });
+      },
+    });
+    const origin = `http://127.0.0.1:${server.port}`;
+    const home = logoutHome(origin);
+
+    try {
+      const refused = await runLogout(home, origin);
+      expect(refused).toContain("NOT revoked");
+
+      const stranded = storedConfig(home);
+      // THE TOKEN SURVIVES. Deleting it here is what orphaned the bearer: the
+      // server holds only its hash, so this string was the only thing left that
+      // could revoke the session it stands for.
+      expect(stranded.accessToken).toBe(TOKEN);
+      expect(stranded.pendingRevocation).toMatchObject({ token: TOKEN, origin });
+
+      reachable = true;
+      const landed = await runLogout(home, origin);
+      expect(landed).toContain("Logged out");
+
+      const after = storedConfig(home);
+      // Only a CONFIRMED revocation clears the local copy — and the pending
+      // marker goes with it, so a later logout does not retry a dead session.
+      expect(after.accessToken).toBeUndefined();
+      expect(after.pendingRevocation).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+});

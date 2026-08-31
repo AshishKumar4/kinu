@@ -296,6 +296,9 @@ const USER_DO_METHODS = [
   'verifyDeviceConnectTicket',
   'verifyDeviceToken',
   'verifyCliSocketBearer',
+  'verifySocketSession',
+  'revokeAllCliTokens',
+  'getCredentialsRevision',
 ] as const satisfies readonly (keyof UserDO)[];
 
 export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, ...USER_DO_METHODS];
@@ -334,9 +337,12 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
 const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
   // The owner's UserDO closes this workspace's CLI websockets the moment it
-  // records a revocation — a socket that never speaks is unreachable by the
-  // frame-time check, and a revoked bearer must lose what it can HEAR too.
   'closeRevokedCliSockets',
+  'closeRevokedSessionSockets',
+  // The owner's UserDO asks a workspace root to re-push its capability token
+  // down the subtree when a reconciliation intent says an earlier push missed
+  // a replica — the idempotent retry that heals the stranding.
+  'repushWorkspaceCapability',
   'getSubordinateBootstrapIdentity',
   'headJournalCacheMerge',
   'headJournalInsertSpawn',

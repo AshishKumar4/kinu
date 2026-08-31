@@ -61,7 +61,14 @@ export async function handleCreateWorkspaceRequest(
 /** Fan a credential-change notification out to the user's active workspaces so
  *  each drops its cached provider/model state (onCredentialsChanged) —
  *  otherwise a disconnected provider stays "available" until the next
- *  claimOwner/setModel. The request's waitUntil owns the fanout. */
+ *  claimOwner/setModel. The request's waitUntil owns the fanout.
+ *
+ *  The fanout is a TIMELINESS mechanism, not a correctness one: every
+ *  mutation also bumps the account credential revision, and a workspace
+ *  compares that number before using its cached state, so a notification that
+ *  never landed is healed at the next use rather than left standing. Each
+ *  rejected workspace is named and classified here, so a persistent failure is
+ *  a diagnosable line rather than an allSettled outcome nobody reads. */
 export function notifyWorkspacesCredentialsChanged(
   env: Env,
   userDO: DurableObjectStub<UserDO>,
@@ -71,16 +78,26 @@ export function notifyWorkspacesCredentialsChanged(
     throw new Error('Credential fanout requires the request ExecutionContext owner');
   }
   ctx.waitUntil((async (): Promise<void> => {
+    let workspaces: Array<{ name: string }>;
     try {
-      const workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
-      await Promise.allSettled(workspaces
-        .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
+      workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
     } catch (cause) {
       diagnostics.failure('workspace.credential_fanout_failed', toKinuError({
         doing: 'notifying the user\'s workspaces of a credential change',
         cause,
         otherwise: 'unavailable',
       }));
+      return;
+    }
+    const settled = await Promise.allSettled(workspaces
+      .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
+    for (const [index, outcome] of settled.entries()) {
+      if (outcome.status === 'fulfilled') continue;
+      diagnostics.failure('workspace.credential_notify_failed', toKinuError({
+        doing: 'telling a workspace its owner\'s credentials changed',
+        cause: outcome.reason,
+        otherwise: 'unavailable',
+      }), { workspace: workspaces[index].name });
     }
   })());
 }

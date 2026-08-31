@@ -285,6 +285,49 @@ export function initWorkspaceCapabilityTables(sql: SqlExec): void {
       updated_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+
+  // A rotation whose subtree push did not reach every replica. `token_hash` is
+  // the hash the registry already committed, so the row is not a second
+  // authority — it is the fact that the ROOT holds that token while some
+  // descendant still presents the previous one. Written when a root install
+  // reports a missed push and cleared when a full push reports none; every
+  // reconcile between the two retries the push, because the hash comparison
+  // alone reads "both sides agree" from a root that is the only one agreeing.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS workspace_capability_reconcile (
+      workspace_name TEXT PRIMARY KEY,
+      token_hash     TEXT NOT NULL,
+      attempts       INTEGER NOT NULL DEFAULT 1,
+      created_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      updated_at     INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    )
+  `);
+}
+
+/** Whether a workspace has a rotation whose subtree push missed a replica. */
+export function pendingCapabilityReconcile(sql: SqlExec, workspaceName: string): string | null {
+  const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
+    `SELECT token_hash FROM workspace_capability_reconcile WHERE workspace_name = ? LIMIT 1`, workspaceName,
+  ).toArray()[0]);
+  return row.success ? row.output.token_hash : null;
+}
+
+/** Record or re-arm a missed subtree push. `attempts` rises on every retry so
+ *  a stuck replica is visible as a growing count rather than as silence. */
+export function armCapabilityReconcile(sql: SqlExec, workspaceName: string, tokenHash: string): void {
+  const now = Date.now();
+  sql.exec(
+    `INSERT INTO workspace_capability_reconcile (workspace_name, token_hash, attempts, created_at, updated_at)
+     VALUES (?, ?, 1, ?, ?)
+     ON CONFLICT(workspace_name) DO UPDATE SET
+       token_hash = excluded.token_hash, attempts = attempts + 1, updated_at = excluded.updated_at`,
+    workspaceName, tokenHash, now, now,
+  );
+}
+
+/** Clear the intent once every replica holds the token the registry expects. */
+export function clearCapabilityReconcile(sql: SqlExec, workspaceName: string): void {
+  sql.exec(`DELETE FROM workspace_capability_reconcile WHERE workspace_name = ?`, workspaceName);
 }
 
 /** The hash currently registered for a workspace, or null when it has never

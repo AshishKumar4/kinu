@@ -97,7 +97,13 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
 
   try {
     await authenticateRequest(request, env);
-    return redirect(new URL(returnTo, url.origin).toString());
+    // `prompt=login` is the step-up recovery URL — the page a stale session is
+    // SENT to when a mutation refuses its authTime. Answering it with a
+    // redirect back to `return_to` would bounce the operator into the very
+    // 401 that sent them here, so the signed-in caller falls through to the
+    // provider list like an unsigned one, and the provider's own reauth
+    // parameter (startOAuth → addProviderPrompt) forces the interactive login.
+    if (prompt === null) return redirect(new URL(returnTo, url.origin).toString());
   } catch (e) {
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
   }

@@ -305,6 +305,45 @@ export async function logout(origin: string, token: string): Promise<{ ok: boole
   return cloudJson(OkSchema, origin, '/api/cli/logout', { method: 'POST', token });
 }
 
+export interface CloudCliSession {
+  tokenHash: string;
+  label: string;
+  createdAt: number;
+  expiresAt: number;
+  lastUsedAt: number | null;
+}
+
+const CloudCliSessionSchema: v.GenericSchema<CloudCliSession> = v.object({
+  tokenHash: v.string(), label: v.string(),
+  createdAt: v.number(), expiresAt: v.number(), lastUsedAt: v.nullable(v.number()),
+});
+
+/** The account's live CLI sessions — the inventory that makes an orphaned
+ *  bearer reachable by something other than its own raw token. */
+export async function listCliSessions(
+  origin: string, token: string,
+): Promise<{ sessions: CloudCliSession[] }> {
+  return cloudJson(v.object({ sessions: v.array(CloudCliSessionSchema) }), origin, '/api/cli/sessions', { token });
+}
+
+/** Revoke one CLI session by the hash the inventory prints. */
+export async function revokeCliSessionByHash(
+  origin: string, token: string, hash: string,
+): Promise<{ ok: boolean }> {
+  return cloudJson(OkSchema, origin, `/api/cli/sessions/${encodeURIComponent(hash)}`, { method: 'DELETE', token });
+}
+
+/** Revoke every live CLI session — the recovery path when no hash can name
+ *  the orphan. The owner re-authenticates afterwards. */
+export async function revokeAllCliSessions(
+  origin: string, token: string,
+): Promise<{ ok: boolean; revoked: number }> {
+  return cloudJson(
+    v.object({ ok: v.boolean(), revoked: v.number() }),
+    origin, '/api/cli/sessions', { method: 'DELETE', token },
+  );
+}
+
 export async function listCloudAgents(origin: string, token: string): Promise<CloudAgent[]> {
   return cloudJson(v.array(CloudAgentSchema), origin, '/api/cli/workspaces', { token });
 }
