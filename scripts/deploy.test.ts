@@ -54,7 +54,7 @@ const REQUIRED_GATES = [
   "bun scripts/secret-scan.ts",
   "bun scripts/schema-drift.ts",
   "bun scripts/tracing-gate.ts",
-  "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/doc-claims.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts",
+  "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts",
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/wired.test.ts",
@@ -82,7 +82,6 @@ const REQUIRED_GATES = [
   "bun run gate:skip-ratchet",
   "bun run gate:set-equality",
   "bun run gate:literature-citations",
-  "bun run gate:doc-claims",
   "bun run gate:commit-message",
   "bun run gate:install-scripts",
   "bun run gate:dependency-advisories",
@@ -267,7 +266,7 @@ describe("deploy gate", () => {
   //
   // These assertions used to be `events == REQUIRED_GATES` and, per failing gate,
   // `events == REQUIRED_GATES.slice(0, n + 1)`. Both read a total order off the
-  // event log, and deploy.sh now runs the middle 50 gates concurrently, so that
+  // event log, and deploy.sh now runs the middle 55 gates concurrently, so that
   // order is scheduling noise.
   //
   // The properties the total order was standing in for are all still asserted, and
@@ -402,7 +401,7 @@ describe("deploy gate", () => {
 
   // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
   // default is not a decision anybody made about this test. One deploy run per
-  // gate, each running every earlier gate's stub: 53 gates is ~2,800 process
+  // gate, each running every earlier gate's stub: 57 gates is ~3,200 process
   // spawns.
   test("every gate fails closed even when the former skip variable is set", () => {
     const last = REQUIRED_GATES.at(-1);

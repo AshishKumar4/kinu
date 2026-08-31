@@ -40,8 +40,8 @@ empty directory. There is no copy, sync, failover, or second Cloudflare
 
 I omit line numbers for `packages/devbox/**`, `core/src/execution/**`, and
 `cf-backend/src/{runtime,kinu-sandbox,sandbox-lifecycle}.ts`: those files
-churn, while symbols are durable and `gate:doc-claims` resolves symbols and
-paths but never line numbers.
+churn, while symbols and paths are durable and a line rots on the next
+insertion above it.
 
 ## Provider contract
 

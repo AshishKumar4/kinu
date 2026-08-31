@@ -592,9 +592,9 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
   test('the declared sum is honest about each gate, and the tier is measured', () => {
     // TWO QUANTITIES, and conflating them is how this budget passed while the
     // hook took twice its allowance. `gatesFor` is cumulative, so a push runs the
-    // commit gates too: 31 entries declaring 68.0s in total. The tier MEASURES
+    // commit gates too: 37 entries declaring 110.5s in total. The tier MEASURES
     // 111-126s. The gap is not a stale declaration — `gate:dead-code` declares
-    // 5.5s and walls 6.0s — it is 31 process spawns the sum does not model, plus
+    // 5.5s and walls 6.0s — it is 37 process spawns the sum does not model, plus
     // `bun run` resolving a script before each one.
     //
     // So the declared sum is asserted as a FLOOR on honesty (no entry may claim
@@ -614,8 +614,8 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
   // long as this filtered LADDER, a gate could join the deploy path and cost
   // nothing on the tier's own cost line. Two did: `bun run verify:lean`, and the
   // bench command whose LADDER entry stopped at the `scripts/bench*` glob while
-  // deploy.sh also passed the core bench units. The tier declared 398.8s and ran
-  // 52 gates of which 50 were described.
+  // deploy.sh also passed the core bench units. The tier now declares 685.0s and
+  // runs 57 gates, all described.
   //
   // Synthesis stays: an undeclared deploy gate must still RUN. This is what makes
   // it also fail, by name, until somebody measures it.

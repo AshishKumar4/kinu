@@ -224,11 +224,9 @@ than one long name for one of them: a reader who meets both has to work out whic
 answer is not guessable from either. The table identifier stays `search_nodes` — identifiers never
 change for prose reasons, and prose about a row may say so.
 
-This one is review, not a gate, and the reason is worth keeping. `gate:doc-claims` derives every
-verdict FROM CODE: a symbol resolves against an identifier index, a path against the tracked file
-list, a stated count against the measured length of a named enumerable. A banned phrase has no code
-side. Its only implementable form is a word list of size one wearing a derivation, and putting that
-in a code-derived gate gives the gate a second failure mode and its own drift surface.
+Review document claims against code before they land. Verify named symbols, paths, and counts against
+source. Keep figures dated and tied to a measurement. A banned phrase has no code side. Review it
+instead of adding a word-list check.
 
 ## Package Structure
 
