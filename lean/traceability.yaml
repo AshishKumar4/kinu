@@ -1067,3 +1067,64 @@ requirements:
       - Atomic R2 PUT, read-after-write, atomic SQL transaction, capture soundness, collision resistance and grant confinement remain explicit premises rather than kernel axioms
       - The await-name register is copied from the frozen contract; the gate now holds AwaitPoint equal to DURABILITY_AWAIT_POINTS as a set, and nothing checks that the two orders agree
       - The model proves no unconditional deadline exists in its transition system, while deployment latency and provider limits require measured evidence
+  PR-CAPTURE-001:
+    statement: The per-mutation durability order a journal daemon must honour is declared as one total step numbering, so an intent fdatasync precedes the effect it describes, the effect precedes the result fdatasync, and the result fdatasync precedes the reply the client sees.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Storage.DurableRoot.journal_intent_precedes_effect
+      - Proteus.Storage.DurableRoot.effect_precedes_journal_result
+      - Proteus.Storage.DurableRoot.journal_result_precedes_reply
+    tsRefs:
+      - packages/devbox/src/capture/journal-capture.ts#JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS
+      - packages/devbox/src/capture/journal/command.ts#journalDaemonArgv
+      - packages/devbox/src/capture/journal/client.ts#JournalDaemonClient
+    remainingEvidence:
+      - Each theorem unfolds MutationOrderedBefore and mutationStepOrder and compares two literals, so the three hold that the model NAMES this order and prove nothing about any syscall sequence
+      - The daemon that must issue both fdatasync calls is a separate binary this repository only names through journalDaemonArgv, so its write path is outside the model and outside the tree
+      - intent-fdatasync-precedes-effect and result-fdatasync-precedes-reply stay measured entries of JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS, and materializeJournalPrefix refuses a capture when either is unproven rather than deriving it from these theorems
+      - The reply step is modelled as a fourth ordinal with no failure arm, so a mutation whose result fdatasync fails after the effect applied is not a state this numbering can express
+  PR-CAPTURE-002:
+    statement: The fence durability order is declared as one total step numbering, so admission closes before the drain, the drain precedes the captured root's syncfs, the syncfs precedes the sealed stage, the sealed stage precedes the manifest fsync, and the manifest fsync precedes the fence fdatasync the capture linearizes at.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Storage.DurableRoot.admission_closes_before_drain
+      - Proteus.Storage.DurableRoot.drain_precedes_root_syncfs
+      - Proteus.Storage.DurableRoot.root_syncfs_precedes_stage
+      - Proteus.Storage.DurableRoot.sealed_stage_precedes_manifest_fsync
+      - Proteus.Storage.DurableRoot.manifest_fsync_precedes_fence_fsync
+    tsRefs:
+      - packages/devbox/src/capture/journal/client.ts#JournalDaemonClient.fence
+      - packages/devbox/src/capture/journal/client.ts#captureFromJournalFence
+      - packages/devbox/src/capture/freeze-drain.ts#FreezeSeam
+      - packages/devbox/src/capture/freeze-drain.ts#captureFrozenCopy
+      - packages/devbox/src/capture/capabilities.ts#decideCaptureMechanism
+    remainingEvidence:
+      - Each theorem unfolds FenceOrderedBefore and fenceStepOrder and compares two literals, so the five hold that the model NAMES this order and say nothing about what a daemon executes between two of these steps
+      - The freeze-drain mechanism reaches its cut through a different sequence, and its missing-syncfs case degrades to a caveat carried on the decision rather than to a step this numbering distinguishes
+      - fence-closes-admission-and-drains, root-syncfs-precedes-stage and sealed-stage-and-manifest-are-durable remain measured platform assumptions, so no theorem here is evidence that a deployed fence performed them in this order
+      - The six steps are totally ordered with no abort arm, so a fence that closes admission and then fails before its fdatasync is outside the model, and only the durable-root theorems under PR-DURABLE-001 cover what survives that crash
+      - No differential fixture runs JournalDaemonClient.fence against this numbering, and WP-F4 is the remaining bridge
+  PR-CAPTURE-003:
+    statement: The fenced point is this model's linearization point and its stage is exactly the captured-root prefix of one committed generation, so that stage is quiescent, non-torn, carries no commit sequenced after the cut, and contains no private-state or mount-control commit.
+    status: by-construction-witness
+    theorems:
+      - Proteus.Storage.DurableRoot.fenced_point_is_linearization_point
+      - Proteus.Storage.DurableRoot.fenced_point_is_process_quiescent
+      - Proteus.Storage.DurableRoot.fenced_point_has_one_committed_generation
+      - Proteus.Storage.DurableRoot.fenced_capture_is_not_torn
+      - Proteus.Storage.DurableRoot.fenced_capture_cut_excluded
+      - Proteus.Storage.DurableRoot.fenced_capture_excludes_private_and_mount
+      - Proteus.Storage.DurableRoot.journal_capture_sound
+    tsRefs:
+      - packages/devbox/src/capture/journal-capture.ts#LinearizationPoint
+      - packages/devbox/src/capture/journal-capture.ts#OneCommittedGeneration
+      - packages/devbox/src/capture/journal-capture.ts#Torn
+      - packages/devbox/src/capture/journal-capture.ts#CutExcluded
+      - packages/devbox/src/capture/journal-capture.ts#JournalCaptureSoundness
+      - packages/devbox/src/capture/journal-capture.ts#materializeJournalPrefix
+    remainingEvidence:
+      - fencedPoint assigns quiescence and the fence phase as field values and stagedAt is DEFINED as the filtered prefix, so these theorems read a declared definition back out rather than proving that a fence the code performed produced such a stage
+      - Non-tornness is witnessed by the point's own cut because the stage is a replayAt by definition, so it refutes a stage matching no committed prefix and never rules out a daemon staging something that is not a replayAt
+      - journal_capture_sound is the conjunction of the six theorems above it and adds no content beyond naming them together
+      - JournalPlatformAssumptions and FreezeDrainPlatformAssumptions carry sixteen platform facts as opaque Props that no theorem constrains, so nothing here is evidence that a deployed FUSE or fanotify plane intercepts every writer
+      - materializeJournalPrefix attaches its executable soundness record after its own contiguity, overflow and evidence checks, and no differential fixture runs those checks against these theorems

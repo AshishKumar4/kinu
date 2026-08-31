@@ -22,12 +22,12 @@ TypeScript locations, classification, missing evidence per requirement.
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale relative to the current provider and the eight-tool builtin surface |
 | MCTS | 11 | exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite backpropagation uses IEEE-754 REAL values, and transition postconditions are hand-maintained |
-| Storage | 147 | index/list properties, byte-chunk reassembly, a list-backed filesystem, and the SQLite filesystem's own correctness obligations | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
+| Storage | 162 | index/list properties, byte-chunk reassembly, a list-backed filesystem, and the SQLite filesystem's own correctness obligations | SQLite tokenization, ranking, concurrency, and table-to-model correspondence remain external evidence obligations |
 | Safety | 6 | the shape of operations constructible from modeled provider names | These are constructor witnesses, not a proof of the deployed sandbox boundary |
 
 Counts: `lean/check-traceability.mjs --list-declarations` reports 485 named
 declarations, measured 2026-08-30. The traceability map enrolls 380
-`proved-in-abstract-model` entries and 90 `by-construction-witness` entries.
+`proved-in-abstract-model` entries and 105 `by-construction-witness` entries.
 
 **Two denominators.** Status declares on a REQUIREMENT and inherits to every
 theorem it claims, so the same four words count twice over two totals. Name the
@@ -37,7 +37,7 @@ The two status groups above cover every traceability-enrolled theorem.
 Near-definitional statements (nonnegativity of a `Nat` EMA score; a constructor
 cannot produce `SQLWrite`) are witnesses, not deep safety proofs.
 
-By requirement, over 49: **30 `proved-in-abstract-model`**, **13
+By requirement, over 52: **30 `proved-in-abstract-model`**, **16
 `by-construction-witness`**, **5 `specified-not-modeled`**, **1
 `trusted-model-assumption`**. Two statuses exist only in this total, because
 five requirements claim no theorem.

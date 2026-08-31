@@ -523,6 +523,33 @@ import Proteus.Storage.DurableRoot
 
 #print axioms Proteus.Storage.DurableRoot.await_point_register_is_total
 #print axioms Proteus.Storage.DurableRoot.await_point_register_has_sixteen
+
+/-! ### Capture soundness — mutation durability ordering -/
+
+#print axioms Proteus.Storage.DurableRoot.journal_intent_precedes_effect
+#print axioms Proteus.Storage.DurableRoot.effect_precedes_journal_result
+#print axioms Proteus.Storage.DurableRoot.journal_result_precedes_reply
+
+/-! ### Capture soundness — fence durability ordering -/
+
+#print axioms Proteus.Storage.DurableRoot.admission_closes_before_drain
+#print axioms Proteus.Storage.DurableRoot.drain_precedes_root_syncfs
+#print axioms Proteus.Storage.DurableRoot.root_syncfs_precedes_stage
+#print axioms Proteus.Storage.DurableRoot.sealed_stage_precedes_manifest_fsync
+#print axioms Proteus.Storage.DurableRoot.manifest_fsync_precedes_fence_fsync
+
+/-! ### Capture soundness — the fenced linearization point -/
+
+#print axioms Proteus.Storage.DurableRoot.fenced_point_is_linearization_point
+#print axioms Proteus.Storage.DurableRoot.fenced_point_is_process_quiescent
+#print axioms Proteus.Storage.DurableRoot.fenced_point_has_one_committed_generation
+#print axioms Proteus.Storage.DurableRoot.fenced_capture_is_not_torn
+#print axioms Proteus.Storage.DurableRoot.fenced_capture_cut_excluded
+#print axioms Proteus.Storage.DurableRoot.fenced_capture_excludes_private_and_mount
+#print axioms Proteus.Storage.DurableRoot.journal_capture_sound
+
+/-! ### Reset-safe durable root -/
+
 #print axioms Proteus.Storage.DurableRoot.runOf_nil
 #print axioms Proteus.Storage.DurableRoot.runOf_cons
 #print axioms Proteus.Storage.DurableRoot.initial_safe
