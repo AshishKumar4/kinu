@@ -22,7 +22,7 @@ import {
  *  tests, which is the point. */
 const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 const noticeBackoffMs = (attempts: number): number =>
-  Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000);
+  Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000); // mirrors recoveryBackoffMs
 import { BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME } from '@kinu.run/core';
 
 function recordingTransports() {

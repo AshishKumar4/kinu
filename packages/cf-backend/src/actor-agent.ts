@@ -235,6 +235,7 @@ import {
 } from "./runtime";
 import { cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner } from "./node-home";
 import {
+  recoveryBackoffMs,
   // The durable lanes' recovery roster — synchronous classification, six arms,
   // terminal-result discipline — and this backend's three cf-minted lane names.
   classifyRecoveredFiber, EVOLUTION_LANE_FIBER, ADVISOR_LANE_FIBER, MCP_WARM_LANE_FIBER,
@@ -2137,15 +2138,27 @@ export abstract class ActorAgent extends Think<Env> {
   async _kinuTerminalRetryTick(): Promise<void> {
     // Maintenance first: the budgeted sweeps and the activation-scoped
     // recovery run in this alarm frame, then the owed external deliveries.
-    // One wake, one carrier, collapse semantics included — a pass that filled
-    // its budget re-arms THIS tick through the same singleton-safe armer.
-    const sweepsTruncated = this.maintenanceSweeps();
-    const recoveryTruncated = await this.maintenanceWork();
+    // One wake, one carrier, collapse semantics included — a pass that left
+    // work unfinished re-arms THIS tick through the same singleton-safe armer,
+    // at the shared capped backoff: a deep backlog drains at a growing pace,
+    // and a persistently FAILING sweep (which also answers unfinished) settles
+    // at the ceiling instead of a one-second loop. The lap count is the
+    // isolate's own; an eviction resets pace and backlog reads together.
+    const sweepsUnfinished = this.maintenanceSweeps();
+    const recoveryUnfinished = await this.maintenanceWork();
     await this.owedDeliveryWork();
-    if (sweepsTruncated || recoveryTruncated) {
-      await this.scheduleTerminalRetry(Date.now() + 1000);
+    if (sweepsUnfinished || recoveryUnfinished) {
+      this.#maintenanceLaps = this.#maintenanceLaps + 1;
+      await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(this.#maintenanceLaps));
+    } else {
+      this.#maintenanceLaps = 0;
     }
   }
+
+  /** Consecutive unfinished maintenance laps — the pace input for the tick's
+   *  own re-arm. In-memory on purpose: the pace only has to hold within one
+   *  isolate, and evictions are slower than the ceiling it caps. */
+  #maintenanceLaps = 0;
 
   /**
    * When this activation began — the isolate's own construction instant.

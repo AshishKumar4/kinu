@@ -555,7 +555,7 @@ export function dispatchRecoveredNotice(
     // recovers this row and re-enters here with the same count, and pacing
     // that ran after the refusal would be skipped by exactly that replay.
     if (attempts > 0) {
-      await new Promise((resolve) => { setTimeout(resolve, noticeBackoffMs(attempts)); });
+      await new Promise((resolve) => { setTimeout(resolve, recoveryBackoffMs(attempts)); });
     }
     if (await transports.deliverSignal(signal) === 'undelivered') {
       diagnostics.event('fiber.notice_redelivery_owed', {
@@ -583,10 +583,12 @@ const RecoveredSignalSchema = v.object({
  *  every dispatch site. */
 export type RecoveredNotice = v.InferOutput<typeof RecoveredSignalSchema>;
 
-/** Capped backoff for a pre-empted notice enqueue: unbounded ATTEMPTS — a cap
- *  that gives up loses the notice this lane exists to keep — with a bounded
- *  PACE, per the retry doctrine every provider path here follows. */
-function noticeBackoffMs(attempts: number): number {
+/** Capped backoff for recovery work that must never give up: unbounded
+ *  ATTEMPTS — a cap would lose the work the carrier exists to keep — with a
+ *  bounded PACE, per the retry doctrine every provider path here follows.
+ *  Shared by the notice lane and the maintenance tick's own re-arm, so a
+ *  persistently failing sweep settles at the ceiling instead of a 1 Hz loop. */
+export function recoveryBackoffMs(attempts: number): number {
   return Math.min(1000 * 2 ** Math.min(attempts, 6), 60_000);
 }
 
