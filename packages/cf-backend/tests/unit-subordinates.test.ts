@@ -300,7 +300,8 @@ describe('subordinate wiring', () => {
       hook.indexOf('\n\n  useEffect(() => {', hook.indexOf('const refreshSubordinates = useCallback')),
     );
     expect(refresh).toContain('const generation = ++subordinateRefreshGeneration.current;');
-    expect(refresh.match(/generation !== subordinateRefreshGeneration\.current/g)).toHaveLength(2);
+    expect(refresh.match(/generation !== subordinateRefreshGeneration\.current/g)).toHaveLength(1);
+    expect(refresh).toContain('thrown !== null && generation === subordinateRefreshGeneration.current');
     expect(hook).toContain('msg.type === "subordinates_changed"');
     expect(hook).toContain('++subordinateRefreshGeneration.current;');
   });
