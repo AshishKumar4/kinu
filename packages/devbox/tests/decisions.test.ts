@@ -554,13 +554,16 @@ describe('every self-re-arming schedule needs a first link', () => {
     }
   });
 
-  test('onStart only arms schedule chains, under the start deadline', () => {
-    // Arming is the WHOLE body — no attach, no restore — and it rides the
-    // container-start budget because `onStart` runs inside
-    // `blockConcurrencyWhile`, whose platform cancel resets the object
-    // (scripts/do-init-gate.test.ts holds the routing from the other side).
+  test('onStart arms schedule chains PLAINLY — bounded work wears no deadline', () => {
+    // Arming is the WHOLE body — no attach, no restore — three local storage
+    // writes whose bound is inherent. The old shape wrapped them in
+    // withContainerStartDeadline, a timer that cannot even fire inside
+    // blockConcurrencyWhile: a paper bound, ruled out. The deadline belongs to
+    // genuinely external container admission, outside the init gate
+    // (scripts/do-init-gate.ts holds both shapes from the other side).
     const hook = bodyOf('override onStart(');
-    expect(hook).toContain('return withContainerStartDeadline(');
+    expect(hook).not.toContain('withContainerStartDeadline(');
+    expect(hook).toContain('BOUNDED_STORAGE_ONLY');
     expect(hook).toContain('this.#armContainerSchedules()');
   });
 

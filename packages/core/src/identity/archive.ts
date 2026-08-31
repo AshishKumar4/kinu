@@ -119,13 +119,33 @@ export interface ArchiveSqlCursor {
   phase: 'sql';
   /** Table whose rows the next page resumes in. */
   table: string;
-  /** Where in that table to resume: the last rowid already emitted, or — for a
-   *  WITHOUT ROWID table, which has none — the number of rows already emitted.
-   *  Keyset, not offset, because a table with a hundred thousand rows would
-   *  otherwise cost a full scan per page. `null` starts the table: a rowid can
-   *  legally be 0 or negative when the table declares its own INTEGER PRIMARY
-   *  KEY, so no numeric sentinel can mean "before the first row". */
-  after: number | null;
+  /**
+   * The dumpable table set the FIRST page pinned, in the order it walks them.
+   *
+   * An export of a live workspace spans several RPCs, and lazily-created tables
+   * (`outbox_<name>`, `swarm_node_records`, …) can be born between two of them.
+   * A later page that re-derives the set from `sqlite_master` would then walk a
+   * table whose schema record was never emitted and hand the restore row
+   * records for a table it never created — an export that completes without
+   * error and cannot be restored. Pinning the first page's set makes a
+   * mid-export birth invisible to this export, exactly as a row written after
+   * `exported_at` already is, and keeps the schema records and the row records
+   * one archive.
+   *
+   * The first page does not carry it: the fresh list it computes IS the pin,
+   * and a cursor without one is either that first page or one written before
+   * pinning existed — both resume by deriving, which is the only coherent
+   * answer for a cursor with no list to consult.
+   */
+  tables?: string[];
+  /** Where in that table to resume — KEYSET, never offset: the last rowid
+   *  already emitted, or, for a WITHOUT ROWID table (which has none), the
+   *  JSON-encoded primary-key tuple of the last emitted row, resumed with a
+   *  row-value comparison. `null` starts the table. A rowid can legally be 0
+   *  or negative, so no numeric sentinel means "before the first row"; and an
+   *  offset resume is what let one concurrent insert duplicate a row across a
+   *  page boundary. */
+  after: number | string | null;
   /** Rows emitted by every page so far — the count the end record declares,
    *  and therefore what makes a short restore detectable. */
   rows: number;
@@ -141,6 +161,29 @@ export interface ArchiveFilesCursor {
 }
 
 export type ArchiveCursor = ArchiveSqlCursor | ArchiveFilesCursor;
+
+/**
+ * The ONE wire schema for a cursor that crosses an RPC — the orchestrator
+ * route, the browser export page and the CLI all parse with this. Each used
+ * to spell its own `v.object`, and valibot's object EXCLUDES unknown keys: the
+ * two copies that never learned `tables` silently stripped the pinned set on
+ * every round trip, which is how a drift-proof pin dies without an error.
+ */
+export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
+  v.object({
+    phase: v.literal('sql'),
+    table: v.pipe(v.string(), v.nonEmpty()),
+    tables: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
+    after: v.nullable(v.union([v.pipe(v.number(), v.safeInteger()), v.string()])),
+    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  }),
+  v.object({
+    phase: v.literal('files'),
+    after: v.pipe(v.string(), v.nonEmpty()),
+    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  }),
+]);
 
 export interface ArchiveFileEntry {
   /** Relative to the workspace root. */
@@ -365,6 +408,28 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+/** A keyset anchor crosses the wire as JSON inside the cursor; parse it back
+ *  at this trust boundary rather than trusting the round trip. */
+const KeysetValueSchema = v.union([v.string(), v.number()]);
+const KeysetAnchorSchema = v.array(KeysetValueSchema);
+
+/** The primary-key COLUMNS a WITHOUT ROWID table is walked by, in key order —
+ * the index the table's rows live in. Empty only for a keyless WITHOUT ROWID
+ * table, which SQLite does not allow to exist — but a table with no key is
+ * reported rather than silently ordered by nothing. */
+function withoutRowidKey(sql: SqlExec, table: SchemaObject): readonly string[] {
+  const columns = sql.exec(
+    `PRAGMA table_info(${quoteIdent(table.name)})`,
+  ).toArray()
+    .map((row) => v.parse(v.object({ name: v.string(), pk: v.number() }), row))
+    .filter((column) => column.pk > 0)
+    .sort((a, b) => a.pk - b.pk);
+  if (columns.length === 0) {
+    throw new Error(`Cannot order a WITHOUT ROWID export of "${table.name}": it has no primary key.`);
+  }
+  return columns.map((column) => column.name);
+}
+
 function archivePath(path: string): string {
   if (!path || path.startsWith('/') || path.endsWith('/')) {
     throw new Error(`Invalid workspace archive path: ${JSON.stringify(path)}.`);
@@ -400,7 +465,16 @@ export async function readWorkspaceArchivePage(
 ): Promise<ArchivePage> {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const schema = readSchema(sql);
-  const dumpable = schema.filter((o) => o.dumpRows);
+  const fileCursor = opts.cursor?.phase === 'files' ? opts.cursor : null;
+  const sqlCursor = opts.cursor?.phase === 'sql' ? opts.cursor : null;
+  const live = schema.filter((o) => o.dumpRows);
+  // The table set this export walks, pinned by its first page. A resumed page
+  // iterates EXACTLY the set the cursor carries — never a fresh derivation — so
+  // a table born mid-export is as absent from this archive as rows written
+  // after `exported_at`. A pinned table that has since been dropped is still
+  // the resumption error it always was.
+  const pinned = sqlCursor?.tables ?? live.map((o) => o.name);
+  const dumpable = sqlCursor === null ? live : live.filter((o) => pinned.includes(o.name));
   const lines: string[] = [];
   let bytes = 0;
   const emit = (
@@ -411,10 +485,8 @@ export async function readWorkspaceArchivePage(
     bytes += line.length + 1;
   };
 
-  const fileCursor = opts.cursor?.phase === 'files' ? opts.cursor : null;
-  const sqlCursor = opts.cursor?.phase === 'sql' ? opts.cursor : null;
   let index = fileCursor ? dumpable.length : 0;
-  let after: number | null = null;
+  let after: number | string | null = null;
   let rows = opts.cursor?.rows ?? 0;
   if (sqlCursor) {
     index = dumpable.findIndex((o) => o.name === sqlCursor.table);
@@ -459,11 +531,30 @@ export async function readWorkspaceArchivePage(
     const table = dumpable[index]!;
     const size = nextBatch();
     const rowidSelect = `SELECT rowid AS ${quoteIdent(ROWID_ALIAS)}, * FROM ${quoteIdent(table.name)}`;
-    const rawBatch = table.withoutRowid
-      ? sql.exec(`SELECT * FROM ${quoteIdent(table.name)} LIMIT ? OFFSET ?`, size, after ?? 0).toArray()
-      : after === null
-        ? sql.exec(`${rowidSelect} ORDER BY rowid LIMIT ?`, size).toArray()
-        : sql.exec(`${rowidSelect} WHERE rowid > ? ORDER BY rowid LIMIT ?`, after, size).toArray();
+    // KEYSET on the WITHOUT ROWID branch, where there is no rowid to hold the
+    // walk still: the primary key is a total order and the index the rows live
+    // in, so resuming is a row-value seek past the last emitted key tuple. An
+    // ordered OFFSET is not enough — a row inserted BEFORE the boundary shifts
+    // every offset and duplicates the row at it, which is exactly what the
+    // paging test caught.
+    const keyset = table.withoutRowid ? withoutRowidKey(sql, table) : null;
+    const rawBatch = ((): readonly unknown[] => {
+      if (keyset === null) {
+        return after === null
+          ? sql.exec(`${rowidSelect} ORDER BY rowid LIMIT ?`, size).toArray()
+          : sql.exec(`${rowidSelect} WHERE rowid > ? ORDER BY rowid LIMIT ?`, after, size).toArray();
+      }
+      const cols = keyset.map(quoteIdent).join(', ');
+      if (after === null) {
+        return sql.exec(`SELECT * FROM ${quoteIdent(table.name)} ORDER BY ${cols} LIMIT ?`, size).toArray();
+      }
+      const anchor = v.parse(KeysetAnchorSchema, JSON.parse(v.parse(v.string(), after)));
+      return sql.exec(
+        `SELECT * FROM ${quoteIdent(table.name)} WHERE (${cols}) > (${keyset.map(() => '?').join(', ')}) `
+        + `ORDER BY ${cols} LIMIT ?`,
+        ...anchor, size,
+      ).toArray();
+    })();
     const batch = rawBatch.map((row) => v.parse(ArchiveDatabaseRowSchema, row));
 
     for (const row of batch) {
@@ -476,11 +567,16 @@ export async function readWorkspaceArchivePage(
       rows++;
       emitted++;
       emittedBytes += bytes - before;
-      after = table.withoutRowid ? (after ?? 0) + 1 : v.parse(v.number(), row[ROWID_ALIAS]);
+      after = keyset === null
+        ? v.parse(v.number(), row[ROWID_ALIAS])
+        : JSON.stringify(keyset.map((name) => v.parse(
+          KeysetValueSchema, row[name],
+          { message: `"${table.name}"."${name}" holds a non-keyset value; a WITHOUT ROWID export key must be TEXT, INTEGER or REAL` },
+        )));
       // Checked per row, not per batch: one oversized row must end the page
       // rather than ride along with a batch's worth of others.
       if (bytes >= maxBytes) {
-        return { lines, next: { phase: 'sql', table: table.name, after, rows } };
+        return { lines, next: { phase: 'sql', table: table.name, after, rows, tables: pinned } };
       }
     }
 

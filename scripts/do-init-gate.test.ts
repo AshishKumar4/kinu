@@ -160,6 +160,30 @@ describe('DO init-gate purity — container-start hook', () => {
       .toEqual([expect.stringContaining('must annotate `: void`')]);
   });
 
+  test('the plainly-bounded marker is the one alternative to the wrapper', () => {
+    // Storage-only work the hook returns needs no deadline: the timer cannot
+    // fire inside the gate, so the wrapper would claim a bound that does not
+    // exist. The marker says so visibly, and the gate accepts it.
+    const marked = `export class KinuSandbox extends Sandbox<Env> {
+      onStart(): Promise<void> {
+        void BOUNDED_STORAGE_ONLY;
+        return this.armSchedules();
+      }
+    }`;
+    expect(reasons(marked)).toEqual([]);
+  });
+
+  test('the marker forbids the wrapper it replaces, and off-object work is still unbounded', () => {
+    const both = `export class KinuSandbox extends Sandbox<Env> {
+      onStart(): Promise<void> {
+        void BOUNDED_STORAGE_ONLY;
+        return withContainerStartDeadline('x', 1, () => this.start(), () => {});
+      }
+    }`;
+    expect(reasons(both))
+      .toEqual([expect.stringContaining('yet routes through `withContainerStartDeadline`')]);
+  });
+
   test('the Sandbox lineage holds indirect subclasses to the container rule', () => {
     const sources = new Map([
       ['devbox.ts', 'export class Devbox extends Sandbox {}'],
@@ -377,20 +401,37 @@ describe('DO init-gate purity, against the real tree', () => {
   });
 
   test('cut the wire: unbounding the real container hook goes red', () => {
-    // The per-start arming is the reason this hook may hold the gate at all.
-    // Take its budget away against the real file and the gate must say so.
-    // The hook lives on Devbox since the extraction; KinuSandbox inherits it.
+    // The per-start arming is plainly bounded storage work, so the hook carries
+    // the marker instead of a wrapper. Strip the marker against the real file
+    // and the gate must demand one of the two bounds.
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     expect(real).toBeDefined();
 
-    const unbounded = real!.replace(
-      'return withContainerStartDeadline(', 'return this.unbounded(',
-    );
-    expect(unbounded).not.toBe(real);
-    const { violations } = auditFile(file, unbounded);
+    const unmarked = real!.replace('    void BOUNDED_STORAGE_ONLY;\n', '');
+    expect(unmarked).not.toBe(real);
+    const { violations } = auditFile(file, unmarked);
     expect(violations.map((v) => v.owner)).toEqual(['Devbox']);
     expect(violations[0]!.reason).toContain('must route its work through');
+  });
+
+  test('cut the wire: wrapping the real container hook goes red from the marker side', () => {
+    // The marker is not a licence to skip the wrapper — it is the REASON the
+    // wrapper is wrong. A wrapper around work the marker vouches for claims a
+    // bound whose timer cannot fire inside the gate, which is the paper bound
+    // this gate exists to prevent, and the gate says so.
+    const file = 'packages/devbox/src/devbox.ts';
+    const real = SOURCES.get(file);
+    expect(real).toBeDefined();
+
+    const wrapped = real!.replace(
+      '    return this.#armContainerSchedules();',
+      '    return withContainerStartDeadline(\'x\', 1, () => this.#armContainerSchedules(), () => {});',
+    );
+    expect(wrapped).not.toBe(real);
+    const { violations } = auditFile(file, wrapped);
+    expect(violations.map((v) => v.owner)).toEqual(['Devbox']);
+    expect(violations[0]!.reason).toContain('yet routes through');
   });
 
   test('cut the wire: detaching the real container hook goes red', () => {

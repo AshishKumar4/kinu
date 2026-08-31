@@ -43,6 +43,7 @@
  * runtime.ts.
  */
 
+import * as v from 'valibot';
 import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
 import type { WorkspaceBundle, WorkspaceSession } from '@kinu.run/core/workspace';
 import { decodeJsonValue } from '@kinu.run/core';
@@ -206,6 +207,45 @@ export interface HostedWorkspace {
 export const PREVIEW_CAPABILITY_HANDLE_LENGTH = 10;
 
 /**
+ * The marker for a preview URL whose capability is still the persisted one but
+ * whose listener did not survive the isolate — the workspace was recycled.
+ *
+ * Modelled on the container plane's `SDK_STALE_PREVIEW`: a status that is not
+ * 404 and a machine-readable body, so a caller can tell "this link never named
+ * anything" from "this link names an exposure that an eviction took and only a
+ * re-expose can bring back".
+ */
+export const RECYCLED_PREVIEW = {
+  status: 410,
+  body: JSON.stringify({
+    error: 'Preview URL is stale because the workspace was recycled',
+    code: 'RECYCLED_WORKSPACE_PREVIEW',
+    detail: 'The workspace process that served this port did not survive eviction. '
+      + 'Re-expose the port to get a working preview URL.',
+  }),
+} as const;
+
+/**
+ * The durable half of a port's capability, as Nimbus's session layer persists
+ * it: `nimbus_preview_capability:<port>` in the object's own KV storage, written
+ * at the moment the embedder is handed the URL and retired on every fresh
+ * registration.
+ *
+ * Read here rather than through the worker package because the hosted
+ * workspace IS the embedder: the row sits in this object's `ctx.storage` and
+ * the value is the same one `ports.expose` answered with. Only the 24-hex
+ * minted shape is accepted, exactly as `readPortCapability` itself does.
+ */
+export async function readWorkspacePortCapability(
+  ctx: DurableObjectState,
+  port: number,
+): Promise<string | null> {
+  const stored = await ctx.storage.get(`nimbus_preview_capability:${Number(port)}`);
+  const parsed = v.safeParse(v.pipe(v.string(), v.regex(/^[a-f0-9]{24}$/)), stored);
+  return parsed.success ? parsed.output : null;
+}
+
+/**
  * Compose the workspace this Durable Object owns.
  *
  * Called once per isolate, lazily — `nextWorkspaceGeneration` bumps a durable
@@ -222,19 +262,32 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
   // One registry per isolate, exactly as a session has one: a port is a live
   // listener in this isolate's memory, and its capability is persisted through
-  // `ctx.storage` by the programmatic surface so a URL survives an eviction.
+  // `ctx.storage` by the programmatic surface. What survives an eviction is the
+  // DURABLE VALUE ONLY — nothing restarts the workspace's processes on wake
+  // (they are waitUntil-held, and `facetManager` is null below), so a URL that
+  // outlived its isolate names a port nobody is listening on until the agent
+  // re-exposes it. `routePreview` is where that distinction becomes an answer.
   const portRegistry = new PortRegistry();
   let composing: Promise<ProgrammaticHost> | undefined;
   const host = async (): Promise<ProgrammaticHost> => {
     composing ??= (async (): Promise<ProgrammaticHost> => {
-      const session = await bundle.session();
-      // `git` over this filesystem: isomorphic-git against the SqliteVFS, with
-      // no child process and nothing reaching a host's git. The Durable Object
-      // context and env are what the NETWORK subcommands (clone/fetch/pull/push)
-      // reach through the git-network facet; local history needs neither, and
-      // both are real here.
-      registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
-      return programmaticHost(session, portRegistry, deps);
+      try {
+        const session = await bundle.session();
+        // `git` over this filesystem: isomorphic-git against the SqliteVFS, with
+        // no child process and nothing reaching a host's git. The Durable Object
+        // context and env are what the NETWORK subcommands (clone/fetch/pull/push)
+        // reach through the git-network facet; local history needs neither, and
+        // both are real here.
+        registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
+        return programmaticHost(session, portRegistry, deps);
+      } catch (cause) {
+        // Same rule as the bundle's `booting` and `planes`: this host lives for
+        // the whole actor isolate, and a cached rejection would poison every
+        // later box op and preview route on one transient failure while each
+        // user retry resets the eviction timer that is the only other way out.
+        composing = undefined;
+        throw cause;
+      }
     })();
     return await composing;
   };
@@ -252,13 +305,34 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       return built;
     },
     async routePreview(port, handle, request, pathname) {
-      const self = await host();
       const capability = portRegistry.get(port)?.capability;
-      // A port nobody is listening on, or one re-exposed under a fresh
-      // capability: either way the link named an exposure that is not this one.
-      if (!capability || capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
+      // A port re-exposed under a fresh capability: the link named an exposure
+      // that is not this one, in an isolate that still holds one.
+      if (capability !== undefined) {
+        if (capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
+          return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+        }
+      } else {
+        // An in-memory miss, answered from the DURABLE copy. Two states share
+        // it, and only the persisted value can tell them apart: a URL for a
+        // port this isolate never saw is a plain 404, while a URL whose
+        // capability is still the persisted one belongs to an exposure an
+        // eviction took with the listener that served it — the workspace was
+        // recycled, and the agent has to re-expose the port before this link
+        // resolves again. A bare 404 would hide that from both the visitor and
+        // the operator; this names it.
+        const persisted = await readWorkspacePortCapability(deps.ctx, port);
+        if (persisted !== null && persisted.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle) {
+          return new Response(RECYCLED_PREVIEW.body, {
+            status: RECYCLED_PREVIEW.status,
+            headers: { 'cache-control': 'no-store', 'content-type': 'application/json' },
+          });
+        }
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
+      // Booted only past the miss arm: a stale or unknown link is answered
+      // above without composing the workspace.
+      const self = await host();
       // An upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.

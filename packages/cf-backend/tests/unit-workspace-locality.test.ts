@@ -24,7 +24,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createHostedWorkspace } from '../src/workspace-host';
+import {
+  createHostedWorkspace, readWorkspacePortCapability, RECYCLED_PREVIEW,
+} from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { sqlOver } from '@kinu.run/test-utils';
 import type { JsonValue } from '@kinu.run/core';
@@ -274,5 +276,74 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     expect(actor.tables()).not.toContain('inodes');
     expect(actor.tables()).toContain('actor_rows');
+  });
+
+  test('one transient boot failure does not poison the isolate', async () => {
+    const actor = actorObject();
+    // One armed failure at the storage seam, then a healthy database: the
+    // shape a transient DO storage error leaves. The pre-fix caches held the
+    // rejection at three layers, so every retry re-awaited the same corpse
+    // while resetting the eviction timer that was the only recovery path.
+    const realExec = actor.ctx.storage.sql.exec.bind(actor.ctx.storage.sql);
+    let failures = 0;
+    Object.assign(actor.ctx.storage.sql, {
+      exec: (query: string, ...bindings: SqlValue[]) => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('transient storage failure');
+        }
+        return realExec(query, ...bindings);
+      },
+    });
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx,
+      env: strictEnv(WORKSPACE_BINDINGS),
+      previewUrl: () => undefined,
+    });
+    // Armed AFTER construction: the boot is lazy, so the first operation is
+    // what meets the failure.
+    failures = 1;
+    await expect(workspace.bundle.vfs.exists('SOUL.md')).rejects.toThrow(/transient storage failure/);
+    // The SAME workspace object, retried: the boot re-attempts instead of
+    // re-awaiting the cached rejection.
+    await workspace.bundle.vfs.writeFile('recovered.txt', 'alive');
+    expect(await workspace.bundle.vfs.readFile('recovered.txt', { encoding: 'utf8' })).toBe('alive');
+  });
+
+  test('a recycled preview link is named, an unknown one stays a 404', async () => {
+    const actor = actorObject();
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, {
+      get: async (key: string) => kv.get(key),
+      put: async (key: string, value: JsonValue) => { kv.set(key, value); },
+    });
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx,
+      env: strictEnv(WORKSPACE_BINDINGS),
+      previewUrl: () => undefined,
+    });
+    const capability = 'abcdef0123456789abcdef01';
+    kv.set('nimbus_preview_capability:3000', capability);
+    expect(await readWorkspacePortCapability(actor.ctx, 3000)).toBe(capability);
+
+    // The exposure died with an eviction; the durable capability is the one
+    // copy that can tell "recycled" from "never existed".
+    const recycled = await workspace.routePreview(
+      3000, capability.slice(0, 10), new Request('https://preview.test/'), '/',
+    );
+    expect(recycled.status).toBe(RECYCLED_PREVIEW.status);
+    const body = v.parse(v.object({ code: v.string() }), await recycled.json());
+    expect(body.code).toBe('RECYCLED_WORKSPACE_PREVIEW');
+
+    const unknown = await workspace.routePreview(
+      3001, 'ffffffffff', new Request('https://preview.test/'), '/',
+    );
+    expect(unknown.status).toBe(404);
+    // And a handle that does not match the persisted capability is a plain
+    // 404 too — the recycled answer never leaks for a forged link.
+    const forged = await workspace.routePreview(
+      3000, 'ffffffffff', new Request('https://preview.test/'), '/',
+    );
+    expect(forged.status).toBe(404);
   });
 });

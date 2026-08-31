@@ -89,6 +89,7 @@ export {
 export {
   WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
   archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
+  ArchiveCursorSchema,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveFilesCursor,
   type ArchiveExportOptions, type ArchivePage,
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,

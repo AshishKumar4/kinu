@@ -15,6 +15,7 @@
 import { callable, type AgentContext, type SubAgentClass } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
+  ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -342,18 +343,6 @@ export type RecentEventRow = Pick<
   'id' | 'trace_id' | 'caused_by' | 'ingress' | 'variant' | 'trust' | 'priority'
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
-const ArchiveCursorSchema = v.variant('phase', [
-  v.object({
-    phase: v.literal('sql'), table: v.pipe(v.string(), v.nonEmpty()),
-    after: v.nullable(v.pipe(v.number(), v.safeInteger())),
-    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-  }),
-  v.object({
-    phase: v.literal('files'), after: v.pipe(v.string(), v.nonEmpty()),
-    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-    files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-  }),
-]);
 
 /**
  * Every synthetic drain turn one settled turn answered, deduped.
@@ -4414,7 +4403,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * The receiver for this ACTIVATION.
+   * The receiver for this ACTIVATION and THIS transfer.
    *
    * Not the transfer's state: which frame is next, what has been staged and
    * whether the fork published are rows in this object's own SQLite
@@ -4422,8 +4411,35 @@ export class OrchestratorAgent extends ActorAgent {
    * refuses. What is cached here is the one thing an activation genuinely owns —
    * the running hash and the sibling temp of the file whose ranges are still
    * arriving.
+   *
+   * The sink is keyed by the transfer id, and that id is per DELIVERY, not per
+   * workspace: a failed fork whose roster row was destroyed retries the same
+   * target name under a fresh id while this isolate stays warm. So the cached
+   * receiver is keyed by the id it was built for and rebuilt when a begin names
+   * a different one — otherwise a replacement transfer stages into
+   * `.fork-<predecessor>.tmp` temps that the next activation, built from the
+   * CURRENT id, can never adopt, and a resumable transfer turns permanently
+   * unresumable after one mid-file eviction.
    */
-  private forkReceiver: ForkTransferReceiver | null = null;
+  private forkReceiver: { transferId: string; receiver: ForkTransferReceiver } | null = null;
+
+  /** The receiver for the transfer a frame belongs to, rebuilt when this
+   * activation's receiver was keyed to a predecessor's transfer. */
+  #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
+    if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
+    const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
+      workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
+      targetAuthority: 'pane',
+      writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
+      transaction: (rows) => this.ctx.storage.transactionSync(rows),
+    });
+    const receiver = new ForkTransferReceiver(
+      writer,
+      createWorkspaceForkSink(this.hostedWorkspace().bundle, transferId),
+    );
+    this.forkReceiver = { transferId, receiver };
+    return receiver;
+  }
 
   /** Receive one bounded semantic frame from the source DO. Not callable from
    * public WS/HTTP; only the source cross-DO stub reaches this method. */
@@ -4453,19 +4469,8 @@ export class OrchestratorAgent extends ActorAgent {
     }
     this.invalidateModelCaches();
 
-    if (!this.forkReceiver) {
-      const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
-        workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
-        targetAuthority: 'pane',
-        writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
-        transaction: (rows) => this.ctx.storage.transactionSync(rows),
-      });
-      this.forkReceiver = new ForkTransferReceiver(
-        writer,
-        createWorkspaceForkSink(this.hostedWorkspace().bundle, frame.transferId),
-      );
-    }
-    const outcome = await this.forkReceiver.accept(frame);
+    const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
+    const outcome = await receiver.accept(frame);
     if (outcome.status === 'staged') return { ok: true, status: 'staged' };
     this.markForkInstructionScopeMigrated(forkName);
     if (outcome.status === 'settled') {

@@ -156,7 +156,6 @@ async function daemonJsResponse(): Promise<Response> {
     },
   });
 }
-
 const TICKET_BODY_SCHEMA = v.object({
   user: v.optional(v.string()),
   token: v.optional(v.string()),

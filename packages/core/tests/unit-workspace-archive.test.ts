@@ -9,6 +9,7 @@
  * the archive an unpaged one would have written.
  */
 
+import * as v from 'valibot';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -318,5 +319,95 @@ describe('workspace archive', () => {
       VALUES (${'u2'}, ${'default'}, ${'a1'}, ${'user'}, ${'local continuation'}, ${1_000})`;
     expect(new ConversationSearchStore(target.sql).search('local continuation').map((hit) => hit.messageId))
       .toEqual(['u2']);
+  });
+});
+
+describe('the table set an export walks is pinned by its first page', () => {
+  test('a table born mid-export never joins it, so the archive stays restorable', async () => {
+    const source = fresh();
+    initAllTables(source.execRaw, source.sql);
+    for (let i = 0; i < 5; i++) {
+      void source.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${'m'+i}, ${'default'}, ${null}, ${'user'}, ${`page boundary ${i}`}, ${100+i})`;
+    }
+
+    // Drive page by page with a budget that forces several pages, and between
+    // two pages create a lazily-created table a live workspace really mints —
+    // the shape `outbox_<name>` and `swarm_node_records` have.
+    const pages: string[] = [];
+    let cursor: ArchiveCursor | null = null;
+    let page = 0;
+    do {
+      if (page === 1) {
+        source.execRaw('CREATE TABLE late_arrival (id INTEGER PRIMARY KEY, note TEXT)');
+        void source.sql`INSERT INTO late_arrival (note) VALUES (${'born mid-export'})`;
+      }
+      const one = await readWorkspaceArchivePage(source.archive, {
+        workspace: 'pinned', source: 'cloud', now: 5, cursor, maxBytes: 1,
+      });
+      pages.push(...one.lines);
+      cursor = one.next;
+      page++;
+    } while (cursor);
+
+    // The archive carries no row record for the late table, and no schema
+    // record either — the pair that would make the restore throw.
+    expect(pages.some((l) => l.includes('"table":"late_arrival"'))).toBe(false);
+    expect(pages.some((l) => l.includes('"name":"late_arrival"'))).toBe(false);
+
+    // And the archive is RESTORABLE — the property the missing pin destroyed.
+    const target = fresh();
+    const result = await restoreWorkspaceArchive(target.archive, pages);
+    expect(result.rows).toBe(5);
+  });
+
+  test('a WITHOUT ROWID table pages stably under concurrent writes', async () => {
+    const ws = fresh();
+    ws.execRaw('CREATE TABLE wr (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID');
+    void ws.sql`INSERT INTO wr (k, v) VALUES (${'b'}, ${'2'})`;
+    void ws.sql`INSERT INTO wr (k, v) VALUES (${'a'}, ${'1'})`;
+    void ws.sql`INSERT INTO wr (k, v) VALUES (${'c'}, ${'3'})`;
+
+    // Walk to the page that carries the first row; the schema-only pages
+    // before it are part of the same export but carry no rows to compare.
+    let cursor: ArchiveCursor | null = { phase: 'sql', table: 'wr', after: null, rows: 0, tables: ['wr'] };
+    for (;;) {
+      const page = await readWorkspaceArchivePage(ws.archive, {
+        workspace: 'wr', source: 'cloud', maxBytes: 1, cursor,
+      });
+      const rows = page.lines.filter((l) => l.includes('"t":"row"'));
+      if (rows.length > 0) {
+        // THE PAGE BOUNDARY: one row emitted, the cursor pointing at the next.
+        expect(rows).toHaveLength(1);
+        expect(JSON.parse(rows[0]!).values.k).toBe('a');
+        cursor = page.next;
+        break;
+      }
+      cursor = page.next;
+      if (cursor === null) throw new Error('the export finished without emitting a row');
+    }
+    // A row lands between the pages — exactly the concurrent write the old
+    // unordered LIMIT/OFFSET shifted offsets under. It sorts BEFORE every row
+    // the remaining pages will emit, so an offset walk shifted by it would
+    // duplicate 'b'.
+    void ws.sql`INSERT INTO wr (k, v) VALUES (${'0'}, ${'0'})`;
+
+    const rest: string[] = [];
+    while (cursor !== null && cursor.phase === 'sql') {
+      const next = await readWorkspaceArchivePage(ws.archive, {
+        workspace: 'wr', source: 'cloud', maxBytes: 1, cursor,
+      });
+      rest.push(...next.lines);
+      cursor = next.next;
+    }
+    const RowLine = v.object({ values: v.object({ k: v.string() }) });
+    const keys = ['a', ...rest
+      .filter((l) => l.includes('"t":"row"'))
+      .map((l) => v.parse(RowLine, JSON.parse(l)).values.k)];
+    // No duplicate, no skip: every row present exactly once regardless of the
+    // write that landed between pages. ('0' itself is the mid-export write —
+    // rows written after the page boundary are as invisible to this page's
+    // membership as they are to any other page.)
+    expect(keys).toEqual(['a', 'b', 'c']);
   });
 });

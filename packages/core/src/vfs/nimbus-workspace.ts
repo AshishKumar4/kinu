@@ -374,6 +374,14 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           provisionWorkspaceRuntimes(provisioning);
           return workspace;
         } catch (cause) {
+          // Clear the cache BEFORE rethrowing: this bundle lives for the whole
+          // actor isolate, and a cached rejection is poison with no expiry —
+          // every later read, exec, fork frame and archive walk re-awaits the
+          // same failure, and each user retry resets the eviction timer, so
+          // the retry defeats the only recovery path there was. A
+          // deterministic failure simply re-fails on the next open, which is
+          // the correct answer; a transient one gets its retry.
+          booting = undefined;
           diagnostics.failure(
             'workspace.boot_failed',
             toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
@@ -419,31 +427,38 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       const held = planes.get(agent.cred.uid);
       if (held) return await held;
       const opening = (async (): Promise<WorkspaceAgentPlane> => {
-        const origin = await open();
-        const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
-        // A SECOND SHELL over the SAME `SqliteVFS` — never a second filesystem.
-        // `vfs` is handed over rather than reopened for exactly that reason: a
-        // second instance over one database is a second content cache, and one
-        // of the two would serve a stale read. `runAs` is the origin shell's,
-        // or this shell loses the identity-transition path `sudo` and `su`
-        // dispatch on.
-        const asAgent = await NimbusWorkspace.create({
-          sql: opts.sql,
-          transactions: opts.transactions,
-          vfs: origin.vfs,
-          cwd: agent.home,
-          env: { HOME: agent.home, TMPDIR: agent.tmp },
-          identity: {
-            pid: process.pid,
-            cred: processes.cred(process.pid),
-            setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
-            runAs: origin.shell.getRunAsHost(),
-          },
-        });
-        return {
-          vfs: agentVfs(origin.vfs.as(agent.cred)),
-          shell: workspaceShell(() => Promise.resolve(asAgent)),
-        };
+        try {
+          const origin = await open();
+          const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
+          // A SECOND SHELL over the SAME `SqliteVFS` — never a second filesystem.
+          // `vfs` is handed over rather than reopened for exactly that reason: a
+          // second instance over one database is a second content cache, and one
+          // of the two would serve a stale read. `runAs` is the origin shell's,
+          // or this shell loses the identity-transition path `sudo` and `su`
+          // dispatch on.
+          const asAgent = await NimbusWorkspace.create({
+            sql: opts.sql,
+            transactions: opts.transactions,
+            vfs: origin.vfs,
+            cwd: agent.home,
+            env: { HOME: agent.home, TMPDIR: agent.tmp },
+            identity: {
+              pid: process.pid,
+              cred: processes.cred(process.pid),
+              setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
+              runAs: origin.shell.getRunAsHost(),
+            },
+          });
+          return {
+            vfs: agentVfs(origin.vfs.as(agent.cred)),
+            shell: workspaceShell(() => Promise.resolve(asAgent)),
+          };
+        } catch (cause) {
+          // Same rule as `booting`: a cached rejection would pin this agent's
+          // plane to one transient failure for the life of the isolate.
+          planes.delete(agent.cred.uid);
+          throw cause;
+        }
       })();
       planes.set(agent.cred.uid, opening);
       return await opening;

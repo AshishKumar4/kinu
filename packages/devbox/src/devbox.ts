@@ -209,6 +209,12 @@ const LAST_TICK_KEY = 'devbox:last-tick';
 const BOOT_ID_KEY = 'devbox:boot-id';
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
 
+/** The do-init gate's marker for a container-start hook whose returned work
+ * touches nothing but this object's own storage. Referenced (as `void`) by
+ * `onStart` so the gate can key its plainly-bounded rule on the method body;
+ * a value only because an undeclared identifier would throw at runtime. */
+const BOUNDED_STORAGE_ONLY = true;
+
 /** Scheduled-callback names. Each MUST name a public method on the class:
  *  `Container.schedule` rejects anything it cannot call back. */
 const STARTUP_CALLBACK = 'devboxStartup';
@@ -582,22 +588,22 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Arm periodic callbacks. The startup callback owns admission and attachment.
    *
-   *  Routed through the container-start deadline even though arming is three
-   *  storage writes: `onStart` runs inside `blockConcurrencyWhile`, whose
-   *  platform cancel RESETS the object, so any await here needs a budget of
-   *  its own that fires first and says what overran. */
+   *  Run PLAINLY, with no deadline wrapper: these are three writes to this
+   *  object's own storage — the one I/O a Durable Object is built to do, with
+   *  no container admission and nothing external to be stranded by — and the
+   *  wrapper's own timer cannot fire inside `blockConcurrencyWhile`, which is
+   *  exactly where this hook runs. A budget that cannot fire is not a bound;
+   *  it is a paper bound, and the platform's cancel is the real backstop for
+   *  the storage either way. The genuinely external container admission is
+   *  bounded where it runs, outside the gate, by the scheduled startup
+   *  callback below. */
   override onStart(): Promise<void> {
-    return withContainerStartDeadline(
-      'Devbox.onStart',
-      openStartBudget(this.policy.attachBudgetMs),
-      () => this.#armContainerSchedules(),
-      (failure) => {
-        console.error(
-          '[devbox] arming the start schedules overran its budget and was abandoned; '
-          + `it later settled with: ${describe({ cause: failure.cause })}`,
-        );
-      },
-    );
+    // BOUNDED_STORAGE_ONLY is the marker the do-init gate reads: nothing this
+    // hook returns reaches off-object, so the gate holds it to the plainly
+    // bounded rule instead of demanding a deadline whose timer cannot fire
+    // here anyway.
+    void BOUNDED_STORAGE_ONLY;
+    return this.#armContainerSchedules();
   }
 
   async #armContainerSchedules(): Promise<void> {
@@ -648,9 +654,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       if (this.#owns(generation)) await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
       console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
     }
-    const bootId = crypto.randomUUID();
+    let bootId: string = crypto.randomUUID();
     await this.#rawExec(`printf %s ${bootId} > ${BOOT_ID_PATH}`);
-    if (this.#owns(generation)) await this.ctx.storage.put(BOOT_ID_KEY, bootId);
+    // The exec is the one await a stale attempt can park INSIDE, so ownership
+    // is re-asked after it rather than only before. A lost race here means a
+    // successor has already stamped this container and the durable row with ITS
+    // id; the stale attempt's exec has just written its own id over the file.
+    // The stale mint is not allowed to survive that: the durable row is the
+    // identity of record, so the file is rewritten to whatever the row now
+    // holds — the successor's id when the row moved, the stale one when it did
+    // not — leaving file and row in agreement rather than diverged with no
+    // writer left to reconcile them. A divergence is what the heartbeat's
+    // replacement detector would misread as a replacement of a healthy box.
+    if (!this.#owns(generation)) {
+      const settled = await this.ctx.storage.get<string>(BOOT_ID_KEY);
+      if (settled !== undefined && settled !== bootId) {
+        bootId = settled;
+        await this.#rawExec(`printf %s ${bootId} > ${BOOT_ID_PATH}`);
+      }
+      return bootId;
+    }
+    await this.ctx.storage.put(BOOT_ID_KEY, bootId);
     return bootId;
   }
 

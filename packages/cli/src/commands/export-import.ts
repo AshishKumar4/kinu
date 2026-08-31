@@ -17,6 +17,7 @@ import { basename } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   WORKSPACE_ARCHIVE_EXTENSION,
+  ArchiveCursorSchema,
   archiveSqlFromDatabase,
   decodeJsonValue,
   readWorkspaceArchivePage,
@@ -44,10 +45,6 @@ const ArchiveHeaderSchema = v.object({
   t: v.optional(v.string()),
   workspace: v.optional(v.string()),
 });
-const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
-  v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),
-  v.object({ phase: v.literal('files'), after: v.string(), rows: v.number(), files: v.number() }),
-]);
 const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
   lines: v.array(v.string()),
   next: v.nullable(ArchiveCursorSchema),

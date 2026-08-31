@@ -23,6 +23,7 @@ import { SOUL_PATH, summarizeSoulBytes } from '../identity/soul';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 /** The plane the fork transfer and the archive walk read and write: the same
@@ -67,9 +68,25 @@ export async function writeWorkspaceSoul(
  * ordinary caller must not receive raw range-write authority over the workspace.
  */
 export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: string): ForkFileSink {
+  // Staging is a WRITE, and a write's parents are its precondition: a fork
+  // lands on a fresh target whose tree holds nothing yet, so the first
+  // `memory/*` range would otherwise ENOENT on the directory. Same contract
+  // the box file adapter keeps for `write`.
+  const ensureParent = async (path: string): Promise<void> => {
+    const resolved = workspacePath(path);
+    const cut = resolved.lastIndexOf('/');
+    if (cut <= 0) return;
+    const parent = resolved.slice(0, cut);
+    const plane = await sessionPlane(bundle);
+    if (!plane.exists(parent)) plane.mkdir(parent, { recursive: true });
+  };
   const native: ForkNativeFilePort = {
-    async truncate(path, size) { (await sessionPlane(bundle)).truncate(workspacePath(path), size); },
+    async truncate(path, size) {
+      await ensureParent(path);
+      (await sessionPlane(bundle)).truncate(workspacePath(path), size);
+    },
     async writeRange(path, offset, bytes) {
+      await ensureParent(path);
       (await sessionPlane(bundle)).writeRange(workspacePath(path), offset, bytes);
     },
     // The staged temp read back for the whole-file digest. Ranged, and through
@@ -80,7 +97,16 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
       return (await sessionPlane(bundle)).readRange(workspacePath(path), offset, length);
     },
     async rename(from, to) {
-      (await sessionPlane(bundle)).rename(workspacePath(from), workspacePath(to));
+      // `SqliteVFS.rename` is the ONE op that reads its inode map without
+      // normalizing — every sibling op drops the leading slash through
+      // `normalizeVfsPath` before the lookup — so a slash-prefixed source
+      // misses a key that provably exists, and a slash-prefixed DESTINATION
+      // would be stored under a key later lookups can never spell. Normalized
+      // here at the seam; every fork file's publish crosses it, and the
+      // resumed-transfer test walks exactly this path.
+      (await sessionPlane(bundle)).rename(
+        normalizeVfsPath(workspacePath(from)), normalizeVfsPath(workspacePath(to)),
+      );
     },
     async unlink(path) { (await sessionPlane(bundle)).unlink(workspacePath(path)); },
   };

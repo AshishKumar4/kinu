@@ -18,6 +18,7 @@ import {
   type ApprovalGrant, type ArchiveCursor, type ArchivePage, type EvolutionConfigView,
   type JsonValue, type InstructionSourceRow, type InstructionSourceView,
   type Page, type SeekCursor,
+  ArchiveCursorSchema,
 } from "@kinu.run/core";
 import { executorLabel } from "@/lib/executors";
 import { useKinu } from "@/hooks/use-kinu";
@@ -33,10 +34,6 @@ import type { Rpc } from '@/lib/protocol';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-const ArchiveCursorSchema = v.variant('phase', [
-  v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),
-  v.object({ phase: v.literal('files'), after: v.string(), rows: v.number(), files: v.number() }),
-]);
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
 const ScoreIntervalSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
 const GepaRunSchema = v.object({

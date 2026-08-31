@@ -50,6 +50,18 @@
  *    That is a replacement bound, not an exemption: an unbounded await is still
  *    unreachable, because a non-async method cannot await at all.
  *
+ *    ONE alternative to the wrapper, narrower than the wrapper and named in the
+ *    method: work this hook returns may instead be PLAINLY BOUNDED storage
+ *    writes to this object's own `ctx.storage` when the method carries the
+ *    `BOUNDED_STORAGE_ONLY` marker. The wrapper's timer is not delivered inside
+ *    `blockConcurrencyWhile` (measured; see `lifecycle.ts`), so for that work a
+ *    deadline is a paper bound — the platform's own cancel governs storage
+ *    either way, and the genuinely external container admission must run OUTSIDE
+ *    this gate, where its timer fires. The marker is the visible edit that says
+ *    "nothing here reaches off-object", and it forbids the wrapper rather than
+ *    merely omitting it: a wrapper that cannot fire would claim a bound that
+ *    does not exist, which is the anti-pattern this gate exists to prevent.
+ *
  * ## The hook that is not `onStart`, and how this gate was blind to it
  *
  * `onStart` is not the only thing the init chain awaits on the subclass. The
@@ -162,6 +174,21 @@ const RECOVERY_HOOKS: readonly string[] = [
  * everything the classifier reaches.
  */
 const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
+/** The marker that opts a container-start hook into the plainly-bounded
+ * alternative: its returned work touches nothing but this object's own storage.
+ * Sought as an identifier inside the method body, so it names the method, not
+ * a comment elsewhere. */
+const BOUNDED_STORAGE_MARKER = 'BOUNDED_STORAGE_ONLY';
+
+/** True when the marker identifier appears anywhere in this method's body. */
+function hasBoundedStorageMarker(body: SyntaxNode): boolean {
+  for (const child of body.children) {
+    if (child.raw.type === 'Identifier' && child.raw.name === BOUNDED_STORAGE_MARKER) return true;
+    if (isFunctionLike(child)) continue;
+    if (hasBoundedStorageMarker(child)) return true;
+  }
+  return false;
+}
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -363,10 +390,19 @@ export function auditFile(
       if (nestedGate(body) !== undefined) {
         fail('opens a nested `blockConcurrencyWhile` — the same gate by another name');
       }
-      if (hook === 'container-start' && boundedStart(body) === undefined) {
-        fail(`must route its work through \`${START_DEADLINE}\` — the container-start gate is `
-          + 'cancelled at do.block_concurrency.cancel_ms by RESETTING the object, so the '
-          + 'work needs a budget of its own');
+      if (hook === 'container-start') {
+        const marked = hasBoundedStorageMarker(body);
+        if (marked && boundedStart(body) !== undefined) {
+          fail(`carries \`${BOUNDED_STORAGE_MARKER}\` yet routes through \`${START_DEADLINE}\` — `
+            + 'a timer that cannot fire inside blockConcurrencyWhile is a paper bound, '
+            + 'not a real one');
+        }
+        if (!marked && boundedStart(body) === undefined) {
+          fail(`must route its work through \`${START_DEADLINE}\` — the container-start gate is `
+            + 'cancelled at do.block_concurrency.cancel_ms by RESETTING the object, so the '
+            + `work needs a budget of its own, or carry \`${BOUNDED_STORAGE_MARKER}\` for `
+            + 'plainly bounded writes to this object own storage');
+        }
       }
       if (hook !== 'recovery') continue;
       // What a non-async method hands back is the only other thing the gate can
