@@ -64,10 +64,11 @@ const MANAGED_ROW_SCHEMA = v.object({
 const SCHEDULE_ROW_SCHEMA = v.object({
   id: v.string(),
   callback: v.string(),
+  payload: v.nullable(v.string()),
   type: v.string(),
   time: v.number(),
 });
-export type HarnessScheduleRow = v.InferOutput<typeof SCHEDULE_ROW_SCHEMA>;
+export type HarnessScheduleRow = Omit<v.InferOutput<typeof SCHEDULE_ROW_SCHEMA>, 'payload'> & { payload: JsonValue };
 
 /** What a recovery hook may hand back. `undefined` is the pre-`FiberRecoveryResult`
  *  shape the SDK still accepts (a `void` return), so the harness must too. */
@@ -265,11 +266,19 @@ export function mockAgentsSdk(): void {
         return row;
       }
 
-      async listSchedules(): Promise<Array<v.InferOutput<typeof SCHEDULE_ROW_SCHEMA>>> {
+      async listSchedules(): Promise<HarnessScheduleRow[]> {
         return this.#scheduleTable()
-          .exec(`SELECT id, callback, type, time FROM cf_agents_schedules ORDER BY time`)
+          .exec(`SELECT id, callback, payload, type, time FROM cf_agents_schedules ORDER BY time`)
           .toArray()
-          .map((row) => v.parse(SCHEDULE_ROW_SCHEMA, row));
+          .map((raw) => {
+            const row = v.parse(SCHEDULE_ROW_SCHEMA, raw);
+            // The SDK hands the payload back parsed; the harness stores it as
+            // the JSON string the insert wrote.
+            const payload: JsonValue = row.payload === null
+              ? null
+              : parseJsonValue(row.payload);
+            return { ...row, payload };
+          });
       }
 
       async cancelSchedule(id: string): Promise<boolean> {

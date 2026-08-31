@@ -14,6 +14,7 @@
  * tests/workerd/do-alarm.test.ts — including the redelivery-on-throw contract
  * the re-arm now depends on.
  */
+import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { orchestratorHarness, subordinateHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
@@ -241,6 +242,37 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent._kinuTerminalRetryTick();
     expect(ended('stale-run')).toBe(true);
     expect(ended('live-run')).toBe(false);
+  });
+
+  test('the backoff floor rides the wake row, so a restart cannot reset the ramp', async () => {
+    // A recovery pass that fills its budget answers unfinished, and its pace
+    // is durable: the lap count is the schedule row's own payload, a fresh
+    // isolate resumes the ramp from it, and an activation's promptness pull
+    // carries the max floor through the collapse instead of resetting it.
+    // Driven by REAL work — a branch-head backlog past the 256-row seal
+    // budget — with no failure injection.
+    const { agent, db } = orchestratorHarness();
+    agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+    const insert = db.prepare(
+      `INSERT INTO head_journal (id, root_id, depth, task, status, spawned_at)
+       VALUES (?, ?, 0, 'take a branch', 'running', ?)`,
+    );
+    const stale = Date.now() - 60_000;
+    for (let i = 0; i < 513; i++) insert.run(`floor-head-${i}`, `branch-floor-${i}`, stale);
+
+    // Lap one: 256 sealed, the pass is unfinished, the re-arm carries laps=1.
+    await agent._kinuTerminalRetryTick();
+    const first = (await agent.listSchedules()).find((row) => row.callback === '_kinuTerminalRetryTick');
+    if (!first) throw new Error('the unfinished tick did not re-arm');
+    expect(first.payload).toBe(1);
+
+    // A RESTARTED isolate (fresh in-memory counter) receives the row's own
+    // payload and resumes at lap two, not lap one.
+    await agent._kinuTerminalRetryTick(v.parse(v.number(), first.payload));
+    const second = (await agent.listSchedules()).find((row) => row.callback === '_kinuTerminalRetryTick');
+    if (!second) throw new Error('the resumed tick did not re-arm');
+    expect(second.payload).toBe(2);
   });
 
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {

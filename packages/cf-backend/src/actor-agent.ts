@@ -2101,13 +2101,13 @@ export abstract class ActorAgent extends Think<Env> {
    * good. An extra row is the harmless failure instead — the tick is idempotent
    * and re-arms from durable state, so it costs one early wake.
    */
-  protected async scheduleTerminalRetry(atMs: number): Promise<void> {
+  protected async scheduleTerminalRetry(atMs: number, laps = 0): Promise<void> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round UP: the SDK stores schedule times in whole seconds, and waking
     // before the target leaves the retry not-yet-due, which would re-arm for the
     // same second and busy-spin the alarm until the millisecond passed.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
-    await this.schedule(new Date(targetSec * 1000), TERMINAL_RETRY_CALLBACK);
+    await this.schedule(new Date(targetSec * 1000), TERMINAL_RETRY_CALLBACK, laps);
     // FUTURE rows only. While `_kinuTerminalRetryTick` runs, the SDK keeps its
     // own one-shot row in `listSchedules()` until the callback returns — so a
     // collapse that counted it would pick the overdue executing row as the
@@ -2120,11 +2120,26 @@ export abstract class ActorAgent extends Think<Env> {
     // The keeper is chosen by a rule every concurrent arm computes identically —
     // earliest wake, ties broken by the SDK's own row id — so two arms converge
     // on the same survivor without coordinating, and the loser's second cancel of
-    // an already-cancelled id is a no-op.
+    // an already-cancelled id is a no-op. THE LAP FLOOR SURVIVES THE COLLAPSE:
+    // the keeper is rewritten carrying the MAX laps any collapsed row held, so
+    // an activation's promptness pull cannot reset a durable backoff a failing
+    // sweep already earned — restarts included, because the floor is a ROW.
     const keeper = armed.reduce((best, row) =>
       row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best);
+    const lapFloor = armed.reduce((most, row) => {
+      const parsed = v.safeParse(v.number(), row.payload);
+      return parsed.success ? Math.max(most, parsed.output) : most;
+    }, laps);
     for (const row of armed) {
       if (row.id !== keeper.id) await this.cancelSchedule(row.id);
+    }
+    const keeperLaps = v.safeParse(v.number(), keeper.payload);
+    if (!keeperLaps.success || keeperLaps.output < lapFloor) {
+      // WRITE FIRST, cancel second — the replacement lands before the old
+      // keeper goes, so no reset in the gap can leave the workspace with no
+      // retry row at all. The extra row is momentary and idempotent to cancel.
+      await this.schedule(new Date(keeper.time * 1000), TERMINAL_RETRY_CALLBACK, lapFloor);
+      await this.cancelSchedule(keeper.id);
     }
   }
 
@@ -2135,29 +2150,49 @@ export abstract class ActorAgent extends Think<Env> {
    * excludes protected members. Idempotent: it reads the owed roster from
    * storage and re-arms from what is left, so a duplicate wake costs one read.
    */
-  async _kinuTerminalRetryTick(): Promise<void> {
+  async _kinuTerminalRetryTick(payload?: JsonValue): Promise<void> {
     // Maintenance first: the budgeted sweeps and the activation-scoped
     // recovery run in this alarm frame, then the owed external deliveries.
     // One wake, one carrier, collapse semantics included — a pass that left
     // work unfinished re-arms THIS tick through the same singleton-safe armer,
     // at the shared capped backoff: a deep backlog drains at a growing pace,
     // and a persistently FAILING sweep (which also answers unfinished) settles
-    // at the ceiling instead of a one-second loop. The lap count is the
-    // isolate's own; an eviction resets pace and backlog reads together.
+    // at the ceiling instead of a one-second loop.
+    //
+    // THE LAP FLOOR IS DURABLE: it rides this wake's own schedule-row payload,
+    // so a deploy, runtime restart or eviction mid-backoff resumes the ramp
+    // where it left off instead of at one second — the in-memory counter only
+    // carries it between alarms of one warm isolate.
+    const floor = v.safeParse(v.number(), payload);
+    if (floor.success && floor.output > this.#maintenanceLaps) {
+      this.#maintenanceLaps = floor.output;
+    }
     const sweepsUnfinished = this.maintenanceSweeps();
     const recoveryUnfinished = await this.maintenanceWork();
     await this.owedDeliveryWork();
     if (sweepsUnfinished || recoveryUnfinished) {
       this.#maintenanceLaps = this.#maintenanceLaps + 1;
-      await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(this.#maintenanceLaps));
+      await this.scheduleTerminalRetry(
+        Date.now() + recoveryBackoffMs(this.#maintenanceLaps), this.#maintenanceLaps,
+      );
     } else {
       this.#maintenanceLaps = 0;
     }
   }
 
-  /** Consecutive unfinished maintenance laps — the pace input for the tick's
-   *  own re-arm. In-memory on purpose: the pace only has to hold within one
-   *  isolate, and evictions are slower than the ceiling it caps. */
+  /**
+   * Consecutive unfinished maintenance laps — the pace input for the tick's
+   * own re-arm.
+   *
+   * In-memory ON PURPOSE, and the durability lives one level down: the delay
+   * is baked into the schedule ROW the re-arm writes, so an eviction cannot
+   * shorten a wake already armed. What resets this counter is an ACTIVATION —
+   * which deliberately pulls one immediate tick for its owed classification —
+   * and the exponential ramp then bounds the fast laps to about six per
+   * activation before the sixty-second ceiling holds again. A persistently
+   * failing sweep therefore costs a handful of sub-minute alarms per
+   * activation, never a one-second loop.
+   */
   #maintenanceLaps = 0;
 
   /**
