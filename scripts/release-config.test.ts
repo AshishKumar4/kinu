@@ -305,17 +305,6 @@ function secretBearingJobs(): readonly { label: string; job: v.InferOutput<typeo
 
 const SECRET_JOBS = secretBearingJobs();
 
-/** GitHub applies path includes and `!` exclusions in declaration order. */
-function pathIsSelected(patterns: readonly string[], path: string): boolean {
-  let selected = false;
-  for (const pattern of patterns) {
-    const excluded = pattern.startsWith('!');
-    const glob = new Bun.Glob(excluded ? pattern.slice(1) : pattern);
-    if (glob.match(path)) selected = !excluded;
-  }
-  return selected;
-}
-
 
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
@@ -415,33 +404,30 @@ describe('the workflows that publish and measure this product', () => {
   });
 
 
-  test('a local Lean setup action change triggers the workflow that executes it', () => {
+  test('the Lean workflow triggers unfiltered and runs the local setup action', () => {
     const workflow = v.parse(
       v.object({
         on: v.object({
-          push: v.object({ paths: v.array(v.string()) }),
-          pull_request: v.object({ paths: v.array(v.string()) }),
+          push: v.nullable(v.object({ paths: v.optional(v.array(v.string())) })),
+          pull_request: v.nullable(v.object({ paths: v.optional(v.array(v.string())) })),
         }),
         jobs: v.object({ verify: v.object({ steps: v.array(StepSchema) }) }),
       }),
       Bun.YAML.parse(readRepositoryFile(REPO_ROOT, LEAN_VERIFY)),
     );
-    const actionGlob = '.github/actions/setup-lean/**';
 
-    // GitHub evaluates paths in order: a later `!` pattern can cancel an
-    // earlier positive glob. Test selection of the concrete action file, not
-    // token membership, or that cancellation reports a false trigger.
-    expect(pathIsSelected([actionGlob, `!${SETUP_LEAN}`], SETUP_LEAN))
-      .toBe(false);
-    expect(pathIsSelected(workflow.on.push.paths, SETUP_LEAN), `${LEAN_VERIFY} push ignores ${SETUP_LEAN}`)
-      .toBe(true);
+    // NO paths filter, and its absence is the contract: the citation gate's
+    // corpus is every tracked text file, so any filter is narrower than what
+    // the gates read — the workflow's own header records the measured gap the
+    // old filter opened. A reintroduced filter fails here by name.
+    expect(workflow.on.push?.paths, `${LEAN_VERIFY} push regained a paths filter`).toBeUndefined();
     expect(
-      pathIsSelected(workflow.on.pull_request.paths, SETUP_LEAN),
-      `${LEAN_VERIFY} pull_request ignores ${SETUP_LEAN}`,
-    ).toBe(true);
+      workflow.on.pull_request?.paths,
+      `${LEAN_VERIFY} pull_request regained a paths filter`,
+    ).toBeUndefined();
     expect(
       workflow.jobs.verify.steps.map((step) => step.uses),
-      `${LEAN_VERIFY} no longer executes the action its paths select`,
+      `${LEAN_VERIFY} no longer runs the local setup action`,
     ).toContain('./.github/actions/setup-lean');
   });
 
