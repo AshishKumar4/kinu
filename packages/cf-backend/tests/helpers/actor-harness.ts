@@ -35,7 +35,6 @@ import {
   type FactsStore, type SleepTimeUpdate,
   type AgentSignal, type SignalOutcome,
 } from '@kinu.run/core';
-import * as v from 'valibot';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
 import {
@@ -598,6 +597,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  settled storage rather than racing a fire-and-forget fiber. */
   harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibers(); }
 
+  /** Join the activation's own detached tasks (timer, event-delivery and
+   *  fork-journal reconciles, facet reclaim). Every one is fenced or
+   *  idempotent, so production never waits on them — a test snapshotting state
+   *  those sweeps also touch must. */
+  harnessSettleBackgroundTasks(): Promise<void> { return this.settleBackgroundTasks(); }
+
   /** When the ledger would next wake, given the sequences a live activation
    *  claims to be running. The re-arm's own input, read directly. */
   harnessNextRetryAt(inFlight: ReadonlySet<string>): number | null {
@@ -719,6 +724,10 @@ function makeCtx(db: Database): AgentContext {
       transactionSync: <T>(closure: () => T): T => db.transaction(closure)(),
       get: async () => undefined,
       put: async () => {},
+      // The durable per-actor shell state Nimbus's programmatic surface keeps,
+      // and the delete it performs when a port capability is revoked.
+      delete: async () => true,
+      deleteAll: async () => {},
       setAlarm: async () => {},
       getAlarm: async () => null,
       deleteAlarm: async () => {},
@@ -726,6 +735,7 @@ function makeCtx(db: Database): AgentContext {
     id: { toString: () => 'harness-actor', name: 'harness-actor' },
     waitUntil: () => {},
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
+    getWebSockets: () => [],
     abort: () => {},
   };
   const partialContext: Partial<AgentContext> = {};
@@ -734,69 +744,6 @@ function makeCtx(db: Database): AgentContext {
   // context, and actor schema initialization only calls the implemented SQL,
   // transaction, identity, alarm, and concurrency members above.
   return partialContext as AgentContext;
-}
-
-/**
- * The workspace filesystem, empty — a fresh workspace, which is a state every
- * root is genuinely in.
- *
- * An inert `{}` binding was not one: a turn reads the workspace for real (SOUL.md
- * via readSoul, then AGENTS.md via collectWorkspaceAgentsMd, and both are
- * documented to report a failed read as a failure rather than an absence), so an
- * inert binding turns every one of those reads into a Nimbus SDK TypeError and
- * the harness can only answer it by declaring one more precondition satisfied
- * per read. Answering as an empty session exercises the production path instead.
- *
- * The whole VFS surface `nimbusSessionFiles` binds, and nothing else: there is no
- * shell here, so a test that needs one says so by failing rather than by getting
- * a command that reports success. `unit-nimbus-lifecycle.test.ts` replaces the
- * binding outright where it needs to observe session lifecycle events.
- */
-function emptyWorkspaceSession() {
-  // BYTES, not text. A file plane that cannot round-trip a byte is not one:
-  // storing the decoded string substituted U+FFFD for every sequence that is
-  // not valid UTF-8, so an upload of arbitrary bytes came back longer and
-  // different while every read still "worked".
-  const files = new Map<string, Uint8Array>();
-  const directories = new Set(['/home', '/home/user']);
-  const stub = {
-    _rpcReady: async () => ({ ok: true as const, preinstalled: [] }),
-    _rpcExists: async (path: string) => files.has(path) || directories.has(path),
-    _rpcStat: async (path: string) => {
-      const content = files.get(path);
-      if (content !== undefined) return { type: 'file', size: content.byteLength, mtime: 0, mode: 0o644 };
-      return directories.has(path) ? { type: 'directory', size: 0, mtime: 0, mode: 0o755 } : null;
-    },
-    _rpcReadFile: async (path: string) => {
-      const content = files.get(path);
-      return content === undefined ? null : new TextDecoder().decode(content);
-    },
-    _rpcReadFileBytes: async (path: string) => files.get(path) ?? null,
-    _rpcWriteFile: async (path: string, content: string | Uint8Array) => {
-      const bytes = v.safeParse(v.instance(Uint8Array), content);
-      files.set(path, bytes.success ? bytes.output : new TextEncoder().encode(v.parse(v.string(), content)));
-      const parts = path.split('/');
-      for (let i = 2; i < parts.length; i++) directories.add(parts.slice(0, i).join('/'));
-    },
-    _rpcReaddir: async (path: string) => {
-      const prefix = `${path.replace(/\/$/, '')}/`;
-      const entries = new Map<string, 'file' | 'directory'>();
-      for (const directory of directories) {
-        const rest = directory.startsWith(prefix) ? directory.slice(prefix.length) : '';
-        if (rest && !rest.includes('/')) entries.set(rest, 'directory');
-      }
-      for (const file of files.keys()) {
-        if (!file.startsWith(prefix)) continue;
-        const rest = file.slice(prefix.length);
-        const slash = rest.indexOf('/');
-        if (rest) entries.set(slash < 0 ? rest : rest.slice(0, slash), slash < 0 ? 'file' : 'directory');
-      }
-      return [...entries].map(([name, type]) => ({ name, type }));
-    },
-    _rpcMkdir: async (path: string) => { directories.add(path); },
-    _rpcDeleteFile: async (path: string) => { files.delete(path); directories.delete(path); },
-  };
-  return { idFromName: (name: string) => name, get: () => stub };
 }
 
 /**
@@ -865,7 +812,6 @@ function makeEnv(
 ): Env {
   const bindings = {
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
-    NIMBUS_SESSION: emptyWorkspaceSession(),
     // The platform gateway is the harness's model provider: a parseable gateway
     // URL plus a recording AI binding, since the transport is the binding now.
     ...platformGatewayEnv(),
@@ -923,7 +869,7 @@ function makeEnv(
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
   // SAFETY: the ActorAgent dependency contract only reads the constructed
-  // LOADER, NIMBUS_SESSION, UserDO, and gateway bindings in this harness; each
+  // LOADER, UserDO, and gateway bindings in this harness; each
   // unsupported operation throws if schema composition begins invoking it.
   return env as Env;
 }
@@ -1048,8 +994,13 @@ export async function reactivateOrchestratorHarness(
  *  the parent's setSubordinateIdentity RPC installs), schema ensured. */
 export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
   // The parent namespace is part of the env the agent is BORN with: a stub that
-  // answers exactly the one instruction-trust authority read (no recorded
-  // approvals — the default-deny truth) and refuses everything else loudly.
+  // answers the one instruction-trust authority read (no recorded approvals —
+  // the default-deny truth) and the ONE shared-workspace hop, and refuses
+  // everything else loudly. `workspaceBoxOp` is served by a REAL parent
+  // orchestrator built lazily on first use, so a subordinate's file plane runs
+  // the production dispatcher over real bytes instead of a fake — and a suite
+  // that never touches the workspace never pays for the parent.
+  let boxParent: ActorHarness<HarnessOrchestratorAgent> | undefined;
   const authority: HarnessInstructionAuthority = {
     getWorkspaceInstructionApprovals: async () => [],
   };
@@ -1059,6 +1010,12 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
       get: (target, prop) => {
         if (prop === 'then') return undefined;
         if (prop === 'getWorkspaceInstructionApprovals') return target.getWorkspaceInstructionApprovals;
+        if (prop === 'workspaceBoxOp') {
+          return async (shellId: string, op: Parameters<HarnessOrchestratorAgent['workspaceBoxOp']>[1]) => {
+            boxParent ??= orchestratorHarness();
+            return await boxParent.agent.workspaceBoxOp(shellId, op);
+          };
+        }
         return async () => {
           throw new Error(`harness parent: ${String(prop)} is not reachable under bun`);
         };

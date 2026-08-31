@@ -1,12 +1,15 @@
 /**
- * The embedded Nimbus workspace used by the local CLI.
+ * The Nimbus workspace. There is only this one.
  *
  * Nimbus (`@nimbus-sh/core`) owns the bytes: a durable POSIX filesystem over a
  * host-supplied SQLite port, with a real shell over it — pipelines, loops,
  * variables, redirection, a working directory that persists across commands,
  * and ~95 coreutils. The host supplies `sql` and `transactions` and nothing
- * else. New hosted workspaces use the remote Nimbus session adapter in
- * execution/nimbus.ts; they do not create these embedded filesystem tables.
+ * else — `ctx.storage.sql` and `ctx` in the Durable Object that owns a hosted
+ * workspace, a `bun:sqlite` database in the local CLI. ONE workspace per host
+ * database and no second Durable Object either way: the filesystem tables sit
+ * beside the actor's own rows, so the bytes and the ledgers that index them
+ * commit under one `transactionSync` and snapshot as one database.
  *
  * ONE FILESYSTEM, ONE SET OF PATHS
  *
@@ -28,9 +31,11 @@
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { HomeRootVfs, TmpConfiner } from './agent-home';
 import { provisionWorkspaceRuntimes } from './workspace-runtimes';
 import * as v from 'valibot';
@@ -225,10 +230,9 @@ function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
  * The privileged half of this filesystem: a uid-0 view of the same bytes, and
  * the principal registry that scopes `/tmp` per uid.
  *
- * It exists only where the filesystem is IN THIS ISOLATE. A host whose
- * workspace is a remote Nimbus session has neither — every pid-less filesystem
- * RPC there is pinned to the session user, and `confinePrincipal` has no RPC at
- * all — so that host provisions nothing and says so.
+ * Present wherever this filesystem is, which is wherever a workspace is: it is
+ * built from the host's own SQLite, so uid 0 is reachable and `confinePrincipal`
+ * is an ordinary method call rather than an RPC nobody exposes.
  */
 export interface WorkspacePrivileged {
   /** `SqliteVFS.as(CRED_KERNEL)`. Only uid 0 can `chown` a directory to a uid
@@ -236,6 +240,24 @@ export interface WorkspacePrivileged {
   readonly root: HomeRootVfs;
   /** The `SqliteVFS` itself, narrowed to the two principal calls. */
   readonly confiner: TmpConfiner;
+}
+
+/**
+ * This workspace's own Nimbus primitives, as a host's process/port surface
+ * binds to them.
+ *
+ * Four members and no more: the shell commands actually run on, the raw
+ * credentialed filesystem, the registry a host adds `git` to, and the process
+ * owner whose pids this filesystem's append capabilities are keyed by. Anything
+ * a host can compose from those is the host's, not this module's.
+ */
+export interface WorkspaceSession {
+  readonly shell: NimbusWorkspace['shell'];
+  readonly vfs: SqliteVFS;
+  readonly registry: NimbusWorkspace['registry'];
+  /** The ONE process owner of this filesystem. A host that spawns through its
+   *  own would hand out pids at or below the revoked generation floor. */
+  readonly processes: SessionProcessSupervisor;
 }
 
 export interface WorkspaceBundle {
@@ -263,6 +285,28 @@ export interface WorkspaceBundle {
    * second call for a uid is the first plane again.
    */
   asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
+  /**
+   * The composed Nimbus primitives, for a host that has to build a surface
+   * this bundle deliberately does not: background processes, listening ports,
+   * an R2 runtime catalogue.
+   *
+   * Those belong to the HOST — a Durable Object holds `ctx.waitUntil` and a
+   * port registry a `bun` process has no use for — so they are composed over
+   * these three rather than reimplemented here. Handing over the workspace's
+   * OWN shell, filesystem and registry is the whole point: a host that opened
+   * its own would have a second content cache over one database, and a host
+   * that spawned from its own process table would issue pids this filesystem
+   * has already revoked.
+   */
+  session(): Promise<WorkspaceSession>;
+  /**
+   * Drop this workspace's tables, leaving the host's own rows alone.
+   *
+   * The deletion of a workspace, which on a shared database cannot be
+   * `deleteAll`: the actor's conversation, ledgers and identity live in the
+   * same SQLite and are dropped by the actor's own teardown.
+   */
+  destroy(): Promise<void>;
 }
 
 export interface WorkspaceOptions {
@@ -284,11 +328,16 @@ export interface WorkspaceOptions {
    * `@nimbus-sh/runtime-cpython`).
    *
    * Supplied by the host rather than imported here because the packages read
-   * `node:fs` and weigh 40 MB: the deployed Worker has neither, and gets its
-   * runtimes from R2 through the hosted session instead. Nothing is written
-   * until one of their commands is invoked — see vfs/workspace-runtimes.ts.
+   * `node:fs` and weigh 40 MB: the deployed Worker has neither. Nothing is
+   * written until one of their commands is invoked — see
+   * vfs/workspace-runtimes.ts.
    */
   runtimes?: readonly RuntimePackage[];
+  /**
+   * Where a wasm interpreter runs. Absent on workerd, where nothing can:
+   * see `provisionWorkspaceRuntimes`' own `facets`, which this is.
+   */
+  runtimeFacets?: FacetHost;
 }
 
 /**
@@ -317,7 +366,12 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           // Before the first command, and after the substrate's own
           // registrations so a coreutil is never shadowed by a runtime bin of
           // the same name.
-          provisionWorkspaceRuntimes({ workspace, runtimes: opts.runtimes ?? [] });
+          const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
+            workspace,
+            runtimes: opts.runtimes ?? [],
+          };
+          if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
+          provisionWorkspaceRuntimes(provisioning);
           return workspace;
         } catch (cause) {
           diagnostics.failure(
@@ -330,12 +384,18 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     }
     return await booting;
   };
-  // The session's process owner, here because a credentialed shell needs a REAL
-  // pid: `ShellCommandIdentity` carries one, append capabilities are keyed by
-  // it, and a number invented locally would collide with a live writer. One
-  // supervisor for this filesystem, so two agents can never be handed the same
-  // pid.
+  // The workspace's process owner, here because a credentialed shell needs a
+  // REAL pid: `ShellCommandIdentity` carries one, append capabilities are keyed
+  // by it, and a number invented locally would collide with a live writer. One
+  // supervisor for this filesystem, so two agents — or an agent and a host's
+  // background process — can never be handed the same pid.
+  //
+  // The pid base is THIS generation's floor. Opening the filesystem revokes
+  // every append writer at or below `generation * PID_GEN_STRIDE`, so a
+  // supervisor left at zero hands out pids whose write authority the very next
+  // boot has already withdrawn.
   const processes = new SessionProcessSupervisor();
+  processes.setPidBase(opts.generation * PID_GEN_STRIDE);
   const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
   return {
     vfs: workspaceVfs(open),
@@ -345,6 +405,16 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       const workspace = await open();
       return { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs };
     },
+    async session() {
+      const workspace = await open();
+      return {
+        shell: workspace.shell,
+        vfs: workspace.vfs,
+        registry: workspace.registry,
+        processes,
+      };
+    },
+    async destroy() { (await open()).destroy(); },
     async asAgent(agent) {
       const held = planes.get(agent.cred.uid);
       if (held) return await held;

@@ -976,7 +976,7 @@ export {
   type DeviceCancelResult,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
-  type NimbusStartResult,
+  type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
@@ -1004,8 +1004,12 @@ export {
   type AgentDir, type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
 export type {
-  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions, WorkspaceVFS,
+  WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions,
+  WorkspaceSession, WorkspaceVFS,
 } from './vfs/nimbus-workspace';
+export {
+  writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles,
+} from './vfs/workspace-planes';
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
   type VfsError, type VfsErrorCode,

@@ -1,78 +1,84 @@
-const SESSION_RE = /^p[a-f0-9]{24}$/;
-const CAPABILITY_RE = /^[a-f0-9]{24}$/;
-const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
-const LABEL_RE = /^([0-9a-z]{1,4})-([a-z2-7]{20})-([a-z2-7]{20})-([a-z2-7]{15})$/;
+/**
+ * The workspace-preview hostname, encoded and decoded.
+ *
+ * One DNS label, four fields, fixed widths for the first three so the fourth can
+ * be a workspace name that contains hyphens:
+ *
+ *   `<port base36>-<capability handle>-<token>-<workspace>`
+ *
+ * Parsing is positional rather than a backtracking regex: with a variable-length
+ * tail there is exactly one correct split, and arithmetic finds it without a
+ * regex engine being free to find a different one.
+ *
+ * THE BUDGET. A DNS label holds 63 characters. Port ≤ 4, handle 10, token 15,
+ * three separators: 32, leaving 31 for the name — comfortably above the longest
+ * name `workspaceSlug` mints (adjective ≤ 11, noun ≤ 8, 8 hex digits, two
+ * hyphens = 29) and above the 24 `slugifyName` caps an operator-chosen one at. A
+ * longer name is refused rather than truncated: a truncated one would address a
+ * different workspace.
+ */
 
-export function encodeBase32(bytes: Uint8Array): string {
-  let bits = 0;
-  let buffer = 0;
-  let encoded = '';
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      encoded += BASE32[(buffer >>> bits) & 31];
-      buffer &= (1 << bits) - 1;
-    }
-  }
-  if (bits > 0) encoded += BASE32[(buffer << (5 - bits)) & 31];
-  return encoded;
-}
+const PORT_RE = /^[0-9a-z]{1,4}$/;
+const HANDLE_RE = /^[a-f0-9]{10}$/;
+const TOKEN_RE = /^[a-z2-7]{15}$/;
+/** Every name `workspaceSlug`/`slugifyName` can produce, and nothing that could
+ *  be read as another label's field or escape the label at all. */
+const WORKSPACE_RE = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
 
-function encodeHex(value: string): string {
-  if (!/^[a-f0-9]+$/.test(value) || value.length % 2 !== 0) throw new Error('Invalid hex value');
-  return encodeBase32(Uint8Array.from(value.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16)));
-}
+const HANDLE_LENGTH = 10;
+const TOKEN_LENGTH = 15;
 
-function decodeBase32Hex(value: string, expectedBytes: number): string | null {
-  let bits = 0;
-  let buffer = 0;
-  const bytes: number[] = [];
-  for (const character of value) {
-    const digit = BASE32.indexOf(character);
-    if (digit < 0) return null;
-    buffer = (buffer << 5) | digit;
-    bits += 5;
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push((buffer >>> bits) & 0xff);
-      buffer &= (1 << bits) - 1;
-    }
-  }
-  if (bytes.length !== expectedBytes || buffer !== 0) return null;
-  return bytes.map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-export interface NimbusPreviewHost {
+export interface WorkspacePreviewHost {
   port: number;
-  sessionId: string;
+  workspace: string;
+  handle: string;
   token: string;
-  capability: string;
 }
 
-export function parseNimbusPreviewLabel(label: string): NimbusPreviewHost | null {
-  const match = LABEL_RE.exec(label.toLowerCase());
-  if (!match) return null;
-  const port = Number.parseInt(match[1], 36);
-  const sessionHex = decodeBase32Hex(match[2], 12);
-  const capability = decodeBase32Hex(match[3], 12);
-  if (!sessionHex || !capability) return null;
-  const sessionId = `p${sessionHex}`;
-  if (!Number.isInteger(port) || port < 1 || port > 65_535 || !SESSION_RE.test(sessionId)) return null;
-  return { port, sessionId, token: match[4], capability };
+export function parseWorkspacePreviewLabel(label: string): WorkspacePreviewHost | null {
+  const lower = label.toLowerCase();
+  const portEnd = lower.indexOf('-');
+  if (portEnd < 1) return null;
+  const handleStart = portEnd + 1;
+  const handleEnd = handleStart + HANDLE_LENGTH;
+  const tokenStart = handleEnd + 1;
+  const tokenEnd = tokenStart + TOKEN_LENGTH;
+  if (lower[handleEnd] !== '-' || lower[tokenEnd] !== '-') return null;
+
+  const portText = lower.slice(0, portEnd);
+  const handle = lower.slice(handleStart, handleEnd);
+  const token = lower.slice(tokenStart, tokenEnd);
+  const workspace = lower.slice(tokenEnd + 1);
+  if (!PORT_RE.test(portText) || !HANDLE_RE.test(handle) || !TOKEN_RE.test(token)) return null;
+  if (!WORKSPACE_RE.test(workspace)) return null;
+  const port = Number.parseInt(portText, 36);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
+  return { port, workspace, handle, token };
 }
 
-export function buildNimbusPreviewHost(
-  port: number,
-  sessionId: string,
-  token: string,
-  capability: string,
-  suffix: string,
-): string {
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Invalid preview port: ${port}`);
-  if (!SESSION_RE.test(sessionId)) throw new Error(`Invalid Nimbus session id: ${sessionId}`);
-  if (!/^[a-z2-7]{15}$/.test(token)) throw new Error('Invalid Nimbus preview token');
-  if (!CAPABILITY_RE.test(capability)) throw new Error('Invalid Nimbus preview capability');
-  return `${port.toString(36)}-${encodeHex(sessionId.slice(1))}-${encodeHex(capability)}-${token}.${suffix}`;
+/**
+ * The hostname for one exposed port, or null when the pieces cannot make a
+ * legal one.
+ *
+ * Null rather than a throw for the name: a workspace whose name is too long for
+ * a DNS label is a workspace whose ports cannot be previewed, which the port
+ * surface reports as "no URL" — the same answer an unconfigured preview host
+ * gets. The other three are derived here and a malformed one is a fault.
+ */
+export function buildWorkspacePreviewHost(parts: {
+  port: number;
+  workspace: string;
+  handle: string;
+  token: string;
+  suffix: string;
+}): string | null {
+  const { port, workspace, handle, token, suffix } = parts;
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`Invalid workspace preview port: ${port}`);
+  }
+  if (!HANDLE_RE.test(handle)) throw new Error('Invalid workspace preview capability handle');
+  if (!TOKEN_RE.test(token)) throw new Error('Invalid workspace preview token');
+  if (!WORKSPACE_RE.test(workspace)) return null;
+  const label = `${port.toString(36)}-${handle}-${token}-${workspace}`;
+  return label.length > 63 ? null : `${label}.${suffix}`;
 }

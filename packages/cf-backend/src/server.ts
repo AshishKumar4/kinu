@@ -102,29 +102,27 @@ export { UserDO } from "./user/user-do";
 export { MonitorDO } from "./monitor/monitor-do";
 // The admin control plane's index and audit log. One instance ("site").
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
-// All nine are load-bearing, and only ONE is bound by `class_name`
-// (NimbusSession). The other eight are resolved by workerd's
-// `enable_ctx_exports`, which walks THIS module's exports and auto-populates
-// loopback Service Bindings — Nimbus then looks them up by string key
-// (`ctxExports.NimbusDOStub`), so a missing export is an absent property:
-// no build error, no type error, a runtime failure when that path first runs.
-// NimbusSession's own constructor captures them, because in prod the outer
-// Worker and the DO are separate isolates. Our compatibility_date 2025-12-01
-// clears the >= 2025-11-17 threshold by 14 days (Nimbus's inline "2026-04-01+"
-// comments are its dogfood's date, not the real bound).
+// NONE of these is bound by `class_name` any more. The workspace Durable Object
+// is gone: Nimbus is held as a LIBRARY in the OrchestratorAgent that owns each
+// workspace (workspace-host.ts), so there is no `NimbusSession` to export and no
+// `NIMBUS_SESSION` namespace to bind.
 //
-// Measured 2026-08-18, before deleting any of them for bundle size: the whole
-// eight-export surface is 10.70 KiB gzip, 0.15% of a 6,983 KiB bundle, because
-// nimbus-session.js re-exports the six binding shims from bindings.js and
-// imports cirrus-real, so only supervisor-rpc.js is a distinct module at all.
-// SupervisorRPC is the trap: the sole 6.29 KiB saving AND the only one that
-// fails SILENTLY — loader-pool.js guards `if (ctxExports?.SupervisorRPC)` and
-// skips wiring env.SUPERVISOR, so facets get undefined and npm/git break later
-// with unrelated errors. The six shims at least throw by name. The real weight
-// is the ~1,369 KiB NimbusSession subgraph (esbuild-wasm, sql.js,
-// isomorphic-git), which is a dependency question, not an export-list one.
+// The eight that remain are resolved by workerd's `enable_ctx_exports`, which
+// walks THIS module's exports and auto-populates loopback Service Bindings —
+// Nimbus then looks them up by string key (`ctxExports.NimbusDOStub`), so a
+// missing export is an absent property: no build error, no type error, a runtime
+// failure when that path first runs. Our compatibility_date 2025-12-01 clears
+// the >= 2025-11-17 threshold by 14 days (Nimbus's inline "2026-04-01+" comments
+// are its dogfood's date, not the real bound).
+//
+// They are retained because Nimbus's npm client and git-network subcommands
+// reach them: SupervisorRPC is the trap, since loader-pool.js guards
+// `if (ctxExports?.SupervisorRPC)` and skips wiring env.SUPERVISOR, so a facet
+// gets undefined and npm/git break later with unrelated errors. The six shims at
+// least throw by name. Measured 2026-08-18 the whole surface was 10.70 KiB gzip;
+// the ~1,369 KiB that dominated it was the NimbusSession subgraph, and dropping
+// the class drops most of that with it.
 export {
-  NimbusSession,
   SupervisorRPC,
   NimbusAssetsRPC,
   NimbusLoaderRPC,

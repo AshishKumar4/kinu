@@ -224,12 +224,13 @@ import {
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend,
+  type NimbusSandboxHandle,
 } from "@kinu.run/core";
 import {
-  bindAgentSql, cleanupHostedNodeHome as removeHostedNodeHome, createCFRuntime,
-  createHostedNodeHomeProvisioner,
+  bindAgentSql, createCFRuntime,
   type CFRuntime, type HostedNodeHome,
 } from "./runtime";
+import { cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner } from "./node-home";
 import {
   // The durable lanes' recovery roster — dispatch, five arms, terminal-result
   // discipline — and this backend's three cf-minted lane names.
@@ -607,6 +608,16 @@ interface WorkspaceTitleInputs {
  */
 export type SteerTurnLanding = 'mid-turn' | 'queued';
 
+
+/**
+ * The durable shell a node home is provisioned and reclaimed through.
+ *
+ * A shell of its own, not the actor's: provisioning runs `mkdir`/`chown`/`chmod`
+ * as uid 0 from `/`, and doing that in the actor's own shell would move the
+ * agent's working directory out from under its next command.
+ */
+const NODE_HOME_SHELL_ID = 'hosted-node-home';
+
 export abstract class ActorAgent extends Think<Env> {
   // ── The actor profile — what a concrete actor class supplies ─────────
   // The rest of this class is actor-agnostic; these members are the whole
@@ -635,6 +646,19 @@ export abstract class ActorAgent extends Think<Env> {
   protected workspaceName(): string { return this.name; }
 
   protected shellId(): string { return `agent:${this.name}`; }
+
+  /**
+   * The workspace's process/port/runtime/exec plane, for one named durable
+   * shell.
+   *
+   * ONE DURABLE OBJECT OWNS THE BYTES. A top-level workspace DO composes Nimbus
+   * over its own `ctx.storage.sql` and answers from there; a facet actor —
+   * its own Durable Object with its own SQLite, sharing the workspace's tree —
+   * answers with a client onto the object that does. In the actor profile
+   * because it is exactly "the whole difference between actor kinds": a new
+   * actor class cannot be added without deciding whether it owns a workspace.
+   */
+  protected abstract workspaceBox(shellId: string): NimbusSandboxHandle;
 
   /** The default agent owns the workspace's canonical scaffold. Facet actors
    * override this with an actor-private path inside the same workspace. */
@@ -4174,6 +4198,7 @@ export abstract class ActorAgent extends Think<Env> {
       const runtime = createCFRuntime(this, {
         env: this.env,
         ctx: this.ctx,
+        workspaceBox: (shellId) => this.workspaceBox(shellId),
         acc: () => this.acc,
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
@@ -5058,17 +5083,19 @@ export abstract class ActorAgent extends Think<Env> {
     };
   }
   /** The parent-owned home provisioner. Its durable mapping survives a reset;
-   * active work does not, because activity belongs to the live search/facet. */
-  private _hostedNodeHomeProvisioner: NodeWorkspaceProvisioner | null = null;
+   * active work does not, because activity belongs to the live search/facet.
+   *
+   * The uid allocation is a row in the SAME database as the filesystem the home
+   * is created in — `resolveHostedNodeHome` is only ever reached on the object
+   * that owns the workspace — so two nodes cannot be handed one uid. */
+  private _hostedNodeHomeProvisioner: NodeWorkspaceProvisioner | undefined;
 
   protected hostedNodeHomeProvisioner(): NodeWorkspaceProvisioner | undefined {
     if (!this.getOwnerUserId()) return undefined;
-    if (!this._hostedNodeHomeProvisioner) {
-      this._hostedNodeHomeProvisioner = createHostedNodeHomeProvisioner(this.env, this.ctx.storage.sql, {
-        ownerUserId: () => this.getOwnerUserId(),
-        workspaceName: this.workspaceName(),
-      });
-    }
+    this._hostedNodeHomeProvisioner ??= createNimbusNodeHomeProvisioner(
+      this.ctx.storage.sql,
+      this.workspaceBox(NODE_HOME_SHELL_ID),
+    );
     return this._hostedNodeHomeProvisioner;
   }
 
@@ -5092,10 +5119,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   private async cleanupNodeHome(nodeId: string): Promise<void> {
     if (!this.getOwnerUserId()) return;
-    await removeHostedNodeHome(this.env, {
-      ownerUserId: () => this.getOwnerUserId(),
-      workspaceName: this.workspaceName(),
-    }, nodeId);
+    await cleanupNimbusNodeHome(this.workspaceBox(NODE_HOME_SHELL_ID), nodeId);
   }
 
   /**

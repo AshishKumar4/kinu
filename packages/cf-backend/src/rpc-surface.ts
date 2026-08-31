@@ -421,6 +421,15 @@ const ORCHESTRATOR_METHODS = [
   'startExecutorFileDownload',
   'transitionReleaseChange',
   'writeExecutorFileChunk',
+  // The workspace's byte plane, for the facets that share it. Here rather than
+  // on the public transport for the same reason `rawCopyFromFork` is: these are
+  // how a facet reaches the object that owns the filesystem, and
+  // `NimbusExecOptions.cred` names a uid — a browser socket that could reach
+  // `workspaceBoxOp` could run a command as uid 0. `routeWorkspacePreview` is
+  // reached only by the preview edge, which has already verified the hostname's
+  // signature, and re-checks the capability handle inside the object.
+  'routeWorkspacePreview',
+  'workspaceBoxOp',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
 export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [

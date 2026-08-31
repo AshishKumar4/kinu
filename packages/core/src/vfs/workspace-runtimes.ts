@@ -6,7 +6,16 @@
  * filesystem, the shell, ~95 coreutils and `node`. `bash`, `python3`, `pip`
  * and `npm` are all "command not found" — not disabled, ABSENT, because the
  * workspace has been handed nothing that could run a wasm module and nothing
- * that speaks to a package registry. This module hands it both.
+ * that speaks to a package registry.
+ *
+ * `npm` and `npx` are handed over unconditionally: they are JavaScript reaching
+ * a registry over `fetch`. The wasm interpreters are handed over only where
+ * something can actually run one — see `provisionWorkspaceRuntimes`' `facets`.
+ * A deployed Worker has no such thing (workerd forbids the dynamic evaluation
+ * `localFacetHost` performs, and the dynamic-worker substrate that replaces it
+ * belongs to the Nimbus session Durable Object), so a hosted workspace has the
+ * filesystem, the shell, the coreutils, `node`, `npm`, `npx` and `git` — and
+ * says exactly that.
  *
  * WHERE THE BYTES COME FROM
  *
@@ -39,7 +48,7 @@
  */
 
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
+import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import { makeBashRunnerFactory } from '@nimbus-sh/core/runtime/bash-runner.js';
 import { makeCPythonRunnerFactory } from '@nimbus-sh/core/runtime/cpython-runner.js';
 import {
@@ -97,6 +106,19 @@ export function workspaceToolchainCapabilities(
 export function provisionWorkspaceRuntimes(deps: {
   workspace: NimbusWorkspace;
   runtimes: readonly RuntimePackage[];
+  /**
+   * Where a wasm interpreter would run, or absent because nothing here can run
+   * one.
+   *
+   * Absent is workerd. `localFacetHost` builds a facet's scope with
+   * `new AsyncFunction(preamble)` — dynamic evaluation, which the Workers
+   * runtime forbids outright — so a deployed Worker that registered
+   * bash/cpython runners anyway would answer `python3` with an eval error
+   * instead of "command not found", and would first have written 35.7 MB of
+   * interpreter rows to get there. A registry entry that cannot run is worse
+   * than an absent one: `provisioningStub` says so itself.
+   */
+  facets?: FacetHost;
 }): void {
   const { workspace, runtimes } = deps;
   const registry = workspace.registry;
@@ -107,15 +129,19 @@ export function provisionWorkspaceRuntimes(deps: {
   // every factory closes over one filesystem and one facet host: a second
   // workspace in the same process would otherwise retarget the first one's bash.
   //
-  // A Map because the lookups are dynamic even though the keys are not — the key
-  // is a `runner` field out of a manifest, so an unknown one must come back
-  // undefined rather than needing an assertion to ask.
-  const runnerDeps = { facets: localFacetHost(), vfs: workspace.vfs };
-  const runners = new Map<string, RunnerFactory>([
-    ['bash-runner', makeBashRunnerFactory(runnerDeps)],
-    ['cpython-runner', makeCPythonRunnerFactory(runnerDeps)],
-  ]);
-  const runnerFor = (key: string): RunnerFactory | undefined => runners.get(key);
+  // Empty when no facet host was supplied, which is not a degraded table but the
+  // honest one: a manifest naming `cpython-runner` on a host that cannot run wasm
+  // resolves to nothing, `rehydrateInstalledRuntimesView` registers no bin for
+  // it, and `python3` stays "command not found" instead of becoming a command
+  // that throws.
+  const runnerDeps = deps.facets ? { facets: deps.facets, vfs: workspace.vfs } : null;
+  const runners: Record<string, RunnerFactory> = runnerDeps
+    ? {
+      'bash-runner': makeBashRunnerFactory(runnerDeps),
+      'cpython-runner': makeCPythonRunnerFactory(runnerDeps),
+    }
+    : {};
+  const runnerFor = (key: string): RunnerFactory | undefined => runners[key];
 
   const installed = rehydrateInstalledRuntimesView(kernelFs, registry, home, runnerFor);
   const alreadyRegistered = new Set(installed.bins);

@@ -106,9 +106,23 @@ const TEAM_RECURSES = {
   cli: WIRED,
 } satisfies RootStatuses;
 
+/**
+ * The workspace filesystem's own tables.
+ *
+ * WIRED wherever a workspace lives, which after the one-DO cutover is the
+ * orchestrator's own Durable Object: `createWorkspace` opens Nimbus over
+ * `ctx.storage.sql`, so these sit beside the conversation and the memory index
+ * that reads them. Absent on a SUBORDINATE for the reason every shared-workspace
+ * surface is absent there — a facet has its own SQLite and shares its parent's
+ * tree over one RPC, so a filesystem in its own database would be a second,
+ * empty workspace.
+ */
 const NIMBUS_BASE = {
-  'cf-orchestrator': { absent: 'the hosted workspace lives in its NIMBUS_SESSION Durable Object' },
-  'cf-subordinate': { absent: 'the hosted workspace lives in its NIMBUS_SESSION Durable Object' },
+  'cf-orchestrator': WIRED,
+  'cf-subordinate': {
+    absent: SUBORDINATE_SCOPED('the workspace filesystem')
+      + '; composing one here would be a second, empty workspace',
+  },
   cli: WIRED,
 } satisfies RootStatuses;
 const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
@@ -327,6 +341,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
+    // The Agents SDK's facet registry: created by the first `subAgent()` call.
+    // The orchestrator makes one during workspace boot — the hosted runtime
+    // facet host registers through the SDK — so the table exists the moment
+    // the workspace opens, which every turn does. A subordinate reaches the
+    // shared workspace over the owner's box RPC instead and registers a facet
+    // of its own only when it first delegates.
+    cf_agents_sub_agents: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: LAZY_ON_FIRST_USE('subAgent') },
+      cli: { absent: 'the Agents SDK\'s Durable Object base is what creates this registry, and a '
+        + 'local session has no Durable Object; local facets run in-process' },
+    },
     // Gated commands parked on the owner. The TABLE is part of the shared
     // workspace schema everywhere; what differs is who can decide the rows —
     // the deferral channel is wired into the approval policy on cf, where the
@@ -386,8 +412,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     release_deployments: RELEASE_TABLE,
 
     // ── the workspace filesystem ──
-    // The local CLI retains the embedded SQLite workspace. Hosted actors use
-    // NIMBUS_SESSION directly and never create this second filesystem.
+    // ONE workspace per host database, on every backend: the local CLI's
+    // bun:sqlite file and the orchestrator's own `ctx.storage.sql`.
     kinu_workspace_generation: NIMBUS_BASE,
     // The filesystem itself. This is the exact set NimbusWorkspace.destroy()
     // drops — the namespace the library commits to owning inside a host's

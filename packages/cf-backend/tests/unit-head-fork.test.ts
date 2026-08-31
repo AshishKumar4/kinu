@@ -20,6 +20,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
+import type { WorkspaceBoxOp, WorkspaceBoxResult } from '../src/workspace-box-rpc';
 import {
   BUILTIN_PROFILE_CATALOG,
   CRAFT_NEUTRAL_PRIOR,
@@ -175,8 +176,33 @@ function makeNimbusNamespace(files: Record<string, string>) {
       };
     },
   };
+  /**
+   * The workspace as a facet now reaches it: ONE op over ONE RPC into the
+   * orchestrator that holds the filesystem. The `_rpc*` shapes above are the
+   * same in-memory tree, kept because the ops are answered from them — a head
+   * reading its parent's SOUL.md and one grepping its parent's tree exercise the
+   * same rows either way.
+   */
+  const boxOp = async (shellId: string, op: WorkspaceBoxOp): Promise<WorkspaceBoxResult> => {
+    switch (op.op) {
+      case 'ready': return undefined;
+      case 'exec': return await stub._rpcExec(op.command, { shellId });
+      case 'files.read': return await stub._rpcReadFile(op.path);
+      case 'files.readBytes': return await stub._rpcReadFileBytes(op.path);
+      case 'files.write': await stub._rpcWriteFile(op.path, op.content); return undefined;
+      case 'files.list': return await stub._rpcReaddir(op.path ?? '/');
+      case 'files.stat': return await stub._rpcStat(op.path);
+      case 'files.lstat': return await stub._rpcStat(op.path);
+      case 'files.exists': return await stub._rpcExists(op.path);
+      case 'files.mkdir': await stub._rpcMkdir(op.path); return undefined;
+      case 'files.delete': await stub._rpcDeleteFile(op.path); return undefined;
+      default:
+        throw new Error(`this fixture's workspace does not answer ${op.op}`);
+    }
+  };
   return {
     binding: { idFromName: (name: string) => name, get: () => stub },
+    boxOp,
     content,
     execOptions,
   };
@@ -299,7 +325,6 @@ function makeFacet(
   };
   const bindings = {
     LOADER: {},
-    NIMBUS_SESSION: nimbus.binding,
     Sandbox: {},
     PREVIEW_HOST_SUFFIX: 'preview.test',
     ...platformGatewayEnv(),
@@ -307,6 +332,9 @@ function makeFacet(
       idFromName: (name: string) => name,
       get: (name: string) => ({
         ...parent.stub,
+        // The workspace's byte plane, which after the one-DO cutover is reached
+        // here and nowhere else.
+        workspaceBoxOp: (shellId: string, op: WorkspaceBoxOp) => nimbus.boxOp(shellId, op),
         facetTurnProfile: async (): Promise<ResolvedTurnProfile> => {
           profileCalls.push(name);
           const profile = parentProfiles[name];
@@ -411,7 +439,10 @@ describe('a head forks its parent workspace', () => {
 
     expect(String(found)).toContain('repo/a.ts');
     expect(parent.calls).toHaveLength(0);
-    expect(nimbus.execOptions).toContainEqual({ shellId: 'head:head-1', shellRoot: '/home/user' });
+    // The head's OWN durable shell, named in the RPC argument. `shellRoot` is
+    // gone with the remote sandbox that used to stamp it: a named shell over a
+    // library-held workspace starts in that workspace's own root.
+    expect(nimbus.execOptions).toContainEqual({ shellId: 'head:head-1' });
   });
 
   test('exec planes are keyed to the PARENT workspace, not the head facet', async () => {

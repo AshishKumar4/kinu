@@ -288,7 +288,13 @@ export function createResolver(
     });
 
     if (specifier.startsWith('.')) {
-      return found(collapse(`${from.slice(0, from.lastIndexOf('/'))}/${specifier}`));
+      const base = collapse(`${from.slice(0, from.lastIndexOf('/'))}/${specifier}`);
+      // A relative path into node_modules is a DEPENDENCY reached through the
+      // filesystem — @nimbus-sh/worker exports no subpath for its dist session
+      // modules, and nimbus-programmatic.ts documents the one live instance.
+      // External like any package specifier, never a dangling local edge.
+      if (base.split('/').includes('node_modules')) return EXTERNAL;
+      return found(base);
     }
     if (specifier.startsWith(WORKSPACE_SCOPE)) {
       const [pkg, ...rest] = specifier.slice(WORKSPACE_SCOPE.length).split('/');

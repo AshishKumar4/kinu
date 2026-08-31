@@ -1,11 +1,17 @@
 /**
  * CF runtime adapter — bridges Think's DO context to core's AgentRuntime.
  *
- * Workspace storage is one NIMBUS_SESSION Durable Object:
- *   VFS      → Nimbus SDK files in the session.
- *   Shell    → Nimbus SDK exec over those same bytes.
- *   Memory   → MemoryStore (FTS5-indexed markdown chunks)
+ * ONE DURABLE OBJECT PER WORKSPACE. Everything a workspace stores is in the
+ * owning actor's own `ctx.storage.sql`:
+ *   VFS      → Nimbus, held as a library over that SQLite (workspace-host.ts).
+ *   Shell    → the same Nimbus workspace's shell over those same bytes.
+ *   Memory   → MemoryStore (FTS5-indexed markdown chunks of those same files)
  *   CraftStore → CraftStore (FTS5-indexed tool storage)
+ *
+ * So the indexed bytes and the index rows commit together, a SQL-only snapshot
+ * of the object is the whole workspace, and destroying one is one object's
+ * teardown. A facet (subordinate, head, swarm node) shares the workspace over a
+ * single RPC into that object — see `CFRuntimeAccess.workspaceBox`.
  *
  * Uses real Agent SDK APIs for infrastructure:
  *   Fibers   → Agent.runFiber() (durable, checkpoint/resume via stash)
@@ -44,13 +50,10 @@ import {
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
-import type { NodeWorkspaceProvisioner, SandboxHandle } from "@kinu.run/core";
-import {
-  cleanupNimbusNodeHome, createNimbusNodeHomeProvisioner, withHostedNodeExecution,
-} from './node-home';
+import type { SandboxHandle } from "@kinu.run/core";
+import { withHostedNodeExecution } from './node-home';
 import type { HostedNodeHome } from './node-home';
 export { withHostedNodeExecution, type HostedNodeHome } from './node-home';
-import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
@@ -76,11 +79,7 @@ import {
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import { agentAffinityKey, explorePrompt, formatInheritedContext, normalizeUsage, reflectionPrompt } from "@kinu.run/core";
-import {
-  createNimbusWorkspaceSandbox,
-  nimbusPreviewConfigured,
-  nimbusPreviewUrl,
-} from "./nimbus-route";
+import { nimbusPreviewConfigured } from "./nimbus-route";
 
 /**
  * The agent surface these runtime builders need — the bare agents-SDK `Agent`
@@ -99,6 +98,18 @@ type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'> & FacetHost;
 export interface CFRuntimeAccess {
   readonly env: Env;
   readonly ctx: DurableObjectState;
+  /**
+   * The workspace's process/port/runtime/exec plane, for the named durable
+   * shell.
+   *
+   * Supplied by the actor rather than built here, because only the actor knows
+   * whether it OWNS the workspace. An orchestrator hands over a box composed
+   * over its own `ctx.storage.sql`; a subordinate or exploration facet — its own
+   * Durable Object with its own SQLite, sharing the orchestrator's tree — hands
+   * over a client onto that orchestrator. Both satisfy `NimbusSandboxHandle`, so
+   * nothing downstream of this line can tell them apart.
+   */
+  workspaceBox(shellId: string): NimbusSandboxHandle;
   /** The turn's ledger + budget, when this actor has one — ActorAgent
    *  (orchestrator, subordinate) does; ExplorationAgent (a head/fork) does
    *  not, so the `workspace` provider's editFile/readFile/writeFile fall
@@ -330,36 +341,6 @@ export interface CFRuntimeHooks {
   workspaceExecution?: HostedNodeHome;
 }
 
-export function createHostedNodeHomeProvisioner(
-  env: Env,
-  sql: SqlDatabase,
-  actor: Pick<ActorRuntimeIdentity, 'ownerUserId' | 'workspaceName'>,
-): NodeWorkspaceProvisioner {
-  const box = createAgentNimbusHandle(env, {
-    ownerUserId: () => actor.ownerUserId(),
-    workspaceName: actor.workspaceName,
-    shellId: 'hosted-node-home',
-    scaffoldPath: '.kinu/internal/hosted-node-home',
-    capabilityToken: async () => null,
-  });
-  return createNimbusNodeHomeProvisioner(sql, box);
-}
-
-export async function cleanupHostedNodeHome(
-  env: Env,
-  actor: Pick<ActorRuntimeIdentity, 'ownerUserId' | 'workspaceName'>,
-  nodeId: string,
-): Promise<void> {
-  const box = createAgentNimbusHandle(env, {
-    ownerUserId: () => actor.ownerUserId(),
-    workspaceName: actor.workspaceName,
-    shellId: 'hosted-node-home',
-    scaffoldPath: '.kinu/internal/hosted-node-home',
-    capabilityToken: async () => null,
-  });
-  await cleanupNimbusNodeHome(box, nodeId);
-}
-
 /**
  * Build a full AgentRuntime from a Think agent's DO context.
  */
@@ -373,10 +354,11 @@ export function createCFRuntime(
   const execRaw: RawSqlExec = (ddl: string) => access.ctx.storage.sql.exec(ddl);
 
   const env = access.env;
-  if (!env.NIMBUS_SESSION) {
-    throw new Error('CF runtime requires the NIMBUS_SESSION binding: the Nimbus session is the hosted workspace');
-  }
-  const workspaceBox = createAgentNimbusHandle(env, actor);
+  // The workspace comes from the actor, because WHERE it lives is the actor's
+  // own fact: an orchestrator composes Nimbus over its own `ctx.storage.sql`,
+  // and a facet holds a client onto the orchestrator that did. This factory
+  // reads neither — one box, one interface, either way.
+  const workspaceBox = access.workspaceBox(actor.shellId);
   const executionBox = hooks.workspaceExecution
     ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution)
     : workspaceBox;
@@ -505,7 +487,16 @@ export function createCFRuntime(
   );
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
-    runtimeCatalog: env.NIMBUS_RUNTIME_CACHE != null,
+    // FALSE, with the bucket bound. `runtimeCatalog` declares that this
+    // deployment can INSTALL AND RUN an interpreter runtime; a workspace held
+    // as a library in the actor's own Durable Object can fetch one out of
+    // NIMBUS_RUNTIME_CACHE and cannot run it — a wasm guest needs a facet
+    // substrate that compiles and enters a module, which on workerd is the
+    // dynamic-worker pool a Nimbus SESSION object composes for itself. So
+    // `python`/`native_binary` are not declared, `runtimes.*` still reaches the
+    // bucket, and `python3` is "command not found" rather than a command that
+    // installs 35.7 MB of rows and then fails.
+    runtimeCatalog: false,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: agentFileVfs, memory, craftStore, shell,
@@ -715,79 +706,6 @@ export function createCFRuntime(
     sandboxHandle,
   };
   return runtime;
-}
-
-
-function createAgentNimbusHandle(env: Env, actor: ActorRuntimeIdentity): NimbusSandboxHandle {
-  let cachedKey = "";
-  let cachedBox: ReturnType<typeof createNimbusWorkspaceSandbox> | null = null;
-
-  const current = () => {
-    const ownerUserId = actor.ownerUserId();
-    if (!ownerUserId) {
-      throw new Error('Nimbus workspace is unavailable until the workspace owner claim completes');
-    }
-    const key = `${ownerUserId}|${actor.workspaceName}`;
-    if (!cachedBox || cachedKey !== key) {
-      cachedKey = key;
-      cachedBox = createNimbusWorkspaceSandbox(env, ownerUserId, actor.workspaceName);
-    }
-    return cachedBox;
-  };
-
-  const previewUrl = (port: number, capability: string | null | undefined): string | undefined => {
-    const ownerUserId = actor.ownerUserId();
-    if (!ownerUserId || !capability) return undefined;
-    return nimbusPreviewUrl(env, ownerUserId, actor.workspaceName, port, capability);
-  };
-  const jsonResult = async (result: Promise<unknown>) => {
-    const value = await result;
-    return value === undefined ? undefined : decodeJsonValue({ value });
-  };
-
-  return {
-    ready: () => current().ready(),
-    exec: (command, options) => current().exec(command, { ...options, shellId: actor.shellId }),
-    startProcess: (command, options) => current().startProcess(command, { ...options, shellId: actor.shellId }),
-    runCode: (code, options) => current().runCode(code, { ...options, shellId: actor.shellId }),
-    files: {
-      read: (path) => current().files.read(path),
-      readBytes: (path) => current().files.readBytes(path),
-      write: (path, content) => current().files.write(path, content),
-      stat: (path) => current().files.stat(path),
-      lstat: (path) => current().files.lstat(path),
-      rename: (from, to) => current().files.rename(from, to),
-      chmod: (path, mode) => current().files.chmod(path, mode),
-      list: (path) => current().files.list(path),
-      exists: (path) => current().files.exists(path),
-      mkdir: (path) => current().files.mkdir(path),
-      delete: (path, options) => current().files.delete(path, options),
-    },
-    runtimes: {
-      ensure: (specs, options) => jsonResult(current().runtimes.ensure(specs, options)),
-      install: (spec, options) => jsonResult(current().runtimes.install(spec, options)),
-      list: () => jsonResult(current().runtimes.list()),
-    },
-    processes: {
-      list: () => jsonResult(current().processes.list()),
-      kill: (pid) => jsonResult(current().processes.kill(pid)),
-      logs: (pid, options) => jsonResult(current().processes.logs(pid, options)),
-    },
-    ports: {
-      expose: async (port) => {
-        const exposed = await current().ports.expose(port);
-        if (!exposed.capability) throw new Error(`No process is listening on workspace port ${port}`);
-        const url = previewUrl(port, exposed.capability);
-        if (!url) throw new Error('Workspace preview URLs are unavailable because the preview host or user-plane secret is not configured');
-        return { ...exposed, url };
-      },
-      unexpose: (port) => current().ports.unexpose(port),
-      list: async () => (await current().ports.list()).map((entry) => ({
-        ...entry,
-        url: previewUrl(entry.port, entry.capability),
-      })),
-    },
-  };
 }
 
 // ── Adapters: agent-utils → core interfaces ──────────────────────

@@ -41,6 +41,8 @@ import {
 } from './actor-agent';
 import type { AgentKind } from './analytics/record';
 import type { OrchestratorAgent } from './orchestrator';
+import { createWorkspaceBoxClient, workspaceBoxOwner } from './workspace-box-rpc';
+import type { NimbusSandboxHandle } from '@kinu.run/core';
 import {
   SubordinateIdentityStore,
   admitSubordinateTask,
@@ -217,6 +219,26 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   protected shellId(): string { return `subordinate:${this.name}`; }
+
+  /**
+   * The parent workspace's box, one Durable Object hop away.
+   *
+   * A subordinate is a facet with its own SQLite — private ledgers, private
+   * scaffold, private transcript — and the workspace it works in is its
+   * parent's. So it composes no filesystem of its own: composing one here would
+   * be a SECOND, EMPTY workspace, which is the regression
+   * tests/unit-head-fork.test.ts pins for heads and holds identically here.
+   *
+   * Resolved per call rather than cached: `workspaceName()` throws until the
+   * parent has seeded this facet's identity, and that sentence is the one a
+   * caller needs.
+   */
+  protected workspaceBox(shellId: string): NimbusSandboxHandle {
+    return createWorkspaceBoxClient({
+      owner: () => workspaceBoxOwner(this.env, this.workspaceName()),
+      shellId,
+    });
+  }
 
   /** What this subordinate is FOR. Its own mission, which for an agent the
    *  owner added without saying anything is the workspace's, inherited at

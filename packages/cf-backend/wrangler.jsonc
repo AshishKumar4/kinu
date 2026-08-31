@@ -113,10 +113,6 @@
       // trigger below. Holds open incidents (so an outage alerts once, not
       // every tick) and the alert outbox.
       { "class_name": "MonitorDO", "name": "MonitorDO" },
-      // Nimbus SDK session DO. Used directly through Nimbus.fromEnv() — no
-      // endpoint/token secrets are required for Kinu's built-in Nimbus
-      // executor.
-      { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
       // Sandbox — @cloudflare/sandbox DO + Container. One container per agent
       // (keyed by agent name). Binding name MUST be "Sandbox" — the SDK's
       // proxyToSandbox hardcodes `env.Sandbox` lookup (see
@@ -171,9 +167,15 @@
   ],
   // Append-only from the first deploy onwards. `v1` registered the six classes
   // this Worker shipped with and is never edited again — a later SQLite class
-  // gets its own tag, which is what `v2` is. `ExplorationAgent` is in v1
-  // without a binding above because it is reached as a facet of
-  // OrchestratorAgent rather than by name.
+  // gets its own tag, which is what `v2` and `v3` are. `ExplorationAgent` is in
+  // v1 without a binding above because it is reached as a facet of
+  // OrchestratorAgent rather than by name; `SubordinateAgent` likewise.
+  //
+  // `v3` RETIRES the workspace session class. Nimbus is now held as a library in
+  // the OrchestratorAgent that owns each workspace (src/workspace-host.ts), so
+  // there is no second object per workspace and nothing binds NIMBUS_SESSION.
+  // v1 keeps naming the class because a migration list is a history, not a
+  // description: editing it would tell the platform this Worker never had one.
   "migrations": [
     {
       "tag": "v1",
@@ -185,6 +187,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["ControlPlaneDO"]
+    },
+    {
+      "tag": "v3",
+      "deleted_classes": ["NimbusSession"]
     }
   ],
   // Synthetic monitoring. Every 15 minutes the worker probes its own public
@@ -281,30 +287,23 @@
     // right default for any deployment that has not decided its operators.
     //
     // THIS IS THE INNER HALF OF A TWO-PART GATE. The outer half is Cloudflare
-    // Access, and it needs two more vars THAT ARE DELIBERATELY NOT WRITTEN HERE
-    // because nobody may invent their values:
+    // Access: one self-hosted application whose destinations are exactly
+    // `kinu.run/control*` and `kinu.run/api/control*` with an Allow policy
+    // naming these same operator addresses. ONE application, because the Worker
+    // pins one AUD and two applications would give the two paths two different
+    // ones. EXACTLY those two destinations, because a broader one — `kinu.run`
+    // bare, or `*.kinu.run` — puts an interactive Access login in front of
+    // every preview URL an agent hands out, the public landing page,
+    // /api/feedback and /api/client-errors. `bun run gate:infra` reads the
+    // account's real Access applications and policies and blocks the deploy
+    // while the application does not match these two vars.
     //
-    //   "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com"
-    //   "CONTROL_PLANE_ACCESS_AUD":         "<the application's 64-hex AUD tag>"
-    //
-    // Both are read from the Access application after it is created in Zero
-    // Trust > Access controls > Applications, as ONE self-hosted application
-    // whose destinations are exactly `kinu.run/control*` and
-    // `kinu.run/api/control*` with an Allow policy naming these same operator
-    // addresses. ONE application, because the Worker pins one AUD and two
-    // applications would give the two paths two different ones. EXACTLY those
-    // two destinations, because a broader one — `kinu.run` bare, or
-    // `*.kinu.run` — puts an interactive Access login in front of every preview
-    // URL an agent hands out, the public landing page, /api/feedback and
-    // /api/client-errors.
-    //
-    // Until both vars are set the admin plane answers 404 to everyone, including
-    // this owner: `verifyControlPlaneAccess` (src/control-plane/access-gate.ts)
-    // has no issuer to pin and refuses rather than trusting a header. A
-    // PRODUCTION DEPLOY IS BLOCKED while they are absent or while the Access
-    // application does not match them — `bun run gate:infra` reads the account's
-    // real Access applications and policies and fails the deploy, which is why
-    // leaving them out of this file is safe rather than merely tidy.
+    // Both values are READ OFF the live application (created 2026-08-31, app id
+    // 6de4a02e-ec8f-421a-b612-ba8b5d6fd973); neither is a credential. The AUD
+    // is a public audience tag, and the team domain is the issuer every
+    // Access-protected site on this account already advertises.
+    "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "https://aksingh.cloudflareaccess.com",
+    "CONTROL_PLANE_ACCESS_AUD": "fa05f0a7d7193ab2d57e08039c567ce3a3bbafa5bccc32e300ab432c607f0015",
     "CONTROL_PLANE_ADMINS": "me@ashishkumarsingh.com",
     // Account the Analytics Engine SQL API is queried against. The same id as
     // `account_id` above; a plain var because it is in this file already, and
@@ -327,9 +326,10 @@
     //   GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET
     //   GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET
     //   CLOUDFLARE_OAUTH_CLIENT_ID / CLOUDFLARE_OAUTH_CLIENT_SECRET
-    // ── Nimbus — built-in lightweight sandbox ────────────────────────
-    // Uses the NIMBUS_SESSION Durable Object binding above through the
-    // official @nimbus-sh/sdk. No endpoint/token secrets are required.
+    // ── Nimbus — the workspace filesystem and shell ──────────────────
+    // Held as a LIBRARY in the OrchestratorAgent that owns each workspace
+    // (src/workspace-host.ts), over that object's own SQLite. No binding, no
+    // second Durable Object, and no endpoint/token secrets.
   },
   // ── Mission Inbox (Email Routing + Email Sending) ────────────────
   // Inbound: an Email Routing catch-all rule on EMAIL_DOMAIN delivers to this
@@ -494,7 +494,6 @@
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
           { "class_name": "MonitorDO", "name": "MonitorDO" },
-          { "class_name": "NimbusSession", "name": "NIMBUS_SESSION" },
           { "class_name": "KinuSandbox", "name": "Sandbox" },
           { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" }
         ]
@@ -523,6 +522,10 @@
         {
           "tag": "v2",
           "new_sqlite_classes": ["ControlPlaneDO"]
+        },
+        {
+          "tag": "v3",
+          "deleted_classes": ["NimbusSession"]
         }
       ],
       // No cron trigger and no OPS_ALERT_EMAIL here: staging has no OAuth

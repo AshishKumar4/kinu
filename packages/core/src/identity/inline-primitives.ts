@@ -3,7 +3,8 @@
  * shared by createWorkspace and openWorkspace. The production backends replace
  * Memory/Executor/Schedule with richer adapters (FTS5 MemoryStore, sandboxed
  * executors); the filesystem is already the production one, so nothing about
- * how bytes are stored differs between this path and a deployed agent.
+ * how bytes are stored differs between this path and a deployed agent: both call
+ * `createWorkspace` over their host's own SQLite.
  */
 
 import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace';

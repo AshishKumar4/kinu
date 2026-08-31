@@ -480,6 +480,12 @@ type Local =
   /** A stylesheet, image or data file — real, and not something a shared
    *  package can import, so it pins its importer where it is. */
   | { readonly kind: 'asset' }
+  /** A relative path that leaves the tree for `node_modules/` — a dependency
+   *  reached through the filesystem because the package exports no subpath for
+   *  it (`nimbus-programmatic.ts` documents the one live instance). A
+   *  DEPENDENCY, never a dependency-free module, and package-relative, so it
+   *  pins its importer exactly as an asset does. */
+  | { readonly kind: 'installed' }
   | { readonly kind: 'missing' }
   | { readonly kind: 'external' };
 
@@ -494,6 +500,7 @@ function resolveLocal(
     ? normalize(join(dirname(from), spec))
     : alias === undefined ? undefined : `${alias[1]}${spec.slice(alias[0].length)}`;
   if (base === undefined) return { kind: 'external' };
+  if (base.split('/').includes('node_modules')) return { kind: 'installed' };
   // One spelling per regime: no extension under a bundler or Bun, an explicit
   // `.ts` inside the raw-Node closure. `base` covers the second and the genuine
   // assets (`.css`, `.json`, `packages/pc-agent/src/index.js`); the rest is the
@@ -556,7 +563,7 @@ function buildGraph(sources: ReadonlyMap<string, string>): Graph {
         edges += 1;
         continue;
       }
-      if (resolved.kind === 'asset') { blocked.push(spec); continue; }
+      if (resolved.kind === 'asset' || resolved.kind === 'installed') { blocked.push(spec); continue; }
       if (SHARED_PACKAGE.test(spec) || importable.has(spec)) continue;
       blocked.push(spec);
     }

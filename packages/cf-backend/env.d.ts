@@ -11,7 +11,6 @@ import type { KinuSandbox } from "./src/kinu-sandbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
-import type { NimbusSession } from "@nimbus-sh/sdk/worker";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
 // This file has top-level imports (for the DO class generics below), which
@@ -45,8 +44,6 @@ declare global {
      *  from Worker code holding a capability token derived from
      *  CREDENTIAL_ENCRYPTION_KEY — see control-plane/admin-caller.ts. */
     ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
-    /** Nimbus SDK session DO — built-in lightweight dev environment. */
-    NIMBUS_SESSION: DurableObjectNamespace<NimbusSession>;
     /** Sandbox container DO — @cloudflare/sandbox. One per agent.
      *  Binding name is fixed to "Sandbox" because the SDK's proxyToSandbox
      *  looks up `env.Sandbox` directly. */

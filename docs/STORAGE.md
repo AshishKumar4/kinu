@@ -1,6 +1,7 @@
 # Data Model
 
-A hosted workspace has two durable authorities. `NIMBUS_SESSION` owns the
+A hosted workspace has ONE durable authority: the OrchestratorAgent Durable
+Object. Nimbus, held as a library over its `ctx.storage.sql`, owns the
 workspace files and execution state. The `OrchestratorAgent` Durable Object's
 SQLite owns relational actor state. Each subsystem owns its tables and creates
 them idempotently. There is no shadow VFS or synchronization path between the
@@ -230,7 +231,7 @@ Both backends run Nimbus's workspace filesystem over their own SQLite. The
 class is `SqliteVFS`, from `@nimbus-sh/core`. Nothing in this repository
 implements a filesystem.
 
-Hosted, the workspace lives in its `NIMBUS_SESSION` Durable Object, reached
+Hosted, the workspace lives in the actor's OWN Durable Object storage, reached
 through the remote session adapter in `core/src/execution/nimbus.ts`; the
 orchestrator DO creates none of the filesystem tables. Local, `createWorkspace`
 (`core/src/vfs/nimbus-workspace.ts`, imported as `createWorkspaceFilesystem`)

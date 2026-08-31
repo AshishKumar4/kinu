@@ -11,7 +11,7 @@ over different turn transports: Cloudflare Think and the local `runChat` loop.
 
 A workspace is 1:1 with an `OrchestratorAgent` Durable Object
 (`cf-backend/src/orchestrator.ts`). Its file plane is the workspace filesystem
-(`core/src/execution/nimbus.ts`), one authoritative `NIMBUS_SESSION`: a real
+(`core/src/execution/nimbus.ts`), one authoritative workspace — Nimbus held as a library over the owning Durable Object's own `ctx.storage.sql`: a real
 shell, runtimes, processes, and ports over the same bytes. Its execution plane
 is an `ExecutionRouter` (`core/src/execution/router.ts`) dispatching to
 whichever other environment is asked for, running commands target-native rather
@@ -22,7 +22,7 @@ filesystem at native paths, reached through its namespace.
 graph TB
     subgraph WS["Workspace = OrchestratorAgent DO (orchestrator.ts)"]
         direction TB
-        Files["Workspace filesystem, authoritative NIMBUS_SESSION<br/>(runtime.ts + execution/nimbus.ts), durable, real shell"]
+        Files["Workspace filesystem, in the owning DO's own SQLite<br/>(workspace-host.ts + execution/nimbus.ts), durable, real shell"]
         subgraph Execs["ExecutionRouter, target-native exec, each its own filesystem"]
             W["workspace.*: the file plane above (default runtime)"]
             S["sandbox.*: Linux container, KinuSandbox (when configured)"]

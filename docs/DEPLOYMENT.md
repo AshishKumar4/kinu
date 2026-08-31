@@ -353,7 +353,6 @@ Classification is narrow: 429 and 529 always count; a 503 counts only when statu
 | `OrchestratorAgent` | Durable Object | The workspace agent (extends `ActorAgent` → `Think`) |
 | `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, release changes |
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
-| `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk`; built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `KinuSandbox` (@cloudflare/sandbox); one container per agent |
 | `ControlPlaneDO` | Durable Object | The admin surface's singleton (one instance, `site`): a fleet index and an audit log. It holds no business logic, and every action it exposes proxies an existing `@callable` on the object that already owns that state |
 | `AUTH_KV` | KV namespace | Sessions, one-time OAuth handoff state, and CLI browser approval state, all of it expiring on its own; identities live in `UserDO`, and so does the one row that says a session is still live and what it stands for — the KV session record is a projection of that row. `kinu-auth`, and `kinu-auth-staging` in staging |

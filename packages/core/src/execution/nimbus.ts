@@ -1,10 +1,11 @@
 /**
  * Nimbus executor adapter.
  *
- * Core stays dependency-clean: the Cloudflare backend constructs the real
- * @nimbus-sh/sdk sandbox handle with Nimbus.fromEnv(...).sandbox(...), then
- * passes that handle here. This adapter only maps the handle's stable SDK
- * shape into Kinu's ExecutorProvider contract.
+ * Core stays dependency-clean: the composing backend builds the workspace box
+ * and passes it here — on Cloudflare that is Nimbus held as a library over the
+ * owning Durable Object's own SQLite (`cf-backend/src/workspace-host.ts`), or a
+ * client onto that object for one of its facets. This adapter only maps the
+ * box's stable shape into Kinu's ExecutorProvider contract.
  */
 
 import * as v from 'valibot';
@@ -177,8 +178,9 @@ export interface NimbusWorkspaceExecutorOpts extends NimbusExecutorOpts {
 }
 
 const NOT_CONFIGURED =
-  'Nimbus executor not configured. Add the NIMBUS_SESSION Durable Object binding ' +
-  'and construct the executor with Nimbus.fromEnv(...).sandbox(...).';
+  'Nimbus executor not configured. The host must construct the workspace box and ' +
+  'pass it here — `createHostedWorkspace(...).box(shellId)` on the Cloudflare ' +
+  'backend, the embedded bundle on the CLI.';
 
 /**
  * `unavailable`, for the reason spelled out in `sandbox.ts`: the binding is
@@ -186,10 +188,10 @@ const NOT_CONFIGURED =
  * `run` tool already spells `unavailable` for an unregistered runtime. One fact,
  * one code, one part of the census.
  *
- * Its own bucket matters more here than anywhere else: on the Cloudflare backend
- * Nimbus IS the workspace (`createNimbusWorkspaceExecutor` registers it as
- * `workspace`), so a missing binding used to answer every single call with prose
- * that `isFailingResultText` reads as a clean success.
+ * Its own bucket matters more here than anywhere else: Nimbus IS the workspace
+ * (`createNimbusWorkspaceExecutor` registers it as `workspace`), so an absent box
+ * used to answer every single call with prose that `isFailingResultText` reads as
+ * a clean success.
  */
 const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
 
@@ -644,16 +646,18 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     files: box ? nimbusSessionFiles(box) : undefined,
     homeDir: async () => root,
     kind: 'nimbus',
-    // JavaScript/TypeScript, the shell, npm, npx, node, bun and git are
-    // registered by the session worker itself (@nimbus-sh/worker
-    // dist/session/init.js — git :457, npm :1927, npx :2311, node :698,
-    // bun :847), so they need no install and are declared unconditionally.
-    // Interpreter runtimes DO need one: `nimbus install` reads them out of the
-    // deployment's R2 bucket, so `python`/`native_binary` are declared exactly
-    // when that bucket is bound (NimbusExecutorOpts.runtimeCatalog). It is not
-    // bound today, which is why this set has never carried `python` in
-    // production — a session without a runtime source answers `python -c` with
-    // an install error, not a Python.
+    // JavaScript/TypeScript, the shell, ~95 coreutils and `node` are the bare
+    // workspace's own; `npm` and `npx` are registered by
+    // `provisionWorkspaceRuntimes` (JavaScript reaching a registry over `fetch`);
+    // `git` is isomorphic-git over the same SqliteVFS, registered by the host.
+    // None needs an install, so all are declared unconditionally.
+    //
+    // Interpreter runtimes DO need one, and they need somewhere to RUN: a wasm
+    // guest requires a facet host, so `python`/`native_binary` are declared
+    // exactly when the composing backend says both halves are present
+    // (NimbusExecutorOpts.runtimeCatalog). The Cloudflare backend says false —
+    // workerd forbids the dynamic evaluation a local facet host performs — and
+    // the CLI supplies `localFacetHost()`.
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'npm', 'git',
       'fs_owned', 'net_outbound',

@@ -80,6 +80,13 @@ describe('reconcileExplorationFacets', () => {
 describe('the exploration-facet sweep over the head journal', () => {
   test('every terminal head loses its facet; only the executing ones keep theirs', async () => {
     const harness = orchestratorHarness();
+    // The activation's own detached facet reclaim is IDEMPOTENT and can fire
+    // any time after construction — it never touches heads spawned after it
+    // started (`spawnedBefore` fences the journal writes), but it legitimately
+    // harvests terminal facets, so a mid-window snapshot of "6 facets exist"
+    // can read fewer. Join the activation before seeding: the assertion is
+    // about ONE sweep over a settled world, not about scheduling order.
+    await harness.agent.harnessSettleBackgroundTasks();
     const settled = [
       ['branch-done', 'completed'],
       ['branch-threw', 'errored'],
@@ -96,15 +103,28 @@ describe('the exploration-facet sweep over the head journal', () => {
     await harness.agent.harnessSpawnBranchHead('branch-stale', 'never reported', null);
     harness.agent.harnessMarkHeadsInterrupted();
     await harness.agent.harnessSpawnBranchHead('branch-live', 'still running', null);
-
-    expect(harness.agent.harnessExplorationFacets().length).toBe(6);
+    const world = () => harness.agent.harnessExplorationFacets().sort().map((facet) => ({
+      facet,
+      journal: harness.agent.harnessBranchHeadStatus(facet.replace(/-head$/, '')) ?? 'no-row',
+    }));
+    expect(world()).toEqual([
+      { facet: 'branch-cut-head', journal: 'aborted' },
+      { facet: 'branch-done-head', journal: 'completed' },
+      { facet: 'branch-live-head', journal: 'running' },
+      { facet: 'branch-spent-head', journal: 'budget_exceeded' },
+      { facet: 'branch-stale-head', journal: 'interrupted' },
+      { facet: 'branch-threw-head', journal: 'errored' },
+    ]);
     await harness.agent.harnessReclaimSettledExplorationFacets();
 
     // The four settled heads are gone whatever they settled AS; the interrupted
     // and the running one are held, and holding them is not a guess — a live
     // head is what makes the sweep refuse to reclaim an unledgered facet too.
-    expect(harness.agent.harnessExplorationFacets()).toEqual([
-      'branch-live-head', 'branch-stale-head',
+    // Asserted WITH each facet's journal status: a mismatch then prints the
+    // sweep's whole decision world, not just the names.
+    expect(world()).toEqual([
+      { facet: 'branch-live-head', journal: 'running' },
+      { facet: 'branch-stale-head', journal: 'interrupted' },
     ]);
   });
 });

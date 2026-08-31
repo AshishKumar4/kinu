@@ -39,12 +39,14 @@ import {
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
+  type WorkspaceOptions,
   nextWorkspaceGeneration,
   workspaceToolchainCapabilities,
 } from '@kinu.run/core/workspace';
 import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
@@ -510,7 +512,8 @@ export function createCLIRuntime(
     transactions: localTransactions(db),
     generation: nextWorkspaceGeneration(workspaceSql),
     runtimes: WORKSPACE_RUNTIMES,
-  });
+    runtimeFacets: localFacetHost(),
+  } satisfies WorkspaceOptions);
   const agentStateVfs = workspace.vfs;
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const cwd = config.cwd ? resolvePath(config.cwd) : null;
@@ -720,7 +723,8 @@ export function buildCLIHeadRuntime(
     transactions: localTransactions(db),
     generation: nextWorkspaceGeneration(nimbusSql(db)),
     runtimes: WORKSPACE_RUNTIMES,
-  });
+    runtimeFacets: localFacetHost(),
+  } satisfies WorkspaceOptions);
   // What stays private is what makes this a fork rather than a second view of
   // the parent: its own scaffold, memory, craft store and transcript, in its
   // own scratch database.

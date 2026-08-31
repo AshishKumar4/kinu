@@ -63,7 +63,8 @@ ledger.
 ## file: the file plane
 
 `FILE_TOOL_ACTIONS` names `read`, `write`, and `edit`. `file`, workspace
-`run`, and `workspace.*` address `rt.storage.vfs`: hosted `NIMBUS_SESSION`, or
+`run`, and `workspace.*` address `rt.storage.vfs`: hosted, the actor DO's own
+Nimbus workspace; or
 the CLI working directory when set, otherwise its in-SQLite tree. Containers
 and devices keep separate files under `sandbox.*` and `laptop.*`.
 

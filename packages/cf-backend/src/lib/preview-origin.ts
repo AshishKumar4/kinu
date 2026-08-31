@@ -1,4 +1,4 @@
-import { parseNimbusPreviewLabel } from './nimbus-preview-host';
+import { parseWorkspacePreviewLabel } from './nimbus-preview-host';
 import * as v from 'valibot';
 
 /**
@@ -170,7 +170,7 @@ export function isPreviewUrl(value: string, configuredSuffix: string | null = br
   const label = host.slice(0, -suffixWithDot.length);
   if (!label || label.includes('.')) return false;
   const sandbox = PREVIEW_HOST_LABEL.exec(label);
-  return (sandbox !== null && validPort(sandbox[1])) || parseNimbusPreviewLabel(label) !== null;
+  return (sandbox !== null && validPort(sandbox[1])) || parseWorkspacePreviewLabel(label) !== null;
 }
 
 /**

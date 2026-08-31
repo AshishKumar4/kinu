@@ -25,9 +25,12 @@ it directly: `core/src/events/outbox.ts:30` builds its outbox on
 `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on fabric, so
 the resolved tree holds it either way.
 
-`patches/` holds two patch files and neither is a Nimbus patch:
-`@plannotator%2Fui@0.30.0.patch` and `@cloudflare%2Fsandbox@0.12.8.patch`. The
-second makes the SDK's handler-map assignments MERGE, so configuring a bucket
+`patches/` holds FOUR patch files and one of them IS a Nimbus patch:
+`@plannotator%2Fui@0.30.0.patch`, `@cloudflare%2Fsandbox@0.12.8.patch`,
+`agents@0.20.1.patch`, and `@nimbus-sh%2Fcore@0.6.0.patch` — the last re-points
+`esbuild-wasm` at its browser entrypoint (`esbuild-wasm/esm/browser.js`) so the
+Worker bundle does not instantiate the Go-imports build. All four are declared in
+the root `package.json`'s `patchedDependencies`. The sandbox patch makes the SDK's handler-map assignments MERGE, so configuring a bucket
 mount cannot unbind an outbound handler the host installed
 (`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
@@ -37,20 +40,32 @@ because that incident is why the gate exists.
 
 ## Ownership
 
-A cloud workspace splits across two durable authorities with different jobs:
+A cloud workspace has ONE durable authority. The `OrchestratorAgent` Durable
+Object owns identity, conversations, plans, task and evolution state and the
+other relational tables — AND, over the same `ctx.storage.sql`, `/home/user`, the
+shell over those bytes, installed runtimes, processes and exposed ports. Nimbus
+is held as a library (`cf-backend/src/workspace-host.ts`), which is what makes
+that possible: it owns no transport, no session and no Durable Object of its own.
 
-- the `OrchestratorAgent` Durable Object owns identity, conversations, plans,
-  task and evolution state, and the other relational tables;
-- one `NIMBUS_SESSION` owns `/home/user`, the shell over those bytes, installed
-  runtimes, processes, and exposed ports.
+`createHostedWorkspace()` is the only constructor, and the object's own name is
+the workspace's, so execution, export, forking, preview routing and destruction
+all address one place. A subordinate or exploration facet has its own SQLite for
+its own ledgers and reaches the workspace over one RPC
+(`OrchestratorAgent.workspaceBoxOp`); it never composes a filesystem, which
+would be a second, empty workspace.
 
-The Nimbus session ID is a SHA-256 digest of the owner ID and the workspace
-name, truncated to 24 hex characters (`nimbusWorkspaceSessionId`,
-`nimbus-route.ts:11-19`). `createNimbusWorkspaceSandbox()` is the only
-constructor for that handle, so execution, export, forking, and destruction all
-address the same session. Fresh workspaces start on this layout directly; there
-is no cutover, legacy copy, dual read, synchronization bridge, or fallback
-filesystem.
+Destruction is one object's teardown: `this.destroy()` drops the filesystem with
+the conversation, so a same-name recreate cannot find half a workspace. Fresh
+workspaces start on this layout directly; there is no cutover, legacy copy, dual
+read, synchronization bridge, or fallback filesystem.
+
+WHAT A HOSTED WORKSPACE CANNOT RUN: the wasm interpreters (`bash`, `python3`,
+`ruby`, `clang`). Those need a facet substrate that compiles and enters a guest
+module, which on workerd is a dynamic-worker pool the Nimbus SESSION object
+composed for itself. `NIMBUS_RUNTIME_CACHE` stays bound and `runtimes.*` still
+reaches it, but the workspace executor no longer declares `python` or
+`native_binary` on this backend (`runtimeCatalog: false`, `runtime.ts`). The
+local CLI keeps them: it supplies `localFacetHost()`, which a Worker cannot.
 
 `Storage.vfs`, the native `file` tool, `run` with `runtime: "workspace"`, and
 the `workspace.*` codemode namespace all address that same session. A write
@@ -75,7 +90,8 @@ The Cloudflare backend registers the provider only as `workspace`, through
 namespace. The optional `sandbox` and `laptop` providers stay different machines
 with their own filesystems.
 
-`NIMBUS_SESSION` belongs to the hosted backend. The local CLI runs its
+The hosted composition (`cf-backend/src/workspace-host.ts`) belongs to the
+hosted backend. The local CLI runs its
 `workspace` provider against the local workspace over `bun:sqlite` state.
 
 ## Actor isolation inside a shared workspace
@@ -155,7 +171,7 @@ compatibility path, on purpose.
 
 ## Configuration and package boundary
 
-The Worker requires the `NIMBUS_SESSION` Durable Object binding and the
+The Worker requires no workspace Durable Object binding — there is none — and the
 `LOADER` Worker Loader binding. `NIMBUS_RUNTIME_CACHE` is optional in `Env`,
 and without it a hosted `python3`, `ruby` or `clang` exits 127 while the shell
 reports the missing binding. `packages/cf-backend/package.json` pins the Nimbus

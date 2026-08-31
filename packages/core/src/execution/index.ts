@@ -64,6 +64,7 @@ export {
   type NimbusExecOptions,
   type NimbusExecResult,
   type NimbusStartResult,
+  type NimbusPortInfo,
 } from './nimbus';
 
 export {

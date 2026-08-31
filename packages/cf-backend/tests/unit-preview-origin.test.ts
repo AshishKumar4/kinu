@@ -26,6 +26,7 @@ import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
   nimbusPreviewUrl,
+  WORKSPACE_PREVIEW_PATH,
 } from '../src/nimbus-route';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
@@ -102,9 +103,9 @@ const ENV = {
 
 interface PreviewNimbusStub {
   fetch?(request: Request): Promise<Response>;
-  _rpcRouteCapabilityPort?(
+  routeWorkspacePreview?(
     port: number,
-    capability: string,
+    handle: string,
     request: Request,
     pathname: string,
   ): Promise<Response>;
@@ -117,9 +118,9 @@ interface PreviewTestBindings {
   /** Present only where a repair is expected to be possible: without the
    *  binding there is no container to re-drive, and the stale answer stands. */
   Sandbox?: object;
-  NIMBUS_SESSION?: {
+  OrchestratorAgent?: {
     idFromName(name: string): string;
-    get(): PreviewNimbusStub;
+    get(id: string): PreviewNimbusStub;
   };
 }
 
@@ -132,13 +133,7 @@ function testEnv(bindings: PreviewTestBindings): Env {
 }
 
 const NIMBUS_CAPABILITY = '0123456789abcdef01234567';
-const configuredNimbusUrl = nimbusPreviewUrl(
-  testEnv(ENV),
-  OWNER,
-  'hello',
-  4321,
-  NIMBUS_CAPABILITY,
-);
+const configuredNimbusUrl = nimbusPreviewUrl(testEnv(ENV), 'hello', 4321, NIMBUS_CAPABILITY);
 if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not configured');
 const NIMBUS_URL = configuredNimbusUrl;
 
@@ -510,13 +505,13 @@ describe('serving a Nimbus preview host', () => {
     let routedPath = '';
     const env = testEnv({
       ...ENV,
-      NIMBUS_SESSION: {
+      OrchestratorAgent: {
         idFromName(name: string) { durableObjectName = name; return name; },
         get() {
           return {
-            async _rpcRouteCapabilityPort(port: number, capability: string, request: Request, pathname: string) {
+            async routeWorkspacePreview(port: number, handle: string, request: Request, pathname: string) {
               routedPort = port;
-              routedCapability = capability;
+              routedCapability = handle;
               routedPath = pathname;
               forwarded = request;
               return new Response(JSON.stringify({ ok: true }), {
@@ -546,9 +541,12 @@ describe('serving a Nimbus preview host', () => {
 
     if (!response || !forwarded) throw new Error('Nimbus preview request was not forwarded');
     expect(response.status).toBe(200);
-    expect(durableObjectName).toMatch(/^p[a-f0-9]{24}:workspace:p[a-f0-9]{24}$/);
+    // The workspace's OWN name: the Durable Object that holds the filesystem is
+    // the OrchestratorAgent addressed by name, which is why the hostname carries
+    // the name rather than a one-way digest a router could not invert.
+    expect(durableObjectName).toBe('hello');
     expect(routedPort).toBe(4321);
-    expect(routedCapability).toBe(NIMBUS_CAPABILITY);
+    expect(routedCapability).toBe(NIMBUS_CAPABILITY.slice(0, 10));
     expect(routedPath).toBe('/api/items');
     const routed: Request = forwarded;
     expect(new URL(routed.url).pathname + new URL(routed.url).search).toBe('/api/items?x=1');
@@ -566,11 +564,11 @@ describe('serving a Nimbus preview host', () => {
     let forwarded: Request | null = null;
     const env = testEnv({
       ...ENV,
-      NIMBUS_SESSION: {
+      OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() {
           return {
-            async _rpcRouteCapabilityPort(_port: number, _capability: string, request: Request) {
+            async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
               forwarded = request;
               return new Response(null, { status: 204 });
             },
@@ -591,11 +589,11 @@ describe('serving a Nimbus preview host', () => {
     let forwarded: Request | null = null;
     const env = testEnv({
       ...ENV,
-      NIMBUS_SESSION: {
+      OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() {
           return {
-            async _rpcRouteCapabilityPort(_port: number, _capability: string, request: Request) {
+            async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
               forwarded = request;
               return new Response(null, { status: 204 });
             },
@@ -617,7 +615,7 @@ describe('serving a Nimbus preview host', () => {
     let rpcCalled = false;
     const env = testEnv({
       ...ENV,
-      NIMBUS_SESSION: {
+      OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() {
           return {
@@ -625,7 +623,7 @@ describe('serving a Nimbus preview host', () => {
               forwarded = request;
               return new Response(null, { status: 204 });
             },
-            async _rpcRouteCapabilityPort() {
+            async routeWorkspacePreview() {
               rpcCalled = true;
               return new Response(null, { status: 500 });
             },
@@ -647,8 +645,8 @@ describe('serving a Nimbus preview host', () => {
     expect(rpcCalled).toBe(false);
     const routed: Request = forwarded;
     const routedUrl = new URL(routed.url);
-    expect(routedUrl.pathname + routedUrl.search).toBe('/port/4321/socket?channel=hmr');
-    expect(routed.headers.get('x-nimbus-preview-capability')).toBe(NIMBUS_CAPABILITY);
+    expect(routedUrl.pathname + routedUrl.search)
+      .toBe(`${WORKSPACE_PREVIEW_PATH}/4321/${NIMBUS_CAPABILITY.slice(0, 10)}/socket?channel=hmr`);
     expect(routed.headers.get('authorization')).toBe('Bearer guest-token');
     expect(routed.headers.get('cookie')).toBe('guest_session=guest');
   });
@@ -657,7 +655,7 @@ describe('serving a Nimbus preview host', () => {
     let touched = false;
     const env = testEnv({
       ...ENV,
-      NIMBUS_SESSION: {
+      OrchestratorAgent: {
         idFromName(name: string) { touched = true; return name; },
         get() { touched = true; return {}; },
       },

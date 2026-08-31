@@ -7,7 +7,7 @@
 
 ## One workspace, optional environments
 
-Kinu has one workspace file plane: the authoritative `NIMBUS_SESSION` on
+Kinu has one workspace file plane: Nimbus held as a library over the owning Durable Object's own `ctx.storage.sql` on
 Cloudflare and the local workspace on the CLI. The `file` tool, default `run`,
 `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 

@@ -270,6 +270,19 @@ describe('capability parity gate', () => {
     expect(movable).toEqual([]);
   });
 
+  test('a relative reach into node_modules is a dependency, not tracked source', () => {
+    // The live instance is nimbus-programmatic.ts: `@nimbus-sh/worker` exports
+    // no `./dist/session/*` subpath, so the module is held through the
+    // installed tree. The resolver must read that as a DEPENDENCY that pins
+    // its importer — before this arm existed it threw `resolves to no tracked
+    // source file` over a file that resolves fine at build time.
+    const { movable } = findMovable(withShared({
+      'packages/cf-backend/src/reach.ts':
+        "export { deep } from '../../../node_modules/@x/y/dist/inner.js';\n",
+    }));
+    expect(movable).toEqual([]);
+  });
+
   test('an intra-package import resolving to nothing is fatal, never a pass', () => {
     // The silent version of this reports the importer as dependency-free, which
     // is the shape that turns a resolver bug into a wider finding set.

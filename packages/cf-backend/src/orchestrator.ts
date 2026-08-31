@@ -15,8 +15,12 @@
 import { callable, type AgentContext, type SubAgentClass } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
-  createNimbusWorkspaceForkSink, createNimbusWorkspaceForkSource, writeNimbusWorkspaceSoul,
-} from "./nimbus-route";
+  createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
+  type NimbusSandboxHandle,
+} from "@kinu.run/core";
+import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
+import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
+import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "./events/webhook-route";
@@ -215,7 +219,6 @@ import type { CodemodeProvider, MctsSearchRunSummary } from "@kinu.run/core";
 import { classify, diagnostics, KinuError, renderCauseChain, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
-import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route';
 import { deleteExplorationFacet, reconcileExplorationFacets, type ExplorationFacetLedgerStatus } from "./facet-spawn";
 import { agentEmailAddress } from "./email/inbound";
 import {
@@ -392,6 +395,74 @@ export class OrchestratorAgent extends ActorAgent {
     return 'orchestrator';
   }
 
+  /**
+   * THE WORKSPACE. Nimbus over this object's own SQLite — one Durable Object per
+   * workspace, and the filesystem tables sit beside the conversation, the
+   * ledgers, the memory index and the fork lineage they belong to.
+   *
+   * Lazy for two reasons that are the same reason: `nextWorkspaceGeneration`
+   * writes a row, and `onStart` runs inside `ctx.blockConcurrencyWhile` where
+   * every write stalls every request on this object. An activation that only
+   * answers a `@callable` read never composes one.
+   */
+  private _workspace: HostedWorkspace | undefined;
+
+  private hostedWorkspace(): HostedWorkspace {
+    this._workspace ??= createHostedWorkspace({
+      ctx: this.ctx,
+      env: this.env,
+      previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
+    });
+    return this._workspace;
+  }
+
+  protected workspaceBox(shellId: string): NimbusSandboxHandle {
+    return this.hostedWorkspace().box(shellId);
+  }
+
+  /**
+   * One op against this workspace's box, for a facet of it.
+   *
+   * Deliberately NOT `@callable`: `NimbusExecOptions.cred` names a uid, so a
+   * browser socket that could reach this could run a command as uid 0. The
+   * caller is another Durable Object in this Worker — a subordinate, an
+   * exploration head, a swarm node — and `sealRpcSurface` keeps it off the
+   * public transport.
+   */
+  async workspaceBoxOp(shellId: string, op: WorkspaceBoxOp): Promise<WorkspaceBoxResult> {
+    return await applyWorkspaceBoxOp(this.workspaceBox(shellId), op);
+  }
+
+  /**
+   * A preview request the edge authenticated, routed into this workspace's port
+   * registry. Reached by RPC for ordinary requests and through `fetch` for a
+   * WebSocket upgrade, which cannot cross an RPC boundary as a 101.
+   */
+  async routeWorkspacePreview(
+    port: number, handle: string, request: Request, pathname: string,
+  ): Promise<Response> {
+    return await this.hostedWorkspace().routePreview(port, handle, request, pathname);
+  }
+
+  /**
+   * A preview WebSocket upgrade. Partyserver owns `fetch` for the chat
+   * transport, so this one path is answered before the base sees it — the label
+   * that produced it was signature-checked at the edge and the capability handle
+   * is checked again inside `routePreview`.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith(`${WORKSPACE_PREVIEW_PATH}/`)) {
+      const [port, handle, ...rest] = url.pathname.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
+      const parsed = Number(port);
+      if (!Number.isInteger(parsed) || !handle) {
+        return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+      }
+      return await this.routeWorkspacePreview(parsed, handle, request, `/${rest.join('/')}`);
+    }
+    return await super.fetch(request);
+  }
+
   protected override turnWorkMode(): WorkMode {
     const requested = super.turnWorkMode();
     const approvedHandoff = this._activeProgrammaticUserMessage !== null
@@ -544,6 +615,29 @@ export class OrchestratorAgent extends ActorAgent {
   private _emailOutbox: EmailOutbox | null = null;
   /** Detached work this actor owns until its lexical error boundary settles. */
   private readonly _backgroundTasks = new Set<AsyncTaskOwner>();
+
+  /**
+   * Await every detached task this activation currently owns.
+   *
+   * The harness seam for suites that assert against the SETTLED
+   * post-activation world: every detached task is fenced or idempotent, so
+   * production never needs this — but a test snapshotting state the
+   * activation's own sweeps also touch must join them explicitly rather than
+   * assume a scheduling order. Laps because a task may enqueue another (the
+   * fork reconcile ends in the facet reclaim), and BOUNDED so a task that
+   * keeps replenishing the set — a genesis turn, a re-armed timer — fails the
+   * caller by name instead of hanging it.
+   */
+  protected async settleBackgroundTasks(): Promise<void> {
+    for (let lap = 0; lap < 32; lap++) {
+      if (this._backgroundTasks.size === 0) return;
+      await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
+    }
+    throw new Error(
+      `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
+      + 'laps — something keeps enqueuing work; join a narrower seam instead',
+    );
+  }
 
   /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
    *  replies and owner notifications (SPEC §7.4). The shared outbox creates
@@ -3385,23 +3479,29 @@ export class OrchestratorAgent extends ActorAgent {
   async exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
     const ownerUserId = this.getOwnerUserId();
     if (!ownerUserId) throw new Error('Cannot export an unclaimed workspace.');
-    const workspace = createNimbusWorkspaceSandbox(this.env, ownerUserId, this.name);
+    const workspace = this.hostedWorkspace().bundle;
     return readWorkspaceArchivePage(this.ctx.storage.sql, {
       workspace: this.name,
       source: 'cloud',
       cursor: parseArchiveCursor(cursor),
-      files: nimbusWorkspaceArchiveFiles(workspace),
+      files: workspaceArchiveFiles(workspace),
     });
   }
 
   /** Tear down every per-agent resource, then wipe this Durable Object. Called
-   *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and no
-   *  orphaned alarm / process / port lingers. Every external plane is
-   *  fail-closed: the optional Sandbox goes first because its teardown can
-   *  fail without deleting the authoritative Nimbus workspace; Nimbus then
-   *  goes before actor storage so a retry never reconnects to stale bytes.
-   *  Deliberately NOT @callable:
-   *  destruction goes through UserDO's ownership check, never the raw websocket. */
+   *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and
+   *  no orphaned alarm / process / port lingers.
+   *
+   *  The optional Sandbox container goes first because it is the one plane that
+   *  is somewhere else: its teardown can fail without touching the workspace,
+   *  and once its storage is gone nothing knows which R2 objects were its. The
+   *  WORKSPACE needs no step of its own — its tables are rows in THIS object, so
+   *  `this.destroy()` drops the filesystem, the conversation and the ledgers in
+   *  one teardown. That is why a same-name recreate can no longer find half a
+   *  workspace: there is no second object to be out of step with.
+   *
+   *  Deliberately NOT @callable: destruction goes through UserDO's ownership
+   *  check, never the raw websocket. */
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
     const ownerUserId = this.getOwnerUserId();
@@ -3418,10 +3518,9 @@ export class OrchestratorAgent extends ActorAgent {
       await sb.discardState();
       await sb.destroy();
     }
-    await createNimbusWorkspaceSandbox(this.env, ownerUserId, this.name).destroy({
-      reason: 'Kinu workspace deleted',
-    });
-    await this.destroy(); // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the isolate
+    // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the
+    // isolate. `deleteAll` is what takes the workspace filesystem with it.
+    await this.destroy();
     return { ok: true };
   }
 
@@ -4210,7 +4309,7 @@ export class OrchestratorAgent extends ActorAgent {
       this.rt.storage.vfs,
       this.boundSql,
       text,
-      (_path, content) => writeNimbusWorkspaceSoul(this.env, ownerUserId, this.name, content),
+      (_path, content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
     );
     // Invalidate the cached SOUL.md + system prompt so the next turn
     // picks up the new identity.
@@ -4256,12 +4355,16 @@ export class OrchestratorAgent extends ActorAgent {
     untilMessageId: string,
     opts?: { name?: string },
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
+    // Before anything is read: a fork of an unclaimed workspace has nobody to
+    // own the copy, and the transport's own reservation would refuse it later
+    // with a message about a name.
+    this.requireOwnerForFork();
     const fork = await forkWorkspace({
       sql: this.boundSql,
       // The workspace plane's own walk, with each inherited file streamed
-      // through the session's typed ranged read: a fork holds one frame of one
-      // file, never the file.
-      vfs: createNimbusWorkspaceForkSource(this.env, this.requireOwnerForFork(), this.name, this.rt.localVfs),
+      // through a native ranged read: a fork holds one frame of one file, never
+      // the file.
+      vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle, this.rt.localVfs),
       sourceName: this.name,
       busy: () => this._inFlight,
       transport: this.forkTransport,
@@ -4354,12 +4457,12 @@ export class OrchestratorAgent extends ActorAgent {
       const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
         workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
         targetAuthority: 'pane',
-        writeSoulFile: (content) => writeNimbusWorkspaceSoul(this.env, ownerUserId, forkName, content),
+        writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
         transaction: (rows) => this.ctx.storage.transactionSync(rows),
       });
       this.forkReceiver = new ForkTransferReceiver(
         writer,
-        createNimbusWorkspaceForkSink(this.env, ownerUserId, forkName, frame.transferId),
+        createWorkspaceForkSink(this.hostedWorkspace().bundle, frame.transferId),
       );
     }
     const outcome = await this.forkReceiver.accept(frame);

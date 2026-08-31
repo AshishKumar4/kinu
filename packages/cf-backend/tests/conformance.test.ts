@@ -18,8 +18,13 @@ import { orchestratorHarness, subordinateHarness, type ActorHarness } from './he
 
 interface RawToolsAgent { observeRawTools(): ToolSet; observeRuntime(): AgentRuntime }
 
-function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): ObservedSurface {
+async function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): Promise<ObservedSurface> {
   const tools = harness.agent.observeRawTools();
+  // The workspace filesystem boots on its FIRST operation (createWorkspace is
+  // lazy on purpose), and production always performs one — the first turn reads
+  // SOUL.md. Observing sqlite_master before any operation would report the
+  // manifest's filesystem tables missing from a root that wires them.
+  await harness.agent.observeRuntime().storage.vfs.exists('SOUL.md');
   return {
     root,
     planes: {
@@ -39,8 +44,8 @@ describe('cf backend conformance', () => {
   ] as const;
 
   for (const [root, make] of ROOTS) {
-    test(`${root}: the observed surface matches the manifest`, () => {
-      const report = compareSurface(observe(root, make()));
+    test(`${root}: the observed surface matches the manifest`, async () => {
+      const report = compareSurface(await observe(root, make()));
       expect(renderConformanceFindings(report)).toBe('');
       expect(report.unmeasured).toEqual([]);
     });
@@ -52,8 +57,8 @@ describe('cf backend conformance', () => {
     // everything it declares `absent` would look conformant against a world
     // that was never built. Same list as above, so a third root added later is
     // covered without a second place to remember.
-    test(`${root}: the observation sees a real surface at all`, () => {
-      const observed = observe(root, make());
+    test(`${root}: the observation sees a real surface at all`, async () => {
+      const observed = await observe(root, make());
       expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
       expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
       expect(observed.planes.tool!.has('execute_tools')).toBe(true);

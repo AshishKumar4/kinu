@@ -11,6 +11,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
+import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
@@ -36,6 +37,7 @@ function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): Wor
     transactions: localTransactions(database),
     generation: nextWorkspaceGeneration(sql),
     runtimes,
+    runtimeFacets: localFacetHost(),
   });
 }
 

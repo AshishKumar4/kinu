@@ -90,6 +90,7 @@ import {
   bindAgentSql, createCFRuntime,
   type CFRuntime, type CFRuntimeHooks, type HostedNodeHome,
 } from "./runtime";
+import { createWorkspaceBoxClient, workspaceBoxOwner } from "./workspace-box-rpc";
 import { createExecuteToolsTool } from "./execute-tools";
 import { buildHeadToolSet } from "@kinu.run/core";
 import {
@@ -388,10 +389,12 @@ export class ExplorationAgent extends Agent<Env> {
    *  private shell state, from the one `createCFRuntime` call every mode that has a
    *  runtime at all shares.
    *
-   *  `workspaceName` is the parent workspace and never this facet's own name.
-   *  `SqliteVFS` is keyed `${ownerUserId}|${workspaceName}`, so a facet that named
-   *  itself would derive a SECOND, EMPTY filesystem — the empty-workspace
-   *  regression pinned by tests/unit-head-fork.test.ts. */
+   *  `workspaceName` is the parent workspace and never this facet's own name, and
+   *  the box is the PARENT'S — reached over one Durable Object hop into the
+   *  orchestrator that holds Nimbus over its own SQLite. A facet that composed a
+   *  workspace of its own, or named itself when asking for one, would get a
+   *  SECOND, EMPTY filesystem — the empty-workspace regression pinned by
+   *  tests/unit-head-fork.test.ts. */
   private facetRuntime(
     scope: 'head' | 'node',
     hooks: CFRuntimeHooks,
@@ -407,7 +410,14 @@ export class ExplorationAgent extends Agent<Env> {
       resolveProfile: () => this.facetProfile(),
     };
     if (workspaceExecution !== undefined) runtimeHooks.workspaceExecution = workspaceExecution;
-    return createCFRuntime(this, { env: this.env, ctx: this.ctx }, {
+    return createCFRuntime(this, {
+      env: this.env,
+      ctx: this.ctx,
+      workspaceBox: (shellId) => createWorkspaceBoxClient({
+        owner: () => workspaceBoxOwner(this.env, workspaceName),
+        shellId,
+      }),
+    }, {
       ownerUserId: () => this.identity.ownerUserId(),
       workspaceName,
       shellId: `${scope}:${this.name}`,

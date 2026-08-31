@@ -271,9 +271,16 @@ bench/clbench/  Kinu as a system for the external Continual Learning Bench
 ## Execution Layer
 
 Each environment is a codemode `ExecutorProvider` with namespace.* APIs.
-`workspace` is the one authoritative file and execution plane: on the hosted
-backend it is the workspace's `NIMBUS_SESSION`, and on the CLI it is the local
-workspace. Optional sandbox and laptop rows are genuinely different machines
+`workspace` is the one authoritative file and execution plane, and it is Nimbus
+held as a LIBRARY over the host's own SQLite — `ctx.storage.sql` in the
+OrchestratorAgent Durable Object that owns a hosted workspace, a `bun:sqlite`
+file on the CLI. ONE Durable Object per workspace: the filesystem tables sit
+beside the conversation, the ledgers and the memory index that reads those same
+files, so bytes and index commit together and a SQL-only snapshot of the object
+is the whole workspace. A facet (subordinate, exploration head, swarm node) has
+its own SQLite for its own ledgers and shares the workspace over one RPC into
+that object (`OrchestratorAgent.workspaceBoxOp`) — never a filesystem of its
+own, which would be a second, empty workspace. Optional sandbox and laptop rows are genuinely different machines
 with their own native paths. The workspace plane carries a MOUNT TABLE
 (`core/src/vfs/mounts.ts`): a live device's files appear at `/pc`, a bound
 container's at `/sandbox`, served through the owning executor's own `files`
@@ -285,7 +292,7 @@ Memory indexing and fork snapshots address the base tree alone.
 
 | Executor   | Namespace  | Binding Required          | Capabilities                |
 |-----------|------------|---------------------------|-----------------------------|
-| Workspace | workspace  | NIMBUS_SESSION on hosted  | canonical files, POSIX shell, ~95 coreutils, `node`; `npm`/`npx`; on-demand `bash`, `python3`, `pip` locally; `git` and `bun` on hosted only; processes, ports |
+| Workspace | workspace  | Nimbus over the owning DO's own SQLite | canonical files, POSIX shell, ~95 coreutils, `node`, `npm`, `npx`, `git`; on-demand `bash`, `python3`, `pip` LOCALLY ONLY; processes, ports, previews |
 | Container | sandbox    | Sandbox DO + Container    | Linux container: git, npm, node, bun, sh/bash, jq, curl; long processes, inbound ports, previews. Probed ABSENT: docker, python3, make, gcc, clang, tsc |
 | Device    | laptop     | WebSocket tunnel from user| the user's own machine, behind consent |
 | Parent    | parent     | (forks only)              | the forked-from workspace's real shell over DO RPC |
