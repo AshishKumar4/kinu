@@ -67,10 +67,10 @@ its `remainingEvidence`.
 
 ## Axiom boundary
 
-[`lean/Proteus/Axioms.lean`](../lean/Proteus/Axioms.lean) prints axioms for all
+[`lean/Kinu/Axioms.lean`](../lean/Kinu/Axioms.lean) prints axioms for all
 the traceability-enrolled theorems; reports contain only kernel `propext`,
 `Classical.choice`, `Quot.sound`. One separate domain axiom,
-`Proteus.Storage.FTS5Search.fts5_indexed_findable`: an explicit trusted
+`Kinu.Storage.FTS5Search.fts5_indexed_findable`: an explicit trusted
 assumption about SQLite FTS5 completeness, enrolled by `PR-STORE-002`
 (measured 2026-08-27).
 No published theorem depends on it. No covering `MemoryStore.indexFile` plus
@@ -86,7 +86,7 @@ Four checks: `lake build` over the whole project; `check-no-false.sh` (the
 historical contradiction witness stays invalid, currently because its deleted
 assumption-module import cannot resolve; a narrow deletion regression check,
 while the axiom audit catches newly used non-kernel assumptions);
-`check-traceability.mjs` (builds `Proteus.Axioms`, parses every axiom report,
+`check-traceability.mjs` (builds `Kinu.Axioms`, parses every axiom report,
 checks the traceability map both directions); `scripts/lean-citations.ts`
 (every citation from anywhere in the tree: cited module exists, cited name has
 an exact `theorem <name>` declaration there).

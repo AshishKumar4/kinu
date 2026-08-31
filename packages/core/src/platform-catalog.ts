@@ -12,7 +12,7 @@
  * Its sibling a second such note was compiled from Cloudflare's INTERNAL
  * repository. Neither is to be reconstructed here, and nothing in this file
  * cites a `cf-*-dossier` section: entries cite the MEASUREMENT. The same
- * shape bit this repo from the other direction: `lean/Proteus/Execution/
+ * shape bit this repo from the other direction: `lean/Kinu/Execution/
  * ToolSystem.lean` still proves completeness over a five-tool surface that no
  * longer exists. Prose beside code drifts from code; prose generated FROM code
  * cannot.

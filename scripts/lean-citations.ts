@@ -44,7 +44,7 @@ const repoRoot = new URL('..', import.meta.url).pathname;
 const leanRoot = join(repoRoot, 'lean');
 
 /** A cited path, in the three spellings the tree uses. `Foo` here is a placeholder
- *  for any module: `MCTS/Foo.lean`, `lean/Proteus/MCTS/Foo.lean`, bare `Foo.lean`,
+ *  for any module: `MCTS/Foo.lean`, `lean/Kinu/MCTS/Foo.lean`, bare `Foo.lean`,
  *  or the brace form `Execution/{Capabilities,ToolSystem}.lean`. */
 const LEAN_PATH = /(?:[A-Za-z0-9_./-]|\{[A-Za-z0-9_,]+\})+\.lean/g;
 
@@ -96,7 +96,7 @@ const CITED_NAMES_LEADING =
 /** Theorem names this scanner cannot see, because they carry no underscore. The
  *  set is asserted against the declarations, so a NEW one fails the gate naming
  *  itself instead of quietly joining the blind spot. */
-const CITATION_OPAQUE = { 'Proteus.Execution.Capabilities.chain': true } as const;
+const CITATION_OPAQUE = { 'Kinu.Execution.Capabilities.chain': true } as const;
 
 /**
  * Citations presented as ILLUSTRATIONS rather than as references — the declared
@@ -173,7 +173,7 @@ const CITATION_ILLUSTRATIVE: readonly Illustrative[] = [
   },
   {
     file: 'scripts/lean-citations.ts',
-    cites: 'lean/Proteus/MCTS/Foo.lean',
+    cites: 'lean/Kinu/MCTS/Foo.lean',
     reason: 'The same placeholder in its prefixed spelling.',
   },
   {
@@ -289,7 +289,7 @@ export function citations(): Citations {
 
 /** Repo-relative module path for a cited path, or `null` when nothing matches. */
 function resolveCitation(path: string, seen: Citations, findings: string[]): string | null {
-  for (const prefix of ['', 'lean/', 'lean/Proteus/']) {
+  for (const prefix of ['', 'lean/', 'lean/Kinu/']) {
     const candidate = `${prefix}${path}`;
     if (candidate.startsWith('lean/')
       && resolve(repoRoot, candidate).startsWith(`${leanRoot}/`)

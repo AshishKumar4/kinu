@@ -1629,7 +1629,7 @@ export interface BranchArbitrationInput {
  * **The arbiter.** A total function of the caps, the search's own policies and the
  * proposal — the single scheduler *Arbitration* names, which a proposal is an input to.
  *
- * A faithful port of `lean/Proteus/Exploration/Arbitration.lean`'s `arbitrate`,
+ * A faithful port of `lean/Kinu/Exploration/Arbitration.lean`'s `arbitrate`,
  * including its ORDER: the theorems there are projections of one acceptance
  * region (`accepted_iff`), so a reordering here would leave the proven arbiter and
  * the shipped one agreeing on which proposals pass while disagreeing on what the
@@ -1651,7 +1651,7 @@ export interface BranchArbitrationInput {
  * the rule over the second one — *"a search resolved to the non-inheriting value
  * refuses an inheriting child"* — so the arm compares `context` with `context`, and
  * the theorem is `accepted_respects_context`. Re-pointing that theorem in
- * `lean/Proteus/Exploration/Arbitration.lean` is the cost of the cut, paid here
+ * `lean/Kinu/Exploration/Arbitration.lean` is the cost of the cut, paid here
  * rather than deferred, because a proven theorem about a field that no
  * longer exists is worse than no theorem.
  */

@@ -2,7 +2,7 @@
   Negative regression gate — this file must NEVER compile.
 
   Each theorem below is a machine-checked proof of `False` derived from an
-  axiom that once lived in the Proteus corpus (removed in WP-F2, 2026-07-13).
+  axiom that once lived in the Kinu corpus (removed in WP-F2, 2026-07-13).
   If this file compiles, the library is inconsistent again — every theorem in
   the corpus becomes vacuously derivable. `check-no-false.sh` runs this file
   and fails CI the moment it starts compiling.
@@ -12,9 +12,9 @@
   chunk_reassembly axiom in Storage/SqliteFSCorrectness.lean).
 -/
 
-import Proteus.Safety.FloatAxioms
-import Proteus.Storage.SqliteFSCorrectness
-open Proteus.Safety.FloatAxioms
+import Kinu.Safety.FloatAxioms
+import Kinu.Storage.SqliteFSCorrectness
+open Kinu.Safety.FloatAxioms
 
 -- Counterexample 1: x + 0 = x is false for x = -0.0 (IEEE: -0.0 + +0.0 = +0.0)
 theorem boom_add_zero : False := by
@@ -42,7 +42,7 @@ theorem boom_zero_div : False := by
 -- String.length with byte-offset String.Pos; for data = "éé", chunkSize = 2 it
 -- claims join ["é"] = "éé". (Also refuted by e.g. ("éab", 1), ("héllo wörld", 1).)
 theorem boom_chunk_reassembly : False := by
-  have h := Proteus.Storage.SqliteFSCorrectness.chunk_reassembly "éé" 2 (by decide)
+  have h := Kinu.Storage.SqliteFSCorrectness.chunk_reassembly "éé" 2 (by decide)
   have hb := congrArg String.data h
   have hne : (String.join ((List.range ((("éé" : String).length + 2 - 1) / 2)).map fun i =>
       ("éé" : String).extract ⟨i * 2⟩ ⟨min ((i + 1) * 2) ("éé" : String).length⟩)).data

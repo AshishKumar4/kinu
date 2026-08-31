@@ -17,7 +17,7 @@ LAKE="${LAKE:-lake}"
 command -v "$LAKE" >/dev/null 2>&1 || LAKE="$HOME/.elan/bin/lake"
 
 if ! "$LAKE" build; then
-  echo "check-no-false: FAIL — the Proteus Lean library does not build." >&2
+  echo "check-no-false: FAIL — the Kinu Lean library does not build." >&2
   exit 1
 fi
 

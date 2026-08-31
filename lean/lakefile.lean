@@ -1,11 +1,11 @@
 import Lake
 open Lake DSL
 
-package proteus where
+package kinu where
   leanOptions := #[
     ⟨`autoImplicit, false⟩
   ]
 
 @[default_target]
-lean_lib Proteus where
-  roots := #[`Proteus, `Proteus.Axioms]
+lean_lib Kinu where
+  roots := #[`Kinu, `Kinu.Axioms]

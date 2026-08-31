@@ -23,7 +23,7 @@
 //
 // Specified by docs/EXPLORATION.md — "The records store", "The archive" and
 // "Comparability"; the population bound the paging answers is
-// `lean/Proteus/Exploration/ArchiveAdmission.lean — separated_cells_are_unboundedly_large`.
+// `lean/Kinu/Exploration/ArchiveAdmission.lean — separated_cells_are_unboundedly_large`.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';

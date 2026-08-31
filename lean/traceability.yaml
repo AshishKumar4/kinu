@@ -7,13 +7,13 @@ requirements:
     statement: Per-turn lifecycle operations reset or increment their modeled counters without mutating the configured step limit.
     status: by-construction-witness
     theorems:
-      - Proteus.Agent.Lifecycle.reset_clears_counters
-      - Proteus.Agent.Lifecycle.reset_preserves_turnCount
-      - Proteus.Agent.Lifecycle.step_increments
-      - Proteus.Agent.Lifecycle.tool_increments
-      - Proteus.Agent.Lifecycle.turn_increments
-      - Proteus.Agent.Lifecycle.steps_bounded_by_calls
-      - Proteus.Agent.Lifecycle.maxSteps_invariant
+      - Kinu.Agent.Lifecycle.reset_clears_counters
+      - Kinu.Agent.Lifecycle.reset_preserves_turnCount
+      - Kinu.Agent.Lifecycle.step_increments
+      - Kinu.Agent.Lifecycle.tool_increments
+      - Kinu.Agent.Lifecycle.turn_increments
+      - Kinu.Agent.Lifecycle.steps_bounded_by_calls
+      - Kinu.Agent.Lifecycle.maxSteps_invariant
     tsRefs:
       - packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.reset
       - packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.recordStep
@@ -26,12 +26,12 @@ requirements:
     statement: The abstract turn queue starts only while idle and completion clears busy state while advancing its counters.
     status: by-construction-witness
     theorems:
-      - Proteus.Agent.TurnQueue.enqueue_preserves_busy
-      - Proteus.Agent.TurnQueue.start_requires_idle
-      - Proteus.Agent.TurnQueue.start_makes_busy
-      - Proteus.Agent.TurnQueue.complete_clears_busy
-      - Proteus.Agent.TurnQueue.complete_increments
-      - Proteus.Agent.TurnQueue.enqueue_increases_total
+      - Kinu.Agent.TurnQueue.enqueue_preserves_busy
+      - Kinu.Agent.TurnQueue.start_requires_idle
+      - Kinu.Agent.TurnQueue.start_makes_busy
+      - Kinu.Agent.TurnQueue.complete_clears_busy
+      - Kinu.Agent.TurnQueue.complete_increments
+      - Kinu.Agent.TurnQueue.enqueue_increases_total
     tsRefs:
       - packages/cli-backend/src/local-session.ts#LocalAgentSession.enqueueTurn
       - packages/cli-backend/src/local-session.ts#LocalAgentSession.pump
@@ -43,10 +43,10 @@ requirements:
     statement: Positive-budget abstract fiber steps conserve the initial budget, decrease the remaining budget, and use a well-founded natural-number measure.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Agent.FiberDurability.step_preserves_conservation
-      - Proteus.Agent.FiberDurability.step_decreases_remaining
-      - Proteus.Agent.FiberDurability.n_steps_remaining
-      - Proteus.MCTS.StorageIsolation.budget_well_founded
+      - Kinu.Agent.FiberDurability.step_preserves_conservation
+      - Kinu.Agent.FiberDurability.step_decreases_remaining
+      - Kinu.Agent.FiberDurability.n_steps_remaining
+      - Kinu.MCTS.StorageIsolation.budget_well_founded
     tsRefs:
       - packages/core/src/mcts/engine.ts#runMCTS
       - packages/core/src/types/mcts.ts#MCTSConfig.budget
@@ -57,8 +57,8 @@ requirements:
     statement: Starting the abstract fiber budget and copying its checkpoint fields witness the declared initial and restore values by construction.
     status: by-construction-witness
     theorems:
-      - Proteus.Agent.FiberDurability.start_conserved
-      - Proteus.Agent.FiberDurability.checkpoint_restore_roundtrip
+      - Kinu.Agent.FiberDurability.start_conserved
+      - Kinu.Agent.FiberDurability.checkpoint_restore_roundtrip
     tsRefs:
       - packages/core/src/mcts/engine.ts#runMCTS
       - packages/cf-backend/src/runtime.ts#createCFRuntime
@@ -69,14 +69,14 @@ requirements:
     statement: The declared evolution postconditions and list operations witness monotone counters, positive nested budgets, and scaffold lookup and append behavior.
     status: by-construction-witness
     theorems:
-      - Proteus.Evolution.Timescales.turnCount_increases
-      - Proteus.Evolution.Timescales.scaffoldVersion_nondecreasing
-      - Proteus.Evolution.Timescales.memorySize_nondecreasing
-      - Proteus.Evolution.Timescales.sessionCount_nondecreasing
-      - Proteus.Evolution.Timescales.nested_budget_bounded
-      - Proteus.Evolution.Timescales.deeper_costs_more
-      - Proteus.Evolution.Scaffold.rollback_nonexistent_is_none
-      - Proteus.Evolution.Scaffold.append_increases_length
+      - Kinu.Evolution.Timescales.turnCount_increases
+      - Kinu.Evolution.Timescales.scaffoldVersion_nondecreasing
+      - Kinu.Evolution.Timescales.memorySize_nondecreasing
+      - Kinu.Evolution.Timescales.sessionCount_nondecreasing
+      - Kinu.Evolution.Timescales.nested_budget_bounded
+      - Kinu.Evolution.Timescales.deeper_costs_more
+      - Kinu.Evolution.Scaffold.rollback_nonexistent_is_none
+      - Kinu.Evolution.Scaffold.append_increases_length
     tsRefs:
       - packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn
       - packages/core/src/evolution/engine.ts#EvolutionEngine.maybeEvolveScaffold
@@ -92,18 +92,18 @@ requirements:
     statement: The abstract craft-list operations preserve their stated membership, filtering, length, and non-emptiness properties.
     status: by-construction-witness
     theorems:
-      - Proteus.Evolution.CraftStore.consolidate_keeps_above
-      - Proteus.Evolution.CraftStore.search_length_bound
-      - Proteus.Evolution.FullCraftLifecycle.extract_increases
-      - Proteus.Evolution.FullCraftLifecycle.extract_contains
-      - Proteus.Evolution.FullCraftLifecycle.update_preserves
-      - Proteus.Evolution.FullCraftLifecycle.consolidation_never_empties
-      - Proteus.Evolution.FullCraftLifecycle.consolidation_nonincreasing
-      - Proteus.Evolution.FullCraftLifecycle.remove_nonincreasing
-      - Proteus.Evolution.FullCraftLifecycle.full_lifecycle_nonempty
-      - Proteus.Evolution.FullCraftLifecycle.ema_nonneg
-      - Proteus.Evolution.FullCraftLifecycle.below_threshold_filtered
-      - Proteus.Evolution.FullCraftLifecycle.pipeline_preserves_nonempty
+      - Kinu.Evolution.CraftStore.consolidate_keeps_above
+      - Kinu.Evolution.CraftStore.search_length_bound
+      - Kinu.Evolution.FullCraftLifecycle.extract_increases
+      - Kinu.Evolution.FullCraftLifecycle.extract_contains
+      - Kinu.Evolution.FullCraftLifecycle.update_preserves
+      - Kinu.Evolution.FullCraftLifecycle.consolidation_never_empties
+      - Kinu.Evolution.FullCraftLifecycle.consolidation_nonincreasing
+      - Kinu.Evolution.FullCraftLifecycle.remove_nonincreasing
+      - Kinu.Evolution.FullCraftLifecycle.full_lifecycle_nonempty
+      - Kinu.Evolution.FullCraftLifecycle.ema_nonneg
+      - Kinu.Evolution.FullCraftLifecycle.below_threshold_filtered
+      - Kinu.Evolution.FullCraftLifecycle.pipeline_preserves_nonempty
     tsRefs:
       - packages/core/src/craft/consolidation.ts#periodicCraftConsolidation
       - packages/agent-utils/src/stores/craft.ts#CraftStore.ensureSchema
@@ -120,8 +120,8 @@ requirements:
     statement: The scaled-natural EMA model remains bounded when both abstract inputs are at most one thousand.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Evolution.FullCraftLifecycle.ema_bounded
-      - Proteus.Evolution.FullCraftLifecycle.ema_stays_bounded
+      - Kinu.Evolution.FullCraftLifecycle.ema_bounded
+      - Kinu.Evolution.FullCraftLifecycle.ema_stays_bounded
     tsRefs:
       - packages/core/src/craft/ema.ts#emaUpdate
     remainingEvidence:
@@ -131,16 +131,16 @@ requirements:
     statement: The abstract executor capability lattice is reflexive and transitive, and whenever its router returns an executor that executor is available and has every requested capability.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Execution.Capabilities.container_subsumes_nimbus
-      - Proteus.Execution.Capabilities.ssh_subsumes_container
-      - Proteus.Execution.Capabilities.ssh_subsumes_nimbus
-      - Proteus.Execution.Capabilities.workspace_incomparable_nimbus
-      - Proteus.Execution.Capabilities.chain
-      - Proteus.Execution.Capabilities.route_satisfies_all
-      - Proteus.Execution.Capabilities.route_available
-      - Proteus.Execution.Capabilities.route_has_all_caps
-      - Proteus.Execution.Capabilities.subsumes_refl
-      - Proteus.Execution.Capabilities.subsumes_trans
+      - Kinu.Execution.Capabilities.container_subsumes_nimbus
+      - Kinu.Execution.Capabilities.ssh_subsumes_container
+      - Kinu.Execution.Capabilities.ssh_subsumes_nimbus
+      - Kinu.Execution.Capabilities.workspace_incomparable_nimbus
+      - Kinu.Execution.Capabilities.chain
+      - Kinu.Execution.Capabilities.route_satisfies_all
+      - Kinu.Execution.Capabilities.route_available
+      - Kinu.Execution.Capabilities.route_has_all_caps
+      - Kinu.Execution.Capabilities.subsumes_refl
+      - Kinu.Execution.Capabilities.subsumes_trans
     tsRefs:
       - packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES
       - packages/core/src/execution/router.ts#DefaultExecutionRouter
@@ -156,12 +156,12 @@ requirements:
     statement: The abstract action classifier maps each modeled agent action to its declared top-level tool.
     status: by-construction-witness
     theorems:
-      - Proteus.Execution.ToolSystem.action_routes_to_valid_tool
-      - Proteus.Execution.ToolSystem.only_mcts_uses_explore
-      - Proteus.Execution.ToolSystem.shell_uses_run
-      - Proteus.Execution.ToolSystem.memory_search_uses_search
-      - Proteus.Execution.ToolSystem.memory_save_uses_note
-      - Proteus.Execution.ToolSystem.file_ops_use_codemode
+      - Kinu.Execution.ToolSystem.action_routes_to_valid_tool
+      - Kinu.Execution.ToolSystem.only_mcts_uses_explore
+      - Kinu.Execution.ToolSystem.shell_uses_run
+      - Kinu.Execution.ToolSystem.memory_search_uses_search
+      - Kinu.Execution.ToolSystem.memory_save_uses_note
+      - Kinu.Execution.ToolSystem.file_ops_use_codemode
     tsRefs:
       - packages/core/src/tools/registry.ts#BUILTIN_TOOLS
     remainingEvidence:
@@ -171,8 +171,8 @@ requirements:
     statement: The abstract crafted-tool call list remains in the workspace namespace when a workspace call is appended.
     status: by-construction-witness
     theorems:
-      - Proteus.Execution.ToolSystem.empty_is_isolated
-      - Proteus.Execution.ToolSystem.append_workspace_preserves
+      - Kinu.Execution.ToolSystem.empty_is_isolated
+      - Kinu.Execution.ToolSystem.append_workspace_preserves
     tsRefs:
       - packages/core/src/execution/inline.ts#createInlineExecutor
       - packages/core/src/tools/builtins.ts#buildCraftedToolSetFromExecute
@@ -183,12 +183,12 @@ requirements:
     statement: The abstract grantable-operation constructor can produce only provider tool calls and cannot construct privileged internal operations.
     status: by-construction-witness
     theorems:
-      - Proteus.Safety.CapabilitySafety.grantableOps_only_toolcalls
-      - Proteus.Safety.CapabilitySafety.sqlwrite_not_grantable
-      - Proteus.Safety.CapabilitySafety.sqlread_not_grantable
-      - Proteus.Safety.CapabilitySafety.scaffoldwrite_not_grantable
-      - Proteus.Safety.CapabilitySafety.spawnsubagent_not_grantable
-      - Proteus.Safety.CapabilitySafety.networkfetch_not_grantable
+      - Kinu.Safety.CapabilitySafety.grantableOps_only_toolcalls
+      - Kinu.Safety.CapabilitySafety.sqlwrite_not_grantable
+      - Kinu.Safety.CapabilitySafety.sqlread_not_grantable
+      - Kinu.Safety.CapabilitySafety.scaffoldwrite_not_grantable
+      - Kinu.Safety.CapabilitySafety.spawnsubagent_not_grantable
+      - Kinu.Safety.CapabilitySafety.networkfetch_not_grantable
     tsRefs:
       - packages/core/src/types/primitives.ts#VFS.exists
       - packages/core/src/tools/builtins.ts#WebToolInput.action
@@ -200,10 +200,10 @@ requirements:
     statement: Exact scaled-integer backpropagation preserves reward bounds and the reward-sum and visit-count invariants in the abstract model.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.MCTS.Backpropagation.update_preserves_range
-      - Proteus.MCTS.Backpropagation.applyRewards_preserves_range
-      - Proteus.MCTS.Backpropagation.applyRewards_sum_invariant
-      - Proteus.MCTS.Backpropagation.sum_invariant
+      - Kinu.MCTS.Backpropagation.update_preserves_range
+      - Kinu.MCTS.Backpropagation.applyRewards_preserves_range
+      - Kinu.MCTS.Backpropagation.applyRewards_sum_invariant
+      - Kinu.MCTS.Backpropagation.sum_invariant
     tsRefs:
       - packages/core/src/mcts/backpropagation.ts#backpropagate
       - packages/core/src/mcts/schemas.ts#SEARCH_NODES_POST_RELEASE_COLUMNS
@@ -214,10 +214,10 @@ requirements:
     statement: Initial-value erasure, numerator shape, zero-state range, and identifier preservation follow directly from the abstract backpropagation constructors.
     status: by-construction-witness
     theorems:
-      - Proteus.MCTS.Backpropagation.init_values_equal_at_first_step
-      - Proteus.MCTS.Backpropagation.update_matches_ts_numerator
-      - Proteus.MCTS.Backpropagation.initial_in_range
-      - Proteus.MCTS.Backpropagation.backprop_preserves_ids
+      - Kinu.MCTS.Backpropagation.init_values_equal_at_first_step
+      - Kinu.MCTS.Backpropagation.update_matches_ts_numerator
+      - Kinu.MCTS.Backpropagation.initial_in_range
+      - Kinu.MCTS.Backpropagation.backprop_preserves_ids
     tsRefs:
       - packages/core/src/mcts/backpropagation.ts#backpropagate
     remainingEvidence:
@@ -226,8 +226,8 @@ requirements:
     statement: Storage identity separation is invariant under every transition admitted by the abstract MCTS transition relation.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.MCTS.StorageIsolation.init_isolated
-      - Proteus.MCTS.StorageIsolation.transition_preserves_isolation
+      - Kinu.MCTS.StorageIsolation.init_isolated
+      - Kinu.MCTS.StorageIsolation.transition_preserves_isolation
     tsRefs:
       - packages/cli-backend/src/branch-process.ts#createBranchSpawner
       - packages/cli-backend/src/branch-worker.ts#dbPath
@@ -260,10 +260,10 @@ requirements:
     statement: The abstract memory index preserves new and unrelated chunks and bounds modeled search result length and score sign by construction.
     status: by-construction-witness
     theorems:
-      - Proteus.Storage.FTS5Search.index_includes_new
-      - Proteus.Storage.FTS5Search.index_preserves_other
-      - Proteus.Storage.FTS5Search.search_bounded
-      - Proteus.Storage.FTS5Search.fts5_scores_nonneg
+      - Kinu.Storage.FTS5Search.index_includes_new
+      - Kinu.Storage.FTS5Search.index_preserves_other
+      - Kinu.Storage.FTS5Search.search_bounded
+      - Kinu.Storage.FTS5Search.fts5_scores_nonneg
     tsRefs:
       - packages/agent-utils/src/memory/store.ts#MemoryStore.appendToFile
       - packages/agent-utils/src/memory/store.ts#MemoryStore.indexFile
@@ -277,7 +277,7 @@ requirements:
     status: trusted-model-assumption
     theorems: []
     axioms:
-      - Proteus.Storage.FTS5Search.fts5_indexed_findable
+      - Kinu.Storage.FTS5Search.fts5_indexed_findable
     tsRefs:
       - packages/agent-utils/src/memory/store.ts#MemoryStore.indexFile
       - packages/agent-utils/src/memory/store.ts#MemoryStore.search
@@ -287,9 +287,9 @@ requirements:
     statement: The abstract list-backed filesystem provides write-read round trips, idempotent directory creation, and non-clobbering writes to paths assumed distinct in the model.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Storage.SqliteFSCorrectness.write_read_roundtrip
-      - Proteus.Storage.SqliteFSCorrectness.mkdir_idempotent
-      - Proteus.Storage.SqliteFSCorrectness.writes_commute
+      - Kinu.Storage.SqliteFSCorrectness.write_read_roundtrip
+      - Kinu.Storage.SqliteFSCorrectness.mkdir_idempotent
+      - Kinu.Storage.SqliteFSCorrectness.writes_commute
     tsRefs:
       - packages/core/src/vfs/nimbus-workspace.ts#WorkspaceVFS
       - packages/core/src/vfs/nimbus-workspace.ts#workspaceVfs
@@ -302,8 +302,8 @@ requirements:
     statement: Positive-size byte chunking in the abstract filesystem reassembles the original byte list and decreases its chunk count one chunk at a time.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Storage.SqliteFSCorrectness.chunkCount_drop
-      - Proteus.Storage.SqliteFSCorrectness.chunk_reassembly
+      - Kinu.Storage.SqliteFSCorrectness.chunkCount_drop
+      - Kinu.Storage.SqliteFSCorrectness.chunk_reassembly
     tsRefs:
       - packages/core/src/vfs/nimbus-workspace.ts#WorkspaceVFS
       - packages/agent-utils/src/vfs/encoding.ts#concatBuffers
@@ -314,12 +314,12 @@ requirements:
     statement: The objective's direction admits exactly two values, strict betterness is irreflexive, asymmetric, transitive and total up to ties, a verifier's return type cannot report a fault, and an adversary bound is declarable but refused as a floor.
     status: by-construction-witness
     theorems:
-      - Proteus.Exploration.isBetter_irrefl
-      - Proteus.Exploration.isBetter_asymm
-      - Proteus.Exploration.isBetter_trans
-      - Proteus.Exploration.isBetter_total
-      - Proteus.Exploration.measurement_cannot_report_fault
-      - Proteus.Exploration.adversary_is_declarable_and_refused
+      - Kinu.Exploration.isBetter_irrefl
+      - Kinu.Exploration.isBetter_asymm
+      - Kinu.Exploration.isBetter_trans
+      - Kinu.Exploration.isBetter_total
+      - Kinu.Exploration.measurement_cannot_report_fault
+      - Kinu.Exploration.adversary_is_declarable_and_refused
     tsRefs:
       - packages/core/src/strategy/objective.ts#ObjectiveDirection
       - packages/core/src/strategy/objective.ts#isBetter
@@ -333,13 +333,13 @@ requirements:
     statement: A floor's margin is negative exactly when the best known honest cost would itself breach the floor, so the section 4.5 C1 and C2 checks are one predicate on two numbers, and the majority-vote floor provably escapes both.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.floorRoom_neg_iff_bestKnown_breaches
-      - Proteus.Exploration.floorAdmissible_rejects_negative_margin
-      - Proteus.Exploration.floorAdmissible_rejects_breaching_baseline
-      - Proteus.Exploration.floorAdmissible_rejects_adversary
-      - Proteus.Exploration.old_majority_floor_escapes_c1
-      - Proteus.Exploration.fixed_majority_floor_has_more_room
-      - Proteus.Exploration.c1_refuses_a_refuted_floor
+      - Kinu.Exploration.floorRoom_neg_iff_bestKnown_breaches
+      - Kinu.Exploration.floorAdmissible_rejects_negative_margin
+      - Kinu.Exploration.floorAdmissible_rejects_breaching_baseline
+      - Kinu.Exploration.floorAdmissible_rejects_adversary
+      - Kinu.Exploration.old_majority_floor_escapes_c1
+      - Kinu.Exploration.fixed_majority_floor_has_more_room
+      - Kinu.Exploration.c1_refuses_a_refuted_floor
     tsRefs:
       - packages/core/src/strategy/objective.ts#floorMargin
       - packages/core/src/strategy/objective.ts#Floor
@@ -352,22 +352,22 @@ requirements:
     statement: From an uncleared sealed state no finite sequence of the run's own actions publishes to any member of the enumerated six-surface publication set, which is section 10.1 S7 as reachability over publication rather than over one table.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.runOf_nil
-      - Proteus.Exploration.Publication.runOf_cons
-      - Proteus.Exploration.Publication.breach_seals
-      - Proteus.Exploration.Publication.publish_requires_open
-      - Proteus.Exploration.Publication.retroPublish_requires_open
-      - Proteus.Exploration.Publication.sealed_is_absorbing
-      - Proteus.Exploration.Publication.sealed_publishes_nothing
-      - Proteus.Exploration.Publication.breach_freezes_the_store
-      - Proteus.Exploration.Publication.retry_does_not_clear
-      - Proteus.Exploration.Publication.good_measurement_does_not_clear
-      - Proteus.Exploration.Publication.surface_enumeration_is_total
-      - Proteus.Exploration.Publication.surface_enumeration_has_six
-      - Proteus.Exploration.Publication.admits_ignores_surface
-      - Proteus.Exploration.Publication.admits_iff_not_uncleared
-      - Proteus.Exploration.Publication.every_surface_is_writable
-      - Proteus.Exploration.Publication.every_surface_is_retro_writable
+      - Kinu.Exploration.Publication.runOf_nil
+      - Kinu.Exploration.Publication.runOf_cons
+      - Kinu.Exploration.Publication.breach_seals
+      - Kinu.Exploration.Publication.publish_requires_open
+      - Kinu.Exploration.Publication.retroPublish_requires_open
+      - Kinu.Exploration.Publication.sealed_is_absorbing
+      - Kinu.Exploration.Publication.sealed_publishes_nothing
+      - Kinu.Exploration.Publication.breach_freezes_the_store
+      - Kinu.Exploration.Publication.retry_does_not_clear
+      - Kinu.Exploration.Publication.good_measurement_does_not_clear
+      - Kinu.Exploration.Publication.surface_enumeration_is_total
+      - Kinu.Exploration.Publication.surface_enumeration_has_six
+      - Kinu.Exploration.Publication.admits_ignores_surface
+      - Kinu.Exploration.Publication.admits_iff_not_uncleared
+      - Kinu.Exploration.Publication.every_surface_is_writable
+      - Kinu.Exploration.Publication.every_surface_is_retro_writable
     tsRefs:
       - packages/core/src/strategy/objective.ts#PUBLICATION_SURFACES
       - packages/core/src/strategy/objective.ts#PublicationState
@@ -382,13 +382,13 @@ requirements:
     statement: Only a recorded re-derivation carrying an admissible replacement floor and a stated adjudication admits publication again, retroactive publication additionally requires verifier-digest equality, and an identity-keyed seal provably cannot discriminate a corrected floor from the breached one.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.identityKey_is_floor_blind
-      - Proteus.Exploration.Publication.sealKey_discriminates
-      - Proteus.Exploration.Publication.refuted_replacement_does_not_clear
-      - Proteus.Exploration.Publication.unaudited_rederivation_does_not_clear
-      - Proteus.Exploration.Publication.rederivation_restores_publication
-      - Proteus.Exploration.Publication.retroPublish_requires_same_verifier
-      - Proteus.Exploration.Publication.admissible_rederivation_admits
+      - Kinu.Exploration.Publication.identityKey_is_floor_blind
+      - Kinu.Exploration.Publication.sealKey_discriminates
+      - Kinu.Exploration.Publication.refuted_replacement_does_not_clear
+      - Kinu.Exploration.Publication.unaudited_rederivation_does_not_clear
+      - Kinu.Exploration.Publication.rederivation_restores_publication
+      - Kinu.Exploration.Publication.retroPublish_requires_same_verifier
+      - Kinu.Exploration.Publication.admissible_rederivation_admits
     tsRefs:
       - packages/core/src/strategy/objective.ts#PublicationState
       - packages/core/src/strategy/objective.ts#Floor
@@ -402,19 +402,19 @@ requirements:
     statement: A floor breach suspends the floor and stops publication without halting the run, stopping scoring or suppressing the settle report, every refused publication is counted so the disclosure cannot under-report, and the suppressed-cell count is a provably independent quantity counted once per cell.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.breach_does_not_halt
-      - Proteus.Exploration.Publication.sealed_still_scores
-      - Proteus.Exploration.Publication.breach_records_suspension
-      - Proteus.Exploration.Publication.sealed_still_reports
-      - Proteus.Exploration.Publication.suppression_none_is_not_zero
-      - Proteus.Exploration.Publication.cleared_seal_discloses_nothing
-      - Proteus.Exploration.Publication.sealed_publish_counts_the_refusal
-      - Proteus.Exploration.Publication.inert_refusal_is_not_a_suppression
-      - Proteus.Exploration.Publication.suppression_counts_every_refusal
-      - Proteus.Exploration.Publication.suppressedCells_counts_each_cell_once
-      - Proteus.Exploration.Publication.suppressedCells_le_improvements
-      - Proteus.Exploration.Publication.suppressedCells_monotone
-      - Proteus.Exploration.Publication.suppression_quantities_are_independent
+      - Kinu.Exploration.Publication.breach_does_not_halt
+      - Kinu.Exploration.Publication.sealed_still_scores
+      - Kinu.Exploration.Publication.breach_records_suspension
+      - Kinu.Exploration.Publication.sealed_still_reports
+      - Kinu.Exploration.Publication.suppression_none_is_not_zero
+      - Kinu.Exploration.Publication.cleared_seal_discloses_nothing
+      - Kinu.Exploration.Publication.sealed_publish_counts_the_refusal
+      - Kinu.Exploration.Publication.inert_refusal_is_not_a_suppression
+      - Kinu.Exploration.Publication.suppression_counts_every_refusal
+      - Kinu.Exploration.Publication.suppressedCells_counts_each_cell_once
+      - Kinu.Exploration.Publication.suppressedCells_le_improvements
+      - Kinu.Exploration.Publication.suppressedCells_monotone
+      - Kinu.Exploration.Publication.suppression_quantities_are_independent
     tsRefs:
       - packages/core/src/strategy/objective.ts#admitsPublication
       - packages/core/src/strategy/objective.ts#carrySuppression
@@ -428,11 +428,11 @@ requirements:
     statement: After a verifier fault no finite trace scores, records or publishes anything, which is section 3.4's crash-is-not-zero asymmetry as reachability.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.fault_halts
-      - Proteus.Exploration.Publication.fault_writes_nothing
-      - Proteus.Exploration.Publication.halted_is_absorbing
-      - Proteus.Exploration.Publication.halted_does_nothing
-      - Proteus.Exploration.Publication.fault_freezes_the_run
+      - Kinu.Exploration.Publication.fault_halts
+      - Kinu.Exploration.Publication.fault_writes_nothing
+      - Kinu.Exploration.Publication.halted_is_absorbing
+      - Kinu.Exploration.Publication.halted_does_nothing
+      - Kinu.Exploration.Publication.fault_freezes_the_run
     tsRefs:
       - packages/core/src/strategy/objective.ts#VerifierFault
       - packages/core/src/strategy/objective.ts#Unmeasurable
@@ -443,10 +443,10 @@ requirements:
     statement: No reachable state contains a recorded node without an observation, because the record action takes the observation as an argument.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.recorded_nodes_are_observed
-      - Proteus.Exploration.Publication.init_nodes_are_observed
-      - Proteus.Exploration.Publication.no_unobserved_node_is_reachable
-      - Proteus.Exploration.Publication.unobserved_node_is_representable
+      - Kinu.Exploration.Publication.recorded_nodes_are_observed
+      - Kinu.Exploration.Publication.init_nodes_are_observed
+      - Kinu.Exploration.Publication.no_unobserved_node_is_reachable
+      - Kinu.Exploration.Publication.unobserved_node_is_representable
     tsRefs:
       - packages/core/src/mcts/engine.ts#runMCTS
       - packages/core/src/types/mcts.ts#SearchNode.observation
@@ -457,14 +457,14 @@ requirements:
     statement: A run that writes a records-store row has measured two different values on two different artifacts, which is section 10.1 S1 with its counterfactual conjunct replaced by section 3.8 B1.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.isDiscriminating_eq
-      - Proteus.Exploration.Publication.constantList_false_witness
-      - Proteus.Exploration.Publication.inertValues_false_witness
-      - Proteus.Exploration.Publication.discriminating_gives_two_values
-      - Proteus.Exploration.Publication.published_implies_discriminated
-      - Proteus.Exploration.Publication.retroPublished_implies_discriminated
-      - Proteus.Exploration.Publication.non_discriminating_run_publishes_nothing
-      - Proteus.Exploration.Publication.discrimination_is_not_relevance
+      - Kinu.Exploration.Publication.isDiscriminating_eq
+      - Kinu.Exploration.Publication.constantList_false_witness
+      - Kinu.Exploration.Publication.inertValues_false_witness
+      - Kinu.Exploration.Publication.discriminating_gives_two_values
+      - Kinu.Exploration.Publication.published_implies_discriminated
+      - Kinu.Exploration.Publication.retroPublished_implies_discriminated
+      - Kinu.Exploration.Publication.non_discriminating_run_publishes_nothing
+      - Kinu.Exploration.Publication.discrimination_is_not_relevance
     tsRefs:
       - packages/core/src/strategy/objective.ts#MeasuredValue
       - packages/core/src/strategy/records.ts#recordExploration
@@ -476,11 +476,11 @@ requirements:
     statement: Section 3.8 B1 needs its own k and its own distinctness to be sound: below two distinct measured candidates variation is inexpressible rather than absent, and an identity-free reading admits a nondeterministic verifier's noise as discrimination.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.single_candidate_is_insufficient_not_inert
-      - Proteus.Exploration.Publication.two_equal_candidates_are_inert
-      - Proteus.Exploration.Publication.identity_free_b1_accepts_verifier_noise
-      - Proteus.Exploration.Publication.baseline_supplies_the_second_value
-      - Proteus.Exploration.Publication.unmeasurable_does_not_discriminate
+      - Kinu.Exploration.Publication.single_candidate_is_insufficient_not_inert
+      - Kinu.Exploration.Publication.two_equal_candidates_are_inert
+      - Kinu.Exploration.Publication.identity_free_b1_accepts_verifier_noise
+      - Kinu.Exploration.Publication.baseline_supplies_the_second_value
+      - Kinu.Exploration.Publication.unmeasurable_does_not_discriminate
     tsRefs:
       - packages/core/src/strategy/objective.ts#MeasuredValue
       - packages/core/src/strategy/objective.ts#Measurement
@@ -491,13 +491,13 @@ requirements:
     statement: A run's report is total and a reported success names a measured value, while a sealed, inert or evidence-poor run cannot report success and the three withholding outcomes are distinct.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Publication.bestOf_mem
-      - Proteus.Exploration.Publication.success_was_measured
-      - Proteus.Exploration.Publication.inert_cannot_succeed
-      - Proteus.Exploration.Publication.insufficient_cannot_succeed
-      - Proteus.Exploration.Publication.sealed_never_succeeds
-      - Proteus.Exploration.Publication.the_three_withholdings_are_distinct
-      - Proteus.Exploration.Publication.discriminating_run_succeeds
+      - Kinu.Exploration.Publication.bestOf_mem
+      - Kinu.Exploration.Publication.success_was_measured
+      - Kinu.Exploration.Publication.inert_cannot_succeed
+      - Kinu.Exploration.Publication.insufficient_cannot_succeed
+      - Kinu.Exploration.Publication.sealed_never_succeeds
+      - Kinu.Exploration.Publication.the_three_withholdings_are_distinct
+      - Kinu.Exploration.Publication.discriminating_run_succeeds
     tsRefs:
       - packages/core/src/strategy/settle.ts#settleReport
       - packages/core/src/strategy/swarm.ts#SwarmSettleReport
@@ -508,17 +508,17 @@ requirements:
     statement: settleOf is total over the score and advance axes and its four clauses are exact fibres, so no archive or pareto region can settle to a scalar winner and settle depends on no other field.
     status: by-construction-witness
     theorems:
-      - Proteus.Exploration.Settle.settle_is_total
-      - Proteus.Exploration.Settle.settle_total_over_axes
-      - Proteus.Exploration.Settle.settleOf_archive_iff
-      - Proteus.Exploration.Settle.settleOf_front_iff
-      - Proteus.Exploration.Settle.settleOf_merge_iff
-      - Proteus.Exploration.Settle.archive_never_settles_best
-      - Proteus.Exploration.Settle.pareto_never_settles_best
-      - Proteus.Exploration.Settle.settleOf_best_iff
-      - Proteus.Exploration.Settle.settleOf_depends_only_on_score_and_advance
-      - Proteus.Exploration.Settle.settleOf_is_not_constant
-      - Proteus.Exploration.Settle.every_settle_kind_is_reachable
+      - Kinu.Exploration.Settle.settle_is_total
+      - Kinu.Exploration.Settle.settle_total_over_axes
+      - Kinu.Exploration.Settle.settleOf_archive_iff
+      - Kinu.Exploration.Settle.settleOf_front_iff
+      - Kinu.Exploration.Settle.settleOf_merge_iff
+      - Kinu.Exploration.Settle.archive_never_settles_best
+      - Kinu.Exploration.Settle.pareto_never_settles_best
+      - Kinu.Exploration.Settle.settleOf_best_iff
+      - Kinu.Exploration.Settle.settleOf_depends_only_on_score_and_advance
+      - Kinu.Exploration.Settle.settleOf_is_not_constant
+      - Kinu.Exploration.Settle.every_settle_kind_is_reachable
     tsRefs:
       - packages/core/src/strategy/swarm.ts#settleOf
       - packages/core/src/strategy/swarm.ts#SwarmSettle
@@ -531,19 +531,19 @@ requirements:
     statement: A function-typed descriptor partitions candidates totally and disjointly while a judged or partial descriptor provably refutes the partition, and a coverage report never names a cell nothing landed in.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Archive.functional_descriptor_partitions
-      - Proteus.Exploration.Archive.judged_descriptor_breaks_partition
-      - Proteus.Exploration.Archive.partial_descriptor_breaks_partition
-      - Proteus.Exploration.Archive.bucketOf_in_grid
-      - Proteus.Exploration.Archive.bucketOf_mem_grid
-      - Proteus.Exploration.Archive.bucketOf_partitions
-      - Proteus.Exploration.Archive.covered_has_a_member
-      - Proteus.Exploration.Archive.member_is_covered
-      - Proteus.Exploration.Archive.coverageCount_le_grid
-      - Proteus.Exploration.Archive.all_of_filter_length_eq
-      - Proteus.Exploration.Archive.full_coverage_fills_every_cell
-      - Proteus.Exploration.Archive.full_coverage_says_nothing_about_quality
-      - Proteus.Exploration.Archive.collapsed_archive_reports_partial_coverage
+      - Kinu.Exploration.Archive.functional_descriptor_partitions
+      - Kinu.Exploration.Archive.judged_descriptor_breaks_partition
+      - Kinu.Exploration.Archive.partial_descriptor_breaks_partition
+      - Kinu.Exploration.Archive.bucketOf_in_grid
+      - Kinu.Exploration.Archive.bucketOf_mem_grid
+      - Kinu.Exploration.Archive.bucketOf_partitions
+      - Kinu.Exploration.Archive.covered_has_a_member
+      - Kinu.Exploration.Archive.member_is_covered
+      - Kinu.Exploration.Archive.coverageCount_le_grid
+      - Kinu.Exploration.Archive.all_of_filter_length_eq
+      - Kinu.Exploration.Archive.full_coverage_fills_every_cell
+      - Kinu.Exploration.Archive.full_coverage_says_nothing_about_quality
+      - Kinu.Exploration.Archive.collapsed_archive_reports_partial_coverage
     tsRefs:
       - packages/core/src/strategy/archive.ts#ArchiveCell
       - packages/core/src/strategy/archive.ts#archiveCellOf
@@ -556,32 +556,32 @@ requirements:
     statement: For a scalar objective a cell's best never worsens across any finite sequence of writes provided the re-record update keeps the better value and the capacity is at least one, and the overwrite reading of section 5.2 is refuted by counterexample.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Records.notWorse_refl
-      - Proteus.Exploration.Records.notWorse_trans
-      - Proteus.Exploration.Records.best_nil
-      - Proteus.Exploration.Records.best_none_iff
-      - Proteus.Exploration.Records.best_cons
-      - Proteus.Exploration.Records.best_cons_none
-      - Proteus.Exploration.Records.best_cons_some
-      - Proteus.Exploration.Records.best_mem
-      - Proteus.Exploration.Records.best_notWorse_mem
-      - Proteus.Exploration.Records.best_notWorse_of_witness
-      - Proteus.Exploration.Records.mergeValue_notWorse
-      - Proteus.Exploration.Records.insertRow_monotone
-      - Proteus.Exploration.Records.insertRow_unique_digest
-      - Proteus.Exploration.Records.overwrite_breaks_monotonicity
-      - Proteus.Exploration.Records.merge_survives_the_same_input
-      - Proteus.Exploration.Records.isBetter_flip
-      - Proteus.Exploration.Records.removeFirst_subset
-      - Proteus.Exploration.Records.mem_removeFirst_of_ne
-      - Proteus.Exploration.Records.length_removeFirst
-      - Proteus.Exploration.Records.constant_of_best_eq_worst
-      - Proteus.Exploration.Records.removeWorst_monotone
-      - Proteus.Exploration.Records.write_monotone
-      - Proteus.Exploration.Records.writes_monotone
-      - Proteus.Exploration.Records.better_candidate_displaces
-      - Proteus.Exploration.Records.tie_does_not_displace
-      - Proteus.Exploration.Records.eviction_can_destroy_the_population
+      - Kinu.Exploration.Records.notWorse_refl
+      - Kinu.Exploration.Records.notWorse_trans
+      - Kinu.Exploration.Records.best_nil
+      - Kinu.Exploration.Records.best_none_iff
+      - Kinu.Exploration.Records.best_cons
+      - Kinu.Exploration.Records.best_cons_none
+      - Kinu.Exploration.Records.best_cons_some
+      - Kinu.Exploration.Records.best_mem
+      - Kinu.Exploration.Records.best_notWorse_mem
+      - Kinu.Exploration.Records.best_notWorse_of_witness
+      - Kinu.Exploration.Records.mergeValue_notWorse
+      - Kinu.Exploration.Records.insertRow_monotone
+      - Kinu.Exploration.Records.insertRow_unique_digest
+      - Kinu.Exploration.Records.overwrite_breaks_monotonicity
+      - Kinu.Exploration.Records.merge_survives_the_same_input
+      - Kinu.Exploration.Records.isBetter_flip
+      - Kinu.Exploration.Records.removeFirst_subset
+      - Kinu.Exploration.Records.mem_removeFirst_of_ne
+      - Kinu.Exploration.Records.length_removeFirst
+      - Kinu.Exploration.Records.constant_of_best_eq_worst
+      - Kinu.Exploration.Records.removeWorst_monotone
+      - Kinu.Exploration.Records.write_monotone
+      - Kinu.Exploration.Records.writes_monotone
+      - Kinu.Exploration.Records.better_candidate_displaces
+      - Kinu.Exploration.Records.tie_does_not_displace
+      - Kinu.Exploration.Records.eviction_can_destroy_the_population
     tsRefs:
       - packages/core/src/strategy/records.ts#recordExploration
       - packages/core/src/strategy/records.ts#bestInCell
@@ -595,16 +595,16 @@ requirements:
     statement: A vector objective admits no monotone best because Pareto domination has incomparable pairs. The frontier contains no dominated member, and an accepted advance retains the complete declared-axis evidence it was measured from.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Records.someStrictlyBetter_irrefl
-      - Proteus.Exploration.Records.dominates_irrefl
-      - Proteus.Exploration.Records.dominates_admits_incomparable
-      - Proteus.Exploration.Records.single_component_is_argmax
-      - Proteus.Exploration.Records.front_subset
-      - Proteus.Exploration.Records.front_undominated
-      - Proteus.Exploration.Records.frontier_nondominance
-      - Proteus.Exploration.Records.accepted_advance_preserves_objective_evidence
-      - Proteus.Exploration.Records.front_insert_no_loss
-      - Proteus.Exploration.Records.front_can_shrink
+      - Kinu.Exploration.Records.someStrictlyBetter_irrefl
+      - Kinu.Exploration.Records.dominates_irrefl
+      - Kinu.Exploration.Records.dominates_admits_incomparable
+      - Kinu.Exploration.Records.single_component_is_argmax
+      - Kinu.Exploration.Records.front_subset
+      - Kinu.Exploration.Records.front_undominated
+      - Kinu.Exploration.Records.frontier_nondominance
+      - Kinu.Exploration.Records.accepted_advance_preserves_objective_evidence
+      - Kinu.Exploration.Records.front_insert_no_loss
+      - Kinu.Exploration.Records.front_can_shrink
     tsRefs:
       - packages/core/src/strategy/objective.ts#paretoObjectiveAxes
       - packages/core/src/strategy/objective.ts#dominatesPareto
@@ -618,17 +618,17 @@ requirements:
     statement: An accepted branch proposal always lands within the depth cap, the remaining budget and the declared width range and never widens the search's resolved context policy, for every proposal including adversarial ones.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Arbitration.accepted_iff
-      - Proteus.Exploration.Arbitration.accepted_children_within_depth
-      - Proteus.Exploration.Arbitration.accepted_within_budget
-      - Proteus.Exploration.Arbitration.accepted_width_in_range
-      - Proteus.Exploration.Arbitration.accepted_respects_context
-      - Proteus.Exploration.Arbitration.archive_refuses_at_node
-      - Proteus.Exploration.Arbitration.arbitrate_at_zero_depth_always_refuses
-      - Proteus.Exploration.Arbitration.every_proposal_gets_a_verdict
-      - Proteus.Exploration.Arbitration.a_legal_proposal_is_accepted
-      - Proteus.Exploration.Arbitration.every_refusal_is_reachable
-      - Proteus.Exploration.Arbitration.an_adversarial_proposal_is_refused
+      - Kinu.Exploration.Arbitration.accepted_iff
+      - Kinu.Exploration.Arbitration.accepted_children_within_depth
+      - Kinu.Exploration.Arbitration.accepted_within_budget
+      - Kinu.Exploration.Arbitration.accepted_width_in_range
+      - Kinu.Exploration.Arbitration.accepted_respects_context
+      - Kinu.Exploration.Arbitration.archive_refuses_at_node
+      - Kinu.Exploration.Arbitration.arbitrate_at_zero_depth_always_refuses
+      - Kinu.Exploration.Arbitration.every_proposal_gets_a_verdict
+      - Kinu.Exploration.Arbitration.a_legal_proposal_is_accepted
+      - Kinu.Exploration.Arbitration.every_refusal_is_reachable
+      - Kinu.Exploration.Arbitration.an_adversarial_proposal_is_refused
     tsRefs:
       - packages/core/src/strategy/swarm.ts#arbitrateBranch
       - packages/core/src/strategy/swarm.ts#BranchProposal
@@ -642,10 +642,10 @@ requirements:
     statement: A transition in which a node acquires its own storage does not satisfy the branch-side actions of the existing MCTS transition relation, and the frame condition that proof consumes is not removable.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Isolation.agent_node_is_not_a_branch_explore
-      - Proteus.Exploration.Isolation.agent_node_is_not_a_branch_evaluate
-      - Proteus.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
-      - Proteus.Exploration.Isolation.agent_node_step_is_representable
+      - Kinu.Exploration.Isolation.agent_node_is_not_a_branch_explore
+      - Kinu.Exploration.Isolation.agent_node_is_not_a_branch_evaluate
+      - Kinu.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
+      - Kinu.Exploration.Isolation.agent_node_step_is_representable
     tsRefs:
       - packages/cf-backend/src/exploration.ts#ExplorationAgent
       - packages/core/src/strategy/swarm.ts#SWARM_UNITS
@@ -687,28 +687,28 @@ requirements:
     statement: The shipped records store keeps a cell's best from ever falling, as a consequence of never deleting a row and refusing a lowering write rather than as a rule of its own.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.RecordsStore.runOf_nil
-      - Proteus.Exploration.RecordsStore.runOf_cons
-      - Proteus.Exploration.RecordsStore.overwrite_monotone_of_admissible
-      - Proteus.Exploration.RecordsStore.recorded_is_admissible
-      - Proteus.Exploration.RecordsStore.refused_write_changes_nothing
-      - Proteus.Exploration.RecordsStore.step_monotone
-      - Proteus.Exploration.RecordsStore.best_never_falls
-      - Proteus.Exploration.RecordsStore.best_never_falls_below_a_recorded_value
-      - Proteus.Exploration.RecordsStore.step_deletes_no_digest
-      - Proteus.Exploration.RecordsStore.trace_deletes_no_digest
-      - Proteus.Exploration.RecordsStore.write_keeps_one_row_per_digest
-      - Proteus.Exploration.RecordsStore.an_unguarded_write_lowers_the_best
-      - Proteus.Exploration.RecordsStore.removing_a_row_can_lower_the_best
-      - Proteus.Exploration.RecordsStore.stepLenient_monotone
-      - Proteus.Exploration.RecordsStore.lenient_best_never_falls
-      - Proteus.Exploration.RecordsStore.the_tie_rule_is_not_what_makes_it_monotone
-      - Proteus.Exploration.RecordsStore.a_better_write_is_recorded
-      - Proteus.Exploration.RecordsStore.a_worse_new_artifact_joins
-      - Proteus.Exploration.RecordsStore.the_direction_decides
-      - Proteus.Exploration.RecordsStore.a_sealed_store_refuses_by_name
-      - Proteus.Exploration.RecordsStore.a_cleared_seal_records_again
-      - Proteus.Exploration.RecordsStore.a_breach_seals_the_store
+      - Kinu.Exploration.RecordsStore.runOf_nil
+      - Kinu.Exploration.RecordsStore.runOf_cons
+      - Kinu.Exploration.RecordsStore.overwrite_monotone_of_admissible
+      - Kinu.Exploration.RecordsStore.recorded_is_admissible
+      - Kinu.Exploration.RecordsStore.refused_write_changes_nothing
+      - Kinu.Exploration.RecordsStore.step_monotone
+      - Kinu.Exploration.RecordsStore.best_never_falls
+      - Kinu.Exploration.RecordsStore.best_never_falls_below_a_recorded_value
+      - Kinu.Exploration.RecordsStore.step_deletes_no_digest
+      - Kinu.Exploration.RecordsStore.trace_deletes_no_digest
+      - Kinu.Exploration.RecordsStore.write_keeps_one_row_per_digest
+      - Kinu.Exploration.RecordsStore.an_unguarded_write_lowers_the_best
+      - Kinu.Exploration.RecordsStore.removing_a_row_can_lower_the_best
+      - Kinu.Exploration.RecordsStore.stepLenient_monotone
+      - Kinu.Exploration.RecordsStore.lenient_best_never_falls
+      - Kinu.Exploration.RecordsStore.the_tie_rule_is_not_what_makes_it_monotone
+      - Kinu.Exploration.RecordsStore.a_better_write_is_recorded
+      - Kinu.Exploration.RecordsStore.a_worse_new_artifact_joins
+      - Kinu.Exploration.RecordsStore.the_direction_decides
+      - Kinu.Exploration.RecordsStore.a_sealed_store_refuses_by_name
+      - Kinu.Exploration.RecordsStore.a_cleared_seal_records_again
+      - Kinu.Exploration.RecordsStore.a_breach_seals_the_store
     tsRefs:
       - packages/core/src/strategy/records.ts#recordExploration
       - packages/core/src/strategy/records.ts#bestInCell
@@ -721,28 +721,28 @@ requirements:
     statement: Archive admission keeps a cell's occupants pairwise at least the novelty floor apart over every finite write sequence, which bounds their similarity and provably does not bound their number.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.ArchiveAdmission.runOf_append
-      - Proteus.Exploration.ArchiveAdmission.belowFloor_foldl
-      - Proteus.Exploration.ArchiveAdmission.tooClose_iff_belowFloor
-      - Proteus.Exploration.ArchiveAdmission.refuses_iff_an_occupant_is_too_close
-      - Proteus.Exploration.ArchiveAdmission.admitted_of_all_far
-      - Proteus.Exploration.ArchiveAdmission.admitted_is_far_from_every_occupant
-      - Proteus.Exploration.ArchiveAdmission.step_preserves_separation
-      - Proteus.Exploration.ArchiveAdmission.separation_is_invariant
-      - Proteus.Exploration.ArchiveAdmission.no_near_copy_is_reachable
-      - Proteus.Exploration.ArchiveAdmission.discreteDist_of_ne
-      - Proteus.Exploration.ArchiveAdmission.discreteDist_symm
-      - Proteus.Exploration.ArchiveAdmission.descending_length
-      - Proteus.Exploration.ArchiveAdmission.lt_of_mem_descending
-      - Proteus.Exploration.ArchiveAdmission.fresh_run
-      - Proteus.Exploration.ArchiveAdmission.separated_cells_are_unboundedly_large
-      - Proteus.Exploration.ArchiveAdmission.a_repeat_does_not_grow_the_population
-      - Proteus.Exploration.ArchiveAdmission.a_near_copy_is_refused_and_names_the_occupant
-      - Proteus.Exploration.ArchiveAdmission.an_empty_cell_admits
-      - Proteus.Exploration.ArchiveAdmission.the_threshold_is_read_as_a_floor
-      - Proteus.Exploration.ArchiveAdmission.an_identical_artifact_is_not_a_near_copy
-      - Proteus.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
-      - Proteus.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
+      - Kinu.Exploration.ArchiveAdmission.runOf_append
+      - Kinu.Exploration.ArchiveAdmission.belowFloor_foldl
+      - Kinu.Exploration.ArchiveAdmission.tooClose_iff_belowFloor
+      - Kinu.Exploration.ArchiveAdmission.refuses_iff_an_occupant_is_too_close
+      - Kinu.Exploration.ArchiveAdmission.admitted_of_all_far
+      - Kinu.Exploration.ArchiveAdmission.admitted_is_far_from_every_occupant
+      - Kinu.Exploration.ArchiveAdmission.step_preserves_separation
+      - Kinu.Exploration.ArchiveAdmission.separation_is_invariant
+      - Kinu.Exploration.ArchiveAdmission.no_near_copy_is_reachable
+      - Kinu.Exploration.ArchiveAdmission.discreteDist_of_ne
+      - Kinu.Exploration.ArchiveAdmission.discreteDist_symm
+      - Kinu.Exploration.ArchiveAdmission.descending_length
+      - Kinu.Exploration.ArchiveAdmission.lt_of_mem_descending
+      - Kinu.Exploration.ArchiveAdmission.fresh_run
+      - Kinu.Exploration.ArchiveAdmission.separated_cells_are_unboundedly_large
+      - Kinu.Exploration.ArchiveAdmission.a_repeat_does_not_grow_the_population
+      - Kinu.Exploration.ArchiveAdmission.a_near_copy_is_refused_and_names_the_occupant
+      - Kinu.Exploration.ArchiveAdmission.an_empty_cell_admits
+      - Kinu.Exploration.ArchiveAdmission.the_threshold_is_read_as_a_floor
+      - Kinu.Exploration.ArchiveAdmission.an_identical_artifact_is_not_a_near_copy
+      - Kinu.Exploration.ArchiveAdmission.the_refusal_names_the_nearest
+      - Kinu.Exploration.ArchiveAdmission.inverting_the_search_admits_a_near_copy
     tsRefs:
       - packages/core/src/strategy/archive.ts#admitToArchive
       - packages/core/src/strategy/archive.ts#noveltyDistance
@@ -757,36 +757,36 @@ requirements:
     statement: The fan-in order is a topological order of the dependency edges the members declare, and a cycle refuses the whole path rather than applying an orderable prefix.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.FanIn.landsCleanly_append
-      - Proteus.Exploration.FanIn.placeStep_preserves
-      - Proteus.Exploration.FanIn.onePass_preserves
-      - Proteus.Exploration.FanIn.sweeps_preserves
-      - Proteus.Exploration.FanIn.placedOf_landsCleanly
-      - Proteus.Exploration.FanIn.ordered_is_placedOf
-      - Proteus.Exploration.FanIn.derived_order_satisfies_rule_one
-      - Proteus.Exploration.FanIn.mem_of_filter_eq_nil
-      - Proteus.Exploration.FanIn.every_member_is_ordered
-      - Proteus.Exploration.FanIn.placeStep_allMembers
-      - Proteus.Exploration.FanIn.onePass_allMembers
-      - Proteus.Exploration.FanIn.sweeps_allMembers
-      - Proteus.Exploration.FanIn.placedOf_allMembers
-      - Proteus.Exploration.FanIn.unique_append_singleton
-      - Proteus.Exploration.FanIn.placeStep_unique
-      - Proteus.Exploration.FanIn.onePass_unique
-      - Proteus.Exploration.FanIn.sweeps_unique
-      - Proteus.Exploration.FanIn.placedOf_unique
-      - Proteus.Exploration.FanIn.a_cycle_applies_nothing
-      - Proteus.Exploration.FanIn.the_sweep_bound_is_tight
-      - Proteus.Exploration.FanIn.a_chain_offered_backwards_still_orders
-      - Proteus.Exploration.FanIn.a_dependent_offered_first_is_applied_last
-      - Proteus.Exploration.FanIn.an_unordered_set_keeps_the_order_it_was_offered_in
-      - Proteus.Exploration.FanIn.a_dependency_outside_the_offered_set_is_not_an_edge
-      - Proteus.Exploration.FanIn.a_settled_dependency_is_not_an_edge
-      - Proteus.Exploration.FanIn.a_cycle_is_refused_by_name
-      - Proteus.Exploration.FanIn.a_self_dependency_is_a_cycle
-      - Proteus.Exploration.FanIn.an_orderable_member_does_not_land_beside_a_cycle
-      - Proteus.Exploration.FanIn.an_orderable_set_applies_every_member
-      - Proteus.Exploration.FanIn.the_offered_order_can_fail_rule_one
+      - Kinu.Exploration.FanIn.landsCleanly_append
+      - Kinu.Exploration.FanIn.placeStep_preserves
+      - Kinu.Exploration.FanIn.onePass_preserves
+      - Kinu.Exploration.FanIn.sweeps_preserves
+      - Kinu.Exploration.FanIn.placedOf_landsCleanly
+      - Kinu.Exploration.FanIn.ordered_is_placedOf
+      - Kinu.Exploration.FanIn.derived_order_satisfies_rule_one
+      - Kinu.Exploration.FanIn.mem_of_filter_eq_nil
+      - Kinu.Exploration.FanIn.every_member_is_ordered
+      - Kinu.Exploration.FanIn.placeStep_allMembers
+      - Kinu.Exploration.FanIn.onePass_allMembers
+      - Kinu.Exploration.FanIn.sweeps_allMembers
+      - Kinu.Exploration.FanIn.placedOf_allMembers
+      - Kinu.Exploration.FanIn.unique_append_singleton
+      - Kinu.Exploration.FanIn.placeStep_unique
+      - Kinu.Exploration.FanIn.onePass_unique
+      - Kinu.Exploration.FanIn.sweeps_unique
+      - Kinu.Exploration.FanIn.placedOf_unique
+      - Kinu.Exploration.FanIn.a_cycle_applies_nothing
+      - Kinu.Exploration.FanIn.the_sweep_bound_is_tight
+      - Kinu.Exploration.FanIn.a_chain_offered_backwards_still_orders
+      - Kinu.Exploration.FanIn.a_dependent_offered_first_is_applied_last
+      - Kinu.Exploration.FanIn.an_unordered_set_keeps_the_order_it_was_offered_in
+      - Kinu.Exploration.FanIn.a_dependency_outside_the_offered_set_is_not_an_edge
+      - Kinu.Exploration.FanIn.a_settled_dependency_is_not_an_edge
+      - Kinu.Exploration.FanIn.a_cycle_is_refused_by_name
+      - Kinu.Exploration.FanIn.a_self_dependency_is_a_cycle
+      - Kinu.Exploration.FanIn.an_orderable_member_does_not_land_beside_a_cycle
+      - Kinu.Exploration.FanIn.an_orderable_set_applies_every_member
+      - Kinu.Exploration.FanIn.the_offered_order_can_fail_rule_one
     tsRefs:
       - packages/core/src/strategy/merge-back.ts#MergeOrder
       - packages/core/src/strategy/merge-back.ts#dependencyOrder
@@ -799,27 +799,27 @@ requirements:
     statement: A verdict bound to a member digest and a base digest never applies after either moves, which is the whole of sequential rebase's correctness.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Exploration.Rebase.readAt_writeAt
-      - Proteus.Exploration.Rebase.applied_is_bound_to_the_base_it_lands_on
-      - Proteus.Exploration.Rebase.rebase_applies_only_bound_verdicts
-      - Proteus.Exploration.Rebase.member_only_binding_cannot_see_the_origin
-      - Proteus.Exploration.Rebase.map_eq_pointwise
-      - Proteus.Exploration.Rebase.the_base_key_moves_when_a_touched_path_moves
-      - Proteus.Exploration.Rebase.both_members_are_bound_to_the_initial_base
-      - Proteus.Exploration.Rebase.the_rebase_moves_the_second_members_base
-      - Proteus.Exploration.Rebase.no_reverifier_refuses_the_stale_member
-      - Proteus.Exploration.Rebase.the_member_digest_does_not_move_when_the_origin_does
-      - Proteus.Exploration.Rebase.member_only_binding_applies_the_stale_member
-      - Proteus.Exploration.Rebase.re_verification_against_the_new_base_applies
-      - Proteus.Exploration.Rebase.a_reverification_bound_elsewhere_does_not_revalidate
-      - Proteus.Exploration.Rebase.a_failed_recheck_refuses
-      - Proteus.Exploration.Rebase.an_unresolved_verifier_refuses
-      - Proteus.Exploration.Rebase.an_unclean_verdict_is_refused_by_its_own_cause
-      - Proteus.Exploration.Rebase.removing_the_comparison_applies_the_stale_verdict
-      - Proteus.Exploration.Rebase.an_absent_path_is_not_an_empty_one
-      - Proteus.Exploration.Rebase.the_base_key_ignores_untouched_paths
-      - Proteus.Exploration.Rebase.the_rebase_stops_at_the_stale_member
-      - Proteus.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
+      - Kinu.Exploration.Rebase.readAt_writeAt
+      - Kinu.Exploration.Rebase.applied_is_bound_to_the_base_it_lands_on
+      - Kinu.Exploration.Rebase.rebase_applies_only_bound_verdicts
+      - Kinu.Exploration.Rebase.member_only_binding_cannot_see_the_origin
+      - Kinu.Exploration.Rebase.map_eq_pointwise
+      - Kinu.Exploration.Rebase.the_base_key_moves_when_a_touched_path_moves
+      - Kinu.Exploration.Rebase.both_members_are_bound_to_the_initial_base
+      - Kinu.Exploration.Rebase.the_rebase_moves_the_second_members_base
+      - Kinu.Exploration.Rebase.no_reverifier_refuses_the_stale_member
+      - Kinu.Exploration.Rebase.the_member_digest_does_not_move_when_the_origin_does
+      - Kinu.Exploration.Rebase.member_only_binding_applies_the_stale_member
+      - Kinu.Exploration.Rebase.re_verification_against_the_new_base_applies
+      - Kinu.Exploration.Rebase.a_reverification_bound_elsewhere_does_not_revalidate
+      - Kinu.Exploration.Rebase.a_failed_recheck_refuses
+      - Kinu.Exploration.Rebase.an_unresolved_verifier_refuses
+      - Kinu.Exploration.Rebase.an_unclean_verdict_is_refused_by_its_own_cause
+      - Kinu.Exploration.Rebase.removing_the_comparison_applies_the_stale_verdict
+      - Kinu.Exploration.Rebase.an_absent_path_is_not_an_empty_one
+      - Kinu.Exploration.Rebase.the_base_key_ignores_untouched_paths
+      - Kinu.Exploration.Rebase.the_rebase_stops_at_the_stale_member
+      - Kinu.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
     tsRefs:
       - packages/core/src/strategy/merge-back.ts#MemberVerdict
       - packages/core/src/strategy/merge-back.ts#memberDigestOf
@@ -834,22 +834,22 @@ requirements:
     statement: Snapshot-chain attach mounts at most two layers and moves no payload bytes so its cost never mentions the tree size, while a periodic checkpoint uploads exactly the cumulative changed-set bytes that remain after configured excludes and never more than the whole set.
     status: by-construction-witness
     theorems:
-      - Proteus.Storage.SnapshotChain.layers_le_two
-      - Proteus.Storage.SnapshotChain.chain_attach_mounts_its_layers
-      - Proteus.Storage.SnapshotChain.chain_attach_independent_of_n
-      - Proteus.Storage.SnapshotChain.chain_attach_independent_of_pending
-      - Proteus.Storage.SnapshotChain.attach_seed_is_the_committed_delta
-      - Proteus.Storage.SnapshotChain.attach_seed_absent_without_delta
-      - Proteus.Storage.SnapshotChain.a_pending_seed_would_differ
-      - Proteus.Storage.SnapshotChain.extract_attach_is_linear_in_n
-      - Proteus.Storage.SnapshotChain.the_changed_set_can_reach_the_whole_tree
-      - Proteus.Storage.SnapshotChain.chain_tick_uploads_unexcluded_bytes
-      - Proteus.Storage.SnapshotChain.chain_tick_upper_bound
-      - Proteus.Storage.SnapshotChain.chain_tick_exact_after_excludes
-      - Proteus.Storage.SnapshotChain.a_pending_only_tick_would_be_strictly_cheaper
-      - Proteus.Storage.SnapshotChain.first_base_uploads_unexcluded_bytes
-      - Proteus.Storage.SnapshotChain.first_base_upper_bound
-      - Proteus.Storage.SnapshotChain.unchanged_tick_uploads_nothing
+      - Kinu.Storage.SnapshotChain.layers_le_two
+      - Kinu.Storage.SnapshotChain.chain_attach_mounts_its_layers
+      - Kinu.Storage.SnapshotChain.chain_attach_independent_of_n
+      - Kinu.Storage.SnapshotChain.chain_attach_independent_of_pending
+      - Kinu.Storage.SnapshotChain.attach_seed_is_the_committed_delta
+      - Kinu.Storage.SnapshotChain.attach_seed_absent_without_delta
+      - Kinu.Storage.SnapshotChain.a_pending_seed_would_differ
+      - Kinu.Storage.SnapshotChain.extract_attach_is_linear_in_n
+      - Kinu.Storage.SnapshotChain.the_changed_set_can_reach_the_whole_tree
+      - Kinu.Storage.SnapshotChain.chain_tick_uploads_unexcluded_bytes
+      - Kinu.Storage.SnapshotChain.chain_tick_upper_bound
+      - Kinu.Storage.SnapshotChain.chain_tick_exact_after_excludes
+      - Kinu.Storage.SnapshotChain.a_pending_only_tick_would_be_strictly_cheaper
+      - Kinu.Storage.SnapshotChain.first_base_uploads_unexcluded_bytes
+      - Kinu.Storage.SnapshotChain.first_base_upper_bound
+      - Kinu.Storage.SnapshotChain.unchanged_tick_uploads_nothing
     tsRefs:
       - packages/devbox/src/snapshot-chain.ts#SnapshotChainPorts
       - packages/devbox/src/snapshot-chain.ts#baseObjectKey
@@ -866,18 +866,18 @@ requirements:
     statement: A snapshot-chain rebase fires only at a quiesce once the cumulative delta has outgrown k times the base, its linear fold then amortizes to fewer than one plus one over k uploaded bytes per changed byte, a tick past that ratio still uploads the unexcluded cumulative delta, and every stored generation is either referenced or named so the unconditional sweep drains it without a listing.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Storage.SnapshotChain.tick_never_rebases
-      - Proteus.Storage.SnapshotChain.rebase_requires_the_delta_to_outgrow_k_base
-      - Proteus.Storage.SnapshotChain.rebase_amortizes_at_a_quiesce
-      - Proteus.Storage.SnapshotChain.a_tick_past_the_ratio_still_uploads_unexcluded_delta
-      - Proteus.Storage.SnapshotChain.referenced_generations_le_two
-      - Proteus.Storage.SnapshotChain.fresh_is_bounded
-      - Proteus.Storage.SnapshotChain.genStep_preserves_bound
-      - Proteus.Storage.SnapshotChain.stored_is_bounded_by_the_named_orphans
-      - Proteus.Storage.SnapshotChain.a_rebase_names_one_generation
-      - Proteus.Storage.SnapshotChain.a_completed_sweep_leaves_one_generation
-      - Proteus.Storage.SnapshotChain.a_partial_sweep_is_re_runnable
-      - Proteus.Storage.SnapshotChain.without_a_sweep_the_population_grows
+      - Kinu.Storage.SnapshotChain.tick_never_rebases
+      - Kinu.Storage.SnapshotChain.rebase_requires_the_delta_to_outgrow_k_base
+      - Kinu.Storage.SnapshotChain.rebase_amortizes_at_a_quiesce
+      - Kinu.Storage.SnapshotChain.a_tick_past_the_ratio_still_uploads_unexcluded_delta
+      - Kinu.Storage.SnapshotChain.referenced_generations_le_two
+      - Kinu.Storage.SnapshotChain.fresh_is_bounded
+      - Kinu.Storage.SnapshotChain.genStep_preserves_bound
+      - Kinu.Storage.SnapshotChain.stored_is_bounded_by_the_named_orphans
+      - Kinu.Storage.SnapshotChain.a_rebase_names_one_generation
+      - Kinu.Storage.SnapshotChain.a_completed_sweep_leaves_one_generation
+      - Kinu.Storage.SnapshotChain.a_partial_sweep_is_re_runnable
+      - Kinu.Storage.SnapshotChain.without_a_sweep_the_population_grows
     tsRefs:
       - packages/devbox/src/snapshot-chain.ts#REBASE_DELTA_RATIO
       - packages/devbox/src/snapshot-chain.ts#shouldRebase
@@ -896,35 +896,35 @@ requirements:
     statement: Overlay-cas attach, replay, read and periodic checkpoint each have a cost independent of the tree size, the quiesce fold carries the design's single linear term, batching bounds what a crash redoes to one batch that re-uploads nothing, and the sweep's whole-prefix listing never happens on the attach or checkpoint path.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Storage.OverlayCas.overlay_mounts_two_layers
-      - Proteus.Storage.OverlayCas.overlay_layers_le_two
-      - Proteus.Storage.OverlayCas.replay_is_linear_in_pending
-      - Proteus.Storage.OverlayCas.overlay_attach_independent_of_n
-      - Proteus.Storage.OverlayCas.overlay_attach_independent_of_cumulative
-      - Proteus.Storage.OverlayCas.overlay_attach_scans_only_pending
-      - Proteus.Storage.OverlayCas.read_is_one_lookup_and_one_chunk
-      - Proteus.Storage.OverlayCas.overlay_read_independent_of_n
-      - Proteus.Storage.OverlayCas.tick_is_blobs_plus_one_put_per_batch
-      - Proteus.Storage.OverlayCas.batching_the_journal_beats_one_put_per_entry
-      - Proteus.Storage.OverlayCas.one_entry_costs_one_journal_put
-      - Proteus.Storage.OverlayCas.batches_cover_the_pending_change
-      - Proteus.Storage.OverlayCas.a_crash_redoes_at_most_one_batch
-      - Proteus.Storage.OverlayCas.a_redone_batch_stages_no_bytes
-      - Proteus.Storage.OverlayCas.overlay_tick_independent_of_n
-      - Proteus.Storage.OverlayCas.overlay_tick_independent_of_cumulative
-      - Proteus.Storage.OverlayCas.overlay_tick_beats_the_chain_when_pending_is_small
-      - Proteus.Storage.OverlayCas.quiesce_fold_carries_the_one_linear_term
-      - Proteus.Storage.OverlayCas.the_fold_operation_count_is_not_linear_in_the_tree
-      - Proteus.Storage.OverlayCas.quiesce_minus_the_fold_is_the_tick
-      - Proteus.Storage.OverlayCas.tick_does_not_fold
-      - Proteus.Storage.OverlayCas.discard_is_one_prefix_delete
-      - Proteus.Storage.OverlayCas.gc_is_bounded_by_listing_and_orphans
-      - Proteus.Storage.OverlayCas.gc_is_off_the_hot_path
-      - Proteus.Storage.OverlayCas.the_sweep_does_read_the_listing
-      - Proteus.Storage.OverlayCas.the_hot_path_lists_only_the_journal_prefix
-      - Proteus.Storage.OverlayCas.a_tombstone_stages_no_bytes
-      - Proteus.Storage.OverlayCas.a_rename_stages_no_bytes
-      - Proteus.Storage.OverlayCas.a_fresh_write_stages_its_bytes
+      - Kinu.Storage.OverlayCas.overlay_mounts_two_layers
+      - Kinu.Storage.OverlayCas.overlay_layers_le_two
+      - Kinu.Storage.OverlayCas.replay_is_linear_in_pending
+      - Kinu.Storage.OverlayCas.overlay_attach_independent_of_n
+      - Kinu.Storage.OverlayCas.overlay_attach_independent_of_cumulative
+      - Kinu.Storage.OverlayCas.overlay_attach_scans_only_pending
+      - Kinu.Storage.OverlayCas.read_is_one_lookup_and_one_chunk
+      - Kinu.Storage.OverlayCas.overlay_read_independent_of_n
+      - Kinu.Storage.OverlayCas.tick_is_blobs_plus_one_put_per_batch
+      - Kinu.Storage.OverlayCas.batching_the_journal_beats_one_put_per_entry
+      - Kinu.Storage.OverlayCas.one_entry_costs_one_journal_put
+      - Kinu.Storage.OverlayCas.batches_cover_the_pending_change
+      - Kinu.Storage.OverlayCas.a_crash_redoes_at_most_one_batch
+      - Kinu.Storage.OverlayCas.a_redone_batch_stages_no_bytes
+      - Kinu.Storage.OverlayCas.overlay_tick_independent_of_n
+      - Kinu.Storage.OverlayCas.overlay_tick_independent_of_cumulative
+      - Kinu.Storage.OverlayCas.overlay_tick_beats_the_chain_when_pending_is_small
+      - Kinu.Storage.OverlayCas.quiesce_fold_carries_the_one_linear_term
+      - Kinu.Storage.OverlayCas.the_fold_operation_count_is_not_linear_in_the_tree
+      - Kinu.Storage.OverlayCas.quiesce_minus_the_fold_is_the_tick
+      - Kinu.Storage.OverlayCas.tick_does_not_fold
+      - Kinu.Storage.OverlayCas.discard_is_one_prefix_delete
+      - Kinu.Storage.OverlayCas.gc_is_bounded_by_listing_and_orphans
+      - Kinu.Storage.OverlayCas.gc_is_off_the_hot_path
+      - Kinu.Storage.OverlayCas.the_sweep_does_read_the_listing
+      - Kinu.Storage.OverlayCas.the_hot_path_lists_only_the_journal_prefix
+      - Kinu.Storage.OverlayCas.a_tombstone_stages_no_bytes
+      - Kinu.Storage.OverlayCas.a_rename_stages_no_bytes
+      - Kinu.Storage.OverlayCas.a_fresh_write_stages_its_bytes
     tsRefs:
       - packages/devbox/src/overlay-cas.ts#OverlayCasPorts
       - packages/devbox/src/cas/sync.ts#StageBlobsOptions
@@ -945,26 +945,26 @@ requirements:
     statement: No finite interleaving of overlay-cas checkpoint transitions reaches a state whose cursor is ahead of its fold, whose journal precedes entry readiness, or whose reap passes the cursor. Entry readiness includes blobless and fully deduplicated entries without claiming a blob PUT, and removing any ordering rule makes a forbidden state reachable.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Storage.OverlayCas.runOf_nil
-      - Proteus.Storage.OverlayCas.runOf_cons
-      - Proteus.Storage.OverlayCas.runOf_append
-      - Proteus.Storage.OverlayCas.empty_is_ordered
-      - Proteus.Storage.OverlayCas.step_preserves_ordering
-      - Proteus.Storage.OverlayCas.ordering_is_invariant
-      - Proteus.Storage.OverlayCas.no_cursor_ahead_of_its_fold
-      - Proteus.Storage.OverlayCas.no_journal_entry_names_an_unstaged_blob
-      - Proteus.Storage.OverlayCas.blobless_entry_can_be_journalled
-      - Proteus.Storage.OverlayCas.no_fold_precedes_its_journal_entry
-      - Proteus.Storage.OverlayCas.no_reap_precedes_its_cursor
-      - Proteus.Storage.OverlayCas.the_cursor_never_passes_a_staged_blob
-      - Proteus.Storage.OverlayCas.the_reap_never_passes_a_staged_blob
-      - Proteus.Storage.OverlayCas.dropping_blob_before_journal_names_an_unstaged_blob
-      - Proteus.Storage.OverlayCas.dropping_fold_before_cursor_advances_past_the_fold
-      - Proteus.Storage.OverlayCas.dropping_journal_before_fold_folds_an_unrecorded_entry
-      - Proteus.Storage.OverlayCas.dropping_cursor_before_reap_leaves_a_hole
-      - Proteus.Storage.OverlayCas.a_tick_journals_without_folding
-      - Proteus.Storage.OverlayCas.a_quiesce_folds_and_advances
-      - Proteus.Storage.OverlayCas.the_reversed_order_does_nothing
+      - Kinu.Storage.OverlayCas.runOf_nil
+      - Kinu.Storage.OverlayCas.runOf_cons
+      - Kinu.Storage.OverlayCas.runOf_append
+      - Kinu.Storage.OverlayCas.empty_is_ordered
+      - Kinu.Storage.OverlayCas.step_preserves_ordering
+      - Kinu.Storage.OverlayCas.ordering_is_invariant
+      - Kinu.Storage.OverlayCas.no_cursor_ahead_of_its_fold
+      - Kinu.Storage.OverlayCas.no_journal_entry_names_an_unstaged_blob
+      - Kinu.Storage.OverlayCas.blobless_entry_can_be_journalled
+      - Kinu.Storage.OverlayCas.no_fold_precedes_its_journal_entry
+      - Kinu.Storage.OverlayCas.no_reap_precedes_its_cursor
+      - Kinu.Storage.OverlayCas.the_cursor_never_passes_a_staged_blob
+      - Kinu.Storage.OverlayCas.the_reap_never_passes_a_staged_blob
+      - Kinu.Storage.OverlayCas.dropping_blob_before_journal_names_an_unstaged_blob
+      - Kinu.Storage.OverlayCas.dropping_fold_before_cursor_advances_past_the_fold
+      - Kinu.Storage.OverlayCas.dropping_journal_before_fold_folds_an_unrecorded_entry
+      - Kinu.Storage.OverlayCas.dropping_cursor_before_reap_leaves_a_hole
+      - Kinu.Storage.OverlayCas.a_tick_journals_without_folding
+      - Kinu.Storage.OverlayCas.a_quiesce_folds_and_advances
+      - Kinu.Storage.OverlayCas.the_reversed_order_does_nothing
     tsRefs:
       - packages/devbox/src/cas/sync.ts#uploadChunks
       - packages/devbox/src/cas/sync.ts#foldJournalIntoTree
@@ -980,16 +980,16 @@ requirements:
     statement: After a completed checkpoint, snapshot-chain crash loss is exactly the writes accepted since that tick; overlay-cas loss is at most that suffix because any per-batch journal prefix only reduces it. Removing snapshot-chain's cannot-decide-commits gate leaves the window open under any finite cadence of skipped ticks.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Storage.SnapshotChain.a_completed_tick_closes_the_window
-      - Proteus.Storage.SnapshotChain.a_tick_free_segment_only_writes
-      - Proteus.Storage.SnapshotChain.loss_is_the_writes_since_the_last_tick
-      - Proteus.Storage.SnapshotChain.skipped_ticks_preserve_loss
-      - Proteus.Storage.SnapshotChain.no_number_of_skipping_ticks_closes_the_window
-      - Proteus.Storage.SnapshotChain.a_skipping_tick_leaves_the_window_open
-      - Proteus.Storage.OverlayCas.batch_step_preserves_order
-      - Proteus.Storage.OverlayCas.batch_trace_from
-      - Proteus.Storage.OverlayCas.batch_trace_invariant
-      - Proteus.Storage.OverlayCas.batch_crash_loss_le_writes_since_tick
+      - Kinu.Storage.SnapshotChain.a_completed_tick_closes_the_window
+      - Kinu.Storage.SnapshotChain.a_tick_free_segment_only_writes
+      - Kinu.Storage.SnapshotChain.loss_is_the_writes_since_the_last_tick
+      - Kinu.Storage.SnapshotChain.skipped_ticks_preserve_loss
+      - Kinu.Storage.SnapshotChain.no_number_of_skipping_ticks_closes_the_window
+      - Kinu.Storage.SnapshotChain.a_skipping_tick_leaves_the_window_open
+      - Kinu.Storage.OverlayCas.batch_step_preserves_order
+      - Kinu.Storage.OverlayCas.batch_trace_from
+      - Kinu.Storage.OverlayCas.batch_trace_invariant
+      - Kinu.Storage.OverlayCas.batch_crash_loss_le_writes_since_tick
     tsRefs:
       - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
       - packages/devbox/src/snapshot-chain.ts#shouldCheckpoint
@@ -1002,57 +1002,57 @@ requirements:
     statement: The durable-root model separates external R2 state, one minimal DO control row, container lifecycle and activation memory; it covers all sixteen await points, reset-safe total actions, a HeadPointer resolving an immutable envelope, manifest-derived two-cycle GC candidacy, pin reachability, payload exclusion and the absence of a wall-clock safety theorem.
     status: proved-in-abstract-model
     theorems:
-      - Proteus.Storage.DurableRoot.await_point_register_is_total
-      - Proteus.Storage.DurableRoot.await_point_register_has_sixteen
-      - Proteus.Storage.DurableRoot.runOf_nil
-      - Proteus.Storage.DurableRoot.runOf_cons
-      - Proteus.Storage.DurableRoot.initial_safe
-      - Proteus.Storage.DurableRoot.step_preserves_safe
-      - Proteus.Storage.DurableRoot.run_preserves_safe
-      - Proteus.Storage.DurableRoot.published_root_closure
-      - Proteus.Storage.DurableRoot.monotone_fenced_head
-      - Proteus.Storage.DurableRoot.run_monotone_fenced_head
-      - Proteus.Storage.DurableRoot.single_operation_row
-      - Proteus.Storage.DurableRoot.redrive_preserves_safe
-      - Proteus.Storage.DurableRoot.redrive_idempotent
-      - Proteus.Storage.DurableRoot.reset_at_every_await
-      - Proteus.Storage.DurableRoot.reset_discards_activation_memory
-      - Proteus.Storage.DurableRoot.redrive_after_every_reset_is_idempotent
-      - Proteus.Storage.DurableRoot.stale_completion_garbage_only
-      - Proteus.Storage.DurableRoot.on_start_idempotent
-      - Proteus.Storage.DurableRoot.on_start_once_per_generation
-      - Proteus.Storage.DurableRoot.restore_exact_head
-      - Proteus.Storage.DurableRoot.restore_ignores_activation_memory
-      - Proteus.Storage.DurableRoot.container_crash_preserves_durable_outcome
-      - Proteus.Storage.DurableRoot.crash_during_sweep_leaks_only
-      - Proteus.Storage.DurableRoot.pin_gc_noninterference
-      - Proteus.Storage.DurableRoot.root_set_change_aborts_mark_sweep
-      - Proteus.Storage.DurableRoot.idempotent_deletion
-      - Proteus.Storage.DurableRoot.delete_preserves_closure
-      - Proteus.Storage.DurableRoot.barrier_prefix_survives_crash
-      - Proteus.Storage.DurableRoot.async_suffix_loss
-      - Proteus.Storage.DurableRoot.payload_excluded_from_durable_view
-      - Proteus.Storage.DurableRoot.payload_excluded_from_restore
-      - Proteus.Storage.DurableRoot.unbounded_wait_counterexample
-      - Proteus.Storage.DurableRoot.safety_has_no_unconditional_wall_clock_bound
-      - Proteus.Storage.DurableRoot.collision_resistance_separates_objects
-      - Proteus.Storage.DurableRoot.capture_sound_is_explicit
-      - Proteus.Storage.DurableRoot.acknowledge_is_event_only
-      - Proteus.Storage.DurableRoot.retry_reads_head
-      - Proteus.Storage.DurableRoot.durable_intent_before_external_await
-      - Proteus.Storage.DurableRoot.sealed_carries_only_verified_root_id
-      - Proteus.Storage.DurableRoot.published_and_acknowledged_bind
-      - Proteus.Storage.DurableRoot.gc_candidates_derive_from_two_manifests
-      - Proteus.Storage.DurableRoot.unique_attempt_fence
-      - Proteus.Storage.DurableRoot.container_mount_is_envelope_identity
-      - Proteus.Storage.DurableRoot.omitted_intent_has_unsafe_witness
-      - Proteus.Storage.DurableRoot.omitted_fence_has_unsafe_witness
-      - Proteus.Storage.DurableRoot.omitted_pin_has_gc_witness
-      - Proteus.Storage.DurableRoot.parent_before_child_has_unsafe_witness
-      - Proteus.Storage.DurableRoot.acknowledgement_before_head_has_unsafe_witness
-      - Proteus.Storage.DurableRoot.receipt_release_too_early_witness
-      - Proteus.Storage.DurableRoot.root_set_race_witness
-      - Proteus.Storage.DurableRoot.container_onstart_activation_memory_witness
+      - Kinu.Storage.DurableRoot.await_point_register_is_total
+      - Kinu.Storage.DurableRoot.await_point_register_has_sixteen
+      - Kinu.Storage.DurableRoot.runOf_nil
+      - Kinu.Storage.DurableRoot.runOf_cons
+      - Kinu.Storage.DurableRoot.initial_safe
+      - Kinu.Storage.DurableRoot.step_preserves_safe
+      - Kinu.Storage.DurableRoot.run_preserves_safe
+      - Kinu.Storage.DurableRoot.published_root_closure
+      - Kinu.Storage.DurableRoot.monotone_fenced_head
+      - Kinu.Storage.DurableRoot.run_monotone_fenced_head
+      - Kinu.Storage.DurableRoot.single_operation_row
+      - Kinu.Storage.DurableRoot.redrive_preserves_safe
+      - Kinu.Storage.DurableRoot.redrive_idempotent
+      - Kinu.Storage.DurableRoot.reset_at_every_await
+      - Kinu.Storage.DurableRoot.reset_discards_activation_memory
+      - Kinu.Storage.DurableRoot.redrive_after_every_reset_is_idempotent
+      - Kinu.Storage.DurableRoot.stale_completion_garbage_only
+      - Kinu.Storage.DurableRoot.on_start_idempotent
+      - Kinu.Storage.DurableRoot.on_start_once_per_generation
+      - Kinu.Storage.DurableRoot.restore_exact_head
+      - Kinu.Storage.DurableRoot.restore_ignores_activation_memory
+      - Kinu.Storage.DurableRoot.container_crash_preserves_durable_outcome
+      - Kinu.Storage.DurableRoot.crash_during_sweep_leaks_only
+      - Kinu.Storage.DurableRoot.pin_gc_noninterference
+      - Kinu.Storage.DurableRoot.root_set_change_aborts_mark_sweep
+      - Kinu.Storage.DurableRoot.idempotent_deletion
+      - Kinu.Storage.DurableRoot.delete_preserves_closure
+      - Kinu.Storage.DurableRoot.barrier_prefix_survives_crash
+      - Kinu.Storage.DurableRoot.async_suffix_loss
+      - Kinu.Storage.DurableRoot.payload_excluded_from_durable_view
+      - Kinu.Storage.DurableRoot.payload_excluded_from_restore
+      - Kinu.Storage.DurableRoot.unbounded_wait_counterexample
+      - Kinu.Storage.DurableRoot.safety_has_no_unconditional_wall_clock_bound
+      - Kinu.Storage.DurableRoot.collision_resistance_separates_objects
+      - Kinu.Storage.DurableRoot.capture_sound_is_explicit
+      - Kinu.Storage.DurableRoot.acknowledge_is_event_only
+      - Kinu.Storage.DurableRoot.retry_reads_head
+      - Kinu.Storage.DurableRoot.durable_intent_before_external_await
+      - Kinu.Storage.DurableRoot.sealed_carries_only_verified_root_id
+      - Kinu.Storage.DurableRoot.published_and_acknowledged_bind
+      - Kinu.Storage.DurableRoot.gc_candidates_derive_from_two_manifests
+      - Kinu.Storage.DurableRoot.unique_attempt_fence
+      - Kinu.Storage.DurableRoot.container_mount_is_envelope_identity
+      - Kinu.Storage.DurableRoot.omitted_intent_has_unsafe_witness
+      - Kinu.Storage.DurableRoot.omitted_fence_has_unsafe_witness
+      - Kinu.Storage.DurableRoot.omitted_pin_has_gc_witness
+      - Kinu.Storage.DurableRoot.parent_before_child_has_unsafe_witness
+      - Kinu.Storage.DurableRoot.acknowledgement_before_head_has_unsafe_witness
+      - Kinu.Storage.DurableRoot.receipt_release_too_early_witness
+      - Kinu.Storage.DurableRoot.root_set_race_witness
+      - Kinu.Storage.DurableRoot.container_onstart_activation_memory_witness
     tsRefs:
       - packages/devbox/src/durability/contracts.ts#ImmutableObjectRefSchema
       - packages/devbox/src/durability/contracts.ts#ObjectReceiptSchema
@@ -1071,9 +1071,9 @@ requirements:
     statement: The per-mutation durability order a journal daemon must honour is declared as one total step numbering, so an intent fdatasync precedes the effect it describes, the effect precedes the result fdatasync, and the result fdatasync precedes the reply the client sees.
     status: by-construction-witness
     theorems:
-      - Proteus.Storage.DurableRoot.journal_intent_precedes_effect
-      - Proteus.Storage.DurableRoot.effect_precedes_journal_result
-      - Proteus.Storage.DurableRoot.journal_result_precedes_reply
+      - Kinu.Storage.DurableRoot.journal_intent_precedes_effect
+      - Kinu.Storage.DurableRoot.effect_precedes_journal_result
+      - Kinu.Storage.DurableRoot.journal_result_precedes_reply
     tsRefs:
       - packages/devbox/src/capture/journal-capture.ts#JOURNAL_CAPTURE_PLATFORM_ASSUMPTIONS
       - packages/devbox/src/capture/journal/command.ts#journalDaemonArgv
@@ -1087,11 +1087,11 @@ requirements:
     statement: The fence durability order is declared as one total step numbering, so admission closes before the drain, the drain precedes the captured root's syncfs, the syncfs precedes the sealed stage, the sealed stage precedes the manifest fsync, and the manifest fsync precedes the fence fdatasync the capture linearizes at.
     status: by-construction-witness
     theorems:
-      - Proteus.Storage.DurableRoot.admission_closes_before_drain
-      - Proteus.Storage.DurableRoot.drain_precedes_root_syncfs
-      - Proteus.Storage.DurableRoot.root_syncfs_precedes_stage
-      - Proteus.Storage.DurableRoot.sealed_stage_precedes_manifest_fsync
-      - Proteus.Storage.DurableRoot.manifest_fsync_precedes_fence_fsync
+      - Kinu.Storage.DurableRoot.admission_closes_before_drain
+      - Kinu.Storage.DurableRoot.drain_precedes_root_syncfs
+      - Kinu.Storage.DurableRoot.root_syncfs_precedes_stage
+      - Kinu.Storage.DurableRoot.sealed_stage_precedes_manifest_fsync
+      - Kinu.Storage.DurableRoot.manifest_fsync_precedes_fence_fsync
     tsRefs:
       - packages/devbox/src/capture/journal/client.ts#JournalDaemonClient.fence
       - packages/devbox/src/capture/journal/client.ts#captureFromJournalFence
@@ -1108,13 +1108,13 @@ requirements:
     statement: The fenced point is this model's linearization point and its stage is exactly the captured-root prefix of one committed generation, so that stage is quiescent, non-torn, carries no commit sequenced after the cut, and contains no private-state or mount-control commit.
     status: by-construction-witness
     theorems:
-      - Proteus.Storage.DurableRoot.fenced_point_is_linearization_point
-      - Proteus.Storage.DurableRoot.fenced_point_is_process_quiescent
-      - Proteus.Storage.DurableRoot.fenced_point_has_one_committed_generation
-      - Proteus.Storage.DurableRoot.fenced_capture_is_not_torn
-      - Proteus.Storage.DurableRoot.fenced_capture_cut_excluded
-      - Proteus.Storage.DurableRoot.fenced_capture_excludes_private_and_mount
-      - Proteus.Storage.DurableRoot.journal_capture_sound
+      - Kinu.Storage.DurableRoot.fenced_point_is_linearization_point
+      - Kinu.Storage.DurableRoot.fenced_point_is_process_quiescent
+      - Kinu.Storage.DurableRoot.fenced_point_has_one_committed_generation
+      - Kinu.Storage.DurableRoot.fenced_capture_is_not_torn
+      - Kinu.Storage.DurableRoot.fenced_capture_cut_excluded
+      - Kinu.Storage.DurableRoot.fenced_capture_excludes_private_and_mount
+      - Kinu.Storage.DurableRoot.journal_capture_sound
     tsRefs:
       - packages/devbox/src/capture/journal-capture.ts#LinearizationPoint
       - packages/devbox/src/capture/journal-capture.ts#OneCommittedGeneration

@@ -1142,7 +1142,7 @@ function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<vo
 /**
  * Inline branch fallback — used when Facets are unavailable.
  *
- * Storage isolation (lean/Proteus/MCTS/StorageIsolation.lean: branch storage
+ * Storage isolation (lean/Kinu/MCTS/StorageIsolation.lean: branch storage
  * disjoint from the orchestrator's) is enforced STRUCTURALLY by capturing only
  * the LLM config, never the agent reference or its storage. The closure has
  * no path to agent.sql or agent.ctx.storage.

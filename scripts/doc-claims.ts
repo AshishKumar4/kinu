@@ -460,7 +460,7 @@ function leanTheorems(): Enumeration {
     members: citations().declarations.size,
     reason: 'Every theorem the Lean corpus declares, from the one scanner that'
       + ' parses Lean. A document may legitimately count a SUBSET of them — eleven'
-      + ' in `lean/Proteus/MCTS/` — and `SUBSET` above is what keeps that readable'
+      + ' in `lean/Kinu/MCTS/` — and `SUBSET` above is what keeps that readable'
       + ' as a subset rather than a contradiction.',
   };
 }

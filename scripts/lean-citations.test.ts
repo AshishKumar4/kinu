@@ -30,7 +30,7 @@ import { describe, expect, test } from 'bun:test';
 import { auditCitations, auditCoverage, citations, type Citations } from './lean-citations';
 
 /** Real modules, so a fixture exercises resolution rather than mocking it. */
-const ARBITRATION = 'lean/Proteus/Exploration/Arbitration.lean';
+const ARBITRATION = 'lean/Kinu/Exploration/Arbitration.lean';
 const STORAGE = 'MCTS/StorageIsolation.lean';
 
 /** A line comfortably past the end of any module in the tree. */

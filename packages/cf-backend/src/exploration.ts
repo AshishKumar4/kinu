@@ -6,7 +6,7 @@
  *   MCTS mode — short-form one-shot rollouts for the MCTS engine. @callable
  *               explore() is a single bare generateText with NO ToolSet and NO
  *               runtime, so a branch has no filesystem to isolate and storage
- *               isolation (lean/Proteus/MCTS/StorageIsolation.lean) holds by DO
+ *               isolation (lean/Kinu/MCTS/StorageIsolation.lean) holds by DO
  *               identity alone. generateReflection() produces a failure
  *               post-mortem. Scoring lives in core (mcts/evaluation.ts via the
  *               engine seam) — branches do not rate themselves.

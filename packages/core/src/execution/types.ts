@@ -5,7 +5,7 @@
  * namespaced APIs: workspace.readFile(), workspace.startProcess(), sandbox.exec().
  *
  * Architecture: docs/EXECUTION-LAYER-SPEC.md
- * Lean formalization: lean/Proteus/Execution/{Capabilities,ToolSystem}.lean
+ * Lean formalization: lean/Kinu/Execution/{Capabilities,ToolSystem}.lean
  */
 
 import type { VFS } from '../types/primitives';

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const leanRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(leanRoot, "..");
-const sourceRoot = join(leanRoot, "Proteus");
+const sourceRoot = join(leanRoot, "Kinu");
 const axiomAuditPath = join(sourceRoot, "Axioms.lean");
 const traceabilityPath = join(leanRoot, "traceability.yaml");
 const allowedKernelAxioms = new Set(["propext", "Classical.choice", "Quot.sound"]);
@@ -15,7 +15,7 @@ const allowedStatuses = new Set([
   "trusted-model-assumption",
   "specified-not-modeled",
 ]);
-const qualifiedNamePattern = /^Proteus(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/;
+const qualifiedNamePattern = /^Kinu(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/;
 const leanConstructorPattern = /\|\s*([A-Za-z_][A-Za-z0-9_']*)/g;
 // --manifest-only stops before the kernel axiom audit, which needs a built Lean
 // toolchain. Everything up to that point is pure file reading: the manifest is
@@ -295,7 +295,7 @@ function collectExpectedAxiomReports(source) {
   const expected = new Map();
   const names = new Set();
   for (const [index, line] of stripLeanComments(source).split("\n").entries()) {
-    const match = line.match(/^\s*#print\s+axioms\s+(Proteus(?:\.[A-Za-z_][A-Za-z0-9_']*)+)\s*$/);
+    const match = line.match(/^\s*#print\s+axioms\s+(Kinu(?:\.[A-Za-z_][A-Za-z0-9_']*)+)\s*$/);
     if (!match) continue;
     const lineNumber = index + 1;
     if (names.has(match[1])) fail(`duplicate #print axioms command: ${match[1]}`);
@@ -681,24 +681,24 @@ for (const name of declarations.axioms) {
 // `BUILTIN_TOOLS`. Both are recorded as remaining evidence on PR-EXEC-001 and
 // PR-EXEC-002.
 const STATE_MIRRORS = [
-  { lean: "Proteus.Exploration.Settle.Unit", ts: "packages/core/src/strategy/swarm.ts#SWARM_UNITS" },
-  { lean: "Proteus.Exploration.Settle.Expand", ts: "packages/core/src/strategy/swarm.ts#SWARM_EXPANDS" },
-  { lean: "Proteus.Exploration.Settle.Score", ts: "packages/core/src/strategy/swarm.ts#SWARM_SCORES" },
-  { lean: "Proteus.Exploration.Settle.Advance", ts: "packages/core/src/strategy/swarm.ts#SWARM_ADVANCES" },
-  { lean: "Proteus.Exploration.Settle.Carry", ts: "packages/core/src/strategy/swarm.ts#SWARM_CARRIES" },
-  { lean: "Proteus.Exploration.Settle.SettleKind", ts: "packages/core/src/strategy/swarm.ts#SwarmSettle" },
-  { lean: "Proteus.Exploration.Arbitration.Context", ts: "packages/core/src/strategy/swarm.ts#SWARM_CONTEXTS" },
-  { lean: "Proteus.Exploration.Arbitration.Refusal", ts: "packages/core/src/strategy/swarm.ts#BRANCH_REFUSAL_POLICIES" },
-  { lean: "Proteus.Exploration.Direction", ts: "packages/core/src/strategy/objective.ts#ObjectiveDirection" },
-  { lean: "Proteus.Exploration.FloorKind", ts: "packages/core/src/strategy/objective.ts#Floor.kind" },
-  { lean: "Proteus.Exploration.Publication.Hypothesis", ts: "packages/core/src/strategy/objective.ts#FloorBreach.hypotheses" },
-  { lean: "Proteus.Exploration.Publication.Publication", ts: "packages/core/src/strategy/objective.ts#PublicationState" },
-  { lean: "Proteus.Exploration.Publication.Surface", ts: "packages/core/src/strategy/objective.ts#PUBLICATION_SURFACES" },
-  { lean: "Proteus.NodeStatus", ts: "packages/core/src/types/mcts.ts#NodeStatus" },
-  { lean: "Proteus.Execution.Capabilities.Capability", ts: "packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES" },
-  { lean: "Proteus.Storage.SnapshotChain.Kind", ts: "packages/devbox/src/storage.ts#CheckpointKind" },
-  { lean: "Proteus.Storage.DurableRoot.AwaitPoint", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_AWAIT_POINTS" },
-  { lean: "Proteus.Storage.DurableRoot.OperationKind", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_OPERATION_KINDS" },
+  { lean: "Kinu.Exploration.Settle.Unit", ts: "packages/core/src/strategy/swarm.ts#SWARM_UNITS" },
+  { lean: "Kinu.Exploration.Settle.Expand", ts: "packages/core/src/strategy/swarm.ts#SWARM_EXPANDS" },
+  { lean: "Kinu.Exploration.Settle.Score", ts: "packages/core/src/strategy/swarm.ts#SWARM_SCORES" },
+  { lean: "Kinu.Exploration.Settle.Advance", ts: "packages/core/src/strategy/swarm.ts#SWARM_ADVANCES" },
+  { lean: "Kinu.Exploration.Settle.Carry", ts: "packages/core/src/strategy/swarm.ts#SWARM_CARRIES" },
+  { lean: "Kinu.Exploration.Settle.SettleKind", ts: "packages/core/src/strategy/swarm.ts#SwarmSettle" },
+  { lean: "Kinu.Exploration.Arbitration.Context", ts: "packages/core/src/strategy/swarm.ts#SWARM_CONTEXTS" },
+  { lean: "Kinu.Exploration.Arbitration.Refusal", ts: "packages/core/src/strategy/swarm.ts#BRANCH_REFUSAL_POLICIES" },
+  { lean: "Kinu.Exploration.Direction", ts: "packages/core/src/strategy/objective.ts#ObjectiveDirection" },
+  { lean: "Kinu.Exploration.FloorKind", ts: "packages/core/src/strategy/objective.ts#Floor.kind" },
+  { lean: "Kinu.Exploration.Publication.Hypothesis", ts: "packages/core/src/strategy/objective.ts#FloorBreach.hypotheses" },
+  { lean: "Kinu.Exploration.Publication.Publication", ts: "packages/core/src/strategy/objective.ts#PublicationState" },
+  { lean: "Kinu.Exploration.Publication.Surface", ts: "packages/core/src/strategy/objective.ts#PUBLICATION_SURFACES" },
+  { lean: "Kinu.NodeStatus", ts: "packages/core/src/types/mcts.ts#NodeStatus" },
+  { lean: "Kinu.Execution.Capabilities.Capability", ts: "packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES" },
+  { lean: "Kinu.Storage.SnapshotChain.Kind", ts: "packages/devbox/src/storage.ts#CheckpointKind" },
+  { lean: "Kinu.Storage.DurableRoot.AwaitPoint", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_AWAIT_POINTS" },
+  { lean: "Kinu.Storage.DurableRoot.OperationKind", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_OPERATION_KINDS" },
 ];
 
 function auditStateMirrors(inductives) {
@@ -767,7 +767,7 @@ if (manifestOnly) {
   process.exit(0);
 }
 
-const build = spawnSync("lake", ["build", "Proteus.Axioms"], {
+const build = spawnSync("lake", ["build", "Kinu.Axioms"], {
   cwd: leanRoot,
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
@@ -779,13 +779,13 @@ if (build.error && build.status === null) {
 if (build.status !== 0) {
   process.stdout.write(build.stdout);
   process.stderr.write(build.stderr);
-  console.error("check-traceability: lake build Proteus.Axioms failed");
+  console.error("check-traceability: lake build Kinu.Axioms failed");
   process.exit(1);
 }
 
 const buildOutput = `${build.stdout}\n${build.stderr}`;
 const reported = new Map();
-const reportPattern = /^info: .*Proteus\/Axioms\.lean:(\d+):\d+: '(Proteus\.[^']+)' (does not depend on any axioms|depends on axioms: \[([^\]]*)\])\s*$/gm;
+const reportPattern = /^info: .*Kinu\/Axioms\.lean:(\d+):\d+: '(Kinu\.[^']+)' (does not depend on any axioms|depends on axioms: \[([^\]]*)\])\s*$/gm;
 for (const match of buildOutput.matchAll(reportPattern)) {
   const lineNumber = Number(match[1]);
   const name = match[2];
@@ -802,7 +802,7 @@ for (const match of buildOutput.matchAll(reportPattern)) {
 }
 if (reported.size === 0) {
   console.error(buildOutput);
-  console.error("check-traceability: no #print axioms records captured from Proteus.Axioms");
+  console.error("check-traceability: no #print axioms records captured from Kinu.Axioms");
   process.exit(1);
 }
 
@@ -824,13 +824,13 @@ for (const [name, axioms] of reported) {
   }
 }
 for (const name of theoremOwners.keys()) {
-  if (!reported.has(name)) fail(`claimed theorem missing from Proteus.Axioms report: ${name}`);
+  if (!reported.has(name)) fail(`claimed theorem missing from Kinu.Axioms report: ${name}`);
 }
 for (const name of declarations.theorems) {
   if (![...expectedReports.values()].includes(name)) {
     fail(`published source theorem has no #print axioms command: ${name}`);
   }
-  if (!reported.has(name)) fail(`published source theorem missing from Proteus.Axioms audit: ${name}`);
+  if (!reported.has(name)) fail(`published source theorem missing from Kinu.Axioms audit: ${name}`);
 }
 for (const name of expectedReports.values()) {
   if (!declarations.theorems.has(name)) fail(`#print axioms target has no source theorem declaration: ${name}`);

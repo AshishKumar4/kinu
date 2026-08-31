@@ -493,12 +493,12 @@ has a home, a scratch and a credential, and an unprovisioned one has none of the
 three.
 
 The storage-isolation proof covers toolless branches. A tooled node breaks its
-storage-acquisition hypothesis. `lean/Proteus/Exploration/Isolation.lean` proves
+storage-acquisition hypothesis. `lean/Kinu/Exploration/Isolation.lean` proves
 that distinction; nodes need their own action, postcondition, and preservation
 proof.
 
 Implemented by `strategy/node-workspace.ts` and `vfs/agent-home.ts`; modelled
-negatively by `lean/Proteus/Exploration/Isolation.lean`.
+negatively by `lean/Kinu/Exploration/Isolation.lean`.
 
 ## Settle is derived
 
@@ -507,7 +507,7 @@ TypeScript and Lean. A new value cannot fall through. The returned shape must
 match the resolved settle; a non-dominated front cannot stand in for one
 aggregate number.
 
-Implemented by `settleOf` and `lean/Proteus/Exploration/Settle.lean`.
+Implemented by `settleOf` and `lean/Kinu/Exploration/Settle.lean`.
 
 ## Fan-in
 
@@ -528,7 +528,7 @@ wave. `score:'judge'` and `score:'none'` provide neither artifact diff nor
 measured verdict. Each is refused for that reason.
 
 Implemented by `fanInAtLevel`, `SwarmFanInReport`, and
-`lean/Proteus/Exploration/FanIn.lean`.
+`lean/Kinu/Exploration/FanIn.lean`.
 
 ## Merge-back
 
@@ -552,7 +552,7 @@ Implemented by `strategy/merge-back.ts`.
 
 ## The Lean invariants
 
-The machine-checked contracts live in `lean/Proteus/Exploration/`:
+The machine-checked contracts live in `lean/Kinu/Exploration/`:
 
 | module | contract | theorems |
 | --- | --- | ---: |
