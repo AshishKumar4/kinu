@@ -40,7 +40,7 @@ import {
 import { debugCommand } from './commands/debug';
 import { labelCommand } from './commands/label';
 import { exportCommand, importCommand } from './commands/export-import';
-import { tokensCommand } from './commands/tokens';
+import { ACCESS_TOKEN_SCOPES, tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
 import { printFailure, VERSION } from './display';
 
@@ -120,7 +120,7 @@ export function buildProgram(): Command {
     .helpGroup(ACCOUNT)
     .description('Manage long-lived CI access tokens (list, create, revoke)')
     .option('--name <name>', 'Token name for create')
-    .option('--scopes <scopes>', 'Comma-separated scopes: workspace.exec, workspace.read')
+    .option('--scopes <scopes>', `Comma-separated scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}`)
     .option('--json', 'Print raw JSON')
     .action(wrapAction(tokensCommand));
 

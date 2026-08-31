@@ -37,8 +37,8 @@ that on every call.
 6. A lifecycle failure is stored before delivery retries until the host accepts
    it.
 
-`DevboxStorage` hides durable bytes behind the three methods its two strategies
-need:
+`DevboxStorage` hides durable bytes behind the three methods every strategy
+needs:
 
 ```ts
 interface DevboxStorage {
@@ -49,7 +49,7 @@ interface DevboxStorage {
 ```
 
 `attach()` takes no deadline. The container-start hook owns the budget and
-`withContainerStartDeadline` wraps the whole attach. Neither strategy would use
+`withContainerStartDeadline` wraps the whole attach. No strategy would use
 a deadline argument.
 
 `lifecycle.ts` holds pure decisions. It touches no container, bucket, or clock,
@@ -329,7 +329,8 @@ and `cloudflare:workers`, neither available outside a Worker.
 
 ## Benchmark fixture
 
-`bench/` raises a real container and runs both strategies against one workload.
+`bench/` raises a real container and runs every strategy arm against one
+workload (`BENCH_SELECTED_ARMS` narrows it; a generated fixture names its arms).
 It is not part of a product deploy. Local `wrangler dev` lacks outbound
 interception, so it is only smoke. `wrangler dev --remote` refuses Durable
 Objects. A real deployment is the only route to a number.

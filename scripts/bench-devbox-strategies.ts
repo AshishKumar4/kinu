@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 /**
- * Devbox storage strategies, measured against each other: `snapshot-chain` vs
- * `r2fs`.
+ * Devbox storage strategies, measured against each other. Five arms, one per
+ * `DevboxStrategyName`: `snapshot-chain`, `r2fs`, `overlay-cas`,
+ * `bounded-layers` and `merkle-pack` (`FIXTURE_CLASS_BY_STRATEGY` below is the
+ * list the driver actually dispatches).
  *
  * This is the decision the whole storage question turns on. The raw-layout
  * benchmark beside it (`scripts/bench-r2-workspace.ts`) answers "what does an R2

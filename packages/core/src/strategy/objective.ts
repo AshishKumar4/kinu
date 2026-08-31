@@ -459,8 +459,8 @@ export type PublicationState =
  *   so it re-enters later turns' context rather than waiting to be read.
  * - `task_history` — `recordTaskOutcome` in `mcts/convergence.ts`. Feeds scaffold
  *   error-rate monitoring, so a laundered score steers evolution.
- * - `scaffold_versions` — `scaffold/modify.ts`, reachable when the artifact IS a
- *   prompt or scaffold (`unit:'generator'`).
+ * - `scaffold_versions` — `scaffold/modify.ts`, reachable when the artifact a run
+ *   is optimising IS a prompt or a scaffold.
  *
  * `craft`, `scaffold_versions`, and `memory`'s lessons and facts, are all
  * `EXPERIENCE_KINDS` members (`experience/types.ts`), so each is additionally a

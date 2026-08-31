@@ -65,7 +65,7 @@ export interface CheckpointOutcome {
   /**
    * Durable bytes this box holds after the commit, for `committed` only.
    *
-   * ONE QUANTITY, both strategies. It used to be "bytes this commit wrote",
+   * ONE QUANTITY, EVERY STRATEGY. It used to be "bytes this commit wrote",
    * which the snapshot chain answered with its new layer's size and r2fs
    * answered with the size of everything the prefix holds — the same field
    * naming two different measurements, so a caller comparing two strategies
@@ -96,7 +96,7 @@ export interface CheckpointOutcome {
    * A SECOND QUANTITY, deliberately, after refusing one earlier in this
    * package's life. The refusal was right at the time — two strategies, no
    * consumer, and a field naming what another field measures is decoration.
-   * Both halves of that changed. There are three strategies now, and a caller
+   * Both halves of that changed. There are five strategies now, and a caller
    * was found DERIVING this number by differencing consecutive `bytes`
    * readings, which is invalid across a fold or a rebase: it produced NEGATIVE
    * per-tick costs on two ticks of a real run, because held bytes legitimately
@@ -113,7 +113,7 @@ export interface CheckpointOutcome {
   readonly movedBytes: number | undefined;
 }
 
-/** The failure stamp both strategies carry on their durable state row, so a
+/** The failure stamp every strategy carries on its durable state row, so a
  *  repeatedly failing checkpoint stays visible across restarts. */
 export interface RecordedFailure {
   readonly at: number;
@@ -261,7 +261,7 @@ export function parseDevboxStrategyName(value: string | null | undefined): Devbo
  * The directory a devbox makes durable, and the default working directory for
  * every command it runs.
  *
- * A constant rather than a setting. Nothing in the class, either strategy, the
+ * A constant rather than a setting. Nothing in the class, any strategy, the
  * bench app or the tests would set it to anything else, and a setting nobody
  * sets is a setting that goes untested.
  */

@@ -36,16 +36,21 @@ the enumeration.
 
 | axis | governs | values |
 | --- | --- | --- |
-| `unit` | what one node produces | `answer`, `generator`, `thought` |
+| `unit` | what one node produces | `answer`, `thought` |
 | `context` | what a child starts from | `fork`, `fresh` |
 | `expand` | how children are produced | `sample`, `aggregate` |
 | `score` | how a node is valued | `verify`, `judge`, `none` |
 | `advance` | where the next unit of budget goes | `uct`, `best-first`, `pareto`, `archive`, `none` |
 | `carry` | what survives across iterations | `none`, `reflections`, `elites`, `artifacts` |
 
-`answer` and `generator` are agent nodes with turns, tools, and transcripts.
-They produce one candidate or a generator that writes candidates. `thought` is
-one model call with no tools or observed environment.
+`answer` is the agent node: turns, tools, and a transcript. `thought` is one
+model call with no tools or observed environment. The engine reads this axis in
+exactly one place, to decide whether a node is an agent at all.
+
+`generator` was a third value here and is gone. It claimed to produce "the
+generator that writes candidates" rather than one candidate, but nothing branched
+on it, so it ran the identical node as `answer`. A caller who writes it is
+refused by name and pointed at `answer`; the `prove` preset now names `answer`.
 
 `fork` gives a child its parent's conversation verbatim, preserving one cacheable
 prefix for siblings. `fresh` gives only the task block and parent report. `fork`

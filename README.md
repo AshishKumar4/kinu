@@ -43,8 +43,8 @@
 
 A workspace is a durable POSIX filesystem, a shell, execution environments, agent
 conversations, memory and an event log. Close the laptop; a cloud workspace keeps
-going. A schedule, a webhook or an email starts the next turn with nobody at the
-keyboard.
+going. A schedule or a webhook starts the next turn with nobody at the
+keyboard, and an email does too once the mail domain is onboarded.
 
 The agent writes tools for itself, keeps the ones that score well, and starts the
 next task from what the last one taught it.
@@ -107,7 +107,7 @@ You bring a Workers Paid account, a zone, and OAuth applications for sign-in.
 | Crafted tools | The agent writes tools, scores them with use, and finds them again over FTS5. |
 | A mutable scaffold | The agent loop is code the agent can rewrite. Four structural gates validate a mutation before it runs. |
 | Evolution | Four timescales: step, turn, session, lifetime. `kinu evolve` searches over the scaffold itself. |
-| Triggers | Schedules, webhooks and email reach a workspace with nobody at the keyboard. |
+| Triggers | Schedules and webhooks reach a workspace with nobody at the keyboard. Email does the same, on a domain that has completed the one-time Email Routing setup — `kinu.run` has not, so the inbox is code-complete and inert. |
 | Web search | The `web` tool works with no keys. A Tavily key adds ranked search. |
 | Model choice | Your Cloudflare account through one sign-in, or your keys: OpenAI, Anthropic, OpenRouter, a Codex subscription, any OpenAI-compatible endpoint, a local Claude Code login. |
 | A control plane | Operators get `/control`: users, workspaces, incidents, feedback, fleet metrics, an audit log. |

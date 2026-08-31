@@ -54,7 +54,7 @@ import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
-import { adaptCloudflareSandbox } from "./sandbox-exec-lane";
+import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "./lib/preview-origin";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
@@ -531,7 +531,7 @@ export function createCFRuntime(
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox) {
     try {
-      // `transport: 'rpc'` is the SDK's primary container-control path: one
+      // {@link SANDBOX_TRANSPORT} is the SDK's primary container-control path: one
       // capnweb RPC session over a WebSocket, against the container's own
       // control plane. `http` and `websocket` select the ROUTE-BASED
       // COMPATIBILITY CLIENT, which Cloudflare deprecated on 2026-06-09 —
@@ -550,15 +550,18 @@ export function createCFRuntime(
       //
       // It must be passed identically on EVERY getSandbox() for an id —
       // changing it mid-life disconnects the active client and drops in-flight
-      // requests. Both call sites therefore move together (see
-      // orchestrator.ts's teardown lookup). The option cannot be dropped in
-      // favour of the SANDBOX_TRANSPORT var alone: the SDK PERSISTS transport
-      // in the sandbox object's own storage and a stored value beats the
-      // env-derived default on every cold start, so an existing sandbox stays
-      // on whatever it was last told. The var is set as well, so a future
+      // requests. That is why the value is {@link SANDBOX_TRANSPORT} rather
+      // than a literal repeated at each site (see orchestrator.ts's teardown
+      // lookup, terminal-route.ts and preview-proxy.ts). The option cannot be
+      // dropped in favour of the SANDBOX_TRANSPORT var alone: the SDK PERSISTS
+      // transport in the sandbox object's own storage and a stored value beats
+      // the env-derived default on every cold start, so an existing sandbox
+      // stays on whatever it was last told. The var is set as well, so a future
       // getSandbox that forgets this option inherits `rpc` rather than the
       // SDK's `http` field default.
-      const sdk = getSandbox(env.Sandbox, sandboxId, { normalizeId: true, transport: "rpc" });
+      const sdk = getSandbox(env.Sandbox, sandboxId, {
+        normalizeId: true, transport: SANDBOX_TRANSPORT,
+      });
       // Egress interception is configured before the container can run
       // anything, by the Durable Object that owns it, and awaited inside the
       // operation that needed it. Not in `onStart`: the Container base
@@ -599,7 +602,7 @@ export function createCFRuntime(
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
       diagnostics.event('sandbox.executor_registered', {
         sandboxId,
-        transport: 'websocket',
+        transport: SANDBOX_TRANSPORT,
         previews: previewSuffix ?? '',
       });
     } catch (err) {

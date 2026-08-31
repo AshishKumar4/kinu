@@ -11,7 +11,7 @@
  * The blocker was real and it was mis-sited. It bounds the GRADING SIGNAL, not the tool
  * surface: a node holding a shell can still be graded, as long as it is graded on what
  * it REPORTS. So the shape runs now, the value that named it is gone because it is what
- * `answer` and `generator` ARE, and what these tests assert is the migration itself —
+ * `answer` IS, and what these tests assert is the migration itself —
  * the old spellings are unrepresentable, the new ones resolve, and the composition that
  * was permanently refused is no longer refused at all.
  *
@@ -75,8 +75,8 @@ function unitCall(over: { unit: SwarmUnitSetting; context: BranchContext }) {
 }
 
 describe('the unit axis names what a node produces, and nothing else', () => {
-  test('the three units are exactly answer/generator/thought', () => {
-    expect([...SWARM_UNITS]).toEqual(['answer', 'generator', 'thought']);
+  test('the two units are exactly answer/thought', () => {
+    expect([...SWARM_UNITS]).toEqual(['answer', 'thought']);
   });
 
   test('the removed spellings are UNREPRESENTABLE, not merely refused', () => {
@@ -108,6 +108,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
    *  surface no longer has. Named rather than `object`, because the shape these
    *  tests send is exactly the thing under test. */
   interface CutSpelling {
+    readonly unit?: { readonly kind: string };
     readonly observe?: string;
     readonly decorrelate?: string;
     readonly expand?: string;
@@ -129,6 +130,19 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     }
     expect(resolved.error).not.toContain('observe');
     expect(resolved.error).not.toContain('decorrelate');
+  });
+
+  test('unit:"generator" is refused by name and sent to the value it always was', () => {
+    const error = refusal({ unit: { kind: 'generator' } });
+    expect(error).toContain('unit:"generator" was cut');
+    // The honest half: it is not a re-homing, it is a value that never did anything.
+    expect(error).toContain('NOTHING EVER READ THE DIFFERENCE');
+    expect(error).toContain('unit:{kind:"answer"}');
+    // The survivors still parse, and neither carries a parameter.
+    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'answer' } }))
+      .toMatchObject({ unit: { kind: 'answer' } });
+    expect(v.parse(SwarmConfigSchema, { unit: { kind: 'thought' } }))
+      .toMatchObject({ unit: { kind: 'thought' } });
   });
 
   test('`observe` is refused by name, and told where each of its values went', () => {
@@ -207,7 +221,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
       },
     });
     if ('reason' in resolved) throw new Error(`prove did not resolve: ${resolved.error}`);
-    expect(resolved.config.unit).toEqual({ kind: 'generator' });
+    expect(resolved.config.unit).toEqual({ kind: 'answer' });
     expect(resolved.config.score).toEqual({ kind: 'verify' });
     expect(resolved.config.advance).toEqual({ kind: 'best-first' });
     expect(resolved.config.carry).toEqual({ kind: 'artifacts', threshold: 1 });

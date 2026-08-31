@@ -35,6 +35,7 @@ import type { OrchestratorAgent } from "./orchestrator";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { err, json } from "./lib/http";
 import { terminalLane } from "./lib/terminal-lane";
+import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 
 /**
  * The PTY entry points the SDK's client proxy adds around the container stub.
@@ -147,10 +148,10 @@ export async function handleTerminalRequest(
   }
   if (!env.Sandbox) return err(503, "no Sandbox binding is configured on this deployment");
 
-  // `{ normalizeId: true, transport: "rpc" }` verbatim from runtime.ts and
-  // orchestrator.ts. The SDK drops in-flight requests when transport changes
-  // mid-life for an id, and it persists the value, so every call site for one
-  // sandbox passes the same options.
+  // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
+  // passes. The SDK drops in-flight requests when transport changes mid-life
+  // for an id, and it persists the value, so every call site for one sandbox
+  // passes the same options.
   //
   // SAFETY: `getSandbox` is DECLARED to return the Durable Object class, but it
   // returns a Proxy around that stub whose `enhancedMethods` add the session and
@@ -165,7 +166,7 @@ export async function handleTerminalRequest(
   // the one acquisition point, so every call site below is type-checked.
   const sandbox = getSandbox(env.Sandbox, `kinu-${agentName}`, {
     normalizeId: true,
-    transport: "rpc",
+    transport: SANDBOX_TRANSPORT,
   }) as KinuSandbox & SandboxPty;
 
   // A terminal's own frames renew the SDK's activity clock — the container

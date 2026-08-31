@@ -36,6 +36,29 @@ import type { Process } from "@cloudflare/sandbox";
 import { decodeJsonValue, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
 import type { KinuSandbox } from "./kinu-sandbox";
 
+/**
+ * The container control-plane transport EVERY `getSandbox` call site passes, and
+ * the one value telemetry may report for it.
+ *
+ * It is a constant rather than a per-call literal for two reasons, one of them a
+ * bug this replaced. The SDK persists transport in the sandbox object's own
+ * storage and drops in-flight requests when the value changes mid-life for an
+ * id, so the call sites MUST agree; and `sandbox.executor_registered` used to
+ * report a hardcoded `'websocket'` next to a `getSandbox(… transport: "rpc")`
+ * three lines above it, which is a metric that says the opposite of what the
+ * process did. Reading both from here makes the report true by construction.
+ *
+ * `rpc` — one capnweb RPC session over a WebSocket, against the container's own
+ * control plane — and NOT the `http`/`websocket` route-based compatibility
+ * client, which Cloudflare deprecated on 2026-06-09 and which cannot restore a
+ * workspace past ~11 MiB (`sandbox.route_client.restore_bytes`; the measured
+ * ladder is in `runtime.ts`). Changing it is an owner decision with that
+ * evidence to answer, not a config tweak; `SANDBOX_TRANSPORT` in
+ * `wrangler.jsonc` carries the same value so a future call site that forgets
+ * the option inherits it rather than the SDK's `http` field default.
+ */
+export const SANDBOX_TRANSPORT = "rpc" as const;
+
 async function jsonResultOrVoid<Result>(result: Promise<Result>) {
   const value = await result;
   return value === undefined ? undefined : decodeJsonValue({ value });

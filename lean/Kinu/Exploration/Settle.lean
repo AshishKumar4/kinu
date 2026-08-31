@@ -35,17 +35,18 @@ namespace Kinu.Exploration.Settle
   Every inductive below is checked constructor-for-constructor against the TS
   constant it mirrors by `lean/check-traceability.mjs` (`AXIS_MIRRORS`), so the
   claim that these ARE the code's values is verified rather than asserted. It was
-  asserted before, and four cuts and a rename went by underneath it: this model
-  still carried `step`, `trajectory`, `mutate`, `agree`, `novelty` and `beam`
-  after the code dropped them, and an `Observe` and a `Decorrelate` axis after the
-  code removed both. A model that names a value the code cannot produce proves a
-  theorem about a wider world and reads as though it proved one about this one.
+  asserted before, and five cuts and a rename went by underneath it: this model
+  still carried `step`, `trajectory`, `generator`, `mutate`, `agree`, `novelty` and
+  `beam` after the code dropped them, and an `Observe` and a `Decorrelate` axis
+  after the code removed both. A model that names a value the code cannot produce
+  proves a theorem about a wider world and reads as though it proved one about
+  this one.
 
   `context` is mirrored in `Arbitration.lean`, which declares it where the arm
   that reads it lives. -/
 
 inductive Unit where
-  | answer | generator | thought
+  | answer | thought
   deriving Repr, BEq, DecidableEq, Inhabited
 
 inductive Expand where

@@ -17,7 +17,8 @@ The day-one decision is where it runs.
 | --- | --- | --- |
 | Lives in | a Durable Object on `kinu.run` | `~/.kinu/<name>/agent.db` on this machine |
 | Keeps running when you close the laptop | yes | no |
-| Web UI, email inbox, webhooks | yes | no |
+| Web UI, webhooks | yes | no |
+| Email inbox | code-complete; live only on a domain whose Email Routing setup is done, which `kinu.run` has not yet had ([EMAIL-INGRESS.md](EMAIL-INGRESS.md)) | no |
 | Timers | yes | yes, while `kinu daemon` runs |
 | Runs commands on your machine | through the desktop daemon you connect | directly |
 | Needs an account | yes | no; account-backed Workers AI is billed to that Cloudflare account |
@@ -61,8 +62,7 @@ whether your version matches the served one.
 
 ```bash
 jarvis "summarise the open PRs"        # one turn, then back to your shell
-kinu chat jarvis                    # stay in the conversation
-kinu chat jarvis -c                 # continue where the last session ended
+kinu chat jarvis                    # stay in the conversation, where it left off
 kinu exec -w jarvis "run the tests" # headless: for scripts and CI
 kinu exec -w jarvis --json "…"      # line-delimited JSON events instead of prose
 kinu stop jarvis                    # stop the turn that's running

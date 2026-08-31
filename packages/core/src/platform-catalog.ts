@@ -259,6 +259,33 @@ export const PLATFORM_CATALOG = {
     ],
   },
 
+  'sandbox.route_client.restore_bytes': {
+    subject:
+      'Largest workspace archive the deprecated route-based sandbox client restores in one '
+      + 'WebSocket write',
+    limit: { value: 11 * MiB, unit: 'bytes' },
+    origin: 'platform',
+    bounds: 'wire',
+    evidence: 'proven-by-probe',
+    provenance: 'packages/cf-backend/src/runtime.ts:540-556 (restore ladder, deployed sandbox, owner account)',
+    date: '2026-08-17',
+    trigger: 'a single-write restore payload above 11 MiB through the http/websocket compatibility client',
+    onBreach: 'the socket closes 1011 and /workspace is left empty',
+    observable: [
+      { context: 'the failed restore', message: 'WebSocket closed: 1011 Container WebSocket error' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'largest single-write restore that lands', value: 11 * MiB, unit: 'bytes' },
+      { scenario: 'smallest single-write restore that fails', value: 12 * MiB, unit: 'bytes' },
+    ],
+    notes:
+      'The ceiling is base64 expansion against a 16 MiB frame: 12 MiB x 4/3 is exactly 16 MiB. '
+      + 'The rpc transport streams the same restores and every probed size lands, which is half '
+      + 'the reason SANDBOX_TRANSPORT is rpc; Cloudflare deprecated the route-based client on '
+      + '2026-06-09. Re-measure on the route client before ever citing a higher figure.',
+  },
+
   'container.instance.disk': {
     subject: 'Disk allocated to each Kinu sandbox container',
     limit: { value: 8_000 * MB, unit: 'bytes' },

@@ -51,21 +51,30 @@ import type { ExplorationRecordsReport } from './records';
 /**
  * What one node PRODUCES.
  *
- * `answer` and `generator` are AGENT nodes — a tool loop with its own turns and its
- * own transcript (*A node is an agent*) — and they differ in what the loop is asked
- * for: one candidate, or the generator that produces candidates (`objective.ts` reaches
- * `scaffold_versions` when the artifact IS a prompt or a scaffold). `thought` is
- * the degenerate point *The six axes* names: one model call, no tools, no
- * observation of an environment because it has no way to touch one. It is the CHEAP
- * TIER rather than a defect, and Tree-of-Thoughts is that point plus a selector.
+ * `answer` is the AGENT node — a tool loop with its own turns and its own
+ * transcript (*A node is an agent*). `thought` is the degenerate point *The six
+ * axes* names: one model call, no tools, no observation of an environment because
+ * it has no way to touch one. It is the CHEAP TIER rather than a defect, and
+ * Tree-of-Thoughts is that point plus a selector.
+ *
+ * `generator` is gone, and it is gone for the reason `decorrelate` went: it named
+ * a distinction NOTHING IMPLEMENTED. It was documented as "the generator that
+ * produces candidates" against `answer`'s "one candidate", but the whole surface
+ * branches on this axis exactly once — `swarm-run.ts`'s `unit.kind !== 'thought'`
+ * — and no prompt, no expansion, no node host and no settle path ever read the
+ * value again. Every `generator` run WAS an `answer` run with a different word in
+ * its argument digest. A public axis value that changes no behaviour is a promise
+ * the engine does not keep, so the axis is the two values it actually has; a
+ * caller who writes the third is told so by name (`CUT_GENERATOR` in
+ * `tools/swarm-input.ts`) rather than silently handed `answer`.
  *
  * `trajectory` is gone and `step` with it. `trajectory` named the shape this axis
- * now HAS at two of its three values, so keeping it would be two spellings of one
+ * now HAS at its agent value, so keeping it would be two spellings of one
  * thing — and the parameter it carried (does this node start from the caller's
  * conversation) is the {@link SWARM_CONTEXTS} question, asked once for the whole
  * surface instead of twice with two names. `step` never executed at all.
  */
-export const SWARM_UNITS = ['answer', 'generator', 'thought'] as const;
+export const SWARM_UNITS = ['answer', 'thought'] as const;
 export type SwarmUnit = (typeof SWARM_UNITS)[number];
 
 /**
@@ -262,7 +271,6 @@ export type SwarmCarrySetting =
  */
 export type SwarmUnitSetting =
   | { readonly kind: 'answer' }
-  | { readonly kind: 'generator' }
   | { readonly kind: 'thought' };
 
 /**
@@ -293,8 +301,8 @@ export type SwarmUnitSetting =
 export interface SwarmConfig {
   /**
    * What one node produces, and therefore whether it is an agent at all. See
-   * {@link SwarmUnitSetting} — `answer` and `generator` run a tool loop, `thought`
-   * is one model call.
+   * {@link SwarmUnitSetting} — `answer` runs a tool loop, `thought` is one model
+   * call. That distinction is the ONE thing this axis decides.
    */
   readonly unit: SwarmUnitSetting;
   /**
@@ -704,9 +712,11 @@ export const SWARM_PRESET_POINTS = {
   },
   prove: {
     config: {
-      // `generator`: a proof is produced by something that can run its own checker
-      // between steps, not by a single answer handed back.
-      unit: { kind: 'generator' }, context: 'fork',
+      // `answer`: an agent node, so a proof candidate is produced by something
+      // that can run its own checker between steps. `generator` used to sit here
+      // to say that in a second word, and it was the same node — see
+      // {@link SWARM_UNITS} for why the word is gone rather than the intent.
+      unit: { kind: 'answer' }, context: 'fork',
       expand: 'sample',
       // The checker IS the score. `verify` requires an `objective`, which is where
       // the caller names the checker — a `prove` call without one is refused by the

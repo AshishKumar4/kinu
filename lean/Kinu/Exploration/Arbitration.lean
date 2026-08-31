@@ -46,7 +46,7 @@
      "hand-asserted rather than refined from" the spawning code — applies here
      unchanged.
   3. AGENT NODES. Nothing in this file says anything about a tooled `unit` —
-     `answer` or `generator`. See `Isolation.lean`.
+     `answer`. See `Isolation.lean`.
 -/
 
 import Kinu.Exploration.Settle

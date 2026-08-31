@@ -17,6 +17,7 @@ import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "./lib/http";
 import { containPreviewResponse, previewSandboxIdOf } from "./lib/preview-origin";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
+import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 
 /**
  * `proxyToSandbox` collapses every forwarding failure — overwhelmingly "the
@@ -110,12 +111,12 @@ async function repairStalePreview(request: Request, env: Env): Promise<void> {
   const sandboxId = previewSandboxIdOf(new URL(request.url), env);
   if (sandboxId === null || !env.Sandbox) return;
   try {
-    // `{ normalizeId: true, transport: "rpc" }` verbatim from runtime.ts,
-    // orchestrator.ts and terminal-route.ts: the SDK persists the transport and
-    // drops in-flight requests when it changes mid-life for an id, so every
-    // Kinu call site for one sandbox passes the same options.
-    await getSandbox(env.Sandbox, sandboxId, { normalizeId: true, transport: "rpc" })
-      .ensureReady();
+    // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
+    // passes: the SDK persists the transport and drops in-flight requests when
+    // it changes mid-life for an id.
+    await getSandbox(env.Sandbox, sandboxId, {
+      normalizeId: true, transport: SANDBOX_TRANSPORT,
+    }).ensureReady();
   } catch (cause) {
     diagnostics.failure('preview.stale_repair_failed', toKinuError({
       doing: 'restoring the container behind a stale preview URL',

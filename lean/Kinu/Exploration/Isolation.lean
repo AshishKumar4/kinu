@@ -14,7 +14,7 @@
   **Acquiring storage — that is, having tools — is exactly what that conjunct
   forbids.**
 
-  So a TOOLED unit — `answer` or `generator`, as against `thought`, the toolless
+  So a TOOLED unit — `answer`, as against `thought`, the toolless
   degenerate point the old hypothesis still fits — invalidates the existing proof's
   HYPOTHESIS, not merely its conclusion. What invalidates it is ACQUIRING STORAGE
   and not the spelling of the axis value, so the two theorems below are that

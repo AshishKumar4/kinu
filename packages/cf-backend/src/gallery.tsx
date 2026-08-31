@@ -903,10 +903,10 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
  * A search under a NAMED PRESET, so the resolved tuple has something to resolve.
  *
  * `prove` rather than `optimise` because it is the row whose axes are least
- * guessable from its name: `unit:generator` (a proof is produced by something that
- * can run its own checker between steps), `advance:best-first` (an exact signal has
- * no noise to re-widen against) and `carry:artifacts ≥1` (kept exactly when the
- * checker accepted). A panel that only printed "prove" would tell a reader none of
+ * guessable from its name: `context:fork` (a proof's children need the ancestor
+ * chain's accepted steps), `advance:best-first` (an exact signal has no noise to
+ * re-widen against) and `carry:artifacts ≥1` (kept exactly when the checker
+ * accepted). A panel that only printed "prove" would tell a reader none of
  * that, which is the whole reason the tuple is rendered beside the name.
  */
 // The Lean module named below is a placeholder: this fixture invents
@@ -4165,6 +4165,32 @@ const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
   },
 ];
 
+/** One turn's worth of real `logActivity` names, oldest first — the order
+ *  `readActivityLog` returns. Covers the three shapes the row has to render: a
+ *  detail that overflows its column, no detail at all, and `elapsedMs: 0`, which
+ *  `logActivity` writes when the row was cut outside a turn and which must read
+ *  as an em dash rather than a 0 ms measurement. */
+const ACTIVITY_LOG: ActivitySnapshot["log"] = [
+  { event: "getmodel", detail: null, elapsedMs: 0, createdAt: NOW - 96e3 },
+  { event: "beforeturn", detail: "streamText() called next", elapsedMs: 4, createdAt: NOW - 95e3 },
+  { event: "gettools_start", detail: null, elapsedMs: 11, createdAt: NOW - 95e3 },
+  {
+    event: "gettools_end", detail: "rebuilt — 24 tools", elapsedMs: 287,
+    createdAt: NOW - 94e3,
+  },
+  {
+    event: "skills_active", detail: "cloudflare,durable-objects,test-driven-development",
+    elapsedMs: 291, createdAt: NOW - 94e3,
+  },
+  {
+    event: "compaction",
+    detail: "kept 18 of 46 messages — 132,904 chars over the 120,000 trigger, "
+      + "summarised the dropped prefix into one system note",
+    elapsedMs: 3_918, createdAt: NOW - 92e3,
+  },
+  { event: "response_complete", detail: "ok", elapsedMs: 41_602, createdAt: NOW - 90e3 },
+];
+
 /**
  * The panel's own question, photographed: `$11.98 over 344 priced steps` is the
  * agent's turns, and the workspace spent $16.26+ over 747 calls of which 87.6%
@@ -4195,7 +4221,7 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
     offTurnShare: 0.09203045743537984,
     missions: ACTIVITY_MISSIONS,
   },
-  log: [],
+  log: ACTIVITY_LOG,
 };
 
 /** The same workspace on a provider that reports no neurons, with nothing left

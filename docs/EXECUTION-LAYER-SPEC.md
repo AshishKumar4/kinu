@@ -111,16 +111,26 @@ exhaustion and permanent configuration refuse at once. One budget
 the smaller of its own cap and a share of what is left, so silent ports cannot
 add a window each.
 
-`DevboxStorage` (`devbox/src/storage.ts`) has three `DevboxStrategyName`
-strategies. `snapshotChainStorage` mounts immutable squashfs plus cumulative
+`DevboxStorage` (`devbox/src/storage.ts`) has five `DevboxStrategyName`
+strategies, and `Devbox.#buildStorage` dispatches all five exhaustively —
+an unrecognised name refuses to build the box rather than falling through to the
+chain wearing another strategy's name. Every one of them needs an R2 store
+binding; without one the box builds a stub whose checkpoints skip and nothing is
+durable. `snapshotChainStorage` mounts immutable squashfs plus cumulative
 R2 delta as lazy FUSE layers. `r2fsStorage` mounts R2 through s3fs and has no
 archive or restore. `overlayCasStorage` replays only post-cursor journal
 entries over a read-only `tree/`, staging blobs before one journal object per
-64 entries; a red-first test pins that batch. No deployed run has compared
+64 entries; a red-first test pins that batch, and it additionally needs its
+bundled runner at `CAS_RUNNER_PATH` in the image. `bounded-layers` and
+`merkle-pack` are the two `DURABLE_ROOT_FORMATS` candidates and share one
+container path (`candidateContainerStorage`); each additionally needs a bundled
+candidate runner — absent, the box refuses by name — and the journal daemon at
+`CANDIDATE_JOURNAL_BINARY`. No deployed run has compared
 these strategies across Worker, Durable Object, Container, or R2. Treat cost
 claims as designed and unit-proven, not observed. Bytes written by one
 strategy are unreadable by another, so a box picks one.
-`packages/devbox/README.md` specifies all three.
+`packages/devbox/README.md` specifies the first three; the candidate pair is
+specified by `devbox/src/durability/contracts.ts` and `src/candidates/`.
 
 `KinuSandbox` names `BACKUP_BUCKET` and `PREVIEW_HOST_SUFFIX`, supplies
 `hasSandboxBackgroundWork` and `acceptSandboxLifecycleFailure` through the

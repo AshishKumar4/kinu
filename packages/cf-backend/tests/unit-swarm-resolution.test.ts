@@ -63,7 +63,7 @@ describe('the resolution a run resolved', () => {
     // reader needs to see, so every axis is present and each carries its own
     // parameter.
     expect(resolution?.kind === 'preset' ? swarmAxisRows(resolution.config) : []).toEqual([
-      { axis: 'unit', value: 'generator' },
+      { axis: 'unit', value: 'answer' },
       { axis: 'context', value: 'fork' },
       { axis: 'expand', value: 'sample' },
       { axis: 'score', value: 'verify' },

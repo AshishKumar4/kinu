@@ -132,6 +132,13 @@ const CUT_OBSERVE = '`observe` was cut entirely, because all three of its values
   + 'agent, and observe:"ancestors" is what context:"fork" supplies by construction. '
   + 'Drop it, and set `context` if what you wanted was the ancestor chain.';
 
+const CUT_GENERATOR = 'unit:"generator" was cut. It was documented as the generator '
+  + 'that produces candidates, against unit:"answer"\'s one candidate, but NOTHING EVER '
+  + 'READ THE DIFFERENCE: the surface branches on this axis once, on '
+  + 'unit:{kind:"thought"}, so every generator run was an answer run with a different '
+  + 'word in its argument digest. Use unit:{kind:"answer"} — the same agent node, now '
+  + 'under its only spelling. The `prove` preset moved with it.';
+
 const CUT_DECORRELATE = '`decorrelate` was cut entirely. It shipped with all three of its '
   + 'values behaving identically — sibling angles were handed out under every one of '
   + 'them including decorrelate:"blind", which names the opposite — so no call was ever '
@@ -169,8 +176,8 @@ function cutAxis(why: string) {
 const SwarmConfigWireSchema = v.strictObject({
   unit: v.optional(v.variant('kind', [
     v.strictObject({ kind: v.literal('answer') }),
-    v.strictObject({ kind: v.literal('generator') }),
     v.strictObject({ kind: v.literal('thought') }),
+    v.pipe(v.strictObject({ kind: v.literal('generator') }), v.check(() => false, CUT_GENERATOR)),
   ])),
   context: v.optional(v.picklist(SWARM_CONTEXTS)),
   observe: cutAxis(CUT_OBSERVE),

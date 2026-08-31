@@ -147,7 +147,7 @@ Manage long-lived CI access tokens (list, create, revoke).
 | Option | What it does |
 | --- | --- |
 | `--name <name>` | Token name for create |
-| `--scopes <scopes>` | Comma-separated scopes: workspace.exec, workspace.read |
+| `--scopes <scopes>` | Comma-separated scopes: workspace.read, workspace.exec, ai.proxy |
 | `--json` | Print raw JSON |
 
 ### kinu create [name]

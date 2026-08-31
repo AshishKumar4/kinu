@@ -99,8 +99,8 @@ export function regionRefusal(resolved: ResolvedSwarm): Refusal | null {
   // surface said so. The blocker was real and it was mis-sited: it bounds the GRADING
   // SIGNAL, not the tool surface. A node now holds tools and is graded on what it
   // REPORTS (`node-agent.ts`), the value that named the shape is gone because the
-  // shape is what `answer` and `generator` now are, and `thought` is the degenerate
-  // point *The six axes* names, kept as the cheap tier. All three execute below.
+  // shape is what `answer` now IS, and `thought` is the degenerate point *The six
+  // axes* names, kept as the cheap tier. Both execute below.
   // NO `score` ARM REFUSES `judge` ANY MORE, and this is the second time the absence is
   // the ticket. It was refused because "judge needs the marginalised ensemble the
   // shipped tree owns" — and the tree DOES own one: `mcts/evaluation.ts` marginalises a

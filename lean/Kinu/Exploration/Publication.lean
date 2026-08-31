@@ -377,7 +377,7 @@ inductive Surface where
       and scaffold error-rate monitoring, so a laundered score can move a scaffold
       decision. -/
   | taskHistory
-  /-- Reachable when the artifact IS a prompt or scaffold (`unit:'generator'`).
+  /-- Reachable when the artifact a run is optimising IS a prompt or scaffold.
       Enumerated before it is reachable, which is the only kind of surface that does
       not have to be discovered. -/
   | scaffoldVersions

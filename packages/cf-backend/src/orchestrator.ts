@@ -228,6 +228,7 @@ import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
+import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,
   type OwedEffect, type TerminalEffectTable, type TerminalTurnParts,
@@ -3406,12 +3407,11 @@ export class OrchestratorAgent extends ActorAgent {
     const ownerUserId = this.getOwnerUserId();
     if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
     if (this.env.Sandbox) {
-      // Same `transport` as every other getSandbox for this id — the SDK drops
-      // in-flight requests if it changes between calls on one sandbox. The
-      // reasoning for `rpc` lives at the other call site (runtime.ts); this one
-      // exists to match it, and the pair must move together.
+      // {@link SANDBOX_TRANSPORT} — the SDK drops in-flight requests if the
+      // transport changes between calls on one sandbox, so the constant is the
+      // agreement. The measured reasoning for `rpc` lives on the constant.
       const sb = getSandbox(this.env.Sandbox, `kinu-${this.name}`, {
-        normalizeId: true, transport: "rpc",
+        normalizeId: true, transport: SANDBOX_TRANSPORT,
       });
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.

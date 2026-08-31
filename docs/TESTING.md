@@ -435,7 +435,7 @@ Either pair is explicit and never overridden:
 
 ```bash
 KINU_ORIGIN=… KINU_TOKEN=…            # deployed/preview worker proxy; mint with
-                                            #   kinu tokens create --scope ai.proxy
+                                            #   kinu tokens create --name evals --scopes ai.proxy
 AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the proxy does not front
 ```
 

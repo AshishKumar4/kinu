@@ -246,15 +246,17 @@
   // disable either executor.
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
-    // Container control plane. Both getSandbox call sites pass `transport: "rpc"`
-    // explicitly and that is what actually switches an EXISTING sandbox — the SDK
-    // persists transport in the sandbox object's storage and a stored value beats
-    // this var on every cold start. The var covers the other direction: a future
+    // Container control plane. Every getSandbox call site passes
+    // `transport: SANDBOX_TRANSPORT` from `src/sandbox-exec-lane.ts` explicitly
+    // — runtime.ts, orchestrator.ts, terminal-route.ts, preview-proxy.ts — and
+    // that is what actually switches an EXISTING sandbox: the SDK persists
+    // transport in the sandbox object's storage and a stored value beats this
+    // var on every cold start. The var covers the other direction: a future
     // getSandbox that omits the option would otherwise inherit the SDK's `http`
     // field default, which is the route-based compatibility client. Cloudflare
     // deprecated `http`/`websocket` on 2026-06-09 ("will not ship in future
     // Sandbox SDK majors") and 1.0 drops the knob entirely, so `rpc` is both the
-    // measured-better and the only surviving path.
+    // measured-better and the only surviving path. Keep the two in step.
     "SANDBOX_TRANSPORT": "rpc",
     "PREVIEW_HOST_SUFFIX": "kinu.run",
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",
@@ -360,9 +362,21 @@
   ],
   // R2 bucket for sandbox /workspace snapshots (squashfs archives), written and
   // read by KinuSandbox. Bucket: `wrangler r2 bucket create kinu-backups`
-  // (already created). Set an R2 lifecycle rule on the `backups/` prefix to GC
-  // archives past their TTL — the SDK enforces TTL at restore time only and
-  // never deletes anything itself.
+  // (already created).
+  //
+  // DO NOT PUT AN R2 LIFECYCLE RULE ON THE `backups/` PREFIX. This comment used
+  // to tell an operator to add one "to GC archives past their TTL", and that
+  // instruction destroys live workspaces. `backups/<uuid>/{data,delta,meta}` is
+  // a GLOBAL namespace shared by every box (`devbox/src/snapshot-chain.ts`), and
+  // a generation's BASE is immutable and referenced for as long as the box
+  // exists — a workspace that has not checkpointed in months still restores from
+  // an object that old, and its archive is the only copy of its /workspace. An
+  // age rule cannot tell a live base from garbage, and the objects it would
+  // delete first are the ones nothing has rewritten. The devbox chain is what
+  // reclaims: it writes the superseded generation's id into its own durable
+  // `orphans` list BEFORE deleting, so a crash mid-sweep is re-runnable, and it
+  // never sweeps by listing precisely because listing shows other boxes' live
+  // generations. Nothing outside a box may delete under this prefix.
   //
   // The devbox strategies stream bytes container → this object → R2 through
   // the bucket BINDING; no credential ever enters the container. The old

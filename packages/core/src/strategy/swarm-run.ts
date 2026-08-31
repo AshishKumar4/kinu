@@ -17,7 +17,8 @@
  * realised rather than approximated:
  *
  *   - `branches` candidates per expansion. What ONE candidate costs is the `unit`
- *     axis: `answer` and `generator` run a real agent per node — a tool loop with
+ *     axis, and it is a two-way choice because `agentNodes` below is the only
+ *     thing that reads it: `answer` runs a real agent per node — a tool loop with
  *     its own turns and its own journalled transcript (`node-agent.ts`; *A node is
  *     an agent*) — while `thought` is the degenerate point *The six axes* names,
  *     one toolless generation, kept as the cheap tier. `expand:'sample'` starts a
@@ -237,7 +238,7 @@ export interface SwarmRunDeps {
   /**
    * Where a TOOL-USING node's loop runs.
    *
-   * Present hands each answer or generator node to a host that gives it its own
+   * Present hands each answer node to a host that gives it its own
    * storage and its own shell state — on the Cloudflare backend an
    * `ExplorationAgent` facet, the same host a fork's head already runs in. Absent
    * runs the loop in this isolate, which is the honest answer for a backend with

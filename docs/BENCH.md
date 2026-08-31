@@ -80,9 +80,28 @@ bun scripts/bench.ts validate --run-root /tmp/b --id <task-id>   # one task, no 
 ```
 
 The third step is the one that matters: a patch that **applies** again is not
-yet a patch that still **breaks** the checks. An id naming no task refuses. If
-the code a defect was data about is genuinely gone, retire it in
-`tests/bench/retired.jsonl`, but only after no live code still holds it.
+yet a patch that still **breaks** the checks. An id naming no task refuses.
+
+If the code a defect was data about is genuinely gone, retire the task instead —
+but only after establishing that no live code still holds the property, and in
+this order, because each step is what makes the next one distinguishable from a
+mistake:
+
+1. **Record it in `tests/bench/retired.jsonl`** — `{id, split, retiredAt,
+   subject, removedBy, reason}`, where `split` is re-derived from the id and the
+   committed `SEAL_SALT` rather than trusted, so a misreported one is refused.
+   Recording first is what keeps a legitimate retirement apart from dropping a
+   task the tree merely got worse at.
+2. **Remove its `tasks.jsonl` line.**
+3. **Delete `tests/bench/patches/<id>.patch`.**
+
+Steps 2 and 3 are both required and neither is optional. A patch file left
+behind is exactly the orphan described above and `gate:bench-corpus` reports it
+as a half-finished retirement; `scripts/bench.test.ts` asserts the inverse for
+every ledger line — a retired id must be absent from the corpus AND leave no
+patch file. Retirement is a last resort: a defect class that still exists in
+relocated or renamed code is re-authored against it, and a line is withdrawn
+from the ledger when that happens.
 
 ### Validation noise and `--validate-retries n`
 
@@ -352,8 +371,9 @@ deterministic workload, every operation counted at the R2 binding, teardown in a
 `finally` on every exit path. Driver: `scripts/bench-r2-workspace.ts`.
 
 **Devbox storage strategies.** `bun scripts/bench-devbox-strategies.ts` measures
-`snapshot-chain` against `r2fs` (and now `overlay-cas`) on cold/warm attach, a
-checkpoint ladder, stop-then-wake and the workload phases, with `/verify` first
+all five `DevboxStrategyName` arms — `snapshot-chain`, `r2fs`, `overlay-cas`,
+`bounded-layers`, `merkle-pack` — on cold/warm attach, a checkpoint ladder,
+stop-then-wake and the workload phases, with `/verify` first
 per arm and a failed verify refused from ranking. It inherits five rules from
 the layout benchmark, each bought with a failed run: verify-first, one box per
 arm, `/ops/flush` at every phase boundary, wake numbers deployed-only, and

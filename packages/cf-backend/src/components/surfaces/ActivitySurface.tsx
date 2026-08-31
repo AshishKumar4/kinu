@@ -1,11 +1,13 @@
 /**
  * Activity — the instrument panel for the run itself.
  *
- * The raw `activity_log` dump that used to close this panel is gone. Event
- * name + detail + ms is telemetry, and everything in it a person should read
- * already lands in chat, in the Work tab's journal, or in the meters above —
- * the same argument that retired the Run Timeline. `kinu debug` prints the
- * rows for anyone who wants them; the table and its RPC are untouched.
+ * It closes with the raw `activity_log` rows. That block was cut once on the
+ * argument that event name + detail + ms is telemetry a person can read in chat
+ * or in the Work tab's journal instead — but `getActivitySnapshot` kept
+ * returning `log`, so the cut left up to 200 rows crossing the wire on every
+ * revalidation with no reader at all. It is back, reading the payload the
+ * snapshot already carries and adding no request of its own. `kinu debug`
+ * prints the same rows for anyone who wants them outside the browser.
  *
  * Provider-reported tokens and cache reads are authoritative and labelled
  * `API`. Category attribution uses the exact composed-content character counts
@@ -33,6 +35,7 @@
 import { useCallback } from "react";
 import {
   GaugeIcon, CurrencyDollarIcon, LightningIcon, WarningCircleIcon,
+  ClockCounterClockwiseIcon,
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -41,7 +44,7 @@ import { fmtTokens, fmtUsd, fmtPct } from "@/lib/format";
 import type { ActivitySnapshot, Rpc } from "@/lib/protocol";
 import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/core";
 import type {
-  ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
+  ActivityLogEntry, ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
 } from "@kinu.run/core";
 import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "./activity-breakdown";
 
@@ -85,6 +88,7 @@ export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
       <ContextBlock snap={snap} />
       <CostBlock snap={snap} />
       <CacheBlock snap={snap} />
+      <LogBlock log={snap.log} />
     </div>
   );
 }
@@ -769,5 +773,79 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
         </>
       )}
     </section>
+  );
+}
+
+/* ── log ────────────────────────────────────────────────────────── */
+
+/**
+ * The agent's own running commentary — one row per notable thing the runtime
+ * did, written by `logActivity` on every backend.
+ *
+ * It is on the panel because the owner asked for it, and because the payload
+ * never stopped arriving: `getActivitySnapshot` has always returned `log`, and
+ * with nothing reading it every revalidation pulled up to 200 rows across the
+ * wire to drop them on the floor. This block reads what the snapshot above
+ * ALREADY carried — it adds no fetch, no RPC and no second cadence of its own,
+ * so restoring it costs one render rather than one more request.
+ *
+ * Newest first, because a log is read from the top. `elapsedMs` is time INTO THE
+ * TURN that wrote the row and `logActivity` writes 0 when there was no turn in
+ * flight (`actor-agent.ts`: `_turnT0 > 0 ? … : 0`), so a zero renders as an em
+ * dash and a reason rather than a 0 ms measurement nobody made — the same rule
+ * every other figure on this panel follows. `detail` is free text written for a
+ * person and is shown as exactly that, never parsed into numbers the run-event
+ * log already carries properly (`core/identity/activity-log.ts`).
+ */
+export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
+  // Walked backwards rather than reversed into a copy: the display order is
+  // newest-first, and the node list React needs is the only array built.
+  const rows: React.ReactNode[] = [];
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const row = log[i]!;
+    rows.push(<LogRow key={`${String(row.createdAt)}:${String(i)}`} row={row} />);
+  }
+  return (
+    <section>
+      <BlockHeader
+        icon={ClockCounterClockwiseIcon}
+        title="Activity log"
+        note={log.length === 0 ? undefined
+          : `${log.length} row${log.length === 1 ? "" : "s"} · newest first`}
+      />
+      {log.length === 0 ? (
+        <Empty>
+          Nothing has been logged for this workspace yet. The runtime writes a row per notable
+          thing it does, so the first turn fills this in.
+        </Empty>
+      ) : (
+        <ol className="max-h-72 overflow-y-auto rounded-lg border p-border p-surface m-0 list-none p-0">
+          {rows}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function LogRow({ row }: { row: ActivityLogEntry }) {
+  const outsideTurn = row.elapsedMs === 0;
+  return (
+    <li className="flex items-baseline gap-2 px-2 py-1 border-b p-border last:border-0">
+      <Num className="text-[10px] p-text-3 shrink-0">
+        {new Date(row.createdAt).toLocaleTimeString()}
+      </Num>
+      <span className="font-mono text-[10.5px] p-text shrink-0">{row.event}</span>
+      {row.detail === null ? null : (
+        <span className="text-[10.5px] p-text-3 min-w-0 flex-1 truncate" title={row.detail}>
+          {row.detail}
+        </span>
+      )}
+      <Num
+        className={`text-[10px] shrink-0 ${row.detail === null ? "ml-auto" : ""} ${outsideTurn ? "p-text-3" : "p-text-2"}`}
+        title={outsideTurn
+          ? "Written outside a turn, so there is no turn-relative elapsed time to report."
+          : "Milliseconds into the turn that wrote this row."}
+      >{outsideTurn ? "—" : `${String(row.elapsedMs)} ms`}</Num>
+    </li>
   );
 }
