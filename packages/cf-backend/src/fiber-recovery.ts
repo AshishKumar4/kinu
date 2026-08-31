@@ -51,6 +51,7 @@ import {
   AdvisorRecoverySnapshotSchema, nanoid, projectJsonValue,
   type AdvisorDisposition, type AdvisorRecoverySnapshot, type JsonValue,
   type SqlExecutor,
+  JsonObjectSchema, type AgentSignal, type SignalOutcome,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
@@ -263,6 +264,13 @@ export const MCP_WARM_LANE_FIBER = 'mcp:warm';
  *  owes, held open while they report. */
 export const TERMINAL_LANE_FIBER = 'terminal:effects';
 
+/** The fork-journal recovery notice in flight — the wake text a reconcile owes
+ *  the agent, carried as its own lane so an eviction between the journal's
+ *  terminal writes and the notice landing replays the DELIVERY, not the
+ *  reconcile. The signal rides the checkpoint whole, and its idempotency key
+ *  makes the replay collide with a delivery that already landed. */
+export const FORK_NOTICE_LANE_FIBER = 'fork:notice';
+
 /** The transports one actor supplies to its lanes' recovery. Every member is
  *  something an activation re-resolves for itself — a stub call, a fresh model
  *  route, its own storage — which is exactly why they are parameters and the
@@ -290,6 +298,10 @@ export interface FiberLaneTransports {
    *  the owed rows are the record, and the alarm frame they were designed for is
    *  where a replay may await an SMTP round trip. */
   readonly armOwedTerminalRecovery: () => Promise<void>;
+  /** Deliver one recovered signal — the fork-notice lane's replay body. The
+   *  OUTCOME is load-bearing: `undelivered` means the enqueue was pre-empted
+   *  and the notice is still owed. */
+  readonly deliverSignal: (signal: AgentSignal) => Promise<SignalOutcome>;
   /**
    * Hand one lane's re-drive to the actor's detached durable carrier.
    *
@@ -340,6 +352,7 @@ export function classifyRecoveredFiber(
     if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
     if (ctx.name === TERMINAL_LANE_FIBER) return armTerminalLaneRecovery(transports, ctx);
+    if (ctx.name === FORK_NOTICE_LANE_FIBER) return redriveForkNoticeLane(transports, ctx);
     return unrecognisedLane(ctx);
   } catch (err) {
     const failure = toKinuError({
@@ -491,6 +504,57 @@ function redriveAdvisorLane(
     snapshot: { lane: ADVISOR_LANE_FIBER, turnId: turnId ?? null, redrive: 'advisor-review' },
   };
 }
+
+/**
+ * A recovery notice that was minted and never confirmed delivered.
+ *
+ * The checkpoint IS the signal: everything the delivery needs crossed into the
+ * fiber row before the reconcile returned, so the replay reconstructs nothing.
+ * A checkpoint that will not parse as a signal is terminal — there is no fact
+ * left to announce — and the idempotency key the producer stamped is what makes
+ * a replay of an already-landed delivery collide instead of duplicating.
+ */
+function redriveForkNoticeLane(
+  transports: FiberLaneTransports,
+  ctx: FiberRecoveryContext,
+): FiberRecoveryResult {
+  const checkpoint = fiberSnapshot(ctx);
+  const parsed = v.safeParse(RecoveredSignalSchema, checkpoint);
+  if (!parsed.success) {
+    return {
+      status: 'error',
+      error: 'the interrupted notice left no readable signal to deliver: '
+        + parsed.issues.map((issue) => issue.message).join('; '),
+      snapshot: { lane: FORK_NOTICE_LANE_FIBER, redrive: null },
+    };
+  }
+  const signal = parsed.output;
+  const dispatch = (): void => {
+    transports.redrive(FORK_NOTICE_LANE_FIBER, checkpoint, async () => {
+      // `undelivered` = the enqueue was pre-empted, so the notice is still
+      // owed: a FRESH fiber row carries the retry, and the pacing is inherent
+      // — a delivery attempt resolves with the turn slot that pre-empted it,
+      // never in a hot loop. The idempotency key makes any landed duplicate
+      // collide.
+      if (await transports.deliverSignal(signal) === 'undelivered') {
+        diagnostics.event('fiber.notice_redelivery_owed', { key: signal.idempotencyKey ?? '(none)' });
+        dispatch();
+      }
+    });
+  };
+  dispatch();
+  return { status: 'completed', snapshot: { lane: FORK_NOTICE_LANE_FIBER, redrive: 'signal-delivery' } };
+}
+
+/** The shape a recovered notice must still have to be deliverable. Structural
+ *  and minimal: the delivery seam needs the kind and the text; the key and
+ *  metadata ride along when present. */
+const RecoveredSignalSchema = v.object({
+  kind: v.string(),
+  text: v.string(),
+  idempotencyKey: v.optional(v.string()),
+  metadata: v.optional(JsonObjectSchema),
+});
 
 /**
  * The MCP warmup lane, which has NOTHING to re-enter.

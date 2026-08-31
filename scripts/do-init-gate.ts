@@ -226,11 +226,10 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  *     directly is refused by the same rule.
  *   • `runDueSessionEvolution`, `reviewCompletedTurn` — the cadence and advisor
  *     passes, each a model call behind one name.
- *   • `dispatchOwedDrainReplies`, `resumeAll`, `replayOwedAndRearm`,
- *     `owedDeliveryWork` — the delivery lanes: owed event replies are external
- *     mail and an interrupted terminal transition replays SMTP and model work.
- *     An activation CLASSIFIES and ARMS the durable wake; the alarm frame
- *     dispatches.
+ *   • `resumeAll`, `replayOwedAndRearm`, `owedDeliveryWork` — the delivery
+ *     lanes: owed event replies are external mail and an interrupted terminal
+ *     transition replays SMTP and model work. An activation CLASSIFIES and
+ *     ARMS the durable wake; the alarm frame dispatches.
  *
  * Names, not a call graph: "Why this shape" above applies unchanged, and the
  * honest limit — a hook that reaches a model under a name not on this list — is
@@ -242,7 +241,7 @@ export const MODEL_SINKS: readonly string[] = [
   'suggestTitle', 'maybeAutoTitle', 'applyAutoTitle',
   'generateText', 'streamText', 'generateJson',
   'runDueSessionEvolution', 'reviewCompletedTurn',
-  'dispatchOwedDrainReplies', 'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',
+  'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',
 ];
 
 /** The marker that opts a container-start hook into the plainly-bounded

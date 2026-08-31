@@ -232,12 +232,12 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     await new Promise((resolve) => { setTimeout(resolve, 0); });
     await new Promise((resolve) => { setTimeout(resolve, 0); });
 
-    // The activation itself dispatched nothing: the answered lease is exactly
-    // as the dead activation left it, while the unanswered one was re-pended
-    // by the bounded sweep. The split IS the contract — classify at
-    // activation, dispatch under the wake.
+    // The activation touched NOTHING: both leases are exactly as the dead
+    // activation left them — it proved existence and armed the wake, which is
+    // the whole contract. The wake's frame joins the answered set, sweeps the
+    // unanswered lease back to pending, and dispatches the owed reply.
     expect(lease(harness, 'ev-answered')).toEqual({ turn_id: 'evt-answered', consumed_at: 5 });
-    expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: null, consumed_at: null });
+    expect(lease(harness, 'ev-unanswered')).toEqual({ turn_id: 'evt-unanswered', consumed_at: 5 });
     await harness.agent._kinuTerminalRetryTick();
 
     // Answered: finished, binding kept.

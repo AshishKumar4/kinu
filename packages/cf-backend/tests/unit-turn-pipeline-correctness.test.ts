@@ -704,36 +704,36 @@ describe('turn-pipeline correctness wiring', () => {
   test('activation classifies owed deliveries; only the durable wake dispatches', () => {
     // Activation reaches one reconcile…
     const onStart = memberBody(source, 'onStart(): void', 'orchestrator.ts');
-    expect(onStart).toContain('this.reconcileEventDeliveries()');
+    expect(onStart).toContain('this.reconcileEventDeliveries(sweepsTruncated)');
 
-    // …and that reconcile launches NO external work — the init ruling covers
-    // spawned work too. The `stillOwed` exclusion is the MECHANISM that keeps
-    // the sweep from re-asking a question whose answer already exists (it is
-    // computed from the transcript BEFORE the sweep and handed to it), and
-    // anything owed arms the terminal wake instead of being dispatched here.
+    // …and that reconcile is EXISTENCE READS AND ONE ARM — the init ruling
+    // covers spawned work too, so the lease join, the stale sweep and every
+    // dispatch belong to the wake's frame.
     const reconcile = memberBody(
-      source, 'protected async reconcileEventDeliveries(): Promise<void>', 'orchestrator.ts',
+      source, 'protected async reconcileEventDeliveries(sweepsTruncated = false): Promise<void>', 'orchestrator.ts',
     );
-    const owedAt = reconcile.indexOf('this.owedDrainReplies()');
-    const sweptAt = reconcile.indexOf('this.eventLog.unbindStale(');
-    expect(owedAt).toBeGreaterThan(-1);
-    expect(sweptAt).toBeGreaterThan(owedAt);
-    expect(reconcile).toContain('STALE_EVENT_DELIVERY_MS');
-    expect(reconcile).toContain('this.orch.scheduleDrain()');
+    expect(reconcile).toContain('hasOpenDrainLease()');
+    expect(reconcile).toContain('hasIncomplete()');
     expect(reconcile).toContain('await this.scheduleTerminalRetry(');
+    expect(reconcile).not.toContain('owedDrainReplies');
+    expect(reconcile).not.toContain('unbindStale');
     expect(reconcile).not.toContain('resumeAll');
-    expect(reconcile).not.toContain('dispatchOwedDrainReplies');
 
-    // The dispatches ride the ONE durable wake, replies first: an owed reply
-    // is an answer somebody is actively waiting on, and the terminal replay
-    // closes the same leases when it finishes a transition.
+    // The wake: sweep with the answered set excluded, then the replies, then
+    // the terminal replay — one frame, one order that cannot lose work.
     const wake = memberBody(
       source, 'protected override async owedDeliveryWork(): Promise<void>', 'orchestrator.ts',
     );
-    const repliesAt = wake.indexOf('await this.dispatchOwedDrainReplies()');
+    const owedAt = wake.indexOf('this.owedDrainReplies()');
+    const sweptAt = wake.indexOf('this.eventLog.unbindStale(');
+    const repliesAt = wake.indexOf('await this.completeEventBatch(');
     const terminalAt = wake.indexOf('await super.owedDeliveryWork()');
-    expect(repliesAt).toBeGreaterThan(-1);
+    expect(owedAt).toBeGreaterThan(-1);
+    expect(sweptAt).toBeGreaterThan(owedAt);
+    expect(repliesAt).toBeGreaterThan(sweptAt);
     expect(terminalAt).toBeGreaterThan(repliesAt);
+    expect(wake).toContain('STALE_EVENT_DELIVERY_MS');
+    expect(wake).toContain('this.orch.scheduleDrain()');
   });
 
   test('cloud admission counts precisely the active tool surface Think submits', () => {

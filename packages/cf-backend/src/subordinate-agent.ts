@@ -496,13 +496,19 @@ export class SubordinateAgent extends ActorAgent {
     this.ensureSchema();
     // The same budget-first prune the root runs: a subordinate carries the same
     // four durable lanes, so it accumulates the same interrupted-fiber rows.
-    this.sweepUnrecoverableFiberRows();
+    // One budget here; a pass that filled it is finished by the terminal wake,
+    // whose tick re-runs every budgeted sweep.
+    const sweepTruncated = this.sweepUnrecoverableFiberRows();
     // And the same terminal classification the root runs, for the same reason:
     // an interrupted transition replays SMTP and model work, and an activation
     // launches no external work. One bounded read decides; a wake due NOW is
     // one schedule row, and the alarm frame's `owedDeliveryWork` dispatches —
     // the carrier a sequence has even when the ledger could not arm its wake.
     this._terminalReported = this.runFiber(TERMINAL_LANE_FIBER, async () => {
+      if (sweepTruncated) {
+        await this.scheduleTerminalRetry(Date.now());
+        return;
+      }
       // An unseeded subordinate has run no turn and can owe no transition —
       // and its terminal ledger deps need the parent identity to build at all.
       if (this.identity.workspaceName() === null) return;

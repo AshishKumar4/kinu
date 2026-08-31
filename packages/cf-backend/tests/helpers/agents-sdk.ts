@@ -336,11 +336,25 @@ export function mockAgentsSdk(): void {
         name: string,
         fn: (ctx: { id: string; signal: AbortSignal; stash(data: JsonValue): void; snapshot: JsonValue | null }) => Promise<Result>,
       ): Promise<Result> {
+        return await this._runFiberWithStashWrapper(name, fn, {});
+      }
+
+      /** The SDK's protected stash wrapper, with its load-bearing property
+       *  replicated: `initialSnapshot` lands in the SAME synchronous prefix as
+       *  the row insert, so no interruption can find a recoverable lane with a
+       *  null payload. */
+      async _runFiberWithStashWrapper<Result>(
+        name: string,
+        fn: (ctx: { id: string; signal: AbortSignal; stash(data: JsonValue): void; snapshot: JsonValue | null }) => Promise<Result>,
+        options: { initialSnapshot?: JsonValue },
+      ): Promise<Result> {
         const sql = this.#fiberTables();
         const id = `fiber-${String(++harnessFiberSeq)}`;
         sql.exec(
-          `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
-          id, name, Date.now(),
+          `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)`,
+          id, name,
+          options.initialSnapshot === undefined ? null : JSON.stringify(options.initialSnapshot),
+          Date.now(),
         );
         harnessActiveFibers.add(id);
         const body = fn({

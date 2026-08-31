@@ -592,6 +592,7 @@ const EXECUTE_TOOLS_TOOL = 'execute_tools' satisfies BuiltinToolName;
  *  callback as `keyof this`, which excludes protected members. */
 export const TERMINAL_RETRY_CALLBACK = '_kinuTerminalRetryTick';
 
+
 /** Where a turn records that its advisor lane was ACCEPTED — started and
  *  checkpointed, so recovery owns it. Not that the review finished: what must
  *  not happen twice is the lane being opened, and the fiber's own row is what
@@ -2134,8 +2135,38 @@ export abstract class ActorAgent extends Think<Env> {
    * storage and re-arms from what is left, so a duplicate wake costs one read.
    */
   async _kinuTerminalRetryTick(): Promise<void> {
+    // Maintenance first: the budgeted sweeps and the activation-scoped
+    // recovery run in this alarm frame, then the owed external deliveries.
+    // One wake, one carrier, collapse semantics included — a pass that filled
+    // its budget re-arms THIS tick through the same singleton-safe armer.
+    const sweepsTruncated = this.maintenanceSweeps();
+    const recoveryTruncated = await this.maintenanceWork();
     await this.owedDeliveryWork();
+    if (sweepsTruncated || recoveryTruncated) {
+      await this.scheduleTerminalRetry(Date.now() + 1000);
+    }
   }
+
+  /**
+   * When this activation began — the isolate's own construction instant.
+   *
+   * The recovery cutoff: a head spawned AFTER this moment belongs to a live
+   * request of THIS activation (requests can land between construction and
+   * the wake's first tick), and no recovery pass may mark it.
+   */
+  protected readonly activationStartedAt = Date.now();
+
+  /**
+   * Whether this activation still owes its ONE recovery pass.
+   *
+   * In-memory ON PURPOSE: "once per activation" is a property of the isolate,
+   * and an eviction resets both together. It is what keeps the recovery in
+   * `maintenanceWork` off the ordinary terminal retries that arm the same
+   * wake mid-activation — `reconcileInterruptedForks` assumes every running
+   * head it sees is stale, which is true for heads spawned before
+   * {@link activationStartedAt} and FALSE for live ones after it.
+   */
+  protected activationRecoveryPending = true;
 
   /**
    * Everything a wake dispatches, in the one order that cannot lose work.
@@ -6290,7 +6321,7 @@ export abstract class ActorAgent extends Think<Env> {
    * failure is named and dropped, because a workspace that cannot prune is
    * still a workspace that must activate.
    */
-  protected sweepUnrecoverableFiberRows(): void {
+  protected sweepUnrecoverableFiberRows(): boolean {
     try {
       const result = sweepUnrecoverableFibers(fiberRowStore(this.boundSql), Date.now());
       if (result.dropped > 0 || result.truncated) {
@@ -6300,13 +6331,53 @@ export abstract class ActorAgent extends Think<Env> {
           truncated: result.truncated,
         });
       }
+      return result.truncated;
     } catch (err) {
       diagnostics.failure('fiber.unrecoverable_sweep_failed', toKinuError({
         doing: 'dropping the interrupted-fiber rows the recovery budget refused',
         cause: err,
         otherwise: 'io',
       }), { workspace: this.name });
+      return false;
     }
+  }
+
+  /** The asynchronous half of maintenance — recovery work that may queue turns
+   *  or cross objects, which is why it lives in the alarm frame and never in
+   *  an activation. Idempotent by contract; the base owns none. Answers
+   *  whether the pass filled a budget and must continue on the next tick. */
+  protected async maintenanceWork(): Promise<boolean> { return false; }
+
+  /** Every budgeted activation sweep this actor owns; a subclass with more
+   *  tables overrides and folds its own in. Answers whether ANY pass filled
+   *  its budget — the caller arms the wake on true. */
+  /** Detached work this actor owns until its lexical error boundary settles. */
+  protected readonly _backgroundTasks = new Set<AsyncTaskOwner>();
+
+  /**
+   * Await every detached task this activation currently owns.
+   *
+   * The harness seam for suites that assert against the SETTLED
+   * post-activation world: every detached task is fenced or idempotent, so
+   * production never needs this — but a test snapshotting state the
+   * activation's own sweeps also touch must join them explicitly rather than
+   * assume a scheduling order. Laps because a task may enqueue another, and
+   * BOUNDED so a task that keeps replenishing the set — a genesis turn, a
+   * re-armed timer — fails the caller by name instead of hanging it.
+   */
+  protected async settleBackgroundTasks(): Promise<void> {
+    for (let lap = 0; lap < 32; lap++) {
+      if (this._backgroundTasks.size === 0) return;
+      await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
+    }
+    throw new Error(
+      `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
+      + 'laps — something keeps enqueuing work; join a narrower seam instead',
+    );
+  }
+
+  protected maintenanceSweeps(): boolean {
+    return this.sweepUnrecoverableFiberRows();
   }
 
   /**
@@ -6358,6 +6429,7 @@ export abstract class ActorAgent extends Think<Env> {
       sql: this.boundSql,
       appendMemory: (path, text) => this.rt.memory.append(path, text),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
+      deliverSignal: (signal) => this.orch.signals.deliver(signal),
       redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
     };
   }
@@ -6389,13 +6461,13 @@ export abstract class ActorAgent extends Think<Env> {
     this._laneRedrives.add(owner);
     owner.promise = (async () => {
       try {
-        await this.runFiber(lane, async (ctx) => {
-          // Re-checkpointed as the body's first act. The row exists from the
-          // insert above it, and a recovery that read it before this stash landed
-          // would see a null snapshot — which for the advisor lane is the
-          // difference between a re-drivable review and a terminal one.
-          ctx.stash(checkpoint);
-          await body();
+        // The SDK's protected stash wrapper writes `initialSnapshot` in the
+        // SAME synchronous prefix as the row insert — so there is no window in
+        // which a reset finds a recoverable lane with a null payload. The
+        // public `runFiber` has no such option; this seam exists for exactly
+        // this composition.
+        await this._runFiberWithStashWrapper(lane, async () => { await body(); }, {
+          initialSnapshot: checkpoint,
         });
       } catch (cause) {
         diagnostics.failure('fiber.lane_redrive_failed', toKinuError({

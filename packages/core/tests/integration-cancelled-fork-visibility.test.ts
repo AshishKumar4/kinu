@@ -248,8 +248,12 @@ describe('an operator-cancelled fork is not reported as running', () => {
     recorder.emit('run-that-finished', { type: 'run_start', agentId: 'a' });
     recorder.emit('run-that-finished', { type: 'run_end', reason: 'complete' });
 
+    // The activation instant strictly POSTDATES the rows a dead activation
+    // left: the cutoff is `<`, so a same-millisecond tie counts as live and
+    // waits for the next activation rather than risking live work.
     await reconcileInterruptedForks({
       journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      now: Date.now() + 1,
     });
 
     const cut = recorder.read(RUN);
@@ -275,9 +279,11 @@ describe('an operator-cancelled fork is not reported as running', () => {
 
     await reconcileInterruptedForks({
       journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      now: Date.now() + 1,
     });
     await reconcileInterruptedForks({
       journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      now: Date.now() + 1,
     });
 
     // Idempotent, because a closed run is no longer open. A second terminal row

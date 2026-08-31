@@ -404,10 +404,20 @@ export class MctsSearchStore {
    *  the activation reconciliation's offered set for the durable-job resume
    *  gate even when the search journalled no heads of its own (`unit:'thought'`
    *  nodes write none), which is the case the journal sweep cannot see. */
-  runningSwarmRoots(): readonly string[] {
+  /** Whether ANY swarm row still claims a live executor — one LIMIT-1 read,
+   *  for the activation-time arm decision. Covers the headless case: a
+   *  `unit:'thought'` search journals no heads, so the journal read alone
+   *  cannot see it. */
+  hasRunningSwarms(): boolean {
+    return this.sql<{ present: number }>`
+      SELECT 1 AS present FROM mcts_search_runs
+      WHERE status='running' AND engine='swarm' LIMIT 1`.length > 0;
+  }
+
+  runningSwarmRoots(createdBefore: number): readonly string[] {
     return this.sql<{ root_id: string }>`
       SELECT root_id FROM mcts_search_runs
-      WHERE status='running' AND engine='swarm'
+      WHERE status='running' AND engine='swarm' AND created_at < ${createdBefore}
       ORDER BY created_at ASC`.map((row) => row.root_id);
   }
 
@@ -431,8 +441,12 @@ export class MctsSearchStore {
    * it. `failed`, not superseded: nothing took the work over; the work died.
    */
   closeUnclaimed(exceptRoots: ReadonlySet<string>, now: number): readonly string[] {
+    // `now` is the ACTIVATION CUTOFF as well as the close timestamp: a running
+    // row created after it belongs to a live request of this activation, and
+    // the reconciliation that calls this must not fail live work.
     const candidates = this.sql<{ root_id: string }>`
-      SELECT root_id FROM mcts_search_runs WHERE status='running' AND engine='swarm'`
+      SELECT root_id FROM mcts_search_runs
+      WHERE status='running' AND engine='swarm' AND created_at < ${now}`
       .map((row) => row.root_id)
       .filter((rootId) => !exceptRoots.has(rootId));
     for (const rootId of candidates) {

@@ -675,6 +675,35 @@ export class HeadJournal {
     return roots.map((row) => this.assembleRun(row.root_id, row.spawned_at));
   }
 
+  /**
+   * Running heads of BRANCH runs alone, as bare id/root pairs, oldest first,
+   * LIMIT-bounded — the activation sweep's read. The filter and the budget sit
+   * in the query because the sweep runs in the init gate: sealing a row moves
+   * it off `status = 'running'`, so the mutation is the cursor and a backlog
+   * deeper than one budget drains across wakes without a stored position.
+   */
+  /** Whether ANY head is still unfinished — `running` OR `interrupted`, one
+   *  LIMIT-1 read for the activation-time arm decision that must not
+   *  materialize a run. `interrupted` counts because the resume gate re-offers
+   *  every unfinished root: a prior reconcile leaves claimed and gate-failed
+   *  roots interrupted on purpose, and their recovery is still owed. */
+  hasUnfinishedHeads(): boolean {
+    return this.sql<{ present: number }>`
+      SELECT 1 AS present FROM head_journal
+      WHERE status = 'running' OR status = 'interrupted' LIMIT 1`.length > 0;
+  }
+
+  listRunningBranchHeads(
+    prefix: string, limit: number, spawnedBefore: number,
+  ): { id: HeadId; rootId: HeadId; task: string }[] {
+    return this.sql<{ id: string; root_id: string; task: string }>`
+      SELECT id, root_id, task FROM head_journal
+      WHERE status = 'running' AND root_id LIKE ${`${prefix}%`}
+        AND spawned_at < ${spawnedBefore}
+      ORDER BY spawned_at ASC LIMIT ${limit}`
+      .map((row) => ({ id: row.id, rootId: row.root_id, task: row.task }));
+  }
+
   listRuns(limit: number): HeadRunView[] {
     const roots = this.sql<{ root_id: string; spawned_at: number }>`
       SELECT root_id, MIN(spawned_at) AS spawned_at FROM head_journal

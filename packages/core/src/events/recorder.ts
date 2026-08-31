@@ -420,9 +420,9 @@ export class RunEventRecorder {
    * reason {@link read} gives: the pairing is over a bounded window whose rows a
    * caller reads anyway.
    */
-  unterminatedRuns(window = 500): string[] {
-    const rows = this.sql<{ run_id: string; type: string }>`
-      SELECT run_id, type FROM run_events
+  unterminatedRuns(window = 500, startedBefore = Number.POSITIVE_INFINITY): string[] {
+    const rows = this.sql<{ run_id: string; type: string; ts: string }>`
+      SELECT run_id, type, ts FROM run_events
       WHERE type = 'run_start' OR type = 'run_end'
       ORDER BY ts DESC LIMIT ${window}`;
     const closed = new Set(rows.filter((row) => row.type === 'run_end').map((row) => row.run_id));
@@ -431,7 +431,10 @@ export class RunEventRecorder {
     for (const row of rows) {
       if (row.type !== 'run_start' || closed.has(row.run_id) || seen.has(row.run_id)) continue;
       seen.add(row.run_id);
-      open.push(row.run_id);
+      // The ACTIVATION CUTOFF: the caller that closes these no longer runs at
+      // start of life, so a run a live request started after the activation
+      // began must not read as abandoned.
+      if (Date.parse(row.ts) < startedBefore) open.push(row.run_id);
     }
     return open;
   }

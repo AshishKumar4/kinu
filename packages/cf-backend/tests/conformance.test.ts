@@ -16,7 +16,11 @@ import {
 } from '@kinu.run/core';
 import { orchestratorHarness, subordinateHarness, type ActorHarness } from './helpers/actor-harness';
 
-interface RawToolsAgent { observeRawTools(): ToolSet; observeRuntime(): AgentRuntime }
+interface RawToolsAgent {
+  observeRawTools(): ToolSet;
+  observeRuntime(): AgentRuntime;
+  _kinuTerminalRetryTick(): Promise<void>;
+}
 
 async function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): Promise<ObservedSurface> {
   const tools = harness.agent.observeRawTools();
@@ -25,6 +29,12 @@ async function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgen
   // SOUL.md. Observing sqlite_master before any operation would report the
   // manifest's filesystem tables missing from a root that wires them.
   await harness.agent.observeRuntime().storage.vfs.exists('SOUL.md');
+  // Post-init recovery moved onto the maintenance wake (activation only arms),
+  // and the facet registry's own table appears when that work first touches a
+  // facet — production reaches this within one alarm hop, so the STEADY surface
+  // this manifest describes includes it. Driven explicitly: activation and
+  // alarm stay distinct boundaries.
+  await harness.agent._kinuTerminalRetryTick();
   return {
     root,
     planes: {

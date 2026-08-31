@@ -36,7 +36,7 @@ import { parseJsonValue } from '../utils/json';
  *  recorder class. */
 export interface RunEventLedger {
   runForHeadSplit(rootId: string): string | null;
-  unterminatedRuns(): string[];
+  unterminatedRuns(window?: number, startedBefore?: number): string[];
   emit(runId: string, input: RunEventInput): void;
 }
 
@@ -289,7 +289,7 @@ export async function reconcileInterruptedForks(deps: {
   // it had forked anything, so this cannot sit behind the fork sweep's early
   // return. Both are the same act — writing the terminal row a destroyed frame
   // could not.
-  closeUnterminatedRuns(deps.runEvents, deps.logActivity);
+  closeUnterminatedRuns(deps.runEvents, startedAt, deps.logActivity);
   const interrupted = deps.journal.markInterrupted({ spawnedBefore: startedAt }, startedAt);
   if (interrupted.length > 0) {
     deps.logActivity?.(
@@ -308,7 +308,7 @@ export async function reconcileInterruptedForks(deps: {
   // resume path runs on every activation even with no offered roots. A second
   // call would reclaim a job out from under the executor the first call started.
   const offeredRoots = new Set(deps.journal.unfinishedRoots(startedAt));
-  for (const root of deps.search?.runningSwarmRoots() ?? []) offeredRoots.add(root);
+  for (const root of deps.search?.runningSwarmRoots(startedAt) ?? []) offeredRoots.add(root);
   const gateNeeded = deps.resume !== undefined || offeredRoots.size > 0;
   const outcome: ResumeOutcome = gateNeeded
     ? await resumeOutcome(deps.resume, [...offeredRoots])
@@ -344,6 +344,11 @@ export async function reconcileInterruptedForks(deps: {
   await deps.signals.deliver({
     kind: FORK_INTERRUPTED_SIGNAL,
     text: forkInterruptedWake(runs),
+    // Keyed on the FACT — the retired run set — because this producer is
+    // at-least-once by construction: the durable carrier that delivers the
+    // notice replays it after an eviction, and two deliveries that mean the
+    // same thing must collide instead of stacking cards.
+    idempotencyKey: `fork-interrupted:${runs.map((run) => run.rootId).sort().join(',')}`,
     metadata: {
       runs: runs.map((run) => run.rootId),
       heads: runs.reduce((n, run) => n + run.abandoned, 0),
@@ -368,11 +373,12 @@ export async function reconcileInterruptedForks(deps: {
  */
 function closeUnterminatedRuns(
   ledger: RunEventLedger | undefined,
+  startedBefore: number,
   logActivity: ((event: string, detail?: string) => void) | undefined,
 ): void {
   if (!ledger) return;
   try {
-    const open = ledger.unterminatedRuns();
+    const open = ledger.unterminatedRuns(undefined, startedBefore);
     if (open.length === 0) return;
     for (const runId of open) {
       ledger.emit(runId, { type: 'run_end', reason: RUN_INTERRUPTED_REASON });

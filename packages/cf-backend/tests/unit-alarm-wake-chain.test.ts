@@ -15,7 +15,7 @@
  * the re-arm now depends on.
  */
 import { describe, expect, test } from 'bun:test';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, subordinateHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -53,6 +53,89 @@ describe('the workspace keeps exactly one wake row', () => {
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual(['kinu-wake']);
   });
 
+  test('a beyond-budget stale backlog drains across maintenance wakes, not the gate', async () => {
+    // The sweep carries a 4096-row budget because it runs in the init gate;
+    // deletion is the cursor, and a truncated pass arms the maintenance tick
+    // so the remainder drains in alarm frames instead of waiting for the next
+    // eviction.
+    const { agent, db } = orchestratorHarness();
+    await agent.listSchedules();
+    const overdueSec = Math.floor((Date.now() - 2 * DAY_MS) / 1000);
+    const insert = db.prepare(
+      `INSERT INTO cf_agents_schedules (id, callback, payload, type, time) VALUES (?, ?, NULL, ?, ?)`,
+    );
+    for (let i = 0; i < 4096 + 50; i++) insert.run(`stale-${i}`, '_chatRecovery', 'delayed', overdueSec);
+
+    agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+
+    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
+    const staleLeft = (): number => db
+      .prepare(`SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_chatRecovery'`)
+      .values()[0]?.[0] as number;
+    // One budget spent, and the continuation armed durably.
+    expect(staleLeft()).toBe(50);
+    const armed = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
+    expect(armed.length).toBe(1);
+
+    // The wake finishes the job and, with nothing left over, does not re-arm.
+    await agent._kinuTerminalRetryTick();
+    expect(staleLeft()).toBe(0);
+  });
+
+  test('a beyond-budget FIBER backlog also arms the wake, and the wake drains it', async () => {
+    const { agent, db } = orchestratorHarness();
+    await agent.listSchedules();
+    db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
+      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
+    const insert = db.prepare(
+      `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
+    );
+    const expired = Date.now() - 25 * 60 * 60 * 1000;
+    for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
+
+    agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+
+    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
+    const fibersLeft = (): number => db
+      .prepare(`SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`).values()[0]?.[0] as number;
+    expect(fibersLeft()).toBe(40);
+    expect((await agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick')).toBe(true);
+
+    await agent._kinuTerminalRetryTick();
+    expect(fibersLeft()).toBe(0);
+  });
+
+  test('a subordinate activation arms the same wake, and the inherited tick serves it', async () => {
+    // The wake machinery lives on the actor base; the subordinate must not
+    // need its own copy — evidence, not assumption, that the inherited
+    // callback fires against the subordinate's own storage.
+    const harness = subordinateHarness();
+    await harness.agent.listSchedules();
+    harness.db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
+      id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
+    const insert = harness.db.prepare(
+      `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
+    );
+    const expired = Date.now() - 25 * 60 * 60 * 1000;
+    for (let i = 0; i < 4096 + 12; i++) insert.run(`sub-fiber-${i}`, 'bg:stale', expired);
+
+    harness.agent.activateActor();
+    await harness.agent.harnessSettleBackgroundTasks();
+
+    // Seeded rows only: the activation's own terminal-lane fiber writes its
+    // carrier row here, fresh and correctly spared.
+    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
+    const left = (): number => harness.db
+      .prepare(`SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`).values()[0]?.[0] as number;
+    expect(left()).toBe(12);
+    expect((await harness.agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick')).toBe(true);
+
+    await harness.agent._kinuTerminalRetryTick();
+    expect(left()).toBe(0);
+  });
+
   test('a failed re-arm leaves the previous wake row in place', async () => {
     // KINU-N003 (first half): `armTimer` cancelled the armed rows and then
     // wrote the replacement. A failure in that window left ZERO wake rows, and
@@ -71,6 +154,93 @@ describe('the workspace keeps exactly one wake row', () => {
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual(
       before.map((row) => row.id),
     );
+  });
+
+  test('a live branch head spawned after activation survives every tick', async () => {
+    // The recovery cutoff is the ISOLATE's construction instant, and the pass
+    // runs once per activation: a head a request spawned after construction —
+    // including the window before the wake's first tick — is live work no
+    // recovery may mark, and a second tick must not re-run the seal at all.
+    const { agent, db } = orchestratorHarness();
+    agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+
+    const insertBranch = (id: string, spawnedAt: number): void => {
+      db.prepare(
+        `INSERT INTO head_journal (id, root_id, depth, task, status, spawned_at)
+         VALUES (?, ?, 0, 'take a branch', 'running', ?)`,
+      ).run(id, `branch-${id}`, spawnedAt);
+    };
+    // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
+    const status = (id: string): string => db
+      .prepare(`SELECT status FROM head_journal WHERE id = '${id}'`)
+      .values()[0]?.[0] as string;
+
+    insertBranch('stale-head', Date.now() - 60_000);
+    insertBranch('live-head', Date.now() + 5);
+
+    await agent._kinuTerminalRetryTick();
+    expect(status('stale-head')).toBe('errored');
+    expect(status('live-head')).toBe('running');
+
+    // The guard is consumed: even a stale-looking row inserted later is left
+    // for the NEXT activation, because mid-activation nothing can tell it
+    // from live work racing the clock.
+    insertBranch('late-stale-head', Date.now() - 60_000);
+    await agent._kinuTerminalRetryTick();
+    expect(status('late-stale-head')).toBe('running');
+  });
+
+  test('a live swarm ledger row created after activation survives the tick', async () => {
+    // The same cutoff, one ledger over: `closeUnclaimed` fails running swarm
+    // rows the resume gate did not claim, and a row a live request created
+    // after construction must not be one of them.
+    const { agent, db } = orchestratorHarness();
+    agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+
+    const insertRun = (root: string, createdAt: number): void => {
+      db.prepare(
+        `INSERT INTO mcts_search_runs
+           (root_id, root_msg_id, task, engine, status, config_json, budget, created_at, updated_at)
+         VALUES (?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
+      ).run(root, `msg-${root}`, createdAt, createdAt);
+    };
+    // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
+    const status = (root: string): string => db
+      .prepare(`SELECT status FROM mcts_search_runs WHERE root_id = '${root}'`)
+      .values()[0]?.[0] as string;
+
+    insertRun('stale-swarm', Date.now() - 60_000);
+    insertRun('live-swarm', Date.now() + 5);
+
+    await agent._kinuTerminalRetryTick();
+    expect(status('stale-swarm')).toBe('failed');
+    expect(status('live-swarm')).toBe('running');
+  });
+
+  test('a live run-event start after activation is not terminalized by the tick', async () => {
+    const { agent, db } = orchestratorHarness();
+    agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+
+    const start = (run: string, ts: number): void => {
+      db.prepare(
+        `INSERT INTO run_events (run_id, event_index, type, ts, payload)
+         VALUES (?, 1, 'run_start', ?, '{}')`,
+      ).run(run, new Date(ts).toISOString());
+    };
+    // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
+    const ended = (run: string): boolean => (db
+      .prepare(`SELECT COUNT(*) AS held FROM run_events WHERE run_id = '${run}' AND type = 'run_end'`)
+      .values()[0]?.[0] as number) > 0;
+
+    start('stale-run', Date.now() - 60_000);
+    start('live-run', Date.now() + 5);
+
+    await agent._kinuTerminalRetryTick();
+    expect(ended('stale-run')).toBe(true);
+    expect(ended('live-run')).toBe(false);
   });
 
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {

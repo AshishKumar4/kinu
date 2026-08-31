@@ -496,6 +496,15 @@ export class EventLog {
     ).toArray().map((row) => v.parse(TurnIdRowSchema, row).turn_id);
   }
 
+  /** Whether ANY drain lease is open — one indexed LIMIT-1 read, for the
+   *  activation-time arm decision that must not materialize the roster. */
+  hasOpenDrainLease(): boolean {
+    return this.sql.exec(
+      `SELECT 1 FROM agent_log
+       WHERE kind = 'event' AND turn_id LIKE 'evt-%' AND consumed_at IS NOT NULL LIMIT 1`,
+    ).toArray().length > 0;
+  }
+
   /**
    * Re-pend synthetic drain deliveries whose recovery lease is still open — a
    * turn was handed these events and never closed the lease on them, so nobody

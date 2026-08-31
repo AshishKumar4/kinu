@@ -112,7 +112,7 @@ import {
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
   startBranchHead, settlePendingBranch, settleBranchIntoTakes, newBranchId,
   branchHeadId, branchOutcomeFromJournal, headStatusUnsettled, storedHeadReportStatus,
-  isSteerBranchRunId,
+  STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseStatus, type ReleaseToolDeps,
   runExperienceAction,
@@ -194,6 +194,7 @@ import {
   resolveModelRoute, type ResolvedTurnProfile,
   WORKSPACE_RUN_ID,
   projectJsonValue,
+  type AgentSignal,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
@@ -227,7 +228,7 @@ import {
   sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
 import { EmailOutbox } from "./email/outbox";
-import { FIBER_RECOVERY_MAX_AGE_MS } from "./fiber-recovery";
+import { FIBER_RECOVERY_MAX_AGE_MS, FORK_NOTICE_LANE_FIBER } from "./fiber-recovery";
 import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
@@ -277,6 +278,10 @@ const KINU_TIMER_CALLBACK = '_kinuTimerTick';
  *  hand-written here beside the words "mirrors the SDK's default"; it is now
  *  the value `ActorAgent.options` hands the framework (fiber-recovery.ts), so
  *  the sweep and the framework cannot disagree about when a row is dead. */
+/** Row budgets for the activation sweeps — the init gate's inherent bound.
+ *  A pass that fills one arms the maintenance wake for the rest. */
+const ORPHAN_SEAL_MAX_ROWS = 256;
+const STALE_SCHEDULE_SWEEP_MAX_ROWS = 4096;
 const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
 
 // The Activity surface's retained sample. Bounded because `run_events` and
@@ -512,13 +517,6 @@ export class OrchestratorAgent extends ActorAgent {
    * batch that WAS answered must have its reply finished rather than the
    * question asked a second time.
    */
-  private async dispatchOwedDrainReplies(): Promise<void> {
-    for (const [drainTurnId, answer] of this.owedDrainReplies()) {
-      const closed = await this.completeEventBatch(drainTurnId, answer);
-      diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
-    }
-  }
-
   /**
    * Every open drain lease paired with the answer its turn already gave.
    *
@@ -551,11 +549,30 @@ export class OrchestratorAgent extends ActorAgent {
    * external work. A wake due NOW is one schedule row; the alarm frame pays
    * for the dispatches inside an invocation, where they belong.
    */
-  protected async reconcileEventDeliveries(): Promise<void> {
-    const stillOwed = new Set(this.owedDrainReplies().keys());
+  protected async reconcileEventDeliveries(sweepsTruncated = false): Promise<void> {
+    if (sweepsTruncated || this.eventLog.hasOpenDrainLease()
+      || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()
+      || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
+      || this.jobs.hasLiveJobs()) {
+      await this.scheduleTerminalRetry(Date.now());
+    }
+  }
+
+  /** The orchestrator's owed external lanes, prepended to the base terminal
+   *  replay so both ride the ONE durable wake. Replies first: an owed reply is
+   *  an answer somebody is actively waiting on, and the terminal replay's own
+   *  resume closes the same leases when it finishes a transition. */
+  protected override async owedDeliveryWork(): Promise<void> {
+    // The lease JOIN lives here, in the alarm frame — the activation only
+    // proved existence. Sweep first with the answered set excluded, so a
+    // question whose answer exists is finished below rather than re-asked;
+    // then the replies; then the terminal replay, which closes the same
+    // leases when it finishes a transition.
+    let owed: ReadonlyMap<string, string> = new Map<string, string>();
     try {
+      owed = this.owedDrainReplies();
       const reconciledEventIds = this.eventLog.unbindStale(
-        STALE_EVENT_DELIVERY_MS, Date.now(), stillOwed,
+        STALE_EVENT_DELIVERY_MS, Date.now(), new Set(owed.keys()),
       );
       if (reconciledEventIds.length > 0) {
         diagnostics.event('event.deliveries_repended', { events: reconciledEventIds.length });
@@ -568,18 +585,11 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
-    if (stillOwed.size > 0 || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()) {
-      await this.scheduleTerminalRetry(Date.now());
-    }
-  }
-
-  /** The orchestrator's owed external lanes, prepended to the base terminal
-   *  replay so both ride the ONE durable wake. Replies first: an owed reply is
-   *  an answer somebody is actively waiting on, and the terminal replay's own
-   *  resume closes the same leases when it finishes a transition. */
-  protected override async owedDeliveryWork(): Promise<void> {
     try {
-      await this.dispatchOwedDrainReplies();
+      for (const [drainTurnId, answer] of owed) {
+        const closed = await this.completeEventBatch(drainTurnId, answer);
+        diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
+      }
     } catch (err) {
       diagnostics.failure('event.owed_reply_resume_failed', toKinuError({
         doing: 'dispatching the event replies a previous activation still owed',
@@ -592,32 +602,6 @@ export class OrchestratorAgent extends ActorAgent {
 
   private _engine: EvolutionEngine | null = null;
   private _emailOutbox: EmailOutbox | null = null;
-  /** Detached work this actor owns until its lexical error boundary settles. */
-  private readonly _backgroundTasks = new Set<AsyncTaskOwner>();
-
-  /**
-   * Await every detached task this activation currently owns.
-   *
-   * The harness seam for suites that assert against the SETTLED
-   * post-activation world: every detached task is fenced or idempotent, so
-   * production never needs this — but a test snapshotting state the
-   * activation's own sweeps also touch must join them explicitly rather than
-   * assume a scheduling order. Laps because a task may enqueue another (the
-   * fork reconcile ends in the facet reclaim), and BOUNDED so a task that
-   * keeps replenishing the set — a genesis turn, a re-armed timer — fails the
-   * caller by name instead of hanging it.
-   */
-  protected async settleBackgroundTasks(): Promise<void> {
-    for (let lap = 0; lap < 32; lap++) {
-      if (this._backgroundTasks.size === 0) return;
-      await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
-    }
-    throw new Error(
-      `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
-      + 'laps — something keeps enqueuing work; join a narrower seam instead',
-    );
-  }
-
   /** Outbound-email intent log: write-ahead + idempotency for mission-inbox
    *  replies and owner notifications (SPEC §7.4). The shared outbox creates
    *  its own table on first use, so there is nothing to initialize here. */
@@ -956,28 +940,53 @@ export class OrchestratorAgent extends ActorAgent {
    *  permanently, while running it late costs one immediate tick. This sweep
    *  runs BEFORE the SDK reads the due rows, which is exactly why the omission
    *  mattered: the row was deleted on the activation that would have run it. */
-  private sweepUnrunnableSchedules(): void {
+  /** The orchestrator's own budgeted sweeps folded onto the base seam —
+   *  every pass RUNS (no short-circuit), because each owns a different table. */
+  protected override maintenanceSweeps(): boolean {
+    // The branch seal is NOT here: it may only mark heads spawned before the
+    // activation cutoff, an activation-scoped pass that lives in
+    // `maintenanceWork` behind the consumed guard.
+    const fibers = super.maintenanceSweeps();
+    const schedules = this.sweepUnrunnableSchedules();
+    return fibers || schedules;
+  }
+
+  private sweepUnrunnableSchedules(): boolean {
     const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
     // The terminal retry is exempt for the same reason the Kinu timer is: it is a
     // STATE-driven wake, not a dated one. Its obligation is whatever the ledger
     // still holds, and that does not expire — deleting an overdue row left owed
     // effects with no carrier, and for a facet's row the root cannot even read
     // the ledger it stranded.
-    const dropped = this.ctx.storage.sql.exec(
-      `DELETE FROM cf_agents_schedules
+    // LIMIT-bounded for the init gate: deletion is the cursor, and a pass that
+    // filled its budget reports truncated so the caller arms the maintenance
+    // wake — the remainder must not wait for the next eviction. Selected THEN
+    // deleted (one synchronous frame, so nothing interleaves) because the
+    // count decides truncation and must not depend on a driver's RETURNING
+    // support.
+    const stale = this.ctx.storage.sql.exec(
+      `SELECT rowid FROM cf_agents_schedules
         WHERE type IN ('delayed', 'scheduled') AND time <= ?
           AND callback NOT IN (?, ?)
-        RETURNING id`,
+        LIMIT ${STALE_SCHEDULE_SWEEP_MAX_ROWS}`,
       cutoffSec,
       KINU_TIMER_CALLBACK,
       TERMINAL_RETRY_CALLBACK,
-    ).toArray().length;
+    ).toArray().map((row) => v.parse(v.object({ rowid: v.number() }), row).rowid);
+    if (stale.length > 0) {
+      this.ctx.storage.sql.exec(
+        `DELETE FROM cf_agents_schedules WHERE rowid IN (${stale.map(() => '?').join(', ')})`,
+        ...stale,
+      );
+    }
+    const dropped = stale.length;
     if (dropped > 0) {
       diagnostics.event('schedule.stale_rows_dropped', {
         dropped,
         horizonMs: STALE_SCHEDULE_HORIZON_MS,
       });
     }
+    return dropped >= STALE_SCHEDULE_SWEEP_MAX_ROWS;
   }
 
   protected get engine(): EvolutionEngine {
@@ -2194,15 +2203,19 @@ export class OrchestratorAgent extends ActorAgent {
    *  widening. */
   onStart(): void {
     this.ensureSchema();
-    this.reconcileOrphanedBranches();
+    let sweepsTruncated = false;
     // Both sweeps run inside `Agent.alarm()`'s initialization, i.e. before the
     // SDK reads its own tables — so a backlog is pruned rather than paid for in
-    // one go. The fiber sweep is the same rule one table over: it drops the
-    // interrupted-fiber rows the recovery budget has already refused, so the
-    // framework's scan never materializes their stashed snapshots.
-    this.sweepUnrecoverableFiberRows();
+    // one go, and every sweep carries a ROW BUDGET because this is the init
+    // gate. A pass that filled its budget arms the maintenance wake below: the
+    // remainder drains in alarm frames, never against the gate and never
+    // waiting for the next eviction. The fiber sweep is the same rule one
+    // table over: it drops the interrupted-fiber rows the recovery budget has
+    // already refused, so the framework's scan never materializes their
+    // stashed snapshots.
+    sweepsTruncated = this.sweepUnrecoverableFiberRows() || sweepsTruncated;
     try {
-      this.sweepUnrunnableSchedules();
+      sweepsTruncated = this.sweepUnrunnableSchedules() || sweepsTruncated;
     } catch (err) {
       diagnostics.failure('schedule.stale_sweep_failed', toKinuError({
         doing: 'sweeping unrunnable schedule rows on activation',
@@ -2234,16 +2247,17 @@ export class OrchestratorAgent extends ActorAgent {
     // transcript tells them apart: the `stillOwed` exclusion keeps the sweep
     // from re-asking a question whose answer already exists.
     //
-    // The activation CLASSIFIES and ARMS — one bounded sweep, one schedule row
-    // when anything is owed. Every dispatch (owed replies, interrupted terminal
-    // transitions) runs under the durable terminal wake in `owedDeliveryWork`,
+    // The activation CLASSIFIES and ARMS — existence reads plus the sweep
+    // verdicts above, one schedule row when anything is owed. Every dispatch
+    // (owed replies, interrupted terminal transitions, fork/job recovery, the
+    // remainder of a truncated sweep) runs under the durable terminal wake,
     // because a reply is external mail and an activation launches no external
     // work, awaited or detached.
     const eventDeliveryReconcileTask: AsyncTaskOwner = { promise: null };
     this._backgroundTasks.add(eventDeliveryReconcileTask);
     eventDeliveryReconcileTask.promise = (async () => {
       try {
-        await this.reconcileEventDeliveries();
+        await this.reconcileEventDeliveries(sweepsTruncated);
       } catch (cause) {
         diagnostics.failure('event.delivery_reconcile_failed', toKinuError({
           doing: 'reconciling the event deliveries a dead activation left open',
@@ -2298,35 +2312,88 @@ export class OrchestratorAgent extends ActorAgent {
     // which queues a turn via `Think.saveMessages` and resolves only when that
     // turn ENDS. Awaiting a whole agent turn inside the init gate is the 30s
     // object reset.
-    const forkJournalReconcileTask: AsyncTaskOwner = { promise: null };
-    this._backgroundTasks.add(forkJournalReconcileTask);
-    forkJournalReconcileTask.promise = (async () => {
-      try {
-        await reconcileInterruptedForks({
-          journal: this.headJournal,
-          signals: this.orch.signals,
-          search: this.mctsSearchStore,
-          runEvents: this.eventRecorder,
-          resume: jobRedriveResumeGate({
-            recoverOrphans: () => this.jobRunner.recoverOrphans(),
-            inputOf: (jobId) => this.jobs.getInput(jobId),
-            rootsForTask: (task) => resumableForkRoots(
-              { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
-            ),
-          }),
-          logActivity: (event, detail) => this.logActivity(event, detail),
-        });
-        await this.reclaimSettledExplorationFacets();
-      } catch (cause) {
-        diagnostics.failure('head.journal_reconcile_failed', toKinuError({
-          doing: 'reconciling fork-journal heads a dead activation left running',
-          cause,
-          otherwise: 'io',
-        }), { workspace: this.name });
-      } finally {
-        this._backgroundTasks.delete(forkJournalReconcileTask);
-      }
-    })();
+    // Fork-journal recovery is turn-capable — the signal seam queues a turn —
+    // so it runs under the terminal wake's alarm frame (`maintenanceWork`),
+    // and the delivery reconcile above is what arms that wake: its existence
+    // reads cover owed deliveries, interrupted transitions, running heads AND
+    // live job rows, so recovery is owed exactly when one of them answers.
+  }
+
+  /** The orchestrator's asynchronous maintenance: reconcile the fork journal a
+   *  dead activation left running (marks, job re-drives, the notice that may
+   *  queue a turn), then reclaim settled exploration facets against the
+   *  ledgers it just settled. Idempotent — every recovery reclaims under a
+   *  fresh lease, and a job this isolate already drives is skipped. */
+  /** Carry one fork-recovery notice durably until the delivery seam accepts
+   *  it. Each attempt is its own fiber row (durable before this returns), and
+   *  an `undelivered` outcome — a pre-empted enqueue — re-dispatches on a
+   *  fresh row, paced by the turn slot that pre-empted it. The idempotency key
+   *  on the signal makes a replay of a landed delivery collide. */
+  private dispatchForkNotice(signal: AgentSignal): void {
+    this.redriveRecoveredLane(
+      FORK_NOTICE_LANE_FIBER,
+      projectJsonValue({ value: signal }),
+      async () => {
+        if (await this.orch.signals.deliver(signal) === 'undelivered') {
+          diagnostics.event('fiber.notice_redelivery_owed', {
+            key: signal.idempotencyKey ?? '(none)',
+          });
+          this.dispatchForkNotice(signal);
+        }
+      },
+    );
+  }
+
+  protected override async maintenanceWork(): Promise<boolean> {
+    // ONCE PER ACTIVATION, on the first tick — and only after the branch seal
+    // ran to completion, because the fork reconcile trusts that every running
+    // head BEFORE THE CUTOFF is stale. Mid-activation terminal retries arm
+    // this same wake; the consumed guard and the cutoff together are what
+    // keep them from marking a LIVE head a request spawned meanwhile.
+    if (!this.activationRecoveryPending) return super.maintenanceWork();
+    if (this.reconcileOrphanedBranches()) return true;
+    this.activationRecoveryPending = false;
+    try {
+      await reconcileInterruptedForks({
+        now: this.activationStartedAt,
+        journal: this.headJournal,
+        // NON-AWAITING: the notice's enqueue is durable the moment it lands
+        // (`Think.saveMessages`), and the delivered promise resolves only when
+        // the QUEUED TURN ends — freight this alarm frame must not carry. The
+        // wait is owned, so a failure still classifies and the harness join
+        // still sees it.
+        signals: {
+          // DURABLE before 'queued' is claimed: the fiber row the redrive
+          // writes synchronously is the acceptance boundary, and an eviction
+          // between the journal's terminal writes and the turn landing replays
+          // the DELIVERY through the fork-notice lane — where the signal's
+          // idempotency key makes an already-landed replay collide instead of
+          // stacking cards.
+          deliver: (signal) => {
+            this.dispatchForkNotice(signal);
+            return Promise.resolve('queued');
+          },
+        },
+        search: this.mctsSearchStore,
+        runEvents: this.eventRecorder,
+        resume: jobRedriveResumeGate({
+          recoverOrphans: () => this.jobRunner.recoverOrphans(),
+          inputOf: (jobId) => this.jobs.getInput(jobId),
+          rootsForTask: (task) => resumableForkRoots(
+            { ledger: this.mctsSearchStore, journal: this.headJournal }, task,
+          ),
+        }),
+        logActivity: (event, detail) => this.logActivity(event, detail),
+      });
+      await this.reclaimSettledExplorationFacets();
+    } catch (cause) {
+      diagnostics.failure('head.journal_reconcile_failed', toKinuError({
+        doing: 'reconciling fork-journal heads a dead activation left running',
+        cause,
+        otherwise: 'io',
+      }), { workspace: this.name });
+    }
+    return super.maintenanceWork();
   }
   /**
    * Reclaim exploration facets a reset left behind, against the ledgers the
@@ -3968,24 +4035,27 @@ export class OrchestratorAgent extends ActorAgent {
    */
   /** A reset owns no live branch fibers. Before a snapshot can say a branch is
    * running, seal every reportless branch head with one durable error report;
-   * `recordReport` changes its status, so the next activation excludes it and
-   * the sweep is idempotent. */
-  private reconcileOrphanedBranches(): void {
-    for (const run of this.headJournal.listRunningRuns()) {
-      if (!isSteerBranchRunId(run.rootId) || run.status !== 'running') continue;
-      for (const head of run.heads) {
-        if (head.status !== 'running') continue;
-        this.headJournal.recordReport({
-          id: head.id, status: 'errored',
-          summary: 'Workspace restarted before the branch settled.',
-          errorMessage: 'workspace restarted before the branch settled',
-          evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [],
-          stepCount: 0, usage: {}, wallClockMs: 0,
-        });
-        this.broadcastBranchStatus({ type: 'branch_status', status: 'error', branchId: run.rootId, task: run.task,
-          message: 'workspace restarted before the branch settled' });
-      }
+   * `recordReport` changes its status, so both the next PAGE and the next
+   * activation exclude it — the mutation is the cursor. LIMIT-bounded because
+   * this runs in the init gate; a pass that filled its budget answers
+   * truncated and the caller arms the maintenance wake for the rest.
+   */
+  private reconcileOrphanedBranches(): boolean {
+    const heads = this.headJournal.listRunningBranchHeads(
+      STEER_BRANCH_RUN_ID_PREFIX, ORPHAN_SEAL_MAX_ROWS, this.activationStartedAt,
+    );
+    for (const head of heads) {
+      this.headJournal.recordReport({
+        id: head.id, status: 'errored',
+        summary: 'Workspace restarted before the branch settled.',
+        errorMessage: 'workspace restarted before the branch settled',
+        evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [],
+        stepCount: 0, usage: {}, wallClockMs: 0,
+      });
+      this.broadcastBranchStatus({ type: 'branch_status', status: 'error', branchId: head.rootId, task: head.task,
+        message: 'workspace restarted before the branch settled' });
     }
+    return heads.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
   /**

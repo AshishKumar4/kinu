@@ -674,6 +674,13 @@ export interface ObservedNaming {
 }
 
 export class HarnessSubordinateAgent extends SubordinateAgent {
+  /** The base join seam, surfaced for suites that assert the SETTLED
+   *  post-activation world — same bridge the orchestrator harness carries. */
+  harnessSettleBackgroundTasks(): Promise<void> { return this.settleBackgroundTasks(); }
+
+  /** The production activation, same bridge the orchestrator harness carries. */
+  activateActor(): void { super.onStart(); }
+
   observeRawTools(): ToolSet { return this.getRawTools(); }
   observeRuntime(): AgentRuntime { return this.rt; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }

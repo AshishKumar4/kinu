@@ -220,6 +220,13 @@ export class BackgroundJobStore {
 
 
   /** Remove all settled jobs. Running jobs are kept. Returns nothing. */
+  /** Whether ANY job row is still live — one LIMIT-1 read, for the
+   *  activation-time arm decision that must not materialize the registry. */
+  hasLiveJobs(): boolean {
+    return this.sql<{ present: number }>`
+      SELECT 1 AS present FROM background_jobs WHERE status = 'running' LIMIT 1`.length > 0;
+  }
+
   clearSettled(): void {
     void this.sql`DELETE FROM background_jobs WHERE status != 'running'`;
   }
