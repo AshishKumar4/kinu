@@ -51,6 +51,7 @@ import {
   describeThrown, publishTeardown, runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
 import * as v from 'valibot';
+import { AwsClient } from 'aws4fetch';
 import { summarize, type Summary } from './fixtures/r2-bench/stats';
 import { parseProbeRun, type ProbeRun } from './fixtures/r2-bench/report';
 import {
@@ -66,7 +67,7 @@ import {
 import type { MeasuredCell, StageId } from './fixtures/storage-matrix/protocol';
 import {
   checkCleanup, createManifest, replayTeardown, writeManifest,
-  type CleanupReport, type DeleteOutcome,
+  type CleanupProbes, type CleanupReport, type DeleteOutcome,
 } from './fixtures/storage-matrix/cleanup';
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
@@ -813,6 +814,207 @@ armSignalTeardown(log);
 
 const wrangler = (args: readonly string[], options: { allowFailure?: boolean } = {}): string =>
   runWrangler(REPO_ROOT, args, options);
+
+/**
+ * The R2 residue plane an interrupted run leaves: ordinary objects written
+ * before an arm's prefix drain ran, and open multipart uploads. The uploads
+ * are invisible to `bucket info` and to the REST object list — S3
+ * ListMultipartUploads is the ONE window — and either residue class blocks
+ * `bucket delete` (error 10008; measured 2026-08-31, twice, after aborted
+ * runs left 22 open uploads behind an "empty" listing).
+ */
+export interface R2ResiduePlane {
+  listObjects(bucket: string): Promise<readonly string[]>;
+  deleteObject(bucket: string, key: string): Promise<void>;
+  listUploads(bucket: string): Promise<readonly { key: string; uploadId: string }[]>;
+  abortUpload(bucket: string, key: string, uploadId: string): Promise<void>;
+  /** Whether the bucket exists at all — S3 answers NoSuchBucket distinctly. */
+  bucketExists(bucket: string): Promise<boolean>;
+}
+
+/** S3 XML carries entity-escaped text; a key read raw would be deleted under
+ *  the wrong name and read as still present forever. */
+export function xmlText(escaped: string): string {
+  return escaped
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/** RFC 3986 for an S3 key path segment set: everything but the separators. */
+const rfc3986Key = (key: string): string =>
+  key.split('/').map((part) => encodeURIComponent(part)
+    .replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
+
+export interface ObjectsPage { keys: string[]; next: string | null }
+
+/** One ListObjectsV2 page: keys plus the continuation cursor, honoring
+ *  IsTruncated so a >1000-key bucket cannot silently read partial. */
+export function parseObjectsPage(body: string): ObjectsPage {
+  const keys: string[] = [];
+  for (const block of body.split('<Contents>').slice(1)) {
+    const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
+    if (key !== undefined) keys.push(xmlText(key));
+  }
+  const truncated = /<IsTruncated>true<\/IsTruncated>/.test(body);
+  const token = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(body)?.[1];
+  if (truncated && token === undefined) {
+    throw new Error('ListObjectsV2 reported IsTruncated with no NextContinuationToken');
+  }
+  return { keys, next: truncated && token !== undefined ? xmlText(token) : null };
+}
+
+export interface UploadsPage {
+  uploads: { key: string; uploadId: string }[];
+  next: { keyMarker: string; uploadIdMarker: string } | null;
+}
+
+/** One ListMultipartUploads page, with its own marker pair — >1000 open
+ *  uploads is exactly the residue shape two aborted runs left this account. */
+export function parseUploadsPage(body: string): UploadsPage {
+  const uploads: { key: string; uploadId: string }[] = [];
+  for (const block of body.split('<Upload>').slice(1)) {
+    const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
+    const uploadId = /<UploadId>([^<]*)<\/UploadId>/.exec(block)?.[1];
+    if (key !== undefined && uploadId !== undefined) {
+      uploads.push({ key: xmlText(key), uploadId: xmlText(uploadId) });
+    }
+  }
+  if (!/<IsTruncated>true<\/IsTruncated>/.test(body)) return { uploads, next: null };
+  const keyMarker = /<NextKeyMarker>([^<]*)<\/NextKeyMarker>/.exec(body)?.[1];
+  const uploadIdMarker = /<NextUploadIdMarker>([^<]*)<\/NextUploadIdMarker>/.exec(body)?.[1];
+  if (keyMarker === undefined || uploadIdMarker === undefined) {
+    throw new Error('ListMultipartUploads reported IsTruncated with no marker pair');
+  }
+  return { uploads, next: { keyMarker: xmlText(keyMarker), uploadIdMarker: xmlText(uploadIdMarker) } };
+}
+
+export function r2ResiduePlane(deps: {
+  accountId: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+}): R2ResiduePlane {
+  const client = new AwsClient({
+    accessKeyId: deps.accessKeyId, secretAccessKey: deps.secretAccessKey, service: 's3', region: 'auto',
+  });
+  const origin = `https://${deps.accountId}.r2.cloudflarestorage.com`;
+  const ask = async (path: string, method = 'GET'): Promise<{ status: number; body: string }> => {
+    const answer = await client.fetch(`${origin}${path}`, { method });
+    return { status: answer.status, body: await answer.text() };
+  };
+  const missing = (status: number, body: string): boolean =>
+    status === 404 && body.includes('NoSuchBucket');
+  return {
+    bucketExists: async (bucket) => {
+      const { status, body } = await ask(`/${bucket}?list-type=2&max-keys=1`);
+      if (missing(status, body)) return false;
+      if (status !== 200) throw new Error(`ListObjectsV2 on ${bucket} answered ${String(status)}`);
+      return true;
+    },
+    listObjects: async (bucket) => {
+      const keys: string[] = [];
+      let token: string | null = null;
+      do {
+        const cursor: string = token === null ? '' : `&continuation-token=${encodeURIComponent(token)}`;
+        const { status, body } = await ask(`/${bucket}?list-type=2&max-keys=1000${cursor}`);
+        if (status !== 200) throw new Error(`ListObjectsV2 on ${bucket} answered ${String(status)}`);
+        const page = parseObjectsPage(body);
+        keys.push(...page.keys);
+        token = page.next;
+      } while (token !== null);
+      return keys;
+    },
+    deleteObject: async (bucket, key) => {
+      const { status } = await ask(`/${bucket}/${rfc3986Key(key)}`, 'DELETE');
+      if (status !== 204 && status !== 404) {
+        throw new Error(`DeleteObject ${bucket}/${key} answered ${String(status)}`);
+      }
+    },
+    listUploads: async (bucket) => {
+      const uploads: { key: string; uploadId: string }[] = [];
+      let marker: { keyMarker: string; uploadIdMarker: string } | null = null;
+      do {
+        const cursor: string = marker === null
+          ? ''
+          : `&key-marker=${encodeURIComponent(marker.keyMarker)}`
+            + `&upload-id-marker=${encodeURIComponent(marker.uploadIdMarker)}`;
+        const { status, body } = await ask(`/${bucket}?uploads=&max-uploads=1000${cursor}`);
+        if (status !== 200) throw new Error(`ListMultipartUploads on ${bucket} answered ${String(status)}`);
+        const page = parseUploadsPage(body);
+        uploads.push(...page.uploads);
+        marker = page.next;
+      } while (marker !== null);
+      return uploads;
+    },
+    abortUpload: async (bucket, key, uploadId) => {
+      const { status } = await ask(
+        `/${bucket}/${rfc3986Key(key)}?uploadId=${encodeURIComponent(uploadId)}`, 'DELETE',
+      );
+      if (status !== 204 && status !== 404) {
+        throw new Error(`AbortMultipartUpload ${bucket}/${key} answered ${String(status)}`);
+      }
+    },
+  };
+}
+
+/** Drain BOTH residue classes so `bucket delete` can succeed on a bucket an
+ *  interrupted run left dirty. Answers what it removed, for the teardown log. */
+export async function drainBucketResidue(
+  plane: R2ResiduePlane, bucket: string,
+): Promise<{ objects: number; uploads: number }> {
+  let objects = 0;
+  for (const key of await plane.listObjects(bucket)) {
+    await plane.deleteObject(bucket, key);
+    objects += 1;
+  }
+  const uploads = await plane.listUploads(bucket);
+  for (const upload of uploads) await plane.abortUpload(bucket, upload.key, upload.uploadId);
+  return { objects, uploads: uploads.length };
+}
+
+/**
+ * The C1/C3 verifiers, OBSERVING only. The teardown replay is the sole
+ * deleter: a checker that deletes cannot tell "teardown worked" from "the
+ * checker mopped up", and its evidence is then worth nothing — the shape this
+ * replaces force-deleted the Worker and the bucket as its "absence check" and
+ * hardcoded the multipart count to zero.
+ */
+export function cleanupObservationProbes(deps: {
+  wrangler: (args: readonly string[], options?: { allowFailure?: boolean }) => string;
+  residue: R2ResiduePlane | null;
+}): Pick<CleanupProbes, 'workerAbsent' | 'bucketState'> {
+  return {
+    workerAbsent: async (name) => {
+      const listed = deps.wrangler(['deployments', 'list', '--name', name], { allowFailure: true });
+      if (!listed.startsWith(WRANGLER_FAILED)) return false;
+      if (/not found|does not exist|10007/i.test(listed)) return true;
+      throw new Error(`deployments list on ${name} failed: ${listed.slice(0, 240)}`);
+    },
+    bucketState: async (name) => {
+      if (deps.residue !== null) {
+        if (!(await deps.residue.bucketExists(name))) return { absent: true, objects: 0, multipartResidue: 0 };
+        return {
+          absent: false,
+          objects: (await deps.residue.listObjects(name)).length,
+          multipartResidue: (await deps.residue.listUploads(name)).length,
+        };
+      }
+      // Without S3 keys only ABSENCE is provable: R2 refuses to delete a
+      // bucket holding objects or open uploads, so a bucket that is gone held
+      // nothing. A bucket still present has an unmeasurable multipart count,
+      // and an unmeasured count is not zero.
+      const info = deps.wrangler(['r2', 'bucket', 'info', name], { allowFailure: true });
+      if (info.startsWith(WRANGLER_FAILED) && /not found|does not exist|10006/i.test(info)) {
+        return { absent: true, objects: 0, multipartResidue: 0 };
+      }
+      throw new Error(
+        `${name} still exists and R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY are absent — `
+        + 'multipart residue cannot be measured, and an unmeasured count is not zero',
+      );
+    },
+  };
+}
 
 interface Fixture { origin: string; token: string }
 
@@ -3478,6 +3680,11 @@ async function main(): Promise<number> {
     { kind: 'local-path', name: dirname(resources.configPath), detail: 'generated Wrangler config directory' },
   ]);
   writeManifest(REPO_ROOT, teardownManifest);
+  const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
+  const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+  const residue = r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined
+    ? r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId: r2AccessKeyId, secretAccessKey: r2SecretAccessKey })
+    : null;
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
   let stop: (() => readonly string[]) | null = null;
@@ -3516,7 +3723,14 @@ async function main(): Promise<number> {
         return failed === undefined ? { ok: true } : { ok: false, error: failed };
       }
       if (entry.kind === 'r2-bucket') {
-        const deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+        let deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+        if (deleted.startsWith(WRANGLER_FAILED) && /not empty|10008/i.test(deleted) && residue !== null) {
+          // An interrupted run leaves objects its arm never drained and open
+          // multipart uploads no listing shows; drain both, then ask once more.
+          const drained = await drainBucketResidue(residue, entry.name);
+          log(`${entry.name}: drained ${String(drained.objects)} object(s), aborted ${String(drained.uploads)} upload(s)`);
+          deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+        }
         if (!deleted.startsWith(WRANGLER_FAILED)) return { ok: true };
         if (/not found|does not exist/i.test(deleted)) return { ok: true, absent: true };
         return { ok: false, error: deleted.slice(0, 240) };
@@ -3534,27 +3748,26 @@ async function main(): Promise<number> {
       cleanupErrors.push(...replay.failures);
       failure ??= `cleanup failed: ${replay.failures.join('; ')}`;
     }
-    const cleanupCheck = await checkCleanup(REPO_ROOT, teardownManifest, {
-      workerAbsent: async (name) => {
-        const deleted = wrangler(['delete', '--name', name, '--force'], { allowFailure: true });
-        return !deleted.startsWith(WRANGLER_FAILED) || /not found|does not exist/i.test(deleted);
-      },
-      containerAppAbsent: async (name) => containerAppIds(REPO_ROOT, [name], log).length === 0,
-      bucketState: async (name) => {
-        const deleted = wrangler(['r2', 'bucket', 'delete', name], { allowFailure: true });
-        return !deleted.startsWith(WRANGLER_FAILED) || /not found|does not exist/i.test(deleted)
-          ? { absent: true, objects: 0, multipartResidue: 0 }
-          : { absent: false, objects: 1, multipartResidue: 0 };
-      },
-      boxStateEmpty: async () => workerStopped,
-      alarmAbsent: async () => workerStopped,
-      mountAbsent: async () => workerStopped,
-      localPathAbsent: async (path) => !existsSync(path),
-      processAbsent: async () => true,
-      counters: async () => ({ ...teardownManifest.counters }),
-    }, R2_OP_VOCABULARY);
+    let cleanupCheck: CleanupReport | null = null;
+    try {
+      cleanupCheck = await checkCleanup(REPO_ROOT, teardownManifest, {
+        ...cleanupObservationProbes({ wrangler, residue }),
+        containerAppAbsent: async (name) => containerAppIds(REPO_ROOT, [name], log).length === 0,
+        boxStateEmpty: async () => workerStopped,
+        alarmAbsent: async () => workerStopped,
+        mountAbsent: async () => workerStopped,
+        localPathAbsent: async (path) => !existsSync(path),
+        processAbsent: async () => true,
+        counters: async () => ({ ...teardownManifest.counters }),
+      }, R2_OP_VOCABULARY);
+    } catch (cause) {
+      // A verifier that could not OBSERVE proves nothing either way; the
+      // artifact then carries no cleanup evidence and admission refuses it.
+      cleanupErrors.push(`cleanup verification failed: ${describeThrown({ cause })}`);
+      failure ??= 'cleanup verification failed';
+    }
     cleanupReport = cleanupCheck;
-    if (!cleanupCheck.passed) {
+    if (cleanupCheck !== null && !cleanupCheck.passed) {
       cleanupErrors.push(...cleanupCheck.checks.filter((row) => !row.ok).map((row) => `${row.gate}: ${row.detail}`));
       failure ??= 'cleanup admission checks failed';
     }

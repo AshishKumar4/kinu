@@ -22,17 +22,22 @@ import {
   sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import { refusalText } from './fixtures/storage-matrix/admission';
+import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
 import {
   addressArmRequest,
   benchmarkExitCode,
   CANDIDATE_CONTAINER_CLASSES,
   candidateLifecycleChecks,
+  cleanupObservationProbes,
   comparablePair,
   devboxAdmission,
+  drainBucketResidue,
   fixtureConfigForArms,
   frozenControlStatus,
   isTransientContainerCreateError,
   parseFrozenControlArtifact,
+  parseObjectsPage,
+  parseUploadsPage,
   parseOptions,
   pollForAttach,
   postLiveTeardown,
@@ -1389,5 +1394,142 @@ describe('a legacy control artifact cannot read as verified', () => {
     const report = renderFrozenControls([parsed]);
     expect(report).toContain('UNUSABLE (legacy contract)');
     expect(report).not.toContain('VERIFIED');
+  });
+});
+
+describe('cleanup verification observes; only the teardown replay deletes', () => {
+  const plane = (world: {
+    exists: boolean; objects: string[]; uploads: { key: string; uploadId: string }[];
+  }) => {
+    const deleted: string[] = [];
+    const aborted: string[] = [];
+    return {
+      residue: {
+        bucketExists: async (_bucket: string) => world.exists,
+        listObjects: async (_bucket: string) => [...world.objects],
+        deleteObject: async (_bucket: string, key: string) => {
+          world.objects = world.objects.filter((held) => held !== key);
+          deleted.push(key);
+        },
+        listUploads: async (_bucket: string) => [...world.uploads],
+        abortUpload: async (_bucket: string, _key: string, uploadId: string) => {
+          world.uploads = world.uploads.filter((held) => held.uploadId !== uploadId);
+          aborted.push(uploadId);
+        },
+      },
+      deleted, aborted,
+    };
+  };
+
+  test('an existing bucket reports its REAL object and multipart counts', async () => {
+    const world = plane({
+      exists: true, objects: ['a', 'b'], uploads: [{ key: 'c', uploadId: 'u1' }],
+    });
+    const probes = cleanupObservationProbes({
+      wrangler: () => { throw new Error('the S3 plane answers; wrangler must not be asked'); },
+      residue: world.residue,
+    });
+    expect(await probes.bucketState('bench')).toEqual({ absent: false, objects: 2, multipartResidue: 1 });
+    // OBSERVED, not remediated: the verifier deleted and aborted nothing.
+    expect(world.deleted).toEqual([]);
+    expect(world.aborted).toEqual([]);
+  });
+
+  test('a gone bucket certifies both counts, because delete refuses residue', async () => {
+    const probes = cleanupObservationProbes({
+      wrangler: () => { throw new Error('unasked'); },
+      residue: plane({ exists: false, objects: [], uploads: [] }).residue,
+    });
+    expect(await probes.bucketState('bench')).toEqual({ absent: true, objects: 0, multipartResidue: 0 });
+  });
+
+  test('an unmeasurable multipart count is a FAILURE, never a zero', async () => {
+    // The pre-fix shape hardcoded multipartResidue: 0 with no instrument — the
+    // exact residue class two aborted runs left behind an empty object list.
+    const probes = cleanupObservationProbes({
+      wrangler: (args) => (args[0] === 'r2' ? 'name: bench\nobject_count: 0' : 'unexpected'),
+      residue: null,
+    });
+    await expect(probes.bucketState('bench')).rejects.toThrow(/unmeasured count is not zero/);
+  });
+
+  test('keyless absence stays provable through bucket info', async () => {
+    const probes = cleanupObservationProbes({
+      wrangler: () => `${WRANGLER_FAILED}: a bucket with this name does not exist`,
+      residue: null,
+    });
+    expect(await probes.bucketState('bench')).toEqual({ absent: true, objects: 0, multipartResidue: 0 });
+  });
+
+  test('worker absence is probed by listing, and an unreadable account throws', async () => {
+    const present = cleanupObservationProbes({ wrangler: () => 'Created: yesterday', residue: null });
+    expect(await present.workerAbsent('w')).toBe(false);
+    const absent = cleanupObservationProbes({
+      wrangler: () => `${WRANGLER_FAILED}: workers.api.error.script_not_found [code: 10007]`, residue: null,
+    });
+    expect(await absent.workerAbsent('w')).toBe(true);
+    const broken = cleanupObservationProbes({
+      wrangler: () => `${WRANGLER_FAILED}: Authentication error`, residue: null,
+    });
+    await expect(broken.workerAbsent('w')).rejects.toThrow(/deployments list on w failed/);
+  });
+
+  test('the teardown drain removes BOTH residue classes an interrupted run leaves', async () => {
+    const world = plane({
+      exists: true,
+      objects: ['boxes/one', 'boxes/two'],
+      uploads: [{ key: 'boxes/three', uploadId: 'u9' }],
+    });
+    expect(await drainBucketResidue(world.residue, 'bench')).toEqual({ objects: 2, uploads: 1 });
+    expect(await world.residue.listObjects('bench')).toEqual([]);
+    expect(await world.residue.listUploads('bench')).toEqual([]);
+  });
+
+  test('no verifier probe carries a destructive command', () => {
+    const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
+    const probesBody = source.slice(
+      source.indexOf('export function cleanupObservationProbes'),
+      source.indexOf('interface Fixture {'),
+    );
+    expect(probesBody.length).toBeGreaterThan(200);
+    expect(probesBody).not.toContain("'delete'");
+    expect(probesBody).not.toContain('--force');
+    // And the replay arm drains residue before retrying its delete.
+    expect(source).toContain('drainBucketResidue(residue, entry.name)');
+  });
+});
+
+describe('the S3 residue parsers read escaped names and follow every page', () => {
+  test('an entity-escaped key round-trips, so its delete addresses the real object', () => {
+    const page = parseObjectsPage(
+      '<ListBucketResult><Contents><Key>boxes/a&amp;b &lt;v1&gt;&#x27;s.bin</Key></Contents>'
+      + '<IsTruncated>false</IsTruncated></ListBucketResult>',
+    );
+    expect(page).toEqual({ keys: ["boxes/a&b <v1>'s.bin"], next: null });
+  });
+
+  test('a truncated object listing yields its cursor, and a cursorless one throws', () => {
+    const page = parseObjectsPage(
+      '<r><Contents><Key>a</Key></Contents><IsTruncated>true</IsTruncated>'
+      + '<NextContinuationToken>tok&amp;1</NextContinuationToken></r>',
+    );
+    expect(page.next).toBe('tok&1');
+    expect(() => parseObjectsPage('<r><IsTruncated>true</IsTruncated></r>'))
+      .toThrow(/no NextContinuationToken/);
+  });
+
+  test('a truncated upload listing yields its marker pair, and a bare one throws', () => {
+    // The pre-fix shape read ONE page and stopped: a bucket with more than
+    // 1000 open uploads silently read partial, and C3 could certify clean
+    // while residue remained.
+    const page = parseUploadsPage(
+      '<r><Upload><Key>k1</Key><UploadId>u1</UploadId></Upload>'
+      + '<IsTruncated>true</IsTruncated><NextKeyMarker>k1</NextKeyMarker>'
+      + '<NextUploadIdMarker>u1</NextUploadIdMarker></r>',
+    );
+    expect(page).toEqual({ uploads: [{ key: 'k1', uploadId: 'u1' }], next: { keyMarker: 'k1', uploadIdMarker: 'u1' } });
+    expect(() => parseUploadsPage('<r><IsTruncated>true</IsTruncated></r>'))
+      .toThrow(/no marker pair/);
+    expect(parseUploadsPage('<r><Upload><Key>k</Key><UploadId>u</UploadId></Upload></r>').next).toBeNull();
   });
 });
