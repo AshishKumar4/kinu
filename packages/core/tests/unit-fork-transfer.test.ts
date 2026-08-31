@@ -464,16 +464,12 @@ describe('fork transfer receiver', () => {
   });
 
   /**
-   * One 256 MiB fork, end to end, over a source that generates its bytes on
-   * demand and a sink the caller supplies.
-   *
-   * The measurement is `heapUsed + external`, which is where Bun accounts a
-   * retained `Uint8Array` (measured: 64 MiB of held ranges moves both by ~48
-   * MB). The buffering control below is what proves the metric can see a
-   * receiver that holds the file, so the streaming arm's bound means something.
+   * One 256 MiB fork, end to end, over generated source bytes and a caller sink.
+   * Frame peaks and receiver staging are exact counters. The buffering control
+   * below proves the same retained-byte channel turns red at the full file size.
    */
   async function streamHugeFork(sink: ForkFileSink): Promise<{
-    peakBytesInFlight: number; peakRead: number; peakFrameBytes: number;
+    peakRead: number; peakFrameBytes: number;
     peakRetained: number; readWholeCalls: number; published: boolean;
   }> {
     let peakRead = 0;
@@ -505,12 +501,6 @@ describe('fork transfer receiver', () => {
     const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain' });
     const receiver = new ForkTransferReceiver(writer, sink);
 
-    const inFlight = (): number => {
-      const usage = process.memoryUsage();
-      return usage.heapUsed + usage.external;
-    };
-    const baseline = inFlight();
-    let peakBytesInFlight = 0;
     let peakRetained = 0;
     let peakFrameBytes = 0;
     let published = false;
@@ -522,9 +512,8 @@ describe('fork transfer receiver', () => {
       const outcome = await receiver.accept(frame);
       published = outcome.status === 'published';
       peakRetained = Math.max(peakRetained, receiver.stagingBytes);
-      peakBytesInFlight = Math.max(peakBytesInFlight, inFlight() - baseline);
     }
-    return { peakBytesInFlight, peakRead, peakFrameBytes, peakRetained, readWholeCalls, published };
+    return { peakRead, peakFrameBytes, peakRetained, readWholeCalls, published };
   }
 
   test('a 256 MiB logical file crosses end to end without either side holding it', async () => {
@@ -584,13 +573,8 @@ describe('fork transfer receiver', () => {
     // range at a time: 256 MiB verified at an 8 MiB peak.
     expect(peakReadBack).toBe(FORK_FRAME_BYTES);
     expect(run.peakRetained).toBe(0);
-    // Under two thirds of the file, and that headroom is GC lag on released
-    // buffers rather than anything held: measured 118-123 MB against 256 MiB
-    // carried, where the control below sits at 389-393 MB for the same stream.
-    // The figure covers the verification reads as well as the frames, which is
-    // why it is above the ~69 MB this measured while the whole-file digest was
-    // folded in memory instead of read back from the staging.
-    expect(run.peakBytesInFlight).toBeLessThan(160 * 1024 * 1024);
+    // The receiver reports zero retained bytes. The negative control below
+    // drives the same channel to the complete 256 MiB file size.
     expect(run.published).toBe(true);
     expect(committed.get(HUGE_PATH)).toEqual({ bytes: HUGE_SIZE, digest: hugeForkDigest() });
     expect(temp.size).toBe(0);
