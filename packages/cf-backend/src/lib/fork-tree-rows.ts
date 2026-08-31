@@ -13,8 +13,8 @@
  * the root row from dispatch, so it is never empty, and the journal half holding
  * every node currently executing was therefore never read.
  */
-import type { HeadRunView } from "@kinu.run/core";
-import type { ForkNode } from "./protocol";
+import { headStatusUnsettled, storedHeadReportStatus, type HeadRunView } from "@kinu.run/core";
+import type { ForkNode, ForkNodeLifecycle } from "./protocol";
 
 /** One `search_nodes` row, as every transport serves it. */
 export interface MctsRow {
@@ -101,10 +101,31 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
  * Never `terminal`: that state means "the branch the run settled on", and the
  * journal records that a node ran, never that it won. Claiming a winner here
  * would be the one thing this fold must not do.
+ *
+ * LOSSY BY NECESSITY, which is why {@link journalLifecycle} rides beside it: the
+ * drawing vocabulary has one word for every ending that is not `completed`, so
+ * this collapses `budget_exceeded`, `aborted`, `errored` and `interrupted` into
+ * `failed` and `completed` into `open`. That is right for a hollow dot and wrong
+ * for a sentence, and the graph used to print this word at the reader.
  */
 function journalStatus(status: string): ForkNode["status"] {
   if (status === "running") return "running";
   return status === "completed" ? "open" : "failed";
+}
+
+/**
+ * The same status as the JOURNAL's own word, or absent when the column holds one
+ * no version of this journal writes.
+ *
+ * Read through core's two unions rather than re-listed here, so the words a
+ * reader is shown are the words `head_journal.status` can hold and a status
+ * added there cannot quietly become "failed" on this surface. Absent is honest:
+ * an unrecognised column value is not a lifecycle this client can name, and
+ * naming it anyway is how an invented word gets on screen.
+ */
+function journalLifecycle(status: string): ForkNodeLifecycle | undefined {
+  if (headStatusUnsettled(status)) return status;
+  return storedHeadReportStatus(status) ?? undefined;
 }
 
 /**
@@ -116,7 +137,8 @@ function journalStatus(status: string): ForkNode["status"] {
  * at 0% is the exact lie the incident's lone root told.
  */
 function journalVertex(head: HeadRunView["heads"][number], parent: ForkNode): ForkNode {
-  return {
+  const lifecycle = journalLifecycle(head.status);
+  const vertex: ForkNode = {
     id: head.id,
     parentId: parent.id,
     // The journal's depth is authoritative even when its parent is not in this
@@ -131,6 +153,11 @@ function journalVertex(head: HeadRunView["heads"][number], parent: ForkNode): Fo
     createdAt: head.spawnedAt,
     children: [],
   };
+  // Assigned rather than declared: an unrecognised status must leave the key
+  // ABSENT, because a reader distinguishes "this store recorded no word I know"
+  // from "this node has no journal row at all".
+  if (lifecycle !== undefined) vertex.lifecycle = lifecycle;
+  return vertex;
 }
 
 /**

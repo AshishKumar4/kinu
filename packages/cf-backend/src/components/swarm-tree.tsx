@@ -47,7 +47,7 @@
  *
  * and always, whichever way it settled:
  *   hollow, danger ring  the branch failed
- *   amber fill           the branch is still running
+ *   brass fill           the branch is still running
  *   square, accent edge  an `expand:'aggregate'` FAN-IN VERTEX — a node that
  *                        consumed a whole level rather than sampling beside its
  *                        siblings. NOT a separate node kind: it is graded through
@@ -450,7 +450,14 @@ function nodeFill(node: ForkNode, ramp: (t: number) => string): string {
 	// A failed branch has no score to show — it never produced one — so it is
 	// drawn hollow rather than coloured by a zero it did not earn.
 	if (node.status === "failed") return "var(--c-surface)";
-	if (node.status === "running") return "var(--c-warning)";
+	// WORKING IS THE ACCENT, as it is everywhere else in the product: the
+	// sidebar's "Working now", the composer's Running, a subordinate at work, the
+	// run dot on the Exploration list and the dot on this node's own transcript
+	// panel. This canvas was the last place drawing it as a WARNING, so a healthy
+	// search read as a problem — and in light mode `--c-warning` (#7E5205) sits a
+	// hair from `--c-text-3` (#5E5344), which made a working node and a settled
+	// unscored one the same brown.
+	if (node.status === "running") return "var(--c-accent)";
 	// Unscored: the same argument as `failed`, for every branch of a fork that
 	// ranked none of them. Neutral, not a ramp position.
 	if (node.value === null) return "var(--c-border-strong)";
@@ -1000,6 +1007,7 @@ export function SwarmTree({
 					hoverRef.current = { runId: region.runId, nodeId: d.data.id };
 					setTooltip({
 						x, y, node: d.data,
+						column: Math.round(d.y / COL),
 						fanIn: region.fanIn.get(d.data.id) ?? null,
 						why: region.why.get(d.data.id) ?? null,
 						runName: region.name,
@@ -1224,7 +1232,7 @@ export function SwarmTree({
 						<>
 							<span className="min-w-0">every branch fed the settle · none was ranked</span>
 							{width >= 470 && (
-								<span className="opacity-70">amber = running · hollow = failed</span>
+								<span className="opacity-70">brass = running · hollow = failed</span>
 							)}
 						</>
 					)}
@@ -1339,6 +1347,9 @@ interface TooltipState {
 	readonly x: number;
 	readonly y: number;
 	readonly node: ForkNode;
+	/** Which COLUMN the tree drew this node in — the same number the depth ruler
+	 *  labels, read off the placed coordinate rather than restated from the row. */
+	readonly column: number;
 	/** Parents this node fanned in, or null for a sampled sibling. */
 	readonly fanIn: number | null;
 	/** The node's own reason for existing, verbatim from the journal, or null. */
@@ -1376,10 +1387,25 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				{node.visits !== null && (
 					<span className="p-text-3">{node.visits} rollout{node.visits === 1 ? "" : "s"}</span>
 				)}
-				<span className="p-text-3">depth {node.depth}</span>
+				{/* THE COLUMN THIS NODE WAS DRAWN IN, not the depth column it carries.
+				    Depth is the horizontal axis here and the ruler labels those columns
+				    `d0…dN`, so the two numbers are a claim about the same thing and
+				    have to be read off the same place. They were not: the layout puts
+				    the tree's own root at column 0 whatever depth its row states
+				    (`linkVertices` can elect an orphan whose parent was pruned), so a
+				    node sitting under `d0` could say "depth 3". `y` is the placed
+				    coordinate and every column is an exact multiple of the pitch. */}
+				<span className="p-text-3">depth {tip.column}</span>
 			</div>
 			<div className="p-text-3 mt-1">
-				{node.status}
+				{/* The store's OWN word. `status` is the drawing vocabulary — it has one
+				    word, `failed`, for a branch that blew its budget, one the operator
+				    stopped, one that threw and one a cold activation interrupted — so
+				    printing it here named four different endings identically and called
+				    a `completed` head `open`. A journalled branch carries its journal
+				    status beside it (`lifecycle`); a search node's `status` already IS
+				    its store's word. */}
+				{node.lifecycle ?? node.status}
 			</div>
 			{/* The fan-in, spelled out. The square on the node says THAT it fanned a
 			    level in; only here is there room to say how wide, and to say that the

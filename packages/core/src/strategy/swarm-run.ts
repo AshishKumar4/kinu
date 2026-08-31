@@ -122,6 +122,7 @@ import { renderCauseChain, type Refusal } from '../obs/error';
 import { usageTotal, type Usage, addUsage } from '../usage';
 import type { NodeLoopHost } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
+import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { SwarmBudget } from './swarm-budget';
 import type { NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
 import { missionMeter, type MissionScope } from '../mission-budget';
@@ -184,6 +185,22 @@ export interface SwarmRunDeps {
    *  produced. Absent = nothing watching; the node's durable steps are
    *  unaffected either way (heads/head-stream.ts). */
   readonly publishHeadStream?: PublishHeadStream;
+  /**
+   * Where this run's DURABLE journal writes are announced — a node appearing, a
+   * step landing, a report filing.
+   *
+   * The durable twin of {@link publishHeadStream}, and the pair is the whole of
+   * head liveness: a frame says what a node is producing right now and is
+   * superseded by the step that contains it, while this says a node's LEDGER
+   * moved and is what makes a reader re-read the store it renders from.
+   *
+   * A swarm carried the transient half and not this one, so a running search
+   * painted a live tail whose landed step arrived only on the reader's own
+   * clock — the same words on screen twice until a poll retired them. Absent is
+   * a backend with nothing watching, and then the journal writes in silence
+   * exactly as it always did.
+   */
+  readonly announceHeadActivity?: AnnounceHeadActivity;
   /**
    * Where this run's diagnostics land. Defaults to the process logger.
    *
@@ -384,7 +401,10 @@ export async function runSwarm(
     }
   }
 
-  const { sql, journal, searchLedger } = initRunLedgers(deps.rt);
+  // The announcing journal when this caller has a channel, the plain one when it
+  // has none — the same instance every write below goes through, so a node's
+  // spawn, its steps and its report all reach an open surface by the one push.
+  const { sql, journal, searchLedger } = initRunLedgers(deps.rt, deps.announceHeadActivity);
   const { carriedIn, carriedBest } = readCarryIn({
     sql,
     identity,

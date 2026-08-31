@@ -31,7 +31,7 @@ import {
 import { isRateLimitedTurnError } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
-import { NodeTranscript } from "@/components/NodeTranscript";
+import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
 import type { HeadDeltas } from "@/components/head-chat";
 import { cleanNodeLabel, type ExplorerSelection } from "@/components/swarm-tree-model";
 import { explorationForkTree, type MctsRow } from "@/lib/fork-tree-rows";
@@ -605,7 +605,7 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : NODE_DOT(node.status)} ${live && moving ? "p-dot-pulse" : ""}`} />
+      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : statusDot(node.status)} ${live && moving ? "p-dot-pulse" : ""}`} />
       <div className="min-w-0 flex-1">
         <div className="text-[11px] p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}
@@ -634,19 +634,6 @@ function RunNodeRow({ node, score, moving, onOpen }: {
       </div>
     </button>
   );
-}
-
-/** A node's dot, over the journal's own vocabulary. `running` is the accent, as
- *  it is everywhere else in the product — and as it has to be here, because the
- *  row above draws a RATE-LIMITED node in `warning`: while running wore the same
- *  token, the one signal that pacing rather than a fault stopped the node was
- *  invisible. `interrupted` is non-terminal and gets the quiet dot rather than a
- *  failure's. */
-function NODE_DOT(status: string): string {
-  if (status === "running") return "p-dot-accent";
-  if (status === "completed") return "p-dot-success";
-  if (status === "errored" || status === "aborted") return "p-dot-danger";
-  return "p-dot-neutral";
 }
 
 /* ── one branch, opened inside its run ─────────────────────────── */

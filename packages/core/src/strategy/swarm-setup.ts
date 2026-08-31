@@ -27,6 +27,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import { HeadJournal } from '../heads/journal';
+import { LiveHeadJournal, type AnnounceHeadActivity } from '../heads/live-journal';
 import { initHeadsTables } from '../heads/schema';
 import {
   initExplorationRecordsTable, recordsFor, verifierDigestOf,
@@ -458,7 +459,31 @@ export interface RunLedgers {
   readonly searchLedger: MctsSearchStore;
 }
 
-export function initRunLedgers(rt: AgentRuntime): RunLedgers {
+export function initRunLedgers(
+  rt: AgentRuntime,
+  /**
+   * Where this run's durable journal writes are announced, or absent for a
+   * caller with nothing watching.
+   *
+   * THE ONE REASON THIS PARAMETER EXISTS. `LiveHeadJournal`'s contract is that
+   * every path into the journal — hosted and unhosted, head and node, top-level
+   * and recursive — goes through the instance a backend hands the controller and
+   * the node host. A swarm never went through it: this factory built a raw
+   * `HeadJournal` of its own, so a node's spawn, its report, and (in-isolate)
+   * every one of its steps landed durably and told nobody. Only a HOSTED node's
+   * steps announced anything, because those cross to the parent's
+   * `recordHeadStep` and the parent's journal is the announcing one — so the
+   * Exploration surface was live for one write of one transport and poll-only
+   * for every other, which is the worst shape a liveness defect can take.
+   *
+   * A LISTENER RATHER THAN A JOURNAL INSTANCE. The tables below are `rt`'s, so
+   * the journal has to be built over `rt.storage.sql`; a caller handing in an
+   * instance could hand one bound to a different database than the one this just
+   * initialised. Only the ANNOUNCEMENT is the backend's, which is exactly the
+   * seam `LiveHeadJournal` takes.
+   */
+  announce?: AnnounceHeadActivity,
+): RunLedgers {
   const sql = rt.storage.sql;
   initSearchTables(rt.storage.execRaw, sql);
   // The transcript store *The journal read model* governs, and it is the SAME ledger a
@@ -468,7 +493,9 @@ export function initRunLedgers(rt: AgentRuntime): RunLedgers {
   // reason `initSearchTables` is: a workspace that has never run a fork has no
   // `head_journal`.
   initHeadsTables(rt.storage.execRaw, sql);
-  const journal = new HeadJournal(sql);
+  const journal = announce === undefined
+    ? new HeadJournal(sql)
+    : new LiveHeadJournal(sql, announce);
   // The run-level ledger every search in this workspace has a row in. Initialised for
   // the same reason the two above are, and written for the reason *Accepted and
   // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read

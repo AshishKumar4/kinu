@@ -2,6 +2,7 @@
   "asymmetry ActorToolsetDeps.craftedToolExecute#absent-in-cf",
   "asymmetry ActorToolsetDeps.createExecuteTool#absent-in-cf",
   "asymmetry ActorToolsetDeps.vectorStore#absent-in-cli",
+  "asymmetry AgentsForkDeps.announceHeadActivity#absent-in-cli",
   "asymmetry AgentsForkDeps.nodeHost#absent-in-cli",
   "asymmetry AgentsForkDeps.reportNodeDelta#absent-in-cli",
   "asymmetry AgentsForkDeps.runtimeForNodeWorkspace#absent-in-cf",

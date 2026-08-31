@@ -1215,6 +1215,21 @@ const RUNNING_RUN: HeadRunView = {
       status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
       spawnedAt: NOW - 12e4, lastStepAt: NOW - 21e3,
     }),
+    // The two endings no fixture held, so the graph's status vocabulary is
+    // photographable in full: `head_journal.status` can hold six words, and the
+    // tooltip prints the store's own one now rather than the picture's `failed`
+    // for four of them. `interrupted` is the non-terminal one — a cold
+    // activation's reconciliation wrote it and the resume gate has not ruled.
+    swarmNode("lv010", "Re-read the pricing resolver end to end", "expansion 4 of 5", {
+      status: "budget_exceeded", depth: 2, parentId: "lv002", wallClockMs: 214_000,
+      spawnedAt: NOW - 18e4, lastStepAt: NOW - 6e4,
+      errorMessage: "Ran out of the depth this search granted it before it could finish "
+        + "reading the resolver.",
+    }),
+    swarmNode("lv011", "Diff the guard against the admin path", "expansion 5 of 5", {
+      status: "interrupted", depth: 2, parentId: "lv002", wallClockMs: 0,
+      spawnedAt: NOW - 18e4, lastStepAt: NOW - 12e4,
+    }),
   ],
   merge: null,
 };

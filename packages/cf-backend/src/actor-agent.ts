@@ -3909,6 +3909,13 @@ export abstract class ActorAgent extends Think<Env> {
       // frames need no wire at all. A HOSTED node's facet publishes over the RPC
       // it already holds, and agents-tool leaves this unread in that case.
       reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
+      // And the DURABLE half of the same liveness, on the SAME listener this
+      // actor's own `headJournal` announces through — so a search's journal is
+      // the announcing one whether its writes came from the head controller, a
+      // facet calling `recordHeadStep`, or the swarm runner in this isolate.
+      // Without it the engine built a raw journal of its own and a running
+      // search told its open surfaces nothing.
+      announceHeadActivity: () => (headId) => { this.announceHeadActivity(headId); },
       compactShared: createSharedPrefixCompactor({
         ports: {
           transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),

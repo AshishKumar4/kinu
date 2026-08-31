@@ -3,9 +3,24 @@
  */
 
 import type {
-	ActivityLogEntry, ContextComposition, DeviceConsentScope, StepTelemetry,
-	Usage, WorkspaceSpend,
+	ActivityLogEntry, ContextComposition, DeviceConsentScope, HeadReportStatus,
+	HeadUnsettledStatus, StepTelemetry, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
+
+/**
+ * A journalled branch's lifecycle, in the JOURNAL's own closed vocabulary —
+ * core's two head-status unions and nothing else.
+ *
+ * Held apart from {@link ForkNode.status} because the two answer different
+ * questions. That field is the DRAWING vocabulary: `failed` decides a hollow
+ * dot, `pruned` a dashed edge, `terminal` the winner's ring, and a search node's
+ * own column really does hold those words. A head's column holds these, and the
+ * fold that puts a head in the tree has to map one onto the other — so a
+ * `completed` head was drawn (correctly) as `open` and then SAID "open", and
+ * `budget_exceeded`, `aborted`, `errored` and `interrupted` all said "failed".
+ * Four different endings under one invented word.
+ */
+export type ForkNodeLifecycle = HeadReportStatus | HeadUnsettledStatus;
 
 /**
  * One branch of a fork, as the tree view draws it.
@@ -44,6 +59,16 @@ export interface ForkNode {
 	branchAgentKey?: string | null;
 	msgId?: string | null;
 	createdAt?: number;
+	/**
+	 * What this branch's own store recorded, when the store was the head journal.
+	 * The word a reader is SHOWN; {@link status} stays the word the picture is
+	 * drawn from.
+	 *
+	 * Absent for a search node, and absent rather than defaulted: `search_nodes`
+	 * holds its own vocabulary, so {@link status} is already that node's honest
+	 * word and a second field restating it could only drift from it.
+	 */
+	lifecycle?: ForkNodeLifecycle;
 }
 
 /**

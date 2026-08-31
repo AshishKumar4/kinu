@@ -49,11 +49,14 @@ interface OlderPageLoad {
 }
 /* ── the frame ───────────────────────────────────────────────────── */
 /**
- * One dot vocabulary, covering BOTH lifecycles this panel can show: a head's
- * journal status and a search node's status. Colours and shape match the tree's
- * own `statusDot`, so the node the reader clicked does not change colour when
- * its panel opens. A word neither vocabulary declares gets the quiet dot — an
- * unrecognised status is not an error.
+ * ONE dot vocabulary for a branch, wherever a branch is drawn — this panel's
+ * header, and the run pane's node list beside it.
+ *
+ * It covers BOTH lifecycles a branch can carry: a head's journal status
+ * (`running`/`interrupted`/`completed`/`budget_exceeded`/`aborted`/`errored`)
+ * and a search node's (`open`/`pruned`/`terminal`/`failed`). A word neither
+ * vocabulary declares gets the quiet dot — an unrecognised status is not an
+ * error.
  *
  * `running` wears the ACCENT, which is what working means everywhere else in
  * this product (the sidebar's "Working now", the composer's Running, a
@@ -61,8 +64,14 @@ interface OlderPageLoad {
  * a problem and was indistinguishable from `budget_exceeded` beside it — and in
  * light mode `--c-warning` (#7E5205) and `--c-text-3` (#5E5344) are two browns,
  * so running and settled-without-an-answer read as the same dot.
+ *
+ * EXPORTED because the Exploration surface kept a second copy that named one
+ * status fewer: `budget_exceeded` was a warning dot in this panel and a neutral
+ * one in the list that opens it, so the same node changed meaning when it was
+ * clicked. Two tables over one closed vocabulary is how that happens; there is
+ * one now.
  */
-function statusDot(status: string): string {
+export function statusDot(status: string): string {
   if (status === "running") return "p-dot-accent";
   if (status === "budget_exceeded") return "p-dot-warning";
   if (status === "completed" || status === "terminal") return "p-dot-success";
@@ -400,8 +409,17 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   /** The live deltas from `useKinu`. Read here rather than by the caller so the
    *  reconciliation below has both halves — the journal and the paint. */
   headDeltas: HeadDeltas;
-  /** Whether the node is still working. Arms the fallback clock below; a
-   *  finished node has nothing further to poll for. */
+  /**
+   * Whether the node is still working, as the CALLER can tell before this hook
+   * has read anything: the drawn tree's word for a canvas selection, the chip's
+   * own run status for a mid-turn branch.
+   *
+   * A SEED, not the authority. Once a view has loaded, the JOURNAL's own status
+   * decides the cadence below — the same word the panel prints and the same one
+   * that gates the live tail — so a tree that has not caught up cannot leave a
+   * working branch unpolled, and a settled branch stops the clock the moment its
+   * report lands rather than when the canvas next redraws.
+   */
   running?: boolean;
 }) {
   const load = useCallback(
@@ -420,10 +438,14 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
    * only while the node is running, so a settled branch reads once and stops.
    */
   const revalidate = useCallback(
-    () => (running ? TRANSCRIPT_FALLBACK_MS : null),
+    (view: NodeTranscriptView | null) =>
+      (view === null ? running : view.status === "running") ? TRANSCRIPT_FALLBACK_MS : null,
     [running],
   );
-  const { resource, reload } = useAsyncResource(load, revalidate, subject);
+  // The type is stated rather than inferred: `null` is a VALUE this read can
+  // answer with (neither store holds the node), so it belongs inside the
+  // resource's type — and the revalidate below reads that same null.
+  const { resource, reload } = useAsyncResource<NodeTranscriptView | null>(load, revalidate, subject);
 
   const tick = nodeId === null ? 0 : headActivity.get(nodeId) ?? 0;
   const seen = useRef({ subject, tick });

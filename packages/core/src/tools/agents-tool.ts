@@ -47,6 +47,7 @@ import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, Swarm
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { NodeLoopHost } from '../strategy/node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
+import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE,
@@ -419,6 +420,29 @@ export interface AgentsForkDeps {
    * watching, and costs a node nothing — the frames are superseded by its steps.
    */
   reportNodeDelta?: () => PublishHeadStream;
+  /**
+   * Where the run's DURABLE journal writes are announced — a node appearing, a
+   * step landing, a report filing.
+   *
+   * The twin of {@link reportNodeDelta}, and wired on BOTH transports rather
+   * than only the in-isolate one: a node's journal rows are the PARENT's
+   * whichever isolate produced them, so the announcement belongs to the parent
+   * either way. That asymmetry is the defect this closes — a hosted node's
+   * steps announced (they cross to the parent's `recordHeadStep`) while its
+   * spawn and its report did not, and an in-isolate node announced nothing at
+   * all, so a live search's own surface learned about it on a poll clock.
+   *
+   * A factory for {@link nodeHost}'s reason. Absent is a backend with nothing
+   * watching, and then the journal writes in silence.
+   *
+   * WIRED ON CF ONLY, beside {@link reportNodeDelta}, which is cf-only for the
+   * same reason and is recorded in `scripts/capability-parity.lock.json` next to
+   * this one: head liveness is a channel a surface has to CONSUME, and only the
+   * browser client reads `head_activity`. The CLI has no reader, so wiring it
+   * there would fan a channel out to nobody — a dead broadcast is the defect
+   * `unit-broadcast-wiring.test.ts` exists to refuse, not parity.
+   */
+  announceHeadActivity?: () => AnnounceHeadActivity;
   /**
    * The shared-prefix compaction ladder for *Inherited context*, over the same
    * `SwarmRunDeps.compactShared` seam the engine consumes. The backend wires the real
@@ -1533,6 +1557,11 @@ async function runSwarmAction(
   // hosted node's own facet-to-parent RPC covers instead.
   const reportNodeDelta = host ? undefined : fork.reportNodeDelta?.();
   if (reportNodeDelta) Object.assign(runDeps, { publishHeadStream: reportNodeDelta });
+  // The durable announcement, wired on BOTH transports: the journal a node's
+  // rows land in is this isolate's whichever isolate ran the node, so this is
+  // never the hosted case's business to replace.
+  const announceHeadActivity = fork.announceHeadActivity?.();
+  if (announceHeadActivity) Object.assign(runDeps, { announceHeadActivity });
   // A host constructs the provisioner around its authoritative filesystem. It
   // may be an in-isolate SqliteVFS or the hosted Nimbus session; the node loop
   // sees the same async contract either way.

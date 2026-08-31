@@ -22,7 +22,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@kinu.run/core';
 import { explorationForkTree, type MctsRow } from '../src/lib/fork-tree-rows';
-import type { ForkNode } from '../src/lib/protocol';
+import type { ForkNode, ForkNodeLifecycle } from '../src/lib/protocol';
 
 const ROOT = 'root-1';
 
@@ -276,5 +276,54 @@ describe('a node nothing has been backpropagated through has no score', () => {
     };
     const tree = explorationForkTree({ tree: [rootRow(), odd], head: null });
     expect(tree?.children[0]?.value).toBe(0.7);
+  });
+});
+
+/**
+ * WHAT THE PICTURE DRAWS AND WHAT IT SAYS ARE TWO VOCABULARIES.
+ *
+ * `ForkNode.status` is the drawing one — `failed` is a hollow dot, `pruned` a
+ * dashed edge, `terminal` the winner's ring — and it has exactly one word for
+ * every ending that is not `completed`. The journal has six. So the fold that
+ * puts a head in the tree collapsed four different endings into `failed` and
+ * `completed` into `open`, and the graph then PRINTED that word at the reader:
+ * a node that blew its budget, one the operator stopped, one that threw and one
+ * a cold activation interrupted all read "failed", and a node that finished read
+ * "open". The lifecycle rides beside the drawing status so both are honest.
+ */
+describe('the fold keeps the journal\'s own status word', () => {
+  /** Every word `head_journal.status` can hold, against the one the picture
+   *  draws it as. Typed pairs rather than an object, so a status the union stops
+   *  declaring fails to compile here instead of being iterated as a string. */
+  const DRAWN: ReadonlyArray<readonly [ForkNodeLifecycle, ForkNode['status']]> = [
+    ['completed', 'open'],
+    ['running', 'running'],
+    ['interrupted', 'failed'],
+    ['budget_exceeded', 'failed'],
+    ['aborted', 'failed'],
+    ['errored', 'failed'],
+  ];
+
+  for (const [status, drawn] of DRAWN) {
+    test(`${status} draws as ${drawn} and still says ${status}`, () => {
+      const tree = explorationForkTree({ tree: [rootRow()], head: journal([head('n1', status)]) });
+      const child = tree?.children[0];
+      expect(child?.status).toBe(drawn);
+      expect(child?.lifecycle).toBe(status);
+    });
+  }
+
+  test('a word no version of this journal writes names nothing at all', () => {
+    // Absent rather than passed through: the graph prints `lifecycle ?? status`,
+    // so a stray column value must fall back to the drawing word instead of
+    // putting an unknown string on screen as a lifecycle.
+    const tree = explorationForkTree({ tree: [rootRow()], head: journal([head('n1', 'reticulating')]) });
+    expect(tree?.children[0]?.lifecycle).toBeUndefined();
+    expect(tree?.children[0]?.status).toBe('failed');
+  });
+
+  test('a search row carries none — its own status IS its store\'s word', () => {
+    const tree = explorationForkTree({ tree: [rootRow(), settledRow('n1', 0.5)], head: null });
+    expect(tree?.children[0]?.lifecycle).toBeUndefined();
   });
 });
