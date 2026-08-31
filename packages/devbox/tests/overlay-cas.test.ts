@@ -550,6 +550,9 @@ interface Harness {
    *  diagnostic is not a port call and the ordering assertions read that. */
   readonly logs: string[];
   readonly stateNow: () => OverlayCasState | null;
+  /** What the upper holds. Only the salvage writes it here, which is what makes
+   *  "these bytes reached the upper" assertable. */
+  readonly upperNow: () => readonly string[];
 }
 
 /** One receipt, exactly as the runner prints it. */
@@ -578,12 +581,17 @@ function harness(overrides: {
   /** Which `writeState` calls reject, by 1-based order of arrival. A rejected
    *  write records the attempt and changes nothing durable. */
   rejectWrites?: readonly number[];
+  /** Top-level entries a replaced container left in the BARE work directory:
+   *  writes that landed while no overlay was mounted. */
+  workdirResidue?: readonly string[];
 } = {}): Harness {
   const calls: string[] = [];
   const logs: string[] = [];
   let mounted = overrides.mounted ?? false;
   let state = overrides.state ?? null;
   let writes = 0;
+  let residue = [...overrides.workdirResidue ?? []];
+  const upper: string[] = [];
   const ports: OverlayCasPorts = {
     containerRunning: () => overrides.running ?? true,
     mountStore: async () => {
@@ -598,6 +606,13 @@ function harness(overrides: {
         throw new Error(`fuse-overlayfs attach of ${DEVBOX_WORKDIR} failed: exit 1`);
       }
       if (overrides.overlayLands ?? true) mounted = true;
+    },
+    salvageWorkdirResidue: async () => {
+      calls.push('salvageWorkdirResidue');
+      upper.push(...residue);
+      const moved = residue.length;
+      residue = [];
+      return moved;
     },
     unmountOverlay: async () => {
       calls.push('unmountOverlay');
@@ -644,7 +659,7 @@ function harness(overrides: {
     now: () => overrides.now ?? 10_000_000,
     log: (message) => logs.push(message),
   };
-  return { ports, calls, logs, stateNow: () => state };
+  return { ports, calls, logs, stateNow: () => state, upperNow: () => [...upper] };
 }
 
 async function attachOf(record: Harness): Promise<AttachOutcome> {
@@ -722,8 +737,8 @@ describe('attach — replay first, mount last, receipt believed only when it par
     // And the fixed control work is all of it: release the stale store mount,
     // mount the store, one runner invocation, mount the overlay, confirm.
     expect(record.calls).toEqual([
-      'overlayMounted', 'unmountStore', 'mountStore', 'invokeRunner:restore', 'mountOverlay',
-      'overlayMounted',
+      'overlayMounted', 'unmountStore', 'mountStore', 'invokeRunner:restore',
+      'salvageWorkdirResidue', 'mountOverlay', 'overlayMounted',
     ]);
     // A million objects and an empty journal is a FRESH classification now,
     // because the receipt says nothing was ever folded and nothing is pending.
@@ -930,6 +945,53 @@ describe('the receipt is untrusted input, because it crossed a process boundary'
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('committed');
     expect(outcome.movedBytes).toBe(9);
+  });
+});
+
+// ── bytes written with no overlay mounted ───────────────────────────────────
+
+describe('a work directory written to with nothing mounted', () => {
+  test('reaches the upper, where the next checkpoint journals it', async () => {
+    // MEASURED, TWICE. The deployed `overlay-cas` arm of runs 20260831031426
+    // and 20260831143544 answered `wake restored empty, expected attached` for a
+    // box that had been written to all through its checkpoint ladder. A
+    // container replaced under an attached box has no overlay, so those writes
+    // landed in the bare work directory — and the attach that followed laid the
+    // overlay straight OVER them. They were still on the disk, invisible under
+    // the mount, so the upper this strategy scans was empty, no journal entry
+    // was ever written, the fold had nothing to fold, and the cursor stayed at
+    // zero. The bytes were not lost by a store failure; they were hidden by a
+    // mount.
+    const record = harness({ workdirResidue: ['ladder', '.devbox-verify-marker.txt'] });
+
+    const outcome = await attachOf(record);
+
+    expect(outcome.kind).toBe('empty');
+    expect(record.upperNow()).toEqual(['ladder', '.devbox-verify-marker.txt']);
+    expect(record.logs.join(' ')).toContain('moved into the upper');
+  });
+
+  test('is salvaged AFTER the replay and BEFORE the mount, so the newer bytes win', async () => {
+    // Order is the whole correctness. The replay writes the upper from the
+    // journal; the residue was written after that journal batch, so it is the
+    // newer of the two and must land on top — and both must be in place before
+    // the overlay takes the upper as a parameter.
+    const record = harness({ workdirResidue: ['notes.txt'] });
+
+    await attachOf(record);
+
+    const replay = record.calls.indexOf('invokeRunner:restore');
+    const salvage = record.calls.indexOf('salvageWorkdirResidue');
+    const mount = record.calls.indexOf('mountOverlay');
+    expect(replay).toBeGreaterThanOrEqual(0);
+    expect(salvage).toBeGreaterThan(replay);
+    expect(mount).toBeGreaterThan(salvage);
+  });
+
+  test('an already-attached box salvages nothing: its work directory IS the mount', async () => {
+    const record = harness({ mounted: true, workdirResidue: ['notes.txt'] });
+    expect((await attachOf(record)).kind).toBe('already-attached');
+    expect(record.calls).not.toContain('salvageWorkdirResidue');
   });
 });
 

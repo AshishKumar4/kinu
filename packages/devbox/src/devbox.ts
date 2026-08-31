@@ -222,6 +222,17 @@ const CHECKPOINT_CALLBACK = 'devboxCheckpoint';
 const HEARTBEAT_CALLBACK = 'devboxHeartbeat';
 const INCIDENT_CALLBACK = 'devboxIncidents';
 
+/**
+ * Where the snapshot chain's seed stamp lives inside the container.
+ *
+ * Beside the upper, never inside it: everything under the upper is archived as
+ * the next delta, and a marker that travelled into the archive would then
+ * describe itself. On the container's own ephemeral disk for the same reason the
+ * boot id is: the fact it records is "the upper ON THIS DISK already holds that
+ * delta", which a replaced disk must not be able to claim.
+ */
+const CHAIN_SEED_STAMP_PATH = `${DEVBOX_RUNTIME_DIR}/upper.seed-stamp`;
+
 /** Where the boot id lives inside the container.
  *
  *  Under `/tmp` deliberately: it must NOT survive a replacement. That is the
@@ -676,6 +687,55 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
     await this.ctx.storage.put(BOOT_ID_KEY, bootId);
     return bootId;
+  }
+
+  /**
+   * Was the container this box restored replaced underneath it?
+   *
+   * ONE COMPARISON, THREE CALLERS: the heartbeat, which re-drives a restoration
+   * it finds stale, and the two commit entry points, which must not report a
+   * commit against a container that is gone. A box with no stamp has made no
+   * claim about any instance, so it answers `false` rather than `replaced`.
+   */
+  async #containerWasReplaced(): Promise<boolean> {
+    const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
+    return expected !== undefined && (await this.#readBootId()) !== expected;
+  }
+
+  /**
+   * Re-attach before committing when the instance underneath was replaced.
+   *
+   * MEASURED DEFECT THIS REPAIRS. `ensureReady()` accepts this object's
+   * in-memory `attached` restoration as proof that THIS container holds the
+   * mount, and the platform replaces a container instance without telling
+   * anyone — measured at roughly once per workload phase under churn. Every
+   * operation between that replacement and the next heartbeat (up to
+   * `heartbeatSeconds`) therefore runs on a fresh container with NO mount, and
+   * its writes land in the bare `/workspace` directory. Both deployed control
+   * arms died of it on 2026-08-31, in the two shapes their strategies give it:
+   *
+   *   `r2fs` — s3fs refuses a non-empty mountpoint, and the refusal is
+   *     terminal, so the box never attached again.
+   *   `overlay-cas` — the next attach mounted the overlay OVER those bytes,
+   *     the upper it scans was therefore empty, nothing was ever journalled,
+   *     and the wake reported `empty` for a box that had been written to.
+   *
+   * A COMMIT IS THE RIGHT PLACE TO ASK. It is the moment this box claims bytes
+   * are durable, it happens at checkpoint cadence rather than per operation, and
+   * one `cat` of the boot marker is the whole cost. The re-attach is the
+   * ordinary restoration, so it goes through the same recovery ladder and the
+   * same residue handling every attach has.
+   */
+  async #healReplacedContainer(): Promise<void> {
+    if (this.#restoration.phase !== 'attached') return;
+    if (this.ctx.container?.running !== true) return;
+    if (!await this.#containerWasReplaced()) return;
+    console.error(
+      '[devbox] the container was replaced under an attached box; re-attaching before this '
+      + 'commit rather than reporting one against a container that is gone',
+    );
+    this.#invalidateGeneration();
+    await this.devboxStartup();
   }
 
   /** The id this container instance is carrying, or undefined when the file is
@@ -1467,6 +1527,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Commit now and report what it did. */
   async checkpointNow(kind: CheckpointKind): Promise<CheckpointOutcome> {
     this.stampInteraction();
+    await this.#healReplacedContainer();
     return await this.#checkpoint(kind);
   }
 
@@ -1491,6 +1552,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * A failed checkpoint refuses to stop because stopping would lose work.
    */
   async quiesce(): Promise<CheckpointOutcome> {
+    // The final commit is the one a wake reads back, so it is the last place a
+    // replaced container may go unnoticed: see `#healReplacedContainer`.
+    await this.#healReplacedContainer();
     const outcome = await this.#checkpoint('quiesce');
     if (outcome.kind === 'failed') {
       await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
@@ -2052,8 +2116,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
       // REPLACEMENT DETECTION, before any decision is made about an instance
       // that may not be the one that was restored.
-      const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
-      if (expected !== undefined && (await this.#readBootId()) !== expected) {
+      if (await this.#containerWasReplaced()) {
         console.error(
           '[devbox] the container instance was replaced; re-driving the restoration now '
           + 'rather than waiting for the next operation',
@@ -2351,6 +2414,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       unmount: async () => {
         await this.unmountBucket(DEVBOX_WORKDIR);
       },
+      // ONE COMMAND, so a container replaced between two RPCs cannot leave the
+      // residue directory made and the move undone. `find -exec … +` runs
+      // nothing when the mountpoint is already empty, which is the ordinary
+      // case, and the count is read from the residue directory the move filled.
+      quarantineMountpoint: async () => {
+        const residue = `${DEVBOX_RUNTIME_DIR}/r2fs-mountpoint-residue`;
+        const swept = await this.#rawExec(
+          `d='${residue}/'$(date +%s%N) && mkdir -p "$d" && `
+          + `find '${DEVBOX_WORKDIR}' -mindepth 1 -maxdepth 1 -exec mv -t "$d" -- {} + && `
+          + `find "$d" -mindepth 1 -maxdepth 1 | wc -l`,
+          DEVBOX_RUNTIME_DIR,
+        );
+        if (swept.exitCode !== 0) {
+          throw new Error(
+            `${DEVBOX_WORKDIR} could not be emptied for a mount: `
+            + `${swept.stderr.trim() || swept.stdout.trim() || `exit ${swept.exitCode}`}`,
+          );
+        }
+        const moved = Number.parseInt(swept.stdout.trim(), 10);
+        return Number.isSafeInteger(moved) && moved >= 0 ? moved : 0;
+      },
       inventory: async () => await prefixInventory(store.bucket, `${prefix}/`),
       clearPrefix: async () => await deletePrefix(store.bucket, `${prefix}/`),
       log: (message) => {
@@ -2427,6 +2511,31 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
       unmountOverlay: async () => {
         await this.#rawExec(`fusermount3 -u '${DEVBOX_WORKDIR}' || true`);
+      },
+      // ONE COMMAND, so a container replaced between two RPCs cannot leave the
+      // move half done. `cp -a src/. dst` MERGES into the directories the replay
+      // already wrote and preserves symlinks rather than following them, which
+      // is what keeps a hostile tree inside the upper; the copy runs before the
+      // delete so a failure loses nothing. `find … -exec … +` runs nothing when
+      // the work directory is empty, which is the ordinary case.
+      salvageWorkdirResidue: async () => {
+        const salvaged = await this.#rawExec(
+          `n=$(find '${DEVBOX_WORKDIR}' -mindepth 1 -maxdepth 1 | wc -l) && `
+          + `if [ "$n" -gt 0 ]; then mkdir -p '${CAS_UPPER_DIR}' && `
+          + `cp -a '${DEVBOX_WORKDIR}/.' '${CAS_UPPER_DIR}/' && `
+          + `find '${DEVBOX_WORKDIR}' -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; fi && `
+          + 'printf %s "$n"',
+          DEVBOX_RUNTIME_DIR,
+        );
+        if (salvaged.exitCode !== 0) {
+          throw new Error(
+            `${DEVBOX_WORKDIR} held entries written with no overlay mounted and they could not `
+            + `be moved into ${CAS_UPPER_DIR}: `
+            + `${salvaged.stderr.trim() || salvaged.stdout.trim() || `exit ${salvaged.exitCode}`}`,
+          );
+        }
+        const moved = Number.parseInt(salvaged.stdout.trim(), 10);
+        return Number.isSafeInteger(moved) && moved >= 0 ? moved : 0;
       },
       overlayMounted: async () =>
         isOverlayMounted((await this.#rawExec('cat /proc/mounts')).stdout, DEVBOX_WORKDIR),
@@ -2782,6 +2891,29 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         return { stream, size };
       },
       putObject: async (key, stream, size) => await putStream(store.bucket, key, stream, size),
+      readSeedStamp: async () => {
+        const read = await this.#rawExec(
+          `cat '${CHAIN_SEED_STAMP_PATH}' 2>/dev/null || true`, DEVBOX_RUNTIME_DIR,
+        );
+        const stamp = read.stdout.trim();
+        return stamp.length > 0 ? stamp : undefined;
+      },
+      writeSeedStamp: async (stamp) => {
+        // ONE COMMAND, and a temp-plus-rename: a stamp read half-written would
+        // claim an upper holds a delta it does not, which is the one way this
+        // marker could cost data rather than time.
+        const written = await this.#rawExec(
+          `printf %s ${JSON.stringify(stamp)} > '${CHAIN_SEED_STAMP_PATH}.tmp' && `
+          + `mv '${CHAIN_SEED_STAMP_PATH}.tmp' '${CHAIN_SEED_STAMP_PATH}'`,
+          DEVBOX_RUNTIME_DIR,
+        );
+        if (written.exitCode !== 0) {
+          throw new Error(
+            `the seed stamp could not be written at ${CHAIN_SEED_STAMP_PATH}: `
+            + `${written.stderr.trim() || written.stdout.trim() || `exit ${written.exitCode}`}`,
+          );
+        }
+      },
       objectFacts: async (key) => {
         // ONE metadata read, exactly what the byte count always cost, and it
         // carries TWO identities because neither covers every object. `digest`

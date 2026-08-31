@@ -889,7 +889,6 @@ export function parseUploadsPage(body: string): UploadsPage {
   }
   return { uploads, next: { keyMarker: xmlText(keyMarker), uploadIdMarker: xmlText(uploadIdMarker) } };
 }
-
 export function r2ResiduePlane(deps: {
   accountId: string;
   accessKeyId: string;

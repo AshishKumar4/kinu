@@ -49,6 +49,11 @@ interface Harness {
   /** Whether the work directory is mounted right now. The ports flip it, so a
    *  postcondition observes a world the code changed. */
   readonly mounted: () => boolean;
+  /** What the BARE mountpoint holds right now. Empty is the state a mount
+   *  requires, so this is the postcondition a stop owes the next attach. */
+  readonly mountpoint: () => readonly string[];
+  /** What was moved aside, so a test can prove nothing was destroyed. */
+  readonly quarantined: () => readonly string[];
 }
 
 function harness(overrides: {
@@ -59,6 +64,10 @@ function harness(overrides: {
   objects?: number;
   bytes?: number;
   syncExit?: number;
+  /** Entries sitting in the BARE mountpoint, as a container left them when it
+   *  was written to with nothing mounted. `mount` refuses while any remain,
+   *  which is what s3fs does. */
+  mountpointEntries?: readonly string[];
   /** The mount call never answers, which is what a stalled store request looks
    *  like from here: s3fs is inside its own connect and retry budgets and this
    *  side has nothing to observe. */
@@ -66,6 +75,8 @@ function harness(overrides: {
 } = {}): Harness {
   const calls: string[] = [];
   let mounted = overrides.mountedAtStart ?? false;
+  let mountpoint = [...overrides.mountpointEntries ?? []];
+  const quarantined: string[] = [];
   const ports: R2fsPorts = {
     containerRunning: () => overrides.running ?? true,
     readMounts: () => Promise.resolve(mounted ? MOUNTED : NOT_MOUNTED),
@@ -86,6 +97,16 @@ function harness(overrides: {
     mount: (s3fsOptions) => {
       calls.push(`mount:${s3fsOptions.join(',')}`);
       if (overrides.mountHangs === true) return Promise.withResolvers<void>().promise;
+      // THE REFUSAL THIS STRATEGY HAS TO SURVIVE, in s3fs's own words. The
+      // deployed `r2fs` arm died of it twice, and every later attach was refused
+      // for the same reason, so a stand-in that always mounts could not see the
+      // defect at all.
+      if (mountpoint.length > 0) {
+        return Promise.reject(new Error(
+          `S3FS mount failed: s3fs: MOUNTPOINT directory ${DEVBOX_WORKDIR} is not empty. `
+          + "if you are sure this is safe, can use the 'nonempty' mount option.",
+        ));
+      }
       mounted = overrides.mountLands ?? true;
       return Promise.resolve();
     },
@@ -102,9 +123,22 @@ function harness(overrides: {
       calls.push('clearPrefix');
       return Promise.resolve(overrides.objects ?? 12);
     },
+    quarantineMountpoint: () => {
+      calls.push('quarantineMountpoint');
+      quarantined.push(...mountpoint);
+      const moved = mountpoint.length;
+      mountpoint = [];
+      return Promise.resolve(moved);
+    },
     log: (message) => calls.push(`log:${message}`),
   };
-  return { ports, calls, mounted: () => mounted };
+  return {
+    ports,
+    calls,
+    mounted: () => mounted,
+    mountpoint: () => [...mountpoint],
+    quarantined: () => [...quarantined],
+  };
 }
 
 async function checkpointOf(record: Harness, kind: CheckpointKind): Promise<CheckpointOutcome> {
@@ -405,6 +439,68 @@ describe('discard — unmount before deleting', () => {
     await r2fsStorage(record.ports).discard();
     expect(record.calls).not.toContain('unmount');
     expect(record.calls).toContain('clearPrefix');
+  });
+});
+
+// ── the mountpoint, across a stop and back ──────────────────────────────────
+//
+// MEASURED, TWICE. The deployed `r2fs` arm of runs 20260831031426 and
+// 20260831143544 died at its third attach with
+//
+//   S3FS mount failed: s3fs: MOUNTPOINT directory /workspace is not empty
+//
+// and that refusal is TERMINAL: the directory is still not empty on the next
+// attach, so the box never attaches again. What put entries there is a container
+// replaced under an attached box — the readiness gate accepted this object's
+// in-memory `attached` restoration as proof that the new container held the
+// mount, so writes went to the bare directory. The commit path now re-attaches
+// when the generation changed (see devbox.ts), and these are the two halves the
+// strategy itself owes: a stop that leaves the mountpoint mountable, and an
+// attach that is not defeated by one that was not.
+
+describe('the mountpoint a stop leaves behind', () => {
+  test('detach leaves an empty mountpoint, which is what the next mount requires', async () => {
+    const record = harness({ mountedAtStart: true, mountpointEntries: ['stranded.txt'] });
+
+    await r2fsStorage(record.ports).detach?.();
+
+    expect(record.calls).toContain('unmount');
+    expect(record.mountpoint()).toEqual([]);
+    // MOVED, NOT DELETED. Those bytes were never durable — nothing was mounted
+    // when they were written — but they are still the caller's, so the sweep
+    // keeps them where an operator can find them.
+    expect(record.quarantined()).toEqual(['stranded.txt']);
+  });
+
+  test('a stop then attach cycle mounts, where an unswept mountpoint refused forever', async () => {
+    const record = harness({ mountedAtStart: true, mountpointEntries: ['stranded.txt'] });
+    const storage = r2fsStorage(record.ports);
+
+    await storage.detach?.();
+    const outcome = await storage.attach();
+
+    expect(outcome.kind).toBe('attached');
+    expect(record.mounted()).toBe(true);
+  });
+
+  test('an attach sweeps a mountpoint no stop ever swept, instead of being refused', async () => {
+    // The container was replaced, the writes landed on a bare directory, and no
+    // detach ran on that container at all: the sweep has to be part of the
+    // mount's own precondition, not only of the stop.
+    const record = harness({ mountpointEntries: ['.devbox-bench', 'ladder'] });
+
+    const outcome = await r2fsStorage(record.ports).attach();
+
+    expect(outcome.kind).toBe('attached');
+    expect(record.calls.indexOf('quarantineMountpoint'))
+      .toBeLessThan(record.calls.findIndex(call => call.startsWith('mount:')));
+    expect(record.quarantined()).toEqual(['.devbox-bench', 'ladder']);
+  });
+
+  test('a detach on a stopped container asks the container nothing', async () => {
+    const record = harness({ running: false, mountedAtStart: true });
+    await r2fsStorage(record.ports).detach?.();
+    expect(record.calls).toEqual([]);
   });
 });
 

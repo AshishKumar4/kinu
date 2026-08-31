@@ -171,6 +171,24 @@ export interface R2fsPorts {
   inventory(): Promise<{ objects: number; bytes: number }>;
   /** Delete every object under this box's prefix. Returns how many went. */
   clearPrefix(): Promise<number>;
+  /**
+   * Move every entry sitting in the BARE mountpoint aside, and answer how many
+   * moved.
+   *
+   * MEASURED DEFECT THIS REPAIRS. s3fs refuses a non-empty mountpoint outright
+   * — `s3fs: MOUNTPOINT directory /workspace is not empty` — and that refusal
+   * is TERMINAL for a box: every later attach re-reads the same directory and
+   * is refused again, so one write that landed while nothing was mounted costs
+   * the box the rest of its life. Two consecutive deployed runs died there
+   * (20260831031426 and 20260831143544, `r2fs` arm, at its third attach).
+   *
+   * An entry can only be in the bare mountpoint if it was written while nothing
+   * was mounted, so it is not durable and never was — this strategy's durable
+   * bytes are the store's. It is MOVED rather than deleted, so nothing is
+   * destroyed, and the count travels back so the strategy says what it swept
+   * instead of sweeping silently.
+   */
+  quarantineMountpoint(): Promise<number>;
   log(message: string): void;
 }
 
@@ -231,6 +249,19 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
       };
     }
     await ports.exec(`mkdir -p '${R2FS_CACHE_DIR}' '${DEVBOX_WORKDIR}'`);
+    // AN EMPTY MOUNTPOINT IS PART OF THE MOUNT'S PRECONDITION, so it is
+    // established here rather than hoped for. `detach` already leaves the
+    // mountpoint empty, and this covers the case no detach ran: a write that
+    // reached the bare directory while nothing was mounted. Without it s3fs
+    // refuses, the refusal is terminal, and the box never attaches again.
+    const swept = await ports.quarantineMountpoint();
+    if (swept > 0) {
+      ports.log(
+        `${swept} entr${swept === 1 ? 'y' : 'ies'} were sitting in ${DEVBOX_WORKDIR} with `
+        + 'nothing mounted there, so they were never durable; moved aside so the mount can '
+        + 'land, and this box serves the store',
+      );
+    }
     await ports.mount(R2FS_S3FS_OPTIONS);
 
     const defect = await mountDefect(await ports.readMounts());
@@ -306,10 +337,25 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
     return { kind: 'committed', reason: undefined, bytes: held.bytes, movedBytes: undefined };
   };
 
+  /**
+   * Release the mount and leave the mountpoint in the state an attach requires.
+   *
+   * THE UNMOUNT IS HALF THE JOB. Once s3fs is gone, `${DEVBOX_WORKDIR}` is an
+   * ordinary directory again, and anything the container wrote there while the
+   * mount was down becomes visible — which is exactly the state that makes the
+   * NEXT `s3fs` refuse with `MOUNTPOINT directory is not empty`. A stop that
+   * leaves that behind hands the next attach a box it cannot mount, so the
+   * sweep belongs here, where the checkpoint that made the store durable has
+   * already run.
+   */
   const detach = async (): Promise<void> => {
-    if (ports.containerRunning() && isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) {
-      await ports.unmount();
-    }
+    if (!ports.containerRunning()) return;
+    if (isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) await ports.unmount();
+    const swept = await ports.quarantineMountpoint();
+    ports.log(
+      `${DEVBOX_WORKDIR} released (r2fs, mountpoint left empty`
+      + `${swept > 0 ? `, ${swept} undurable entr${swept === 1 ? 'y' : 'ies'} moved aside` : ''})`,
+    );
   };
 
   const discard = async (): Promise<void> => {

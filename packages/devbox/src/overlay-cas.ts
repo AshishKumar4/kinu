@@ -155,6 +155,26 @@ export interface OverlayCasPorts {
   inventory(): Promise<{ objects: number; bytes: number }>;
   /** Delete every object under this box's prefix. Returns how many went. */
   clearPrefix(): Promise<number>;
+  /**
+   * Move whatever the BARE work directory holds into the upper, and answer how
+   * many top-level entries moved.
+   *
+   * MEASURED DEFECT THIS REPAIRS. A container replaced under an attached box
+   * has no overlay, and every write until the replacement is noticed lands in
+   * the bare work directory. The attach that follows used to lay the overlay
+   * straight OVER those bytes: they were still on the disk, invisible under the
+   * mount, so the upper this strategy scans was empty, no journal entry was
+   * ever written, the fold had nothing to fold, and the wake reported `empty`
+   * for a box that had been written to — twice, on the deployed runs of
+   * 2026-08-31 (`overlay-cas` arm).
+   *
+   * Into the UPPER, not aside: the upper is exactly where an un-journalled
+   * change belongs, so the next checkpoint scans these bytes, journals them and
+   * folds them like any other pending change. Ordering is the caller's: the
+   * journal replay writes the upper too, and these bytes are the newer of the
+   * two, so they are moved AFTER the replay and win where the paths collide.
+   */
+  salvageWorkdirResidue(): Promise<number>;
   readState(): Promise<OverlayCasState | null>;
   writeState(state: OverlayCasState): Promise<void>;
   clearState(): Promise<void>;
@@ -271,6 +291,17 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
     await ports.unmountStore();
     await ports.mountStore();
     const restored = await runner('restore');
+    // AFTER THE REPLAY, BEFORE THE MOUNT. Anything in the bare work directory
+    // was written while no overlay existed — a container replaced under an
+    // attached box — and mounting over it would hide bytes nothing has
+    // journalled. See `salvageWorkdirResidue`.
+    const salvaged = await ports.salvageWorkdirResidue();
+    if (salvaged > 0) {
+      ports.log(
+        `${salvaged} entr${salvaged === 1 ? 'y' : 'ies'} written to ${DEVBOX_WORKDIR} while no `
+        + 'overlay was mounted were moved into the upper, so the next checkpoint journals them',
+      );
+    }
     await ports.mountOverlay();
     if (!await ports.overlayMounted()) {
       throw new Error(

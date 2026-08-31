@@ -800,6 +800,9 @@ function snapshotChainArm(): ConformanceArm {
    *  which is exactly why the chain's control plane is not in the store. */
   let row: ChainState | null = null;
   let disk = new ContainerDisk();
+  /** The seed stamp lives beside the upper on the container's own disk, so a
+   *  replacement takes it with the upper it describes. */
+  let seedStamp: string | undefined;
   let storage = build();
 
   function build(): DevboxStorage {
@@ -822,6 +825,10 @@ function snapshotChainArm(): ConformanceArm {
       },
       checkpointIntervalMs: () => 0,
       checkChanges: async () => ({ status: 'changed', version: `v${durable.writes.length}` }),
+      readSeedStamp: async () => disk.dead ? undefined : seedStamp,
+      writeSeedStamp: async (stamp) => {
+        seedStamp = stamp;
+      },
       exec,
       mountStore: async (chainId) => {
         if (disk.dead) throw new ContainerDied('mountStore on a dead container');
@@ -914,6 +921,9 @@ function snapshotChainArm(): ConformanceArm {
     replaceContainer: () => {
       disk.dead = true;
       disk = new ContainerDisk();
+      // The stamp described an upper on the disk that just died. A blank disk
+      // holds neither, which is what makes a replacement seed in full.
+      seedStamp = undefined;
       storage = build();
     },
     stopContainer: () => {
@@ -1006,6 +1016,11 @@ function r2fsArm(): ConformanceArm {
       },
       inventory: async () => durable.inventory(`${prefix}/`),
       clearPrefix: async () => durable.deletePrefix(`${prefix}/`),
+      // NOTHING IN THIS MACHINE WRITES TO A BARE MOUNTPOINT: `workspace.write`
+      // refuses when nothing is mounted, so the sweep has nothing to move and
+      // says so. The dirty-mountpoint case lives in `r2fs.test.ts`, whose mount
+      // refuses a non-empty mountpoint the way s3fs does.
+      quarantineMountpoint: async () => 0,
       log: () => undefined,
     };
     return r2fsStorage(ports);
@@ -1295,6 +1310,11 @@ function overlayCasArm(): ConformanceArm {
       },
       inventory: async () => durable.inventory(`${prefix}/`),
       clearPrefix: async () => durable.deletePrefix(`${prefix}/`),
+      // Same as the r2fs arm: this machine's workspace refuses a write with no
+      // overlay mounted, so no residue can exist here. `overlay-cas.test.ts`
+      // owns the case where a replaced container left bytes in the bare work
+      // directory.
+      salvageWorkdirResidue: async () => 0,
       readState: async () => row,
       writeState: async (next) => {
         row = next;

@@ -264,6 +264,9 @@ function harness(overrides: {
   /** A caller-owned array to record into, so a staged `mounts` closure can read
    *  the calls made so far without a forward reference to the harness. */
   calls?: string[];
+  /** The seed stamp this container's disk already carries: which delta the upper
+   *  beside it holds. A replaced container has none, which is the default. */
+  seedStamp?: string;
 } = {}): Harness {
   const generations = [...(overrides.generations ?? [])];
   const calls = overrides.calls ?? [];
@@ -280,12 +283,22 @@ function harness(overrides: {
   const staged = overrides.mounts ?? NOT_MOUNTED;
   const mounts = (): string => (staged instanceof Function ? staged() : staged);
   let extractSeq = 3;
+  let seedStamp = overrides.seedStamp;
   let seedDied = false;
   let liveMark = overrides.upperMark ?? '7:4096:1700000000';
   let writes = 0;
 
   const ports: SnapshotChainPorts = {
     containerRunning: () => overrides.running ?? true,
+    readSeedStamp: () => {
+      calls.push('readSeedStamp');
+      return Promise.resolve(seedStamp);
+    },
+    writeSeedStamp: (stamp) => {
+      calls.push(`writeSeedStamp:${stamp}`);
+      seedStamp = stamp;
+      return Promise.resolve();
+    },
     allowExtraction: () => overrides.allowExtraction ?? true,
     archiveExcludes: () => overrides.archiveExcludes ?? CHAIN_EXCLUDES,
     readState: () => Promise.resolve(state),
@@ -895,6 +908,102 @@ describe('attach — the mount must be observed to have landed', () => {
 });
 
 // ── checkpoint ──────────────────────────────────────────────────────────────
+
+// ── the seed, across a stop that kept the container ─────────────────────────
+//
+// MEASURED, TWICE. The deployed `snapshot-chain` arm of runs 20260831031426 and
+// 20260831143544 died with
+//
+//   ContainerStartOverrun: Devbox.attach exceeded its 300000ms budget
+//
+// on the wake after a stop, while the COLD attach of the same box passed
+// comfortably. The difference between the two is this copy: a cold box has no
+// delta, and a woken one has the whole cumulative changed set to seed — read
+// through squashfuse over the mounted store, which is the only full read of an
+// archive anywhere on this path. The header's claim that "an attach moves NO
+// bytes" was true of everything except the one step that moves all of them.
+//
+// A stop does not necessarily take the container with it. When the same instance
+// comes back, its upper already holds exactly what the last publication
+// archived, and the stamp is what makes that provable rather than hopeful.
+
+describe('a wake whose upper already holds this delta', () => {
+  const stampFor = (chainId = CHAIN_ID, bytes = DELTA_BYTES): string =>
+    `${chainId}:${bytes}:${versionOf(deltaObjectKey(chainId), bytes)}`;
+
+  test('copies nothing, and still lands the overlay over the base', async () => {
+    const calls: string[] = [];
+    const record = harness({
+      state: chainState(),
+      mounts: mountsAfterAttach(calls),
+      calls,
+      seedStamp: stampFor(),
+    });
+
+    const outcome = await attachOf(record);
+
+    expect(outcome.kind).toBe('attached');
+    expect(record.calls.filter(call => call.startsWith('seedUpper'))).toEqual([]);
+    // ONE layer mount, not two: the delta is not mounted either, because the
+    // only reason to mount it was to copy it.
+    expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(1);
+    expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
+    expect(outcome.detail).toContain('already in this upper');
+  });
+
+  test('keeps the upper, because emptying it would throw away the delta AND the pending change',
+    async () => {
+      const calls: string[] = [];
+      const record = harness({
+        state: chainState(), mounts: mountsAfterAttach(calls), calls, seedStamp: stampFor(),
+      });
+
+      await attachOf(record);
+
+      expect(record.calls).not.toContain(`resetDirs:${UPPER}`);
+      expect(record.calls.some(call => call.startsWith('resetDirs') && call.includes(UPPER)))
+        .toBe(false);
+    });
+
+  test('a stamp naming another delta is not this delta: the copy happens', async () => {
+    const calls: string[] = [];
+    const record = harness({
+      state: chainState(),
+      mounts: mountsAfterAttach(calls),
+      calls,
+      // Same generation, same length, a DIFFERENT upload — the shape a replaced
+      // delta has, and the reason the stamp carries the store's own version.
+      seedStamp: `${CHAIN_ID}:${DELTA_BYTES}:another-upload`,
+    });
+
+    expect((await attachOf(record)).kind).toBe('attached');
+    expect(record.calls).toContain(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
+  });
+
+  test('a blank container disk has no stamp, so a replacement is seeded in full', async () => {
+    const calls: string[] = [];
+    const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
+
+    expect((await attachOf(record)).kind).toBe('attached');
+    expect(record.calls).toContain(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
+    // And the copy stamps what it seeded, so the NEXT attach on this disk can
+    // skip it.
+    expect(record.calls).toContain(`writeSeedStamp:${stampFor()}`);
+  });
+
+  test('the stamp is written after the copy and before the overlay', async () => {
+    const calls: string[] = [];
+    const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
+
+    await attachOf(record);
+
+    const seeded = record.calls.indexOf(`seedUpper:${DEVBOX_RUNTIME_DIR}/lower-delta->${UPPER}`);
+    const stamped = record.calls.findIndex(call => call.startsWith('writeSeedStamp:'));
+    const mounted = record.calls.indexOf(`overlayAttach:${DEVBOX_WORKDIR}:1`);
+    expect(stamped).toBeGreaterThan(seeded);
+    expect(stamped).toBeLessThan(mounted);
+  });
+});
 
 describe('checkpoint — gated on real change, proportional to it', () => {
   test('LIVE DEFECT: an unattached chain can answer neither skipped nor committed',

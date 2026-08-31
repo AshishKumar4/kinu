@@ -781,6 +781,17 @@ export interface SnapshotChainPorts {
   /** Delete objects. Used by discard, and to drop a superseded extraction
    *  archive after its replacement is durably recorded. */
   deleteObjects(keys: readonly string[]): Promise<void>;
+  /**
+   * The seed stamp: which delta the upper on THIS container disk already holds.
+   *
+   * Kept beside the upper rather than inside it, so no archive ever carries it,
+   * and on the container's own disk rather than in durable storage, because the
+   * fact it records — "these bytes are already in this upper" — dies with the
+   * disk. A replaced container has no stamp and is seeded from the store, which
+   * is the whole point: see {@link snapshotChainStorage}'s attach.
+   */
+  readSeedStamp(): Promise<string | undefined>;
+  writeSeedStamp(stamp: string): Promise<void>;
   /** Entry count of the work directory. The extraction-mode postcondition. */
   countEntries(dir: string): Promise<number>;
   /** Extraction-mode attach, through the SDK's own local-store path. */
@@ -1124,6 +1135,39 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return { kind: 'attached', detail: `extract ${generation.base.id}` };
   };
 
+  /**
+   * The identity of the delta a seeded upper holds: this chain's generation and
+   * the exact object the seed was copied from.
+   *
+   * All three halves are load-bearing. A generation id alone would match after a
+   * rebase onto a new base; a size alone would match a different archive of the
+   * same length; `objectVersion` is the store's own name for the upload that
+   * wrote the delta, so a replaced delta of identical size never matches a stamp
+   * written for its predecessor.
+   *
+   * THE DIGEST IS DELIBERATELY ABSENT. `putObject` always has one and
+   * `objectFacts` does not: R2 reports no checksum for an object the multipart
+   * API wrote, which is every delta large enough for this to matter. A stamp
+   * carrying it would therefore never match the store's own answer for exactly
+   * the archives whose copy costs the most, and the skip would be dead code.
+   */
+  const seedStampOf = (chainId: string, delta: ChainLayer): string =>
+    `${chainId}:${delta.bytes}:${delta.objectVersion ?? 'no-version'}`;
+
+  /** Record what the upper now holds, and treat a stamp this container will not
+   *  write as a slow next attach rather than a failed one: an unstamped upper is
+   *  re-seeded, which is correct, only wasteful. */
+  const stampSeededUpper = async (chainId: string, delta: ChainLayer): Promise<void> => {
+    try {
+      await ports.writeSeedStamp(seedStampOf(chainId, delta));
+    } catch (error) {
+      ports.log(
+        `${upperDir} holds delta ${chainId} and the seed stamp could not be written, so the `
+        + `next attach on this container will copy it again: ${describe({ cause: error })}`,
+      );
+    }
+  };
+
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const containerGeneration = await ports.containerGeneration?.();
     // Release any mount the SDK still believes it holds at this path before
@@ -1169,6 +1213,39 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (visible !== 'ready') {
       throw new Error(`chain ${generation.base.id} store mount does not expose ${mountedBase}`);
     }
+    // The delta this generation would seed from, as the STORE describes it: the
+    // seed copies the stored object, so the stored object's identity is the one
+    // a stamp may claim. An unreferenced but complete delta — a previous run
+    // crashed between the atomic PUT and the state write — is adopted, as this
+    // file's header describes.
+    const storedDelta = await ports.objectFacts(deltaObjectKey(generation.base.id));
+    const haveDelta = generation.delta !== undefined || storedDelta !== undefined;
+
+    // IS THIS UPPER ALREADY THIS DELTA?
+    //
+    // MEASURED COST THIS REMOVES. The seeding copy below reads the whole
+    // cumulative delta through squashfuse over the mounted store — the only
+    // full read of an archive on this path — and it ran on EVERY attach. On the
+    // deployed benchmark the ladder leaves a ~68 MiB delta and the post-stop
+    // wake spent the entire 300 s attach budget on that copy, twice
+    // (20260831031426 and 20260831143544, `snapshot-chain` arm): the box was
+    // abandoned mid-attach and the arm died, while the cold attach of the same
+    // box — which has no delta to seed — passed comfortably. The file header
+    // promises an attach that "moves NO bytes"; the copy was the one thing that
+    // broke that promise.
+    //
+    // A stop does not necessarily take the container with it, and when the same
+    // instance comes back its upper still holds exactly the bytes the last
+    // publication archived. The stamp is what makes that provable: it is written
+    // only after a copy completes and only names the delta object that copy read,
+    // so a half-seeded upper has no stamp, a superseded delta never matches one,
+    // and a replaced container — a blank disk — has none at all and is seeded in
+    // full. The upper is asked for as well as the stamp, because a stamp beside
+    // a missing upper claims nothing.
+    const seeded = storedDelta !== undefined
+      && (await ports.readSeedStamp()) === seedStampOf(generation.base.id, storedDelta)
+      && (await shell.pathExists(upperDir));
+
     await shell.unmountPath(DEVBOX_WORKDIR);
     await shell.unmountPath(lowerBase);
     await shell.unmountPath(lowerDelta);
@@ -1184,17 +1261,20 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // seeding copy below preserves symlinks instead of following them, so the
     // only way out of the upper would be a symlink ALREADY sitting at a path
     // the copy writes through. This reset is what guarantees there is none.
-    await shell.resetDirs([lowerBase, lowerDelta, upperDir, workDir]);
+    //
+    // AN ALREADY-SEEDED UPPER IS THE ONE EXCEPTION, and it is not an exception
+    // to that guarantee: the copy that filled it ran under this same reset, and
+    // the stamp proving it exists only because that copy finished. Emptying it
+    // would throw away the delta AND every change made since the publication
+    // that stamped it, then buy both back over the network.
+    await shell.resetDirs(seeded
+      ? [lowerBase, lowerDelta, workDir]
+      : [lowerBase, lowerDelta, upperDir, workDir]);
     try {
       await shell.mountLayer(baseObjectKey(generation.base.id), lowerBase);
     } catch (error) {
       await layerFailed('base', { cause: error });
     }
-
-    // An unreferenced but complete delta — a previous run crashed between the
-    // atomic PUT and the state write — is adopted. See this file's header.
-    const haveDelta = generation.delta !== undefined
-      || (await ports.objectFacts(deltaObjectKey(generation.base.id))) !== undefined;
 
     // SEED BEFORE THE OVERLAY LANDS, and this order is the whole correctness of
     // a re-driven attach.
@@ -1219,7 +1299,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // read of an archive anywhere on this path: a delta that mounts and then
     // fails mid-copy is a delta this generation cannot serve, and it says so
     // through `layerFailed` rather than as a bare host failure.
-    if (haveDelta) {
+    if (haveDelta && !seeded) {
       try {
         await shell.mountLayer(deltaObjectKey(generation.base.id), lowerDelta);
         await shell.seedUpper(lowerDelta, upperDir);
@@ -1231,6 +1311,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // lower of the overlay below, so removing it would be refused by the
       // kernel — and would break the overlay if it were not.
       await ports.exec(`rm -rf ${shellPath(lowerDelta)}`);
+      // STAMPED AFTER THE COPY AND BEFORE THE OVERLAY, which is the window the
+      // seeding order already relies on: no overlay exists yet, so a stamp can only
+      // describe a copy that finished.
+      if (storedDelta !== undefined) await stampSeededUpper(generation.base.id, storedDelta);
     }
     // ONE lower. The delta is already in the upper, which is what the header
     // means by "the upper alone is the whole cumulative changed set" — now true
@@ -1243,7 +1327,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // One mounted layer, plus the delta if there was one — reported separately
     // because they are different things now: the layer is lazy and moves no
     // bytes, the seed is a copy that already happened.
-    const restored = haveDelta ? 'base+seeded delta' : 'base';
+    const restored = !haveDelta
+      ? 'base'
+      : seeded ? 'base+delta already in this upper' : 'base+seeded delta';
     ports.log(
       `${DEVBOX_WORKDIR} attached from ${generation.base.id} `
       + `(chain, ${bytes} bytes, ${restored})`,
@@ -1798,6 +1884,15 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     await publish(committed, async () => {
       await ports.exec(`rm -rf ${shellPath(stageDir)}`);
     });
+    // THIS UPPER *IS* THE DELTA THAT WAS JUST PUBLISHED, so the stamp says so
+    // where the next attach reads it: the archive was built FROM this upper, so
+    // copying the object back over it would move the whole changed set to
+    // reproduce bytes already on the disk. A base or a rebase stamps nothing —
+    // its generation has no delta object at all, and the next attach resets the
+    // upper, which is what a fresh base requires.
+    if (!fresh && committed.delta !== undefined) {
+      await stampSeededUpper(chainId, committed.delta);
+    }
     ports.log(
       `${DEVBOX_WORKDIR} ${rebasing ? 'rebase' : first ? 'base' : 'delta'} ${chainId} `
       + `(${layer.bytes} bytes)`,

@@ -653,7 +653,11 @@ describe('every self-re-arming schedule needs a first link', () => {
     // 11-minute idle while the instance underneath was replaced. The boot id is
     // the only reliable signal, and the tick is the only place it can be read.
     const heartbeat = bodyOf('async devboxHeartbeat(');
-    expect(heartbeat).toContain('#readBootId()');
+    // ONE COMPARISON, AND EVERY CALLER GOES THROUGH IT. The heartbeat asks
+    // `#containerWasReplaced()`, which is where the boot id is read; a second
+    // copy of that comparison is how the two would drift.
+    expect(heartbeat).toContain('#containerWasReplaced()');
+    expect(bodyOf('async #containerWasReplaced(')).toContain('#readBootId()');
     expect(heartbeat).toContain('this.devboxStartup()');
     // The COUNTER lives where the evidence is, not where it is noticed. Every
     // restoration passes through the stamp, whether the container-start hook or
@@ -665,6 +669,28 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect(bodyOf('async #stampBootId(')).toContain('REPLACED_COUNT_KEY');
     // The id must die with the instance, or it proves nothing.
     expect(source).toContain("BOOT_ID_PATH = '/tmp/devbox-boot-id'");
+  });
+
+  test('a commit asks the same question, because a heartbeat cadence is not a fence', () => {
+    // MEASURED, TWICE. Detection every `heartbeatSeconds` leaves every operation
+    // in between running against a container that no longer holds the mount, and
+    // `ensureReady()` accepts this object's in-memory `attached` restoration as
+    // proof that it does. The deployed control arms died of exactly that on
+    // 2026-08-31: `r2fs` wrote into a bare `/workspace` until s3fs refused the
+    // mountpoint forever, and `overlay-cas` had its writes hidden under the next
+    // overlay so nothing was ever journalled and the wake reported `empty`.
+    //
+    // A COMMIT is where it has to be asked: it is the moment a box claims bytes
+    // are durable, it runs at checkpoint cadence rather than per operation, and
+    // one read of the boot marker is the whole cost.
+    expect(bodyOf('async checkpointNow(')).toContain('#healReplacedContainer()');
+    expect(bodyOf('async quiesce(')).toContain('#healReplacedContainer()');
+    const heal = bodyOf('async #healReplacedContainer(');
+    expect(heal).toContain('#containerWasReplaced()');
+    // Re-attach through the ordinary restoration, so the recovery ladder and the
+    // strategy's own residue handling are the ones that run.
+    expect(heal).toContain('this.#invalidateGeneration();');
+    expect(heal).toContain('await this.devboxStartup();');
   });
 
   test('keepAlive is never enabled, because it kills the alarm chain', () => {

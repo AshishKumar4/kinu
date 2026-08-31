@@ -410,6 +410,10 @@ async function measureAttach(
         throw new Error('attach listed the prefix, which is the tree-size term');
       },
       clearPrefix: async () => 0,
+      // Nothing here writes to a bare work directory, so the salvage moves
+      // nothing; `overlay-cas.test.ts` owns the case where a replaced container
+      // left bytes there.
+      salvageWorkdirResidue: async () => 0,
       readState: async () => null,
       writeState: async () => {},
       clearState: async () => {},
