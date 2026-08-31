@@ -1251,6 +1251,8 @@ export {
 // that depicts it (the landing page's terminal demo), so mocks cannot drift.
 export {
   CHANGE_KIND_GLYPH,
+  COMPOSER_MAX_ROWS,
+  composerVisibleRows,
   TUI_ADVERTISED_PRESET_BINDINGS,
   TUI_ADVERTISED_HINTS,
   TUI_COMPOSER_PLACEHOLDER,

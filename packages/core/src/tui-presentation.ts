@@ -79,3 +79,28 @@ export const TUI_ADVERTISED_HINTS = [
   { action: 'hub.agents', keys: tuiHintKey(TUI_ADVERTISED_PRESET_BINDINGS['hub.agents']), label: 'agents' },
   { action: 'tier.quick', keys: tuiHintKey(TUI_ADVERTISED_PRESET_BINDINGS['tier.quick']), label: 'tiers' },
 ] as const;
+
+/** Rows of a wrapped draft the chat composer grows to before it scrolls
+ *  instead. Eight keeps a long paste readable without burying the transcript. */
+export const COMPOSER_MAX_ROWS = 8;
+
+/** Rows the composer shows for a draft the editor wrapped to `virtualLines`
+ *  visual rows.
+ *
+ *  A draft is not a line count: word wrap turns one typed line into as many
+ *  VISUAL rows as the composer's width demands, over display columns — a CJK
+ *  glyph costs two, a combining mark none. The editor owns that wrap and the
+ *  cursor's row and column within it, and reports the result as a virtual line
+ *  count; this is the display decision on top of it. Never none, so an empty
+ *  draft keeps its placeholder row. Never more than `maxRows` — past the cap
+ *  the draft scrolls inside the composer with the cursor still in view, so the
+ *  cap bounds what is shown and never what can be typed. A count no editor
+ *  could report (no layout yet, so no wrap width) reads as one row rather than
+ *  a box height of NaN. */
+export function composerVisibleRows(virtualLines: number, maxRows: number = COMPOSER_MAX_ROWS): number {
+  if (!Number.isFinite(virtualLines)) return 1;
+  const rows = Math.floor(virtualLines);
+  const cap = Number.isFinite(maxRows) ? Math.max(1, Math.floor(maxRows)) : Number.POSITIVE_INFINITY;
+  if (rows < 1) return 1;
+  return Math.min(rows, cap);
+}

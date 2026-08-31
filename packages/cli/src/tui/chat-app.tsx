@@ -20,7 +20,7 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import {
-  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, effectiveRoleCatalog,
+  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, composerVisibleRows, effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type TierId,
 } from '@kinu.run/core';
 import {
@@ -213,6 +213,10 @@ function ChatScene({
     hubData ? { identity: `${initialClient.mode}:${initialClient.agentName}`, data: hubData } : null,
   );
   const [draft, setDraft] = useState('');
+  // What the composer SHOWS of that draft. The editor wraps it over display
+  // columns, so these are visual rows, not typed lines — read back from the
+  // editor after anything that re-wraps it.
+  const [composerRows, setComposerRows] = useState(1);
   // Each conversation keeps its own composer draft across switches — leaving
   // saves under the OLD client's key, arriving restores under the new one's.
   const draftsRef = useRef(new Map<string, string>());
@@ -363,10 +367,22 @@ function ChatScene({
     return effects;
   }, []);
 
+  /** How many visual rows the editor wrapped the draft into, capped for
+   *  display. The editor is the only thing that knows: it owns the wrap over
+   *  display columns and the cursor's row and column within it. Re-read after
+   *  anything that re-wraps — an edit, or a resize that changes the width the
+   *  same text wraps at. */
+  const syncComposerRows = useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    setComposerRows(composerVisibleRows(input.editorView.getTotalVirtualLineCount()));
+  }, []);
+
   const setInputText = useCallback((text: string) => {
     inputRef.current?.setText(text);
     setDraft(text);
-  }, []);
+    syncComposerRows();
+  }, [syncComposerRows]);
 
   /** Send (or steer) one user prompt. @path mentions (plus quoted/~ path
    *  tokens) become attachments: images and PDFs inline as file parts, other
@@ -1375,7 +1391,6 @@ function ChatScene({
     return handleSubmit(value);
   }, [handleSubmit, setInputText]);
 
-  const draftLines = Math.min(6, Math.max(1, draft.split('\n').length));
   const commandHints = !settingsOpen && !commandPalette && !modelPicker && hubView === null
     && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
     && !isProcessing && !/\s/.test(draft.trimStart())
@@ -1412,6 +1427,9 @@ function ChatScene({
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
   }, [inputFocused]);
+  // A resize re-wraps the same text at a new width, which the editor reports
+  // but no edit announces. The terminal's own dimensions are the trigger.
+  useEffect(syncComposerRows, [width, syncComposerRows]);
   inputShouldFocusRef.current = inputFocused;
 
   return (
@@ -1478,7 +1496,7 @@ function ChatScene({
 
       <box
         style={{
-          height: draftLines + 2,
+          height: composerRows + 2,
           border: true,
           borderStyle: 'single',
           borderColor: isProcessing ? colors.border.strong : colors.border.default,
@@ -1496,7 +1514,10 @@ function ChatScene({
             ...openTuiKeyBindings(keybindings, 'editor.submit'),
             ...openTuiKeyBindings(keybindings, 'editor.newline'),
           ]}
-          onContentChange={() => setDraft(inputRef.current?.plainText ?? '')}
+          onContentChange={() => {
+            setDraft(inputRef.current?.plainText ?? '');
+            syncComposerRows();
+          }}
           onSubmit={onInputSubmit}
         />
       </box>
