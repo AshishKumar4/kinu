@@ -66,18 +66,19 @@ export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729e
 
 # ── Which environment ─────────────────────────────────────────
 #
-# The four values that differ. Everything else in this file is shared.
+# The values that differ. Everything else in this file is shared. Both
+# environments serve the SAME unified shell — the landing carries the app
+# behind auth — so the smoke marker is one value, not a split.
 KINU_ENV="${1:-production}"
+KINU_APP_ROOT="landing-root"
 case "$KINU_ENV" in
   production)
     KINU_URL="https://kinu.run/"
     KINU_WRANGLER_ARGS=()
-    KINU_APP_ROOT="landing-root"
     ;;
   staging)
     KINU_URL="https://staging.kinu.run/"
     KINU_WRANGLER_ARGS=(--env staging)
-    KINU_APP_ROOT="root"
     ;;
   *)
     echo -e "${RED}Unknown environment '$KINU_ENV'.${NC}"
