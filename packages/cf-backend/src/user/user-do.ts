@@ -322,7 +322,7 @@ export class WorkspaceReservationNotPendingError extends Error {
  *  already has words for, and because the alternative — a bare SQL uniqueness
  *  violation — is not something a caller can read. Crosses the DO RPC boundary
  *  as its message, the same way `CapabilityDeniedError` does. */
-export class CliAuthorizationSpentError extends Error {
+class CliAuthorizationSpentError extends Error {
   constructor(options: ErrorOptions) {
     super('That CLI authorization has already been redeemed.', options);
     this.name = 'CliAuthorizationSpentError';

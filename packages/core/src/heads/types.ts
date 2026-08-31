@@ -175,7 +175,7 @@ export interface HeadStep {
  * status as `errored`, so a branch that ran out of wall clock was recorded as
  * having thrown. Four statuses, none of them a lump.
  */
-export const HEAD_REPORT_STATUSES = ['completed', 'budget_exceeded', 'aborted', 'errored'] as const;
+const HEAD_REPORT_STATUSES = ['completed', 'budget_exceeded', 'aborted', 'errored'] as const;
 export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];
 
 /**
@@ -188,7 +188,7 @@ export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];
  * gate either re-drives the run or `abandonRunning` settles it `aborted`. That is
  * what makes a caller owing work on these two terminate.
  */
-export const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;
+const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;
 export type HeadUnsettledStatus = (typeof HEAD_UNSETTLED_STATUSES)[number];
 
 /** Is this stored status one a head is still executing under? */

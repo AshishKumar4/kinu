@@ -105,6 +105,7 @@ import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
+import { LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
@@ -5232,6 +5233,9 @@ async function mount() {
   else if (frame === "activity") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />;
   else if (frame === "activityclean") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />;
   else if (frame === "activityempty") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />;
+  // The log pane alone, at fixture scale — the close-up the composed activity
+  // frames render too small to read.
+  else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
     entries = ["/workspace/checkout-fixes"];

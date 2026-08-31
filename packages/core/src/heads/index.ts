@@ -32,8 +32,6 @@ export {
   budgetExhausted,
   HEAD_BUILTIN_TOOLS,
   keepBuiltins,
-  HEAD_REPORT_STATUSES,
-  HEAD_UNSETTLED_STATUSES,
   headStatusUnsettled,
   storedHeadReportStatus,
 } from './types';
