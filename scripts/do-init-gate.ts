@@ -92,6 +92,39 @@
  * cannot await. Two syntactic facts, no call graph, and the gate says so on its
  * success path.
  *
+ * ## The one thing the wait-shaped rules cannot see: WHAT the work is
+ *
+ * All three rules above are about the WAIT. `async`, an own-scope `await`, a
+ * nested gate, what a recovery hook hands back — every one of them asks what
+ * the gate ends up waiting on. `OrchestratorAgent.onStart` satisfied all of
+ * them while spawning this:
+ *
+ *   autoTitleTask.promise = (async () => {
+ *     await this.hydrateTitle();
+ *     const soul = await readSoul(this.rt.storage.vfs);
+ *     await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
+ *   })();
+ *
+ * — a fire-and-forget task, launched from inside `blockConcurrencyWhile`, whose
+ * chain ends in `generateText`. The gate waits on none of it, so all three
+ * rules were satisfied and the shape was still wrong: an LLM call on the init
+ * path of every cold start of every claimed workspace, running against an
+ * activation whose gate is still open, and cancelled on eviction with its
+ * rejection swallowed by the runtime. Detaching work does not take it off the
+ * init path. It only takes it out of the WAIT.
+ *
+ * So the fourth rule is about REACH, and it is the only one that descends into
+ * what the hook SPAWNS: no call named in `MODEL_SINKS` may appear anywhere
+ * inside a governed `onStart` — its own scope, or a function expression it
+ * launches there. Model-reaching work belongs on a request frame (for the
+ * legacy title heal, the workspace-open `@callable`), where it is ordinary
+ * agent work rather than init-path work.
+ *
+ * Recovery hooks are deliberately NOT held to this rule: their sanctioned shape
+ * is to hand each re-drive to a detached durable carrier, and a re-drive may
+ * legitimately reach the model. That exemption is printed on the success path
+ * beside the other blind spots, not left to be discovered.
+ *
  * ## Why this shape, and not a call-graph gate
  *
  * The obvious gate — walk what `onStart` transitively awaits and look for
@@ -174,6 +207,37 @@ const RECOVERY_HOOKS: readonly string[] = [
  * everything the classifier reaches.
  */
 const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
+
+/**
+ * Calls that reach a model, pinned by name — the class of work no `onStart` may
+ * launch, awaited or not.
+ *
+ * Pinned by equality for the same reason {@link RECOVERY_HOOKS} is: this list
+ * IS the rule, so widening it — or failing to widen it when a new model seam
+ * arrives — must be an edit somebody makes here rather than a silent change of
+ * subject. Each name either performs a provider round trip or is a lane whose
+ * whole purpose is to make one:
+ *
+ *   • `suggestTitle`, `maybeAutoTitle`, `applyAutoTitle` — the titling chain
+ *     that shipped inside `OrchestratorAgent.onStart`, ending in `generateText`.
+ *   • `generateText`, `streamText`, `generateJson` — the provider entry points
+ *     this repo calls, so a hook that skips the lanes and reaches the SDK
+ *     directly is refused by the same rule.
+ *   • `runDueSessionEvolution`, `reviewCompletedTurn` — the cadence and advisor
+ *     passes, each a model call behind one name.
+ *
+ * Names, not a call graph: "Why this shape" above applies unchanged, and the
+ * honest limit — a hook that reaches a model under a name not on this list — is
+ * printed on the success path rather than left implied. `import.meta.main` also
+ * refuses a pin no source mentions, because a stale name is a rule every hook
+ * passes.
+ */
+export const MODEL_SINKS: readonly string[] = [
+  'suggestTitle', 'maybeAutoTitle', 'applyAutoTitle',
+  'generateText', 'streamText', 'generateJson',
+  'runDueSessionEvolution', 'reviewCompletedTurn',
+];
+
 /** The marker that opts a container-start hook into the plainly-bounded
  * alternative: its returned work touches nothing but this object's own storage.
  * Sought as an identifier inside the method body, so it names the method, not
@@ -262,6 +326,23 @@ function nestedGate(body: SyntaxNode): SyntaxNode | undefined {
     if (memberCalleeName(node) === 'blockConcurrencyWhile') hit = node;
   });
   return hit;
+}
+
+/**
+ * Every {@link MODEL_SINKS} call inside this hook, with the node it sits on.
+ *
+ * Unlike `ownScopeAwait` this DESCENDS into nested functions, and that is the
+ * whole point: the shape it exists to catch is a task the hook SPAWNS, whose
+ * own scope is where the model call lives. Work launched from an init hook is
+ * still init-path work — the gate merely stops waiting for it.
+ */
+function modelSinkCalls(body: SyntaxNode): { readonly name: string; readonly node: SyntaxNode }[] {
+  const found: { name: string; node: SyntaxNode }[] = [];
+  walk(body, (node) => {
+    const name = memberCalleeName(node) ?? identifierCalleeName(node);
+    if (name !== undefined && MODEL_SINKS.includes(name)) found.push({ name, node });
+  });
+  return found;
 }
 
 /** The bounded-start call this hook hands its work to, if any. Own scope only:
@@ -390,6 +471,20 @@ export function auditFile(
       if (nestedGate(body) !== undefined) {
         fail('opens a nested `blockConcurrencyWhile` — the same gate by another name');
       }
+      // The class of work, not the shape of the wait. Every check above asks
+      // what the gate waits on; this one asks what the hook LAUNCHES, and so it
+      // descends into the nested function expression a detached task is written
+      // as. The recovery population is exempt: handing a re-drive to a detached
+      // durable carrier is its sanctioned answer, and a re-drive may reach the
+      // model.
+      if (hook !== 'recovery') {
+        for (const sink of modelSinkCalls(body)) {
+          fail(`reaches \`${sink.name}\` at line ${String(parsed.lineAt(sink.node.start))} — a `
+            + 'model call on the init path. Detaching it does not move it off that path: the '
+            + 'promise runs against an activation whose gate is still open, and eviction cancels '
+            + 'it with its rejection swallowed. Run it from a request frame instead');
+        }
+      }
       if (hook === 'container-start') {
         const marked = hasBoundedStorageMarker(body);
         if (marked && boundedStart(body) !== undefined) {
@@ -491,6 +586,16 @@ if (import.meta.main) {
     problems.push(`no source declares \`${RECOVERY_CLASSIFIER}\` — the recovery hand-off rule `
       + 'is pinned to a name that no longer exists');
   }
+  // The sink rule's other half, and the same argument the classifier pin makes:
+  // a name no source mentions is a rule every hook passes, which reads exactly
+  // like a rule every hook obeys.
+  const unmentioned = MODEL_SINKS.filter(
+    (sink) => ![...sources].some(([, text]) => text.includes(sink)),
+  );
+  if (unmentioned.length > 0) {
+    problems.push(`no source mentions ${unmentioned.join(', ')} — the model-sink pin is stale, `
+      + 'so those names can no longer refuse anything');
+  }
   if (problems.length > 0) {
     for (const problem of problems) console.error(`do-init-gate: ${problem}`);
     process.exit(1);
@@ -514,6 +619,11 @@ if (import.meta.main) {
       + `\n  recovery hooks outside \`RECOVERY_HOOKS\` — the set is pinned from the vendored`
       + ' agents/think chains, so a vendor bump that awaits a NEW subclass hook in the gate'
       + '\n  is ungoverned until the name is added here'
+      + `;\n  what an onStart-spawned call REACHES beyond the ${String(MODEL_SINKS.length)} pinned`
+      + ' `MODEL_SINKS` names: the rule is by NAME, so a helper spawned there that reaches a'
+      + '\n  model under a name not on the list is ungoverned — and the recovery hooks are exempt'
+      + ' from that rule outright, because their sanctioned answer hands a re-drive (which may'
+      + '\n  reach the model) to a detached durable carrier'
       + (vendor.length > 0
         ? `;\n  the startup of vendor DO classes this repo re-exports (${vendor.join(', ')})`
         : ''),
@@ -530,7 +640,10 @@ if (import.meta.main) {
     + '\n(ActorAgent.beforeTurn); recovery work that must reach the model is detached.'
     + `\nContainer-start hook: return \`${START_DEADLINE}(...)\` so the work is bounded.`
     + `\nRecovery hook: classify synchronously through \`${RECOVERY_CLASSIFIER}\` and hand`
-    + '\nevery re-drive to a detached durable carrier (ActorAgent.redriveRecoveredLane).',
+    + '\nevery re-drive to a detached durable carrier (ActorAgent.redriveRecoveredLane).'
+    + '\nEither onStart, whatever the gate waits on: a call named in `MODEL_SINKS` is refused'
+    + '\noutright — detaching a model call does not move it off the init path. Run it from a'
+    + '\nrequest frame (for the legacy title heal, the workspace-open @callable).',
   );
   process.exit(1);
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { readSources } from './sources';
-import { audit, auditFile } from './do-init-gate';
+import { audit, auditFile, MODEL_SINKS } from './do-init-gate';
 
 /**
  * The fixture is not invented. This is `SubordinateAgent.onStart` exactly as it
@@ -352,6 +352,132 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
   });
 });
 
+// ── The class of work, not the shape of the wait ─────────────────────────────
+//
+// The three rules above all ask what the GATE WAITS ON. `OrchestratorAgent.onStart`
+// satisfied every one of them — not async, annotated `: void`, no own-scope await,
+// no nested gate — while spawning a fire-and-forget task whose chain ran
+// `hydrateTitle` → `readSoul` → `maybeAutoTitle` → `suggestTitle` → `generateText`.
+// An LLM call on the init path of every cold start of every claimed workspace,
+// against an activation whose gate is still open, cancelled on eviction with its
+// rejection swallowed. Detaching work takes it out of the wait, not off the path.
+describe('DO init-gate purity — model work spawned from the init gate', () => {
+  /**
+   * The shipped defect, recovered from the diff and not invented. This is the
+   * last block of `OrchestratorAgent.onStart` exactly as it stood, before the
+   * work moved to the workspace-open `@callable` (`getWorkspaceSnapshot`).
+   */
+  const SPAWNED = `export class OrchestratorAgent extends ActorAgent {
+    onStart(): void {
+      this.ensureSchema();
+      if (this.getOwnerUserId()) {
+        const autoTitleTask: AsyncTaskOwner = { promise: null };
+        this._backgroundTasks.add(autoTitleTask);
+        autoTitleTask.promise = (async () => {
+          try {
+            await this.hydrateTitle();
+            if (!isPlaceholderWorkspaceTitle(this.getDisplayName(), this.name)) return;
+            const soul = await readSoul(this.rt.storage.vfs);
+            await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
+          } finally {
+            this._backgroundTasks.delete(autoTitleTask);
+          }
+        })();
+      }
+    }
+  }`;
+
+  test('the shipped defect is reported — and only the reach rule can see it', () => {
+    const found = reasons(SPAWNED);
+    // ONE finding, from the one rule that descends into what the hook spawns.
+    // Every wait-shaped check passes on this method, which is why it shipped.
+    expect(found).toEqual([expect.stringContaining('reaches `maybeAutoTitle`')]);
+    expect(found[0]).toContain('Detaching it does not move it off that path');
+    expect(found.some((reason) => reason.includes('async')
+      || reason.includes('awaits in its own scope')
+      || reason.includes('nested `blockConcurrencyWhile`')
+      || reason.includes('must annotate'))).toBe(false);
+  });
+
+  test('every pinned sink refuses, in both call shapes the tree uses', () => {
+    // No name on the list is decoration. Both shapes, because both exist: a lane
+    // reached on `this`, and a provider entry point called as a free function.
+    expect(MODEL_SINKS.length).toBeGreaterThan(0);
+    for (const sink of MODEL_SINKS) {
+      for (const call of [`this.${sink}(input)`, `${sink}(input)`]) {
+        const spawned = `export class A extends Agent {
+          onStart(): void {
+            void (async () => { await ${call}; })();
+          }
+        }`;
+        expect(reasons(spawned)).toEqual([expect.stringContaining(`reaches \`${sink}\``)]);
+      }
+    }
+  });
+
+  test('a sink called straight from the hook is refused too', () => {
+    // The spawn is what made the defect invisible, not what made it wrong.
+    const direct = `export class A extends Agent {
+      onStart(): void { void this.applyAutoTitle(this.ownMission()); }
+    }`;
+    expect(reasons(direct)).toEqual([expect.stringContaining('reaches `applyAutoTitle`')]);
+  });
+
+  test('the fork-journal reconcile spawn stays legal — bounded SQL is not model work', () => {
+    // The shape three lines above the defect in the same method, and the reason
+    // this rule is a name list rather than "detached work is banned": the
+    // reconcile marks stale heads `interrupted` and offers their roots to the job
+    // sweep. Indexed writes, no provider, and it MUST be allowed to stay.
+    const bounded = `export class OrchestratorAgent extends ActorAgent {
+      onStart(): void {
+        this.ensureSchema();
+        const forkJournalReconcileTask: AsyncTaskOwner = { promise: null };
+        this._backgroundTasks.add(forkJournalReconcileTask);
+        forkJournalReconcileTask.promise = (async () => {
+          try {
+            await reconcileInterruptedForks({
+              journal: this.headJournal,
+              signals: this.orch.signals,
+              resume: jobRedriveResumeGate({ recoverOrphans: () => this.jobRunner.recoverOrphans() }),
+            });
+            await this.reclaimSettledExplorationFacets();
+          } finally {
+            this._backgroundTasks.delete(forkJournalReconcileTask);
+          }
+        })();
+      }
+    }`;
+    expect(reasons(bounded)).toEqual([]);
+  });
+
+  test('the container-start hook is held to the same reach rule', () => {
+    // Same name, opposite wait requirement — and the same answer about REACH: a
+    // container start is not a licence to open a provider connection either.
+    const container = `export class Devbox extends Sandbox {
+      override onStart(): Promise<void> {
+        void BOUNDED_STORAGE_ONLY;
+        void (async () => { await streamText(this.describeBoot()); })();
+        return this.armContainerSchedules();
+      }
+    }`;
+    expect(reasons(container)).toEqual([expect.stringContaining('reaches `streamText`')]);
+  });
+
+  test('a recovery hook is exempt — the re-drive it detaches may reach the model', () => {
+    // Deliberate, and printed on the success path rather than left to be
+    // discovered: this population's sanctioned answer is to hand each re-drive
+    // to a detached durable carrier, and a re-drive is allowed to reach a model.
+    // Holding it to the sink list would refuse the prescribed fix.
+    const recovery = `export class ActorAgent extends Think {
+      override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+        this.redriveRecoveredLane(ctx.name, ctx.snapshot, () => this.runDueSessionEvolution());
+        return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
+      }
+    }`;
+    expect(reasons(recovery)).toEqual([]);
+  });
+});
+
 describe('DO init-gate purity, against the real tree', () => {
   const SOURCES = readSources();
 
@@ -474,5 +600,35 @@ describe('DO init-gate purity, against the real tree', () => {
     const { violations, classifier } = auditFile(file, widened);
     expect(classifier).toMatchObject({ async: true });
     expect(violations.map((v) => v.reason)).toEqual([expect.stringContaining('declared `async`')]);
+  });
+
+  test('cut the wire: re-spawning the auto-title task from the real onStart goes red', () => {
+    // The defect this rule exists for, restored against the real file. The block
+    // was deleted from `onStart` and its work now runs from the workspace-open
+    // @callable; put it back and the gate must refuse it — while the
+    // fork-journal reconcile spawned immediately above it stays legal, which is
+    // the discrimination the whole rule rests on.
+    const file = 'packages/cf-backend/src/orchestrator.ts';
+    const real = SOURCES.get(file);
+    expect(real).toBeDefined();
+
+    const tail = '        this._backgroundTasks.delete(forkJournalReconcileTask);\n'
+      + '      }\n    })();\n  }\n';
+    expect(real).toContain(tail);
+    const respawned = real!.replace(tail, `${tail.slice(0, -4)}    if (this.getOwnerUserId()) {
+      const autoTitleTask: AsyncTaskOwner = { promise: null };
+      this._backgroundTasks.add(autoTitleTask);
+      autoTitleTask.promise = (async () => {
+        await this.hydrateTitle();
+        const soul = await readSoul(this.rt.storage.vfs);
+        await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
+      })();
+    }
+  }
+`);
+    expect(respawned).not.toBe(real);
+    const { violations } = auditFile(file, respawned);
+    expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['OrchestratorAgent.onStart']);
+    expect(violations[0]!.reason).toContain('reaches `maybeAutoTitle`');
   });
 });

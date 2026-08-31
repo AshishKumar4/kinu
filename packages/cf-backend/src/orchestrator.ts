@@ -1861,6 +1861,56 @@ export class OrchestratorAgent extends ActorAgent {
     return true;
   }
 
+  /** Whether this activation has already offered a legacy workspace its title.
+   *  See {@link ensureLegacyTitle}: the answer this produces is durable, so one
+   *  check is everything any number of opens can learn. */
+  private _legacyTitleChecked = false;
+
+  /**
+   * Offer a legacy workspace its title, from the frame that OPENED it.
+   *
+   * Workspaces created before mission-derived titling still show their raw
+   * slug. Healing one costs a registry read, a SOUL.md read, and — when the
+   * placeholder is real — a model call.
+   *
+   * That chain used to be launched from `onStart`: a fire-and-forget task,
+   * spawned inside `blockConcurrencyWhile`, ending in `generateText`. Detaching
+   * work does not take it off the init path. The activation's gate is still
+   * open around whatever the hook spawns, the runtime cancels a floating
+   * promise on eviction with its rejection swallowed, and the model call was
+   * therefore both unbounded and unreliable — paid for on every cold start of
+   * every claimed workspace, whether or not anyone was looking.
+   *
+   * The open frame is where it belongs: an ordinary request, off the gate, at
+   * the one moment the raw slug is actually on somebody's screen. Detached from
+   * THAT frame rather than awaited by it, so the mount payload never waits on a
+   * model call — request-frame model work is ordinary agent work.
+   * `scripts/do-init-gate.ts` refuses the old shape by REACH now (its pinned
+   * model-sink list), not by whether the gate awaits it.
+   */
+  private ensureLegacyTitle(): void {
+    if (this._legacyTitleChecked || !this.getOwnerUserId()) return;
+    this._legacyTitleChecked = true;
+    const autoTitleTask: AsyncTaskOwner = { promise: null };
+    this._backgroundTasks.add(autoTitleTask);
+    autoTitleTask.promise = (async () => {
+      try {
+        await this.hydrateTitle();
+        if (!isPlaceholderWorkspaceTitle(this.getDisplayName(), this.name)) return;
+        const soul = await readSoul(this.rt.storage.vfs);
+        await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
+      } catch (cause) {
+        diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
+          doing: 'reading SOUL.md to title a legacy workspace',
+          cause,
+          otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._backgroundTasks.delete(autoTitleTask);
+      }
+    })();
+  }
+
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
   // Lifecycle (detach → settle → wake + cancel + recover) lives in the core
   // BackgroundJobRunner (this.jobRunner) and the control plane above it in core
@@ -2289,32 +2339,6 @@ export class OrchestratorAgent extends ActorAgent {
         this._backgroundTasks.delete(forkJournalReconcileTask);
       }
     })();
-    // Workspaces created before mission-derived titling still show their raw
-    // slug. Title them from SOUL.md's mission the first time one is opened —
-    // every other workspace is already titled, so it costs a registry read.
-    // The placeholder check runs against the ROOT's naming state once the
-    // activation cache has hydrated from it. Fire-and-forget: boot never
-    // waits on a model call.
-    if (this.getOwnerUserId()) {
-      const autoTitleTask: AsyncTaskOwner = { promise: null };
-      this._backgroundTasks.add(autoTitleTask);
-      autoTitleTask.promise = (async () => {
-        try {
-          await this.hydrateTitle();
-          if (!isPlaceholderWorkspaceTitle(this.getDisplayName(), this.name)) return;
-          const soul = await readSoul(this.rt.storage.vfs);
-          await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
-        } catch (cause) {
-          diagnostics.failure('workspace.auto_title_soul_read_failed', toKinuError({
-            doing: 'reading SOUL.md to title a legacy workspace',
-            cause,
-            otherwise: 'io',
-          }), { workspace: this.name });
-        } finally {
-          this._backgroundTasks.delete(autoTitleTask);
-        }
-      })();
-    }
   }
   /**
    * Reclaim exploration facets a reset left behind, against the ledgers the
@@ -4002,6 +4026,11 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable()
   async getWorkspaceSnapshot() {
+    // The workspace is being OPENED: this is the mount round trip the web
+    // client makes (`hooks/use-kinu.ts`, `loadAllData`), and a request frame
+    // rather than the init gate. Launched BEFORE this frame's own reads, so an
+    // open whose payload fails still leaves the title lane running.
+    this.ensureLegacyTitle();
     const [status, tools, memoryContent, executors, activePlan, tabPresence] = await Promise.all([
       this.getAgentStatus(),
       this.getToolDescriptions(),

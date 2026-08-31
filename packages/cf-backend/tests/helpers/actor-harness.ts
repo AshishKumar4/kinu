@@ -33,7 +33,7 @@ import {
   type HeadInput, type HeadReport, type HeadRuntime,
   type ShellApprovalRequest,
   type FactsStore, type SleepTimeUpdate,
-  type AgentSignal, type SignalOutcome,
+  type AgentSignal, type SignalOutcome, type ReleaseBoard,
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
@@ -820,12 +820,14 @@ function makeEnv(
       // Recording when a test asked for it, refusing otherwise. The refusing
       // default is the point: a path that reaches the user plane without saying
       // it would fails loudly rather than silently succeeding against a double.
-      // What a CLAIMED root's owner plane actually answers on a settled turn: the
-      // title registry, the owner profile and the MCP warm. The harness declares
-      // an owner and holds a capability, so refusing these would make every settle
-      // owe a title it can never land and file a failure for a connect nobody
-      // asked about. Everything else still refuses, which is what keeps a path
-      // that reaches the user plane unannounced from passing against a double.
+      // What a CLAIMED root's owner plane actually answers on a settled turn or
+      // an OPEN: the title registry, the owner profile, the MCP warm, and the
+      // release board the workspace-open payload reads for tab presence. The
+      // harness declares an owner and holds a capability, so refusing these
+      // would make every settle owe a title it can never land, file a failure for
+      // a connect nobody asked about, and fail the mount round trip outright.
+      // Everything else still refuses, which is what keeps a path that reaches
+      // the user plane unannounced from passing against a double.
       //
       // A suite that supplies a REAL UserDO gets that instead, whole: the point of
       // `world.userDO` is to drive production code over production state.
@@ -845,6 +847,13 @@ function makeEnv(
             return { servers: 1 };
           },
           getProfile: async (): Promise<{ email: string } | null> => userPlane?.profile ?? null,
+          // An EMPTY board, which is the honest answer for a workspace no test
+          // has bound a release source to: `getWorkspaceTabPresence` gates the
+          // Releases tab on `changes.length`, so an empty board is a tab the
+          // surface correctly does not show.
+          getReleaseBoard: async (): Promise<ReleaseBoard> => ({
+            bindings: [], changes: [], checks: [], approvals: [], deployments: [],
+          }),
         };
         return new Proxy(ownerPlane, {
           get: (target, prop) => {

@@ -502,6 +502,33 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A workspace's title is no longer generated from the Durable Object's init
+  path.** `OrchestratorAgent.onStart` spawned a fire-and-forget task that read the
+  owner's title registry, read SOUL.md and asked a model for a name, so every cold
+  start of every claimed workspace launched an LLM call inside
+  `blockConcurrencyWhile` — whether or not anybody was looking at the title. The
+  gate waited on none of it, which is exactly why it survived review: the hook was
+  not `async`, awaited nothing in its own scope, and opened no nested gate.
+  Detaching work takes it out of the WAIT, not off the init path. The promise runs
+  against an activation whose gate is still open, and an eviction cancels it with
+  its rejection swallowed by the runtime, so the title a legacy workspace was owed
+  could also simply never arrive.
+
+  The check now runs from the frame that OPENED the workspace — the mount round
+  trip the web client makes (`getWorkspaceSnapshot`) — guarded once per activation,
+  because the answer it produces is durable. That is the only moment the raw slug
+  is on somebody's screen, and request-frame model work is ordinary agent work.
+
+  `scripts/do-init-gate.ts` gained the rule that would have refused the shape. Its
+  existing rules all ask what the gate WAITS on; the new one asks what the hook
+  LAUNCHES, and it is the only one that descends into nested function expressions:
+  a call named in the pinned `MODEL_SINKS` list may not appear anywhere inside a
+  governed `onStart`. The bounded fork-journal reconcile spawned from the same
+  method stays legal, which is the discrimination the rule rests on, and recovery
+  hooks are exempt outright — their sanctioned answer hands a re-drive that may
+  reach the model to a detached durable carrier. A pin no source mentions fails
+  the gate, and both the exemption and the by-name limit print on the success path.
+
 - **An interrupted durable lane is classified inside the Durable Object's init
   gate and re-driven outside it.** Every entry point — `fetch`, a websocket
   frame, the persisted keepAlive alarm with nobody connected — awaits
