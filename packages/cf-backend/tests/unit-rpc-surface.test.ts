@@ -429,7 +429,7 @@ describe('a facet reaches its root only through the sealed surface', () => {
     // The ONE acquisition that is not a local: it hands the thunk to another
     // module, which is why that module is in REACHING_FILES. Counted here so a
     // second hand-off cannot be added without extending the corpus too.
-    const handedOff = [...source_.matchAll(/forwardFacetModelOperations\(\(\) => this\.getSharedParentStub\(\)\)/g)];
+    const handedOff = [...source_.matchAll(/forwardFacetModelOperation\(\(\) => this\.getSharedParentStub\(\), event\)/g)];
     expect(handedOff).toHaveLength(1);
     expect(named).toHaveLength(bindings.length - handedOff.length);
     expect(named.filter((name, i, all) => all.indexOf(name) === i)).toEqual(['parent']);
