@@ -15,6 +15,8 @@
  * The terminal ledger itself — claim, effects, replay — is
  * unit-durable-terminal.test.ts.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, mock, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -372,7 +374,6 @@ function installedFiberRecoveryScene() {
   const subject = {
     _runFiberRecoveryInProgress: false,
     _resolvedOptions: {
-      fiberRecoveryScanDeadlineMs: 10_000,
       fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
     },
     _runFiberActiveFibers: new Set<string>(),
@@ -736,5 +737,19 @@ describe('the interrupted-fiber sweep spends the budget before the memory', () =
     expect(result).toEqual({ dropped: 1, scanned: 1, truncated: false });
     expect(scene.survivors()).not.toContain('expired-behind-the-wall');
     expect(scene.survivors()).toHaveLength(FIBER_SWEEP_MAX_ROWS + 10);
+  });
+
+  test('the PATCHED framework scan carries the same row budget, never a stopwatch', () => {
+    // This repo owns patches/agents@0.20.1.patch: its _checkRunFibers rewrite
+    // is Kinu code wearing a vendor path, so the init ruling applies to it the
+    // same way. Pinned against the INSTALLED dist so a future repin that
+    // resurrects the wall-clock exit fails here by name.
+    const dist = readFileSync(
+      join(import.meta.dirname, '../../../node_modules/agents/dist/index.js'), 'utf8',
+    );
+    expect(dist).not.toContain('scan_deadline_exceeded');
+    expect(dist).not.toContain('scanStartedAt');
+    expect(dist).toContain('RUN_SCAN_MAX_ROWS = 4096');
+    expect(dist).toContain('scan_budget_exceeded');
   });
 });

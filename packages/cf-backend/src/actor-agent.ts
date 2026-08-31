@@ -241,7 +241,7 @@ import {
   // The recovery budget this backend DECLARES (handed to the SDK below), and
   // the budget-first pass that applies it before the framework allocates.
   sweepUnrecoverableFibers, fiberRowStore,
-  FIBER_RECOVERY_MAX_AGE_MS, FIBER_RECOVERY_SCAN_DEADLINE_MS,
+  FIBER_RECOVERY_MAX_AGE_MS,
   type FiberLaneTransports,
 } from "./fiber-recovery";
 import {
@@ -6157,7 +6157,6 @@ export abstract class ActorAgent extends Think<Env> {
    */
   static options = {
     fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
-    fiberRecoveryScanDeadlineMs: FIBER_RECOVERY_SCAN_DEADLINE_MS,
   };
 
   /**

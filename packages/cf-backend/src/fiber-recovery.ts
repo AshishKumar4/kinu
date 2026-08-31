@@ -70,13 +70,6 @@ import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Soft deadline for one interrupted-fiber pass. Kinu's declared value for the
- * SDK option of the same name, so the pre-pass below and the framework's own
- * scan are bounded by one number.
- */
-export const FIBER_RECOVERY_SCAN_DEADLINE_MS = 10_000;
-
-/**
  * The most rows one activation's pre-pass scans — the inherent bound the init
  * ruling requires. Metadata-only pages, so the worst case is a handful of
  * indexed reads; a backlog deeper than this waits for the next activation
@@ -85,9 +78,10 @@ export const FIBER_RECOVERY_SCAN_DEADLINE_MS = 10_000;
 export const FIBER_SWEEP_MAX_ROWS = 4096;
 
 /**
- * One metadata row per read. This is not a policy cap: recovery stays bounded
- * by the SDK's existing scan deadline, while the read is structurally incapable
- * of holding more than one snapshot candidate at a time.
+ * One metadata row per read. This is not a policy cap: the framework's own
+ * scan carries the same 4096-row budget (patches/agents@0.20.1.patch — a
+ * stopwatch bounded nothing but the wait), while the read is structurally
+ * incapable of holding more than one snapshot candidate at a time.
  */
 const ONE_FIBER_ROW = 1;
 
