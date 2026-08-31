@@ -167,15 +167,24 @@ export const PRESETS = {
  */
 export type SurfaceVariant = 'bare' | 'glossed' | 'zoo';
 
-/** Verbatim from `ObjectiveSpec`, because a paraphrase would test my wording. */
+/** Verbatim from `SwarmInput.models` — the field the spec `ObjectiveSpec` was
+ *  authoring — because a paraphrase would test my wording rather than theirs.
+ *  Naming the declaration rather than its author is what makes the claim checkable
+ *  at all, and the marker STAYS even though it no longer resolves: `SwarmInput` has
+ *  since dropped `models` as accepted-and-ignored (see the note on
+ *  `SwarmConfig` in `packages/core/src/strategy/swarm.ts`), so this copy is the
+ *  pre-registered surface rather than a live quotation. Dropping the marker would
+ *  hide that from the citation gate, which counts it and names it on the green path
+ *  as a target this tree does not declare. */
 export const MODELS_FIELD_DESCRIPTION =
   'Per-node model variation, for CAPABILITY AND COST ROUTING — a cheap model for recon, a '
-  + 'strong one for synthesis. NOT for diversity: Self-MoA (2502.00674) re-ran '
-  + "Mixture-of-Agents' own ablation over the same six models and found the HOMOGENEOUS "
-  + 'ensemble beat the mixed one 65.7 vs 59.1 with the proposer count and topology held fixed '
-  + '(six proposals, one aggregator; the paper claims no cost parity). A model zoo is measured '
-  + 'WORSE than repeated sampling from the best model when the purpose is decorrelation. '
-  + 'Decorrelation is the `decorrelate` axis.';
+  + 'strong one for synthesis. Available on EVERY preset. NOT for diversity: Self-MoA '
+  + "(2502.00674) re-ran Mixture-of-Agents' own ablation over the same six models and found "
+  + 'the HOMOGENEOUS ensemble beat the mixed one 65.7 vs 59.1 with the proposer count and '
+  + 'topology held fixed (six proposals, one aggregator; the paper claims no cost parity), '
+  + 'quality dominating diversity by up to 3.2x. A model zoo is measured WORSE than repeated '
+  + 'sampling from the best model when the purpose is decorrelation. Decorrelation is the '
+  + '`decorrelate` axis.';
 
 /** One value's mechanism clause. Total over (axis, value) so a value added to
  *  AXIS_VALUES without a gloss renders as blank rather than crashing a run —

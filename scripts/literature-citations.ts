@@ -57,6 +57,7 @@
 
 import { CLAIMS, NO_LOCATOR, WORKS, type Claim, type Work } from './literature';
 import { isParseable, isTextSource, readMatching } from './sources';
+import { declaredName, literalText, parse, walk, type SyntaxNode } from './syntax';
 
 /**
  * The three files whose CONTENT is example citations: this program, its register, and
@@ -175,14 +176,87 @@ const FINGERPRINT = /[.%×+\u2212]/;
 /* ── Reading prose ─────────────────────────────────────────────────────── */
 
 /**
- * The text a literature citation can live in. A paper is cited in prose, and in
- * source that means a COMMENT — never a string literal, which is why
- * `unit-web.test.ts`'s `'First & Best'` fixture and every numeric literal beside
- * it are out of scope by construction rather than by exception list.
+ * The comment stream of a source file, with each comment BLOCK kept separate.
+ *
+ * WHY THE SEPARATOR IS A BLANK LINE. `PARAGRAPH_BREAK` needs `\n{2,}`, so joining
+ * comments with a single newline made a file's whole comment stream ONE paragraph,
+ * and a citation then reached across the code between two comments. Worse than a
+ * paragraph: `SENTENCE_BREAK` cannot break before a digit, so a comment OPENING on
+ * one — `// 1 BY CONSTRUCTION`, a few lines under a docblock citing Rainbow Teaming
+ * in `strategy/swarm.ts` — landed inside the citing sentence itself, where no
+ * window could reach it, and two interface members' separate docblocks read as one
+ * sentence the same way. Both shapes are pinned in this gate's own test rather than
+ * against a live path: the sites that provoked them were reworded to get a push
+ * through, and a reworded site stops being evidence.
+ *
+ * WHY NOT A BLANK LINE BETWEEN EVERY COMMENT, which is the one-character fix. A run
+ * of `//` lines is N separate matches, so that shatters all 10,344 multi-line
+ * line-comment blocks in this tree into one-line paragraphs, and it LOSES real
+ * coverage: measured, `curriculum/proposer.ts` stops citing either `absolute-zero`
+ * number and both register entries turn into `cited nowhere` findings.
+ *
+ * So a unit ends where the AUTHOR said it ends. A block comment's closing delimiter
+ * is that statement; a run of line comments has only contiguity, so only line
+ * comments with neither a blank line nor code between them are one block. Measured
+ * against `--list-claims`, that leaves the governed set byte-identical and every
+ * register entry's homes unchanged, at 75 claim sites rather than 77 — the two it
+ * drops are sentences spliced from two different comments, which no author wrote.
+ */
+function comments(text: string): string {
+  let joined = '';
+  let end = 0;
+  let previousLine = false;
+  for (const match of text.matchAll(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g)) {
+    const line = match[0].startsWith('//');
+    // Whitespace spanning at most one newline: the next comment is the next line.
+    const contiguous = /^[^\S\n]*\n?[^\S\n]*$/.test(text.slice(end, match.index));
+    if (end > 0) joined += contiguous && line && previousLine ? '\n' : '\n\n';
+    joined += match[0];
+    end = match.index + match[0].length;
+    previousLine = line;
+  }
+  return joined;
+}
+
+/**
+ * How far a citation REACHES around the sentence carrying it, and therefore which
+ * numbers stand beside it. Two shapes of prose, because this tree holds two and one
+ * rule over both is wrong in two directions at once.
+ *
+ *   - `sentence` — code-like prose: a doc comment, or a string expression handed to
+ *     a model. A dense block where a single `Self-MoA` mention would pool a whole
+ *     module's constants, so a citation reaches its own sentence and no further.
+ *   - `section` — Markdown. A citation opens a section and the argument then runs
+ *     for paragraphs naming no author; the passage that set REACH did exactly that
+ *     for four. So it carries forward, is reset by a heading, and expires at REACH.
+ *
+ * A RENDERED LITERAL IS NOT A THIRD CASE, and the first draft's mistake is worth
+ * recording: it read the whole expression as one window, on the argument that a
+ * model receives all of it at once. That confuses two things. Where the unit ENDS is
+ * the literal's own contribution and `auditFile` enforces it — eleven unrelated
+ * strings in a `messages` array are eleven units and pool nothing. How far a
+ * citation reaches INSIDE a unit is a different question, and there a rendered
+ * description is a dense block of sentences exactly like a docblock. Whole-unit
+ * reach measured as noise on the first run: `ladder.ts` describes this very gate in
+ * one 900-character expression, so `arXiv` in its account of citation forms
+ * attributed the `4000` of its account of REACH, and `unit-web.test.ts`'s
+ * `'1. First & Best'` fixture read as an author pair beside an ordinal.
+ */
+export type Window = 'sentence' | 'section';
+
+/**
+ * The COMMENT text a literature citation can live in. Prose a human wrote for
+ * another human: Markdown, and in source a comment.
+ *
+ * It is half the corpus and it used to be all of it. `renderedProse` below is the
+ * other half, and blind spot 9 named its absence for exactly as long as it took to
+ * measure: `scripts/axis-ergonomics/{corpus,surface,validate}.ts` carried the
+ * bare-parity defect inside string literals, and it was found only because a
+ * recording echoed one of them into a file this function does read.
  */
 export function citable(file: string, text: string): string {
   const stripped = isParseable(file)
-    ? [...text.matchAll(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g)].map((match) => match[0]).join('\n')
+    ? comments(text)
     : text.replace(/```[\s\S]*?```/g, ' ');
   return stripped
     // JSDoc continuation leaders, so a citation wrapped across lines reads as one
@@ -192,6 +266,187 @@ export function citable(file: string, text: string): string {
     // `config.ts:100`, `judgeSamples: 3`, `c=20`. Leaving it in makes every
     // implementation constant read as a literature claim.
     .replace(/`[^`\n]*`/g, ' ');
+}
+
+/**
+ * A docblock DECLARING that the string beneath it is quoted from somewhere else.
+ *
+ * DECLARED, because `verbatim` is ordinary prose in this tree — 164 files say a value
+ * is "passed through verbatim" or "shared verbatim" — so the word cannot be the
+ * marker. The marker is the phrase plus a BACKTICKED TARGET, an author naming what
+ * they copied, and it is the shape `RECORDING` and `hand: 'withdrawn'` already use:
+ * declared by the writer at the moment of writing, changing which check applies and
+ * never disabling one.
+ *
+ * The target is captured LOOSELY on purpose, and this was the second draft. Matching
+ * only identifier-shaped targets silently dropped `` `git add -A --ignore-errors` ``
+ * from the count, so the gate printed zero uncompared quotations while one sat in
+ * `unit-checkpoint-format.test.ts` — a blind spot that under-reports itself is worse
+ * than the hole it describes. Every claim is counted; RESOLUTION, not shape, decides
+ * which are compared, and a target this tree does not declare is named on the green
+ * path instead of guessed at.
+ */
+const QUOTE_CLAIM = /\bVerbatim from `([^`\n]+)`/i;
+
+/** JSDoc and line-comment leaders, so a docblock reads as the prose it renders to. */
+const DOC_LEADER = /^[ \t]*(?:\/\*\*+|\*\/|\*|\/\/)[ \t]?/gm;
+
+/** Nodes ESTree puts between a declaration and the statement a docblock sits above.
+ *  `export const X = …` is three nodes deep, and the docblock is above the first. */
+const DECLARATION_WRAPPER: ReadonlySet<string> = new Set([
+  'VariableDeclaration', 'ExportNamedDeclaration', 'ExportDefaultDeclaration',
+]);
+
+/** The declaration a member belongs to, so `models` inside `SwarmConfig` can be
+ *  named the way prose names it. Undefined for a top-level declaration, which needs
+ *  no qualifier. */
+function ownerName(node: SyntaxNode): string | undefined {
+  let up = node.parent;
+  while (up !== undefined) {
+    const named = declaredName(up);
+    if (named !== undefined && named !== declaredName(node)) return named;
+    up = up.parent;
+  }
+  return undefined;
+}
+
+/** A string a docblock declares to be a copy of another declaration's prose. */
+export interface Quotation {
+  readonly file: string;
+  /** The declaration doing the quoting, for the finding to name. */
+  readonly name: string;
+  /** The dotted name it claims to copy. */
+  readonly target: string;
+  /** The quote as the reader receives it. */
+  readonly text: string;
+}
+
+/** A parseable file's string prose, all of it from ONE parse. */
+export interface Rendered {
+  /** Every string expression, as the reader receives it. */
+  readonly units: readonly string[];
+  /** `Name` and `Owner.member` to the docblock above them, so a quote's target
+   *  resolves wherever in the corpus it was declared. */
+  readonly docs: readonly (readonly [string, string])[];
+  /** Declarations claiming to quote another. */
+  readonly quotes: readonly Quotation[];
+}
+
+/**
+ * The comment immediately above `at`, or undefined when the declaration has none.
+ *
+ * Read from OFFSETS rather than from a comment table, because the offsets are what
+ * this program already has and the question is purely positional: is the nearest
+ * thing above this declaration a comment that ends where it begins.
+ *
+ * BOTH SYNTAXES, by the same rule `comments` uses for reach: a block comment's
+ * closing delimiter ends it, and a run of line comments is one block while nothing
+ * but whitespace separates the lines. Reading only `/** *\/` was the first draft and
+ * it under-reported itself — `unit-checkpoint-format.test.ts` declares a quotation
+ * over a `//` run, and the gate counted zero uncompared quotations while that one
+ * sat unread.
+ */
+function docblockAbove(text: string, at: number): string | undefined {
+  const before = text.slice(0, at).replace(/\s+$/, '');
+  if (before.endsWith('*/')) {
+    const open = before.lastIndexOf('/**');
+    return open < 0 ? undefined : before.slice(open);
+  }
+  const lines = before.split('\n');
+  let first = lines.length;
+  while (first > 0 && /^[ \t]*\/\//.test(lines[first - 1] ?? '')) first -= 1;
+  return first === lines.length ? undefined : lines.slice(first).join('\n');
+}
+
+/**
+ * A string expression, as the READER receives it: every literal chunk of one
+ * concatenation or template, joined in source order — plus the two things only this
+ * parse can see, which is why one function returns all three.
+ *
+ * WHY THE UNIT IS THE EXPRESSION AND NOT THE LITERAL. The defect this closes was
+ * written across four `+`-joined lines, and `65.7 vs 59.1` and the `2502.00674`
+ * attributing it sat in different quotes. A per-quote corpus governs neither: the
+ * citation is in one fragment and the numbers in the next. So the fragments of one
+ * expression are one text, which is also what the model is handed.
+ *
+ * A template HOLE is a space, not a join. `${x}` is a value this program cannot
+ * read, and closing the gap would manufacture numbers that no author wrote —
+ * `` `${a}.${b}` `` is not the decimal it would look like. A space is the honest
+ * spelling of "something unknown was here", and it costs only the ability to read a
+ * claim split across an interpolation, which is named in the blind spots.
+ *
+ * Newlines inside a unit are FLATTENED. A rendered description's line breaks are
+ * formatting an author chose for a model's eye; they are not evidence that the text
+ * below one came from somewhere else. Treating them as paragraph boundaries would
+ * split a tool docstring into thirty units and let a citation in the summary govern
+ * none of the numbers in the body.
+ */
+export function renderedProse(file: string, text: string): Rendered {
+  const { root } = parse(file, text);
+  const rooted = new Map<number, { at: number; end: number; body: string }[]>();
+  const docs: [string, string][] = [];
+  const claims: { name: string; target: string; at: number; end: number }[] = [];
+  walk(root, (node) => {
+    const declared = declaredName(node);
+    if (declared !== undefined) {
+      // `export const X` hangs the declarator two nodes below the statement the
+      // docblock sits above, so the offset to look above is the statement's.
+      let statement = node;
+      while (statement.parent !== undefined && DECLARATION_WRAPPER.has(statement.parent.type)) {
+        statement = statement.parent;
+      }
+      const doc = docblockAbove(text, statement.start);
+      if (doc !== undefined) {
+        const owner = ownerName(node);
+        docs.push([declared, doc]);
+        if (owner !== undefined) docs.push([`${owner}.${declared}`, doc]);
+        const claim = QUOTE_CLAIM.exec(doc);
+        // The text it quotes is the expression this declaration is initialised with,
+        // resolved after the walk because that is when its fragments are all in.
+        if (claim?.[1] !== undefined) {
+          claims.push({ name: declared, target: claim[1], at: node.start, end: node.end });
+        }
+      }
+    }
+    const body = literalText(node);
+    if (body === undefined) return;
+    // `literalText` is total over every reader-visible literal, numbers and regexes
+    // included, and a numeric literal arrives as its own source text. Only a QUOTED
+    // one is prose; the rest are governed where they are written, in code.
+    if (node.type === 'Literal' && !/["'`]/.test(text.charAt(node.start))) return;
+    let top = node;
+    while (top.parent !== undefined
+      && (top.parent.type === 'TemplateLiteral' || top.parent.type === 'BinaryExpression')) {
+      top = top.parent;
+    }
+    rooted.set(top.start, [...(rooted.get(top.start) ?? []), { at: node.start, end: node.end, body }]);
+  });
+  const byStart = new Map<number, string>();
+  for (const [start, pieces] of rooted) {
+    const ordered = [...pieces].sort((a, b) => a.at - b.at);
+    let body = '';
+    for (const [index, piece] of ordered.entries()) {
+      const before = ordered[index - 1];
+      // Pure concatenation punctuation between two chunks means they are one word;
+      // anything else between them is an interpolation, and unknown.
+      if (before !== undefined) {
+        body += /^["'`)\s+]*$/.test(text.slice(before.end, piece.at)) ? '' : ' ';
+      }
+      body += piece.body;
+    }
+    byStart.set(start, body.replace(/[\r\n]+/g, ' '));
+  }
+  return {
+    units: [...byStart.values()],
+    docs,
+    // A claim on a declaration that holds no string expression quotes nothing, and is
+    // dropped rather than reported: the marker is then prose about something else.
+    quotes: claims.flatMap(({ name, target, at, end }) => {
+      const starts = [...byStart.keys()].filter((start) => start >= at && start < end);
+      const held = starts.length === 0 ? undefined : byStart.get(Math.min(...starts));
+      return held === undefined ? [] : [{ file, name, target, text: held }];
+    }),
+  };
 }
 
 /**
@@ -210,8 +465,9 @@ export function citable(file: string, text: string): string {
  * The value is measured, not chosen. Below 3,700 the corpus starts losing real claim
  * sites: the longest carry measured in this tree was a passage in a removed internal
  * audit that opened with a citation and then argued for four paragraphs naming no
- * author. At 4000 the corpus governs the same 133 claim sites and the same 54 register
- * entries as unbounded paragraphs did. Beyond that distance it is a real blind spot,
+ * author. At 4000 the corpus governs the same 75 claim sites and 21 register
+ * entries as unbounded paragraphs (measured 2026-08-31). Beyond that distance it
+ * is a real blind spot,
  * and it is printed as one.
  *
  * It is not, on its own, enough for a recorded corpus, and the measurement says so:
@@ -498,37 +754,64 @@ export interface Coverage {
   /** Which files were read as recordings, so the exclusion is printable. */
   readonly recordings: Set<string>;
   sites: number;
+  /** String expressions read as model-facing prose. A count, not a set, because the
+   *  point of printing it is that the corpus this gate governs is a MEASUREMENT
+   *  rather than an assertion — the surface was invisible for as long as nobody had
+   *  a number for it. */
+  literals: number;
+  /** `Name` and `Owner.member` to the docblock above them, accumulated across the
+   *  whole corpus because a quote and the prose it copies are rarely in one file. */
+  readonly docs: Map<string, string>;
+  /** Every declared quote claim, compared after the corpus is read for the same
+   *  reason: the target may be declared in a file read later. */
+  readonly quotes: Quotation[];
 }
 
 export function coverage(): Coverage {
   return {
-    works: new Set(), files: new Map(), recorded: new Map(), recordings: new Set(), sites: 0,
+    works: new Set(),
+    files: new Map(),
+    recorded: new Map(),
+    recordings: new Set(),
+    sites: 0,
+    literals: 0,
+    docs: new Map(),
+    quotes: [],
   };
 }
 
 /**
- * One file, audited. Exported so the red directions are provable against synthetic
- * prose instead of by mutating the tree the gate governs.
+ * The window a file's own prose is read under. Derived from the file, never passed
+ * in, so "which shape is this text" is answered once and in one place.
  */
-export function auditProse(file: string, text: string, seen: Coverage): string[] {
+export const windowOf = (file: string): Window => (isParseable(file) ? 'sentence' : 'section');
+
+/**
+ * One text, audited under one window. Exported so the red directions are provable
+ * against synthetic prose instead of by mutating the tree the gate governs.
+ *
+ * `source` is already the citable text: `citable` for a comment or a document,
+ * `rendered` for a string expression. The split matters because the two disagree
+ * about what a paragraph is, and the window is what carries that disagreement.
+ */
+export function auditProse(
+  file: string, source: string, seen: Coverage, window: Window,
+): string[] {
   const findings: string[] = [];
-  // A doc comment is not paragraph-structured prose: it is a dense block where one
-  // `Self-MoA` mention would pool a module's constants, so there a citation reaches
-  // its own sentence only. In Markdown it reaches forward through the section —
-  // the passage that set this bound opened with
-  // `Koh et al. 2407.01476 Table 4 (§5.1) holds node expansions fixed …`
-  // and then argued for four paragraphs that name no author at all. Carry-forward is
-  // reset by a heading, replaced by the next citation, and expires at REACH, so the
-  // reach is exactly "the work currently under discussion" and never the whole file.
-  const narrow = isParseable(file);
+  // Whether a citation reaches only its own sentence, and equivalently whether it
+  // dies with it. Code-like prose is a dense block where one `Self-MoA` mention
+  // would pool a module's constants; Markdown carries the work under discussion
+  // forward — the passage that set this bound opened with `Koh et al. 2407.01476
+  // Table 4 (§5.1) holds node expansions fixed …` and then argued for four
+  // paragraphs naming no author at all.
+  const narrow = window === 'sentence';
   // A recording is still READ, and judged by a different obligation: its quotations
   // are collected so `auditCoverage` can refuse a register entry that lives only
   // there, and no finding is raised against it either way.
-  const recording = RECORDING.test(text);
+  const recording = RECORDING.test(source);
   if (recording) seen.recordings.add(file);
   const blame = !recording;
   const ledger = recording ? seen.recorded : seen.files;
-  const source = citable(file, text);
   let carried: readonly Work[] = [];
   let carriedAt = -Infinity;
 
@@ -666,6 +949,131 @@ export function auditProse(file: string, text: string, seen: Coverage): string[]
   return findings;
 }
 
+/**
+ * One file, both of its prose corpora: what a human wrote in comments, and what the
+ * MODEL is handed in string expressions.
+ *
+ * The second is the surface that survived the whole audit, and its size is the
+ * finding: 168,682 string expressions over 1,872 parseable files, 3.7MB of literal
+ * text, of which 808KB across 1,230 files carries a digit and can therefore produce
+ * a citation or a finding. Nothing before this read a byte of it.
+ *
+ * THE TWO CORPORA DO NOT MEET, and that is a property of this function rather than a
+ * rule stated anywhere: each `auditProse` call gets its own `source` string, so a
+ * citation in a comment cannot reach a number inside a literal and a citation inside
+ * a literal cannot reach the code's comments. It is the right default — a docstring
+ * and the string beneath it are written for different readers — and it is a real
+ * blind spot, printed as one, because a figure whose only citation sits in the
+ * docstring ABOVE its literal is governed by neither corpus.
+ */
+export function auditFile(file: string, text: string, seen: Coverage): string[] {
+  const findings = auditProse(file, citable(file, text), seen, windowOf(file));
+  if (!isParseable(file)) return findings;
+  const prose = renderedProse(file, text);
+  for (const [name, doc] of prose.docs) seen.docs.set(name, doc);
+  seen.quotes.push(...prose.quotes);
+  for (const unit of prose.units) {
+    seen.literals += 1;
+    // A unit with no digit cannot produce a finding or a citation: every path below
+    // `claimNumbers` requires a number, and `claimNumbers` requires a digit. Stated
+    // as the reason rather than as a fast path, because a filter that skipped a
+    // governed unit would be indistinguishable from a gate that found nothing.
+    if (!/\d/.test(unit)) continue;
+    findings.push(...auditProse(file, unit, seen, 'sentence'));
+  }
+  return findings;
+}
+
+/**
+ * Prose reduced to the words a reader receives, so two spellings of one sentence
+ * compare equal. Backticks, dashes, brackets and quotes are separators; a sentence's
+ * closing period is not part of its last word; a `{@link X}` is dropped, because a
+ * link has no rendered text and every renderer spells it differently.
+ *
+ * Number shapes survive: `65.7`, `2502.00674` and `3.2x` are one token each, which is
+ * the whole point — a dropped magnitude is what this check exists to catch.
+ */
+function words(prose: string): readonly string[] {
+  return prose
+    .replace(/\{@link\s+[^}]*\}/g, ' ')
+    .toLowerCase()
+    .split(/[^a-z0-9.%]+/)
+    .map((word) => word.replace(/^\.+|\.+$/g, ''))
+    .filter((word) => word.length > 0);
+}
+
+/** Whether `run` appears in `stream` as a CONTIGUOUS block. Contiguity is the check:
+ *  a subsequence would let a quote drop every second word and pass. */
+function holds(stream: readonly string[], run: readonly string[]): boolean {
+  for (let at = 0; at + run.length <= stream.length; at += 1) {
+    if (run.every((word, index) => stream[at + index] === word)) return true;
+  }
+  return false;
+}
+
+/** The first word of `run` the quote stops carrying — the longest prefix that still
+ *  holds, plus one. What a reader needs to see the divergence without a diff. */
+function divergence(stream: readonly string[], run: readonly string[]): string {
+  let kept = 0;
+  while (kept < run.length && holds(stream, run.slice(0, kept + 1))) kept += 1;
+  return run.slice(kept, kept + 8).join(' ');
+}
+
+/** A sentence long enough to be a claim. Below this a fragment matches almost any
+ *  prose — `Default false.` is not a quotation anyone can drift. */
+const CLAIM_WORDS = 3;
+
+/**
+ * A declared quotation against the prose it claims to copy.
+ *
+ * WHAT IS CHECKABLE, and it is not "the two texts are equal". A quote is allowed to
+ * be an EXCERPT: `MODELS_FIELD_DESCRIPTION` renders the first two paragraphs of
+ * `SwarmConfig.models` for a model and stops before the three that discuss the
+ * refusal, which is editorial judgement and not drift. What is not allowed is a
+ * silent drop from the MIDDLE of what it does quote.
+ *
+ * So the span is the unit: find the first and last source sentence the quote still
+ * carries, and every source sentence between them must be carried too. Outside that
+ * span the source is simply not quoted. Inside it, an omission is a finding — which
+ * is exactly the shape of the drift this caught on its first run, where the study
+ * harness had dropped `Available on EVERY preset.` and, more seriously, the clause
+ * carrying a paper's own magnitude, while still presenting itself as verbatim.
+ *
+ * A target that resolves to nothing is NOT a finding. `Verbatim from \`git add -A\``
+ * quotes another program, and a quote from outside this repository cannot be
+ * compared against it — those are counted and named on the green path instead.
+ */
+export function auditQuotations(seen: Coverage): string[] {
+  const findings: string[] = [];
+  for (const quote of seen.quotes) {
+    const source = seen.docs.get(quote.target);
+    if (source === undefined) continue;
+    const stream = words(quote.text);
+    const claims = sentences(source.replace(DOC_LEADER, ''))
+      .map((sentence) => ({ text: sentence.text, run: words(sentence.text) }))
+      .filter((claim) => claim.run.length >= CLAIM_WORDS);
+    const carried = claims.map((claim) => holds(stream, claim.run));
+    const first = carried.indexOf(true);
+    if (first < 0) {
+      findings.push(
+        `${quote.file}: ${quote.name} declares itself verbatim from ${quote.target} and`
+        + ' shares not one sentence with it — either the name is wrong or the copy is a'
+        + ' paraphrase, and a paraphrase must not claim to be a quotation.',
+      );
+      continue;
+    }
+    for (const [index, claim] of claims.entries()) {
+      if (carried[index] === true || index < first || index > carried.lastIndexOf(true)) continue;
+      findings.push(
+        `${quote.file}: ${quote.name} claims to quote ${quote.target} verbatim but drops`
+        + ` "${claim.text.slice(0, 150)}" — the quote diverges at`
+        + ` "${divergence(stream, claim.run)}". Restore it or stop claiming verbatim.`,
+      );
+    }
+  }
+  return findings;
+}
+
 /** Register entries prose no longer cites, and the empty-corpus failure a gate must
  *  not have. A withdrawn entry is exempt: it records a number this repository no
  *  longer asserts, so the ideal number of citations for it is zero, and enrolling it
@@ -714,9 +1122,9 @@ if (import.meta.main) {
   const findings = [...auditRegister()];
   for (const [file, text] of readMatching(isTextSource)) {
     if (Object.hasOwn(SELF, file)) continue;
-    findings.push(...auditProse(file, text, seen));
+    findings.push(...auditFile(file, text, seen));
   }
-  findings.push(...auditCoverage(seen));
+  findings.push(...auditCoverage(seen), ...auditQuotations(seen));
 
   if (process.argv.includes('--list-claims')) {
     for (const claim of CLAIMS) {
@@ -738,11 +1146,16 @@ if (import.meta.main) {
   const depth = (hand: Claim['hand']): string =>
     String(CLAIMS.filter((claim) => claim.hand === hand).length);
   const worklist = CLAIMS.filter((claim) => claim.hand !== 'primary' || claim.where === NO_LOCATOR);
+  const compared = seen.quotes.filter((quote) => seen.docs.has(quote.target));
+  const outside = seen.quotes.filter((quote) => !seen.docs.has(quote.target));
   console.log(
     `literature-citations: OK — ${String(CLAIMS.length)} external numbers across`
     + ` ${String(WORKS.length)} works, cited at ${String(seen.sites)} claim sites.`
     + ` Provenance: ${depth('primary')} primary, ${depth('artifact')} second-hand through an`
-    + ` internal artifact, ${depth('unverified')} read by nobody, ${depth('withdrawn')} withdrawn.`,
+    + ` internal artifact, ${depth('unverified')} read by nobody, ${depth('withdrawn')} withdrawn.`
+    + ` Corpora: comments, plus ${String(seen.literals)} string expressions read as`
+    + ` model-facing prose, of which ${String(compared.length)} declare a quotation compared`
+    + ` against its source.`,
   );
   console.log(
     'literature-citations: BLIND SPOTS, so this pass is not mistaken for verification.'
@@ -770,15 +1183,26 @@ if (import.meta.main) {
     + ' corrected without being falsified: '
     + `${[...seen.recordings].join(', ')}. They earn no credit either — a register entry whose`
     + ' only home is a recording is a finding, so the category cannot green anything.'
-    + '\n  7. It cannot detect a compressed or paraphrased QUOTATION. That failure sank a model'
-    + ' quotation in this very audit and needs the recorded source, not a register.'
+    + '\n  7. It cannot detect a paraphrase that claims nothing. A quotation is compared only'
+    + ' where a docblock DECLARES it with ``Verbatim from `Name` `` — a copy that says nothing'
+    + ' about where it came from is governed by no comparison, and neither is a compressed'
+    + ' quotation of a PAPER, which needs the recorded source rather than a register.'
     + `\n  8. ${String(worklist.length)} of ${String(CLAIMS.length)} numbers are second-hand or`
     + ' unlocated. `--list-claims` prints the worklist; being on it is not an error, it is the'
     + ' point.'
-    + '\n  9. A citation inside a STRING LITERAL is not read: `citable` keeps comments only.'
-    + " That blind spot is load-bearing — this repository's user-facing tool messages quote the"
-    + ' literature, and `scripts/axis-ergonomics/{corpus,surface,validate}.ts` carried the'
-    + ' bare-parity defect in exactly that position, found only because a recording echoed one'
-    + ' of them into a file this gate does read.',
+    + `\n  9. THE TWO CORPORA DO NOT MEET. A file's comments and each of its string expressions`
+    + ' are audited as separate texts, so a citation in a docstring does NOT reach a number in'
+    + ' the literal beneath it, and a citation inside a literal does not reach the code around'
+    + ' it. That is deliberate — a docstring and the string below it are written for different'
+    + ' readers, and pooling them would let one arXiv id govern every constant in a module —'
+    + ' but it is a genuine hole: a figure whose only citation stands in the docstring above'
+    + ' its literal is governed by neither corpus. Measured, not assumed: proven in both'
+    + " directions in this gate's test."
+    + `\n  10. ${String(outside.length)} declared quotation(s) name a target this repository does`
+    + ' not declare and are NOT compared'
+    + `${outside.length > 0 ? ` (${outside.map((q) => `${q.file} → ${q.target}`).join(', ')})` : ''}`
+    + ' — a quote from another program, a paper or a person cannot be checked against this'
+    + ' tree. Only the span a quote shares with its source is governed: an EXCERPT is allowed'
+    + ' to stop early, and only a drop from the middle of what it does quote is a finding.',
   );
 }

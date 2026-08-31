@@ -333,9 +333,10 @@ export const CORPUS: readonly Case[] = [
       requiredAxes: { advance: ['pareto'], unit: ['generator'] },
       rationale:
         "GEPA. advance:'pareto' is single-use in the matrix and survives because its own "
-        + 'ablation earns it inside the same budget (+8.17% over scalar-best, +11.33% over '
-        + 'beam). The user has described a Pareto frontier without using the word, which is '
-        + 'the right way to test whether the word is findable.',
+        + 'ablation earns it inside the same budget (up to +8.17% over scalar-best and up to '
+        + '+11.33% over beam, each at its best benchmark). The user has described a Pareto '
+        + 'frontier without using the word, which is the right way to test whether the word '
+        + 'is findable.',
     },
   },
 

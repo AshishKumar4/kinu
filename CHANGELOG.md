@@ -211,6 +211,27 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   pattern extraction, sleep-time compression). Unset, it is the chat vendor's own
   small tier where it has one, at the same provider on the same credential, and
   the chat model where it does not.
+- The literature citation gate now reads STRING EXPRESSIONS, not just comments.
+  Its blind spot was load-bearing: a paper is cited in prose, and the prose this
+  repository hands a MODEL lives in tool descriptions and field docstrings that
+  nothing had ever read a byte of — 168,682 string expressions across 1,872
+  parseable files, 3.7MB of literal text. The unit is the whole expression rather
+  than one quote, because a citation and the figures it attributes are routinely
+  in different `+`-joined fragments; an interpolation is read as an unknown
+  rather than closed over, so `${a}.${b}` is never mistaken for a decimal.
+- A string that DECLARES itself a quotation is now compared against the prose it
+  names. `Verbatim from `Name`` in the docblock above a string is a checkable
+  claim: the target resolves to a declaration anywhere in the corpus, and every
+  sentence of it inside the span the quote covers must survive in the quote. An
+  excerpt may stop early — a description rendered for a model legitimately drops
+  the paragraphs about a refusal — but a silent drop from the MIDDLE of what it
+  quotes is refused. It caught `MODELS_FIELD_DESCRIPTION` in the axis study
+  presenting itself as verbatim while missing `Available on EVERY preset.` and
+  the clause carrying Self-MoA's own `up to 3.2x` magnitude, both of which are
+  restored. A target this tree does not declare — another program's output, a
+  paper, a person, or a field that has since been removed — is counted and named
+  on the green path rather than guessed at, and three such targets are named
+  there now.
 
 ### Changed
 
@@ -603,11 +624,29 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   The paper claims no cost parity, since its six mixed proposers span 132B-141B MoE
   downward, so token cost differs, and what it holds fixed is the proposal
   count and topology, six proposals and one aggregator. That is what
-  `SwarmConfig.models` in `packages/core` had already been corrected to say, and
-  what `MODELS_FIELD_DESCRIPTION` claims to quote verbatim. The gate cannot see
-  it: a citation inside a string literal is not read, and this one surfaced only
-  because a recording echoed the tool's own refusal into a file the gate does
-  read. That blind spot is now stated on the green path too.
+  `MODELS_FIELD_DESCRIPTION` declares it quotes verbatim from the spec's own
+  `models` field docstring. The gate now reads that position — string
+  expressions are part of the corpus, and a declared quotation is compared
+  against the declaration it names — and it reports this one as UNCOMPARED,
+  because `SwarmInput` no longer declares `models` at all: the field was removed
+  from `packages/core` as accepted-and-ignored, so there is no live declaration
+  left to compare the study's copy against.
+- A literature citation no longer reaches across the code between two comments.
+  `citable` joined every comment in a file with a single newline, and a paragraph
+  break needs a blank line, so a whole file's comment stream was ONE paragraph:
+  a comment opening on a bare digit six lines below an unrelated docblock was
+  read as an uncited number belonging to that docblock's paper, and two members
+  of one interface had their separate docblocks read as a single sentence. The
+  one-character fix — separate every comment — was measured and rejected: a run
+  of `//` lines is N separate comments, so it shatters all 10,344 multi-line
+  line-comment blocks in the tree into one-line paragraphs and drops real
+  coverage, including both `absolute-zero` citations in
+  `packages/core/src/curriculum/proposer.ts`. So a unit now ends where its
+  AUTHOR ended it: a block comment's closing delimiter says so, and only line
+  comments with neither a blank line nor code between them are one block. The
+  governed set is byte-identical — every register entry keeps the same home
+  files — and the two claim sites it drops were sentences spliced from two
+  different comments, which no author wrote.
 - A shell command or file write no longer fails because the shadow-git
   checkpoint before it met a directory the agent may not read. Staging a
   working directory the agent does not own, whether a system temp root, a project

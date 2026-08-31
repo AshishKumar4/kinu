@@ -166,6 +166,12 @@ export const WORKS: readonly Work[] = [
     cites: ['ToT', 'Tree of Thoughts', '2305.10601'],
   },
   {
+    id: 'pugh-quality-diversity',
+    source: 'Pugh, Soros & Stanley, Quality Diversity: A New Frontier for Evolutionary'
+      + ' Computation, Frontiers in Robotics and AI, 2016',
+    cites: ['Pugh et al.'],
+  },
+  {
     id: 'landis-koch',
     source: 'Landis & Koch, The Measurement of Observer Agreement for Categorical Data,'
       + ' Biometrics 33:159, 1977',
@@ -304,6 +310,30 @@ export const CLAIMS: readonly Claim[] = [
       + ' since our prose says "no novelty rejection test", which normally means novelty'
       + ' against the ARCHIVE, while the paper ablates a PARENT-CHILD filter, which is'
       + ' strictly weaker.',
+  },
+  {
+    work: 'rainbow-teaming',
+    value: '7',
+    says: 'attack success points bought by dropping the filter (ASR 0.92 -> 0.99)',
+    where: NO_LOCATOR,
+    unit: 'points of attack success rate, one safety domain, one 7B target',
+    hand: 'artifact',
+    via: 'agent://SpecAudit.SpecEvidence',
+    verifiedBy: 'SpecAudit.SpecEvidence read the paper first-hand; this gate has not',
+    note: 'no locator reached this register — see the 0.6 entry.',
+  },
+  {
+    work: 'pugh-quality-diversity',
+    value: '900',
+    says: 'the number of runs behind the filled-grid-with-poor-bins observation',
+    where: NO_LOCATOR,
+    unit: 'evolutionary runs',
+    hand: 'unverified',
+    verifiedBy: 'nobody',
+    note: 'named by the audit as explicitly NOT verified. It is the sole support for the'
+      + ' judged-descriptor refusal, so a verifier should locate the run count and the'
+      + ' quoted sentence, and confirm the grid claim is about descriptor quality rather'
+      + ' than about fitness.',
   },
   {
     work: 'rainbow-teaming',

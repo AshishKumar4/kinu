@@ -22,16 +22,17 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { auditCoverage, auditProse, auditRegister, coverage } from './literature-citations';
+import { auditCoverage, auditFile, auditQuotations, auditRegister, coverage } from './literature-citations';
 
 /** One markdown file, as the gate reads its corpus. */
 function audit(text: string): string[] {
-  return auditProse('docs/FIXTURE.md', text, coverage());
+  return auditFile('docs/FIXTURE.md', text, coverage());
 }
 
-/** One source file, where a citation reaches its own sentence only. */
+/** One source file, both corpora: its comments, where a citation reaches its own
+ *  sentence, and its string expressions. */
 function auditSource(text: string): string[] {
-  return auditProse('packages/core/src/fixture.ts', text, coverage());
+  return auditFile('packages/core/src/fixture.ts', text, coverage());
 }
 
 describe('the register governs itself before it judges prose', () => {
@@ -255,6 +256,60 @@ describe('the false positives that shaped the corpus decision', () => {
   });
 });
 
+describe('a comment block ends where its author ended it', () => {
+  test('a citation does not reach a comment on the far side of code', () => {
+    // The defect this closes, as it stood in `strategy/swarm.ts`: comments joined by
+    // a SINGLE newline are one paragraph, and `SENTENCE_BREAK` cannot break before a
+    // digit, so a comment opening on `1` was swallowed by the citing sentence six
+    // lines above it. The prose had to be reworded to land the swarm preset table.
+    expect(auditSource([
+      '/**',
+      ' * Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7 vs',
+      ' * 59.1 with the proposer count and topology held fixed.',
+      ' */',
+      'export const POINTS = {',
+      "  ideate: { expand: 'sample', advance: 'none' },",
+      '  // 1 BY CONSTRUCTION rather than by choice: `advance` selects nothing, so there',
+      '  // is no second level to reach.',
+      '  depth: 1,',
+      '};',
+    ].join('\n'))).toEqual([]);
+  });
+
+  test("nor does one block comment's citation reach the next block's numbers", () => {
+    // Two members of one interface, documented separately. The closing delimiter left
+    // a bare `/` on its own line, which is not a sentence start either, so these two
+    // docblocks used to arrive as a single sentence.
+    expect(auditSource([
+      'export interface RunScaffoldGepaOpts {',
+      '  /**',
+      '   * Self-MoA (2502.00674) measured 65.7 vs 59.1 with the topology held fixed.',
+      '   */',
+      '  seed?: string;',
+      '  /**',
+      '   * Must be at least 50 characters per gate 1.',
+      '   */',
+      '  rationale?: string;',
+      '}',
+    ].join('\n'))).toEqual([]);
+  });
+
+  test('but contiguous line comments are ONE unit, or the fix costs real coverage', () => {
+    // The guard on the one-character version of this fix. Separating EVERY comment
+    // shatters a run of `//` lines into one-line paragraphs, and a sentence wrapped
+    // across two of them loses its own citation: measured, that dropped both
+    // `absolute-zero` sites in `curriculum/proposer.ts` and turned the register
+    // entries into `cited nowhere`. So this number must still be governed.
+    const found = auditSource([
+      '// Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7',
+      '// vs 59.1 with the proposer count held fixed, and 41.7% of runs agreed.',
+    ].join('\n'));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('41.7%');
+    expect(found[0]).toContain('carries no locator');
+  });
+});
+
 describe('reach, and the recorded corpus that showed it was unbounded', () => {
   /** A recording as its writer emits one: the timestamp stamped at the head of the
    *  document, and no blank line anywhere after it. */
@@ -283,7 +338,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
     // 369 of them before this: `-08` out of an ISO timestamp, array indices, and JSON
     // structure, all read as unlocated claims about a paper because a minified or
     // machine-written document is one paragraph and a paragraph was the reach.
-    expect(auditProse(
+    expect(auditFile(
       'scripts/axis-ergonomics/runs/axis-fixture.json',
       recorded(`${reply}\n${structure}`),
       coverage(),
@@ -294,7 +349,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
     // The same bytes with the declaration removed, so the file is fully governed. The
     // candidate beside the citation is a finding; the one 16KB down the same
     // structureless paragraph is not. Under paragraph reach it was.
-    const found = auditProse(
+    const found = auditFile(
       'scripts/axis-ergonomics/runs/axis-fixture.json',
       recorded(`${reply}\n${structure}`).replace('"ranAt"', '"stampedAt"'),
       coverage(),
@@ -308,7 +363,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
   });
 
   test('a real unlocated number in ordinary prose still fails', () => {
-    const found = auditProse(
+    const found = auditFile(
       'scripts/axis-ergonomics/runs/axis-fixture.json',
       recorded(reply).replace('"ranAt"', '"stampedAt"'),
       coverage(),
@@ -346,7 +401,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
     // exculpatory: every number it was carrying becomes a coverage finding, and the
     // corpus reports that it cannot fail.
     const seen = coverage();
-    auditProse('scripts/axis-ergonomics/runs/axis-fixture.json', recorded(reply), seen);
+    auditFile('scripts/axis-ergonomics/runs/axis-fixture.json', recorded(reply), seen);
     const found = auditCoverage(seen);
     expect(found.some((finding) =>
       finding.includes('self-moa 59.1 is quoted only inside recorded output'))).toBe(true);
@@ -357,7 +412,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
     // The declared property is that a PROGRAM wrote this document, in one pass, as the
     // record of a run. A `ranAt` pasted into a hand-written file is a suppression
     // handle, and it is refused.
-    const found = auditProse(
+    const found = auditFile(
       'scripts/axis-ergonomics/runs/axis-fixture.json',
       `{\n  "note": "hand written",\n  "ranAt": "2026-08-18T06:06:17.962Z",\n${reply}\n}`,
       coverage(),
@@ -369,7 +424,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
   test('a document placed beside the recordings is governed like any other', () => {
     // Why this is a property of the content and not a glob over `runs/`: a glob would
     // make the gate blind to every future document written there.
-    expect(auditProse(
+    expect(auditFile(
       'scripts/axis-ergonomics/runs/README.md',
       'Koh et al. 2407.01476 Table 4 gives 28.5% at matched compute.',
       coverage(),
@@ -387,7 +442,138 @@ describe('the enumerability ratchet', () => {
 
   test('a register entry nothing cites is a finding', () => {
     const seen = coverage();
-    auditProse('docs/FIXTURE.md', 'Nothing is cited here.', seen);
+    auditFile('docs/FIXTURE.md', 'Nothing is cited here.', seen);
     expect(auditCoverage(seen).some((f) => f.includes('is cited nowhere'))).toBe(true);
+  });
+});
+
+describe('a string that declares itself a quotation', () => {
+  /** The declaration a quote names, in its own file — a quote and its source are
+   *  rarely together, so resolution has to cross the corpus. */
+  const SOURCE = [
+    'export interface Spec {',
+    '  /**',
+    '   * A cheap model for recon, a strong one for synthesis. Available on EVERY preset.',
+    '   * The homogeneous ensemble beat the mixed one 65.7 vs 59.1, quality dominating',
+    '   * diversity by up to 3.2x.',
+    '   * A zoo is worse than repeated sampling when the purpose is decorrelation.',
+    '   */',
+    '  readonly models?: readonly string[];',
+    '}',
+  ].join('\n');
+
+  /** Every file's prose, then the quotations compared against what they name. Two
+   *  phases for the same reason the gate has two: the target may be read later. */
+  function auditQuoted(...files: readonly string[]): string[] {
+    const seen = coverage();
+    for (const [index, text] of files.entries()) {
+      auditFile(`packages/core/src/fixture-${String(index)}.ts`, text, seen);
+    }
+    return auditQuotations(seen);
+  }
+
+  test('a sentence dropped from the MIDDLE of what it quotes is refused', () => {
+    // The defect this shipped for: `MODELS_FIELD_DESCRIPTION` in the axis study had
+    // dropped `Available on EVERY preset.` and the clause carrying Self-MoA's own
+    // 3.2x magnitude, while still calling itself verbatim.
+    const found = auditQuoted(SOURCE, [
+      '/** Verbatim from `Spec.models`. */',
+      'export const DESCRIPTION =',
+      "  'A cheap model for recon, a strong one for synthesis. '",
+      "  + 'The homogeneous ensemble beat the mixed one 65.7 vs 59.1, quality dominating '",
+      "  + 'diversity by up to 3.2x. '",
+      "  + 'A zoo is worse than repeated sampling when the purpose is decorrelation.';",
+    ].join('\n'));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('drops "Available on EVERY preset."');
+    expect(found[0]).toContain('diverges at "available on every preset"');
+  });
+
+  test('a dropped CLAUSE is caught too, because the magnitude is what goes missing', () => {
+    const found = auditQuoted(SOURCE, [
+      '/** Verbatim from `Spec.models`. */',
+      'export const DESCRIPTION =',
+      "  'A cheap model for recon, a strong one for synthesis. Available on EVERY preset. '",
+      "  + 'The homogeneous ensemble beat the mixed one 65.7 vs 59.1. '",
+      "  + 'A zoo is worse than repeated sampling when the purpose is decorrelation.';",
+    ].join('\n'));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('diverges at "quality dominating diversity by up to 3.2x"');
+  });
+
+  test('but an EXCERPT that stops early is not drift, and this is the load-bearing half', () => {
+    // Without the span rule this is where the check would be useless: the shipped
+    // quote renders two paragraphs of a five-paragraph docstring for a model and
+    // deliberately stops before the ones about the refusal.
+    expect(auditQuoted(SOURCE, [
+      '/** Verbatim from `Spec.models`. */',
+      "export const SHORT = 'A cheap model for recon, a strong one for synthesis. '",
+      "  + 'Available on EVERY preset.';",
+    ].join('\n'))).toEqual([]);
+  });
+
+  test('a paraphrase sharing no sentence with its source is refused', () => {
+    const found = auditQuoted(SOURCE, [
+      '/** Verbatim from `Spec.models`. */',
+      "export const LOOSE = 'Model choice routes for capability, never for decorrelating.';",
+    ].join('\n'));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('shares not one sentence');
+  });
+
+  test('a target this repository does not declare is counted, never guessed at', () => {
+    // Three live shapes: `git add -A --ignore-errors` quotes another program, a
+    // bundled `dist/index.js:663` quotes a dependency, and the axis study names a
+    // field this tree has since removed. None is checkable here, and inventing a
+    // comparison would be worse than printing the hole — so the green path names
+    // them and this stays silent.
+    expect(auditQuoted([
+      '/** Verbatim from `ObjectiveSpec`, whoever that is. */',
+      "export const OUTSIDE = 'Anything at all, and nothing to compare it with.';",
+    ].join('\n'))).toEqual([]);
+  });
+
+  test('a claim declared over a run of LINE comments is read too', () => {
+    // Both comment syntaxes, by the same rule reach uses. Reading only `/** */` made
+    // the gate print zero uncompared quotations while `unit-checkpoint-format.test.ts`
+    // declared one over a `//` run — a blind spot that under-reports itself.
+    const found = auditQuoted(SOURCE, [
+      '// Verbatim from `Spec.models`, and reflowed for one line.',
+      'export const DESCRIPTION =',
+      "  'A cheap model for recon, a strong one for synthesis. '",
+      "  + 'A zoo is worse than repeated sampling when the purpose is decorrelation.';",
+    ].join('\n'));
+    expect(found).toHaveLength(2);
+    expect(found[0]).toContain('drops "Available on EVERY preset."');
+    expect(found[1]).toContain('drops "The homogeneous ensemble beat the mixed one');
+  });
+});
+
+describe('the two corpora do not meet', () => {
+  // Stated as a blind spot on the GREEN path, so it is proven here rather than
+  // assumed. Both fixtures are chosen to DISCRIMINATE: each text ends or begins
+  // where `SENTENCE_BREAK` cannot cut — a lowercase word after a period, a capital
+  // after none — so pooling the comments and the literals into one text glues them
+  // into a single sentence and the unregistered `41.7` is refused beside Self-MoA.
+  // A politely punctuated fixture proves nothing here: sentence reach alone would
+  // separate it whether the corpora were pooled or not.
+  test('a citation in a comment does not reach a number inside a literal', () => {
+    // A LINE comment on purpose: a block comment's closing delimiter would leave a
+    // `*/` that `SENTENCE_BREAK` cuts at, which separates the two texts by accident
+    // rather than by design. A `//` run has no delimiter, so this is the shape that
+    // actually leaks if the corpora are pooled.
+    expect(auditSource([
+      '// Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7 vs',
+      '// 59.1 with the proposer count and topology held fixed.',
+      "export const NOTE = 'the live default is 41.7 on every preset';",
+    ].join('\n'))).toEqual([]);
+  });
+
+  test("nor does a citation inside a literal reach the code's comments", () => {
+    expect(auditSource([
+      '// the live default of 41.7 is ours',
+      "export const NOTE = 'Self-MoA (2502.00674) measured 65.7 vs 59.1 with the topology'",
+      "  + ' held fixed.';",
+    ].join('\n'))).toEqual([]);
   });
 });
