@@ -7,6 +7,7 @@ import { DEFAULT_WORKERS_AI_MODEL_ID, type ModelInfo } from '@kinu.run/core';
 
 export const WORKERS_AI_PREFERRED_MODEL_IDS = [
   DEFAULT_WORKERS_AI_MODEL_ID,
+  '@cf/deepseek-ai/deepseek-v4-pro-0813',
   '@cf/moonshotai/kimi-k2.6',
   '@cf/nvidia/nemotron-3-120b-a12b',
   '@cf/openai/gpt-oss-120b',
@@ -16,7 +17,9 @@ export const WORKERS_AI_PREFERRED_MODEL_IDS = [
 ];
 
 export const WORKERS_AI_FALLBACK_MODEL_CATALOG: ModelInfo[] = [
-  { id: DEFAULT_WORKERS_AI_MODEL_ID,                   label: 'DeepSeek V4 Pro 0813',    capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1_048_576, inputModalities: ['text'] },
+  // Label/window per developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31).
+  { id: DEFAULT_WORKERS_AI_MODEL_ID,                   label: 'GLM 5.3',                 capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1_048_576, inputModalities: ['text'] },
+  { id: '@cf/deepseek-ai/deepseek-v4-pro-0813',        label: 'DeepSeek V4 Pro 0813',    capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1_048_576, inputModalities: ['text'] },
   { id: '@cf/moonshotai/kimi-k2.6',                    label: 'Kimi K2.6',               capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 262_144 },
   { id: '@cf/nvidia/nemotron-3-120b-a12b',             label: 'Nemotron 3 Super 120B',  capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 256_000 },
   { id: '@cf/openai/gpt-oss-120b',                     label: 'GPT OSS 120B',           capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 128_000 },

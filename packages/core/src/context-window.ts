@@ -13,6 +13,9 @@ const WINDOWS: Array<[RegExp, number]> = [
   [/(^|\/)gpt-5\.5\b/i, 1_050_000],
   [/claude-(?:opus|sonnet)-4-[67]\b/i, 1_000_000],
   [/deepseek-v4-pro-0813/i, 1_048_576],
+  // Per developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31):
+  // 1M-token context, same as its 5.2 sibling.
+  [/glm-5\.[23]/i, 1_048_576],
   [/kimi-k3/i, 1_048_576],
   [/kimi-k2/i, 262_144],
   [/llama-4/i, 131_072],

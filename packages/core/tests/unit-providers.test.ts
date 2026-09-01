@@ -21,9 +21,9 @@ function createTestAuth(store: Map<string, AuthResolution> = new Map()): Pick<Pr
 }
 
 describe('parseModelSpec', () => {
-  test('uses DeepSeek V4 Pro as the one canonical Workers AI default', () => {
-    expect(DEFAULT_WORKERS_AI_MODEL_ID).toBe('@cf/deepseek-ai/deepseek-v4-pro-0813');
-    expect(DEFAULT_WORKERS_AI_MODEL_SPEC).toBe('workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813');
+  test('uses GLM 5.3 as the one canonical Workers AI default', () => {
+    expect(DEFAULT_WORKERS_AI_MODEL_ID).toBe('@cf/zai-org/glm-5.3');
+    expect(DEFAULT_WORKERS_AI_MODEL_SPEC).toBe('workers-ai/@cf/zai-org/glm-5.3');
   });
 
   test('splits on first slash so workers-ai/@cf/... survives', () => {

@@ -3,7 +3,7 @@
 // is shared platform knowledge: cf-backend seeds new agents with it, the CLI
 // seeds local agents and ranks model menus by it, and cli-backend uses it as
 // the branch-worker fallback.
-export const DEFAULT_WORKERS_AI_MODEL_ID = '@cf/deepseek-ai/deepseek-v4-pro-0813';
+export const DEFAULT_WORKERS_AI_MODEL_ID = '@cf/zai-org/glm-5.3';
 export const DEFAULT_WORKERS_AI_MODEL_SPEC = `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`;
 
 /** The provider id Workers AI models are specced under. */

@@ -53,14 +53,14 @@ describe('normalizeModelEntries + contextWindowForSpec', () => {
     // resolver lists ModelInfo rows under their provider id.
     const rows = normalizeModelEntries({ rows: [
       {
-        provider: 'workers-ai', id: '@cf/deepseek-ai/deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro 0813',
+        provider: 'workers-ai', id: '@cf/zai-org/glm-5.3', label: 'GLM 5.3',
         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1048576,
       },
       { provider: 'my-gateway', id: 'openai/gpt-4.1', label: 'GPT-4.1', contextWindow: 1047576 },
     ] });
     expect(rows).toEqual([
       {
-        spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'DeepSeek V4 Pro 0813', provider: 'workers-ai',
+        spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'GLM 5.3', provider: 'workers-ai',
         capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1048576,
       },
       {

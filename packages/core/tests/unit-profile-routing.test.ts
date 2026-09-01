@@ -30,7 +30,7 @@ function envelope(catalog = BUILTIN_PROFILE_CATALOG): ProfileCatalogEnvelope {
 const PROVIDER = {
   revision: 'r1',
   availableModels: [
-    'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813', '@cf/a/model-a', '@cf/b/model-b',
+    'workers-ai/@cf/zai-org/glm-5.3', '@cf/a/model-a', '@cf/b/model-b',
   ],
 };
 

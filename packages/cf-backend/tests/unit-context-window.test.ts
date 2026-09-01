@@ -15,8 +15,8 @@ import {
 describe("contextWindowForModel", () => {
   test("the offline Workers AI catalog keeps DeepSeek V4 Pro as the first default", () => {
     expect(WORKERS_AI_FALLBACK_MODEL_CATALOG[0]).toEqual({
-      id: "@cf/deepseek-ai/deepseek-v4-pro-0813",
-      label: "DeepSeek V4 Pro 0813",
+      id: "@cf/zai-org/glm-5.3",
+      label: "GLM 5.3",
       capabilities: ["tools", "streaming", "reasoning"],
       contextWindow: 1_048_576,
       inputModalities: ["text"],
@@ -26,6 +26,7 @@ describe("contextWindowForModel", () => {
   test("matches known model families on their spec", () => {
     expect(contextWindowForModel("minimax/m3")).toBe(1_000_000);
     expect(contextWindowForModel("workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813")).toBe(1_048_576);
+    expect(contextWindowForModel("workers-ai/@cf/zai-org/glm-5.3")).toBe(1_048_576);
     expect(contextWindowForModel("@cf/moonshotai/kimi-k2.6")).toBe(262_144);
     expect(contextWindowForModel("@cf/meta/llama-4-scout")).toBe(131_072);
     expect(contextWindowForModel("anthropic/claude-opus-4-7")).toBe(1_000_000);

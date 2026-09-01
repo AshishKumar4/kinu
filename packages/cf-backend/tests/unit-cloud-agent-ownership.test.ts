@@ -189,7 +189,7 @@ describe('cloud agent ownership safety', () => {
       // The agent takes the first turn itself — after the soul, model and
       // effort are durable, and without the owner having to reprompt.
       expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('soul'));
-      expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('model:@cf/deepseek-ai/deepseek-v4-pro-0813'));
+      expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('model:@cf/zai-org/glm-5.3'));
       expect(background).toHaveLength(1);
       await Promise.all(background);
       expect(calls).toContain('auto-title:React Hello World');
