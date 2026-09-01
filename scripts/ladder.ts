@@ -362,6 +362,22 @@ export const LADDER: readonly Gate[] = [
   },
 
   {
+    run: 'bun run gate:complexity',
+    tier: 'push',
+    // 2.2 s measured 2026-09-01: one oxc-parser walk over 1,907 parseable
+    // files and 48,052 functions, joined once against the lock.
+    seconds: 3,
+    catches: 'a new function arriving at the 99.9th-percentile budget line (39), any '
+      + 'function exceeding the measured tree ceiling (126), a locked resident gaining a '
+      + 'branch, and a stale lock row whose function was simplified or deleted — the '
+      + 'cleanup is recorded rather than silently absorbed.',
+    blind: 'complexity that never branches: a 300-line straight-line function scores 1, '
+      + 'and cognitive load carried by data shape, nesting depth or naming is not counted '
+      + 'at all. The worst twenty print by name on every run so the reader can judge what '
+      + 'the number cannot.',
+  },
+
+  {
     run: 'bun run gate:dead-code',
     tier: 'push',
     // 7.0 s measured 2026-09-01: two knip runs dominate, the dependency census
