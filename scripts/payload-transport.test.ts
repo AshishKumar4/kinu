@@ -4,12 +4,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import {
-  BASE64_CHUNK_BYTES,
-  MIB,
-  PART_SIZE_BYTES,
   PAYLOAD_ARMS,
-  base64ReadPlan,
+  PAYLOAD_SIZES_MIB,
   type PayloadArmId,
+  type PayloadSizeMiB,
 } from './fixtures/payload-transport/arms';
 import { CLEANUP_GATES, evaluateCleanup, EXIT_RESIDUE, exitFor } from './fixtures/payload-transport/cleanup';
 import { decideAll, judgeImage, LOOPBACK_RESIDENCY_NOTE, operationNeedsStart, SDK_THROUGHPUT_CLAIM_NOTE } from './fixtures/payload-transport/decision';
@@ -33,7 +31,13 @@ const driverSource = readFileSync(join(ROOT, 'bench-payload-transports.ts'), 'ut
 const harnessSource = readFileSync(join(FIXTURE_DIR, 'container-harness.ts'), 'utf8');
 const configSource = readFileSync(join(FIXTURE_DIR, 'wrangler.jsonc'), 'utf8');
 
-function cell(arm: PayloadArmId, op: 'put' | 'get', sizeMiB: 1 | 10 | 100, wallMs: number | null, status: Cell['status'] = 'ok'): Cell {
+/** The tier these unit fixtures are written at. Whichever tier the instrument
+ *  runs first: these tests are about ranking, redaction and schema shape, none
+ *  of which depend on the size — so they take one from the list rather than
+ *  naming a number the list can stop containing. */
+const TIER = PAYLOAD_SIZES_MIB[0];
+
+function cell(arm: PayloadArmId, op: 'put' | 'get', sizeMiB: PayloadSizeMiB, wallMs: number | null, status: Cell['status'] = 'ok'): Cell {
   const result: Cell = { arm, op, sizeMiB, rep: 0, phase: status === 'ok' ? 'published' : 'failed', status, wallMs };
   if (status !== 'ok') result.reason = status;
   return result;
@@ -42,7 +46,7 @@ function cell(arm: PayloadArmId, op: 'put' | 'get', sizeMiB: 1 | 10 | 100, wallM
 function artifact(cells: readonly Cell[], warmups: readonly Cell[] = []): Artifact {
   return validateArtifact({
     instrument: 'payload-transports', version: 1,
-    plan: { runId: 'r', workerName: 'kinu-payload-bench-r', bucketName: 'kinu-payload-bench-r', seed: 7, sizesMiB: [1, 10, 100], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z', imagePinned: 'docker.io/cloudflare/sandbox:0.12.8', imageObserved: '0.12.8' },
+    plan: { runId: 'r', workerName: 'kinu-payload-bench-r', bucketName: 'kinu-payload-bench-r', seed: 7, sizesMiB: [...PAYLOAD_SIZES_MIB], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z', imagePinned: 'docker.io/cloudflare/sandbox:0.12.8', imageObserved: '0.12.8' },
     availability: PAYLOAD_ARMS.map((arm) => {
       const row: Availability = { arm, available: arm !== 'temp-s3-creds' };
       if (arm === 'temp-s3-creds') row.reason = 'R2 has no STS';
@@ -82,50 +86,36 @@ describe('payload workload determinism (in-container generator)', () => {
   });
 });
 
-describe('bounded do-base64 assembly', () => {
-  test('the 100 MiB plan performs bounded contiguous reads within exact multipart parts', () => {
-    const sizeBytes = 100 * MIB;
-    const parts = base64ReadPlan(sizeBytes);
-    expect(parts).toHaveLength(7);
-    expect(parts.map((part) => part.byteLength)).toEqual([
-      PART_SIZE_BYTES,
-      PART_SIZE_BYTES,
-      PART_SIZE_BYTES,
-      PART_SIZE_BYTES,
-      PART_SIZE_BYTES,
-      PART_SIZE_BYTES,
-      4 * MIB,
-    ]);
-
-    let cursor = 0;
-    let reads = 0;
-    for (const [index, part] of parts.entries()) {
-      expect(part.partNumber).toBe(index + 1);
-      expect(part.offset).toBe(cursor);
-      expect(part.byteLength).toBeLessThanOrEqual(PART_SIZE_BYTES);
-      let partCursor = part.offset;
-      for (const chunk of part.chunks) {
-        expect(chunk.offset).toBe(partCursor);
-        expect(chunk.byteLength).toBeGreaterThan(0);
-        expect(chunk.byteLength).toBeLessThanOrEqual(BASE64_CHUNK_BYTES);
-        expect(chunk.offset + chunk.byteLength).toBeLessThanOrEqual(part.offset + part.byteLength);
-        partCursor += chunk.byteLength;
-        reads += 1;
-      }
-      expect(partCursor).toBe(part.offset + part.byteLength);
-      cursor += part.byteLength;
-    }
-    expect(cursor).toBe(sizeBytes);
-    expect(reads).toBe(19);
+describe('the owning-DO arm measures the product, not the fixture', () => {
+  test('it streams through devbox\u2019s own putStream, holding no assembled part', () => {
+    // The arm exists to price what a snapshot-chain checkpoint costs. Calling
+    // packages/devbox/src/object-store.ts directly is what makes the number
+    // devbox's: small-PUT/multipart routing and the recorded digest are that
+    // module's decisions, and a copy here would price the copy.
+    expect(workerSource).toContain("from '../../../packages/devbox/src/object-store'");
+    expect(workerSource).toContain('await putStream(this.env.BACKUP_BUCKET, key, body, sizeBytes)');
+    expect(workerSource).toContain('streamFile(await this.readFileStream(file))');
   });
-
-  test('the owner applies that plan through bounded base64 reads and abortable multipart assembly', () => {
-    expect(workerSource).toContain('base64ReadPlan(sizeBytes)');
-    expect(workerSource).toContain("readFile(scratch, { encoding: 'base64' })");
-    expect(workerSource).toContain('await upload.uploadPart(part.partNumber, assembled)');
-    expect(workerSource).toContain('await upload.complete(uploadedParts)');
-    expect(workerSource).toContain('await upload.abort()');
-    expect(workerSource).not.toContain('await this.readFile(file)');
+  test('the in-isolate part assembly that could not reach 64 MiB is gone', () => {
+    // Three runs out of three reset the owning DO on the first tier needing
+    // multipart, every 8 MiB cell before it green: the arm held ~40 MiB live
+    // per 16 MiB part, a shape devbox does not have. Its geometry is deleted
+    // rather than tuned, because tuning it would keep pricing the fixture.
+    for (const dead of [
+      'base64ReadPlan', 'PART_SIZE_BYTES', 'usesMultipart', 'readBase64Chunk',
+      'uploadPart', 'createMultipartUpload',
+    ]) {
+      expect({ dead, inWorker: workerSource.includes(dead) }).toEqual({ dead, inWorker: false });
+    }
+    const armsSource = readFileSync(join(FIXTURE_DIR, 'arms.ts'), 'utf8');
+    expect(armsSource).not.toContain('export const PART_SIZE_BYTES');
+    expect(armsSource).not.toContain('export function base64ReadPlan');
+  });
+  test('the digest recorded is the one the upload took, not a second measurement', () => {
+    // putStream hashes the bytes as they pass and returns that digest; the
+    // driver compares it against the container's seeded sha256, so a transport
+    // that corrupts is a `corrupt` cell rather than a fast one.
+    expect(workerSource).toContain('sha256: landed.digest');
   });
 });
 
@@ -198,6 +188,42 @@ describe('deterministic process redrive', () => {
   });
 });
 
+describe('no cell is measured across a version rollout', () => {
+  // Run 20260901172655-c3e95c: `wrangler deploy` then three `wrangler secret
+  // put` calls, each minting a Worker version. Two of three setup attempts and
+  // then the 64 MiB do-base64 warm-up died on `Durable Object reset because its
+  // code was updated` — the first transfer long enough for a rollout to land
+  // inside it. The origin had already answered a readiness probe.
+  test('the deployment is proven quiet after the secrets and before setup', () => {
+    const secretIndex = driverSource.indexOf("putSecret('R2_SECRET_ACCESS_KEY'");
+    const settleIndex = driverSource.indexOf('await awaitDeploymentSettled(origin, token)');
+    const setupIndex = driverSource.indexOf('await setupFixture(origin, token)');
+    expect(secretIndex).toBeGreaterThan(-1);
+    expect(settleIndex).toBeGreaterThan(secretIndex);
+    expect(setupIndex).toBeGreaterThan(settleIndex);
+  });
+  test('quiescence is proven by consecutive probes, never by a sleep', () => {
+    // A fixed pause would encode a guess about rollout duration. The gate
+    // counts consecutive identical observations and restarts the count on any
+    // disturbance, so the property proven is the one the run needs.
+    expect(driverSource).toContain('stable >= SETTLE_PROBES');
+    expect(driverSource).toMatch(/stable = 0;[\s\S]{0,200}seen = null;/);
+  });
+  test('the probe reaches the Durable Object, not just the Worker', () => {
+    // /shape is answered by the stateless handler and proves nothing about the
+    // object a measurement binds to; the settle probe must go through the DO.
+    expect(workerSource).toContain('await box.runningVersion()');
+    expect(workerSource).toContain('this.env.CF_VERSION_METADATA?.id ?? null');
+    expect(configSource).toContain('"version_metadata"');
+  });
+  test('a fixture that cannot report its version censors the run', () => {
+    // Never "assume settled": an unreportable version makes a rollout
+    // indistinguishable from quiet, which is the condition being excluded.
+    expect(driverSource).toContain('cannot report which Worker version it is running');
+    expect(driverSource).toContain('censoring the run rather than');
+  });
+});
+
 describe('credentials never reach a command line or the artifact', () => {
   test('no CLI credential flags exist anywhere in the instrument', () => {
     for (const source of [workerSource, harnessSource, driverSource]) {
@@ -215,7 +241,7 @@ describe('credentials never reach a command line or the artifact', () => {
     expect(driverSource).toContain('grantFingerprint');
     // The opaque URL is forwarded to the container as a command argument but
     // never persisted; only its SHA-256 fingerprint reaches the artifact.
-    expect(JSON.stringify(validateArtifact(artifact([cell('presigned-r2', 'put', 1, 10)])))).not.toContain('https://');
+    expect(JSON.stringify(validateArtifact(artifact([cell('presigned-r2', 'put', TIER, 10)])))).not.toContain('https://');
   });
   test('deploy argv carries non-secret vars only; secrets go through stdin', () => {
     const varMatches = [...driverSource.matchAll(/'--var', `([A-Z_]+):/g)].map((match) => match[1]);
@@ -322,12 +348,12 @@ describe('no payload body originates on the driver', () => {
 describe('decision honesty', () => {
   test('never ranks unavailable or corrupt arms', () => {
     const cells = [
-      cell('do-base64', 'put', 1, 100), cell('do-base64', 'get', 1, 100),
-      cell('loopback-entrypoint', 'put', 1, 50), cell('loopback-entrypoint', 'get', 1, 50),
-      cell('presigned-r2', 'put', 1, null, 'unavailable'), cell('presigned-r2', 'get', 1, null, 'unavailable'),
-      cell('temp-s3-creds', 'put', 1, null, 'corrupt'), cell('temp-s3-creds', 'get', 1, null, 'corrupt'),
+      cell('do-base64', 'put', TIER, 100), cell('do-base64', 'get', TIER, 100),
+      cell('loopback-entrypoint', 'put', TIER, 50), cell('loopback-entrypoint', 'get', TIER, 50),
+      cell('presigned-r2', 'put', TIER, null, 'unavailable'), cell('presigned-r2', 'get', TIER, null, 'unavailable'),
+      cell('temp-s3-creds', 'put', TIER, null, 'corrupt'), cell('temp-s3-creds', 'get', TIER, null, 'corrupt'),
     ];
-    const verdict = decideAll(cells).find((entry) => entry.sizeMiB === 1)!;
+    const verdict = decideAll(cells).find((entry) => entry.sizeMiB === TIER)!;
     expect(verdict.kind).toBe('ranking');
     if (verdict.kind === 'ranking') {
       expect(verdict.ranked.map((row) => row.arm)).toEqual(['loopback-entrypoint', 'do-base64']);
@@ -335,21 +361,21 @@ describe('decision honesty', () => {
     }
   });
   test('a single clean arm produces no ranking', () => {
-    const verdict = decideAll([cell('do-base64', 'put', 1, 100), cell('do-base64', 'get', 1, 100)]).find((entry) => entry.sizeMiB === 1)!;
+    const verdict = decideAll([cell('do-base64', 'put', TIER, 100), cell('do-base64', 'get', TIER, 100)]).find((entry) => entry.sizeMiB === TIER)!;
     expect(verdict.kind).toBe('no-ranking');
   });
   test('records warm-up evidence separately from statistic samples and ranking', () => {
     const samples = [
-      cell('do-base64', 'put', 1, 100), cell('do-base64', 'get', 1, 100),
-      cell('loopback-entrypoint', 'put', 1, 50), cell('loopback-entrypoint', 'get', 1, 50),
+      cell('do-base64', 'put', TIER, 100), cell('do-base64', 'get', TIER, 100),
+      cell('loopback-entrypoint', 'put', TIER, 50), cell('loopback-entrypoint', 'get', TIER, 50),
     ];
     const warmups = [
-      cell('do-base64', 'put', 1, 10_000), cell('do-base64', 'get', 1, 10_000),
+      cell('do-base64', 'put', TIER, 10_000), cell('do-base64', 'get', TIER, 10_000),
     ];
     const observed = artifact(samples, warmups);
     expect(observed.cells).toHaveLength(samples.length);
     expect(observed.warmups).toEqual(warmups);
-    const verdict = decideAll(observed.cells).find((entry) => entry.sizeMiB === 1)!;
+    const verdict = decideAll(observed.cells).find((entry) => entry.sizeMiB === TIER)!;
     expect(verdict.kind).toBe('ranking');
     if (verdict.kind === 'ranking') {
       expect(verdict.ranked.map((row) => row.arm)).toEqual(['loopback-entrypoint', 'do-base64']);
@@ -367,7 +393,7 @@ describe('decision honesty', () => {
       instrument: 'payload-transports', version: 1,
       plan: { runId: 'r', workerName: 'w', bucketName: 'b', seed: 1, sizesMiB: [1], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z' },
       availability: [], warmups: [], controlRpc: [], concurrency: [], verdicts: [], cleanup: { residue: false, steps: [] },
-      cells: [{ ...cell('do-base64', 'put', 1, 10), uploadIntent: { operationId: 'op', attemptId: 'attempt', boxId: 'box', epoch: '0', exactKey: 'key', method: 'PUT', byteLength: '1', sha256: 'NOT-A-DIGEST', expiresAt: '1' } }],
+      cells: [{ ...cell('do-base64', 'put', TIER, 10), uploadIntent: { operationId: 'op', attemptId: 'attempt', boxId: 'box', epoch: '0', exactKey: 'key', method: 'PUT', byteLength: '1', sha256: 'NOT-A-DIGEST', expiresAt: '1' } }],
     };
     expect(() => v.parse(ArtifactSchema, invalid)).toThrow();
   });
@@ -375,7 +401,7 @@ describe('decision honesty', () => {
 
 describe('report honesty and cleanup admission', () => {
   test('renders every required disclosure', () => {
-    const text = renderMarkdown(artifact([cell('do-base64', 'put', 1, 10), cell('do-base64', 'get', 1, 10)]));
+    const text = renderMarkdown(artifact([cell('do-base64', 'put', TIER, 10), cell('do-base64', 'get', TIER, 10)]));
     expect(text).toContain(SDK_THROUGHPUT_CLAIM_NOTE);
     expect(text).toContain(LOOPBACK_RESIDENCY_NOTE);
     expect(text).toContain('CPU per arm is UNKNOWN');

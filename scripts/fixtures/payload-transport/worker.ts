@@ -11,10 +11,11 @@
  * container daemon outlives DO resets, so every operation here is keyed by a
  * deterministic operationId and is start-or-read, never assumed local.
  *
- *   do-base64            the owning DO pulls the file out of the container
- *                        through `readFile()` (base64 across the RPC boundary —
- *                        the current product path) and writes decoded bytes to
- *                        the binding; GET streams back via `writeFile()`
+ *   do-base64            the owning DO pulls the file out of the container as
+ *                        base64 SSE frames and streams the decoded bytes into
+ *                        the binding, through the PRODUCT'S OWN `putStream` —
+ *                        the current devbox snapshot-chain path; GET streams
+ *                        back via `writeFile()`
  *   loopback-entrypoint   the container fetches `http://r2.internal/<bucket>/<key>`
  *                        through SDK outbound interception into the exported
  *                        ContainerProxy WorkerEntrypoint (mountBucket plane)
@@ -32,9 +33,15 @@
 
 import { AwsClient } from 'aws4fetch';
 import { SignJWT } from 'jose';
-import { Sandbox, ContainerProxy, type Process } from '@cloudflare/sandbox';
+import { Sandbox, ContainerProxy, streamFile, type Process } from '@cloudflare/sandbox';
 import * as v from 'valibot';
-import { base64ReadPlan, usesMultipart } from './arms';
+// THE PRODUCT'S UPLOAD, NOT A MODEL OF IT. `packages/devbox/src/object-store.ts`
+// is what a snapshot-chain checkpoint calls, small-PUT/multipart routing and
+// digest included, so this arm reports what devbox costs rather than what a
+// re-implementation in this file would cost. Imported by path because the
+// devbox package deliberately exports a narrow surface; the fixtures under
+// scripts/ already reach into packages/devbox/src the same way.
+import { putStream } from '../../../packages/devbox/src/object-store';
 import { operationNeedsStart } from './decision';
 import { HarnessResultSchema } from './wire';
 import type { HarnessResult } from './wire';
@@ -66,6 +73,10 @@ interface JsonReply {
   readonly exitCode?: number | null;
   readonly results?: readonly HarnessResult[];
   readonly imageVersion?: string;
+  /** The settle gate's answer. Nullable rather than absent: "this Durable
+   *  Object cannot say" and "this route was not reached" must not look alike
+   *  to a driver that censors the run on the first. */
+  readonly version?: string | null;
   readonly sha256?: string;
   readonly size?: number;
   readonly ms?: number;
@@ -124,11 +135,6 @@ async function sha256Of(data: ArrayBuffer | Uint8Array): Promise<string> {
     .join('');
 }
 
-function decodeBase64(value: string): Uint8Array {
-  const raw = atob(value);
-  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
-}
-
 /** One line of a thrown value, in the shape `new Error(msg, { cause })` spells. */
 const describeThrown = (error: Error | string): string =>
   error instanceof Error ? error.message : error;
@@ -181,6 +187,28 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
 
   async control(): Promise<void> {}
 
+  /**
+   * Which Worker version THIS Durable Object is running.
+   *
+   * Asked of the DO and not of the Worker's fetch handler, because the fact
+   * the settle gate needs is about the DO: a version rollout REPLACES a
+   * Durable Object mid-call — `Durable Object reset because its code was
+   * updated` — and a stateless handler can already be answering from the new
+   * version while the object a measurement is bound to has not been swapped
+   * yet. The run this gate exists for lost its 64 MiB warm-up to exactly that,
+   * three `wrangler secret put` versions after the code deploy, several
+   * minutes after an unauthenticated readiness probe had reported the origin
+   * healthy.
+   *
+   * Absent binding answers `null` rather than throwing: the driver treats an
+   * unreportable version as an unsettleable deployment and censors the run,
+   * which is the same answer it gives for an unverifiable image, and is never
+   * a measurement.
+   */
+  async runningVersion(): Promise<string | null> {
+    return this.env.CF_VERSION_METADATA?.id ?? null;
+  }
+
   private async sourceFileSize(file: string): Promise<number> {
     const measured = await this.exec(`wc -c < ${shellArg(file)}`, { timeout: 120_000 });
     const output = measured.stdout.trim();
@@ -192,118 +220,51 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     return size;
   }
 
-  private async sourceSha256(file: string): Promise<string> {
-    const hashed = await this.exec(`sha256sum ${shellArg(file)}`, { timeout: 120_000 });
-    const sha256 = /^([0-9a-f]{64})/.exec(hashed.stdout)?.[1];
-    if (hashed.exitCode !== 0 || sha256 === undefined) {
-      throw new Error(`sha256sum printed no digest: ${hashed.stdout.slice(0, 120)}`);
-    }
-    return sha256;
-  }
-
   /**
-   * Copy one bounded byte range into a disposable container file, then use the
-   * product's base64 `readFile` surface. The temporary range makes the clone
-   * budget explicit even though the SDK file API has no range option.
-   */
-  private async readBase64Chunk(file: string, offset: number, byteLength: number): Promise<Uint8Array> {
-    const scratch = `/tmp/payload-bench/base64-${crypto.randomUUID()}.chunk`;
-    let result: Uint8Array | undefined;
-    let failure: unknown;
-    let failed = false;
-    try {
-      const copied = await this.exec([
-        'dd',
-        `if=${shellArg(file)}`,
-        `of=${shellArg(scratch)}`,
-        'bs=1048576',
-        'iflag=skip_bytes,count_bytes',
-        `skip=${offset}`,
-        `count=${byteLength}`,
-        'status=none',
-      ].join(' '), { timeout: 120_000 });
-      if (copied.exitCode !== 0) {
-        throw new Error(`could not copy base64 chunk at ${offset}: ${copied.stderr.slice(0, 200)}`);
-      }
-      const read = await this.readFile(scratch, { encoding: 'base64' });
-      if (read.encoding !== 'base64') {
-        throw new Error(`base64 chunk at ${offset} returned ${read.encoding ?? 'no'} encoding`);
-      }
-      result = decodeBase64(read.content);
-      if (result.byteLength !== byteLength) {
-        throw new Error(`base64 chunk at ${offset} decoded ${result.byteLength} bytes, expected ${byteLength}`);
-      }
-    } catch (error) {
-      failed = true;
-      failure = error;
-    }
-    const removed = await this.exec(`rm -f ${shellArg(scratch)}`, { timeout: 60_000 });
-    if (removed.exitCode !== 0) {
-      const cleanupError = new Error(`could not remove base64 chunk: ${removed.stderr.slice(0, 200)}`);
-      if (failed) {
-        throw new Error(
-          `base64 chunk failed and cleanup also failed: ${describeThrown(failure instanceof Error ? failure : String(failure))}`,
-          { cause: cleanupError },
-        );
-      }
-      throw cleanupError;
-    }
-    if (failed) throw failure;
-    if (result === undefined) throw new Error(`base64 chunk at ${offset} produced no bytes`);
-    return result;
-  }
-
-  /**
-   * Arm 1 PUT — the current base64 RPC surface, read in bounded chunks and
-   * assembled into exact R2 multipart parts rather than one giant clone.
+   * Arm 1 PUT — THE PRODUCT'S OWNING-DO PATH, not a model of it.
+   *
+   * `packages/devbox/src/snapshot-chain.ts`'s `stageAndPut` does exactly this:
+   * take the SDK's binary file stream out of the container, hand it to
+   * `putStream`, and let that route between a single PUT and multipart. So this
+   * arm calls the product's own `putStream` over the product's own container
+   * stream, and the number it reports is devbox's number.
+   *
+   * IT REPLACES AN IN-DO REASSEMBLY THAT MEASURED THE FIXTURE. The previous
+   * body pulled bounded base64 chunks and welded them into exact 16 MiB
+   * multipart parts inside the isolate; that is not a shape devbox has, and it
+   * held roughly 40 MiB live per part — the owning DO was reset, three runs out
+   * of three, on the FIRST tier large enough to need multipart (64 MiB), with
+   * every 8 MiB cell before it green. An arm that cannot complete the tier it
+   * exists to price, in a way the product would not fail, is measuring its own
+   * assembly. Streaming holds one chunk plus one part, which is what the
+   * product holds.
+   *
+   * The digest is `putStream`'s, taken over the bytes as they pass, so it is
+   * the same identity a real checkpoint records — and comparing it against the
+   * container's own `sha256sum` is what proves the transport did not corrupt.
    */
   async fileThroughOwnerToObject(file: string, key: string): Promise<{ ms: number; sha256: string }> {
     const sizeBytes = await this.sourceFileSize(file);
-    const sha256 = await this.sourceSha256(file);
-    const parts = base64ReadPlan(sizeBytes);
-    const bucket = this.env.BACKUP_BUCKET;
+    const chunks = streamFile(await this.readFileStream(file));
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const next = await chunks.next();
+        if (next.done === true) {
+          controller.close();
+          return;
+        }
+        // Text here would prove a protocol mismatch, not a payload: every tier
+        // this instrument seeds is random bytes.
+        if (!(next.value instanceof Uint8Array)) {
+          controller.error(new Error(`${file} streamed text instead of bytes`));
+          return;
+        }
+        controller.enqueue(next.value);
+      },
+    });
     const started = Date.now();
-    const upload = usesMultipart(sizeBytes)
-      ? await bucket.createMultipartUpload(key)
-      : undefined;
-    const uploadedParts: R2UploadedPart[] = [];
-    try {
-      if (parts.length === 0) await bucket.put(key, new Uint8Array());
-      for (const part of parts) {
-        const assembled = new Uint8Array(part.byteLength);
-        let written = 0;
-        for (const chunk of part.chunks) {
-          if (chunk.offset !== part.offset + written) {
-            throw new Error(`base64 chunk order broke at ${chunk.offset}, expected ${part.offset + written}`);
-          }
-          const bytes = await this.readBase64Chunk(file, chunk.offset, chunk.byteLength);
-          assembled.set(bytes, written);
-          written += bytes.byteLength;
-        }
-        if (written !== part.byteLength) {
-          throw new Error(`base64 part ${part.partNumber} assembled ${written} bytes, expected ${part.byteLength}`);
-        }
-        if (upload === undefined) {
-          await bucket.put(key, assembled);
-        } else {
-          uploadedParts.push(await upload.uploadPart(part.partNumber, assembled));
-        }
-      }
-      if (upload !== undefined) await upload.complete(uploadedParts);
-    } catch (error) {
-      if (upload !== undefined) {
-        try {
-          await upload.abort();
-        } catch (abortError) {
-          throw new Error(
-            `base64 multipart upload failed and could not be aborted: ${describeThrown(error instanceof Error ? error : String(error))}`,
-            { cause: abortError },
-          );
-        }
-      }
-      throw error;
-    }
-    return { ms: Date.now() - started, sha256 };
+    const landed = await putStream(this.env.BACKUP_BUCKET, key, body, sizeBytes);
+    return { ms: Date.now() - started, sha256: landed.digest };
   }
 
   /** Arm 1 GET — stream the stored object INTO the container; hash afterwards. */
@@ -468,6 +429,10 @@ interface Env {
   BUCKET_NAME?: string;
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
+  /** Which Worker version this isolate is running. Read INSIDE the Durable
+   *  Object, because that is the only place the answer means what the settle
+   *  gate needs it to mean — see {@link PayloadBenchSandbox.runningVersion}. */
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
 }
 
 /** Delete everything under a prefix, paging until the bucket reports none. */
@@ -524,6 +489,13 @@ export default {
     if (url.pathname === '/control') {
       await box.control();
       return json({ ok: true });
+    }
+
+    // The settle gate's probe. It goes THROUGH the Durable Object on purpose:
+    // a reset in flight surfaces here as an error instead of being discovered
+    // by a measurement.
+    if (url.pathname === '/version') {
+      return json({ version: await box.runningVersion() });
     }
 
     // Idempotent readiness: the first RPC runs onStart; re-running proves the

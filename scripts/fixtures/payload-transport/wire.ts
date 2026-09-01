@@ -17,6 +17,10 @@ export const SetupReplySchema = v.looseObject({
   imageVersion: v.string(),
 });
 export type SetupReply = v.InferOutput<typeof SetupReplySchema>;
+/** What the Durable Object says it is running. `null` means the binding is
+ *  absent, which the driver treats as an unsettleable deployment rather than
+ *  as a version. */
+export const VersionReplySchema = v.looseObject({ version: v.nullable(v.string()) });
 export const OperationStartReplySchema = v.looseObject({
   ok: v.literal(true),
   started: v.boolean(),

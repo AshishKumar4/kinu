@@ -91,71 +91,48 @@ export const ARM_SPECS: readonly ArmSpec[] = [
 export const armSpec = (id: PayloadArmId): ArmSpec =>
   ARM_SPECS.find((spec) => spec.id === id)!;
 
-/** The payload tiers. Deterministic, and small enough that one run fits an hour. */
-export const PAYLOAD_SIZES_MIB = [1, 10, 100] as const;
+/**
+ * The payload tiers, in MiB.
+ *
+ * CHOSEN AGAINST THE THING BEING MEASURED, not for round numbers. 8 MiB is
+ * `SMALL_PUT_BYTES` in packages/devbox/src/object-store.ts — the exact line
+ * where the owning DO stops buffering one copy and promotes to multipart, so
+ * the smallest tier sits ON the routing boundary the product actually has. 64
+ * and 256 MiB are the sizes a real workspace archive reaches: the deployed
+ * failure quoted in snapshot-chain.ts moved a 700 MB delta, and a tier that
+ * stopped at 100 MiB would have measured only the regime where nothing hurts.
+ */
+export const PAYLOAD_SIZES_MIB = [8, 64, 256] as const;
 export type PayloadSizeMiB = (typeof PAYLOAD_SIZES_MIB)[number];
+
+/**
+ * The tier the concurrency probe runs at: the MIDDLE one.
+ *
+ * Derived, never retyped. The probe used to spell its size `10` at the call
+ * site and again inside its own MiB/s arithmetic, so retiering the instrument
+ * would have left it asking for a tier that no longer exists while still
+ * dividing by the old number — a row that reads as a throughput and is not one.
+ * The middle tier because the probe measures CONTENTION, not size: the
+ * smallest tier finishes before concurrency can be observed and the largest
+ * spends the run on bytes rather than on overlap.
+ */
+export const CONCURRENCY_TIER_MIB = PAYLOAD_SIZES_MIB[1];
 
 export const MIB = 1024 * 1024;
 
 /**
- * One R2 multipart part. The owning-DO arm assembles each part from bounded
- * base64 reads before uploading it, so no individual structured clone carries
- * more than `BASE64_CHUNK_BYTES` raw payload.
+ * The owning-DO arm holds no plan and no part geometry, and that absence is
+ * the point.
+ *
+ * This file used to carry `PART_SIZE_BYTES`, `base64ReadPlan` and a chunk/part
+ * algebra, because that arm read bounded base64 chunks and welded them into
+ * exact 16 MiB R2 multipart parts inside the Durable Object. None of it
+ * described devbox: `snapshot-chain.ts` hands the container's byte stream
+ * straight to `packages/devbox/src/object-store.ts`'s `putStream`, which does
+ * its own routing. The arm now calls that function, so the geometry belongs to
+ * the product and the numbers are the product's — and the fixture keeps no
+ * second copy of a decision it does not own.
  */
-export const PART_SIZE_BYTES = 16 * MIB;
-
-/** Sizes larger than one part use R2 multipart assembly in the owning-DO arm. */
-export const usesMultipart = (sizeBytes: number): boolean => sizeBytes > PART_SIZE_BYTES;
-
-export const partCount = (sizeBytes: number): number =>
-  usesMultipart(sizeBytes) ? Math.ceil(sizeBytes / PART_SIZE_BYTES) : 1;
-
-/**
- * How many raw bytes ride in ONE base64 boundary crossing. Six raw MiB expands
- * to exactly eight MiB of base64 text, comfortably below the clone ceiling.
- */
-export const RAW_CHUNK_BYTES = 8 * MIB;
-export const BASE64_CHUNK_BYTES = 6 * MIB;
-
-export const chunkSizeFor = (arm: ArmSpec): number =>
-  arm.base64AtBoundary ? BASE64_CHUNK_BYTES : RAW_CHUNK_BYTES;
-
-export interface Base64ReadChunk {
-  /** Offset from the source file, never crossing its owning multipart part. */
-  readonly offset: number;
-  readonly byteLength: number;
-}
-
-export interface Base64ReadPart {
-  /** R2 multipart part numbers are one-based. */
-  readonly partNumber: number;
-  readonly offset: number;
-  readonly byteLength: number;
-  readonly chunks: readonly Base64ReadChunk[];
-}
-
-/**
- * The exact read/assembly plan for the owning-DO base64 arm. Chunks cover the
- * source contiguously in order and each part closes at `PART_SIZE_BYTES`.
- */
-export function base64ReadPlan(sizeBytes: number): readonly Base64ReadPart[] {
-  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
-    throw new Error(`base64 read size must be a non-negative safe integer, got ${sizeBytes}`);
-  }
-  const parts: Base64ReadPart[] = [];
-  for (let offset = 0, partNumber = 1; offset < sizeBytes; offset += PART_SIZE_BYTES, partNumber += 1) {
-    const byteLength = Math.min(PART_SIZE_BYTES, sizeBytes - offset);
-    const chunks: Base64ReadChunk[] = [];
-    for (let chunkOffset = offset; chunkOffset < offset + byteLength; chunkOffset += BASE64_CHUNK_BYTES) {
-      chunks.push({
-        offset: chunkOffset,
-        byteLength: Math.min(BASE64_CHUNK_BYTES, offset + byteLength - chunkOffset),
-      });
-    }
-    parts.push({ partNumber, offset, byteLength, chunks });
-  }
-  return parts;
-}
 
 /**
  * Cell outcome statuses. `corrupt` stands alone, not as a failure flavour:

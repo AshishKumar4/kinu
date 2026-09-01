@@ -3,8 +3,8 @@
   "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
+    "lib": ["ES2024"],
+    "types": ["@cloudflare/workers-types", "node"],
     "allowImportingTsExtensions": true,
     "moduleDetection": "force"
   },

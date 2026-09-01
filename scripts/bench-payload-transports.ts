@@ -42,7 +42,10 @@ import {
   publishTeardown, runTeardownOnce, runWrangler, wranglerProvesAbsence,
   WRANGLER_FAILED,
 } from './fixtures/r2-bench/deploy-substrate';
-import { PAYLOAD_ARMS, PAYLOAD_SIZES_MIB, type PayloadArmId } from './fixtures/payload-transport/arms';
+import {
+  CONCURRENCY_TIER_MIB, PAYLOAD_ARMS, PAYLOAD_SIZES_MIB,
+  type PayloadArmId, type PayloadSizeMiB,
+} from './fixtures/payload-transport/arms';
 import { CLEANUP_GATES, evaluateCleanup, exitFor, type CleanupEvidence } from './fixtures/payload-transport/cleanup';
 import { decideAll, judgeImage } from './fixtures/payload-transport/decision';
 import { isValidResourceName, runIdentity, type RunIdentity } from './fixtures/payload-transport/payload';
@@ -59,6 +62,7 @@ import {
   PurgeReplySchema,
   SetupReplySchema,
   TemporaryCredentialsReplySchema,
+  VersionReplySchema,
 } from './fixtures/payload-transport/wire';
 import type { HarnessResult, SetupReply } from './fixtures/payload-transport/wire';
 import { summarize } from './fixtures/r2-bench/stats';
@@ -196,6 +200,88 @@ async function call<TSchema extends v.GenericSchema>(
   }
   return v.parse(schema, object);
 }
+/**
+ * How many consecutive probes must report the SAME running version before any
+ * measurement is accepted, and how far apart they are spaced.
+ *
+ * NOT A SLEEP. A fixed pause encodes a guess about how long a rollout takes;
+ * this encodes the property the run actually needs — that the Durable Object
+ * measurements are about to bind is no longer being replaced. Each probe goes
+ * through the DO, so a rollout in flight either changes the reported id or
+ * throws `Durable Object reset because its code was updated`, and both restart
+ * the count.
+ *
+ * Six probes three seconds apart is fifteen seconds of proven quiet. The run
+ * this gate was written for was still being re-versioned roughly three minutes
+ * after `wrangler deploy` returned, so the DEADLINE is what has to be generous;
+ * the quiet window only has to be longer than the gap between two rollouts of
+ * one `wrangler secret put`, which is seconds.
+ */
+const SETTLE_PROBES = 6;
+const SETTLE_GAP_MS = 3_000;
+const SETTLE_DEADLINE_MS = 420_000;
+
+/**
+ * Refuse to measure until the deployment has stopped moving.
+ *
+ * THE PRECONDITION THIS INSTRUMENT WAS MISSING. `wrangler deploy` is followed
+ * by three `wrangler secret put` calls, and each one mints a new Worker
+ * version; a version rollout resets Durable Objects mid-call. Run
+ * 20260901172655-c3e95c lost two of three setup attempts and then its 64 MiB
+ * do-base64 warm-up to that reset — the first arm/tier pair large enough for a
+ * rollout to land inside it — after an unauthenticated readiness probe had
+ * already reported the origin healthy. Readiness of the WORKER was proven;
+ * quiescence of the DEPLOYMENT was assumed.
+ *
+ * It is a censoring gate, like the image check: an unsettleable deployment
+ * throws, and throwing before the first cell means the run has no data rather
+ * than data taken across a rollout.
+ */
+async function awaitDeploymentSettled(origin: string, token: string): Promise<string> {
+  const deadline = Date.now() + SETTLE_DEADLINE_MS;
+  let stable = 0;
+  let seen: string | null = null;
+  let lastDisturbance = 'none observed';
+  for (;;) {
+    let reported: string | null;
+    try {
+      reported = (await call(origin, token, '/version', VersionReplySchema)).version;
+    } catch (error) {
+      // A reset in flight IS the disturbance being waited out, so it restarts
+      // the count rather than failing the run.
+      lastDisturbance = renderThrownChain({ cause: error });
+      stable = 0;
+      seen = null;
+      reported = null;
+      if (Date.now() >= deadline) break;
+      await delay(SETTLE_GAP_MS);
+      continue;
+    }
+    if (reported === null) {
+      throw new Error(
+        'the fixture cannot report which Worker version it is running, so a rollout '
+        + 'cannot be told from a quiet deployment; censoring the run rather than '
+        + 'measuring across one. Expected the version_metadata binding CF_VERSION_METADATA.',
+      );
+    }
+    if (reported === seen) {
+      stable += 1;
+      if (stable >= SETTLE_PROBES) return reported;
+    } else {
+      if (seen !== null) lastDisturbance = `version moved ${seen} → ${reported}`;
+      seen = reported;
+      stable = 1;
+    }
+    if (Date.now() >= deadline) break;
+    await delay(SETTLE_GAP_MS);
+  }
+  throw new Error(
+    `the deployment was still moving after ${String(Math.round(SETTLE_DEADLINE_MS / 1000))} s `
+    + `(${String(stable)}/${String(SETTLE_PROBES)} consecutive quiet probes; last disturbance: `
+    + `${lastDisturbance}); censoring the run rather than measuring across a rollout.`,
+  );
+}
+
 async function setupFixture(origin: string, token: string): Promise<SetupReply> {
   let lastFailure = 'setup was not attempted';
   for (let attempt = 1; attempt <= 4; attempt += 1) {
@@ -254,13 +340,13 @@ async function runOperation(
 
 interface SeededFile {
   readonly path: string;
-  readonly sizeMiB: 1 | 10 | 100;
+  readonly sizeMiB: PayloadSizeMiB;
   readonly sizeBytes: number;
   readonly sha256: string;
 }
 function requiredSeed(
-  seeded: ReadonlyMap<1 | 10 | 100, SeededFile>,
-  sizeMiB: 1 | 10 | 100,
+  seeded: ReadonlyMap<PayloadSizeMiB, SeededFile>,
+  sizeMiB: PayloadSizeMiB,
 ): SeededFile {
   const found = seeded.get(sizeMiB);
   if (found === undefined) throw new Error(`seed evidence omitted ${sizeMiB} MiB`);
@@ -284,7 +370,7 @@ interface MeasuredEvidence {
   readonly sha256: string;
 }
 
-function seedEvidence(result: HarnessResult, sizeMiB: 1 | 10 | 100): SeedEvidence {
+function seedEvidence(result: HarnessResult, sizeMiB: PayloadSizeMiB): SeedEvidence {
   if (result.bytes === undefined || result.sha256 === undefined) {
     throw new Error(`seed ${sizeMiB} MiB returned incomplete evidence`);
   }
@@ -525,6 +611,10 @@ async function main(): Promise<number> {
     origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(deployed)?.[0] ?? null;
     if (origin === null) throw new Error('wrangler deploy returned no workers.dev origin');
     await awaitTokenAccepted(origin, token, '/shape', log);
+    // DEPLOYMENT QUIESCENCE, proven before the container is even prepared: the
+    // three secrets above each minted a Worker version, and a version rollout
+    // resets the Durable Object every cell is measured through.
+    log(`deployment settled on version ${await awaitDeploymentSettled(origin, token)}`);
 
     const setup = await setupFixture(origin, token);
 
@@ -549,7 +639,7 @@ async function main(): Promise<number> {
     if (seededResults.length !== PAYLOAD_SIZES_MIB.length) {
       throw new Error(`seed operation returned ${seededResults.length} results`);
     }
-    const seeded = new Map<1 | 10 | 100, SeededFile>();
+    const seeded = new Map<PayloadSizeMiB, SeededFile>();
     for (const [index, sizeMiB] of PAYLOAD_SIZES_MIB.entries()) {
       const result = seededResults[index];
       if (result === undefined) throw new Error(`seed result ${index} is absent`);
@@ -695,7 +785,7 @@ async function main(): Promise<number> {
       }
 
       function judge(
-        cellBase: { arm: PayloadArmId; op: 'put' | 'get'; sizeMiB: 1 | 10 | 100; rep: number },
+        cellBase: { arm: PayloadArmId; op: 'put' | 'get'; sizeMiB: PayloadSizeMiB; rep: number },
         seededFile: SeededFile,
         objectKey: string,
         measured: MeasuredEvidence,
@@ -797,10 +887,10 @@ async function main(): Promise<number> {
         }
       })();
       const startedAt = Date.now();
-      const tenMiB = requiredSeed(seeded, 10);
+      const contended = requiredSeed(seeded, CONCURRENCY_TIER_MIB);
       const results = await Promise.all(
         Array.from({ length: opts.concurrency }, (_, slot) =>
-          runCell(arm, 'put', tenMiB, 1000 + slot, `concurrent/${arm}/${slot}`)),
+          runCell(arm, 'put', contended, 1000 + slot, `concurrent/${arm}/${slot}`)),
       );
       const wallMs = Date.now() - startedAt;
       stop.value = true;
@@ -810,7 +900,7 @@ async function main(): Promise<number> {
         concurrencyRows.push({
           arm,
           wallMs,
-          throughputMiBs: (10 * opts.concurrency) / (wallMs / 1000),
+          throughputMiBs: (CONCURRENCY_TIER_MIB * opts.concurrency) / (wallMs / 1000),
           status: 'ok',
         });
       } else {
