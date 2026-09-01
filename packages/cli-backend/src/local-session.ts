@@ -179,7 +179,7 @@ import { makeSqlExec, type CLIRuntime } from './runtime';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
-import { createCLIHeadRuntime } from './head-runtime';
+import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from './fiber';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
@@ -4854,8 +4854,10 @@ export class LocalAgentSession implements BackendHost {
    */
   private headRuntimeOptions(
     model: () => LanguageModel,
-  ): Parameters<typeof createCLIHeadRuntime>[0] {
-    const options: Parameters<typeof createCLIHeadRuntime>[0] = {
+  ): CLIHeadRuntimeDeps {
+    // Annotated with the NAMED interface, not Parameters<...>[0], so the
+    // field-supply census sees this construction site.
+    const options: CLIHeadRuntimeDeps = {
       model,
       // The merge's model, effort and spend label are core's policy
       // (`headMergeLLM`) off this profile; the binding below is the only local
