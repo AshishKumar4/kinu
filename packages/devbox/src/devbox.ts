@@ -933,19 +933,21 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // about a container nobody asked to exist on the one channel built to be
       // trusted, and arming wakes a box that was deliberately stopped, one
       // second after a `quiesce` that arms nothing on purpose.
-      if (!this.#owns(admitting)) return;
-      const failure = classifyRecovery({ cause: error });
-      admissionRefusal = `[${failure} → retry] ${describe({ cause: error })}`;
-      await this.#record('attach', admissionRefusal);
-      if (!this.#owns(admitting)) return;
-      // ASK AGAIN ON THE STARTUP CADENCE, not the heartbeat's. The re-arm used
-      // to be `heartbeatSeconds`, so a container that needed a few more seconds
-      // than one port probe allows was left unattached for a full heartbeat —
-      // the dominant term in a 44,189 ms cold attach whose container was up
-      // within seconds. This is the same row `kickStartup` arms, so the retry
-      // rides machinery that already exists, and it cannot spin: each attempt
-      // spends its own port probe before it can fail again.
-      await this.#arm(STARTUP_CALLBACK, 1);
+      if (this.#owns(admitting)) {
+        const failure = classifyRecovery({ cause: error });
+        admissionRefusal = `[${failure} → retry] ${describe({ cause: error })}`;
+        await this.#record('attach', admissionRefusal);
+        if (this.#owns(admitting)) {
+          // ASK AGAIN ON THE STARTUP CADENCE, not the heartbeat's. The re-arm used
+          // to be `heartbeatSeconds`, so a container that needed a few more seconds
+          // than one port probe allows was left unattached for a full heartbeat —
+          // the dominant term in a 44,189 ms cold attach whose container was up
+          // within seconds. This is the same row `kickStartup` arms, so the retry
+          // rides machinery that already exists, and it cannot spin: each attempt
+          // spends its own port probe before it can fail again.
+          await this.#arm(STARTUP_CALLBACK, 1);
+        }
+      }
     }
     // THE ADMITTED-NOTHING EXIT, keyed on the named outcome the catch
     // classified: the container was never admitted, so there is no restoration
