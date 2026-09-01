@@ -1,19 +1,108 @@
 import { SyntaxStyle } from '@opentui/core';
-import { createContext, createElement, useContext, useMemo, type ReactNode } from 'react';
+import { useRenderer } from '@opentui/react';
+import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import * as v from 'valibot';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 export type ThemeAppearance = 'dark' | 'light';
 export type TerminalColorCapability = 'truecolor' | 'ansi256' | 'ansi16';
 
+/**
+ * The TUI's colour roles, and where each one comes from.
+ *
+ * Two sources, in this order:
+ *
+ * 1. The canvas model is oh-my-pi's (can1357/oh-my-pi 17.4.2,
+ *    `packages/coding-agent/src/modes/theme/`). Its `dark.json` and
+ *    `light.json` set `text: ""` and `userMessageText: ""`, and `color.ts`
+ *    turns `""` into `\x1b[39m` / `\x1b[49m`: the terminal's own foreground
+ *    and background. Nothing paints the canvas. What IS painted: the user
+ *    bubble (`userMessageBg`, `components/user-message.ts`), the composer
+ *    (`tui-adapters.ts` `surfaceColor: bgFill("userMessageBg")`), tool cards
+ *    (`toolPendingBg`/`toolSuccessBg`/`toolErrorBg`,
+ *    `components/tool-execution.ts`) and the status line. Thinking is
+ *    `thinkingText: gray`, italic (`components/assistant-message.ts`).
+ *    Markdown code fences take `mdCodeBlock` ink and no fill
+ *    (`tui-adapters.ts` `getMarkdownTheme`). Here the canvas, the chrome and
+ *    the cards are transparent by default; the bubble, the composer, the
+ *    tool/code well and the dialogs are painted.
+ *
+ *    One deliberate difference: opentui paints unset text `#FFFFFF` rather
+ *    than emitting `39m` (measured on a pty, 2026-09-01), so prose takes the
+ *    theme's ink for the detected appearance instead of the terminal's.
+ *
+ * 2. Every colour is the web app's (`packages/cf-backend/src/index.css`, the
+ *    `:root` dark block and the `[data-mode="light"]` block). A terminal has
+ *    no alpha, so the one tint the web uses is composited at its ground.
+ *
+ * | TUI role              | web token                              | dark    | light   |
+ * |-----------------------|----------------------------------------|---------|---------|
+ * | background.canvas     | --c-bg (solid presets; else terminal)   | #0F0D0B | #E9E2D3 |
+ * | background.chrome     | --c-sidebar (solid presets; else none)  | #141110 | #F1EBDD |
+ * | background.surface    | --c-surface (solid presets; else none)  | #181512 | #F7F3E9 |
+ * | background.overlay    | --c-overlay — dialogs, palettes, hubs   | #221C15 | #F7F3E9 |
+ * | background.recessed   | --c-recessed — a well inside a dialog   | #131110 | #E0D8C5 |
+ * | background.elevated   | --c-elevated — the open/active row      | #221C15 | #E8E0CE |
+ * | background.selection  | --c-neutral-tint over --c-overlay       | #2E2821 | #E9E5DA |
+ * | background.accent     | --c-accent — the gold fill              | #E0A458 | #D89A44 |
+ * | background.user       | --c-user-bg — user bubble, composer     | #241E16 | #F2D9AC |
+ * | border.default        | --c-border — structural rules           | #262019 | #D2C6AE |
+ * | border.subtle         | --c-dash — separators inside a card     | #2A241D | #DBD1BE |
+ * | border.strong         | --c-border-strong — outlined controls   | #332C23 | #BBAB8C |
+ * | border.focus          | --c-accent, text-grade on paper (*)     | #E0A458 | #8F5C10 |
+ * | border.user           | --c-user-border — the bubble edge       | #3A3126 | #D9B573 |
+ * | text.primary          | --c-text-2 — prose, UI text             | #D8CFC2 | #3D3427 |
+ * | text.strong           | --c-text — ink: headings, the bubble    | #EDE5D8 | #1C1710 |
+ * | text.muted            | --c-text-3 — dim: hints, thinking       | #9C9184 | #5E5344 |
+ * | text.onAccent         | --c-accent-on — ink on the gold fill    | #1A1408 | #1F1503 |
+ * | intent.accent         | --c-accent, text-grade on paper (*)     | #E0A458 | #8F5C10 |
+ * | intent.accentStrong   | --c-accent-fg — silk: links, inline code| #E3D2AE | #7A5514 |
+ * | intent.info           | --c-info                                | #8FB6D6 | #2F6289 |
+ * | intent.success        | --c-success                             | #8FBC8B | #316530 |
+ * | intent.warning        | --c-warning                             | #E8B97A | #7E5205 |
+ * | intent.danger         | --c-danger                              | #C97B6B | #96412C |
+ * | well.fill             | --c-recessed, dark block (**)           | #131110 | #131110 |
+ * | well.border           | --c-border-strong, dark block           | #332C23 | #332C23 |
+ * | well.ink              | --c-text-2, dark block                  | #D8CFC2 | #D8CFC2 |
+ * | well.muted            | --c-text-3, dark block                  | #9C9184 | #9C9184 |
+ * | well.code             | --c-code, dark block                    | #E3D2AE | #E3D2AE |
+ * | well.accent           | --c-accent, dark block                  | #E0A458 | #E0A458 |
+ * | well.success          | --c-success, dark block                 | #8FBC8B | #8FBC8B |
+ * | well.danger           | --c-danger, dark block                  | #C97B6B | #C97B6B |
+ *
+ * (*) The web keeps two golds on paper: the fill stays bright (#D89A44) and
+ * text-grade gold deepens to #8F5C10, the mock's own figure. In a terminal
+ * every gold is text or a one-cell rule, so the light ink set's
+ * `intent.accent` and `border.focus` take the text-grade gold (4.4:1 on the
+ * web canvas) and only `background.accent` keeps the bright fill, under
+ * `text.onAccent`.
+ *
+ * (**) Code blocks and tool cards sit on a dark well in every theme, light
+ * ones included. That is a Kinu decision: omp's own `light.json` tints its
+ * tool cards light (`toolSuccessBg: #e8f0e8`). The well is the web's dark
+ * code surface (`.p-code`: silk on `--c-recessed`), and because it is dark
+ * on a light canvas it carries the dark block's inks and marks itself.
+ *
+ * Roles the web has and the TUI does not: `--c-text-4` (micro labels;
+ * `text.muted` covers the register), `--c-fill` (chip planes; a terminal chip
+ * is a bracketed word), the status tints (a notice here is a bordered box in
+ * the status hue) and `--c-scrim` (a transparent canvas has nothing to blend
+ * a scrim into). `intent.warningMuted` is gone: the web has no such hue, and
+ * every mark that used it is gold or dim on the web.
+ */
 export interface TuiThemeColors {
   readonly background: {
-    readonly canvas: string;
-    readonly chrome: string;
-    readonly surface: string;
+    /** The transcript ground. Absent: the terminal's own background. */
+    readonly canvas?: string;
+    /** Sidebar and status strip. Absent: the terminal's own background. */
+    readonly chrome?: string;
+    /** Cards on the canvas. Absent: the terminal's own background. */
+    readonly surface?: string;
+    readonly overlay: string;
     readonly recessed: string;
+    readonly elevated: string;
     readonly selection: string;
-    readonly selectionStrong: string;
+    readonly accent: string;
     readonly user: string;
   };
   readonly border: {
@@ -35,7 +124,17 @@ export interface TuiThemeColors {
     readonly info: string;
     readonly success: string;
     readonly warning: string;
-    readonly warningMuted: string;
+    readonly danger: string;
+  };
+  /** The dark surface code blocks and tool cards sit on, with its own inks. */
+  readonly well: {
+    readonly fill: string;
+    readonly border: string;
+    readonly ink: string;
+    readonly muted: string;
+    readonly code: string;
+    readonly accent: string;
+    readonly success: string;
     readonly danger: string;
   };
 }
@@ -43,12 +142,10 @@ export interface TuiThemeColors {
 export interface TuiThemeDefinition {
   readonly id: string;
   readonly label: string;
+  /** One line the picker shows beside the label. */
+  readonly description: string;
   readonly appearance: ThemeAppearance;
-  readonly source: 'kinu' | 'compatibility' | 'custom';
-  readonly license?: {
-    readonly spdx: string;
-    readonly sourceUrl: string;
-  };
+  readonly source: 'kinu' | 'custom';
   readonly colors: TuiThemeColors;
 }
 
@@ -67,100 +164,252 @@ export interface ThemeRegistry {
 
 export const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark';
 export const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light';
+/**
+ * What a fresh install paints: the ink set the terminal's own background
+ * calls for, on that background. The same rule as omp's `getDefaultTheme`.
+ */
+export const DEFAULT_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
+  mode: 'system',
+  darkThemeId: DEFAULT_DARK_TUI_THEME_ID,
+  lightThemeId: DEFAULT_LIGHT_TUI_THEME_ID,
+});
 
-const KINU_DARK: TuiThemeDefinition = {
-  id: DEFAULT_DARK_TUI_THEME_ID,
-  label: 'Kinu dark',
-  appearance: 'dark',
-  source: 'kinu',
-  colors: {
-    background: {
-      canvas: '#0F0D0B',
-      chrome: '#141110',
-      surface: '#181512',
-      recessed: '#131110',
-      selection: '#1B1713',
-      selectionStrong: '#2C241A',
-      user: '#241E16',
-    },
-    border: {
-      default: '#3A3126',
-      subtle: '#4A3D2E',
-      strong: '#5A4935',
-      focus: '#E0A458',
-      user: '#6A533A',
-    },
-    text: {
-      primary: '#EDE5D8',
-      strong: '#F1D9A9',
-      muted: '#A99D8E',
-      onAccent: '#21170D',
-    },
-    intent: {
-      accent: '#E0A458',
-      accentStrong: '#F1C27D',
-      info: '#8FB6D6',
-      success: '#8FBC8B',
-      warning: '#E8B97A',
-      warningMuted: '#B39166',
-      danger: '#D88776',
-    },
-  },
+/**
+ * The grounds a transparent theme is measured on: the web canvas of its
+ * appearance, which the ink set was designed for, and the extreme the
+ * terminal can go to. A theme that paints its canvas is measured on that.
+ */
+export const REFERENCE_TERMINAL_GROUNDS: Readonly<Record<ThemeAppearance, readonly string[]>> = Object.freeze({
+  dark: Object.freeze(['#0F0D0B', '#000000']),
+  light: Object.freeze(['#E9E2D3', '#FFFFFF']),
+});
+
+/** WCAG AA for running text; 3:1 for marks, labels and the focus rule. */
+export const TEXT_CONTRAST_MINIMUM = 4.5;
+export const MARK_CONTRAST_MINIMUM = 3;
+
+/** The web's dark code surface; every theme's well unless it says otherwise. */
+const KINU_DARK_WELL: TuiThemeColors['well'] = {
+  fill: '#131110',
+  border: '#332C23',
+  ink: '#D8CFC2',
+  muted: '#9C9184',
+  code: '#E3D2AE',
+  accent: '#E0A458',
+  success: '#8FBC8B',
+  danger: '#C97B6B',
 };
 
+const KINU_LIGHT_COLORS: TuiThemeColors = {
+  background: {
+    overlay: '#F7F3E9',
+    recessed: '#E0D8C5',
+    elevated: '#E8E0CE',
+    selection: '#E9E5DA',
+    accent: '#D89A44',
+    user: '#F2D9AC',
+  },
+  border: {
+    default: '#D2C6AE',
+    subtle: '#DBD1BE',
+    strong: '#BBAB8C',
+    focus: '#8F5C10',
+    user: '#D9B573',
+  },
+  text: {
+    primary: '#3D3427',
+    strong: '#1C1710',
+    muted: '#5E5344',
+    onAccent: '#1F1503',
+  },
+  intent: {
+    accent: '#8F5C10',
+    accentStrong: '#7A5514',
+    info: '#2F6289',
+    success: '#316530',
+    warning: '#7E5205',
+    danger: '#96412C',
+  },
+  well: KINU_DARK_WELL,
+};
+
+const KINU_DARK_COLORS: TuiThemeColors = {
+  background: {
+    overlay: '#221C15',
+    recessed: '#131110',
+    elevated: '#221C15',
+    selection: '#2E2821',
+    accent: '#E0A458',
+    user: '#241E16',
+  },
+  border: {
+    default: '#262019',
+    subtle: '#2A241D',
+    strong: '#332C23',
+    focus: '#E0A458',
+    user: '#3A3126',
+  },
+  text: {
+    primary: '#D8CFC2',
+    strong: '#EDE5D8',
+    muted: '#9C9184',
+    onAccent: '#1A1408',
+  },
+  intent: {
+    accent: '#E0A458',
+    accentStrong: '#E3D2AE',
+    info: '#8FB6D6',
+    success: '#8FBC8B',
+    warning: '#E8B97A',
+    danger: '#C97B6B',
+  },
+  well: KINU_DARK_WELL,
+};
+
+/** The web's light ink set on the terminal's own background. */
 const KINU_LIGHT: TuiThemeDefinition = {
   id: DEFAULT_LIGHT_TUI_THEME_ID,
   label: 'Kinu light',
+  description: 'Ink and brass on your terminal\'s light background.',
   appearance: 'light',
   source: 'kinu',
-  colors: {
-    background: {
-      canvas: '#F1EADF',
-      chrome: '#E7DDCF',
-      surface: '#DED2C1',
-      recessed: '#EAE1D5',
-      selection: '#D5C6B2',
-      selectionStrong: '#CBB99F',
-      user: '#E2C99F',
-    },
-    border: {
-      default: '#8A7762',
-      subtle: '#9E8B74',
-      strong: '#6F5E4D',
-      focus: '#80500E',
-      user: '#8B642F',
-    },
-    text: {
-      primary: '#2C241D',
-      strong: '#3C2B16',
-      muted: '#62584D',
-      onAccent: '#F8F0E4',
-    },
-    intent: {
-      accent: '#80500E',
-      accentStrong: '#633B08',
-      info: '#245C78',
-      success: '#32643A',
-      warning: '#72480D',
-      warningMuted: '#765B36',
-      danger: '#8D352B',
-    },
-  },
+  colors: KINU_LIGHT_COLORS,
 };
 
-const HIGH_CONTRAST: TuiThemeDefinition = {
-  id: 'high-contrast',
-  label: 'High contrast',
+/** The web's dark ink set on the terminal's own background. */
+const KINU_DARK: TuiThemeDefinition = {
+  id: DEFAULT_DARK_TUI_THEME_ID,
+  label: 'Kinu dark',
+  description: 'Ink and brass on your terminal\'s dark background.',
+  appearance: 'dark',
+  source: 'kinu',
+  colors: KINU_DARK_COLORS,
+};
+
+/**
+ * Kinu dark with every ground, rule and ink turned to the family's slate:
+ * the hue of `--c-info` (207°) at Kinu dark's own saturation and lightness
+ * per rung. The brass, the silk and the status hues do not move, so the
+ * accent stays the one warm note. For terminals that run cool.
+ */
+const KINU_DUSK: TuiThemeDefinition = {
+  id: 'kinu-dusk',
+  label: 'Kinu dusk',
+  description: 'Kinu dark turned to slate, brass unchanged.',
   appearance: 'dark',
   source: 'kinu',
   colors: {
     background: {
-      canvas: '#090807',
-      chrome: '#12100D',
-      surface: '#1B1813',
+      overlay: '#151C22',
+      recessed: '#101213',
+      elevated: '#151C22',
+      selection: '#21282E',
+      accent: '#E0A458',
+      user: '#161E24',
+    },
+    border: {
+      default: '#192026',
+      subtle: '#1D242A',
+      strong: '#232C33',
+      focus: '#E0A458',
+      user: '#26313A',
+    },
+    text: {
+      primary: '#C2CED8',
+      strong: '#D8E4ED',
+      muted: '#84919C',
+      onAccent: '#1A1408',
+    },
+    intent: KINU_DARK_COLORS.intent,
+    well: {
+      fill: '#101213',
+      border: '#232C33',
+      ink: '#C2CED8',
+      muted: '#84919C',
+      code: '#E3D2AE',
+      accent: '#E0A458',
+      success: '#8FBC8B',
+      danger: '#C97B6B',
+    },
+  },
+};
+
+/** The web's `[data-mode="light"]` block painted whole: canvas, chrome and cards. */
+const KINU_LIGHT_SOLID: TuiThemeDefinition = {
+  id: 'kinu-light-solid',
+  label: 'Kinu light, painted',
+  description: 'The web app\'s light face, canvas included.',
+  appearance: 'light',
+  source: 'kinu',
+  colors: {
+    ...KINU_LIGHT_COLORS,
+    background: {
+      ...KINU_LIGHT_COLORS.background,
+      canvas: '#E9E2D3',
+      chrome: '#F1EBDD',
+      surface: '#F7F3E9',
+    },
+  },
+};
+
+/** The web's `:root` dark block painted whole: canvas, chrome and cards. */
+const KINU_DARK_SOLID: TuiThemeDefinition = {
+  id: 'kinu-dark-solid',
+  label: 'Kinu dark, painted',
+  description: 'The web app\'s dark face, canvas included.',
+  appearance: 'dark',
+  source: 'kinu',
+  colors: {
+    ...KINU_DARK_COLORS,
+    background: {
+      ...KINU_DARK_COLORS.background,
+      canvas: '#0F0D0B',
+      chrome: '#141110',
+      surface: '#181512',
+    },
+  },
+};
+
+/**
+ * Kinu light painted one rung up: the canvas takes the paper card tone
+ * (`--c-surface`), cards step to a near-white warm paper, and the web canvas
+ * (`--c-bg`) becomes the well inside dialogs. For a terminal that reads the
+ * tinted ground as dim.
+ */
+const KINU_PAPER: TuiThemeDefinition = {
+  id: 'kinu-paper',
+  label: 'Kinu paper, painted',
+  description: 'Kinu light on brighter paper, same ink and brass.',
+  appearance: 'light',
+  source: 'kinu',
+  colors: {
+    ...KINU_LIGHT_COLORS,
+    background: {
+      ...KINU_LIGHT_COLORS.background,
+      canvas: '#F7F3E9',
+      chrome: '#FBF8F1',
+      surface: '#FFFDF8',
+      overlay: '#FFFDF8',
+      recessed: '#E9E2D3',
+      selection: '#F0EEE8',
+    },
+  },
+};
+
+/** Kinu dark pushed to the ends: near-white ink and bright rules on the terminal's black. */
+const HIGH_CONTRAST: TuiThemeDefinition = {
+  id: 'high-contrast',
+  label: 'High contrast',
+  description: 'Bright ink and rules for a near-black terminal.',
+  appearance: 'dark',
+  source: 'kinu',
+  colors: {
+    background: {
+      overlay: '#1B1813',
       recessed: '#0D0B09',
-      selection: '#322818',
-      selectionStrong: '#4B381B',
+      elevated: '#2A2419',
+      selection: '#3A3020',
+      accent: '#FFD37A',
       user: '#34240F',
     },
     border: {
@@ -182,106 +431,34 @@ const HIGH_CONTRAST: TuiThemeDefinition = {
       info: '#A8D8FF',
       success: '#A7E8A1',
       warning: '#FFD37A',
-      warningMuted: '#D7B775',
+      danger: '#FF9A87',
+    },
+    well: {
+      fill: '#0D0B09',
+      border: '#D8C8A9',
+      ink: '#F7F0E3',
+      muted: '#CEC3B1',
+      code: '#FFE7AD',
+      accent: '#FFD37A',
+      success: '#A7E8A1',
       danger: '#FF9A87',
     },
   },
 };
 
-const OMP_DARK: TuiThemeDefinition = {
-  id: 'omp-dark',
-  label: 'Oh My Pi dark',
-  appearance: 'dark',
-  source: 'compatibility',
-  license: {
-    spdx: 'MIT',
-    sourceUrl: 'https://github.com/can1357/oh-my-pi/blob/160ed439ac0df594347e7d7018b813a7ffdb5e81/packages/coding-agent/src/modes/theme/dark.json',
-  },
-  colors: {
-    background: {
-      canvas: '#121212',
-      chrome: '#161A1F',
-      surface: '#1D2129',
-      recessed: '#14171C',
-      selection: '#31363F',
-      selectionStrong: '#3D424A',
-      user: '#221D1A',
-    },
-    border: {
-      default: '#5F6673',
-      subtle: '#4E545E',
-      strong: '#777D88',
-      focus: '#FEBB38',
-      user: '#785F3E',
-    },
-    text: {
-      primary: '#E8E8E8',
-      strong: '#F2D69A',
-      muted: '#9DA2AB',
-      onAccent: '#211706',
-    },
-    intent: {
-      accent: '#FEBB38',
-      accentStrong: '#FFD47D',
-      info: '#3EA7E8',
-      success: '#89D281',
-      warning: '#E4C00F',
-      warningMuted: '#B99F36',
-      danger: '#FC5C69',
-    },
-  },
-};
-
-const OPENCODE_DARK: TuiThemeDefinition = {
-  id: 'opencode-dark',
-  label: 'OpenCode dark',
-  appearance: 'dark',
-  source: 'compatibility',
-  license: {
-    spdx: 'MIT',
-    sourceUrl: 'https://github.com/anomalyco/opencode/blob/dc13c6bb3d08762ab186b7922208e0155b8d8928/packages/tui/src/theme/assets/opencode.json',
-  },
-  colors: {
-    background: {
-      canvas: '#0A0A0A',
-      chrome: '#141414',
-      surface: '#1E1E1E',
-      recessed: '#101010',
-      selection: '#282828',
-      selectionStrong: '#323232',
-      user: '#2A211C',
-    },
-    border: {
-      default: '#606060',
-      subtle: '#484848',
-      strong: '#777777',
-      focus: '#FAB283',
-      user: '#A16F50',
-    },
-    text: {
-      primary: '#EEEEEE',
-      strong: '#FFD0B2',
-      muted: '#9A9A9A',
-      onAccent: '#261307',
-    },
-    intent: {
-      accent: '#FAB283',
-      accentStrong: '#FFC09F',
-      info: '#67C8D2',
-      success: '#7FD88F',
-      warning: '#F5A742',
-      warningMuted: '#C38C4A',
-      danger: '#E97C84',
-    },
-  },
-};
-
+/**
+ * Order matters twice: the picker lists themes in it, and `themeOrDefault`
+ * takes the first theme of the terminal's appearance when a selection names
+ * a theme that is gone, so Kinu light and Kinu dark lead their appearances.
+ */
 export const BUILTIN_TUI_THEMES: readonly TuiThemeDefinition[] = Object.freeze([
-  KINU_DARK,
   KINU_LIGHT,
+  KINU_DARK,
+  KINU_DUSK,
+  KINU_LIGHT_SOLID,
+  KINU_DARK_SOLID,
+  KINU_PAPER,
   HIGH_CONTRAST,
-  OMP_DARK,
-  OPENCODE_DARK,
 ].map(freezeTheme));
 
 const ThemeColorSchema = v.pipe(
@@ -291,12 +468,14 @@ const ThemeColorSchema = v.pipe(
 );
 const TuiThemeColorsSchema = v.strictObject({
   background: v.strictObject({
-    canvas: ThemeColorSchema,
-    chrome: ThemeColorSchema,
-    surface: ThemeColorSchema,
+    canvas: v.optional(ThemeColorSchema),
+    chrome: v.optional(ThemeColorSchema),
+    surface: v.optional(ThemeColorSchema),
+    overlay: ThemeColorSchema,
     recessed: ThemeColorSchema,
+    elevated: ThemeColorSchema,
     selection: ThemeColorSchema,
-    selectionStrong: ThemeColorSchema,
+    accent: ThemeColorSchema,
     user: ThemeColorSchema,
   }),
   border: v.strictObject({
@@ -318,13 +497,23 @@ const TuiThemeColorsSchema = v.strictObject({
     info: ThemeColorSchema,
     success: ThemeColorSchema,
     warning: ThemeColorSchema,
-    warningMuted: ThemeColorSchema,
+    danger: ThemeColorSchema,
+  }),
+  well: v.strictObject({
+    fill: ThemeColorSchema,
+    border: ThemeColorSchema,
+    ink: ThemeColorSchema,
+    muted: ThemeColorSchema,
+    code: ThemeColorSchema,
+    accent: ThemeColorSchema,
+    success: ThemeColorSchema,
     danger: ThemeColorSchema,
   }),
 });
 const CustomThemeSchema = v.strictObject({
   id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,63}$/u)),
   label: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  description: v.optional(v.pipe(v.string(), v.trim()), ''),
   appearance: v.picklist(['dark', 'light']),
   colors: TuiThemeColorsSchema,
 });
@@ -385,7 +574,7 @@ function themeOrDefault(
   return fallback;
 }
 
-function resolveThemeSelection(
+export function resolveThemeSelection(
   registry: ThemeRegistry,
   selection: ThemeSelection,
   terminalAppearance: ThemeAppearance,
@@ -431,32 +620,97 @@ export function parseCustomTheme(json: string, filename: string): TuiThemeDefini
   return freezeTheme(theme);
 }
 
-function themeContrastFailures(theme: TuiThemeDefinition): string[] {
-  const { background, border, text, intent } = theme.colors;
-  const pairs = [
-    ['text.primary/background.canvas', text.primary, background.canvas, 4.5],
-    ['text.strong/background.canvas', text.strong, background.canvas, 4.5],
-    ['text.muted/background.canvas', text.muted, background.canvas, 3],
-    ['text.primary/background.surface', text.primary, background.surface, 4.5],
-    ['intent.accent/background.canvas', intent.accent, background.canvas, 3],
-    ['intent.success/background.canvas', intent.success, background.canvas, 3],
-    ['intent.warning/background.canvas', intent.warning, background.canvas, 3],
-    ['intent.danger/background.canvas', intent.danger, background.canvas, 3],
-    ['border.focus/background.canvas', border.focus, background.canvas, 3],
-  ] as const;
-  return pairs.flatMap(([label, foreground, backgroundColor, minimum]) => {
-    const ratio = contrastRatio(foreground, backgroundColor);
-    return ratio + Number.EPSILON < minimum ? [`${label} contrast ${ratio.toFixed(2)} is below ${String(minimum)}.`] : [];
-  });
+export interface ThemeContrastPair {
+  readonly label: string;
+  readonly foreground: string;
+  readonly background: string;
+  readonly minimum: number;
+  readonly ratio: number;
 }
 
-function detectTerminalAppearance(environment: Readonly<Record<string, string | undefined>> = process.env): ThemeAppearance {
-  const colorFgBg = environment.COLORFGBG?.split(';').at(-1);
-  if (colorFgBg !== undefined && /^\d+$/u.test(colorFgBg)) {
-    const background = Number(colorFgBg);
-    return background === 0 || (background >= 8 && background <= 15) ? 'dark' : 'light';
+/**
+ * The pairs every theme is held to: the three inks on every ground they are
+ * drawn on, the ink on the gold fill, each status hue on the grounds a mark
+ * or label sits on, the focus rule on the canvas, and the well's own inks and
+ * marks on the well.
+ */
+export function themeContrastPairs(theme: TuiThemeDefinition): readonly ThemeContrastPair[] {
+  const { background, border, text, intent, well } = theme.colors;
+  const pairs: ThemeContrastPair[] = [];
+  const push = (label: string, foreground: string, ground: string, minimum: number) => {
+    pairs.push({ label, foreground, background: ground, minimum, ratio: contrastRatio(foreground, ground) });
+  };
+  const canvases: ReadonlyArray<readonly [string, string]> = background.canvas === undefined
+    ? REFERENCE_TERMINAL_GROUNDS[theme.appearance].map((ground) => [`terminal ${ground}`, ground] as const)
+    : [['background.canvas', background.canvas]];
+  const painted: Array<readonly [string, string]> = [
+    ...canvases,
+    ...(background.chrome === undefined ? [] : [['background.chrome', background.chrome] as const]),
+    ...(background.surface === undefined ? [] : [['background.surface', background.surface] as const]),
+    ['background.overlay', background.overlay],
+    ['background.recessed', background.recessed],
+    ['background.elevated', background.elevated],
+    ['background.selection', background.selection],
+    ['background.user', background.user],
+  ];
+  for (const ink of ['primary', 'strong', 'muted'] as const) {
+    for (const [label, ground] of painted) push(`text.${ink}/${label}`, text[ink], ground, TEXT_CONTRAST_MINIMUM);
   }
-  return environment.TERM_PROGRAM?.toLowerCase().includes('apple_terminal') === true ? 'light' : 'dark';
+  push('text.onAccent/background.accent', text.onAccent, background.accent, TEXT_CONTRAST_MINIMUM);
+  const markGrounds = [...canvases, ['background.overlay', background.overlay] as const, ['background.recessed', background.recessed] as const];
+  for (const hue of ['accent', 'accentStrong', 'info', 'success', 'warning', 'danger'] as const) {
+    for (const [label, ground] of markGrounds) push(`intent.${hue}/${label}`, intent[hue], ground, MARK_CONTRAST_MINIMUM);
+  }
+  for (const [label, ground] of canvases) push(`border.focus/${label}`, border.focus, ground, MARK_CONTRAST_MINIMUM);
+  for (const ink of ['ink', 'muted', 'code'] as const) push(`well.${ink}/well.fill`, well[ink], well.fill, TEXT_CONTRAST_MINIMUM);
+  for (const hue of ['accent', 'success', 'danger'] as const) push(`well.${hue}/well.fill`, well[hue], well.fill, MARK_CONTRAST_MINIMUM);
+  return pairs;
+}
+
+function themeContrastFailures(theme: TuiThemeDefinition): string[] {
+  return themeContrastPairs(theme).flatMap((pair) => (
+    pair.ratio + Number.EPSILON < pair.minimum
+      ? [`${pair.label} contrast ${pair.ratio.toFixed(2)} is below ${String(pair.minimum)}.`]
+      : []
+  ));
+}
+
+/**
+ * The terminal's appearance when it has not answered the renderer's OSC 11
+ * query: `COLORFGBG` (a background index below 8 is dark), else dark. The
+ * same tiers, in the same order, as omp's `detectTerminalBackground`
+ * (`packages/coding-agent/src/modes/theme/theme.ts`): its tier 1 is the OSC
+ * 11 luminance the renderer supplies here, its tier 2 is this env var, and
+ * its last answer is dark.
+ */
+export function appearanceFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): ThemeAppearance {
+  const colorFgBg = environment.COLORFGBG?.split(';');
+  const background = colorFgBg !== undefined && colorFgBg.length >= 2 ? Number.parseInt(colorFgBg[1]!, 10) : Number.NaN;
+  if (!Number.isNaN(background)) return background < 8 ? 'dark' : 'light';
+  return 'dark';
+}
+
+/**
+ * The appearance the terminal reports. The renderer queries OSC 10/11 at
+ * start and re-queries on a DEC 2031 notification, classifying the answered
+ * background by BT.601 brightness above 128 — the mechanism omp implements
+ * itself in `packages/tui/src/terminal.ts` (`#startDirectOsc11Query`,
+ * `#handleOsc11Response`). Until an answer arrives, the environment decides.
+ */
+export function useTerminalAppearance(override?: ThemeAppearance): ThemeAppearance {
+  const renderer = useRenderer();
+  const [reported, setReported] = useState<ThemeAppearance | null>(() => renderer.themeMode);
+  useEffect(() => {
+    setReported(renderer.themeMode);
+    const onThemeMode = (mode: ThemeAppearance) => setReported(mode);
+    renderer.on('theme_mode', onThemeMode);
+    return () => {
+      renderer.off('theme_mode', onThemeMode);
+    };
+  }, [renderer]);
+  return override ?? reported ?? appearanceFromEnvironment();
 }
 
 function detectTerminalColorCapability(environment: Readonly<Record<string, string | undefined>> = process.env): TerminalColorCapability {
@@ -474,17 +728,23 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
 }
 
 
+/**
+ * Assistant markdown in the web's registers: prose in `--c-text-2`, headings
+ * and bold in ink, inline code as silk (`.p-code-inline`), code blocks as
+ * silk on the well (`.p-code`), links as silk (`--text-color-kumo-link`),
+ * quotes in the dim register.
+ */
 function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
-  const { background, border, text, intent } = theme.colors;
+  const { border, text, intent, well } = theme.colors;
   return SyntaxStyle.fromStyles({
     text: { fg: text.primary },
     paragraph: { fg: text.primary },
     heading: { fg: text.strong, bold: true },
     strong: { fg: text.strong, bold: true },
     emphasis: { fg: text.primary, italic: true },
-    code: { fg: intent.accentStrong, bg: background.recessed },
-    codespan: { fg: intent.accentStrong, bg: background.recessed },
-    link: { fg: intent.info, underline: true },
+    code: { fg: well.code, bg: well.fill },
+    codespan: { fg: intent.accentStrong },
+    link: { fg: intent.accentStrong, underline: true },
     blockquote: { fg: text.muted, italic: true },
     list: { fg: text.primary },
     list_item: { fg: text.primary },
@@ -498,12 +758,17 @@ export interface ActiveTuiTheme {
   readonly definition: TuiThemeDefinition;
   readonly colors: TuiThemeColors;
   readonly markdownSyntax: SyntaxStyle;
+  /** What a `system` selection follows right now. */
+  readonly terminalAppearance: ThemeAppearance;
+  readonly registry: ThemeRegistry;
 }
 
 const DEFAULT_ACTIVE_THEME: ActiveTuiTheme = Object.freeze({
   definition: KINU_DARK,
   colors: KINU_DARK.colors,
   markdownSyntax: markdownSyntaxForTheme(KINU_DARK),
+  terminalAppearance: 'dark',
+  registry: DEFAULT_THEME_REGISTRY,
 });
 const ThemeContext = createContext<ActiveTuiTheme>(DEFAULT_ACTIVE_THEME);
 
@@ -515,8 +780,8 @@ export function TuiThemeProvider(props: {
   readonly children: ReactNode;
 }) {
   const registry = props.registry ?? DEFAULT_THEME_REGISTRY;
-  const selection = props.selection ?? { mode: 'theme', themeId: DEFAULT_DARK_TUI_THEME_ID };
-  const appearance = props.terminalAppearance ?? detectTerminalAppearance();
+  const selection = props.selection ?? DEFAULT_TUI_THEME_SELECTION;
+  const appearance = useTerminalAppearance(props.terminalAppearance);
   const capability = props.colorCapability ?? detectTerminalColorCapability();
   const active = useMemo(() => {
     const definition = projectTheme(resolveThemeSelection(registry, selection, appearance), capability);
@@ -524,6 +789,8 @@ export function TuiThemeProvider(props: {
       definition,
       colors: definition.colors,
       markdownSyntax: markdownSyntaxForTheme(definition),
+      terminalAppearance: appearance,
+      registry,
     });
   }, [appearance, capability, registry, selection]);
   return createElement(ThemeContext.Provider, { value: active }, props.children);
@@ -537,18 +804,16 @@ function validateTheme(theme: TuiThemeDefinition, source: string): void {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(theme.id)) throw new Error(`${source}.id must be a lower-case theme id.`);
   if (theme.label.trim() === '') throw new Error(`${source}.label cannot be empty.`);
   v.parse(TuiThemeColorsSchema, theme.colors);
-  if (theme.source === 'compatibility' && (theme.license?.spdx.trim() === '' || theme.license?.sourceUrl.trim() === '')) {
-    throw new Error(`${source}: compatibility themes require license and source metadata.`);
-  }
   const failures = themeContrastFailures(theme);
   if (failures.length > 0) throw new Error(`${source}: ${failures.join(' ')}`);
 }
 
 
 function freezeTheme(theme: TuiThemeDefinition): TuiThemeDefinition {
-  const common = {
+  return Object.freeze({
     id: theme.id,
     label: theme.label,
+    description: theme.description,
     appearance: theme.appearance,
     source: theme.source,
     colors: Object.freeze({
@@ -556,14 +821,12 @@ function freezeTheme(theme: TuiThemeDefinition): TuiThemeDefinition {
       border: Object.freeze({ ...theme.colors.border }),
       text: Object.freeze({ ...theme.colors.text }),
       intent: Object.freeze({ ...theme.colors.intent }),
+      well: Object.freeze({ ...theme.colors.well }),
     }),
-  };
-  return Object.freeze(theme.license === undefined
-    ? common
-    : { ...common, license: Object.freeze({ ...theme.license }) });
+  });
 }
 
-function contrastRatio(foreground: string, background: string): number {
+export function contrastRatio(foreground: string, background: string): number {
   const luminance = (hex: string): number => {
     const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
     const [red, green, blue] = channels.map((channel) => (
@@ -577,17 +840,23 @@ function contrastRatio(foreground: string, background: string): number {
     / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
 }
 
+/** The grounds of a theme as `mapColors` assembles them, optional ones last. */
+type ThemeGrounds = { -readonly [Key in keyof TuiThemeColors['background']]: TuiThemeColors['background'][Key] };
+
 function mapColors(colors: TuiThemeColors, map: (color: string) => string): TuiThemeColors {
+  const background: ThemeGrounds = {
+    overlay: map(colors.background.overlay),
+    recessed: map(colors.background.recessed),
+    elevated: map(colors.background.elevated),
+    selection: map(colors.background.selection),
+    accent: map(colors.background.accent),
+    user: map(colors.background.user),
+  };
+  if (colors.background.canvas !== undefined) background.canvas = map(colors.background.canvas);
+  if (colors.background.chrome !== undefined) background.chrome = map(colors.background.chrome);
+  if (colors.background.surface !== undefined) background.surface = map(colors.background.surface);
   return {
-    background: {
-      canvas: map(colors.background.canvas),
-      chrome: map(colors.background.chrome),
-      surface: map(colors.background.surface),
-      recessed: map(colors.background.recessed),
-      selection: map(colors.background.selection),
-      selectionStrong: map(colors.background.selectionStrong),
-      user: map(colors.background.user),
-    },
+    background,
     border: {
       default: map(colors.border.default),
       subtle: map(colors.border.subtle),
@@ -607,8 +876,17 @@ function mapColors(colors: TuiThemeColors, map: (color: string) => string): TuiT
       info: map(colors.intent.info),
       success: map(colors.intent.success),
       warning: map(colors.intent.warning),
-      warningMuted: map(colors.intent.warningMuted),
       danger: map(colors.intent.danger),
+    },
+    well: {
+      fill: map(colors.well.fill),
+      border: map(colors.well.border),
+      ink: map(colors.well.ink),
+      muted: map(colors.well.muted),
+      code: map(colors.well.code),
+      accent: map(colors.well.accent),
+      success: map(colors.well.success),
+      danger: map(colors.well.danger),
     },
   };
 }

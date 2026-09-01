@@ -1,4 +1,3 @@
-import { useTerminalDimensions } from '@opentui/react';
 import { TUI_MARKS, type ReasoningEffort, type ResolvedTurnProfile } from '@kinu.run/core';
 
 import type { AgentClientMode } from '../agent-client';
@@ -7,6 +6,7 @@ import { useKeybindingRegistry } from './actions';
 import { formatContextUsage, modelDisplayName } from './context-status';
 import { clipText } from './format';
 import { useTuiTheme } from './theme';
+import { useSceneWidth } from './tui-shell';
 
 interface Props {
   name: string;
@@ -26,8 +26,12 @@ interface Props {
 
 const IDENTITY_PREFIX = `kinu ${TUI_MARKS.prompt} `;
 
+/**
+ * The web's top bar: a strip on the chrome with one hairline under it
+ * (`border-b p-border p-sidebar`). Brass brand mark, ink name, dim mode.
+ */
 export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, connected, scaffoldVersion, toolCount, autoEvolve, contextTokens = 0, contextWindow, branchCount = 0, profile }: Props) {
-  const { width } = useTerminalDimensions();
+  const width = useSceneWidth();
   const { colors } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
   const innerWidth = Math.max(0, width - 4);
@@ -112,11 +116,10 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   return (
     <box
       style={{
-        height: 3,
-        border: true,
-        borderStyle: 'single',
+        height: 2,
+        border: ['bottom'],
         borderColor: colors.border.default,
-        backgroundColor: colors.background.surface,
+        backgroundColor: colors.background.chrome,
         paddingLeft: 1,
         paddingRight: 1,
         flexDirection: 'row',

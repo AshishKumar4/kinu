@@ -26,6 +26,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
   { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename' },
   { name: '/settings', description: 'Open interactive settings' },
+  { name: '/theme', description: 'Choose the TUI theme; follows the terminal by default' },
   { name: '/models', description: 'List configured model providers', requires: 'localControls' },
   { name: '/memory', description: 'Show memory' },
   { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]' },
@@ -117,6 +118,8 @@ export type SlashOutcome =
   | { kind: 'exit' }
   | { kind: 'model-picker' }
   | { kind: 'settings' }
+  /** The theme picker — TUI renders an overlay, classic says where themes live. */
+  | { kind: 'theme' }
   | { kind: 'model-set'; spec: string }
   | { kind: 'effort-set'; effort: ReasoningEffort }
   | { kind: 'role-set'; role: string }
@@ -161,6 +164,8 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       return { kind: 'text', text: commandHelp(client) };
     case '/settings':
       return { kind: 'settings' };
+    case '/theme':
+      return { kind: 'theme' };
     case '/status':
       return { kind: 'status', status: await client.status() };
     case '/tools': {

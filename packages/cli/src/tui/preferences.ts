@@ -10,11 +10,7 @@ import {
   type KeymapPresetId,
   type TuiActionId,
 } from './actions';
-import {
-  DEFAULT_DARK_TUI_THEME_ID,
-  DEFAULT_LIGHT_TUI_THEME_ID,
-  type ThemeSelection,
-} from './theme';
+import { DEFAULT_TUI_THEME_SELECTION, type ThemeSelection } from './theme';
 
 export const ONBOARDING_STEP_IDS = [
   'location',
@@ -42,11 +38,7 @@ export interface TuiPreferenceStore {
 }
 
 const DEFAULT_TUI_PREFERENCES: TuiPreferences = Object.freeze({
-  theme: Object.freeze({
-    mode: 'system',
-    darkThemeId: DEFAULT_DARK_TUI_THEME_ID,
-    lightThemeId: DEFAULT_LIGHT_TUI_THEME_ID,
-  }),
+  theme: DEFAULT_TUI_THEME_SELECTION,
   keymapPreset: 'pi-omp',
   keyOverrides: Object.freeze({}),
   wideSidebarOpen: true,

@@ -16,7 +16,7 @@ import {
   type OnboardingStepId,
   type WorkspaceLocationChoice,
 } from './preferences';
-import { BUILTIN_TUI_THEMES, useTuiTheme } from './theme';
+import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 
 export interface OnboardingReadiness {
   readonly location?: WorkspaceLocationChoice;
@@ -51,7 +51,7 @@ export interface TuiOnboardingOperations {
   connectAccount(): void | Promise<void>;
   connectProvider(): void | Promise<void>;
   configureTiers(): void | Promise<void>;
-  selectTheme(themeId: string): void | Promise<void>;
+  selectTheme(selection: ThemeSelection): void | Promise<void>;
   selectKeymap(presetId: KeymapPresetId): void | Promise<void>;
   createWorkspace(input: OnboardingWorkspaceInput): void | Promise<void>;
   skip(step: OnboardingStepId): void | Promise<void>;
@@ -148,10 +148,15 @@ export function GuidedOnboarding(props: {
     });
   }, [busy, refresh, startTransition]);
 
+  const { registry } = useTuiTheme();
+  const themeChoices = useMemo<ReadonlyArray<{ readonly label: string; readonly selection: ThemeSelection }>>(() => [
+    { label: 'Follow the terminal', selection: DEFAULT_TUI_THEME_SELECTION },
+    ...registry.themes.map((theme) => ({ label: theme.label, selection: { mode: 'theme' as const, themeId: theme.id } })),
+  ], [registry]);
   const choices = activeStep === 'location'
     ? (['cloud', 'local', 'both'] as const)
     : activeStep === 'theme'
-      ? BUILTIN_TUI_THEMES.map((theme) => theme.id)
+      ? themeChoices.map((choice) => choice.label)
       : activeStep === 'keymap'
         ? KEYMAP_PRESET_IDS
         : activeStep === 'workspace'
@@ -178,8 +183,8 @@ export function GuidedOnboarding(props: {
         run(props.operations.configureTiers);
         return;
       case 'theme': {
-        const themeId = choices[selectedIndex];
-        if (themeId !== undefined) run(() => props.operations.selectTheme(themeId));
+        const choice = themeChoices[selectedIndex];
+        if (choice !== undefined) run(() => props.operations.selectTheme(choice.selection));
         return;
       }
       case 'keymap': {
@@ -194,7 +199,7 @@ export function GuidedOnboarding(props: {
         return;
       }
     }
-  }, [activeStep, choices, mission, props.operations, props.roles, readiness, roleIndex, run, selectedIndex]);
+  }, [activeStep, choices, mission, props.operations, props.roles, readiness, roleIndex, run, selectedIndex, themeChoices]);
 
   useKeyboard((event) => {
     const result = dispatcher.feed(event, ['home']);
@@ -256,7 +261,7 @@ export function GuidedOnboarding(props: {
         <strong fg={colors.intent.accent}>Kinu setup</strong>
         <span fg={colors.text.muted}> · Step {stepNumber}/{ONBOARDING_STEP_IDS.length} · {activeStep}</span>
       </text>
-      <box flexDirection="column" style={{ marginTop: 1, border: true, borderColor: colors.border.default, backgroundColor: colors.background.surface, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
+      <box flexDirection="column" style={{ marginTop: 1, border: true, borderStyle: 'rounded', borderColor: colors.border.default, backgroundColor: colors.background.surface, paddingLeft: 2, paddingRight: 2, paddingTop: 1, paddingBottom: 1 }}>
         {activeStep === 'location' && (
           <>
             <text><strong fg={colors.text.strong}>Where will your workspaces live?</strong></text>
@@ -282,7 +287,8 @@ export function GuidedOnboarding(props: {
         {activeStep === 'theme' && (
           <>
             <text><strong fg={colors.text.strong}>Choose a theme</strong></text>
-            {BUILTIN_TUI_THEMES.map((theme, index) => <ChoiceRow key={theme.id} label={theme.label} selected={index === selectedIndex} />)}
+            <text><span fg={colors.text.muted}>Following the terminal picks the ink for your terminal's own background. /theme changes it later.</span></text>
+            {themeChoices.map((choice, index) => <ChoiceRow key={choice.label} label={choice.label} selected={index === selectedIndex} />)}
           </>
         )}
         {activeStep === 'keymap' && (
@@ -296,7 +302,7 @@ export function GuidedOnboarding(props: {
             <text><strong fg={colors.text.strong}>Create your first workspace</strong></text>
             <text><span fg={colors.text.muted}>Role: {selectedRole?.label ?? 'No configured role'} · Tab changes role</span></text>
             {selectedRole !== undefined && <text><span fg={colors.text.muted}>{selectedRole.description}</span></text>}
-            <box style={{ height: 5, marginTop: 1, border: true, borderColor: colors.border.focus, backgroundColor: colors.background.recessed }}>
+            <box style={{ height: 5, marginTop: 1, border: true, borderStyle: 'rounded', borderColor: colors.border.focus, backgroundColor: colors.background.user }}>
               <textarea
                 ref={(value) => { missionRef.current = value; }}
                 focused={!busy}
@@ -307,6 +313,14 @@ export function GuidedOnboarding(props: {
                 ]}
                 onContentChange={() => setMission(missionRef.current?.plainText ?? '')}
                 onSubmit={activate}
+                style={{
+                  backgroundColor: colors.background.user,
+                  focusedBackgroundColor: colors.background.user,
+                  textColor: colors.text.strong,
+                  focusedTextColor: colors.text.strong,
+                  placeholderColor: colors.text.muted,
+                  cursorColor: colors.intent.accent,
+                }}
               />
             </box>
           </>

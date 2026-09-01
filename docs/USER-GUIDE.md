@@ -86,6 +86,7 @@ Useful on day one:
 | `/changelog` | review what the agent changed about itself; revert by index |
 | `/model`, `/effort` | change model or reasoning effort mid-conversation |
 | `/settings` | open model, effort, shell approval, and always-active skill settings |
+| `/theme` | pick a theme with a live preview; by default the ink follows your terminal's own background |
 | `/role [id]` | show or switch this agent's active role |
 
 Transcripts record by default (`kinu transcripts` lists them). They are

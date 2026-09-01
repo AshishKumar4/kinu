@@ -44,6 +44,20 @@ export function tuiLayoutForWidth(width: number): TuiLayout {
   return width >= MEDIUM_LAYOUT_MIN_COLUMNS ? 'medium' : 'narrow';
 }
 
+const SceneWidthContext = createContext<number | null>(null);
+
+/**
+ * The columns the scene owns: the terminal minus the pinned sidebar. The
+ * status bar, the transcript and every overlay size themselves to it, not to
+ * the terminal — the pinned sidebar took 28 columns the chrome kept counting
+ * as its own, so the status bar overflowed and dialogs centred off the edge.
+ * Outside a shell (a bare component in a test or a capture) it is the terminal.
+ */
+export function useSceneWidth(): number {
+  const { width } = useTerminalDimensions();
+  return useContext(SceneWidthContext) ?? width;
+}
+
 export type TuiAgentStatus = 'idle' | 'running' | 'needs-you' | 'failed';
 
 /** A subordinate of one peer agent — display data under its parent's row. */
@@ -547,8 +561,9 @@ export function TuiShell(props: TuiShellProps) {
     }
   });
 
-  const navigator = (
+  const navigatorFor = (host: NavigatorHost) => (
     <WorkspaceNavigator
+      host={host}
       rows={rows}
       page={page}
       loading={props.roster.loading}
@@ -561,6 +576,7 @@ export function TuiShell(props: TuiShellProps) {
     />
   );
 
+  const sceneWidth = sidebarPinned ? Math.max(1, width - WORKSPACE_SIDEBAR_COLUMNS) : width;
   return (
     <box
       flexDirection="row"
@@ -577,16 +593,18 @@ export function TuiShell(props: TuiShellProps) {
             overflow: 'hidden',
             border: ['right'],
             borderColor: colors.border.default,
+            backgroundColor: colors.background.chrome,
           }}
         >
-          {navigator}
+          {navigatorFor('sidebar')}
         </box>
       )}
-      <box key="scene-content" style={{ flexGrow: 1, minWidth: 0, height: '100%' }}>{props.children}</box>
+      <box key="scene-content" style={{ flexGrow: 1, minWidth: 0, height: '100%' }}>
+        <SceneWidthContext.Provider value={sceneWidth}>{props.children}</SceneWidthContext.Provider>
+      </box>
       {layout === 'wide' && (
         <box
-          key="sidebar-toggle"
-          style={{ position: 'absolute', right: 1, top: 0 }}
+          style={{ position: 'absolute', right: 1, top: 1 }}
           onMouseDown={() => updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen }))}
         >
           <text><span fg={colors.text.muted}>{sidebarPinned ? `${keybindings.hint('workspace.toggle')} hide workspaces` : `${keybindings.hint('workspace.toggle')} workspaces`}</span></text>
@@ -603,19 +621,24 @@ export function TuiShell(props: TuiShellProps) {
             width: Math.min(WORKSPACE_SIDEBAR_COLUMNS + 4, width),
             height: '100%',
             border: true,
-            borderColor: colors.border.focus,
-            backgroundColor: colors.background.chrome,
+            borderStyle: 'rounded',
+            borderColor: colors.border.strong,
+            backgroundColor: colors.background.overlay,
           }}
           title="Workspaces · Esc close"
         >
-          {navigator}
+          {navigatorFor('overlay')}
         </box>
       )}
     </box>
   );
 }
 
+/** Where the navigator sits: on the chrome beside the scene, or in a dialog. */
+type NavigatorHost = 'sidebar' | 'overlay';
+
 function WorkspaceNavigator(props: {
+  readonly host: NavigatorHost;
   readonly rows: readonly TuiSidebarRow[];
   readonly page: TuiAgentPage;
   readonly loading: boolean;
@@ -628,8 +651,9 @@ function WorkspaceNavigator(props: {
 }) {
   const { colors } = useTuiTheme();
   const currentKey = props.current === undefined ? null : agentRowKey(props.current);
+  const ground = props.host === 'overlay' ? colors.background.overlay : colors.background.chrome;
   return (
-    <box flexDirection="column" style={{ width: '100%', height: '100%', paddingLeft: 1, paddingRight: 1, backgroundColor: colors.background.chrome }}>
+    <box flexDirection="column" style={{ width: '100%', height: '100%', paddingLeft: 1, paddingRight: 1, backgroundColor: ground }}>
       <box flexDirection="column" style={{ height: 2, flexShrink: 0 }}>
         <text><strong fg={colors.text.strong}>Workspaces</strong></text>
         <text><span fg={colors.text.muted}>{clipText(`${props.page.items.length} of ${props.page.total} · ${props.projectLabel}`, WORKSPACE_SIDEBAR_COLUMNS - 4)}</span></text>
@@ -640,17 +664,18 @@ function WorkspaceNavigator(props: {
         stickyScroll={false}
         style={{
           flexGrow: 1,
-          rootOptions: { backgroundColor: colors.background.chrome },
-          viewportOptions: { backgroundColor: colors.background.chrome },
-          contentOptions: { backgroundColor: colors.background.chrome },
+          rootOptions: { backgroundColor: ground },
+          viewportOptions: { backgroundColor: ground },
+          contentOptions: { backgroundColor: ground },
           scrollbarOptions: {
-            trackOptions: { foregroundColor: colors.border.strong, backgroundColor: colors.background.chrome },
+            trackOptions: { foregroundColor: colors.border.strong, backgroundColor: ground ?? colors.background.recessed },
           },
         }}
       >
         {props.rows.map((row, index) => (
           <NavigatorRow
             key={row.key}
+            host={props.host}
             row={row}
             selected={index === props.selectedIndex}
             active={row.kind === 'agent' && row.key === currentKey}
@@ -667,6 +692,7 @@ function WorkspaceNavigator(props: {
 }
 
 function NavigatorRow(props: {
+  readonly host: NavigatorHost;
   readonly row: TuiSidebarRow;
   readonly selected: boolean;
   readonly active: boolean;
@@ -674,7 +700,10 @@ function NavigatorRow(props: {
 }) {
   const { colors } = useTuiTheme();
   const { row } = props;
-  const rowBackground = props.selected || props.active ? colors.background.selectionStrong : colors.background.chrome;
+  // The open row is the web sidebar's raised row (`--c-elevated`); inside a
+  // dialog that rung is the dialog's own ground, so the tinted row stands in.
+  const highlight = props.host === 'overlay' ? colors.background.selection : colors.background.elevated;
+  const rowBackground = props.selected || props.active ? highlight : undefined;
   const marker = <span fg={props.selected ? colors.intent.accentStrong : colors.text.muted}>{props.selected ? '› ' : '  '}</span>;
   if (row.kind === 'workspace' || row.kind === 'remote') {
     const label = row.kind === 'remote' ? 'Cloud' : row.label;

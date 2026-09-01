@@ -6,10 +6,10 @@ import { describe, expect, test } from 'bun:test';
 import { MessageList } from '../src/tui/messages';
 import { BUILTIN_TUI_THEMES } from '../src/tui/theme';
 
-const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.canvas;
+const TEST_TUI_BACKGROUND = BUILTIN_TUI_THEMES[0]!.colors.background.overlay;
 
 describe('TUI transcript rendering', () => {
-  test('only user messages carry a speaker label; assistant markdown stays unprefixed', async () => {
+  test('the user turn is a bubble with no speaker label; assistant markdown stays unprefixed', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     try {
@@ -25,9 +25,12 @@ describe('TUI transcript rendering', () => {
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
-      expect(frame).toContain('YOU');
+      // The web chat marks the speaker by the bubble alone; no gutter label.
+      expect(frame).not.toContain('YOU');
       expect(frame).toContain('Review this module');
       expect(frame).not.toContain('KINU');
+      // The bubble's rounded edge sits on the user row.
+      expect(frame).toContain('╭');
       expect(frame).toContain('Plan');
       expect(frame).toContain('Inspect');
       expect(frame).not.toContain('**Inspect**');
@@ -159,9 +162,9 @@ describe('TUI transcript rendering', () => {
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
       expect(frame).toContain('use staging instead');
-      expect(frame).toContain('↪ steering');
+      expect(frame).toContain('↪ steered mid-turn');
       // The marker belongs to the steered bubble only.
-      expect(frame.split('↪ steering')).toHaveLength(2);
+      expect(frame.split('↪ steered mid-turn')).toHaveLength(2);
     } finally {
       root.render(<box />);
       renderer.destroy();

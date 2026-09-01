@@ -113,41 +113,39 @@ export function HubOverlay(props: {
   const panelHeight = Math.min(Math.max(12, Math.floor(props.height * 0.72)), 28, Math.max(3, props.height - 2));
   const title = props.view === 'agents' ? 'Agent Hub' : props.view === 'roles' ? 'Role Hub' : 'Tier Hub';
   return (
-    <>
-      <box style={{ position: 'absolute', zIndex: 70, top: 0, left: 0, width: '100%', height: '100%', backgroundColor: colors.background.canvas, opacity: 0.78 }} />
-      <box
-        flexDirection="column"
-        style={{
-          position: 'absolute',
-          zIndex: 71,
-          top: Math.max(1, Math.floor((props.height - panelHeight) / 2)),
-          left: Math.max(1, Math.floor((props.width - panelWidth) / 2)),
-          width: panelWidth,
-          height: panelHeight,
-          border: true,
-          borderColor: colors.border.focus,
-          backgroundColor: colors.background.surface,
-          paddingLeft: 1,
-          paddingRight: 1,
-          paddingTop: 1,
-          paddingBottom: 1,
-        }}
-        title={`${title} · Esc close`}
-      >
-        <text>
-          <span fg={props.view === 'agents' ? colors.intent.accent : colors.text.muted}>Agents</span>
-          <span fg={colors.border.strong}> · </span>
-          <span fg={props.view === 'roles' ? colors.intent.accent : colors.text.muted}>Roles</span>
-          <span fg={colors.border.strong}> · </span>
-          <span fg={props.view === 'tiers' ? colors.intent.accent : colors.text.muted}>Tiers</span>
-        </text>
-        {props.view === 'agents' && (
-          <AgentHubRows data={props.data} newAgentHint={props.newAgentHint} />
-        )}
-        {props.view === 'roles' && <RoleHubRows data={props.data.profile} />}
-        {props.view === 'tiers' && <TierHubRows data={props.data.profile} />}
-      </box>
-    </>
+    <box
+      flexDirection="column"
+      style={{
+        position: 'absolute',
+        zIndex: 71,
+        top: Math.max(1, Math.floor((props.height - panelHeight) / 2)),
+        left: Math.max(1, Math.floor((props.width - panelWidth) / 2)),
+        width: panelWidth,
+        height: panelHeight,
+        border: true,
+        borderStyle: 'rounded',
+        borderColor: colors.border.strong,
+        backgroundColor: colors.background.overlay,
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 1,
+        paddingBottom: 1,
+      }}
+      title={`${title} · Esc close`}
+    >
+      <text>
+        <span fg={props.view === 'agents' ? colors.intent.accent : colors.text.muted}>Agents</span>
+        <span fg={colors.border.strong}> · </span>
+        <span fg={props.view === 'roles' ? colors.intent.accent : colors.text.muted}>Roles</span>
+        <span fg={colors.border.strong}> · </span>
+        <span fg={props.view === 'tiers' ? colors.intent.accent : colors.text.muted}>Tiers</span>
+      </text>
+      {props.view === 'agents' && (
+        <AgentHubRows data={props.data} newAgentHint={props.newAgentHint} />
+      )}
+      {props.view === 'roles' && <RoleHubRows data={props.data.profile} />}
+      {props.view === 'tiers' && <TierHubRows data={props.data.profile} />}
+    </box>
   );
 }
 
@@ -209,7 +207,7 @@ function RoleHubRows({ data }: { readonly data: TuiProfileHubData }) {
         const active = roleId === data.activeRoleId;
         const available = allowed.has(roleId);
         return (
-          <box key={roleId} flexDirection="column" style={{ height: 2, marginBottom: 1, backgroundColor: active ? colors.background.selectionStrong : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
+          <box key={roleId} flexDirection="column" style={{ height: 2, marginBottom: 1, backgroundColor: active ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
             <text>
               <span fg={active ? colors.intent.accent : available ? colors.intent.success : colors.text.muted}>{active ? '● ' : available ? '○ ' : '× '}</span>
               <strong fg={active ? colors.text.strong : colors.text.primary}>{role.label ?? deriveRoleLabel(roleId)}</strong>
@@ -234,7 +232,7 @@ function TierHubRows({ data }: { readonly data: TuiProfileHubData }) {
         const assignment = configured ?? defaultAssignment;
         const active = data.resolved?.tier.id === tierId;
         return (
-          <box key={tierId} flexDirection="column" style={{ marginBottom: 1, backgroundColor: active ? colors.background.selectionStrong : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
+          <box key={tierId} flexDirection="column" style={{ marginBottom: 1, backgroundColor: active ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
             <text>
               <span fg={active ? colors.intent.accent : colors.text.primary}>{tierId}{configured === undefined && tierId !== 'default' ? ' → default' : ''}</span>
               <span fg={colors.text.muted}> · {assignment.model} · {assignment.reasoningEffort ?? 'provider effort'}</span>

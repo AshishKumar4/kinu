@@ -44,6 +44,7 @@ import {
   TuiProductProvider,
   TuiShell,
   tuiLayoutForWidth,
+  useSceneWidth,
   useTuiProduct,
   useAgentRoster,
   agentSourceFromList,
@@ -84,6 +85,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
 
 function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const { width, height } = useTerminalDimensions();
+  const sceneWidth = useSceneWidth();
   const { colors } = useTuiTheme();
   const { keybindings, preferences, updatePreferences } = useTuiProduct();
   const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
@@ -137,7 +139,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const layout = tuiLayoutForWidth(width);
   const overlayNavigation = navigationOpen && layout !== 'wide';
   const sidebarFocusable = agents.length > 0 && layout === 'wide' && preferences.wideSidebarOpen;
-  const panelWidth = Math.min(Math.max(28, width - 4), Math.max(52, Math.floor(width * 0.72)), 104);
+  const panelWidth = Math.min(Math.max(28, sceneWidth - 4), Math.max(52, Math.floor(sceneWidth * 0.72)), 104);
   const promptHeight = compactHome ? 3 : Math.min(Math.max(4, Math.floor(height * 0.15)), 7);
 
   useEffect(() => () => {
@@ -391,9 +393,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         style={{
           width: panelWidth,
           border: true,
-          borderStyle: 'single',
+          borderStyle: 'rounded',
           borderColor: colors.border.default,
-          backgroundColor: colors.background.chrome,
+          backgroundColor: colors.background.surface,
           paddingLeft: 2,
           paddingRight: 2,
           paddingTop: 1,
@@ -412,7 +414,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         </text>
 
         {setupRequired && (
-          <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'single', borderColor: colors.border.subtle, paddingLeft: 1, paddingRight: 1 }}>
+          <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'rounded', borderColor: colors.border.subtle, paddingLeft: 1, paddingRight: 1 }}>
             <text><strong fg={colors.text.primary}>Setup required</strong></text>
             <text><span fg={colors.text.muted}>  kinu setup</span> <span fg={colors.text.primary}>connect account and optional local provider</span></text>
             <text><span fg={colors.text.muted}>  kinu auth</span>  <span fg={colors.text.primary}>connect cloud workspaces only</span></text>
@@ -426,9 +428,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             style={{
               height: promptHeight,
               border: true,
-              borderStyle: 'single',
-              borderColor: busy ? colors.border.strong : focusArea === 'mission' ? colors.border.focus : colors.border.default,
-              backgroundColor: colors.background.recessed,
+              borderStyle: 'rounded',
+              borderColor: busy ? colors.border.strong : focusArea === 'mission' ? colors.border.focus : colors.border.user,
+              backgroundColor: colors.background.user,
               paddingLeft: 1,
               paddingRight: 1,
             }}
@@ -449,6 +451,14 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               ]}
               onContentChange={() => setDraft(textareaRef.current?.plainText ?? '')}
               onSubmit={submit}
+              style={{
+                backgroundColor: colors.background.user,
+                focusedBackgroundColor: colors.background.user,
+                textColor: colors.text.strong,
+                focusedTextColor: colors.text.strong,
+                placeholderColor: colors.text.muted,
+                cursorColor: colors.intent.accent,
+              }}
             />
           </box>
         )}
@@ -456,7 +466,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         <box flexDirection="column" style={{ marginTop: 1 }}>
           <text>
             <span fg={colors.intent.accentStrong}>Mode: </span>
-            <span fg={mode === 'cloud' ? (cloudReady ? colors.text.primary : colors.intent.warningMuted) : (localReady ? colors.text.primary : colors.intent.warningMuted)}>
+            <span fg={mode === 'cloud' ? (cloudReady ? colors.text.primary : colors.intent.warning) : (localReady ? colors.text.primary : colors.intent.warning)}>
               {modeLabel}
             </span>
             <span fg={colors.text.muted}>  {focusArea === 'mode' ? `${keybindings.hint('home.next')} switches` : `${keybindings.hint('home.focus-next')} to focus`}</span>
@@ -501,7 +511,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             <box
               style={{
                 height: 1,
-                backgroundColor: focusArea === 'model' ? colors.background.selectionStrong : colors.background.chrome,
+                backgroundColor: focusArea === 'model' ? colors.background.elevated : undefined,
                 paddingLeft: 1,
                 paddingRight: 1,
               }}
@@ -523,7 +533,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
                   key={effort}
                   style={{
                     width: effort.length + 3,
-                    backgroundColor: effort === reasoningEffort ? colors.background.selection : colors.background.chrome,
+                    backgroundColor: effort === reasoningEffort ? colors.background.elevated : undefined,
                     paddingLeft: 1,
                     paddingRight: 1,
                   }}
@@ -540,7 +550,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               ))}
               <text><span fg={colors.text.muted}>  {focusArea === 'effort' ? `${keybindings.hint('home.next')} select` : `${keybindings.hint('home.focus-next')} to focus`}</span></text>
             </box>
-            {catalogHint && <text><span fg={colors.intent.warningMuted}>  {catalogHint}</span></text>}
+            {catalogHint && <text><span fg={colors.text.muted}>  {catalogHint}</span></text>}
           </box>
           {compactHome && (
             <text>
@@ -550,7 +560,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             </text>
           )}
           {cloudSyncNotice && (
-            <text><span fg={colors.intent.warningMuted}>{clipText(cloudSyncNotice, Math.max(8, panelWidth - 2))}</span></text>
+            <text><span fg={colors.text.muted}>{clipText(cloudSyncNotice, Math.max(8, panelWidth - 2))}</span></text>
           )}
         </box>
 
@@ -566,13 +576,13 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
           models={modelPicker.menu.models}
           failures={modelPicker.menu.failures}
           currentSpec={defaultModel || null}
-          terminal={{ width, height }}
+          terminal={{ width: sceneWidth, height }}
           loading={modelPicker.loading}
           error={modelPicker.error}
           onSelect={selectModel}
         />
       )}
-      {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
+      {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width: sceneWidth, height }} />}
     </box>
     </TuiShell>
   );
@@ -591,16 +601,16 @@ function ModeSegment(props: {
     : colors.border.default;
   const textColor = props.ready
     ? props.selected ? colors.text.strong : colors.text.primary
-    : colors.intent.warningMuted;
+    : colors.intent.warning;
   return (
     <box
       style={{
         width: 18,
         height: 3,
         border: true,
-        borderStyle: 'single',
+        borderStyle: 'rounded',
         borderColor,
-        backgroundColor: props.selected ? colors.background.selectionStrong : colors.background.recessed,
+        backgroundColor: props.selected ? colors.background.elevated : undefined,
         paddingLeft: 1,
         paddingRight: 1,
         alignItems: 'center',
@@ -666,9 +676,9 @@ function createDefaultOnboarding(
     async configureTiers() {
       await loadActiveProfile();
     },
-    selectTheme(themeId) {
+    selectTheme(selection) {
       const current = preferences.read();
-      preferences.write({ ...current, theme: { mode: 'theme', themeId } });
+      preferences.write({ ...current, theme: selection });
     },
     selectKeymap(presetId) {
       const current = preferences.read();
@@ -713,6 +723,7 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   installTurnDiagnostics();
   requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  await renderer.waitForThemeMode(250);
   const root = createRoot(renderer);
   const { promise, resolve } = Promise.withResolvers<HomeTuiAction>();
   const complete = (action: HomeTuiAction) => {

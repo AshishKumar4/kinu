@@ -1,6 +1,7 @@
 import type { SelectOption, SelectRenderable } from '@opentui/core';
+import { useKeyboard } from '@opentui/react';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { formatContextWindow, CHANGE_KIND_GLYPH, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
+import { formatContextWindow, CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
 import { takeEvidence } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import { filterModels, type AgentModelEntry } from '../model-catalog';
@@ -9,7 +10,14 @@ import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import { clipText } from './format';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
-import { useTuiTheme } from './theme';
+import {
+  DEFAULT_TUI_THEME_SELECTION,
+  REFERENCE_TERMINAL_GROUNDS,
+  resolveThemeSelection,
+  useTuiTheme,
+  type ThemeSelection,
+  type TuiThemeDefinition,
+} from './theme';
 
 export interface OverlayGeometry {
   width: number;
@@ -51,7 +59,6 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={false}
     >
       <PaletteLine text={filterHint} width={innerWidth} color={colors.text.muted} />
       {visibleCommands.map((command) => (
@@ -106,9 +113,9 @@ function PaletteSearchInput({
       }}
       style={{
         width: '100%',
-        backgroundColor: colors.background.surface,
+        backgroundColor: colors.background.recessed,
         textColor: colors.text.primary,
-        focusedBackgroundColor: colors.background.surface,
+        focusedBackgroundColor: colors.background.recessed,
         focusedTextColor: colors.text.strong,
         placeholderColor: colors.text.muted,
         cursorColor: colors.intent.accentStrong,
@@ -150,7 +157,6 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       {!compact && (
         <PaletteLine text="Type to filter · ↑/↓ move · Enter insert · Esc close" width={innerWidth} color={colors.text.muted} />
@@ -177,9 +183,9 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
           style={{
             width: '100%',
             flexGrow: 1,
-            backgroundColor: colors.background.chrome,
+            backgroundColor: colors.background.overlay,
             textColor: colors.text.primary,
-            selectedBackgroundColor: colors.background.selectionStrong,
+            selectedBackgroundColor: colors.background.selection,
             selectedTextColor: colors.text.primary,
           }}
         />
@@ -237,7 +243,6 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       {!compact && (
         <PaletteLine
@@ -270,9 +275,9 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
           style={{
             width: '100%',
             flexGrow: 1,
-            backgroundColor: colors.background.chrome,
+            backgroundColor: colors.background.overlay,
             textColor: colors.text.primary,
-            selectedBackgroundColor: colors.background.selectionStrong,
+            selectedBackgroundColor: colors.background.selection,
             selectedTextColor: colors.text.primary,
           }}
         />
@@ -346,7 +351,6 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       {!compact && (
         <PaletteLine text="Type to filter · ↑/↓ move · Enter select · Esc close" width={innerWidth} color={colors.text.muted} />
@@ -388,9 +392,9 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
           style={{
             flexGrow: 1,
             height: compact ? 1 : Math.max(3, paletteHeight - 6),
-            backgroundColor: colors.background.chrome,
+            backgroundColor: colors.background.overlay,
             textColor: colors.text.primary,
-            focusedBackgroundColor: colors.background.chrome,
+            focusedBackgroundColor: colors.background.overlay,
             focusedTextColor: colors.text.primary,
             selectedBackgroundColor: colors.background.selection,
             selectedTextColor: colors.text.strong,
@@ -441,7 +445,6 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       {!compact && (
         <PaletteLine text="↑/↓ move · Enter forks before that message · Esc close" width={innerWidth} color={colors.text.muted} />
@@ -460,9 +463,9 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
         style={{
           flexGrow: 1,
           height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
-          backgroundColor: colors.background.chrome,
+          backgroundColor: colors.background.overlay,
           textColor: colors.text.primary,
-          focusedBackgroundColor: colors.background.chrome,
+          focusedBackgroundColor: colors.background.overlay,
           focusedTextColor: colors.text.primary,
           selectedBackgroundColor: colors.background.selection,
           selectedTextColor: colors.text.strong,
@@ -506,7 +509,6 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       {!compact && (
         <PaletteLine text="↑/↓ move · Enter reverts the line · Esc keeps everything" width={innerWidth} color={colors.text.muted} />
@@ -528,9 +530,9 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
           style={{
             flexGrow: 1,
             height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
-            backgroundColor: colors.background.chrome,
+            backgroundColor: colors.background.overlay,
             textColor: colors.text.primary,
-            focusedBackgroundColor: colors.background.chrome,
+            focusedBackgroundColor: colors.background.overlay,
             focusedTextColor: colors.text.primary,
             selectedBackgroundColor: colors.background.selection,
             selectedTextColor: colors.text.strong,
@@ -579,7 +581,6 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       {!compact && (
         <>
@@ -601,9 +602,9 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
         style={{
           flexGrow: 1,
           height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 6),
-          backgroundColor: colors.background.chrome,
+          backgroundColor: colors.background.overlay,
           textColor: colors.text.primary,
-          focusedBackgroundColor: colors.background.chrome,
+          focusedBackgroundColor: colors.background.overlay,
           focusedTextColor: colors.text.primary,
           selectedBackgroundColor: colors.background.selection,
           selectedTextColor: colors.text.strong,
@@ -682,7 +683,6 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
       height={layout.paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       <PaletteLine text={`Agent wants to use ${consent.deviceLabel} for a local action.`} width={layout.innerWidth} color={colors.text.primary} />
       <PaletteLine text={`Method: ${consent.method}`} width={layout.innerWidth} color={colors.text.muted} />
@@ -719,7 +719,6 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       height={paletteHeight}
       left={position.left}
       top={position.top}
-      dim={true}
     >
       {prompt.phase === 'ask' ? (
         <>
@@ -757,6 +756,213 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
   );
 }
 
+interface ThemePickerProps {
+  terminal: OverlayGeometry;
+  /** The stored selection, so the row it names carries the current mark. */
+  selection: ThemeSelection;
+  onSelect: (selection: ThemeSelection) => void;
+}
+
+interface ThemeChoice {
+  readonly key: string;
+  readonly label: string;
+  readonly note: string;
+  readonly selection: ThemeSelection;
+  /** What the row paints: for the system row, the theme the terminal gets now. */
+  readonly theme: TuiThemeDefinition;
+}
+
+const THEME_LIST_COLUMNS = 34;
+const THEME_PREVIEW_MIN_COLUMNS = 34;
+/** Rows the preview transcript needs: strip, bubble, prose, well, composer, caption. */
+const THEME_PREVIEW_ROWS = 21;
+
+function sameSelection(left: ThemeSelection, right: ThemeSelection): boolean {
+  if (left.mode === 'theme' || right.mode === 'theme') {
+    return left.mode === 'theme' && right.mode === 'theme' && left.themeId === right.themeId;
+  }
+  return left.darkThemeId === right.darkThemeId && left.lightThemeId === right.lightThemeId;
+}
+
+/**
+ * The theme picker: every registered theme plus "follow the terminal", each
+ * row with its own bubble, brass and well swatches, and the highlighted one
+ * drawn as a small transcript beside the list so the choice is visual.
+ * Enter stores the selection through the preference store; Esc keeps things.
+ */
+export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePickerProps) {
+  const { colors, registry, terminalAppearance } = useTuiTheme();
+  const keybindings = useKeybindingRegistry();
+  const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
+  const choices = useMemo<ThemeChoice[]>(() => {
+    const system = selection.mode === 'system' ? selection : DEFAULT_TUI_THEME_SELECTION;
+    const systemTheme = resolveThemeSelection(registry, system, terminalAppearance);
+    return [
+      {
+        key: 'system',
+        label: 'Follow the terminal',
+        note: `${terminalAppearance} now · ${systemTheme.label}`,
+        selection: system,
+        theme: systemTheme,
+      },
+      ...registry.themes.map((theme) => ({
+        key: theme.id,
+        label: theme.label,
+        note: theme.colors.background.canvas === undefined ? theme.appearance : `${theme.appearance} · painted`,
+        selection: { mode: 'theme' as const, themeId: theme.id },
+        theme,
+      })),
+    ];
+  }, [registry, selection, terminalAppearance]);
+  const currentIndex = choices.findIndex((choice) => sameSelection(choice.selection, selection));
+  const [highlighted, setHighlighted] = useState(Math.max(0, currentIndex));
+  const choice = choices[Math.min(highlighted, choices.length - 1)]!;
+
+  useKeyboard((event) => {
+    const result = dispatcher.feed(event, ['modal']);
+    if (result.pending) {
+      event.preventDefault();
+      return;
+    }
+    switch (result.actionId) {
+      case 'modal.previous':
+        event.preventDefault();
+        setHighlighted((index) => (index - 1 + choices.length) % choices.length);
+        return;
+      case 'modal.next':
+        event.preventDefault();
+        setHighlighted((index) => (index + 1) % choices.length);
+        return;
+      case 'modal.activate':
+        event.preventDefault();
+        onSelect(choice.selection);
+        return;
+      default:
+        return;
+    }
+  });
+
+  const paletteWidth = boundedPaletteWidth(terminal, 0.82, 44, 108);
+  const innerWidth = Math.max(1, paletteWidth - 4);
+  const previewWidth = innerWidth - THEME_LIST_COLUMNS - 1;
+  const showPreview = previewWidth >= THEME_PREVIEW_MIN_COLUMNS;
+  const listWidth = showPreview && terminal.height >= THEME_PREVIEW_ROWS + 5 ? THEME_LIST_COLUMNS : innerWidth;
+  const previewFits = showPreview && terminal.height >= THEME_PREVIEW_ROWS + 5;
+  const paletteHeight = Math.min(Math.max(choices.length + 7, previewFits ? THEME_PREVIEW_ROWS + 5 : 0), Math.max(3, terminal.height - 2));
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  const compact = paletteHeight < choices.length + 6;
+  return (
+    <PaletteFrame
+      title="Theme"
+      width={paletteWidth}
+      height={paletteHeight}
+      left={position.left}
+      top={position.top}
+    >
+      {!compact && (
+        <PaletteLine text="↑/↓ move · Enter apply · Esc keep the current theme" width={innerWidth} color={colors.text.muted} />
+      )}
+      <box flexDirection="row" style={{ flexGrow: 1 }}>
+        <box flexDirection="column" style={{ width: listWidth, flexShrink: 0 }}>
+          {choices.map((entry, index) => (
+            <ThemeChoiceRow
+              key={entry.key}
+              choice={entry}
+              width={listWidth}
+              highlighted={index === highlighted}
+              current={index === currentIndex}
+            />
+          ))}
+          {!compact && (
+            <box style={{ marginTop: 1 }}>
+              <text><span fg={colors.text.muted}>{clipText(choice.theme.description, listWidth)}</span></text>
+            </box>
+          )}
+        </box>
+        {previewFits && (
+          <box style={{ width: 1, flexShrink: 0 }} />
+        )}
+        {previewFits && <ThemePreview theme={choice.theme} width={previewWidth} />}
+      </box>
+    </PaletteFrame>
+  );
+}
+
+function ThemeChoiceRow({ choice, width, highlighted, current }: {
+  readonly choice: ThemeChoice;
+  readonly width: number;
+  readonly highlighted: boolean;
+  readonly current: boolean;
+}) {
+  const { colors } = useTuiTheme();
+  const swatch = choice.theme.colors;
+  const badge = current ? ' current ' : '';
+  const labelWidth = Math.max(4, width - 2 - 3 - badge.length - 3);
+  return (
+    <box style={{ height: 1, backgroundColor: highlighted ? colors.background.selection : undefined }}>
+      <text>
+        <span fg={highlighted ? colors.intent.accentStrong : colors.text.muted}>{highlighted ? '› ' : '  '}</span>
+        <span fg={highlighted ? colors.text.strong : colors.text.primary}>{clipText(choice.label, labelWidth).padEnd(labelWidth)}</span>
+        <span fg={swatch.background.user}>▇</span>
+        <span fg={swatch.intent.accent}>▇</span>
+        <span fg={swatch.well.fill}>▇</span>
+        {badge !== '' && <span fg={colors.text.onAccent} bg={colors.background.accent}>{badge}</span>}
+      </text>
+    </box>
+  );
+}
+
+/**
+ * One transcript in the theme under the cursor: status strip, a user bubble,
+ * a line of prose, a tool card on the well, the composer. A transparent theme
+ * is shown on the web canvas of its appearance, the ground it was designed
+ * for, and says so.
+ */
+function ThemePreview({ theme, width }: { readonly theme: TuiThemeDefinition; readonly width: number }) {
+  const { colors } = theme;
+  const ground = colors.background.canvas ?? REFERENCE_TERMINAL_GROUNDS[theme.appearance][0]!;
+  const inner = Math.max(1, width - 2);
+  const rule = '┄'.repeat(Math.max(1, inner - 4));
+  return (
+    <box flexDirection="column" style={{ width, flexShrink: 0, backgroundColor: ground, paddingLeft: 1, paddingRight: 1 }}>
+      <box style={{ height: 2, border: ['bottom'], borderColor: colors.border.default, backgroundColor: colors.background.chrome, flexDirection: 'row', justifyContent: 'space-between' }}>
+        <text>
+          <strong fg={colors.intent.accent}>kinu {TUI_MARKS.prompt} </strong>
+          <strong fg={colors.text.strong}>checkout</strong>
+          <span fg={colors.text.muted}> local</span>
+        </text>
+        <text><span fg={colors.intent.success}>{TUI_MARKS.connected}</span></text>
+      </box>
+      <box flexDirection="column" alignItems="flex-end" style={{ marginTop: 1 }}>
+        <box style={{ maxWidth: '80%', border: true, borderStyle: 'rounded', borderColor: colors.border.user, backgroundColor: colors.background.user, paddingLeft: 1, paddingRight: 1 }}>
+          <text><span fg={colors.text.strong}>{clipText('Run the checkout suite.', Math.max(4, inner - 6))}</span></text>
+        </box>
+      </box>
+      <text><span fg={colors.text.primary}>{clipText('Two tests fail: shipping is taxed twice.', inner)}</span></text>
+      <box flexDirection="column" style={{ marginTop: 1, border: true, borderStyle: 'rounded', borderColor: colors.well.border, backgroundColor: colors.well.fill, paddingLeft: 1, paddingRight: 1 }}>
+        <text>
+          <span fg={colors.well.ink}>Agent activity</span>
+          <span fg={colors.well.muted}> · 1 call</span>
+        </text>
+        <text>
+          <span fg={colors.well.accent}>{TUI_MARKS.toolCall} </span>
+          <span fg={colors.well.ink}>exec</span>
+          <span fg={colors.well.muted}> {clipText('bun test packages/checkout', Math.max(4, inner - 12))}</span>
+        </text>
+        <text><span fg={colors.well.muted}>  {TUI_MARKS.toolResult} 37 pass · </span><span fg={colors.well.danger}>2 fail</span></text>
+        <text><span fg={colors.well.border}>{rule}</span></text>
+        <text><span fg={colors.well.code}>{clipText('lineTotal = subtotal + tax(subtotal)', Math.max(4, inner - 4))}</span></text>
+      </box>
+      <box style={{ marginTop: 1, height: 3, border: true, borderStyle: 'rounded', borderColor: colors.border.focus, backgroundColor: colors.background.user, paddingLeft: 1 }}>
+        <text><span fg={colors.intent.accent}>{TUI_MARKS.prompt} </span><span fg={colors.text.muted}>{clipText(TUI_COMPOSER_PLACEHOLDER, Math.max(4, inner - 6))}</span></text>
+      </box>
+      {colors.background.canvas === undefined && (
+        <text><span fg={colors.text.muted}>{clipText(`shown on a ${theme.appearance} terminal`, inner)}</span></text>
+      )}
+    </box>
+  );
+}
+
 function PaletteLine(props: { text: string; width: number; color: string; accentPrefix?: number }) {
   const { colors } = useTuiTheme();
   const text = clipText(props.text, props.width);
@@ -774,6 +980,10 @@ function PaletteLine(props: { text: string; width: number; color: string; accent
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/**
+ * Live work as the web's `ThinkingRow`: a gold pulse and the word in the dim
+ * register, omp's `thinkingText: gray`.
+ */
 export function PhaseLine({ label }: { label: string | null }) {
   const { colors } = useTuiTheme();
   const [frame, setFrame] = useState(0);
@@ -785,7 +995,7 @@ export function PhaseLine({ label }: { label: string | null }) {
   if (!label) return null;
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
-      <text><span fg={colors.intent.accent}>{`${SPINNER_FRAMES[frame]} ${label}`}</span></text>
+      <text><span fg={colors.intent.accent}>{SPINNER_FRAMES[frame]} </span><span fg={colors.text.muted}>{label}</span></text>
     </box>
   );
 }
@@ -796,51 +1006,39 @@ interface PaletteFrameProps {
   height: number;
   left: number;
   top: number;
-  dim: boolean;
   children: ReactNode;
 }
 
-function PaletteFrame({ title, width, height, left, top, dim, children }: PaletteFrameProps) {
+/**
+ * A dialog as the web draws one (`.p-overlay`): the overlay ground under a
+ * strong rule, rounded. No scrim — the canvas is the terminal's own, and a
+ * translucent layer has nothing known to blend into.
+ */
+function PaletteFrame({ title, width, height, left, top, children }: PaletteFrameProps) {
   const { colors } = useTuiTheme();
   return (
-    <>
-      {dim && (
-        <box
-          style={{
-            position: 'absolute',
-            zIndex: 40,
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            backgroundColor: colors.background.canvas,
-            opacity: 0.76,
-          }}
-        />
-      )}
-      <box
-        flexDirection="column"
-        style={{
-          position: 'absolute',
-          zIndex: 41,
-          top,
-          left,
-          width,
-          height,
-          border: true,
-          borderStyle: 'single',
-          borderColor: colors.border.focus,
-          backgroundColor: colors.background.chrome,
-          paddingLeft: 1,
-          paddingRight: 1,
-          paddingTop: 1,
-          paddingBottom: 1,
-        }}
-        title={title}
-      >
-        {children}
-      </box>
-    </>
+    <box
+      flexDirection="column"
+      style={{
+        position: 'absolute',
+        zIndex: 41,
+        top,
+        left,
+        width,
+        height,
+        border: true,
+        borderStyle: 'rounded',
+        borderColor: colors.border.strong,
+        backgroundColor: colors.background.overlay,
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 1,
+        paddingBottom: 1,
+      }}
+      title={title}
+    >
+      {children}
+    </box>
   );
 }
 

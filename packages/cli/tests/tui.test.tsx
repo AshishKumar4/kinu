@@ -472,7 +472,7 @@ describe('CLI TUI layout', () => {
       const hintLine = lineContaining(frame, 'Type to filter');
       const commandLine = lineContaining(frame, '/very-long');
       const closingLine = frame.split('\n').findIndex((line, index) =>
-        index > commandLine && line.includes('└'));
+        index > commandLine && line.includes('╰'));
       expect(commandLine).toBeGreaterThan(hintLine);
       expect(closingLine).toBeGreaterThan(commandLine);
       expect(frame).toContain('/very-long');
@@ -504,7 +504,7 @@ describe('CLI TUI layout', () => {
       const frame = captureCharFrame();
       const commandLine = lineContaining(frame, '/status');
       const closingLine = frame.split('\n').findIndex((line, index) =>
-        index > commandLine && line.includes('└'));
+        index > commandLine && line.includes('╰'));
       expect(closingLine).toBeGreaterThan(commandLine);
     } finally {
       root.render(<box />);

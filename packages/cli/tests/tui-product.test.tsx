@@ -162,10 +162,10 @@ describe('TUI product registries', () => {
       id: 'invisible',
       colors: {
         ...dark.colors,
-        text: { ...dark.colors.text, primary: dark.colors.background.canvas },
+        text: { ...dark.colors.text, primary: dark.colors.background.overlay },
       },
     };
-    expect(() => createThemeRegistry([invisible])).toThrow(/text\.primary\/background\.canvas contrast/);
+    expect(() => createThemeRegistry([invisible])).toThrow(/text\.primary\/background\.overlay contrast/);
   });
 
   test('a system theme selection follows the terminal appearance', async () => {
@@ -194,7 +194,7 @@ describe('TUI product registries', () => {
       colors: BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light')!.colors,
     });
     expect(parseCustomTheme(valid, 'paper-custom.json').id).toBe('paper-custom');
-    expect(() => parseCustomTheme(valid.replace('"canvas":"#', '"canvas":"nope#'), 'broken.json')).toThrow(/canvas/);
+    expect(() => parseCustomTheme(valid.replace('"overlay":"#', '"overlay":"nope#'), 'broken.json')).toThrow(/overlay/);
     expect(() => parseCustomTheme(valid.replace('"appearance":"light"', '"appearance":"light","surprise":true'), 'unknown.json')).toThrow(/surprise/);
   });
 });

@@ -452,6 +452,9 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
       console.log(`\n${DIM('Settings:')} use ${commands.join(', ')}, or open the full-screen TUI.\n`);
       return 'ok';
     }
+    case 'theme':
+      console.log(`\n${DIM('Theme:')} the full-screen TUI has the picker; ~/.kinu/tui.json holds the choice.\n`);
+      return 'ok';
     case 'model-picker': {
       const current = await client.getModelSpec();
       console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);

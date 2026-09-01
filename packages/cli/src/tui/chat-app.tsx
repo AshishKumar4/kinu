@@ -70,6 +70,7 @@ import {
   PhaseLine,
   TakesOverlay,
   SettingsOverlay,
+  ThemePickerOverlay,
   type TuiSettingChoice,
   WalkbackOverlay,
 } from './overlays';
@@ -80,12 +81,13 @@ import { initialInputState, reduceInput, type InputEffect, type InputMachineEven
 import { agentDisplayLabel, clipText } from './format';
 import { createKeyDispatcher, openTuiKeyBindings, type TuiActionId } from './actions';
 import { buildAgentHubEntries, HubOverlay, type TuiHubData, type TuiHubView } from './hubs';
-import { useTuiTheme } from './theme';
+import { useTuiTheme, type ThemeSelection } from './theme';
 import {
   TuiProductProvider,
   TuiShell,
   tuiLayoutForWidth,
   usePreservedScrollAnchor,
+  useSceneWidth,
   useTuiProduct,
   useAgentRoster,
   agentSourceFromList,
@@ -133,6 +135,7 @@ export interface ChatAppOpts {
 type ActiveSurface =
   | { kind: 'commands' }
   | { kind: 'settings' }
+  | { kind: 'theme' }
   | { kind: 'hub'; view: TuiHubView }
   | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
   | { kind: 'changelog'; view: AgentChangelogView }
@@ -176,8 +179,9 @@ function ChatScene({
   hubData,
 }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
-  const { colors } = useTuiTheme();
-  const { keybindings, updatePreferences } = useTuiProduct();
+  const sceneWidth = useSceneWidth();
+  const { colors, definition: activeTheme } = useTuiTheme();
+  const { keybindings, preferences, updatePreferences } = useTuiProduct();
   const keyDispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
   const workspaceSource = useMemo(
     () => workspaceSourceInput ?? agentSourceFromList(listSidebarAgents),
@@ -205,6 +209,7 @@ function ChatScene({
   const commandPalette = activeSurface?.kind === 'commands';
   const hubView = activeSurface?.kind === 'hub' ? activeSurface.view : null;
   const settingsOpen = activeSurface?.kind === 'settings';
+  const themePickerOpen = activeSurface?.kind === 'theme';
   // The hub describes ONE open workspace, so its state carries that
   // workspace's identity: a switch resets it synchronously alongside every
   // other per-client piece, and the refresh effect re-derives it from the
@@ -281,6 +286,13 @@ function ChatScene({
         value: value === effort ? 'current' : '',
         command: `/effort ${value}`,
       })),
+      {
+        id: 'theme',
+        group: 'Appearance',
+        label: 'Theme',
+        value: preferences.theme.mode === 'system' ? `follows the terminal · ${activeTheme.label}` : activeTheme.label,
+        command: '/theme',
+      },
     ];
     if (client.localControls) {
       const approval = client.localControls.getShellApprovalMode();
@@ -301,8 +313,7 @@ function ChatScene({
       });
     }
     return rows;
-
-  }, [client, modelSpec, status?.reasoningEffort]);
+  }, [activeTheme.label, client, modelSpec, preferences.theme.mode, status?.reasoningEffort]);
   useEffect(() => {
     if (activeSurface?.kind !== 'model') modelRequestRef.current += 1;
   }, [activeSurface?.kind]);
@@ -802,6 +813,9 @@ function ChatScene({
       case 'settings':
         setActiveSurface({ kind: 'settings' });
         return;
+      case 'theme':
+        setActiveSurface({ kind: 'theme' });
+        return;
       case 'device-connect':
         await deviceConnect.open();
         return;
@@ -817,6 +831,7 @@ function ChatScene({
         }
         const cancelled = {
           settings: 'Settings closed.',
+          theme: 'Theme picker closed. Your theme is unchanged.',
           commands: 'Command palette closed.',
           hub: 'Agent hub closed.',
           model: 'Model selection cancelled.',
@@ -1391,7 +1406,7 @@ function ChatScene({
     return handleSubmit(value);
   }, [handleSubmit, setInputText]);
 
-  const commandHints = !settingsOpen && !commandPalette && !modelPicker && hubView === null
+  const commandHints = !settingsOpen && !themePickerOpen && !commandPalette && !modelPicker && hubView === null
     && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
     && !isProcessing && !/\s/.test(draft.trimStart())
     ? filterCommands(commands, draft)
@@ -1402,6 +1417,8 @@ function ChatScene({
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
   const surfaceTitle = settingsOpen
     ? 'Settings ›'
+    : themePickerOpen
+      ? 'Theme ›'
     : commandPalette
       ? 'Commands ›'
       : hubView !== null
@@ -1473,7 +1490,7 @@ function ChatScene({
           viewportOptions: { backgroundColor: colors.background.canvas },
           contentOptions: { backgroundColor: colors.background.canvas },
           scrollbarOptions: {
-            trackOptions: { foregroundColor: colors.border.strong, backgroundColor: colors.background.surface },
+            trackOptions: { foregroundColor: colors.border.strong, backgroundColor: colors.background.canvas ?? colors.background.recessed },
           },
         }}
       >
@@ -1485,22 +1502,25 @@ function ChatScene({
         <box flexDirection="column" style={{ paddingLeft: 2, paddingRight: 2 }}>
           {inputState.queue.map((text, i) => (
             <text key={`queued-${i}`}>
-              <span fg={colors.intent.warningMuted}>⧗ </span>
-              <span fg={colors.text.muted}>{i + 1} · </span>
-              <span fg={colors.text.primary}>{clipText(text.replace(/\s+/g, ' '), Math.max(8, width - 12))}</span>
+              <span fg={colors.text.muted}>⧗ {i + 1} · </span>
+              <span fg={colors.text.primary}>{clipText(text.replace(/\s+/g, ' '), Math.max(8, sceneWidth - 12))}</span>
             </text>
           ))}
           <text><span fg={colors.text.muted}>queued · {keybindings.hint('queue.edit-last')} on an empty input edits the last</span></text>
         </box>
       )}
 
+      {/* The composer sits on the user fill, as omp's editor does
+          (`surfaceColor: bgFill("userMessageBg")`): what you type lands in
+          the block it will be sent as. The edge is the bubble's; focus turns
+          it gold, the web's `.p-composer:focus-within`. */}
       <box
         style={{
           height: composerRows + 2,
           border: true,
-          borderStyle: 'single',
-          borderColor: isProcessing ? colors.border.strong : colors.border.default,
-          backgroundColor: colors.background.surface,
+          borderStyle: 'rounded',
+          borderColor: inputFocused ? colors.border.focus : colors.border.user,
+          backgroundColor: colors.background.user,
           paddingLeft: 1,
         }}
         title={composerTitle}
@@ -1519,13 +1539,30 @@ function ChatScene({
             syncComposerRows();
           }}
           onSubmit={onInputSubmit}
+          style={{
+            backgroundColor: colors.background.user,
+            focusedBackgroundColor: colors.background.user,
+            textColor: colors.text.strong,
+            focusedTextColor: colors.text.strong,
+            placeholderColor: colors.text.muted,
+            cursorColor: colors.intent.accent,
+          }}
         />
       </box>
 
-      {settingsOpen ? (
+      {themePickerOpen ? (
+        <ThemePickerOverlay
+          terminal={{ width: sceneWidth, height }}
+          selection={preferences.theme}
+          onSelect={(selection: ThemeSelection) => {
+            setActiveSurface(null);
+            updatePreferences((current) => ({ ...current, theme: selection }));
+          }}
+        />
+      ) : settingsOpen ? (
         <SettingsOverlay
           settings={settings}
-          terminal={{ width, height }}
+          terminal={{ width: sceneWidth, height }}
           onSelect={(setting) => {
             setActiveSurface(null);
             if (setting.command === '/model') return openModelPicker();
@@ -1540,14 +1577,14 @@ function ChatScene({
         <HubOverlay
           view={hubView}
           data={hubLive}
-          width={width}
+          width={sceneWidth}
           height={height}
           {...(onNewAgent !== undefined ? { newAgentHint: keybindings.hint('hub.new-agent') } : {})}
         />
       ) : commandPalette ? (
         <CommandPaletteOverlay
           commands={commands}
-          terminal={{ width, height }}
+          terminal={{ width: sceneWidth, height }}
           onSelect={(command) => {
             setActiveSurface(null);
             setInputText(`${command.name}${command.usage ? ' ' : ''}`);
@@ -1558,7 +1595,7 @@ function ChatScene({
           models={modelPicker.menu.models}
           failures={modelPicker.menu.failures}
           currentSpec={modelSpec}
-          terminal={{ width, height }}
+          terminal={{ width: sceneWidth, height }}
           loading={modelPicker.loading}
           error={modelPicker.error}
           onSelect={selectModel}
@@ -1566,26 +1603,26 @@ function ChatScene({
       ) : changelogView ? (
         <ChangelogOverlay
           view={changelogView}
-          terminal={{ width, height }}
+          terminal={{ width: sceneWidth, height }}
           onSelect={revertChangelogEntry}
         />
       ) : takesView ? (
         <TakesOverlay
           set={takesView}
-          terminal={{ width, height }}
+          terminal={{ width: sceneWidth, height }}
           onSelect={(candidate) => pickTake(takesView, candidate)}
         />
       ) : inputState.walkbackOpen && walkbackList.length > 0 ? (
         <WalkbackOverlay
           candidates={walkbackList}
-          terminal={{ width, height }}
+          terminal={{ width: sceneWidth, height }}
           onSelect={performWalkback}
         />
       ) : (
-        <CommandHintOverlay commands={commandHints} terminal={{ width, height }} />
+        <CommandHintOverlay commands={commandHints} terminal={{ width: sceneWidth, height }} />
       )}
-      {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width, height }} />}
-      {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width, height }} />}
+      {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width: sceneWidth, height }} />}
+      {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width: sceneWidth, height }} />}
     </box>
     </TuiShell>
   );
@@ -1663,6 +1700,10 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   const hubData = opts.hubData ?? await loadHubData(opts.client, opts.client.agentName);
   const renderOptions: ChatAppOpts = { ...opts, hubData };
   const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
+  // The renderer asks the terminal for its background (OSC 11) as it sets
+  // up. Wait for the answer, bounded by the renderer's own query timeout, so
+  // the first frame already carries the right ink set instead of repainting.
+  await renderer.waitForThemeMode(250);
   const root = createRoot(renderer);
   let currentClient = opts.client;
 

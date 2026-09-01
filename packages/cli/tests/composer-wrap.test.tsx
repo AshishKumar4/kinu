@@ -16,18 +16,18 @@ import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture'
 afterEach(cleanupChats);
 
 /** Rows of the composer box: its top border through its bottom border. The
- *  status bar draws a box too, so the composer is the LAST box on screen —
- *  it sits under the transcript, at the bottom of the scene. */
+ *  composer is the LAST rounded box on screen — it sits under the transcript,
+ *  at the bottom of the scene. */
 function composerBoxRows(frame: string): string[] {
   const lines = frame.split('\n');
   let bottom = -1;
   for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (lines[index]!.startsWith('└')) { bottom = index; break; }
+    if (lines[index]!.startsWith('╰')) { bottom = index; break; }
   }
   if (bottom < 0) throw new Error(`no closed box in frame:\n${frame}`);
   let top = -1;
   for (let index = bottom - 1; index >= 0; index -= 1) {
-    if (lines[index]!.startsWith('┌')) { top = index; break; }
+    if (lines[index]!.startsWith('╭')) { top = index; break; }
   }
   if (top < 0) throw new Error(`composer box never opens in frame:\n${frame}`);
   return lines.slice(top, bottom + 1);
