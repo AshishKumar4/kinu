@@ -1039,6 +1039,17 @@ function r2fsArm(): ConformanceArm {
       unmount: async () => {
         disk.unmount(DEVBOX_WORKDIR);
       },
+      // THIS MACHINE MODELS DURABILITY ACROSS DEATHS, NOT MOUNT REFERENCES.
+      // Nothing here stands in the work directory, so parking is a no-op that
+      // reports where it would have parked, and an ordinary unmount always
+      // succeeds — so the lazy path is never reached from here. The reference
+      // physics that makes both load-bearing is modelled in `r2fs.test.ts`,
+      // whose unmount refuses while the session is on the mount.
+      parkSession: async () => DEVBOX_RUNTIME_DIR,
+      lazyUnmount: async () => {
+        disk.unmount(DEVBOX_WORKDIR);
+        return true;
+      },
       inventory: async () => durable.inventory(`${prefix}/`),
       clearPrefix: async () => durable.deletePrefix(`${prefix}/`),
       // NOTHING IN THIS MACHINE WRITES TO A BARE MOUNTPOINT: `workspace.write`

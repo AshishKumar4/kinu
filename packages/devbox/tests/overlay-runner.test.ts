@@ -55,26 +55,47 @@ describe('the stale bystander rule — an unjournalled path stays detectable', (
     const previous = new Map([['late.txt', signature(1, 'a')]]);
     const scanned = new Map([['late.txt', signature(2, 'b')]]);
     const next = nextScanCache(previous, scanned, new Set(['late.txt']), new Set());
-    expect(next.get('late.txt')?.mtimeMs).toBe(1);
+    expect(next.signatures.get('late.txt')?.mtimeMs).toBe(1);
+    expect(next.changed).toBe(false);
   });
 
   test('a journalled path takes the row the scan just measured', () => {
     const previous = new Map([['done.txt', signature(1, 'a')]]);
     const scanned = new Map([['done.txt', signature(2, 'b')]]);
     const next = nextScanCache(previous, scanned, new Set(), new Set());
-    expect(next.get('done.txt')?.mtimeMs).toBe(2);
+    expect(next.signatures.get('done.txt')?.mtimeMs).toBe(2);
+    expect(next.changed).toBe(true);
   });
 
   test('a tombstoned path loses its row, because it no longer exists to detect', () => {
     const previous = new Map([['gone.txt', signature(1, 'a')]]);
     const next = nextScanCache(previous, new Map(), new Set(), new Set(['gone.txt']));
-    expect(next.has('gone.txt')).toBe(false);
+    expect(next.signatures.has('gone.txt')).toBe(false);
+    expect(next.changed).toBe(true);
   });
 
   test('a path the scan found unchanged survives, so it is not re-read next time', () => {
     const previous = new Map([['stable.txt', signature(1, 'a')]]);
     const next = nextScanCache(previous, new Map(), new Set(), new Set());
-    expect(next.get('stable.txt')?.mtimeMs).toBe(1);
+    expect(next.signatures.get('stable.txt')?.mtimeMs).toBe(1);
+    expect(next.changed).toBe(false);
+  });
+
+  test('A RE-MEASURED ROW IDENTICAL TO THE STORED ONE IS NOT A CHANGE, which is what '
+    + 'keeps an idle tick from writing', () => {
+    // The condition the caller used to infer from entry counts. A scan that
+    // measures the same bytes it measured last time produces the same row, and
+    // storing it again would cost a PUT proportional to the whole upper to
+    // publish bytes already there.
+    const previous = new Map([['same.txt', signature(1, 'a')]]);
+    const scanned = new Map([['same.txt', signature(1, 'a')]]);
+    const next = nextScanCache(previous, scanned, new Set(), new Set());
+    expect(next.changed).toBe(false);
+  });
+
+  test('a tombstone for a path with no row is not a change either', () => {
+    const next = nextScanCache(new Map(), new Map(), new Set(), new Set(['never-cached.txt']));
+    expect(next.changed).toBe(false);
   });
 });
 
@@ -603,6 +624,50 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
       await rm(paths.root, { recursive: true, force: true });
     }
   });
+
+  test('AN IDLE TICK OVER A DELETION STILL WRITES NOTHING, because a whiteout is not news',
+    async () => {
+      // MEASURED LIVE, and the reason the invariant above was not the whole
+      // rule. A whiteout carries no signature, so no cache row can ever satisfy
+      // it and the scan re-emits its `delete` on every pass; `filterChanged`
+      // then drops it, because the pending journal already holds that exact
+      // tombstone. The old condition — "the scan measured more entries than
+      // staging took" — is therefore PERMANENTLY true for any upper holding one
+      // deletion, so the box rewrote its whole scan cache every interval,
+      // forever, storing bytes identical to the ones already there.
+      //
+      // On the deployed 1 MB arm that cost one 25,072 B PUT of 1,975 ms per idle
+      // tick (probe ocs09011400, tick-unchanged). An opaque directory does the
+      // same thing for the same reason: `scanUpper` re-emits it unconditionally.
+      const paths = await fixture('idle-tick-whiteout');
+      try {
+        const stamp = new Date(1_700_000_000_000);
+        for (let at = 0; at < 8; at += 1) {
+          const file = join(paths.upper, `file-${at}.txt`);
+          await writeFile(file, `body-${at}`);
+          await utimes(file, stamp, stamp);
+        }
+        await writeFile(join(paths.upper, '.wh.removed.txt'), '');
+        await mkdir(join(paths.upper, 'shadowed'));
+        await writeFile(join(paths.upper, 'shadowed', '.wh..wh..opq'), '');
+        const first = await runOverlayRunner({
+          operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store),
+        });
+        expect(first.entries).toBe(10);
+
+        const watched = new WatchedCasStore(new FileCasStore(paths.store));
+        const idle = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: watched });
+
+        expect(idle.entries).toBe(0);
+        expect(watched.keys('put')).toEqual([]);
+        expect(idle.movedBytes).toBe(0);
+        // Still authoritative: the eight files and the opaque directory keep
+        // their rows, so the next tick re-digests nothing.
+        expect(Object.keys(await scanCache(paths.store))).toHaveLength(9);
+      } finally {
+        await rm(paths.root, { recursive: true, force: true });
+      }
+    });
 
   test('A LOST SCAN CACHE IS REWRITTEN AND NOTHING IS RE-JOURNALLED', async () => {
     // THE OTHER HALF OF THE CACHE-WRITE RULE, and the case that makes the

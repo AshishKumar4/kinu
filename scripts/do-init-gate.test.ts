@@ -140,16 +140,116 @@ describe('DO init-gate purity — container-start hook', () => {
       .toEqual([expect.stringContaining('must route its work through `withContainerStartDeadline`')]);
   });
 
-  test('`async` is still a violation — it is how an unbounded await gets in', () => {
+  test('`async` is a violation when it holds an await that is not the admitted restore', () => {
+    // `async` is no longer refused outright on this hook — the admitted restore
+    // is held HERE, deliberately — so the wire that must stay live is the one
+    // that refuses every OTHER await by name.
     const widened = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await withContainerStartDeadline('x', 1, () => this.start(), () => {});
+        await this.restoreInStartGate();
+        await this.warmTheCaches();
       }
     }`;
-    expect(reasons(widened)).toEqual([
-      expect.stringContaining('declared `async`'),
-      expect.stringContaining('awaits in its own scope'),
-    ]);
+    const found = reasons(widened);
+    expect(found).toEqual([expect.stringContaining('not on the admitted init-await list')]);
+    expect(found[0]).toContain('warmTheCaches');
+  });
+
+  test('the admitted restore is the container hook\'s one legal await', () => {
+    // The owner's placement, at fixture size: the activation restores the box
+    // inside its own gate, so the platform holds every request behind the
+    // restore instead of this class hoping a promise is joined.
+    const admitted = `export class KinuSandbox extends Sandbox<Env> {
+      override async onStart(): Promise<void> {
+        await this.restoreInStartGate();
+      }
+    }`;
+    expect(reasons(admitted)).toEqual([]);
+  });
+
+  test('the admitted restore inside a loop holds the gate N times, and is refused', () => {
+    // The admission is bounded work owed ONCE at the start of the object's
+    // life. A loop turns the same spelling into unbounded work, so the loop is
+    // named rather than the call.
+    const looping = `export class KinuSandbox extends Sandbox<Env> {
+      async onStart(): Promise<void> {
+        for (const _ of this.generations()) {
+          await this.restoreInStartGate();
+        }
+      }
+    }`;
+    expect(reasons(looping))
+      .toEqual([expect.stringContaining('inside a loop')]);
+  });
+
+  test('the admitted restore may not also claim a timer bound — it cannot fire here', () => {
+    const papered = `export class KinuSandbox extends Sandbox<Env> {
+      async onStart(): Promise<void> {
+        await this.restoreInStartGate();
+        void withContainerStartDeadline('x', 1, () => this.start(), () => {});
+      }
+    }`;
+    expect(reasons(papered))
+      .toEqual([expect.stringContaining('also routes through `withContainerStartDeadline`')]);
+  });
+
+  test('the admitted restore may not claim to be storage-only — it reaches the container', () => {
+    const mismarked = `export class KinuSandbox extends Sandbox<Env> {
+      async onStart(): Promise<void> {
+        void BOUNDED_STORAGE_ONLY;
+        await this.restoreInStartGate();
+      }
+    }`;
+    expect(reasons(mismarked))
+      .toEqual([expect.stringContaining('the marker is claiming something false')]);
+  });
+
+  test('the pinned restore may not sleep on a Durable Object timer', () => {
+    // THE WEDGE, and it is the reason this second pin exists. A timer inside
+    // `blockConcurrencyWhile` is not delivered until the block releases, so a
+    // sleep on this path does not slow the restore — it holds the gate until the
+    // platform cancels it and RESETS the object.
+    const sleeping = `export class KinuSandbox extends Sandbox<Env> {
+      async onStart(): Promise<void> {
+        await this.restoreInStartGate();
+      }
+      async restoreInStartGate(): Promise<void> {
+        while (!this.attached) await scheduler.wait(100);
+      }
+    }`;
+    const found = reasons(sleeping);
+    expect(found).toEqual([expect.stringContaining('WEDGES the activation')]);
+    expect(found[0]).toContain('scheduler.wait'.split('.')[1]);
+  });
+
+  test('a timer inside a function the pinned restore SPAWNS is refused too', () => {
+    // The timer scan descends into nested functions on purpose — the opposite
+    // trade from the await scan. A detached task cannot extend the gate, but a
+    // timer it schedules is still one the runtime cannot deliver while the gate
+    // is held.
+    const nested = `export class KinuSandbox extends Sandbox<Env> {
+      async onStart(): Promise<void> {
+        await this.restoreInStartGate();
+      }
+      async restoreInStartGate(): Promise<void> {
+        await this.attach(async () => { await scheduler.wait(50); });
+      }
+    }`;
+    expect(reasons(nested))
+      .toEqual([expect.stringContaining('WEDGES the activation')]);
+  });
+
+  test('the pinned restore may not carry the paper bound either', () => {
+    const wrapped = `export class KinuSandbox extends Sandbox<Env> {
+      async onStart(): Promise<void> {
+        await this.restoreInStartGate();
+      }
+      async restoreInStartGate(): Promise<void> {
+        await withContainerStartDeadline('x', 1, () => this.attach(), () => {});
+      }
+    }`;
+    expect(reasons(wrapped))
+      .toEqual([expect.stringContaining('Poll the budget instead')]);
   });
 
   test('the narrowing is keyed on the base class, not on the file or the name', () => {
@@ -617,48 +717,84 @@ export class A extends Agent {
     expect(violations[0]!.reason).toContain('not on the admitted init-await list');
   });
 
-  test('cut the wire: unbounding the real container hook goes red', () => {
-    // The per-start arming is plainly bounded storage work, so the hook carries
-    // the marker instead of a wrapper. Strip the marker against the real file
-    // and the gate must demand one of the two bounds.
-    const file = 'packages/devbox/src/devbox.ts';
-    const real = SOURCES.get(file);
-    expect(real).toBeDefined();
-
-    const unmarked = real!.replace('    void BOUNDED_STORAGE_ONLY;\n', '');
-    expect(unmarked).not.toBe(real);
-    const { violations } = auditFile(file, unmarked);
-    expect(violations.map((v) => v.owner)).toEqual(['Devbox']);
-    expect(violations[0]!.reason).toContain('must route its work through');
+  test('the real tree declares the pinned in-gate restore', () => {
+    // The other half of the container-start rule, and the same argument the
+    // classifier pin makes: an admitted await pinned to a name nothing declares
+    // admits a call that cannot happen, and leaves the gate reading green while
+    // nothing about the restore was checked at all.
+    expect(audit(SOURCES).restore).toEqual({
+      file: 'packages/devbox/src/devbox.ts',
+      line: expect.any(Number),
+      deadlineWrapped: false,
+      timers: [],
+    });
   });
 
-  test('cut the wire: wrapping the real container hook goes red from the marker side', () => {
-    // The marker is not a licence to skip the wrapper — it is the REASON the
-    // wrapper is wrong. A wrapper around work the marker vouches for claims a
-    // bound whose timer cannot fire inside the gate, which is the paper bound
-    // this gate exists to prevent, and the gate says so.
+  test('cut the wire: renaming the real admitted restore goes red by name', () => {
+    // The admission is by SPELLING, so the wire to cut is the spelling. A hook
+    // that awaits some other restore is holding the gate on work nobody
+    // admitted, and the gate says which call it was.
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     expect(real).toBeDefined();
 
-    const wrapped = real!.replace(
-      '    return this.#armContainerSchedules();',
-      '    return withContainerStartDeadline(\'x\', 1, () => this.#armContainerSchedules(), () => {});',
+    const renamed = real!.replace(
+      '    await this.restoreInStartGate();',
+      '    await this.restoreEverythingNow();',
     );
-    expect(wrapped).not.toBe(real);
-    const { violations } = auditFile(file, wrapped);
+    expect(renamed).not.toBe(real);
+    const { violations } = auditFile(file, renamed);
     expect(violations.map((v) => v.owner)).toEqual(['Devbox']);
-    expect(violations[0]!.reason).toContain('yet routes through');
+    expect(violations[0]!.reason).toContain('not on the admitted init-await list');
   });
 
-  test('cut the wire: detaching the real container hook goes red', () => {
+  test('cut the wire: a Durable Object sleep in the real restore goes red', () => {
+    // THE WEDGE, against the shipped file. This is the one defect that turns the
+    // owner's placement from a bound into a reset loop, so it is cut here and
+    // not only at fixture size.
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
-    const detached = real!.replace('onStart(): Promise<void> {', 'onStart(): void {');
+    const slept = real!.replace(
+      '    await this.#armContainerSchedules();',
+      '    await this.#armContainerSchedules();\n    await scheduler.wait(100);',
+    );
+    expect(slept).not.toBe(real);
+    const { violations } = auditFile(file, slept);
+    expect(violations.map((v) => v.member)).toEqual(['restoreInStartGate']);
+    expect(violations[0]!.reason).toContain('WEDGES the activation');
+  });
+
+  test('cut the wire: a paper bound inside the real restore goes red', () => {
+    const file = 'packages/devbox/src/devbox.ts';
+    const real = SOURCES.get(file);
+    const papered = real!.replace(
+      '      await this.#restoreNow(generation, gateRestoreSteps(budget));',
+      '      await withContainerStartDeadline(\'x\', budget, () => this.#restoreNow(generation, gateRestoreSteps(budget)), () => {});',
+    );
+    expect(papered).not.toBe(real);
+    const { violations } = auditFile(file, papered);
+    expect(violations.map((v) => v.member)).toEqual(['restoreInStartGate']);
+    expect(violations[0]!.reason).toContain('Poll the budget instead');
+  });
+
+  test('cut the wire: detaching the real container hook goes red twice', () => {
+    // TWO refusals, and both are the point. Detaching loses the annotation the
+    // gate requires — and it also drops the hook out of the admitted-async
+    // population, so the older rule wakes up and demands one of the bounds it
+    // knows about. A detached restore is not merely unannotated; it is
+    // unbounded work nobody is waiting for.
+    const file = 'packages/devbox/src/devbox.ts';
+    const real = SOURCES.get(file);
+    const detached = real!.replace(
+      '  override async onStart(): Promise<void> {\n    await this.restoreInStartGate();',
+      '  override onStart(): void {\n    void this.restoreInStartGate();',
+    );
     expect(detached).not.toBe(real);
     const { violations } = auditFile(file, detached);
-    expect(violations.map((v) => v.reason))
-      .toEqual([expect.stringContaining('must annotate `: Promise<void>`')]);
+    expect(violations.map((v) => v.reason)).toEqual([
+      expect.stringContaining('must annotate `: Promise<void>`'),
+      expect.stringContaining('must route its work through'),
+    ]);
   });
 
   test('cut the wire: re-inlining the real terminal replay in the recovery hook goes red', () => {

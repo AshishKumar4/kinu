@@ -195,7 +195,12 @@ describe('G0-G9 storage run admission', () => {
     expect(() => requireAdmitted(verdict)).toThrow('RECOMMENDATION REFUSED');
   });
 
-  test('a control whose cells OBSERVED every preregistered witness satisfies G2', () => {
+  test('an arm whose cells OBSERVED every preregistered witness satisfies G2 and still ranks', () => {
+    // THE RULING THIS PINS. A preregistered defect is a MEASURED COST, so an arm
+    // that reproduced all of its own is admitted AND rank-eligible. It used to
+    // be neither: `devboxArmEvidence` marked these three `kind: 'control'` with
+    // `rankEligible: false`, and G2 would have refused any attempt to rank them.
+    //
     // The repair the witness cells exist for: the expectations are unchanged and
     // the observation now happens, so a control that failed as predicted stops
     // refusing the run it was meant to validate.
@@ -216,6 +221,9 @@ describe('G0-G9 storage run admission', () => {
     const g2 = evaluateRun(record).gates.find((row) => row.gate === 'G2');
     expect(g2?.reasons).toEqual([]);
     expect(g2?.ok).toBe(true);
+    for (const strategy of ['snapshot-chain', 'r2fs', 'overlay-cas'] as const) {
+      expect(observed(strategy).rankEligible).toBe(true);
+    }
   });
 
   test('one witness that vanished still refuses, with the others observed', () => {

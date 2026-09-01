@@ -55,19 +55,23 @@ export interface RunProvenance {
 
 export type ArmKind = 'calibration' | 'control' | 'candidate';
 
-/** Per-arm evidence for G1 and G2. Red controls carry the exact witnesses they
- *  are REQUIRED to produce; candidates must be clean on every check. */
+/** Per-arm evidence for G1 and G2. An arm carries the exact red witnesses it is
+ *  REQUIRED to reproduce, whether or not it competes. */
 export interface ArmEvidence {
   readonly arm: string;
-  /** What the arm is FOR. Only `candidate` arms enter G3/G5 evaluation or a
-   *  recommendation; controls and calibrations prove the instrument. */
+  /** What the arm is FOR. A `candidate` competes: it enters G3/G5 evaluation
+   *  and the ranking. A `control` or `calibration` measures the instrument or
+   *  the bare machine — the layout benchmark's native disk — and never ranks
+   *  because it is not a strategy, NOT because of the defects it carries. */
   readonly kind: ArmKind;
   /** Whether this arm's numbers may be ranked. Must be false for every
    *  non-candidate kind. */
   readonly rankEligible: boolean;
-  /** The red witnesses this control MUST produce, preregistered before the
-   *  run: e.g. overlay-cas's unbounded restore claim, r2fs's known semantic
-   *  gaps. Empty for clean controls and candidates. */
+  /** The red witnesses this arm MUST produce, preregistered before the run:
+   *  e.g. overlay-cas's unbounded restore claim, r2fs's known semantic gaps.
+   *  Empty for an arm with no preregistered defect. These are MEASURED COSTS
+   *  reproduced to prove the instrument still sees them; a competing arm may
+   *  carry them and still win on its numbers. */
   readonly expectedRedChecks: readonly string[];
   /** The checks that actually failed on this arm. */
   readonly observedRedChecks: readonly string[];
@@ -299,13 +303,19 @@ function censorProblems(scored: readonly ScoredCell[]): string[] {
 function semanticsProblems(record: StorageRunRecord): string[] {
   const problems: string[] = [];
   for (const arm of record.arms) {
+    // WITNESSES ARE JUDGED ON EVERY ARM, whatever its rank eligibility. This
+    // used to run only on the non-candidate branch, so an instrument that made
+    // its arms rank-eligible silently stopped checking that their preregistered
+    // defects still reproduced. Preregistration is a drift detector; it is not
+    // a statement about who may win, and the two must not be wired together.
+    problems.push(...witnessProblems(arm));
     if (arm.kind !== 'candidate') {
-      // Controls and calibrations never rank, so a rankEligible flag on one is
-      // an instrument error regardless of how its checks came out.
+      // A calibration reference — the layout benchmark's native disk — measures
+      // the machine rather than a strategy, so a rankEligible flag on one is an
+      // instrument error regardless of how its checks came out.
       if (arm.rankEligible) {
         problems.push(`arm \`${arm.arm}\` is a ${arm.kind} but is marked rank-eligible`);
       }
-      problems.push(...witnessProblems(arm));
       continue;
     }
     if (arm.producedMeasurements && !arm.semanticsPassed) {
@@ -313,17 +323,20 @@ function semanticsProblems(record: StorageRunRecord): string[] {
         + ` (${arm.failedChecks.slice(0, 5).join(', ')})`);
     }
     if (!arm.rankEligible) {
-      problems.push(`candidate arm \`${arm.arm}\` is marked rank-ineligible`);
+      problems.push(`competing arm \`${arm.arm}\` is marked rank-ineligible`);
     }
   }
   return problems;
 }
 
 /**
- * A red control must produce EXACTLY its preregistered witnesses. An observed
- * failure nobody predicted means the instrument found something new; a missing
- * witness means the defect the control exists to catch has silently
+ * An arm must produce EXACTLY its preregistered witnesses. An observed failure
+ * nobody predicted means the instrument found something new; a missing witness
+ * means the defect the preregistration exists to catch has silently
  * disappeared. Both are instrument drift and both refuse the run.
+ *
+ * What this never does is rank. A witness is a MEASURED COST attached to the
+ * arm that carries it, and an arm carrying one still competes on its numbers.
  */
 function witnessProblems(arm: ArmEvidence): string[] {
   const expected = new Set(arm.expectedRedChecks);
@@ -331,13 +344,13 @@ function witnessProblems(arm: ArmEvidence): string[] {
   const problems: string[] = [];
   for (const name of arm.observedRedChecks) {
     if (!expected.has(name)) {
-      problems.push(`control \`${arm.arm}\` failed unexpected check "${name}" not in its preregistered witnesses`);
+      problems.push(`arm \`${arm.arm}\` failed unexpected check "${name}" not in its preregistered witnesses`);
     }
   }
   for (const name of arm.expectedRedChecks) {
     if (!observed.has(name)) {
       problems.push(
-        `control \`${arm.arm}\` did NOT produce its expected red witness "${name}": `
+        `arm \`${arm.arm}\` did NOT produce its expected red witness "${name}": `
         + 'an expected failure that vanished is instrument drift',
       );
     }
@@ -617,8 +630,15 @@ function armFromLayout(layout: RunArtifact['layouts'][number]): ArmEvidence {
     arm: layout.id,
     kind: layout.id === NATIVE_CONTROL ? 'control' : 'candidate',
     rankEligible: layout.id !== NATIVE_CONTROL,
+    // THE LAYOUT BENCHMARK PREREGISTERS NO WITNESSES, so it observes none. A
+    // mount refusal is a FAILED CHECK — it is already in `failedChecks`, and it
+    // is what makes this arm unattached and its semantics unproven — never an
+    // "observed red witness", which means "a defect predicted before the run
+    // showed up where it was predicted". Recording it in both places made
+    // `witnessProblems` see an unpredicted red on an arm whose instrument has
+    // no predictions to check it against.
     expectedRedChecks: [],
-    observedRedChecks: layout.mountError === null ? [] : [`mount refused: ${layout.mountError}`],
+    observedRedChecks: [],
     attachedVerified: layout.id === NATIVE_CONTROL || layout.mountError === null,
     semanticsPassed,
     failedChecks: failed,

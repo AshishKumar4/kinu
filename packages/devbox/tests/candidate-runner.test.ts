@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 
@@ -1112,6 +1112,59 @@ describe('a merkle restore walks the tree in parallel', () => {
       expect(store.barrier.widest).toBeGreaterThanOrEqual(4);
       expect(store.barrier.widest).toBeLessThanOrEqual(12);
       expect(await readFile(join(place.workspace, 'empty-23.bin'))).toEqual(Buffer.alloc(0));
+    } finally {
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('a tree with NO files restores, rather than a pool waiting on zero work', async () => {
+    // THE HYPOTHESIS THIS RETIRES. When merkle-pack cold attach hung at its
+    // 25,000 ms ceiling in `e2e20260901140445`, the first suspicion was this
+    // walk's materialization pool spinning up zero workers and never
+    // resolving. It does not: the pool is sized `min(width, queued.length)`,
+    // so an empty queue makes `Promise.all([])`, and the phase notes below
+    // prove the walk ran and reached its end with no file in it.
+    //
+    // Worth a test rather than a reading, because "restores nothing" is a real
+    // shape — a checkpoint of a tree that holds only directories — and it is
+    // the one shape every other test in this file lacks.
+    const place = paths('merkle-no-files');
+    try {
+      await mkdir(place.workspace, { recursive: true });
+      const host = new Host('box-merkle-no-files', place.store);
+      const journal = new MutationLog();
+      await journal.perform({ op: 'mkdir', path: 'pkg' });
+      await journal.perform({ op: 'mkdir', path: 'pkg/nested' });
+      await checkpoint(host, 'merkle-pack', place, journal, 'merkle-no-files');
+      const head = (await host.restoreControl()).head;
+      if (head === null) throw new Error('the published file-less head did not come back');
+
+      const store = new HoldingStore(place.store, 1);
+      const manifestBytes = await store.readRange({
+        operationId: 'restore-no-files', attemptId: '1', boxId: 'box-merkle-no-files',
+        epoch: head.envelope.epoch, exactKey: head.envelope.rootObject.key, method: 'GET',
+        byteOffset: '0', byteLength: head.envelope.rootObject.byteLength,
+        sha256: head.envelope.rootObject.sha256, expiresAt: String(Date.now() + 60_000),
+      });
+      const view = await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, {
+        operationId: 'restore-no-files', attemptId: '1', boxId: 'box-merkle-no-files',
+        epoch: head.envelope.epoch, expiresAt: String(Date.now() + 60_000),
+      });
+      await rm(place.workspace, { recursive: true, force: true });
+      await mkdir(place.workspace, { recursive: true });
+      const root = new BeneathRoot(place.workspace);
+      const notes: string[] = [];
+      try {
+        await restoreMerkleTree(view, root, notes);
+      } finally {
+        root.close();
+      }
+
+      expect(notes.join(', ')).toMatch(/tree walk \(2 dirs, 0 files, 0 links\) \d+ ms/);
+      // The LAST phase is the one that proves it got past the pool: a walk that
+      // parked in materialization would never append this note at all.
+      expect(notes.join(', ')).toMatch(/data \(0 bytes\) \d+ ms, directory metadata \d+ ms/);
+      expect(await readdir(join(place.workspace, 'pkg'))).toEqual(['nested']);
     } finally {
       await rm(join(place.workspace, '..'), { recursive: true, force: true });
     }

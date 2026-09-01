@@ -14,6 +14,19 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- **The overlay-cas runner can say where a run went: `--profile stderr`.** One
+  `[profile]` line per phase carrying the wall time, the store's own counter
+  delta for that phase, and whatever else the phase counted — paths walked,
+  files re-digested, tree writes. Milliseconds alone cannot tell a phase that
+  spent a minute on two thousand FUSE round trips from one that spent a minute
+  moving a gigabyte, and on a mount whose per-operation latency is a second that
+  is the only distinction worth having. It goes to stderr because stdout carries
+  the receipt and exactly one line of it. Off unless asked for: a production run
+  passes no sink, pays one branch per phase and allocates nothing.
+
+  It is what eliminated the strategy. See the measurement in the header of
+  `packages/devbox/src/overlay-cas.ts`.
+
 - **`@kinu.run/devbox`: an ephemeral Cloudflare container presented as a machine
   that stays.** A container is spot capacity, so the platform can reclaim it
   between two calls and the disk comes back blank. The package makes that look
@@ -501,6 +514,30 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   `ideate` returns its candidates unordered.
 
 ### Fixed
+
+- **An idle overlay-cas box no longer rewrites its whole scan cache every
+  interval.** The runner wrote `scan.json` whenever staging took fewer entries
+  than the scan measured, as a stand-in for "some cached row is now stale". That
+  stand-in is PERMANENTLY true for any upper holding one deleted file or one
+  opaque directory: `scanUpper` re-emits a whiteout's `delete` and an opaque
+  directory's entry on every single pass — neither can ever be satisfied by a
+  cached row — and `filterChanged` then drops both, because the pending journal
+  already holds them. So a box sitting still republished one row per path in its
+  workspace, forever, to store bytes identical to the ones already there. The
+  documented invariant said it wrote nothing at all; on a deployed 1 MB arm it
+  wrote 25,072 B and spent 1,975 ms doing it, every tick.
+
+  The write was not the whole damage. A receipt reporting `entries: 0` with
+  nonzero `movedBytes` is deliberately NOT a skip — the adapter reads that pair
+  as a real commit, because it is how a redrive whose journal batch already
+  landed reports itself. So a box holding one deleted file and doing nothing
+  else answered `committed` on every tick and advanced `lastCheckpointAt` each
+  time, and `work directory is unchanged` was unreachable for it. The skip that
+  branch exists to report now happens.
+
+  `nextScanCache` now reports whether any row actually changed and that answer
+  is the write condition, so the rule is decided where the rows are built
+  instead of inferred from a count of entries at the call site.
 
 - **A workspace's title is no longer generated from the Durable Object's init
   path.** `OrchestratorAgent.onStart` spawned a fire-and-forget task that read the

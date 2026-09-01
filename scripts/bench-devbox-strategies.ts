@@ -43,7 +43,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -56,8 +56,8 @@ import { AwsClient } from 'aws4fetch';
 import { summarize, type Summary } from './fixtures/r2-bench/stats';
 import { parseProbeRun, type ProbeRun } from './fixtures/r2-bench/report';
 import {
-  R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, decide, opsAreBlind, sqliteFinding,
-  totalsFor, type DecisionVerdict, type TickRecord,
+  R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, RULE_WORKLOADS, decide, opsAreBlind,
+  sqliteFinding, totalsFor, type DecisionVerdict, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import {
   R2_OP_VOCABULARY, cleanupEvidenceFromReport, evaluateRun, expectedCells, findCredentialLeaks,
@@ -67,8 +67,9 @@ import {
 } from './fixtures/storage-matrix/admission';
 import type { MeasuredCell, StageId } from './fixtures/storage-matrix/protocol';
 import {
-  checkCleanup, createManifest, replayTeardown, writeManifest,
-  type CleanupProbes, type CleanupReport, type DeleteOutcome,
+  checkCleanup, createManifest, recoverAbandonedRuns, replayTeardown, writeManifest,
+  type CleanupProbes, type CleanupReport, type DeleteOutcome, type TeardownEntry,
+  type TeardownManifest,
 } from './fixtures/storage-matrix/cleanup';
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
@@ -98,7 +99,12 @@ interface ChainGeneration {
 interface AttachOutcome { kind: string; detail: string }
 
 interface StartupState {
-  restoration?: 'unstarted' | 'attached' | 'unattached';
+  /** The box's own name for where its restoration stands. FIVE values, because
+   *  two used to be conflated: `restoring` is an attempt IN FLIGHT (which
+   *  `unstarted` used to be reported as, for its whole duration), and `repair`
+   *  is attached-but-degraded (which `attached` used to be reported as). A
+   *  driver that cannot tell those apart cannot attribute a ceiling. */
+  restoration?: 'unstarted' | 'restoring' | 'attached' | 'repair' | 'unattached';
   /** Is the container up? A stopped container has NOTHING in flight for a
    * later poll to observe: `/state` re-arms a startup row and deliberately
    * never drives the restoration inline, while every real operation drives it
@@ -139,7 +145,9 @@ const StateReplySchema: v.GenericSchema<StateReply> = v.looseObject({
   extractionAllowed: v.optional(v.boolean()),
   storePrefix: v.optional(v.string()),
   state: v.optional(v.looseObject({
-    restoration: v.optional(v.picklist(['unstarted', 'attached', 'unattached'])),
+    restoration: v.optional(
+      v.picklist(['unstarted', 'restoring', 'attached', 'repair', 'unattached']),
+    ),
     running: v.optional(v.boolean()),
     unready: v.optional(v.string()),
     lastAttach: v.optional(v.looseObject({ kind: v.string(), detail: v.string() })),
@@ -163,6 +171,11 @@ export type StartupPollVerdict =
    *  no scheduled work exists for a later poll to observe. */
   | { readonly kind: 'stopped'; readonly detail: string }
   | { readonly kind: 'attached'; readonly attach: AttachOutcome }
+  /** Attached, and NAMING what did not come back. Its own verdict because an
+   *  arm that reports this passed its attach and failed its restoration, and
+   *  collapsing it into `attached` is how a box that publishes no working URL
+   *  reads as a success. */
+  | { readonly kind: 'repair'; readonly attach: AttachOutcome; readonly incomplete: string }
   | { readonly kind: 'failed'; readonly reason: string };
 
 /** The durable attach record belongs to a restoration only after that
@@ -184,6 +197,13 @@ export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
   }
   if (state?.restoration === 'attached' && state.lastAttach !== undefined) {
     return { kind: 'attached', attach: state.lastAttach };
+  }
+  if (state?.restoration === 'repair' && state.lastAttach !== undefined) {
+    return {
+      kind: 'repair',
+      attach: state.lastAttach,
+      incomplete: state.unready ?? 'the box named no incompleteness',
+    };
   }
   if (state?.running === false && state.restoration === 'unstarted') {
     return {
@@ -337,6 +357,10 @@ export interface ArmFixture extends FixtureNames {
  */
 export interface FixtureResources {
   readonly arms: readonly ArmFixture[];
+  /** The teardown manifest for this run, written to disk before the first of
+   *  these resources was created. Carried here so no caller can deploy a
+   *  fixture whose resources nothing durable has recorded. */
+  readonly manifest: TeardownManifest;
   readonly digests: FixtureImageDigests;
   readonly configDir: string;
   disposeConfig(): void;
@@ -383,6 +407,19 @@ export function resourceNames(runId: string, arm: Strategy): FixtureNames {
     bucket: worker,
     containerApps: [`${worker}-${FIXTURE_CLASS_BY_STRATEGY[arm].toLowerCase()}`],
   };
+}
+
+/**
+ * The box one arm measures in, named once.
+ *
+ * The formula was written out five times in this file, and the teardown
+ * manifest names the box as a durable-state resource, so a sixth copy in the
+ * manifest builder would be a copy that can drift from the box the run
+ * actually raised — a manifest naming durable state nobody created, and real
+ * durable state nobody deletes.
+ */
+export function boxName(runId: string, arm: Strategy): string {
+  return `ab-${arm}-${runId}`;
 }
 
 /**
@@ -460,11 +497,61 @@ export function fixtureConfigForArms(
   }, null, 2)}\n`;
 }
 
+/**
+ * Plan every resource this run will own, BEFORE any of them exists.
+ *
+ * Derived entirely from `runId` and the arms, which is what makes it possible
+ * to write it first: nothing here needs a resource to have been created in
+ * order to be named. ONE COMPLETE SET PER ARM, so an interrupted run deletes
+ * each arm's Worker, container application and bucket on its own evidence
+ * rather than as one shared lump.
+ */
+export function plannedTeardownManifest(
+  runId: string,
+  arms: readonly Strategy[],
+  configDir: string,
+): TeardownManifest {
+  return createManifest(runId, [
+    ...arms.flatMap((strategy) => {
+      const names = resourceNames(runId, strategy);
+      const box = boxName(runId, strategy);
+      return [
+        { kind: 'worker' as const, name: names.worker, detail: `${strategy} fixture Worker` },
+        ...names.containerApps.map((name) => ({
+          kind: 'container-app' as const, name, detail: `${strategy} container application`,
+        })),
+        { kind: 'r2-bucket' as const, name: names.bucket, detail: `dedicated ${strategy} bucket` },
+        { kind: 'do-state' as const, name: box, detail: 'per-arm durable box state' },
+        { kind: 'alarm' as const, name: box, detail: 'per-arm durable alarm' },
+        { kind: 'mount' as const, name: box, detail: 'per-arm mounted workspace' },
+      ];
+    }),
+    { kind: 'local-path', name: configDir, detail: 'generated Wrangler config directory' },
+  ]);
+}
+
 export async function createFixtureResources(
   runId: string,
   arms: readonly Strategy[],
 ): Promise<FixtureResources> {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-devbox-bench-'));
+  // THE MANIFEST IS THE FIRST THING THAT EXISTS, before the config directory
+  // and long before a deploy.
+  //
+  // WHAT THIS FIXES. The manifest used to be built by `main` from the fixtures
+  // this function returns, so the window between "resources are named" and
+  // "the list of them is durable" spanned two bundle builds, a Dockerfile
+  // render and every per-arm config write. A driver killed inside that window
+  // — or one that threw out of a failed bundle — left a temp directory and a
+  // run id with no record anywhere that either had ever been planned.
+  //
+  // The build directory is DERIVED from the run id rather than `mkdtemp`'s
+  // random suffix, because a name nobody can predict cannot be written down
+  // before it is created, and an unnamed directory is one the next driver
+  // cannot sweep.
+  const dir = join(tmpdir(), `kinu-devbox-bench-${runId}`);
+  const manifest = plannedTeardownManifest(runId, arms, dir);
+  writeManifest(REPO_ROOT, manifest);
+  mkdirSync(dir, { recursive: true });
   const bundlePath = join(dir, 'candidate-runner.bundle.mjs');
   const overlayBundlePath = join(dir, 'overlay-cas-runner.bundle.mjs');
   const dockerfilePath = join(dir, 'candidate-runner.Dockerfile');
@@ -508,6 +595,7 @@ export async function createFixtureResources(
     `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
   return {
     arms: armFixtures,
+    manifest,
     configDir: dir,
     digests: {
       imageSha256: SANDBOX_IMAGE_DIGEST,
@@ -591,7 +679,7 @@ const PROCESS_DEADLINE_MS = 1_500_000;
  *
  * Every arm is measured by the same driver against the same workloads and the
  * same routes. Nothing below this line knows which arm it is running, which is
- * what makes a three-way comparison the same experiment as a two-way one.
+ * what makes a five-way comparison the same experiment as a two-way one.
  */
 export type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas' | 'bounded-layers' | 'merkle-pack';
 export const STRATEGIES: readonly Strategy[] = [
@@ -602,9 +690,31 @@ export const STRATEGIES: readonly Strategy[] = [
   'merkle-pack',
 ];
 
-const CANDIDATE_STRATEGIES = ['bounded-layers', 'merkle-pack'] as const satisfies readonly Strategy[];
-const CONTROL_STRATEGIES = ['snapshot-chain', 'r2fs', 'overlay-cas'] as const satisfies readonly Strategy[];
-type ControlStrategy = (typeof CONTROL_STRATEGIES)[number];
+/**
+ * The arm production actually runs, and therefore the one every other strategy
+ * has to beat in order to replace it.
+ *
+ * THE TAXONOMY THIS REPLACES. The instrument used to split the arms into
+ * `CANDIDATE_STRATEGIES = {bounded-layers, merkle-pack}` and
+ * `CONTROL_STRATEGIES = {snapshot-chain, r2fs, overlay-cas}`, and only a
+ * candidate could be ranked: `devboxArmEvidence` marked the other three
+ * rank-INELIGIBLE, and the decision pairs did not contain `r2fs` at all. A
+ * shipped arm that beat both candidates on every workload therefore could not
+ * be reported as the winner, and one arm could not be compared at all. That is
+ * a conclusion written into the instrument rather than measured by it.
+ *
+ * The ruling this encodes instead: every strategy competes against the
+ * incumbent, on the same admission gates and the same decisive workloads. A
+ * strategy's preregistered defects are MEASURED COSTS carried beside its
+ * numbers (see `PREREGISTERED_WITNESSES`), never a filter that removes it from
+ * the ranking before its numbers are read.
+ */
+export const INCUMBENT = 'snapshot-chain' as const satisfies Strategy;
+
+/** Every arm that must beat the incumbent to become the default. DERIVED from
+ *  `STRATEGIES`, so an arm added above competes without this line being
+ *  edited — a stale copy here is how `r2fs` came to be uncomparable. */
+export const CHALLENGERS: readonly Strategy[] = STRATEGIES.filter((arm) => arm !== INCUMBENT);
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 
 interface FrozenControlArtifact {
@@ -706,7 +816,7 @@ export const FROZEN_CONTROL_LABEL = {
 } as const satisfies Record<FrozenControlStatus, string>;
 
 export interface FrozenControl {
-  readonly strategy: ControlStrategy;
+  readonly strategy: Strategy;
   readonly artifact: string;
   readonly sha256: string;
   readonly date: string;
@@ -793,9 +903,11 @@ export function frozenControlStatus(
 }
 
 /** Decode one supplied historical artifact as context. The source artifact
- * establishes the provenance and digest recorded in the new report. */
+ * establishes the provenance and digest recorded in the new report. ANY
+ * strategy may be supplied frozen: "frozen" describes where the numbers came
+ * from — a previous run, not this one — and never which arms may win. */
 export function parseFrozenControlArtifact(
-  strategy: ControlStrategy,
+  strategy: Strategy,
   path: string,
   text: string,
 ): FrozenControl {
@@ -839,7 +951,7 @@ export function parseFrozenControlArtifact(
 }
 
 export interface ControlOption {
-  readonly strategy: ControlStrategy;
+  readonly strategy: Strategy;
   readonly path: string;
 }
 
@@ -857,10 +969,9 @@ export interface Options {
   /** Run durability verification and cleanup, without performance workloads. */
   verifyOnly: boolean;
   plan: boolean;
-  /** Schema-validated historical context. These paths never affect current-arm ranking. */
+  /** Schema-validated historical context from previous runs. These paths never
+   *  affect current-arm ranking. */
   controls: readonly ControlOption[];
-  /** Run only the candidates. Supplied controls remain report context only. */
-  candidatesOnly: boolean;
   /** Arms to run, from `--arms a,b`. Defaults to all five; an unknown name
    *  refuses rather than measuring an empty run. */
   arms: readonly Strategy[];
@@ -887,38 +998,10 @@ export interface Options {
  */
 const armLogContext = new AsyncLocalStorage<Strategy>();
 
-/** How much of an arm's own log a durable artifact carries. Bounded, because
- *  the artifact is a diagnosis aid, not a log archive: the last lines before a
- *  wedge are the ones that name it, and everything before them is noise a
- *  reader would page past anyway. */
-const ARM_LOG_TAIL_LINES = 80;
-
-const armLogTails = new Map<Strategy, string[]>();
-
 const log = (message: string): void => {
   const arm = armLogContext.getStore();
   process.stderr.write(`[devbox-bench${arm === undefined ? '' : `:${arm}`}] ${message}\n`);
-  if (arm === undefined) return;
-  const tail = armLogTails.get(arm) ?? [];
-  tail.push(message);
-  if (tail.length > ARM_LOG_TAIL_LINES) tail.splice(0, tail.length - ARM_LOG_TAIL_LINES);
-  armLogTails.set(arm, tail);
 };
-
-/** This arm's own log tail, as a durable artifact records it. */
-export const armLogTail = (arm: Strategy): readonly string[] => [...(armLogTails.get(arm) ?? [])];
-
-/** Everything the driver said about every arm, reset for the next run. */
-export const resetArmLogs = (): void => { armLogTails.clear(); };
-
-/** Run `work` in one arm's log context, so everything the shared transport says
- *  inside it is attributed — and mirrored — to that arm. Exported because the
- *  lifecycle suite drives arms through its own lanes rather than through
- *  `runArmsInFlight`, and an arm whose lines nobody attributes has no tail for
- *  its durable artifact to carry. */
-export function underArmLog<T>(arm: Strategy, work: () => T): T {
-  return armLogContext.run(arm, work);
-}
 
 
 /** Valibot's own field-level words for a payload that missed its contract. What
@@ -2638,13 +2721,18 @@ async function runDecisive(
   return { ticks, treeBytes, notes };
 }
 
-// ── the control witness cells ───────────────────────────────────────────────
+// ── the preregistered witness cells ─────────────────────────────────────────
 //
-// The three shipped strategies are MANDATORY HISTORICAL CONTROLS, never
-// production winners. Each preregisters the red witnesses its own documented
-// defects must produce, and G2 refuses a run on either drift: a witness nobody
-// observed (the defect went away, or the cell could not run) and an observed
-// failure nobody predicted.
+// Three of the arms ship today and each has documented defects. Each of those
+// arms preregisters the red witnesses its defects must produce, and G2 refuses
+// a run on either drift: a witness nobody observed (the defect went away, or
+// the cell could not run) and an observed failure nobody predicted.
+//
+// A WITNESS PRICES AN ARM; IT DOES NOT DISQUALIFY ONE. The header here used to
+// read "MANDATORY HISTORICAL CONTROLS, never production winners", and the rest
+// of the instrument believed it: those three arms were marked rank-ineligible
+// and could not be recommended whatever they measured. They compete now, and
+// what these cells buy is a measured cost to weigh against their numbers.
 //
 // WHY THESE CELLS EXIST AT ALL. `observedRedChecks` was hardcoded `[]`, so every
 // run carrying a control was refused for eight witnesses that nothing had ever
@@ -2661,7 +2749,7 @@ async function runDecisive(
 // r2fs open-write holder, which must exist BEFORE the recycle it survives.
 
 /** One preregistered witness cell's result. `observed` is the DEFECT showing
- *  up where it was predicted — a control is REQUIRED to produce it — never a
+ *  up where it was predicted — the arm is REQUIRED to produce it — never a
  *  test passing. */
 export interface WitnessCheck {
   readonly name: string;
@@ -2670,7 +2758,7 @@ export interface WitnessCheck {
 }
 
 /**
- * The red witnesses each control must produce, preregistered before the run.
+ * The red witnesses each arm must produce, preregistered before the run.
  *
  * Every name is a defect its own strategy's header states in prose:
  *
@@ -2691,8 +2779,15 @@ export interface WitnessCheck {
  *     atomic and it costs the object's bytes".
  *   `POSIX-gap` — "there is no flush-to-store primitive": `sync` reaches s3fs
  *     and s3fs uploads on close, so a synced file is not yet durable.
+ *
+ * A witness is a MEASURED COST, never an eligibility filter. An arm carrying
+ * one of these defects still competes and can still win: the defect is priced
+ * beside its numbers and the reader weighs it. What the preregistration buys
+ * is drift detection — a predicted defect that stops reproducing means the
+ * instrument, the arm, or the prediction changed, and the run is refused until
+ * somebody says which.
  */
-const CONTROL_WITNESSES = {
+const PREREGISTERED_WITNESSES = {
   'snapshot-chain': ['cumulative-delta-seed', 'mutable-delta'],
   'overlay-cas': ['unbounded-pending-replay', 'O(u)-scan'],
   r2fs: ['open-write-loss', 'non-atomic-rename', 'POSIX-gap'],
@@ -2774,14 +2869,14 @@ const SCAN_COST_GROWTH = 2;
  *
  * Pure and exported, so every direction is provable against hand-built facts:
  * the defect observed, the defect vanished, and the cell that never ran. The
- * order and the names come from `CONTROL_WITNESSES`, so a witness can never be
- * answered by a cell that was not preregistered for this arm.
+ * order and the names come from `PREREGISTERED_WITNESSES`, so a witness can
+ * never be answered by a cell that was not preregistered for this arm.
  */
 export function controlWitnessChecks(
   strategy: Strategy,
   facts: ControlWitnessFacts,
 ): WitnessCheck[] {
-  return CONTROL_WITNESSES[strategy].map((name): WitnessCheck => {
+  return PREREGISTERED_WITNESSES[strategy].map((name): WitnessCheck => {
     switch (name) {
       case 'cumulative-delta-seed': {
         const cell = facts.cumulativeDeltaSeed;
@@ -3040,17 +3135,20 @@ async function upperScanPoint(
 }
 
 /**
- * Run this control arm's witness cells and answer what they observed.
+ * Run this arm's preregistered witness cells and answer what they observed.
  *
  * Every cell is bounded and independent: one that throws records its reason and
  * leaves its own facts absent, which the classifier reads as an unobserved
  * witness and G2 refuses. A cell is never allowed to take the arm down with it —
  * the rows this arm already measured are worth more than the cell.
+ *
+ * An arm with no preregistered witness runs no cells and answers no facts; it
+ * is not a special case here, just an empty list in `PREREGISTERED_WITNESSES`.
  */
 async function runControlWitnessCells(
   fixture: Fixture,
   box: string,
-  strategy: ControlStrategy,
+  strategy: Strategy,
   input: {
     /** The marker file the arm wrote before its stop, relative to the work
      *  directory, and the holder the pre-stop hook left behind. */
@@ -3303,24 +3401,6 @@ async function measureArm(
   const result = unmeasuredArm(strategy, box, notes);
   observe(result);
   noteLiveBox(box);
-
-  /** Write this arm's row to its own durable file at every phase boundary.
-   *
-   *  The row is one mutable object the whole pipeline fills in, so what this
-   *  writes is exactly what the arm has settled so far — never a copy that can
-   *  disagree with the row the run-level assembly will read. A write that
-   *  itself throws is logged and swallowed: the artifact is a safety net, and
-   *  a net that trips the measurement it was catching has stopped being one.
-   *  Failures here are visible in the log and in `readArmArtifact`'s verdict
-   *  when the run-level assembly reads the file back. */
-  const settle = (what: string): void => {
-    try {
-      writeArmArtifact(REPO_ROOT, options.runId, strategy, result);
-    } catch (error) {
-      log(`the durable arm artifact could not be written after ${what}: ${describeThrown({ cause: error })}`);
-    }
-  };
-  settle('the arm started');
   const teardown = async (): Promise<ArmResult> => {
     if (result.teardown === null) {
       result.teardown = await call(
@@ -3366,13 +3446,11 @@ async function measureArm(
     const note = `create failed: ${describeThrown({ cause: error })}`;
     log(note);
     notes.push(note);
-    settle('a refused create');
     return result;
   }
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
-  settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
 
@@ -3443,7 +3521,6 @@ async function measureArm(
   result.wakeMs = woke.ms;
   result.wakeKind = woke.attach.kind;
   result.wakeBootId = woke.state.state?.bootId ?? null;
-  settle('the wake');
   verify(
     'the wake attached durable bytes',
     result.wakeKind === 'attached',
@@ -3595,7 +3672,6 @@ async function measureArm(
     );
   }
   result.verifyPassed = result.verifyChecks.every((check) => check.pass);
-  settle('the lifecycle proof');
   if (!result.verifyPassed) {
     notes.push('LIFECYCLE VERIFY FAILED: this arm measured a blank disk and is not ranked');
     notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
@@ -3615,7 +3691,6 @@ async function measureArm(
   }
 
   result.generationAfterLadder = await chainGeneration(fixture, box);
-  settle('the workload phases');
 
   // THE DECISIVE EXPERIMENT. Placed after the workload phases and BEFORE
   // stop/wake, deliberately: these workloads leave hundreds of megabytes behind,
@@ -3647,7 +3722,6 @@ async function measureArm(
   result.attachWarmMs = warm.ms;
   result.attachWarmKind = warm.attach.kind;
   result.attachWarmBootId = warm.state.state?.bootId ?? null;
-  settle('the warm attach');
 
   log('ops accounting and teardown');
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
@@ -3655,12 +3729,17 @@ async function measureArm(
 
   // THE WITNESS CELLS, after the tally and before the teardown.
   //
-  // A control arm is here to prove the instrument can still SEE the defects its
-  // strategy is known to have; G2 refuses a run whose control produced none of
-  // them. The cells write their own files and take their own checkpoints, so
-  // they run past the priced window on purpose: an arm billed for its witness
-  // cells would report a cost the comparison is not about.
-  if (strategy === 'snapshot-chain' || strategy === 'r2fs' || strategy === 'overlay-cas') {
+  // An arm with preregistered defects is here to prove the instrument can still
+  // SEE them; G2 refuses a run whose arm produced none of the ones it promised.
+  // The cells write their own files and take their own checkpoints, so they run
+  // past the priced window on purpose: an arm billed for its witness cells
+  // would report a cost the comparison is not about.
+  //
+  // DERIVED from the preregistration, never a second copy of its membership.
+  // The hardcoded `snapshot-chain || r2fs || overlay-cas` this replaces was the
+  // same three-arm taxonomy that kept those arms out of the ranking, and a
+  // fourth arm given a witness would have silently never run its cells.
+  if (PREREGISTERED_WITNESSES[strategy].length > 0) {
     log('witness cells');
     const witnessed = await runControlWitnessCells(fixture, box, strategy, { markerFile, openWrite });
     result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts);
@@ -3672,8 +3751,6 @@ async function measureArm(
       );
     }
   }
-
-  settle('the witness cells');
 
   // Everything below is CLEANUP, and a cleanup failure is not a measurement
   // failure. The 2026-08-29 02:42 run lost a fully measured `bounded-layers`
@@ -3711,7 +3788,6 @@ async function measureArm(
       notes.push(`the box was not released after the arm: ${released.error ?? 'stop did not confirm'}`);
     }
   });
-  settle('the arm finished');
   return result;
 }
 
@@ -3734,156 +3810,6 @@ export function refuseFailedArm(arm: ArmResult, reason: string): ArmResult {
   arm.verifyChecks.push({ name: 'the arm completed every measured step', pass: false, detail: reason });
   arm.verifyPassed = false;
   return arm;
-}
-
-// ── durable per-arm artifacts ───────────────────────────────────────────────
-//
-// MEASURED DEFECT THIS REPAIRS: the 20260831233915 decisive run and the
-// devbox-e2e-e2ecal0901002202 calibration both spent hours measuring arms whose
-// rows existed only inside the process that measured them. The run-level
-// artifact is written once, at the end, by the same process — so a wedged
-// sibling, a killed driver or a run that never reached its own assembly left
-// NOTHING but a log. An arm's settled measurements are the one thing the run
-// cannot afford to lose to a process it does not control, so every arm writes
-// its own row to disk the moment it settles, and the final assembly reads those
-// files rather than trusting its own memory.
-
-/** Where one run's per-arm artifacts live: under `bench-artifacts`, one
- *  directory per run, one file per arm. The run id — not the `--out` basename —
- *  is the directory, so two runs sharing a `--out` path never collide and one
- *  run's directory holds exactly the arms that run requested. */
-export function armArtifactDir(repoRoot: string, runId: string): string {
-  return join(repoRoot, 'bench-artifacts', runId);
-}
-
-export function armArtifactPath(repoRoot: string, runId: string, arm: Strategy): string {
-  return join(armArtifactDir(repoRoot, runId), `${arm}.json`);
-}
-
-/** What one arm's own artifact holds: the row, and the log tail.
- *
- *  The row is the same `ArmResult` the run-level artifact assembles from, so
- *  there is no second shape to keep in agreement. The log tail is the driver's
- *  own last words about the arm — bounded by `ARM_LOG_TAIL_LINES` — which is
- *  all an arm that never settled can offer. `settledAt` dates the write, so a
- *  reader comparing this file against a run-level artifact that never landed can
- *  see WHICH of the two is missing rather than guessing. */
-export interface ArmArtifact<Row = ArmResult> {
-  readonly schema: 'devbox-arm-artifact/1';
-  readonly arm: Strategy;
-  readonly runId: string;
-  readonly settledAt: string;
-  readonly logTail: readonly string[];
-  readonly row: Row;
-}
-
-/** The file's contract, parsed at the boundary like every wire reply here. The
- *  ROW is left unparsed on purpose: two drivers write two row shapes through
- *  this one writer, and the envelope — schema, arm, run — is what a reader has
- *  to be able to trust before it reads either. */
-const ArmArtifactSchema: v.GenericSchema<ArmArtifact<unknown>> = v.looseObject({
-  schema: v.literal('devbox-arm-artifact/1'),
-  arm: v.picklist(STRATEGIES),
-  runId: v.string(),
-  settledAt: v.string(),
-  logTail: v.array(v.string()),
-  row: v.unknown(),
-});
-
-/**
- * Write one arm's row to its own file, atomically, the moment it settles.
- *
- *  ATOMICALLY (tmp + rename, the repo's own `writeLedger` pattern): the reader
- *  of this file is a process that has already lost its sibling, and a file cut
- *  off mid-write by that same death would be a second wedge sitting on the
- *  first. `rename` within one filesystem is the one write a reader either sees
- *  whole or does not see at all.
- *
- *  THE MOMENT IT SETTLES, not once at the end: called at every phase boundary
- *  with whatever the row holds, so the file is monotone — a cold attach, a
- *  ladder, a wake each overwrite the last partial row — and a kill between
- *  boundaries costs at most the phase in flight, never a number that already
- *  landed. Success and refusal both write, because a refusal IS the arm's
- *  settled answer.
- */
-export function writeArmArtifact<Row>(
-  repoRoot: string,
-  runId: string,
-  arm: Strategy,
-  row: Row,
-): ArmArtifact<Row> {
-  const artifact: ArmArtifact<Row> = {
-    schema: 'devbox-arm-artifact/1',
-    arm,
-    runId,
-    settledAt: new Date().toISOString(),
-    logTail: armLogTail(arm),
-    row,
-  };
-  const path = armArtifactPath(repoRoot, runId, arm);
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(artifact, null, 2)}\n`);
-  renameSync(temporary, path);
-  return artifact;
-}
-
-/** What one arm's settled artifact read back as. `error` is set only when a
- *  file EXISTS and cannot be used — an absent file is a verdict of its own
- *  (externally-aborted), not a read failure, and conflating the two would hide
- *  a wedged arm behind a missing one. */
-export interface ReadArmArtifact {
-  readonly artifact: ArmArtifact | null;
-  readonly error: string | null;
-}
-
-/**
- * Read one arm's settled artifact back from disk.
- *
- *  The run-level assembly reads THESE FILES rather than the rows it still holds
- *  in memory, which is the whole point: a wedged arm's siblings settled on disk
- *  before the wedge, and the assembly must not depend on having watched them
- *  settle. A file that cannot be used is reported rather than skipped — an
- *  `externally-aborted` row carrying the read failure is a finding, while an
- *  unreadable file read as "never measured" would be one more silent loss.
- */
-export function readArmArtifact(repoRoot: string, runId: string, arm: Strategy): ReadArmArtifact {
-  const path = armArtifactPath(repoRoot, runId, arm);
-  if (!existsSync(path)) return { artifact: null, error: null };
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(readFileSync(path, 'utf8'));
-  } catch (cause) {
-    return { artifact: null, error: `unreadable (${path}): ${describeThrown({ cause })}` };
-  }
-  const parsed = v.safeParse(ArmArtifactSchema, decoded);
-  if (!parsed.success) {
-    return {
-      artifact: null,
-      error: `not an arm artifact (${path}): ${issueText(parsed.issues)}`,
-    };
-  }
-  // SAFETY: the envelope is parsed above; the row is whatever THIS run's own
-  // lane wrote through `writeArmArtifact` minutes earlier, and the decisive
-  // assembly is the only reader of the `ArmResult` shape it wrote itself. A
-  // cross-driver read would need its own row parse and has no caller.
-  return { artifact: parsed.output as ArmArtifact, error: null };
-}
-
-/**
- * The row for an arm this process never saw settle.
- *
- *  `reason` names what happened to the run rather than to the arm — the arm's
- *  own answer lives in its durable file when it has one, and the two must not
- *  wear each other's words. The log tail rides along as `log:` notes because
- *  that is the shape the report already prints for a failed arm.
- */
-export function externallyAbortedArm(arm: Strategy, box: string, reason: string): ArmResult {
-  // The tail first, the verdict last: `refuseFailedArm` appends the reason as
-  // the closing note and as the failed lifecycle check, so writing it here too
-  // would print it twice in a report whose whole job is to be read.
-  const notes = armLogTail(arm).map((line) => `log: ${line}`);
-  return refuseFailedArm(unmeasuredArm(arm, box, notes), `externally-aborted: ${reason}`);
 }
 
 /**
@@ -3924,16 +3850,7 @@ export async function runArm(
         `the failed arm's box could not be released: ${describeThrown({ cause: releaseError })}`,
       );
     }
-    // The refusal is the arm's settled answer, and it goes to disk like every
-    // other settled one — a killed run must not be able to lose the reason an
-    // arm died, which is the one fact the next reader of that arm needs.
-    const refused = refuseFailedArm(measured, reason);
-    try {
-      writeArmArtifact(REPO_ROOT, options.runId, strategy, refused);
-    } catch (writeError) {
-      log(`the durable arm artifact could not be written after the failure: ${describeThrown({ cause: writeError })}`);
-    }
-    return refused;
+    return refuseFailedArm(measured, reason);
   }
 }
 
@@ -3984,23 +3901,7 @@ export async function runArmsInFlight(
       } catch (error) {
         const reason = `arm lane failed: ${describeThrown({ cause: error })}`;
         log(reason);
-        // A lane that never reached `measureArm` owns no `settle` boundary, so
-        // the refusal is written here — the artifact for this arm must exist
-        // whatever shape the failure took, or the run-level assembly would read
-        // its absence as an external abort. The row is a REFUSED one carrying
-        // the log tail, because a lane failure is this run's own answer about
-        // the arm, not something external that happened to the run.
-        const refused = refuseFailedArm(unmeasuredArm(
-          strategy,
-          `ab-${strategy}-${runId}`,
-          armLogTail(strategy).map((line) => `log: ${line}`),
-        ), reason);
-        try {
-          writeArmArtifact(REPO_ROOT, runId, strategy, refused);
-        } catch (writeError) {
-          log(`the durable arm artifact could not be written after the lane failure: ${describeThrown({ cause: writeError })}`);
-        }
-        return refused;
+        return refuseFailedArm(unmeasuredArm(strategy, `ab-${strategy}-${runId}`, []), reason);
       }
     })));
 }
@@ -4064,73 +3965,78 @@ export interface RunMeta {
 }
 
 /**
- * The pairs a ratio may be taken over, most specific first.
+ * Every ratio this instrument may take: one challenger against the incumbent.
  *
- * A pair is used only when this run MEASURED both of its arms. The candidate
- * pair leads because the two candidates are the live question: the three
- * shipped strategies are mandatory historical controls (see
- * `CONTROL_WITNESSES`) and can never be a production winner, so a run carrying
- * the candidates is deciding between them rather than against a control.
+ * DERIVED FROM `STRATEGIES`, never listed. The hand-written list this replaces
+ * held two pairs — `bounded-layers` vs `merkle-pack` and `snapshot-chain` vs
+ * `overlay-cas` — and its header said the shipped arms "can never be a
+ * production winner". Both halves were instrument bugs. `r2fs` appeared in no
+ * pair, so the one arm with a full set of preregistered semantic defects was
+ * also the one arm whose cost was never compared to anything; and a
+ * candidate-versus-candidate ratio decides which challenger is better without
+ * ever asking whether either beats what production runs today.
+ *
+ * The ruling: every strategy competes against `INCUMBENT`. A challenger
+ * replaces it by beating it on the decisive workloads under the same admission
+ * gates — not by belonging to a set the instrument declared eligible.
  */
-const DECISION_PAIRS = [
-  {
-    baseline: 'bounded-layers',
-    candidate: 'merkle-pack',
-    purpose: 'candidate comparison this experiment exists to decide',
-  },
-  {
-    baseline: 'snapshot-chain',
-    candidate: 'overlay-cas',
-    purpose: 'original O(p)-versus-O(c) question over the shipped arms',
-  },
-] as const satisfies readonly {
+const DECISION_PAIRS: readonly {
   readonly baseline: Strategy;
   readonly candidate: Strategy;
   readonly purpose: string;
-}[];
+}[] = CHALLENGERS.map((challenger) => ({
+  baseline: INCUMBENT,
+  candidate: challenger,
+  purpose: `whether \`${challenger}\` displaces the deployed \`${INCUMBENT}\``,
+}));
 
-export type DecisionPair =
-  | {
-      readonly kind: 'pair';
-      readonly baseline: Strategy;
-      readonly candidate: Strategy;
-      readonly purpose: string;
-    }
+export interface ComparedPair {
+  readonly baseline: Strategy;
+  readonly candidate: Strategy;
+  readonly purpose: string;
+}
+
+export type DecisionPairs =
+  | { readonly kind: 'pairs'; readonly pairs: readonly ComparedPair[] }
   | { readonly kind: 'absent'; readonly reason: string };
 
 /**
- * The two arms a ratio may be taken over, derived from the arms this run
- * MEASURED rather than named beside the table.
+ * Every incumbent-versus-challenger ratio this run can actually take, derived
+ * from the arms it MEASURED rather than named beside the table.
  *
- * MEASURED DEFECT THIS REPAIRS. The caller used to read
+ * ALL of them, not the first that matches. The single-pair predecessor returned
+ * the most specific pair it could find and the report printed exactly one
+ * ratio, so a five-arm run — the shape this driver deploys by default — decided
+ * the default on one comparison and silently discarded the other three.
+ *
+ * MEASURED DEFECT THIS REPAIRS. The caller before that one read
  *
  *     const candidate = STRATEGIES.find((id) => id === 'overlay-cas');
  *     if (candidate !== undefined) { decide(ticks, 'snapshot-chain', candidate); }
  *
  * over a frozen five-element constant, so the guard was true on every run and
- * the else-branch beside it was unreachable. A `--candidates-only` run — the
- * only shape the final staging run has — therefore printed a decision rule
- * whose ratio was taken over `snapshot-chain` and `overlay-cas`: two arms it
- * never deployed, never measured, and could not have measured, because their
- * durable-object bindings are absent from the generated fixture config.
+ * the else-branch beside it was unreachable. A two-arm run therefore printed a
+ * decision rule whose ratio was taken over `snapshot-chain` and `overlay-cas`:
+ * two arms it never deployed, never measured, and could not have measured,
+ * because their durable-object bindings are absent from the generated config.
  */
-export function comparablePair(arms: readonly { readonly strategy: string }[]): DecisionPair {
+export function comparablePairs(arms: readonly { readonly strategy: string }[]): DecisionPairs {
   const present = new Set(arms.map((arm) => arm.strategy));
-  for (const pair of DECISION_PAIRS) {
-    if (present.has(pair.baseline) && present.has(pair.candidate)) {
-      return {
-        kind: 'pair',
-        baseline: pair.baseline,
-        candidate: pair.candidate,
-        purpose: pair.purpose,
-      };
-    }
-  }
+  const pairs = DECISION_PAIRS.filter(
+    (pair) => present.has(pair.baseline) && present.has(pair.candidate),
+  );
+  if (pairs.length > 0) return { kind: 'pairs', pairs };
+  const measured = arms.length === 0
+    ? 'no arms'
+    : arms.map((arm) => `\`${arm.strategy}\``).join(', ');
   return {
     kind: 'absent',
-    reason: `This run measured ${arms.length === 0 ? 'no arms' : arms.map((arm) => `\`${arm.strategy}\``).join(', ')}, `
-      + 'and no declared pair has both of its arms present: '
-      + `${DECISION_PAIRS.map((pair) => `\`${pair.baseline}\` vs \`${pair.candidate}\``).join(' or ')}.`,
+    reason: present.has(INCUMBENT)
+      ? `This run measured ${measured}, so it carries the incumbent \`${INCUMBENT}\` and no challenger `
+        + 'to compare against it.'
+      : `This run measured ${measured}, and the incumbent \`${INCUMBENT}\` is not among them. Every ratio `
+        + 'this instrument takes is a challenger against the incumbent, so a run without it can rank its '
+        + 'arms against each other but cannot say whether any of them displaces what production runs.',
   };
 }
 
@@ -4138,7 +4044,8 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
   const out = [
     '#### Frozen controls (not ranked)',
     '',
-    'These schema-validated external rows provide context only. Candidate ranking uses only measurements from this run.',
+    'These schema-validated external rows provide context only. They come from a PREVIOUS run, so they '
+    + 'never enter this run\'s ranking, which uses only arms this run measured.',
   ];
   if (controls.length === 0) {
     out.push('', 'Historical context is unavailable: no `--control <strategy>=<path>` was supplied.');
@@ -4290,29 +4197,40 @@ function render(
     }
     out.push('#### Decision rule');
     out.push('');
-    const pair = comparablePair(arms);
-    if (pair.kind === 'absent') {
+    const comparisons = comparablePairs(arms);
+    if (comparisons.kind === 'absent') {
       out.push(
-        `**NO RATIO IS DERIVABLE FROM THIS RUN.** ${pair.reason} A ratio needs a declared pair `
-        + 'whose BOTH arms this run measured; printing one over arms the run never requested '
+        `**NO RATIO IS DERIVABLE FROM THIS RUN.** ${comparisons.reason} A ratio needs the incumbent and at `
+        + 'least one challenger, both MEASURED here; printing one over arms the run never requested '
         + 'would report a rule about a comparison nobody performed.',
       );
       out.push('');
     } else {
-      const verdict: DecisionVerdict = decide(eligibleTicks, pair.baseline, pair.candidate);
       out.push(
-        `ratio(w) = Σ ticks(\`${pair.baseline}\`, w) / Σ ticks(\`${pair.candidate}\`, w), `
-        + `the ${pair.purpose}. `
-        + 'ratio(git) ≥ 10 AND ratio(npm) ≥ 3 ⇒ the O(p) shape wins outright. '
-        + `Both < 3 ⇒ O(c) tick cost is not the bottleneck and \`${pair.baseline}\` stays default. `
+        `ratio(w) = Σ ticks(\`${INCUMBENT}\`, w) / Σ ticks(challenger, w), taken once per challenger this `
+        + 'run measured. ratio(git) ≥ 10 AND ratio(npm) ≥ 3 ⇒ that challenger\'s O(p) shape wins outright. '
+        + `Both < 3 ⇒ O(c) tick cost is not the bottleneck and \`${INCUMBENT}\` holds against it. `
         + 'Between them the rule is deliberately undecided, and says so.',
       );
       out.push('');
-      out.push(verdict.kind === 'inconclusive'
-        ? `**INCONCLUSIVE.** ${verdict.reason}`
-        : verdict.kind === 'o-p-wins'
-          ? `**THE O(p) SHAPE WINS: \`${pair.candidate}\`.** ${verdict.detail}`
-          : `**\`${pair.baseline}\` STAYS DEFAULT.** ${verdict.detail}`);
+      out.push('| challenger | verdict | measured |');
+      out.push('| --- | --- | --- |');
+      for (const pair of comparisons.pairs) {
+        const verdict: DecisionVerdict = decide(eligibleTicks, pair.baseline, pair.candidate);
+        const label = verdict.kind === 'inconclusive'
+          ? 'INCONCLUSIVE'
+          : verdict.kind === 'o-p-wins'
+            ? `**DISPLACES \`${INCUMBENT}\`**`
+            : `\`${INCUMBENT}\` HOLDS`;
+        const detail = verdict.kind === 'inconclusive' ? verdict.reason : verdict.detail;
+        out.push(`| \`${pair.candidate}\` | ${label} | ${detail} |`);
+      }
+      out.push('');
+      out.push(
+        'Every challenger is judged against the same incumbent by the same rule, so the rows are '
+        + 'comparable with each other. A challenger absent from this table is one whose arm this run '
+        + 'did not measure.',
+      );
       out.push('');
       out.push(
         'The 10x and 3x bars are CHOSEN thresholds from the research that set them, not measured '
@@ -4422,72 +4340,147 @@ function render(
 }
 
 /**
- * One recommendation, derived from the rows rather than written beside them.
+ * The ranking, over every arm this run measured, derived from the rows rather
+ * than written beside them.
  *
- * The deciding quantity is small-file and metadata latency, because that is what
- * a workspace does; the checkpoint ladder decides the cost of keeping it durable;
- * and a failed verify or an unverified wake disqualifies an arm outright, because
- * a fast number from a blank disk is worse than no number.
+ * WHAT THIS REPLACES. The predecessor scored on metadata latency alone and
+ * named a best and a worst — and `devboxArmEvidence` had already marked three
+ * of the five arms rank-INELIGIBLE before it ran, so the "recommendation" was a
+ * two-name comparison whose outcome was fixed by taxonomy rather than by
+ * measurement. Every arm that clears the one gate applying to all of them, the
+ * lifecycle proof, is ranked here, on the workloads the decision rule reads.
+ *
+ * A PREREGISTERED DEFECT IS A COST, NOT A FILTER. An arm's observed witnesses
+ * are priced in the last column and named beside the winner; they never remove
+ * it from the table. `r2fs` losing on POSIX semantics is a fact a reader weighs
+ * against its numbers, not a reason to withhold the numbers.
+ *
+ * DISPLACEMENT STILL NEEDS THE BAR. Ranking says which arm cost least; it does
+ * not license changing the default. `INCUMBENT` keeps it unless a challenger
+ * clears the preregistered 10x/3x bar `decide` applies, so the ranking and the
+ * decision rule cannot disagree about what ships.
  */
 export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdict): string {
   requireAdmitted(admission);
-  const ranked = arms.filter((arm) => arm.verifyPassed);
-  if (ranked.length === 0) {
+  const proven = arms.filter((arm) => arm.verifyPassed);
+  if (proven.length === 0) {
     return 'NO DEFAULT IS DERIVABLE FROM THIS RUN. No arm completed the lifecycle proof, which means every arm '
       + 'measured the container\'s own blank disk rather than its strategy. The lifecycle rows above '
       + 'say which checks failed; fix those before reading any latency from this table.';
   }
-  if (ranked.length === 1) {
-    const only = ranked[0]!;
-    return `ONLY \`${only.strategy}\` completed the lifecycle proof, so it is the default by default rather than by `
-      + `measurement. That is a weaker statement than this benchmark exists to make: the other arm's `
-      + 'lifecycle failure is the thing to fix, and the comparison should be re-run before the choice is '
-      + 'treated as settled.';
-  }
-
-  const scored = ranked
-    .map((arm) => ({ arm, stat: metricSummary(arm, DECIDING_METRIC)?.p50 ?? null }))
-    .filter((row): row is { arm: ArmResult; stat: number } => row.stat !== null);
-  if (scored.length < 2) {
-    return 'Both arms completed the lifecycle proof but the deciding metric did not complete on both, so the arms '
-      + 'are not separable on this run. The workload table says which cells are missing.';
-  }
-  scored.sort((a, b) => a.stat - b.stat);
-  const best = scored[0]!;
-  const worst = scored[scored.length - 1]!;
-  const ratio = worst.stat / best.stat;
-  const wakeNote = best.arm.wakeKind === 'attached'
+  const wakeNote = (arm: ArmResult): string => arm.wakeKind === 'attached'
     ? ''
-    : ` Its wake was NOT verified (attach.kind '${best.arm.wakeKind}'), so the restore half of this `
+    : ` Its wake was NOT verified (attach.kind '${arm.wakeKind}'), so the restore half of this `
       + 'recommendation rests on the checkpoint ladder rather than on an observed cold start.';
+  const costCell = (costs: readonly string[]): string =>
+    costs.length === 0 ? 'none preregistered' : costs.map((name) => `\`${name}\``).join(', ');
 
-  return `DEFAULT TO \`${best.arm.strategy}\`. On the metric that decides a workspace — metadata `
-    + `latency over many small files — it is ${ratio.toFixed(1)}x faster than \`${worst.arm.strategy}\` `
-    + `(${best.stat.toFixed(2)} ms against ${worst.stat.toFixed(2)} ms per \`stat\`), and both arms `
-    + 'completed the lifecycle proof, so both numbers describe a real attached workspace rather than a blank disk.'
-    + wakeNote;
+  const scored = proven.map((arm) => {
+    const totals = RULE_WORKLOADS.map((workload) => totalsFor(arm.decisiveTicks, workload));
+    return {
+      arm,
+      unmeasured: RULE_WORKLOADS.filter((_, index) => totals[index]!.ticks === 0),
+      decisiveMs: totals.reduce((sum, row) => sum + row.sumWallMs, 0),
+      statMs: metricSummary(arm, DECIDING_METRIC)?.p50 ?? null,
+      costs: arm.witnessChecks.filter((witness) => witness.observed).map((witness) => witness.name),
+    };
+  });
+  const rankable = scored
+    .filter((row) => row.unmeasured.length === 0)
+    .sort((a, b) => a.decisiveMs - b.decisiveMs);
+
+  const out: string[] = [
+    `RANKED ON THE DECISIVE WORKLOADS (${RULE_WORKLOADS.join(' + ')}), over every arm that completed the `
+    + 'lifecycle proof, under the same gate. No arm is excluded by what kind of strategy it is.',
+    '',
+    '| rank | arm | Σ decisive tick ms | `' + DECIDING_METRIC + '` p50 (ms) | measured costs |',
+    '| --- | --- | --- | --- | --- |',
+  ];
+  rankable.forEach((row, index) => {
+    const name = `\`${row.arm.strategy}\`${row.arm.strategy === INCUMBENT ? ' (incumbent)' : ''}`;
+    out.push(
+      `| ${index + 1} | ${name} | ${Math.round(row.decisiveMs)} `
+      + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${costCell(row.costs)} |`,
+    );
+  });
+  for (const row of scored.filter((candidate) => candidate.unmeasured.length > 0)) {
+    out.push(
+      `| — | \`${row.arm.strategy}\` | unranked: no ticks on ${row.unmeasured.join(', ')} `
+      + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${costCell(row.costs)} |`,
+    );
+  }
+  out.push('');
+
+  const best = rankable[0];
+  if (best === undefined) {
+    out.push(
+      'NO DEFAULT IS DERIVABLE FROM THIS RUN. Every arm that completed the lifecycle proof is missing ticks '
+      + `on at least one decisive workload, so none of them is comparable on the quantity the rule reads.`,
+    );
+    return out.join('\n');
+  }
+  const incumbent = rankable.find((row) => row.arm.strategy === INCUMBENT);
+  if (incumbent === undefined) {
+    out.push(
+      `\`${best.arm.strategy}\` COSTS LEAST HERE, but the incumbent \`${INCUMBENT}\` is not in the ranking, so `
+      + 'nothing in this run says whether it displaces the deployed default. Re-run with the incumbent among '
+      + `the arms before treating this order as a change of default.${wakeNote(best.arm)}`,
+    );
+    return out.join('\n');
+  }
+  if (best.arm.strategy === INCUMBENT) {
+    out.push(
+      `\`${INCUMBENT}\` STAYS DEFAULT. It is the incumbent and it also costs least on the decisive workloads, `
+      + 'so no challenger displaces it on this run.',
+    );
+    return out.join('\n');
+  }
+
+  const verdict = decide(proven.flatMap((arm) => arm.decisiveTicks), INCUMBENT, best.arm.strategy);
+  const ratio = incumbent.decisiveMs / best.decisiveMs;
+  out.push(verdict.kind === 'o-p-wins'
+    ? `DEFAULT TO \`${best.arm.strategy}\`. It costs ${ratio.toFixed(1)}x less decisive tick time than the `
+      + `incumbent \`${INCUMBENT}\` and it clears the preregistered bar — ${verdict.detail}.${wakeNote(best.arm)}`
+    : `\`${INCUMBENT}\` STAYS DEFAULT. \`${best.arm.strategy}\` costs ${ratio.toFixed(1)}x less decisive tick `
+      + 'time, but the default changes only when a challenger clears the preregistered bar, and this one does '
+      + `not — ${verdict.kind === 'inconclusive' ? verdict.reason : verdict.detail}.`);
+  if (best.costs.length > 0) {
+    out.push('');
+    out.push(
+      `\`${best.arm.strategy}\` carries ${best.costs.length} preregistered defect(s) this run OBSERVED: `
+      + `${costCell(best.costs)}. Those are a cost of adopting it, not a reason it was kept out of the `
+      + 'ranking; the witness rows above say what each one did.',
+    );
+  }
+  return out.join('\n');
 }
 
 /** The admission evidence one devbox arm contributes. Exported so the gate's
  *  red tests can prove a current-only run cannot recommend without a deploy.
  *
- *  The witnesses are preregistered in `CONTROL_WITNESSES` and OBSERVED by the
- *  cells `runControlWitnessCells` runs; this only carries what those cells saw.
- *  A witness the cells did not observe is absent here, and G2 refuses the run —
- *  which is the correct answer both when a cell could not run and when the
- *  defect it exists to catch has silently gone away. */
+ *  EVERY ARM IS A COMPETITOR. This used to answer `kind: 'control'` and
+ *  `rankEligible: false` for `snapshot-chain`, `r2fs` and `overlay-cas`, which
+ *  made G2 refuse those arms a place in the ranking no matter what they
+ *  measured — the taxonomy decided the outcome before the run started. A
+ *  strategy's preregistered defects are carried below as observed witnesses and
+ *  priced by `recommend`; they are costs, not eligibility.
+ *
+ *  The witnesses are preregistered in `PREREGISTERED_WITNESSES` and OBSERVED by
+ *  the cells `runControlWitnessCells` runs; this only carries what those cells
+ *  saw. A witness the cells did not observe is absent here, and G2 refuses the
+ *  run — which is the correct answer both when a cell could not run and when
+ *  the defect it exists to catch has silently gone away. */
 export function devboxArmEvidence(
   arm: Pick<
     ArmResult,
     'strategy' | 'verifyPassed' | 'verifyChecks' | 'phases' | 'checkpoints' | 'decisiveTicks' | 'witnessChecks'
   >,
 ): ArmEvidence {
-  const candidate = arm.strategy === 'bounded-layers' || arm.strategy === 'merkle-pack';
   return {
     arm: arm.strategy,
-    kind: candidate ? 'candidate' : 'control',
-    rankEligible: candidate,
-    expectedRedChecks: [...CONTROL_WITNESSES[arm.strategy]],
+    kind: 'candidate',
+    rankEligible: true,
+    expectedRedChecks: [...PREREGISTERED_WITNESSES[arm.strategy]],
     // OBSERVED, not asserted: every name here comes from a cell that RAN
     // against the deployed arm and saw the defect. A witness the cells could
     // not observe is missing from this list on purpose, and `witnessProblems`
@@ -5011,13 +5004,103 @@ interface ArmLaneState {
   refusal: string | null;
 }
 
+/**
+ * Delete one entry of an ABANDONED run's manifest, from its name alone.
+ *
+ * The in-run executor reaches for lane state — the deploy's own stop closure,
+ * the fixture's generated config, the temp directory handle. None of that
+ * survives the process that made it, and a manifest recovered from disk is by
+ * definition a manifest whose process is gone, so every deletion here goes
+ * through the resource's name and nothing else.
+ *
+ * Idempotent in the same way the in-run path is: "already absent" is success,
+ * because a recovery that cannot be run twice is a recovery that cannot be
+ * interrupted.
+ */
+export function orphanTeardownExecutor(
+  residue: R2ResiduePlane | null,
+): (entry: TeardownEntry) => Promise<DeleteOutcome> {
+  // Which Workers this recovery has already deleted. Durable state is only
+  // reachable through its Worker, so an entry claiming a box is empty is
+  // worthless until the Worker serving it is gone.
+  const workersDeleted = new Set<string>();
+  return async (entry: TeardownEntry): Promise<DeleteOutcome> => {
+    if (entry.kind === 'worker') {
+      const deleted = wrangler(['delete', '--name', entry.name, '--force'], { allowFailure: true });
+      if (!deleted.startsWith(WRANGLER_FAILED)) {
+        workersDeleted.add(entry.name);
+        return { ok: true };
+      }
+      if (/not found|does not exist/i.test(deleted)) {
+        workersDeleted.add(entry.name);
+        return { ok: true, absent: true };
+      }
+      return { ok: false, error: deleted.slice(0, 240) };
+    }
+    if (entry.kind === 'container-app') {
+      if (containerAppIds(REPO_ROOT, [entry.name], log).length === 0) return { ok: true, absent: true };
+      const failed = deleteContainerApps(REPO_ROOT, [entry.name], log).find((status) => /failed/i.test(status));
+      return failed === undefined ? { ok: true } : { ok: false, error: failed };
+    }
+    if (entry.kind === 'r2-bucket') {
+      let deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+      if (deleted.startsWith(WRANGLER_FAILED) && /not empty|10008/i.test(deleted) && residue !== null) {
+        const drained = await drainBucketResidue(residue, entry.name);
+        log(`${entry.name}: drained ${String(drained.objects)} object(s), aborted ${String(drained.uploads)} upload(s)`);
+        deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+      }
+      if (!deleted.startsWith(WRANGLER_FAILED)) return { ok: true };
+      if (/not found|does not exist/i.test(deleted)) return { ok: true, absent: true };
+      return { ok: false, error: deleted.slice(0, 240) };
+    }
+    if (entry.kind === 'do-state' || entry.kind === 'alarm' || entry.kind === 'mount') {
+      // The owning Worker is DERIVED from the box, so this asks about the one
+      // Worker that could still be serving this state rather than about the
+      // recovery as a whole: one arm's failed delete must not report another
+      // arm's durable state as surviving.
+      const owner = workerServingBox(entry.name);
+      if (owner === null) return { ok: false, error: `no Worker name derives from box ${entry.name}` };
+      return workersDeleted.has(owner)
+        ? { ok: true }
+        : { ok: false, error: `Worker ${owner} must be deleted before its durable state` };
+    }
+    if (entry.kind === 'local-path') {
+      rmSync(entry.name, { recursive: true, force: true });
+      return { ok: true };
+    }
+    return { ok: false, error: `unsupported teardown resource ${entry.kind}` };
+  };
+}
+
+/**
+ * The Worker that serves a box, read back out of the box's own name.
+ *
+ * `boxName` is `ab-<strategy>-<runId>` and `resourceNames` is
+ * `<base>-<runId>-<strategy>`, so the pair round-trips: a recovered manifest
+ * carries no lane state, and this is how a durable-state entry still knows
+ * which Worker has to go first. Answers null for a name no strategy produces
+ * rather than guessing, because a wrong guess would report state deleted that
+ * a live Worker still serves.
+ */
+function workerServingBox(box: string): string | null {
+  for (const strategy of STRATEGIES) {
+    const prefix = `ab-${strategy}-`;
+    if (!box.startsWith(prefix)) continue;
+    const runId = box.slice(prefix.length);
+    if (runId === '' || boxName(runId, strategy) !== box) continue;
+    return resourceNames(runId, strategy).worker;
+  }
+  return null;
+}
+
 const HELP = `Usage: bun scripts/bench-devbox-strategies.ts [options]
 
 Options:
-  --candidates-only                 Measure bounded-layers and merkle-pack only.
-  --control <strategy>=<path>       Add optional historical context for one control:
-                                    snapshot-chain, r2fs, overlay-cas.
-  --arms <strategy,...>             Measure named strategies.
+  --arms <strategy,...>             Measure named strategies. Defaults to every arm:
+                                    ${STRATEGIES.join(', ')}.
+  --control <strategy>=<path>       Add frozen historical context for one strategy,
+                                    from a previous run's artifact. Any of:
+                                    ${STRATEGIES.join(', ')}.
   --plan                            Print the execution plan without deploying.
   --decisive                        Run decisive workloads.
   --keep                            Retain external resources for inspection.
@@ -5031,8 +5114,8 @@ export function parseOptions(argv: readonly string[]): Options {
     return index !== -1 && index + 1 < argv.length ? argv[index + 1]! : fallback;
   };
   const controls: ControlOption[] = [];
-  const controlStrategies = CONTROL_STRATEGIES.join(', ');
-  const seenControls = new Set<ControlStrategy>();
+  const knownStrategies = STRATEGIES.join(', ');
+  const seenControls = new Set<Strategy>();
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] !== '--control') continue;
     const rawControl = argv[index + 1];
@@ -5045,10 +5128,10 @@ export function parseOptions(argv: readonly string[]): Options {
     }
     const rawStrategy = rawControl.slice(0, separator);
     const path = rawControl.slice(separator + 1);
-    const strategy = CONTROL_STRATEGIES.find((known) => known === rawStrategy);
+    const strategy = STRATEGIES.find((known) => known === rawStrategy);
     if (separator < 1 || strategy === undefined) {
       throw new Error(
-        `--control strategy "${rawStrategy}" is not a historical control; known controls: ${controlStrategies}`,
+        `--control strategy "${rawStrategy}" is not a known strategy; known strategies: ${knownStrategies}`,
       );
     }
     if (path === '') throw new Error('--control requires <strategy>=<path>');
@@ -5060,7 +5143,6 @@ export function parseOptions(argv: readonly string[]): Options {
     index += 1;
   }
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-  const candidatesOnly = argv.includes('--candidates-only');
   const requestedArms = value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
     const arm = STRATEGIES.find((strategy) => strategy === raw.trim());
     if (arm === undefined) {
@@ -5072,9 +5154,9 @@ export function parseOptions(argv: readonly string[]): Options {
   if (duplicate !== undefined) {
     throw new Error(`--arms repeats "${duplicate}"; each requested arm must appear exactly once`);
   }
-  if (candidatesOnly && argv.includes('--arms')) {
-    throw new Error('--candidates-only selects bounded-layers and merkle-pack; do not also pass --arms');
-  }
+  // NO PRIVILEGED SUBSET. `--candidates-only` used to select
+  // {bounded-layers, merkle-pack} behind the operator's back; every arm now
+  // competes, so a subset is named outright with `--arms` or it is all of them.
   return {
     runId,
     seed: Number.parseInt(value('seed', '20260824'), 10),
@@ -5083,9 +5165,8 @@ export function parseOptions(argv: readonly string[]): Options {
     verifyOnly: argv.includes('--verify-only'),
     plan: argv.includes('--plan'),
     keep: argv.includes('--keep'),
-    candidatesOnly,
     controls,
-    arms: candidatesOnly ? [...CANDIDATE_STRATEGIES] : requestedArms,
+    arms: requestedArms,
     out: value('out', join('bench-artifacts', `devbox-strategies-${runId}.json`)),
   };
 }
@@ -5132,39 +5213,52 @@ async function main(): Promise<number> {
   const startedAt = new Date().toISOString();
 
 
+  const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
+  const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+  const residue = r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined
+    ? r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId: r2AccessKeyId, secretAccessKey: r2SecretAccessKey })
+    : null;
+
+  // ABANDONED RUNS FIRST, BEFORE THIS RUN CREATES ANYTHING.
+  //
+  // A driver killed between its deploy and its teardown leaves a manifest
+  // naming live Workers, container applications and buckets, and nothing ever
+  // read it: recovery only happened inside the process that wrote it, which is
+  // exactly the process that is gone. Every interrupted run therefore added a
+  // permanent set of resources to the account, and the next run's own teardown
+  // could not see them because they belong to a different run id.
+  //
+  // Deleting them here, before the deploy, also keeps this run's own accounting
+  // honest: leftover buckets from a previous run are residue the C1–C7 checks
+  // would otherwise have to explain away.
+  const recovered = await recoverAbandonedRuns(
+    REPO_ROOT,
+    options.runId,
+    orphanTeardownExecutor(residue),
+    log,
+  );
+  const unswept = recovered.filter((run) => run.failures.length > 0 || !run.replayed);
+  if (recovered.length === 0) {
+    log('no abandoned benchmark resources from earlier runs');
+  } else if (unswept.length > 0) {
+    log(
+      `${unswept.length} earlier run(s) still hold resources: `
+      + `${unswept.map((run) => run.runId).join(', ')}`,
+    );
+  }
+
   const fixtures = await createFixtureResources(options.runId, options.arms);
+  const teardownManifest = fixtures.manifest;
   const lanes = fixtures.arms.map((fixture): ArmLaneState => ({
     fixture,
-    box: `ab-${fixture.strategy}-${options.runId}`,
-    boxes: new Set([`ab-${fixture.strategy}-${options.runId}`]),
+    box: boxName(options.runId, fixture.strategy),
+    boxes: new Set([boxName(options.runId, fixture.strategy)]),
     live: null,
     stop: null,
     workerStopped: false,
     workerVersion: '',
     refusal: null,
   }));
-  const teardownManifest = createManifest(options.runId, [
-    // ONE COMPLETE SET PER ARM. Each row names a resource exactly one arm owns,
-    // so an interrupted run deletes each arm's Worker, container application
-    // and bucket on its own evidence rather than as one shared lump.
-    ...lanes.flatMap((lane) => [
-      { kind: 'worker' as const, name: lane.fixture.worker, detail: `${lane.fixture.strategy} fixture Worker` },
-      ...lane.fixture.containerApps.map((name) => ({
-        kind: 'container-app' as const, name, detail: `${lane.fixture.strategy} container application`,
-      })),
-      { kind: 'r2-bucket' as const, name: lane.fixture.bucket, detail: `dedicated ${lane.fixture.strategy} bucket` },
-      { kind: 'do-state' as const, name: lane.box, detail: 'per-arm durable box state' },
-      { kind: 'alarm' as const, name: lane.box, detail: 'per-arm durable alarm' },
-      { kind: 'mount' as const, name: lane.box, detail: 'per-arm mounted workspace' },
-    ]),
-    { kind: 'local-path', name: fixtures.configDir, detail: 'generated Wrangler config directory' },
-  ]);
-  writeManifest(REPO_ROOT, teardownManifest);
-  const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
-  const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
-  const residue = r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined
-    ? r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId: r2AccessKeyId, secretAccessKey: r2SecretAccessKey })
-    : null;
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
   let cleanupReport: CleanupReport | null = null;
@@ -5193,9 +5287,17 @@ async function main(): Promise<number> {
         const lane = lanes.find((candidate) => candidate.fixture.worker === entry.name);
         if (lane === undefined) return { ok: false, error: `no arm owns Worker ${entry.name}` };
         const statuses = (lane.stop ?? (() => deleteFixtureResources(lane.fixture)))();
-        lane.workerStopped = true;
         if (statuses.length > 0) log(`${lane.fixture.strategy} fixture resources: ${statuses.join(', ')}`);
         const failed = statuses.find((status) => /failed/i.test(status));
+        // OBSERVED, never assumed. This was set unconditionally, one line above
+        // the check that reads the same statuses — so a Worker whose delete
+        // FAILED still flipped the flag, and the box's `do-state`, `alarm` and
+        // `mount` entries then answered `ok` on the strength of it. Those
+        // entries were marked done and persisted, which puts them beyond the
+        // startup sweep forever: it only revisits UNFINISHED entries. C4/C5
+        // read the same flag, so the run also certified durable state absent
+        // while the Worker serving it was still up.
+        lane.workerStopped = failed === undefined;
         return failed === undefined ? { ok: true } : { ok: false, error: failed };
       }
       if (entry.kind === 'container-app') {
@@ -5320,26 +5422,6 @@ async function main(): Promise<number> {
     await runTeardownOnce();
   }
 
-  // THE ASSEMBLY READS THE DURABLE FILES, NOT ITS OWN MEMORY. Every arm wrote
-  // its row to bench-artifacts/<run>/<arm>.json at each phase boundary, so a
-  // run whose in-flight window was interrupted by anything this catch already
-  // survived still assembles exactly what its arms settled. An arm with no
-  // file never settled in THIS process — recorded as externally-aborted with
-  // the log tail, never as an unmeasured row that would misread a wedge as a
-  // strategy that measured nothing.
-  const settledArms = options.arms.map((strategy) => {
-    const read = readArmArtifact(REPO_ROOT, options.runId, strategy);
-    if (read.error !== null) {
-      log(`the durable artifact for ${strategy} could not be read: ${read.error}`);
-      failure ??= `the durable artifact for ${strategy} could not be read`;
-    }
-    if (read.artifact !== null) return read.artifact.row;
-    const reason = read.error ?? failure ?? 'this arm never settled before the run ended';
-    return externallyAbortedArm(strategy, `ab-${strategy}-${options.runId}`, reason);
-  });
-  arms.length = 0;
-  arms.push(...settledArms);
-
   const meta: RunMeta = {
     date: new Date().toISOString().slice(0, 10),
     run: `${FIXTURE_BASE}-${options.runId}`,
@@ -5402,7 +5484,11 @@ async function main(): Promise<number> {
     join(REPO_ROOT, options.out),
     `${JSON.stringify({ meta, identity, frozenControls, arms, cleanup, admission }, null, 2)}\n`,
   );
-  process.stdout.write(`${render(arms, meta, admission, frozenControls, options.candidatesOnly)}\n`);
+  // A PARTIAL RUN SAYS SO. When some arm was not measured, the frozen-control
+  // section renders even if it is empty, so the report states outright whether
+  // history covered the gap rather than leaving the absence unremarked.
+  const partial = options.arms.length < STRATEGIES.length;
+  process.stdout.write(`${render(arms, meta, admission, frozenControls, partial)}\n`);
   log(`artifact written to ${options.out}`);
   return benchmarkExitCode(failure, admission);
 }

@@ -215,7 +215,12 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect(container.startWaitOptions).toHaveLength(1);
     expect(container.startWaitOptions[0]).toMatchObject({
       portToCheck: 3000,
-      retries: 1,
+      // THE PROBE LASTS ITS WHOLE WINDOW, expressed as the SDK's own retry
+      // shape. `retries: 1` made the SDK give up after ONE poll — its
+      // `totalTries` IS this number — so the abort signal below could never
+      // fire and every instant refusal cost an incident row plus a re-arm.
+      // Measured live at 21 incidents in 15 s on a contended account.
+      retries: Math.ceil(TEST_POLICY.portWaitMs / 100),
       waitInterval: 100,
       signal: expect.any(AbortSignal),
     });
@@ -235,31 +240,50 @@ describe('the startup kick arms restoration without attaching inline', () => {
     });
   });
 
-  test('a capacity or unhealthy admission records its classification and arms one successor', async () => {
-    for (const [kind, afterRunning] of [
-      ['capacity', false],
-      ['unhealthy', true],
-    ] as const) {
-      const { box, container, rows } = harness(TestBox);
-      await container.stop();
-      const unavailable = new SandboxFailure({
-        code: 'CONTAINER_UNAVAILABLE',
-        message: `the container is ${kind === 'capacity' ? 'at capacity' : 'not healthy'}`,
-      });
-      if (afterRunning) container.startFaultAfterRunning = unavailable;
-      else container.startFaultBeforeRunning = unavailable;
+  test('a capacity refusal — no container ever ran — records its class and arms one successor', async () => {
+    // The container was never admitted, so no start hook ran and nothing
+    // restored: the incident and the successor row are the whole answer.
+    const { box, container, rows } = harness(TestBox);
+    await container.stop();
+    container.startFaultBeforeRunning = new SandboxFailure({
+      code: 'CONTAINER_UNAVAILABLE',
+      message: 'the container is at capacity',
+    });
 
-      await box.devboxStartup();
+    await box.devboxStartup();
 
-      expect(container.startWaitOptions).toHaveLength(1);
-      expect(armed(container)).toBe(1);
-      expect(incidents(rows)).toEqual([
-        expect.objectContaining({
-          stage: 'attach',
-          reason: expect.stringContaining('[transient → retry]'),
-        }),
-      ]);
-    }
+    expect(container.startWaitOptions).toHaveLength(1);
+    expect(armed(container)).toBe(1);
+    expect(incidents(rows)).toEqual([
+      expect.objectContaining({
+        stage: 'attach',
+        reason: expect.stringContaining('[transient → retry]'),
+      }),
+    ]);
+    expect((await box.devboxState()).restoration).toBe('unstarted');
+  });
+
+  test('an unhealthy answer AFTER the container ran files no blocker: its start hook restored the box', async () => {
+    // THE GATE CHANGES WHAT THIS FAULT MEANS, and the difference is the whole
+    // point of the placement. `startFaultAfterRunning` fires once the platform
+    // has an instance — which is AFTER the SDK ran the container-start hook, so
+    // the restore already happened inside it and the box is attached. The
+    // admission refusal that used to be filed here would be a blocker about a
+    // box that is working, on the one channel built to be trusted; the
+    // generation the start hook turned over is what makes this attempt's
+    // refusal inert.
+    const { box, container, rows } = harness(TestBox);
+    await container.stop();
+    container.startFaultAfterRunning = new SandboxFailure({
+      code: 'CONTAINER_UNAVAILABLE',
+      message: 'the container is not healthy',
+    });
+
+    await box.devboxStartup();
+
+    const state = await box.devboxState();
+    expect({ restoration: state.restoration, ready: state.ready, incidents: incidents(rows) })
+      .toEqual({ restoration: 'attached', ready: true, incidents: [] });
   });
 
   test('a stopped replacement cannot reuse the prior container attachment after eviction', async () => {

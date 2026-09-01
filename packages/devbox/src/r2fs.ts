@@ -40,7 +40,7 @@
  * semantics that are close to but not the same as a disk.
  */
 
-import { findMount } from './lifecycle';
+import { describeThrown, findMount } from './lifecycle';
 import {
   DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
@@ -165,6 +165,46 @@ export interface R2fsPorts {
    *  options merged over the SDK's R2 defaults. */
   mount(s3fsOptions: readonly string[]): Promise<void>;
   unmount(): Promise<void>;
+  /**
+   * Move the container's shared session shell OUT of the work directory, and
+   * answer where it now stands.
+   *
+   * MEASURED DEFECT THIS REPAIRS, and it is the whole reason every r2fs stop
+   * refused. `fusermount -u` is issued through the SDK's DEFAULT session, which
+   * the SDK creates with `cwd: "/workspace"` — the mount point itself. A shell
+   * standing on a mount holds a reference to it, so the unmount is refused
+   * EBUSY by the very session that asked for it, no matter how many holders
+   * the scan killed first. Deployed probe `hp0901170218` measured both halves:
+   * the stop refused with the mount up, and the same `fusermount -u`, run again
+   * with nothing changed except the session's cwd, returned 0 and released it.
+   *
+   * The SDK draws the same distinction itself: its backup session, the one that
+   * unmounts overlay mounts, is created with `cwd: "/"` and documented as never
+   * sharing shell state. The default session was simply never given that
+   * treatment.
+   */
+  parkSession(): Promise<string>;
+  /**
+   * Detach the mount LAZILY — `fusermount -z`, the `MNT_DETACH` the kernel
+   * offers for exactly this — and answer whether the mount is gone from
+   * `/proc/mounts`.
+   *
+   * THE LAST RESORT, AND ONLY AFTER THE FLUSH SUCCEEDED. A reference this
+   * strategy cannot revoke — an ancestor of the scan's own shell, or one of the
+   * container server's own children — leaves an ordinary unmount permanently
+   * refused, and a box that can never release its mount can never stop. A lazy
+   * detach removes the mount from the namespace immediately and lets the kernel
+   * free it when the last reference drops, which is measured to clear a live
+   * cwd holder on a real mount.
+   *
+   * IT IS NOT A WAY TO SKIP THE FLUSH. The bytes an open writer left in the
+   * page cache reach the store only through the `sync -f` above, so this is
+   * reached only on the path where that sync has already returned 0. Called
+   * before it, a lazy detach would be a way to lose exactly the bytes the stop
+   * exists to save. The SDK uses the same primitive for its own mounts
+   * (`fusermount3 -uz`).
+   */
+  lazyUnmount(): Promise<boolean>;
   /** Objects and bytes this box's prefix holds right now. Read through the
    *  store binding, not through the mount: the question is what is durable, and
    *  the mount's answer would come from a cache. */
@@ -225,6 +265,64 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
     return undefined;
   };
 
+  /**
+   * Release the s3fs mount — from OUTSIDE it, and lazily if it still refuses.
+   *
+   * ONE HELPER FOR ALL THREE RELEASES, because all three are the same act and
+   * two of them used to get it wrong silently. A stop releases the mount, and
+   * so do both of `attach`'s refusals: a mount already here that fails its
+   * read-back, and a fresh mount that reports success and then fails it. Every
+   * one of those `fusermount -u` calls travels through the session the SDK
+   * created with `cwd: "/workspace"`, so every one of them was refused EBUSY in
+   * a deployed container — which turned `attach`'s two refusals into the wrong
+   * error entirely: the caller was told the mount was busy instead of being
+   * told what was wrong with it, and the defective mount stayed up for the next
+   * attach to adopt. That is the very laundering the comments at those sites
+   * say they exist to prevent.
+   *
+   * `why` names the release in the log, because a lazy detach is worth reading
+   * about and "which release was this" is the first question about one.
+   *
+   * IT ANSWERS THE REFUSAL RATHER THAN THROWING IT, because its three callers
+   * owe different sentences. A stop has nothing to add and rethrows as-is. Both
+   * of `attach`'s refusals have a sentence the refusal must NOT replace: the one
+   * naming the DEFECT, which is the only thing telling a caller why this mount
+   * was rejected — and a bare throw here erased it, measured against the init
+   * gate's restore deadline, where a release refused before it was even issued
+   * produced a report that never mentioned what was wrong with the mount. The
+   * refusal instead travels as the `cause` of that sentence, which loses
+   * nothing: `classifyRecovery` walks the cause chain and returns on the first
+   * classified value, so a gate refusal buried under a defect sentence still
+   * classifies `gate-bound` and still retries without advancing the destructive
+   * ladder, and `describeThrown` renders the whole chain so one incident reason
+   * carries the defect AND the refusal.
+   */
+  const releaseMount = async (why: string): Promise<Error | undefined> => {
+    const parked = await ports.parkSession();
+    try {
+      await ports.unmount();
+      return undefined;
+    } catch (cause) {
+      // A refusal that survives a parked session is a reference this strategy
+      // cannot revoke: one of the container server's own children, or an
+      // ancestor of the holder scan's shell, which that scan names and
+      // deliberately never signals. The mount still has to go — a box that
+      // cannot release its mount can never stop, and can never attach again.
+      if (await ports.lazyUnmount()) {
+        ports.log(
+          `${DEVBOX_WORKDIR} refused an ordinary unmount with the session parked at ${parked} `
+          + `(${why}), so it was detached lazily (MNT_DETACH): ${describeThrown({ cause })}`,
+        );
+        return undefined;
+      }
+      // NORMALISED HERE, at the boundary it crosses. A thrown value is whatever
+      // the thrower threw, and this one is about to become a `cause` that two
+      // callers attach to a sentence of their own — so it is made an `Error`
+      // once, here, rather than left as a value every caller has to re-narrow.
+      return cause instanceof Error ? cause : new Error(describeThrown({ cause }));
+    }
+  };
+
   const attach = async (): Promise<AttachOutcome> => {
     const mountsBefore = await ports.readMounts();
     if (isS3fsMounted(mountsBefore, DEVBOX_WORKDIR)) {
@@ -234,11 +332,15 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
       // rejected mount into a healthy answer on the next call.
       const defect = await mountDefect(mountsBefore);
       if (defect !== undefined) {
-        await ports.unmount();
+        const refusal = await releaseMount('a mount already here failed its read-back');
         throw new Error(
-          `${DEVBOX_WORKDIR} was already mounted, but ${defect}. Unmounted; the next attach `
-          + 'starts from a clean container rather than serving a mount this strategy would '
-          + 'have refused.',
+          `${DEVBOX_WORKDIR} was already mounted, but ${defect}. `
+          + (refusal === undefined
+            ? 'Unmounted; the next attach starts from a clean container rather than serving a '
+              + 'mount this strategy would have refused.'
+            : 'It could NOT be released, so the next attach re-reads this same mount, refuses '
+              + 'it again, and tries the release again.'),
+          refusal === undefined ? undefined : { cause: refusal },
         );
       }
       const held = await ports.inventory();
@@ -271,10 +373,15 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
       // /proc/mounts and reported `already-attached` — one broken mount, refused
       // once and then accepted for the rest of the container's life. A refusal
       // has to leave nothing behind for a later call to adopt.
-      await ports.unmount();
+      const refusal = await releaseMount('a fresh mount reported success and failed its read-back');
       throw new Error(
-        `mount of ${DEVBOX_WORKDIR} reported success, but ${defect}. Unmounted; refusing to `
-        + 'start rather than serve a mount that is not the one this strategy describes.',
+        `mount of ${DEVBOX_WORKDIR} reported success, but ${defect}. `
+        + (refusal === undefined
+          ? 'Unmounted; refusing to start rather than serve a mount that is not the one this '
+            + 'strategy describes.'
+          : 'It could NOT be released, so the next attach finds this mount, refuses it by the '
+            + 'same read-back, and tries the release again.'),
+        refusal === undefined ? undefined : { cause: refusal },
       );
     }
     const held = await ports.inventory();
@@ -347,6 +454,12 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
    * leaves that behind hands the next attach a box it cannot mount, so the
    * sweep belongs here, where the checkpoint that made the store durable has
    * already run.
+   *
+   * AND THE SESSION HAS TO STAND SOMEWHERE ELSE FIRST. See
+   * {@link R2fsPorts.parkSession}: the unmount travels through a session shell
+   * the SDK created in `/workspace`, and a shell standing on a mount refuses
+   * that mount's release. This is the deterministic reason every deployed r2fs
+   * stop refused, with the holder scan's names taking the blame for it.
    */
   const detach = async (): Promise<void> => {
     if (!ports.containerRunning()) return;
@@ -367,7 +480,13 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
           + `${synced.stderr.trim() || synced.stdout.trim() || `exit ${synced.exitCode}`}`,
         );
       }
-      await ports.unmount();
+      // THE FLUSH HAS LANDED, which is what makes the lazy fallback inside
+      // `releaseMount` safe here rather than lossy: the open write's bytes are
+      // already in s3fs, so the only remaining question is the namespace.
+      // A stop has no sentence of its own to add: `#detachStorage` is what names
+      // the holders a refusal should blame, so the refusal travels up verbatim.
+      const refusal = await releaseMount('a stop');
+      if (refusal !== undefined) throw refusal;
     }
     const swept = await ports.quarantineMountpoint();
     ports.log(

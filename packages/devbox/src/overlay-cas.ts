@@ -54,6 +54,85 @@
  *   count. Nothing re-measured the LOCAL harness after the change, so the
  *   millisecond rows above stand as they were taken and the byte row does not
  *   describe this release.
+ *
+ * ── ELIMINATED AS A CHECKPOINT STRATEGY, 2026-09-01 ──────────────────────────
+ *
+ * MEASURED DEPLOYED, probe ocs09011400: one box on Cloudflare Containers, a
+ * real R2 bucket, `/var/tmp/devbox/cas-store` mounted `fuse.s3fs` and
+ * `/workspace` mounted `fuse-overlayfs`, carrying the lifecycle suite's own
+ * small tree — 128 files, 922,624 B — written through the overlay. The runner
+ * was then driven by hand with `--profile stderr`, so every row below is the
+ * runner's own clock beside the store calls that produced it, not a driver's
+ * view through a request.
+ *
+ *   cold tick                                    400,997 ms
+ *     read scan cache                 398 ms     1 GET
+ *     SCAN THE WHOLE UPPER             67 ms     no store call; 141 paths,
+ *                                                128 files, 922,624 B digested
+ *     load pending journal            386 ms     2 GET + 1 LIST
+ *     stage blobs                 392,777 ms     131 PUT + 128 HEAD, 960,183 B
+ *     write scan cache              2,297 ms     1 PUT, 25,072 B
+ *   idle tick (nothing changed)                   15,173 ms
+ *     SCAN THE WHOLE UPPER              9 ms     no store call, 0 re-digested
+ *   quiesce (fold + reap)                        549,989 ms
+ *     fold journal into tree      518,220 ms     130 PUT + 133 GET + 6 DELETE
+ *     sweep orphan blobs           21,076 ms     2 GET + 2 LIST
+ *
+ * Cold tick plus fold is 950,986 ms, which is the 894,809 ms this arm spent on
+ * `checkpoint-small` in the lifecycle suite: a quiesce IS a tick and a fold in
+ * one invocation.
+ *
+ * THE SCAN IS NOT THE COST AND NEVER WAS. 67 ms cold, 9 ms idle, 13 ms after a
+ * fold — 0.017% of the tick, and not one store call in it. The scan already
+ * enumerates the overlay UPPER, which IS the change set; there is no whole-tree
+ * walk here to replace with one. Any plan that starts by making the scan
+ * cheaper is optimizing four hundredths of a percent.
+ *
+ * THE COST IS ONE OBJECT PUBLISHED PER CHANGED FILE, THROUGH THE MOUNT. Three
+ * independent measurements agree on the unit: 1,517 ms per store call while
+ * staging, 1,927 ms per store call while folding, and 1,255–1,365 ms for a bare
+ * 3 KiB write-temp-then-rename on the same mount with nothing else running
+ * (probe ocm09011500). It is per-operation latency, not bytes and not CPU —
+ * the cold tick moved 960 KB in 393 s, which is 2.4 KB/s.
+ *
+ * CONCURRENCY CANNOT HIDE IT, which is the finding that closes the question.
+ * The runner publishes sequentially, so the obvious repair is a bounded pool.
+ * Measured on the arm's own mount, 24 files, same publish pattern: one lane
+ * 1,365 ms/file, eight lanes 1,020 ms/file (1.32×), twenty-four lanes
+ * 1,031 ms/file (1.22×). It saturates at 1.3× and stops improving between 8 and
+ * 24 — s3fs serializes. A perfect pool leaves the floor at ~1,020 ms per
+ * publication.
+ *
+ * WHY THAT FLOOR IS THE STRATEGY AND NOT AN IMPLEMENTATION. Every changed file
+ * must be published TWICE through this mount: once as a chunk blob, because the
+ * store is content-addressed, and once as a `tree/` object, because `tree/` is
+ * the fuse-overlayfs read-only LOWER and s3fs can only serve it as real objects
+ * carrying real POSIX mode and mtime. So the floor is 2 × 1,020 ms per changed
+ * file even with concurrency saturated:
+ *
+ *   128 files (this suite's 1 MB tree)  ≥   261 s  vs an 83,000 ms ceiling
+ *   2,525 files (its 30 MiB npm tree)   ≥ 86 min
+ *
+ * Three point one times over the suite's own ceiling in the BEST case, and
+ * 11.4× over it as implemented. Neither exit from that floor leaves the
+ * strategy intact. Publish the changed set as one archive instead of per-file
+ * objects and there is no lower to mount — that is snapshot-chain and
+ * merkle-pack. Write `tree/` through the R2 binding instead of the mount and
+ * the payload crosses the Durable Object isolate, which is the one thing the
+ * paragraph above this measurement exists to forbid. Either way what remains is
+ * not a content-addressed overlay.
+ *
+ * So the headline at the top of this file is TRUE AND INSUFFICIENT. Attach
+ * really is O(pending change) with no payload byte, the tick's class-A cost
+ * really is blobs plus batches rather than a PUT per path, and the scan really
+ * is bounded by the change. The strategy is eliminated on the term none of
+ * those describe: what it costs to put a changed file into R2 through a FUSE
+ * mount, times the number of changed files. It is kept in the tree as a
+ * measured arm, not as a candidate default.
+ *
+ * REPRODUCE IT: `--profile stderr` on the runner prints one `[profile]` line
+ * per phase — wall time, the store counter delta, and what that phase counted.
+ * Absent in every production invocation; see `OverlayRunnerRequest.profile`.
  */
 
 import * as v from 'valibot';

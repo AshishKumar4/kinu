@@ -14,8 +14,8 @@
  * number.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import * as v from 'valibot';
 
 export const TEARDOWN_MANIFEST_SCHEMA = 'storage-matrix/teardown@1';
@@ -77,17 +77,35 @@ const TeardownManifestSchema = v.object({
   kept: v.boolean(),
 });
 
-/** The manifest lives OUTSIDE git and outside the process: bench-artifacts
- *  survives a crash that kills the driver, which is the point. */
-export function manifestPath(repoRoot: string, runId: string): string {
-  return join(repoRoot, 'bench-artifacts', 'teardown', `${runId}.json`);
+/** The one place the manifest directory is spelled: `bench-artifacts` lives
+ *  OUTSIDE git and outside the process, so it survives a crash that kills the
+ *  driver, which is the point. */
+function manifestDirectory(repoRoot: string): string {
+  return join(repoRoot, 'bench-artifacts', 'teardown');
 }
 
+export function manifestPath(repoRoot: string, runId: string): string {
+  return join(manifestDirectory(repoRoot), `${runId}.json`);
+}
+
+/**
+ * Persist the manifest, ATOMICALLY.
+ *
+ * A plain `writeFileSync` is not atomic, and the one event this file exists to
+ * survive — a signal that kills the driver — can land between the truncate and
+ * the last byte. That leaves a manifest whose JSON does not parse, which is
+ * strictly worse than no manifest at all: the resources are real, the list of
+ * them is on disk, and nothing can read it. Write a sibling temp file and
+ * rename it over the target instead; rename within one directory is atomic, so
+ * a reader sees either the previous manifest or the new one.
+ */
 export function writeManifest(repoRoot: string, manifest: TeardownManifest): void {
   const path = manifestPath(repoRoot, manifest.runId);
   mkdirSync(dirname(path), { recursive: true });
   manifest.updatedAt = new Date().toISOString();
-  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  const staging = `${path}.writing`;
+  writeFileSync(staging, `${JSON.stringify(manifest, null, 2)}\n`);
+  renameSync(staging, path);
 }
 
 export function loadManifest(repoRoot: string, runId: string): TeardownManifest | null {
@@ -161,6 +179,106 @@ export async function replayTeardown(
     writeManifest(repoRoot, manifest);
   }
   return { manifest, failures };
+}
+
+/** What a startup scan of the manifest directory found. */
+export interface ManifestScan {
+  /** Manifests still naming resources nobody deleted, oldest run first. */
+  readonly unfinished: readonly TeardownManifest[];
+  /** Manifest files that could not be decoded. Their resources are real and
+   *  their list is unreadable, so they are reported rather than dropped. */
+  readonly unreadable: readonly string[];
+}
+
+/**
+ * Every manifest on disk that still names work nobody finished.
+ *
+ * A driver killed between its deploy and its teardown leaves exactly this: a
+ * complete list of live resources with `done: false` against each. Nothing
+ * reads it unless the next driver looks, so the next driver looks BEFORE it
+ * creates resources of its own — otherwise each interrupted run silently adds
+ * a Worker, a container application and a bucket to the account forever.
+ *
+ * `exclude` is the run doing the scanning. Its own manifest is unfinished by
+ * construction, and replaying it would delete the resources it is about to use.
+ */
+export function scanUnfinishedManifests(repoRoot: string, exclude: string): ManifestScan {
+  const directory = manifestDirectory(repoRoot);
+  if (!existsSync(directory)) return { unfinished: [], unreadable: [] };
+  const unfinished: TeardownManifest[] = [];
+  const unreadable: string[] = [];
+  for (const file of readdirSync(directory).sort()) {
+    if (!file.endsWith('.json')) continue;
+    if (basename(file, '.json') === exclude) continue;
+    const path = join(directory, file);
+    let manifest: TeardownManifest;
+    try {
+      manifest = v.parse(TeardownManifestSchema, JSON.parse(readFileSync(path, 'utf8')));
+    } catch (error) {
+      unreadable.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    if (manifest.entries.some((entry) => !entry.done)) unfinished.push(manifest);
+  }
+  return { unfinished, unreadable };
+}
+
+/** What the startup scan did about one abandoned run. */
+export interface RecoveredRun {
+  readonly runId: string;
+  /** Entries still undeleted when the scan found it. */
+  readonly unfinished: number;
+  /** False when `--keep` retained the resources on purpose; they are reported
+   *  and left alone, because deleting what an operator asked to inspect is a
+   *  worse failure than leaving it. */
+  readonly replayed: boolean;
+  readonly failures: readonly string[];
+}
+
+/**
+ * Report every abandoned run, and replay the ones nobody asked to keep.
+ *
+ * Runs before the caller creates anything. `replayTeardown` persists each
+ * entry's status as it goes, so a recovery that is itself interrupted leaves
+ * strictly less work than it found and the driver after this one continues.
+ */
+export async function recoverAbandonedRuns(
+  repoRoot: string,
+  exclude: string,
+  exec: (entry: TeardownEntry) => Promise<DeleteOutcome>,
+  report: (line: string) => void,
+): Promise<readonly RecoveredRun[]> {
+  const scan = scanUnfinishedManifests(repoRoot, exclude);
+  for (const problem of scan.unreadable) {
+    report(`abandoned teardown manifest cannot be decoded, so its resources must be swept by hand — ${problem}`);
+  }
+  const recovered: RecoveredRun[] = [];
+  for (const manifest of scan.unfinished) {
+    const pending = manifest.entries.filter((entry) => !entry.done);
+    report(
+      `run ${manifest.runId} (last touched ${manifest.updatedAt}) left ${pending.length} resource(s) undeleted: `
+      + pending.map((entry) => `${entry.kind}:${entry.name}`).join(', '),
+    );
+    if (manifest.kept) {
+      report(`run ${manifest.runId} was retained on purpose (--keep); leaving its resources in place`);
+      recovered.push({ runId: manifest.runId, unfinished: pending.length, replayed: false, failures: [] });
+      continue;
+    }
+    const replay = await replayTeardown(repoRoot, manifest, exec);
+    for (const failure of replay.failures) report(`run ${manifest.runId}: ${failure}`);
+    report(
+      replay.failures.length === 0
+        ? `run ${manifest.runId}: every abandoned resource is now deleted or already absent`
+        : `run ${manifest.runId}: ${replay.failures.length} resource(s) still undeleted; its manifest keeps them`,
+    );
+    recovered.push({
+      runId: manifest.runId,
+      unfinished: pending.length,
+      replayed: true,
+      failures: replay.failures,
+    });
+  }
+  return recovered;
 }
 
 // ── counter reconciliation ──────────────────────────────────────────────────

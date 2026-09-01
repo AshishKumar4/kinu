@@ -16,6 +16,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { Devbox, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
+import type { DevboxStore, DevboxStrategyName } from '../src/storage';
 
 const COMMAND = 'bun run server.ts';
 /** The transient the caller retries on, and the one that can strike between
@@ -211,5 +212,103 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     container.startFaults.push({ error: new Error(LOST), created: false });
     await expect(container.startProcess('x', { processId: 'p1' })).rejects.toThrow('lost');
     expect(container.processes.size).toBe(0);
+  });
+});
+
+/**
+ * A merkle-pack box, because the candidate arms are the only strategy whose
+ * attach and repair drive a SUPERVISED RUNNER inside the container — and the
+ * wait for that runner to exit is what the test below is about.
+ */
+class CandidateBox extends Devbox<Record<string, never>> {
+  protected override get strategy(): DevboxStrategyName {
+    return 'merkle-pack';
+  }
+
+  protected override get candidateRunnerPath(): string {
+    return '/runner.ts';
+  }
+
+  protected override get store(): DevboxStore {
+    // SAFETY: constructed against the R2Bucket contract. The repair path this
+    // test drives reaches the runner wait before it reads a single object, so
+    // `list` is the only member it can touch.
+    const bucket: R2Bucket = Object.create({ list: () => ({ objects: [], truncated: false }) });
+    return { binding: 'BACKUP_BUCKET', bucket };
+  }
+
+  protected override get ambientCheckpoints(): boolean {
+    return false;
+  }
+}
+
+describe('a supervised runner wait ends when the container that would report the exit is gone', () => {
+  /**
+   * MEASURED DEFECT THIS PINS. `waitForRunnerExit` polled `getProcess` in a
+   * `for (;;)` whose only two exits were "the record is gone" and "the record
+   * says exited". A container that stopped or was replaced satisfies neither:
+   * the record lives on THIS side, so it keeps answering `running` for a
+   * process whose reporter no longer exists, and the poll waits for an event
+   * that can never arrive.
+   *
+   * What that costs is not one slow attach. The storage adapter is built once
+   * per isolate (`#storage ??=`) and `attach()` keeps its in-flight promise in
+   * `attaching`, released only in the `finally` of the run itself — so an
+   * attach that never settles becomes the answer handed to every later attach
+   * in that isolate. The box stops being slow and becomes unattachable.
+   *
+   * Measured: in `e2ecal0901002202`, run with a 900,000 ms wall and no ceilings
+   * enforced, `bounded-layers` cold-attach and `merkle-pack` wake-attach each
+   * recorded 900,001 ms — the wall, not a duration — while every arm that
+   * settled did so in single-digit seconds. Both candidate arms then lost
+   * cold-attach to the 25,000 ms ceiling in `e2e20260901140445`. The platform
+   * error printed beside them names the condition exactly: "The sandbox
+   * container stopped while the operation was pending."
+   */
+  test('a container that stopped mid-poll ends the wait, and says so', async () => {
+    const { box, container, rows } = harness(CandidateBox);
+    // An ATTACHED box whose checkpoint runner is still live: the state
+    // `repairAttached` exists for, and the one path that waits on a runner
+    // without first reading an object out of the store.
+    container.bootId = 'boot-1';
+    rows.set('devbox:boot-id', 'boot-1');
+    rows.set('devbox:candidate-control:merkle-pack', {
+      version: 1,
+      head: null,
+      operation: {
+        operationId: 'op-1',
+        kind: 'tick',
+        epoch: '1',
+        bootId: 'boot-1',
+        baseRevision: '0',
+        expectedParent: null,
+        phase: 'transferring',
+        attemptId: 'attempt-1',
+      },
+    });
+    container.processes.set('candidate-runner-checkpoint', {
+      id: 'candidate-runner-checkpoint',
+      pid: 4_242,
+      status: 'running',
+      command: 'bun /runner.ts --action checkpoint',
+    });
+
+    // THE INSTANCE GOES WHILE THE POLL IS IN FLIGHT, which is when it really
+    // goes. The record it left behind still says `running`, because the record
+    // is on this side and nothing remains to update it.
+    container.stopsContainerOnPoll.add('candidate-runner-checkpoint');
+
+    // IT ANSWERS, and the answer is a refusal that names the condition. A
+    // refusal is the whole point: it settles the attach, which releases the
+    // adapter's single-flight entry, so the NEXT attach opens real work
+    // against whatever container the box has by then. An attach that never
+    // answers is the one outcome no later caller can recover from.
+    await expect(box.devboxStartup()).rejects.toThrow(
+      'candidate runner candidate-runner-checkpoint lost its container before it exited',
+    );
+
+    // And it is on the durable channel too, so the box still says why after
+    // the isolate that learned it is gone.
+    expect((await box.devboxState()).incidents.total).toBeGreaterThan(0);
   });
 });

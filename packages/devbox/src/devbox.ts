@@ -8,20 +8,29 @@
  *
  * WHAT THIS CLASS OWNS
  *
- *   The start, fast. `onStart` runs inside `blockConcurrencyWhile`, where a
- *   container cold start and anything else it awaits share ONE platform cancel
- *   window, and the runtime resets the object when that window closes. So this
- *   hook does nothing slow: it resets the per-container flags and arms the
- *   schedule rows.
+ *   The restoration, INSIDE the activation that owns the container. The SDK
+ *   awaits `onStart` within `blockConcurrencyWhile`, so while it is held the
+ *   runtime delivers no event to this object at all — and that is where the
+ *   attach, the supervised processes and the port manifest now run. The first
+ *   operation after a cold start therefore cannot observe a half-restored box
+ *   for a reason stronger than any promise this class could hold: it has not
+ *   been delivered yet. The gate opens on a world that is either restored or
+ *   named `repair`.
  *
- *   The restoration, scheduled and bounded. The attach, the supervised
- *   processes and the port manifest all run from a `Container.schedule` row, so
- *   they survive eviction, block nobody, and carry a budget that can actually
- *   fire.
+ *   Bounded WITHOUT a timer, because a timer cannot help there: one set inside
+ *   the block is not delivered until the block releases. The budget — the
+ *   platform's own `do.block_concurrency.cancel_ms` minus a margin — is POLLED
+ *   instead, before each phase and before each container command, so a restore
+ *   that cannot finish completes the activation with a classified reason rather
+ *   than holding the gate until the runtime resets the object. Nothing on this
+ *   path sleeps in the Durable Object; the waits that must happen happen inside
+ *   the container, in one command, counted.
  *
- *   The readiness gate. Every operation goes through `ensureReady()`, so a
- *   caller that arrives before the scheduled restoration finished waits for it
- *   instead of seeing a half-restored box.
+ *   The readiness gate, as the FALLBACK. `ensureReady()` still guards every
+ *   operation, but what it guards against is now the case the start hook cannot
+ *   cover: the platform replacing a container instance under a live object. It
+ *   returns what it admitted the caller INTO — restored, or repair with a
+ *   reason — and refuses everything else.
  *
  *   The activity lease. The disk is ephemeral, so an idle expiry costs an
  *   attach. One durable timestamp plus one heartbeat holds the container while
@@ -65,7 +74,7 @@ import * as v from 'valibot';
 import {
   DEFAULT_DEVBOX_POLICY,
   generatePortToken,
-  healthProbeCommand,
+  GateBudgetSpent,
   healthProbeSilent,
   describeThrown as describe,
   type LateStartFailure,
@@ -94,8 +103,8 @@ import {
   type RecoveryRow,
   type RecoveryStage,
   type SupervisedProcessSpec,
-  findMount, withContainerStartDeadline, runRestoreStep, openStartBudget,
-  type StartBudget,
+  findMount, withContainerStartDeadline, openStartBudget, awaitListenerCommand,
+  racedRestoreSteps, gateRestoreSteps, type RestoreSteps,
 } from './lifecycle';
 import { r2fsStorage, type R2fsPorts } from './r2fs';
 import { deletePrefix, prefixInventory, putStream } from './object-store';
@@ -123,7 +132,12 @@ import {
   type CandidateContainerFormat,
   type CandidateContainerPorts,
 } from './candidates/container';
-import { journalDaemonArgv } from './capture/journal/command';
+import {
+  JOURNAL_READY_WAIT_SECONDS,
+  journalDaemonArgv,
+  journalReadyCommand,
+  readJournalReady,
+} from './capture/journal/command';
 import {
   beginCandidateOperation,
   candidateRunControl,
@@ -167,14 +181,27 @@ import {
 } from './storage';
 
 const CANDIDATE_CONTROL_PREFIX = 'devbox:candidate-control:';
-/** The journal daemon must present its mount and control socket before a
- *  workload can write through it; a wake is not complete until it does. */
-const JOURNAL_READY_ATTEMPTS = 40;
-const JOURNAL_READY_INTERVAL_MS = 50;
 /** Runner status is polled instead of opening Sandbox's long-lived log SSE.
  *  Separate from cli-backend's LOCK_POLL_MS: same round number, unrelated
  *  decisions — this paces a container process poll, that one a config lock. */
 const RUNNER_EXIT_POLL_INTERVAL_MS = 50;
+/** How long a container gets to REPORT itself stopped after it acknowledged the
+ *  signal, as a count times an interval.
+ *
+ *  A COUNT, BECAUSE THE ALTERNATIVE HUNG. This wait had no bound at all
+ *  (`while (running) await wait(100)`), and it sits on the recovery path: a
+ *  `destroy()` the platform acknowledged but never reflected in `running` pinned
+ *  the in-flight attempt for ever, and a pinned attempt is one `kickStartup`
+ *  early-returns on — so nothing re-armed and no further incident was filed.
+ *  Fifty probes at 100 ms is five seconds, an order of magnitude more than the
+ *  transition takes when it happens at all. */
+const CONTAINER_STOP_ATTEMPTS = 50;
+const CONTAINER_STOP_INTERVAL_MS = 100;
+/** How often the container-admission probe asks the platform for an instance,
+ *  inside the one window `portWaitMs` gives it. The SDK's own default poll
+ *  interval; named here because the retry COUNT is derived from it and a
+ *  divisor spelled twice is a divisor that drifts. */
+const ADMISSION_POLL_INTERVAL_MS = 100;
 
 /** The durable control record for one candidate arm; an absent row is no history. */
 function readCandidateControl(stored: StoredValue | undefined): CandidateControlStateV1 {
@@ -210,12 +237,6 @@ const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 const LAST_TICK_KEY = 'devbox:last-tick';
 const BOOT_ID_KEY = 'devbox:boot-id';
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
-
-/** The do-init gate's marker for a container-start hook whose returned work
- * touches nothing but this object's own storage. Referenced (as `void`) by
- * `onStart` so the gate can key its plainly-bounded rule on the method body;
- * a value only because an undeclared identifier would throw at runtime. */
-const BOUNDED_STORAGE_ONLY = true;
 
 /** Scheduled-callback names. Each MUST name a public method on the class:
  *  `Container.schedule` rejects anything it cannot call back. */
@@ -321,15 +342,30 @@ export interface DevboxReport {
   readonly strategy: DevboxStrategyName;
   readonly durable: boolean;
   readonly running: boolean;
-  /** The restoration attempt this isolate has observed for the current
-   * container generation. `unattached` is terminal until an explicit repair;
-   * a driver polls this instead of inferring lifecycle state from a stale
-   * attach record. */
-  readonly restoration: 'unstarted' | 'attached' | 'unattached';
+  /**
+   * The restoration this isolate has observed for the current container
+   * generation, as ONE name a caller can act on.
+   *
+   * FIVE NAMES, and two of them used to be ambient. A box whose work directory
+   * came back but whose services did not still ADMITS operations — that is
+   * deliberate, because the agent whose dev server failed is the only thing that
+   * can fix it and a box refusing `exec` cannot be repaired — but it used to
+   * report `attached`, exactly like a box that had restored everything. And a
+   * box with an attempt IN FLIGHT reported `unstarted`, which is what a box with
+   * nothing running reports. Both conflations were measured as defects (see
+   * `Restoration`), so both have their own name now: `attached` MEANS fully
+   * restored, `repair` names the degraded admission, `restoring` names an
+   * attempt in flight, and {@link unready} says which phase or how long.
+   *
+   * `unattached` is terminal until an explicit repair; a driver polls this
+   * instead of inferring lifecycle state from a stale attach record.
+   */
+  readonly restoration: 'unstarted' | 'restoring' | 'attached' | 'repair' | 'unattached';
   /** Attached AND fully restored: every supervised process back, every exposed
-   *  port's listener answering, every port re-exposed. Never true on a box that
-   *  is only half of that — a box that advertised readiness over a failed
-   *  service handed callers a URL that answers 502. */
+   *  port's listener answering, every port re-exposed. Exactly
+   *  `restoration === 'attached'` — the two cannot disagree, because a box that
+   *  is only half of that is named `repair` instead. A box that advertised
+   *  readiness over a failed service handed callers a URL that answers 502. */
   readonly ready: boolean;
   /** Why the box is not ready, or undefined when it is. Either nothing is
    *  attached or a required process, listener or port did not come back. The
@@ -371,17 +407,57 @@ export interface DevboxReport {
  * succeeded — or publish readiness for a generation that no longer existed. One
  * value cannot hold both halves of a contradiction.
  *
- * The split between `attached` and its `incomplete` reason is the other half:
- * operations are permitted the moment the WORK DIRECTORY is there, because a box
- * that refused `exec` could not be repaired by the agent whose service failed,
- * while `ready` stays false until the whole restoration landed.
+ * THE PARTIAL ADMISSION IS A PHASE OF ITS OWN, which is the second thing one
+ * value buys. `attached` used to carry an `incomplete` reason, so the same name
+ * meant both "everything came back" and "operations are being let into a world
+ * where a service did not" — and every reader that keyed on the name alone
+ * treated the second as the first. Splitting `repair` out makes that
+ * conflation unrepresentable: an activation settles on exactly one of the two,
+ * and a caller admitted into `repair` can see what it is entering.
+ *
+ * A RESTORATION IN FLIGHT IS ALSO A PHASE, and its absence was a measured
+ * defect. `unstarted` used to mean both "nothing has begun" and "an attempt is
+ * running and has published nothing yet", because the generation turnover that
+ * OPENS an attempt reset this value to `unstarted` and only the walk's end wrote
+ * again. So a box mid-restoration answered `restoration: 'unstarted'`, `unready:
+ * 'no restoration has run for this container yet'` — while its own attempt was
+ * pinned in `#startup`, `kickStartup` was early-returning on that pin, and
+ * therefore nothing re-armed. Measured live in probe `blp1`: running=true,
+ * `unstarted`, frozen for 300,771 ms, `/state` answering in ~300 ms throughout,
+ * and the driver's poll reading that as `pending` for ever. With `restoring` in
+ * the union that reading cannot be produced: an attempt is in flight or it is
+ * not, and the value says which — and `since` is what makes the in-flight
+ * answer actionable, because "restoring for 40 ms" and "restoring for 300 s"
+ * call for different decisions from whoever is polling.
  */
 type Restoration =
-  /** Nothing has attempted a restoration for this container yet. */
+  /** No attempt has begun for this container generation. NOT "an attempt is
+   *  running and has said nothing yet" — that is `restoring`. */
   | { readonly phase: 'unstarted' }
-  /** The work directory is attached. `incomplete` names what did not come back,
-   *  or is undefined when everything did. */
-  | { readonly phase: 'attached'; readonly incomplete: string | undefined }
+  /**
+   * An attempt is IN FLIGHT for this generation.
+   *
+   * `where` says which home it is running in, because the two have different
+   * observability and a reader needs to know which one it is looking at: an
+   * activation's restore holds the platform's init gate, so nothing can observe
+   * this value while it is set (an event asking would not be delivered), and
+   * seeing it means the object was RESET mid-restore. The scheduled fallback
+   * holds no gate, so this is the ordinary reading for a poll that arrives
+   * mid-restoration, and the honest answer to it is "wait", never "drive".
+   */
+  | { readonly phase: 'restoring'; readonly where: 'init-gate' | 'schedule'; readonly since: number }
+  /** The work directory is attached AND every supervised process, listener and
+   *  port came back. The only phase that is `ready`. */
+  | { readonly phase: 'attached' }
+  /**
+   * The work directory is attached and something else did not come back.
+   *
+   * OPERATIONS ARE STILL ADMITTED, and that is the point of the phase rather
+   * than an oversight: a box that refused `exec` could not be repaired by the
+   * agent whose service failed. `incomplete` is what did not come back, always
+   * present — a `repair` with nothing to repair is `attached`.
+   */
+  | { readonly phase: 'repair'; readonly incomplete: string }
   /**
    * There is no attached work directory, so operations refuse.
    *
@@ -393,6 +469,51 @@ type Restoration =
    * a box refusing for ever on a retry nothing is holding.
    */
   | { readonly phase: 'unattached'; readonly reason: string; readonly retry: boolean };
+
+/**
+ * What the FIRST operation admitted after a restoration is entering.
+ *
+ * The readiness gate's answer, returned rather than merely recorded. A caller
+ * that is let into a `repair` box is entering a world where a named service did
+ * not come back, and it used to have no way to know that from the call it made:
+ * the gate resolved `void` for both outcomes and the difference lived in a
+ * separate `devboxState()` poll nobody was obliged to make.
+ */
+export type RestoreAdmission =
+  | { readonly kind: 'restored' }
+  | { readonly kind: 'repair'; readonly incomplete: string };
+
+/** What a boot stamp that did not land contributes to the incompleteness
+ *  reason, by the outcome the step reported.
+ *
+ *  A TABLE, because one of the three is counter-intuitive and a nested ternary
+ *  hid it: `pending` — a repair that found no stamp and was not asked to retry
+ *  one — reports the FAILED wording deliberately, since that is the sentence the
+ *  next repair reads to decide it must retry the stamp. Changing it to "pending"
+ *  would silently disable that retry. */
+const STAMP_MISSING = {
+  late: 'the boot id stamp is still pending',
+  failed: 'the boot id stamp failed',
+  pending: 'the boot id stamp failed',
+} as const;
+
+/**
+ * The phase a settled restoration is in, from what did not come back.
+ *
+ * ONE BUILDER FOR TWO CALL SITES — the ordinary restore and the attached-container
+ * repair — because this mapping IS the contract the two phases now carry:
+ * nothing missing is `attached`, anything missing is `repair` and names it. The
+ * two copies of this ternary that used to stand at those call sites are how
+ * `attached` came to mean both things.
+ */
+function settledRestoration(
+  down: readonly string[],
+  stamp: keyof typeof STAMP_MISSING | 'done',
+): Restoration {
+  const missing = stamp === 'done' ? down : [...down, STAMP_MISSING[stamp]];
+  if (missing.length === 0) return { phase: 'attached' };
+  return { phase: 'repair', incomplete: missing.join('; ') };
+}
 
 /** One attempt's hold on the ladder row: the token it claimed, the stage that
  *  claim preserved, and whether the row it read was readable at all. */
@@ -452,6 +573,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  waiting on work whose result is already discarded. */
   #startup: { readonly generation: number; readonly run: Promise<void> } | undefined;
   #restoration: Restoration = { phase: 'unstarted' };
+  /**
+   * Set exactly while THIS activation's own restore holds the platform's init
+   * gate, and it answers the only two questions that window raises.
+   *
+   *   • MAY ANOTHER CONTAINER COMMAND BE ISSUED? `deadlineAt` is polled by
+   *     `#rawExec`, which every internal command passes through — the strategy's
+   *     `exec` port included — because a timer cannot bound anything in here.
+   *     Refusing to ISSUE is what makes the bound real: a command never sent
+   *     leaves nothing running to abandon.
+   *   • IS A CRITICAL SECTION ALREADY HELD? Non-undefined says yes, so the
+   *     ladder's read-modify-write runs plainly instead of opening a nested
+   *     `blockConcurrencyWhile` inside the platform's own. The exclusion a
+   *     nested one would buy is already in force, and nesting the platform's
+   *     critical section is not a property this class needs to depend on.
+   *
+   * ONE FIELD FOR BOTH because they are one fact: the activation's restore is
+   * running. Two fields could disagree about that, and a `#rawExec` that
+   * believed the gate was open while the ladder believed it was closed is
+   * exactly the kind of split this class spent its history removing.
+   */
+  #startGate: { readonly deadlineAt: number } | undefined;
   /** The work-directory holders the last release pass signalled, kept only
    *  long enough for a refused detach to name them. Cleared on every detach
    *  attempt, successful or not, so a later refusal cannot blame a stale list. */
@@ -612,24 +754,120 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return true;
   }
 
-  /** Arm periodic callbacks. The startup callback owns admission and attachment.
+  /**
+   * THE ACTIVATION RESTORES THE BOX, and every request waits behind it because
+   * the platform holds them, not because this class asked them to.
    *
-   *  Run PLAINLY, with no deadline wrapper: these are three writes to this
-   *  object's own storage — the one I/O a Durable Object is built to do, with
-   *  no container admission and nothing external to be stranded by — and the
-   *  wrapper's own timer cannot fire inside `blockConcurrencyWhile`, which is
-   *  exactly where this hook runs. A budget that cannot fire is not a bound;
-   *  it is a paper bound, and the platform's cancel is the real backstop for
-   *  the storage either way. The genuinely external container admission is
-   *  bounded where it runs, outside the gate, by the scheduled startup
-   *  callback below. */
-  override onStart(): Promise<void> {
-    // BOUNDED_STORAGE_ONLY is the marker the do-init gate reads: nothing this
-    // hook returns reaches off-object, so the gate holds it to the plainly
-    // bounded rule instead of demanding a deadline whose timer cannot fire
-    // here anyway.
-    void BOUNDED_STORAGE_ONLY;
-    return this.#armContainerSchedules();
+   * `Container.onStart` is awaited inside `blockConcurrencyWhile`
+   * (`@cloudflare/containers`, `container.js`: `blockConcurrencyWhile(async () =>
+   * { await this.state.setHealthy(); await this.onStart(); })`), so while this
+   * hook is held the runtime delivers NO event to this object. That is the
+   * strongest admission control there is, and using it is the whole design: the
+   * first `exec` after a cold start is not queued behind an in-isolate promise
+   * it might have raced — it is not delivered at all until the restore settled.
+   * `ensureReady()` remains, but as the FALLBACK for a container replaced in
+   * mid-life, not as the primary path.
+   *
+   * WHY THIS IS NOT THE DEFECT THAT MOVED THE ATTACH OUT. It was moved out
+   * because the attach shared one platform cancel window with the CONTAINER
+   * COLD START, and 44 s of container plus attach reset the object. Two facts
+   * changed that, and both are the SDK's own:
+   *
+   *   • The container is already up. `startAndWaitForPorts` proves the default
+   *     port answers BEFORE it calls this hook, so the platform's own capacity
+   *     wait — a container-application shortage answering "there is no container
+   *     instance that can be provided", observed on a contended account for
+   *     minutes at a time — is spent outside this gate and outside this budget.
+   *     The gate opens on a healthy container.
+   *   • The restore no longer sleeps in the Durable Object. Every phase is one
+   *     container round trip, and the phases that must WAIT wait inside the
+   *     container in a single counted command (`awaitListenerCommand`, and the
+   *     chain's own layer and mount probes). A `scheduler.wait` here would never
+   *     be delivered, which is exactly why none is left on this path.
+   *
+   * WHAT BOUNDS IT, given that a timer cannot. The budget is POLLED — before
+   * each phase by {@link gateRestoreSteps}, and before each container command by
+   * `#rawExec` — so no command is issued once it is spent and gate occupancy is
+   * at most the budget plus one command. `KinuSandbox` derives that budget from
+   * `do.block_concurrency.cancel_ms` minus a margin, so the activation
+   * COMPLETES rather than being cancelled, and a restore that could not finish
+   * completes it too: as `repair` when the work directory is there, as
+   * `unattached` when it is not. Neither wedges the gate, and neither throws —
+   * a throw here rejects the platform's own block.
+   */
+  override async onStart(): Promise<void> {
+    await this.restoreInStartGate();
+  }
+
+  /**
+   * The restore the init gate holds: arm the durable callbacks, then restore
+   * this container generation, bounded by a polled budget and classified
+   * whatever happens.
+   *
+   * CALLED FROM `onStart` AND NOWHERE ELSE, and its contract is that the
+   * platform's own critical section is already held — which is what lets the
+   * ladder claim below skip opening a nested one. It is public because the
+   * do-init gate pins it by name as the ONE await an activation may hold, and
+   * `#private` names cannot be spelled in that pin.
+   *
+   * IDEMPOTENT, because the hook fires at least once per container start and a
+   * replacement fires it again. Nothing here latches: the schedule arming is
+   * future-only, the generation turns over so no stale attempt can publish, the
+   * attach asks the CONTAINER whether it is already mounted rather than reading
+   * a stored marker, a process already running is left alone, and a port is
+   * re-exposed under the token its URL was built on. Running it twice in a row
+   * therefore costs one attach probe and changes nothing.
+   */
+  async restoreInStartGate(): Promise<void> {
+    // A CONTAINER START TURNS THE GENERATION OVER, before anything else. This
+    // hook runs on a container instance nothing has restored yet, so any attempt
+    // still in flight from the previous instance is describing a world that is
+    // gone: it must not publish readiness, file this generation's failure, or
+    // release a single-flight entry that is now this activation's.
+    this.#invalidateGeneration();
+    const generation = this.#generation;
+    const budget = openStartBudget(this.policy.attachBudgetMs);
+    // THE DURABLE CALLBACKS FIRST, and unconditionally. They are three writes to
+    // this object's own storage, and they are what the FALLBACK rides: the
+    // heartbeat that notices a replaced container, the checkpoint cadence, and
+    // the startup row a classified failure below re-arms. A restore that ends
+    // `unattached` must still leave a box that can be repaired without a caller.
+    await this.#armContainerSchedules();
+    // The window every container command below is polled against, and the flag
+    // that says a platform critical section is already held. One field, because
+    // both facts are the same fact: this activation's restore is running.
+    this.#startGate = { deadlineAt: Date.now() + budget.remainingMs() };
+    // REGISTERED AS THE GENERATION'S ONE ATTEMPT, even though the platform will
+    // not deliver a caller who could join it. "Nothing can arrive while the gate
+    // is held" is a claim about the runtime; "this generation has at most one
+    // restoration" is a claim about this class, and the second must be true on
+    // its own. Anything that DOES reach `devboxStartup` here — the `start()`
+    // call this hook is nested inside is the real one — joins this run instead
+    // of opening a second restoration against the same container.
+    const run = (async () => {
+      try {
+        await this.#restoreNow(generation, gateRestoreSteps(budget));
+      } catch (error) {
+        // NOTHING ESCAPES INTO THE PLATFORM'S BLOCK. `#restoreNow` classifies
+        // every restore failure and returns rather than raising, so reaching
+        // here means something outside the restore threw — this object's own
+        // storage, in the ladder claim. Rejecting would reject
+        // `blockConcurrencyWhile` itself, which the runtime answers by resetting
+        // the object: the same reset this whole design exists to avoid, arrived
+        // at by a different road. So it is recorded, the box stays refusing with
+        // a reason, and the armed startup row is what tries again.
+        const reason = `the activation's restore could not run: ${describe({ cause: error })}`;
+        this.#restoration = { phase: 'unattached', reason, retry: true };
+        await this.#record('attach', reason);
+      }
+    })();
+    this.#startup = { generation, run };
+    try {
+      await run;
+    } finally {
+      this.#startGate = undefined;
+      if (this.#owns(generation) && this.#startup?.run === run) this.#startup = undefined;
+    }
   }
 
   async #armContainerSchedules(): Promise<void> {
@@ -640,11 +878,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     await this.#arm(HEARTBEAT_CALLBACK, this.policy.heartbeatSeconds);
   }
 
-  /** Attach, then restore. Both bounded, both outside the concurrency gate.
-   *
-   *  The attach carries its own budget, which can now actually fire: a timer
-   *  set inside `blockConcurrencyWhile` is not delivered until the block
-   *  releases, so the bound that used to wrap this was unreachable. */
   /**
    * Stamp this container instance with an id, and mirror it durably.
    *
@@ -747,7 +980,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * same residue handling every attach has.
    */
   async #healReplacedContainer(): Promise<void> {
-    if (this.#restoration.phase !== 'attached') return;
+    // BOTH ADMITTING PHASES. A box in `repair` is serving callers over a work
+    // directory too, so a commit against a replaced container is exactly as
+    // wrong there as it is on a fully restored one.
+    const held = this.#restoration;
+    if (held.phase !== 'attached' && held.phase !== 'repair') return;
     if (this.ctx.container?.running !== true) return;
     if (!await this.#containerWasReplaced()) return;
     console.error(
@@ -775,6 +1012,59 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   /**
+   * ONE restore attempt, wherever it runs, and it always CLASSIFIES.
+   *
+   * The two homes — the init gate that is the primary path, and the schedule row
+   * that covers a container replaced in mid-life — differ in exactly one thing:
+   * the {@link RestoreSteps} they hand it. The walk itself, its order, its
+   * fences and its classification are this one method, because two copies of a
+   * restoration are two things to keep in step and the second one rots.
+   *
+   * IT DOES NOT THROW; IT HANDS THE FAILURE BACK. The gate's caller is
+   * `blockConcurrencyWhile`, and a rejection there is the platform's own failure
+   * path — so raising is not this method's decision to make. Every outcome
+   * leaves the box in a NAMED state (`attached`, `repair`, or `unattached` with
+   * the ladder's reason), and the classified cause is RETURNED so a caller whose
+   * policy is to raise one raises exactly that value rather than a second
+   * wording of it. The gate discards it; `#startupAttempt` rethrows it.
+   *
+   * IT SAYS SO WHILE IT RUNS, which is the other half. The first thing it
+   * publishes is `restoring`, before the ladder claim's own await, so no window
+   * exists in which an attempt is in flight and this box still reports that none
+   * has begun. See {@link Restoration}: that window was measured as a 300 s
+   * freeze in which every poll read `unstarted` and decided to wait.
+   */
+  async #restoreNow(
+    generation: number,
+    steps: RestoreSteps,
+  ): Promise<{ readonly cause: unknown } | undefined> {
+    this.#restoration = {
+      phase: 'restoring',
+      where: this.#startGate === undefined ? 'schedule' : 'init-gate',
+      since: Date.now(),
+    };
+    const claim = await this.#claimRecovery();
+    if (!this.#owns(generation)) return undefined;
+    if (!claim.admit) {
+      // The ladder row did not parse, so there is no evidence to act on and
+      // nothing may be destroyed on a guess. The claim has already normalised
+      // the row to the terminal stage, so this refusal is readable and finite:
+      // `attachNow()` re-attempts, and a success deletes the row.
+      const reason = 'the attach-recovery record did not parse [unreadable → refuse]';
+      this.#restoration = { phase: 'unattached', reason, retry: false };
+      await this.#record('attach', reason);
+      return { cause: new Error(reason) };
+    }
+    try {
+      await this.#attachAndRestore(generation, claim, steps);
+      return undefined;
+    } catch (error) {
+      await this.#recover(generation, claim, { cause: error });
+      return { cause: error };
+    }
+  }
+
+  /**
    * The whole restoration under ONE clock, and TWO failure policies.
    *
    * Every phase draws on the same budget: the attach, the workload restart, each
@@ -785,25 +1075,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *
    * WHAT EXHAUSTION MEANS DEPENDS ON WHAT IS ABANDONED, and that split is the
    * whole design. The attach is mid-mount: abandoning it leaves work no token
-   * here can fence, which a retry would collide with, so it throws
-   * {@link ContainerStartOverrun} and the taxonomy replaces the container
-   * identity. Every step after it — a process that will not start, a listener
-   * that never answers, a port that will not expose, a boot id that will not
-   * stamp — mutates no mount, so exhaustion there is REPORTED: the box stays
-   * attached, its specs stay, no failed port is exposed, `unready` names what did
-   * not come back, and an agent or an explicit `attachNow()` can try again.
-   * Replacing a healthy container because a dev server was slow to bind would be
-   * the cure that destroys the patient.
+   * here can fence, which a retry would collide with, so it throws — outside the
+   * gate {@link ContainerStartOverrun}, inside it {@link GateBudgetSpent} — and
+   * the taxonomy answers each with the recovery its evidence supports. Every
+   * step after it — a process that will not start, a listener that never
+   * answers, a port that will not expose, a boot id that will not stamp —
+   * mutates no mount, so exhaustion there is REPORTED: the box stays attached,
+   * its specs stay, no failed port is exposed, `unready` names what did not come
+   * back, and an agent or an explicit `attachNow()` can try again. Replacing a
+   * healthy container because a dev server was slow to bind would be the cure
+   * that destroys the patient.
    *
    * Nothing re-arms on that path either: an app the box cannot wait for is not a
    * reason to wake the box again on a timer.
    */
-  async #attachAndRestore(generation: number, claim: RecoveryClaim): Promise<void> {
-    const budget = openStartBudget(this.policy.attachBudgetMs);
-    const outcome = await withContainerStartDeadline(
-      'Devbox.attach',
-      budget,
-      () => this.#requireStorage().attach(),
+  async #attachAndRestore(
+    generation: number,
+    claim: RecoveryClaim,
+    steps: RestoreSteps,
+  ): Promise<void> {
+    const outcome = await steps.attach(
+      async () => await this.#requireStorage().attach(),
       (failure) => {
         console.error(
           '[devbox] the attach overran its budget and was abandoned; it later settled '
@@ -811,7 +1103,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         );
       },
     );
-    await this.#restorePhases(generation, claim, budget, outcome);
+    await this.#restorePhases(generation, claim, steps, outcome);
   }
 
   /** The phases after the attach, in order, each fenced by the attempt's
@@ -819,7 +1111,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #restorePhases(
     generation: number,
     claim: RecoveryClaim,
-    budget: StartBudget,
+    steps: RestoreSteps,
     outcome: AttachOutcome,
   ): Promise<void> {
     // THE ATTACH IS THE LONG AWAIT, and everything past this line is a write.
@@ -829,7 +1121,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     if (!this.#owns(generation)) return;
     await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
     console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
-    const restored = await this.#restartWorkloads(generation, budget);
+    const restored = await this.#restartWorkloads(generation, steps);
     if (!this.#owns(generation)) return;
     // Stamped after the whole walk, so no id exists on an instance whose
     // restoration is still half-done — a stamp taken earlier would make one look
@@ -839,10 +1131,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // incompleteness reason is what answers "is this box ready".
     //
     // A STEP LIKE ANY OTHER, so it draws its own allowance and reports rather
-    // than throws. A boot id the container will not write leaves the box
-    // attached and unready, not replaced.
-    const stamped = await runRestoreStep(
-      budget.nextAllowanceMs(),
+    // than throws. A boot id the container will not write leaves the box in
+    // `repair`, not replaced.
+    const stamped = await steps.run(
       async () => await this.#stampBootId(generation),
       (failure) => {
         console.error(
@@ -852,43 +1143,38 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
     );
     if (!this.#owns(generation)) return;
-    const incomplete = stamped.kind === 'done'
-      ? restored.join('; ')
-      : [...restored, stamped.kind === 'late' ? 'the boot id stamp is still pending' : 'the boot id stamp failed'].join('; ');
-    this.#restoration = {
-      phase: 'attached',
-      incomplete: incomplete.length === 0 ? undefined : incomplete,
-    };
+    this.#restoration = settledRestoration(restored, stamped.kind);
     // A SUCCESSFUL ATTEMPT IS THE ONLY THING THAT CLEARS THE LADDER, and only
     // while the row still names it. Cleared any earlier, a failure in a later
     // step of the same attempt — the boot-id stamp is the last of them — would
     // delete the stage it had just earned, and the ladder could never reach the
     // step that replaces a container failing in exactly that way. A restoration
     // that landed the work directory but not every service still clears it: the
-    // box IS attached, and `incomplete` is what says the rest is not ready.
+    // box IS attached, and `repair` is what says the rest is not ready.
     await this.#releaseRecovery(claim, generation);
   }
 
   /**
-   * THE WHOLE RESTORATION: filesystem attach, then supervised processes, then
-   * port forwarding.
+   * THE FALLBACK RESTORATION: the same walk, driven from a schedule row instead
+   * of from the activation that owns the container.
    *
-   * Runs from a schedule row, so it survives eviction and holds no gate.
+   * NOT THE PRIMARY PATH ANY MORE. A cold start restores inside the init gate
+   * (`onStart` → `restoreInStartGate`), where the platform itself holds every
+   * request behind the restore. This callback exists for the case the gate
+   * cannot cover, and it is a real one: the platform replaces a container
+   * instance UNDER a live Durable Object, and the hook that would restore it
+   * fires on a container start this object may never see. So the heartbeat spots
+   * the replacement, the schedule row survives an eviction, and both land here.
    *
-   * The attach used to live in `onStart`, and that was wrong on the platform
-   * rather than merely slow. `onStart` is awaited inside
-   * `blockConcurrencyWhile`; a container cold start and the attach then share
-   * ONE platform cancel window, and when it expires the runtime resets the
-   * object. Measured on a deployed Worker: the first operation after a stop
-   * answered 500 with "A call to blockConcurrencyWhile() in a Durable Object
-   * waited for too long. The call was canceled and the Durable Object was
-   * reset." A bound inside that window cannot help either, because a timer set
-   * inside the block is not delivered until the block releases.
+   * IT IS ALSO THE BACKSTOP FOR A CANCELLED GATE. If an activation's restore is
+   * ever cancelled at `do.block_concurrency.cancel_ms` the object is reset with
+   * nothing published — and the row this hook rides was armed FIRST, before the
+   * restore, precisely so that the next tick re-drives it here, outside the
+   * gate, where a timer is delivered and the ladder can escalate.
    *
-   * Nothing observes a half-attached box, because every operation awaits
-   * `ensureReady()` and this is what `ensureReady()` waits for. The difference
-   * is that a failure now refuses operations and records an incident instead of
-   * resetting the object.
+   * Because it holds no gate, a caller can observe a box mid-restoration here;
+   * every operation awaits `ensureReady()`, which joins this attempt rather than
+   * opening a second one.
    */
   async devboxStartup(): Promise<void> {
     // ADMISSION IS OBSERVED, NEVER ASSUMED, and it is asked on every attempt.
@@ -927,8 +1213,22 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     try {
       await this.start(undefined, {
         portToCheck: this.defaultPort,
-        retries: 1,
-        waitInterval: 100,
+        // THE PROBE REALLY LASTS ITS WINDOW, and it did not. `retries: 1` makes
+        // the SDK's `totalTries` exactly one (`container.js`: `totalTries =
+        // waitOptions.retries`, and the loop throws NO_CONTAINER_INSTANCE_ERROR
+        // when `totalTries === tries + 1`), so the first refusal ended the call
+        // after ONE ~100 ms poll and the abort signal below could never fire —
+        // the comment claiming `portWaitMs` bounded this probe was describing
+        // something the code did not do. Every one of those instant refusals
+        // cost a durable incident row plus a re-arm at one-second granularity:
+        // measured live on a contended account, 21 incidents in 15 s, all
+        // "[unclassified → retry] there is no container instance...", before the
+        // same box attached at ~20 s. The retry count is now the window divided
+        // by the interval — the SDK's own default shape — so ONE call polls the
+        // whole window and a container that appears inside it is admitted with
+        // no incident at all.
+        retries: Math.ceil(this.policy.portWaitMs / ADMISSION_POLL_INTERVAL_MS),
+        waitInterval: ADMISSION_POLL_INTERVAL_MS,
         // The PORT policy bounds the port probe, which is the question it is
         // named for. It is not the container's admission deadline: a container
         // still coming up has not failed, so the answer to a probe that did not
@@ -971,7 +1271,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // `ensureReady()` → this callback.
     if (admissionRefusal !== null) return;
     const generation = this.#generation;
-    if (this.#restoration.phase === 'attached') return;
+    // ALREADY SETTLED FOR THIS GENERATION. `repair` counts: the work directory
+    // is attached and re-running the whole walk would not fix the service that
+    // did not come back — `attachNow()` is the affordance for that, and it goes
+    // through `#repairAttached`.
+    if (this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair') return;
     // Only candidates can prove and repair their live mount graph. Every other
     // strategy takes the ordinary attach path instead of treating a boot marker
     // as a durable attachment fact.
@@ -991,45 +1295,51 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   /**
-   * ONE startup attempt, fenced by the generation that owns it.
+   * ONE fallback attempt, fenced by the generation that owns it.
    *
    * The failure path is the recovery ladder in `lifecycle.ts` — a taxonomy, not
    * one retry policy — and every write it makes is guarded, including the
    * release of the single-flight entry: an attempt that released a successor's
    * entry let the next caller start a second concurrent restoration against the
    * same container.
+   *
+   * THE THROW IS THIS PATH'S OWN POLICY, and the only thing it does not share
+   * with the gate. `#restoreNow` classifies and hands the cause back, because
+   * the gate's caller is `blockConcurrencyWhile` and a rejection there is the
+   * platform's failure path. Here the caller is an operation — a commit that must
+   * not report against a box with no work directory, or an `attachNow()`
+   * repairing on somebody's behalf — so the failure is raised, AS ITSELF. The
+   * SDK's own error is what the caller sees and what its own classifier reads; a
+   * message re-written here would be this class's second opinion on it.
+   *
+   * RAISED EVEN WHEN SUPERSEDED. A superseded attempt publishes nothing, arms
+   * nothing and destroys nothing — but it still OWES its caller an answer, and
+   * "the work you asked for did not happen" is that answer whoever ended up
+   * owning the lifecycle.
    */
   async #startupAttempt(generation: number): Promise<void> {
-    const claim = await this.#claimRecovery();
-    if (!this.#owns(generation)) return;
-    if (!claim.admit) {
-      // The ladder row did not parse, so there is no evidence to act on and
-      // nothing may be destroyed on a guess. The claim has already normalised
-      // the row to the terminal stage, so this refusal is readable and finite:
-      // `attachNow()` re-attempts, and a success deletes the row.
-      const reason = `the attach-recovery record did not parse [unreadable → refuse]`;
-      this.#restoration = { phase: 'unattached', reason, retry: false };
-      await this.#record('attach', reason);
-      throw new Error(reason);
-    }
+    let failed: { readonly cause: unknown } | undefined;
     try {
-      await this.#attachAndRestore(generation, claim);
-    } catch (error) {
-      await this.#recover(generation, claim, { cause: error });
-      throw error;
+      failed = await this.#restoreNow(
+        generation,
+        racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs)),
+      );
     } finally {
       // OUR OWN ENTRY ONLY. Owning the generation is what proves the entry is
       // ours: a generation holds at most one live attempt, because a second
       // caller joins the first.
       if (this.#owns(generation)) this.#startup = undefined;
     }
+    if (failed !== undefined) throw failed.cause;
   }
 
   /**
-   * Re-run only the service half of an incomplete attached restoration.
+   * Re-run only the service half of a restoration that settled in `repair`.
    *
    * This uses the startup flight because two explicit repairs must not race
-   * process reservations, port exposures, or the boot marker.
+   * process reservations, port exposures, or the boot marker. It runs OUTSIDE
+   * the init gate — a caller asked for it — so it takes the raced step policy
+   * whose timer is delivered.
    */
   async #repairAttached(generation: number): Promise<void> {
     const pending = this.#startup;
@@ -1038,8 +1348,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       if (!this.#owns(generation)) return;
       const active = this.#startup;
       if (active !== undefined && active.generation === generation) return await active.run;
-      const retryBootStamp = this.#restoration.phase === 'attached'
-        && this.#restoration.incomplete?.includes('the boot id stamp failed') === true;
+      const retryBootStamp = this.#restoration.phase === 'repair'
+        && this.#restoration.incomplete.includes('the boot id stamp failed');
       if (this.#requireStorage().repairAttached !== undefined) {
         this.#restoration = { phase: 'unstarted' };
       }
@@ -1096,19 +1406,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       await this.devboxStartup();
       return;
     }
-    const restored = await this.#restartWorkloads(generation, budget);
+    const steps = racedRestoreSteps(budget);
+    const restored = await this.#restartWorkloads(generation, steps);
     if (!this.#owns(generation)) return;
     const stamped = expected === undefined && retryBootStamp
-      ? await runRestoreStep(budget.nextAllowanceMs(), async () => await this.#stampBootId(generation), () => undefined)
+      ? await steps.run(async () => await this.#stampBootId(generation), () => undefined)
       : expected === undefined ? { kind: 'pending' as const } : { kind: 'done' as const };
     if (!this.#owns(generation)) return;
-    const incomplete = stamped.kind === 'done'
-      ? restored.join('; ')
-      : [...restored, stamped.kind === 'late' ? 'the boot id stamp is still pending' : 'the boot id stamp failed'].join('; ');
-    this.#restoration = {
-      phase: 'attached',
-      incomplete: incomplete.length === 0 ? undefined : incomplete,
-    };
+    this.#restoration = settledRestoration(restored, stamped.kind);
   }
 
   /** Does the attempt that started on `generation` still own this lifecycle?
@@ -1153,7 +1458,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    */
   async #claimRecovery(): Promise<RecoveryClaim> {
     const token = crypto.randomUUID();
-    return await this.ctx.blockConcurrencyWhile(async () => {
+    return await this.#critical(async () => {
       const admission = admissionStep(
         parseRecoveryRow(await this.ctx.storage.get(ATTACH_RECOVERY_KEY)),
       );
@@ -1205,7 +1510,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * that compared, yielded, and then wrote would put a stage back on top of that
    * success and arm the replacement of a container that is working.
    * `blockConcurrencyWhile` is the platform's own critical section and the only
-   * primitive that closes it. The class header warns against putting SLOW work
+   * primitive that closes it — except where one is ALREADY held, which is the
+   * whole of `#critical` below. The class header warns against putting SLOW work
    * inside that block, where the platform's cancel window resets the object;
    * this section is one read and one write, orders of magnitude below it.
    *
@@ -1221,13 +1527,33 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     generation: number,
     apply: () => Promise<void>,
   ): Promise<boolean> {
-    return await this.ctx.blockConcurrencyWhile(async () => {
+    return await this.#critical(async () => {
       const held = parseRecoveryRow(await this.ctx.storage.get(ATTACH_RECOVERY_KEY));
       if (!this.#owns(generation)) return false;
       if (held.kind !== 'row' || held.row.owner !== claim.token) return false;
       await apply();
       return true;
     });
+  }
+
+  /**
+   * The platform's critical section — or the closure run plainly, when one is
+   * already held.
+   *
+   * WHY THE CONDITION EXISTS. The activation's own restore runs INSIDE
+   * `blockConcurrencyWhile`: the SDK's container-start hook is awaited there, so
+   * for the whole of that restore this object is already exclusive and no event
+   * can be delivered to it. Opening a second section inside the first would ask
+   * the runtime to nest its own critical sections — which may well work, and
+   * which this class has no reason to depend on. The exclusion the caller needs
+   * is in force either way, and `#startGate` is the fact that says so.
+   *
+   * Both callers are one read plus one write against this object's own storage:
+   * the ladder claim, and the conditional stage write above.
+   */
+  async #critical<T>(closure: () => Promise<T>): Promise<T> {
+    if (this.#startGate !== undefined) return await closure();
+    return await this.ctx.blockConcurrencyWhile(closure);
   }
 
   /**
@@ -1326,12 +1652,34 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     );
   }
 
-  /** Wait for the provider's own state transition. `stop` and `destroy`
-   *  acknowledge the signal before `container.running` flips, and returning in
-   *  that window let an immediate wake reuse the old mount, then lose it
-   *  underneath the next operation. */
+  /**
+   * Wait for the provider's own state transition. `stop` and `destroy`
+   * acknowledge the signal before `container.running` flips, and returning in
+   * that window let an immediate wake reuse the old mount, then lose it
+   * underneath the next operation.
+   *
+   * BOUNDED BY A COUNT, and it was not. `while (running) await wait(100)` has no
+   * exit but the platform's cooperation, and this runs on the RECOVERY path: a
+   * `destroy()` that is acknowledged but never flips the flag pinned the attempt
+   * in `#startup` for ever, and because `kickStartup` early-returns on a pinned
+   * attempt, nothing re-armed and no further incident was ever filed. That is
+   * the exact shape probe `blp1` froze in for 300,771 ms while `/state` kept
+   * answering. A container that will not report itself stopped is now a NAMED
+   * refusal instead of a silent hang, which the caller above turns into a
+   * terminal `unattached` — the honest answer, because work may still be running
+   * inside an identity that refused to die.
+   */
   async #awaitContainerStopped(): Promise<void> {
-    while (this.ctx.container?.running === true) await scheduler.wait(100);
+    for (let attempt = 0; attempt < CONTAINER_STOP_ATTEMPTS; attempt += 1) {
+      if (this.ctx.container?.running !== true) return;
+      await scheduler.wait(CONTAINER_STOP_INTERVAL_MS);
+    }
+    if (this.ctx.container?.running !== true) return;
+    throw new Error(
+      `the container still reported itself running ${String(CONTAINER_STOP_ATTEMPTS)} probes `
+      + `after it acknowledged the stop (${String(CONTAINER_STOP_ATTEMPTS * CONTAINER_STOP_INTERVAL_MS)}ms); `
+      + 'refusing to treat the identity as gone',
+    );
   }
 
   /**
@@ -1353,14 +1701,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * Each failure is still recorded and the rest of the phase still runs: one
    * dead spec must not hide the others from the incident ledger.
    */
-  async #restartWorkloads(generation: number, budget: StartBudget): Promise<readonly string[]> {
+  async #restartWorkloads(generation: number, steps: RestoreSteps): Promise<readonly string[]> {
     const [processes, ports] = await Promise.all([this.#procSpecs(), this.#portSpecs()]);
     const plan = restartPlan(processes, ports);
     // EVERY STEP IS DECLARED, and the boot stamp is declared by the caller. The
     // divisor of each allowance is the work still to do, so a port's probe
     // cannot spend what its own exposure and the stamp still need — and a step
     // that finishes early leaves its share to the next one.
-    budget.declare(plan.start.length + plan.serve.length * 2);
+    steps.declare(plan.start.length + plan.serve.length * 2);
     // The caller re-checks ownership before it reads any of this, so a
     // superseded walk stops where it is and its answer is discarded.
     const superseded = ['the attempt was superseded'];
@@ -1373,8 +1721,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // INSIDE the restoration that readiness waits for — so going through it
       // makes the restoration wait for itself, and takes a lane a caller already
       // blocked at the gate may hold.
-      const started = await runRestoreStep(
-        budget.nextAllowanceMs(),
+      const started = await steps.run(
         async () => {
           // ALREADY RUNNING IS ALREADY RESTORED. The walk is re-runnable on
           // purpose: an explicit `attachNow()` repairs a restoration that came
@@ -1416,19 +1763,19 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
     for (const spec of plan.serve) {
       if (!this.#owns(generation)) return superseded;
-      if (!await this.#awaitListener(spec.port, budget.nextAllowanceMs())) {
+      if (!await this.#awaitListener(spec.port, steps)) {
         down.push(`port ${spec.port} never answered`);
         await this.#record('port', `nothing listens on port ${spec.port} after restart`, {
           port: spec.port,
         });
-        // ITS ALLOWANCE GOES BACK. The exposure this port will not get is work
-        // the budget no longer has to cover, so the ports after it are not
-        // charged for this one's silence.
-        budget.nextAllowanceMs();
+        // ITS EXPOSURE'S ALLOWANCE GOES BACK. The exposure this port will not
+        // get is work the budget no longer has to cover, so the ports after it
+        // are not charged for this one's silence.
+        steps.skip();
         continue;
       }
       if (!this.#owns(generation)) return superseded;
-      if (!await this.#exposeWithSpec(spec, budget.nextAllowanceMs())) {
+      if (!await this.#exposeWithSpec(spec, steps)) {
         down.push(`port ${spec.port} was not exposed`);
       }
     }
@@ -1445,35 +1792,55 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * server was declared silent and the incident that followed reached the agent
    * as a blocker telling it not to hand out a URL that worked moments later.
    * Wrong blockers in the one channel built to be trusted are worse than none.
+   *
+   * IT WAITS IN THE CONTAINER, IN ONE COMMAND, which is what makes it legal
+   * inside the init gate — and cheaper everywhere else. The wait used to be a
+   * Durable Object loop around `scheduler.wait`, so a thirty-second window at a
+   * two-second cadence cost fifteen DO↔container round trips per port, and
+   * inside `blockConcurrencyWhile` its timer would never be delivered at all:
+   * the proof would hang, and the platform would answer by RESETTING the object.
+   * `awaitListenerCommand` moves the loop and the sleep to the container, where
+   * a count bounds them and the object waits on one hop.
    */
-  async #awaitListener(port: number, shareMs: number): Promise<boolean> {
-    // WHICHEVER IS SMALLER: this port's own cap, or the share of the
-    // restoration's remaining budget it was given. The cap alone was a timer per
-    // port, so silence cost the box one window for every port it had and nothing
-    // bounded the sum — three silent ports added about ninety seconds while
-    // every caller waited in the readiness gate.
-    const deadline = Date.now() + Math.min(this.policy.portWaitMs, shareMs);
-    for (;;) {
-      const probe = await this.#rawExec(healthProbeCommand(port));
-      if (!healthProbeSilent(probe.stdout)) return true;
-      if (Date.now() >= deadline) return false;
-      await scheduler.wait(this.policy.portProbeIntervalMs);
-    }
+  async #awaitListener(port: number, steps: RestoreSteps): Promise<boolean> {
+    // WHICHEVER IS SMALLER: this port's own cap, or what is left of the whole
+    // restoration's budget. The cap alone was a timer per port, so silence cost
+    // the box one window for every port it had and nothing bounded the sum —
+    // three silent ports added about ninety seconds while every caller waited in
+    // the readiness gate.
+    const windowMs = Math.min(this.policy.portWaitMs, steps.remainingMs());
+    const interval = this.policy.portProbeIntervalMs;
+    const probed = await steps.run(
+      async () => await this.#rawExec(
+        awaitListenerCommand(port, Math.floor(windowMs / Math.max(1, interval)), interval),
+      ),
+      (failure) => {
+        console.error(
+          `[devbox] the listener proof for port ${port} outran its allowance; it later settled `
+          + `with: ${describe({ cause: failure.cause })}`,
+        );
+      },
+    );
+    // A step that was refused or abandoned proves nothing, and a port whose
+    // listener was never proven is never exposed — the same answer silence gets.
+    return probed.kind === 'done' && !healthProbeSilent(probed.value.stdout);
   }
 
   /** True when nothing failed. A box with no preview host configured exposes
    *  nothing and that is not a failure — it declares no previews, which is the
    *  honest answer rather than a URL that cannot resolve. */
-  async #exposeWithSpec(spec: PortExposureSpec, allowanceMs: number): Promise<boolean> {
+  async #exposeWithSpec(spec: PortExposureSpec, steps: RestoreSteps): Promise<boolean> {
     const hostname = this.previewHost;
     if (hostname === undefined || hostname.length === 0) {
       console.log(`[devbox] port ${spec.port} not re-exposed: no preview host configured`);
+      // DECLARED BUT NOT RUN, so its share goes back — the caller declared two
+      // steps for every port before it knew this box publishes no previews.
+      steps.skip();
       return true;
     }
     const options: PortExposeOptions = { hostname, token: spec.token };
     if (spec.name !== undefined) options.name = spec.name;
-    const exposed = await runRestoreStep(
-      allowanceMs,
+    const exposed = await steps.run(
       // `super`, for the reason `#restartWorkloads` gives at its own start call:
       // the restoration must not wait on the readiness gate it IS, nor queue
       // behind a caller already waiting at that gate.
@@ -1520,32 +1887,55 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // storm this whole taxonomy exists to avoid.
     if (this.#startup !== undefined) return;
     const held = this.#restoration;
-    if (held.phase === 'attached') return;
+    // An attempt in flight owes nothing: it will settle into a phase, and this
+    // poll's job is to notice a box with nobody working on it.
+    if (held.phase === 'restoring') return;
+    if (held.phase === 'attached' || held.phase === 'repair') return;
     if (held.phase === 'unattached' && !held.retry) return;
     await this.#arm(STARTUP_CALLBACK, 1);
   }
 
   /**
-   * The readiness gate every operation passes through.
+   * The readiness gate every operation passes through, and WHAT it admits the
+   * operation into.
    *
-   * Resolves immediately once this container generation's restoration settled.
-   * Otherwise it waits on the in-flight restoration, or drives it now for an
-   * operation that raced ahead of the scheduled tick — which is the common case
-   * on a cold start, because the schedule fires a second later and a caller is
-   * usually already waiting.
+   * THE FALLBACK, NOT THE PRIMARY PATH. On a cold start the restore already
+   * happened: it ran inside the container-start gate, where the platform held
+   * every request behind it, so the first operation arrives at a box that is
+   * already settled and this method resolves on its first branch. What it exists
+   * for is the case the gate cannot cover — a container replaced under a live
+   * object — where it joins the in-flight fallback attempt or drives one.
+   *
+   * IT RETURNS THE ADMISSION rather than resolving `void`. A box in `repair` is
+   * admitted deliberately: refusing `exec` would deny the agent the one way it
+   * has to fix the service that did not come back. But "admitted into a world
+   * where something is missing" and "admitted into the world the caller left"
+   * are different facts, and a gate that resolved `void` for both made the
+   * difference discoverable only by a separate poll nobody was obliged to make.
+   *
+   * EVERY OTHER PHASE REFUSES, and that closes a measured hole. The tail of this
+   * method used to be a bare `await this.devboxStartup()` with no check after
+   * it — and `devboxStartup` RETURNS NORMALLY when the container was never
+   * admitted (its admitted-nothing exit). So an operation against a box the
+   * platform had no capacity for ran as if ready: measured live in probe `blp1`,
+   * `exec` answered success in 62 ms while the box's own state said no
+   * restoration had attached anything. For a mount-backed strategy that means
+   * the caller's bytes land in a bare `/workspace` nothing will ever checkpoint.
+   *
+   * The refusal for that case does NOT write `unattached`: nothing was
+   * classified, the container was simply not there yet, and `unattached` is
+   * terminal to every poller that reads it. The box stays re-armable and this
+   * caller is told to ask again.
    */
-  async ensureReady(): Promise<void> {
+  async ensureReady(): Promise<RestoreAdmission> {
     // A stopped container may still have the previous instance's attached
     // state in memory. Let the startup callback turn that generation over
     // before this method can accept it as ready.
     if (this.ctx.container?.running !== true) {
       await this.devboxStartup();
     }
-    // ATTACHMENT, NOT READINESS. A restoration that landed the work directory
-    // and failed to bring one service back leaves the box operable on purpose:
-    // refusing `exec` would deny the agent the one way it has to repair that
-    // service. `ready` is what stays false, and `devboxState()` says why.
-    if (this.#restoration.phase === 'attached') return;
+    const settled = this.#admission();
+    if (settled !== undefined) return settled;
     if (this.#restoration.phase === 'unattached') {
       // THE RETRY THE TAXONOMY PROMISED, DRIVEN HERE WHEN NOTHING ELSE WILL.
       //
@@ -1571,20 +1961,44 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         await this.devboxStartup();
         // A drive that failed again leaves a FRESH reason and a fresh arm, and
         // only a box still unattached refuses below.
-        if (this.#restoration.phase !== 'unattached') return;
+        const droveTo = this.#admission();
+        if (droveTo !== undefined) return droveTo;
       }
-      // THE REFUSAL NAMES BOTH HALVES: the taxonomy's own `[class → action]`
-      // tag, which the reason already carries, and whether anything is going to
-      // try again. A caller told this is terminal is being told to call
-      // `attachNow()`; one told a retry is under way is being told to ask again.
-      throw new Error(
-        `this devbox has no attached work directory: ${this.#restoration.reason}. `
-        + (this.#restoration.retry
-          ? 'A retry is already under way; operations are refused until it lands.'
-          : 'That recovery class is terminal: call attachNow() to attempt the attach again.'),
-      );
+      if (this.#restoration.phase === 'unattached') {
+        // THE REFUSAL NAMES BOTH HALVES: the taxonomy's own `[class → action]`
+        // tag, which the reason already carries, and whether anything is going
+        // to try again. A caller told this is terminal is being told to call
+        // `attachNow()`; one told a retry is under way is being told to ask
+        // again.
+        throw new Error(
+          `this devbox has no attached work directory: ${this.#restoration.reason}. `
+          + (this.#restoration.retry
+            ? 'A retry is already under way; operations are refused until it lands.'
+            : 'That recovery class is terminal: call attachNow() to attempt the attach again.'),
+        );
+      }
     }
     await this.devboxStartup();
+    const drove = this.#admission();
+    if (drove !== undefined) return drove;
+    // NOTHING ATTACHED, AND NOTHING CLASSIFIED IT. The drive above returned
+    // without a work directory: either the platform admitted no container (the
+    // admitted-nothing exit, which records an incident and re-arms) or an
+    // attempt is still in flight. Both are re-armable, so the box's phase is
+    // left exactly as it is and only this operation is refused.
+    throw new Error(
+      `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
+      + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
+    );
+  }
+
+  /** The admission this box's settled phase grants, or undefined when it has
+   *  not settled into one. ONE reader for the three places the gate asks. */
+  #admission(): RestoreAdmission | undefined {
+    const held = this.#restoration;
+    if (held.phase === 'attached') return { kind: 'restored' };
+    if (held.phase === 'repair') return { kind: 'repair', incomplete: held.incomplete };
+    return undefined;
   }
 
   // ── operations ───────────────────────────────────────────────────────────
@@ -1629,7 +2043,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    */
   async attachNow(): Promise<AttachOutcome> {
     this.stampInteraction();
-    if (this.#restoration.phase === 'attached' && this.#restoration.incomplete !== undefined) {
+    if (this.#restoration.phase === 'repair') {
       const generation = this.#generation;
       await this.#repairAttached(generation);
       const outcome = await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY);
@@ -1686,10 +2100,21 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *      fds their cwd and open files hold under the work directory.
    *   2. Every other holder is signalled by ONE bounded container command
    *      (see {@link releaseWorkdirHoldersCommand}): TERM, wait, KILL, with
-   *      pid 1 excluded and only fd holders signalled.
+   *      pid 1 excluded, cwd holders and the scan's own ancestors named rather
+   *      than signalled, and STDOUT re-read afterwards so what comes back is
+   *      who is still holding rather than who was.
    *   3. Only then does the detach run, wrapped so a refusal that STILL lands
-   *      names the holders it found rather than the bare EBUSY the SDK
-   *      answers with.
+   *      names those holders rather than the bare EBUSY the SDK answers with.
+   *
+   * AND KILLING HOLDERS WAS NEVER THE WHOLE STORY, which cost two deployed runs
+   * to learn. `probe09011530` and `hp0901170218` both refused this stop naming a
+   * `bun` pid, and in both the scan had already killed that writer successfully
+   * — the name was residue of a pre-signal list, and the real reference was the
+   * SESSION the unmount travels through, which the SDK creates with
+   * `cwd: "/workspace"`. A shell standing on a mount holds it. So a stop can
+   * signal every holder there is and still be refused, which is why the release
+   * below is necessary but not sufficient and the r2fs detach parks the session
+   * before it asks. See {@link R2fsPorts.parkSession}.
    */
   async quiesce(): Promise<CheckpointOutcome> {
     // The final commit is the one a wake reads back, so it is the last place a
@@ -1968,7 +2393,18 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const held = this.#restoration;
     if (held.phase === 'unstarted') return 'no restoration has run for this container yet';
     if (held.phase === 'unattached') return held.reason;
-    return held.incomplete;
+    if (held.phase === 'repair') return held.incomplete;
+    // AN ATTEMPT IN FLIGHT IS NOT "NOTHING HAS RUN", and saying so was a
+    // measured defect: for the whole of a minutes-long attempt this box
+    // answered "no restoration has run for this container yet", so a poller
+    // read `pending` for ever and never drove. The duration is what makes the
+    // answer actionable — a restore that has been running for 300 s is a
+    // different fact from one that started a moment ago.
+    if (held.phase === 'restoring') {
+      return `a restoration has been running in the ${held.where} for `
+        + `${String(Math.max(0, Date.now() - held.since))} ms`;
+    }
+    return undefined;
   }
 
   /**
@@ -1988,7 +2424,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       durable: this.store !== undefined,
       running: this.ctx.container?.running === true,
       restoration: this.#restoration.phase,
-      ready: this.#restoration.phase === 'attached' && this.#restoration.incomplete === undefined,
+      ready: this.#restoration.phase === 'attached',
       unready: this.#unready(),
       lastInteractionAt: this.#lastInteraction
         ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY),
@@ -2611,8 +3047,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const prefix = this.#boxPrefix();
     return {
       containerRunning: () => this.ctx.container?.running === true,
-      readMounts: async () => (await this.#rawExec('cat /proc/mounts')).stdout,
-      exec: async (command) => await this.#rawExec(command),
+      // BOTH OF THESE RUN FROM THE RUNTIME DIRECTORY, NOT THE WORK DIRECTORY,
+      // for the reason `quarantineMountpoint` below already does: `#rawExec`
+      // defaults its cwd to `DEVBOX_WORKDIR`, and these are the two commands
+      // the detach issues immediately before releasing that very mount. Reading
+      // `/proc/mounts` and flushing a path do not require standing in it, and
+      // standing in it is what refuses the unmount that follows.
+      readMounts: async () => (await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR)).stdout,
+      exec: async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR),
       pathExists: async (path) => await this.#pathExists(path),
       mount: async (s3fsOptions) => {
         await this.mountBucket(store.binding, DEVBOX_WORKDIR, {
@@ -2624,6 +3066,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       unmount: async () => {
         await this.unmountBucket(DEVBOX_WORKDIR);
       },
+      // BOTH DELEGATE TO THE ONE SEAM, `#parkSessionOutside` / `#lazyUnmount`,
+      // because every strategy that mounts at the work directory needs exactly
+      // this and a second copy would eventually disagree with the first.
+      parkSession: async () => await this.#parkSessionOutside(DEVBOX_WORKDIR),
+      lazyUnmount: async () => await this.#lazyUnmount(DEVBOX_WORKDIR),
       // ONE COMMAND, so a container replaced between two RPCs cannot leave the
       // residue directory made and the move undone. `find -exec … +` runs
       // nothing when the mountpoint is already empty, which is the ordinary
@@ -2719,9 +3166,23 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           );
         }
       },
-      unmountOverlay: async () => {
-        await this.#rawExec(`fusermount3 -u '${DEVBOX_WORKDIR}' || true`);
-      },
+      // THROUGH THE ONE SEAM, which is the same defect measured on the r2fs arm
+      // with only the mount differing: this used to ask a shell standing in
+      // `/workspace` (the `#rawExec` default) to unmount `/workspace`, refused
+      // EBUSY by the very session issuing it, and `|| true` then hid the
+      // refusal.
+      //
+      // A SWALLOWED EBUSY HERE IS NOT COSMETIC. `detach` goes on to release the
+      // store mount while fuse-overlayfs still holds its read-only lower, and
+      // `attach` early-returns `already-attached` whenever the overlay is
+      // mounted, deliberately WITHOUT replaying the journal, on the premise that
+      // a mounted overlay means the replay finished. A silently-failed unmount
+      // is exactly the state that falsifies that premise: the next attach
+      // reports success over a workspace missing its journalled changes. So the
+      // release now really happens (parked, and lazily if it must), and a
+      // refusal that still lands is spoken aloud rather than dropped.
+      unmountOverlay: async () =>
+        await this.#releaseFuseMount(DEVBOX_WORKDIR, 'the workspace overlay'),
       // ONE COMMAND, so a container replaced between two RPCs cannot leave the
       // move half done. `cp -a src/. dst` MERGES into the directories the replay
       // already wrote and preserves symlinks rather than following them, which
@@ -2947,27 +3408,49 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           processId: 'candidate-journal',
           autoCleanup: false,
         });
-        for (let attempt = 0; attempt < JOURNAL_READY_ATTEMPTS; attempt += 1) {
-          const ready = await this.#rawExec(
-            `test -S '${CANDIDATE_JOURNAL_SOCKET}' `
-            + `&& grep -qs ' ${CANDIDATE_JOURNAL_MOUNT} fuse' /proc/mounts && echo yes || echo no`,
-            DEVBOX_RUNTIME_DIR,
-          );
-          if (ready.stdout.trim() === 'yes') return;
-          await scheduler.wait(JOURNAL_READY_INTERVAL_MS);
-        }
+        // ONE HOP. The wait lives in the container — see `journalReadyCommand`
+        // for the forty round trips it replaces and the deployed attach that
+        // never returned through them.
+        const probe = await this.#rawExec(
+          journalReadyCommand({
+            mount: CANDIDATE_JOURNAL_MOUNT,
+            socket: CANDIDATE_JOURNAL_SOCKET,
+          }),
+          DEVBOX_RUNTIME_DIR,
+        );
+        const reading = readJournalReady(probe.stdout);
+        if (reading?.socket === true && reading.mount === true) return;
         const logs = await this.getProcessLogs(started.id);
         await this.killProcess(started.id);
         throw new Error(
-          `candidate journal daemon did not mount ${CANDIDATE_JOURNAL_MOUNT}: `
+          `candidate journal daemon did not serve ${CANDIDATE_JOURNAL_MOUNT} within `
+          + `${String(JOURNAL_READY_WAIT_SECONDS)}s (`
+          + `${reading === undefined
+            ? `the readiness probe answered ${JSON.stringify(probe.stdout.trim() || probe.stderr.trim())}`
+            : `control socket ${reading.socket ? 'present' : 'absent'}, `
+              + `mount ${reading.mount ? 'present' : 'absent'}`}): `
           + `${logs.stderr.trim() || logs.stdout.trim() || 'no daemon output'}`,
         );
       },
+      // THROUGH THE ONE SEAM, because `CANDIDATE_JOURNAL_MOUNT` IS
+      // `DEVBOX_WORKDIR`: this releases a FUSE mount at the very directory the
+      // shared session is created in, so it has the same disease the r2fs arm
+      // was measured with. The explicit `DEVBOX_RUNTIME_DIR` here was already
+      // right, but `2>/dev/null || true` meant a refusal was unobservable — and
+      // an unreleased journal mount is how a wake starts a SECOND daemon over a
+      // mount the first still owns, which is the one hazard this daemon's own
+      // comments say must never happen. Now it is parked, taken lazily if it
+      // must be, and said aloud if it still refuses.
       stopJournal: async () => {
         for (const row of await this.listProcesses()) {
           if (row.command.includes(CANDIDATE_JOURNAL_BINARY)) await this.killProcess(row.id);
         }
-        await this.#rawExec(`fusermount3 -u '${CANDIDATE_JOURNAL_MOUNT}' 2>/dev/null || true`, DEVBOX_RUNTIME_DIR);
+        // Only when there is something to release: this runs on paths where no
+        // daemon ever mounted, and a refusal reported for an absent mount would
+        // be noise that trains a reader to ignore the real one.
+        const mounts = await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR);
+        if (findMount(mounts.stdout, CANDIDATE_JOURNAL_MOUNT) === undefined) return;
+        await this.#releaseFuseMount(CANDIDATE_JOURNAL_MOUNT, 'the candidate journal mount');
       },
       getRunnerProcess: async (processId) => await super.getProcess(processId),
       waitForRunnerExit: async (processId) => {
@@ -2979,6 +3462,31 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
               throw new Error(`candidate runner ${processId} exited without an exit code`);
             }
             return { exitCode: process.exitCode };
+          }
+          // A RUNNER CANNOT OUTLIVE ITS CONTAINER, and this loop is the one
+          // place that used to believe it could. The process table is answered
+          // from THIS side, so an instance the platform reclaimed leaves its
+          // rows saying `running` with nothing left to ever move them — and a
+          // poll whose only exits are "gone" and "exited" then waits for an
+          // event that has no reporter.
+          //
+          // Asked AFTER the status, so a process that really exited is still
+          // reported by its exit code even if the container went afterwards:
+          // the contradiction being caught here is a LIVE record with no
+          // container behind it, which is never a fact about the runner.
+          //
+          // MEASURED. This is the whole distance between a slow attach and an
+          // unattachable box: `#storage` is built once per isolate and
+          // `attach()` parks its in-flight promise in `attaching`, released
+          // only when that promise settles — so one wait that never ends is
+          // handed to every later attach in the isolate. In
+          // `e2ecal0901002202`, run against a 900,000 ms wall, `bounded-layers`
+          // cold-attach and `merkle-pack` wake-attach each recorded 900,001 ms
+          // — the wall, not a duration — and the platform's own sentence for
+          // the arms beside them was "The sandbox container stopped while the
+          // operation was pending".
+          if (this.ctx.container?.running !== true) {
+            throw new Error(`candidate runner ${processId} lost its container before it exited`);
           }
           await scheduler.wait(RUNNER_EXIT_POLL_INTERVAL_MS);
         }
@@ -3158,16 +3666,182 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Container exec that does NOT pass the readiness gate.
    *
-   *  Every internal probe, mount and archive command uses this. The public
-   *  `exec` waits for the restoration to finish, and the restoration itself
-   *  runs commands, so routing internal work through the public method would
-   *  make it wait for itself. */
+   *  Every internal probe, mount and archive command uses this — the strategy's
+   *  own `exec` port included, which is what makes the check below complete for
+   *  the restore path. The public `exec` waits for the restoration to finish,
+   *  and the restoration itself runs commands, so routing internal work through
+   *  the public method would make it wait for itself.
+   *
+   *  IT IS ALSO WHERE THE INIT GATE'S BOUND LIVES. While an activation's restore
+   *  holds the gate a timer cannot bound anything, so the budget is polled HERE,
+   *  at the one seam every container command passes: past the deadline the
+   *  command is not ISSUED, and a command never sent leaves nothing running to
+   *  abandon. That is what turns "the platform will cancel us eventually" into a
+   *  bound this class owns — gate occupancy is the budget plus at most the one
+   *  command already in flight. R2 and mount-binding hops do not pass here and
+   *  are bounded by their own transports. */
   async #rawExec(
     command: string,
     cwd = DEVBOX_WORKDIR,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const gate = this.#startGate;
+    if (gate !== undefined && Date.now() > gate.deadlineAt) {
+      throw new GateBudgetSpent(
+        `\`${command.slice(0, 60)}\` was issued`,
+        this.policy.attachBudgetMs,
+      );
+    }
     const result = await super.exec(command, { cwd });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+  }
+
+  // ── the one seam every container mount is released through ────────────────
+  //
+  // MEASURED DEFECT THIS REPAIRS, AND WHY IT IS A SEAM RATHER THAN A PATCH.
+  // `#rawExec` above defaults its cwd to `DEVBOX_WORKDIR`, and the SDK creates
+  // its default session with `cwd: "/workspace"` too — so unless a caller says
+  // otherwise, the shared session shell is standing ON the work directory. A
+  // shell standing on a mount holds a reference to that mount, so a
+  // `fusermount -u` issued from it is refused EBUSY by the session issuing it,
+  // no matter how many holders were killed first.
+  //
+  // Proven by controlled experiment on a live deployed container
+  // (probe `hp0901171035`, `scripts/devbox-holder-probe.ts`): the SAME
+  // `fusermount -u /workspace`, adjacent in time, against the same live mount,
+  // with zero fd holders in either arm —
+  //
+  //   session cwd INSIDE the mount   -> rc=1, "Device or resource busy"
+  //   session cwd parked OUTSIDE it  -> rc=0, mount released
+  //
+  // EVERY strategy that mounts at the work directory has this disease, which is
+  // why the repair lives here and not in one strategy: r2fs mounts s3fs there,
+  // overlay-cas mounts fuse-overlayfs there, and the candidate arms mount the
+  // journal daemon there (`CANDIDATE_JOURNAL_MOUNT` IS `DEVBOX_WORKDIR`). A
+  // per-strategy fix leaves the next mount point to rediscover it deployed.
+
+  /**
+   * Move the shared session shell OUT of `mountPath`, and answer where it
+   * stands now.
+   *
+   * The runtime directory normally, `/` when the mount CONTAINS the runtime
+   * directory — parking inside the very mount being released would be the bug
+   * this method exists to prevent, so the choice is computed rather than
+   * assumed. `pwd` travels back so a caller reports where it parked instead of
+   * asserting that it worked.
+   */
+  async #parkSessionOutside(mountPath: string): Promise<string> {
+    const outside = DEVBOX_RUNTIME_DIR === mountPath
+      || DEVBOX_RUNTIME_DIR.startsWith(`${mountPath}/`)
+      ? '/'
+      : DEVBOX_RUNTIME_DIR;
+    const parked = await this.#rawExec('cd . && pwd', outside);
+    return parked.stdout.trim() || outside;
+  }
+
+  /** `fusermount -z` IS `MNT_DETACH`. Tried under both binary names the image
+   *  may carry, then answered from `/proc/mounts` rather than from an exit code:
+   *  the question is whether the mount is gone, and only the mount table can
+   *  answer that. */
+  async #lazyUnmount(mountPath: string): Promise<boolean> {
+    await this.#rawExec(
+      `fusermount -uz '${mountPath}' 2>/dev/null `
+      + `|| fusermount3 -uz '${mountPath}' 2>/dev/null || true`,
+      await this.#parkSessionOutside(mountPath),
+    );
+    const mounts = await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR);
+    return findMount(mounts.stdout, mountPath) === undefined;
+  }
+
+  /**
+   * Release one container mount: park the session outside it, ask, and fall back
+   * to a lazy detach if it still refuses.
+   *
+   * THE LAZY FALLBACK IS THE LAST RESORT, and it is what makes a box stoppable
+   * at all. A reference this class may not revoke — an ancestor of the holder
+   * scan's own shell, or one of the container server's own children sitting at
+   * `cwd=/workspace` — leaves an ordinary unmount permanently refused, and a box
+   * that can never release its mount can never stop and can never attach again.
+   * `MNT_DETACH` removes the mount from the namespace immediately and lets the
+   * kernel free it when the last reference drops.
+   *
+   * IT IS NOT A WAY TO SKIP A FLUSH, and this is a PRECONDITION ON THE CALLER,
+   * not a detail of one strategy. `MNT_DETACH` returns as soon as the mount
+   * leaves the namespace; it does not wait for anything and cannot flush. Bytes
+   * an open writer left in the page cache reach the store only through the
+   * caller's own `sync`, so a caller releasing a mount it may have WRITTEN to
+   * must flush and check that flush BEFORE calling this. r2fs's detach does
+   * exactly that, and says so.
+   *
+   * WHICH MOUNTS THAT BINDS TODAY, AND WHICH IT WILL BIND NEXT. Of the current
+   * callers only r2fs's work directory is writable, and it flushes. The overlay
+   * and the candidate journal are released on teardown paths whose bytes are
+   * already published elsewhere. But `CHAIN_STORE_MOUNT` is mounted
+   * `readOnly: true` today precisely because the chain streams its archive
+   * through the owning Durable Object, and the measured way to stop paying that
+   * (7-9x on payload, from the payload-transport instrument) is to make that
+   * mount READ-WRITE and let the container write the archive straight to its
+   * final key. The moment that happens this precondition applies to it: a lazy
+   * release that beat the flush would lose the tail of an archive the chain has
+   * already recorded as landed, which is silent corruption of a committed head
+   * rather than a failed stop. Whoever makes that mount writable owes it a
+   * checked flush here, and must write to the final key directly — a
+   * write-temp-then-rename on s3fs is a server-side COPY that scales with the
+   * object, so the atomic-rename idiom the rest of this codebase reaches for is
+   * not available on that path.
+   */
+  async #releaseMount(
+    mountPath: string,
+    unmount: () => Promise<void>,
+  ): Promise<{ readonly lazily: boolean; readonly parkedAt: string }> {
+    const parkedAt = await this.#parkSessionOutside(mountPath);
+    try {
+      await unmount();
+      return { lazily: false, parkedAt };
+    } catch (cause) {
+      if (!(await this.#lazyUnmount(mountPath))) throw cause;
+      console.error(
+        `[devbox] ${mountPath} refused an ordinary unmount with the session parked at `
+        + `${parkedAt}, so it was detached lazily (MNT_DETACH): ${describe({ cause })}`,
+      );
+      return { lazily: true, parkedAt };
+    }
+  }
+
+  /**
+   * Release a `fusermount3` mount this class made, and report a refusal that
+   * still lands WITHOUT throwing.
+   *
+   * The two callers — the workspace overlay and the candidate journal daemon —
+   * both sit at `DEVBOX_WORKDIR` and both must keep their existing
+   * non-throwing contract: `unmountOverlay` runs inside a detach that goes on to
+   * release the store mount, and `stopJournal` runs on teardown paths that must
+   * not be blocked by one mount. What they may NOT keep is silence. `|| true`
+   * used to make a refusal here unobservable, and both silences are load
+   * bearing: an unreleased overlay makes the next `attach` report
+   * `already-attached` without replaying the journal, and an unreleased journal
+   * mount lets a wake start a SECOND daemon over a mount the first still owns.
+   *
+   * ONE BODY, because the duplication gate is right that two copies of it are
+   * two things to keep in agreement; `what` is the only thing that differed.
+   */
+  async #releaseFuseMount(mountPath: string, what: string): Promise<void> {
+    try {
+      await this.#releaseMount(mountPath, async () => {
+        const released = await this.#rawExec(
+          `fusermount3 -u '${mountPath}'`,
+          await this.#parkSessionOutside(mountPath),
+        );
+        if (released.exitCode !== 0) {
+          throw new Error(
+            released.stderr.trim() || released.stdout.trim() || `exit ${released.exitCode}`,
+          );
+        }
+      });
+    } catch (error) {
+      console.error(
+        `[devbox] ${what} at ${mountPath} was NOT released: ${describe({ cause: error })}`,
+      );
+    }
   }
 
   async #pathExists(path: string): Promise<boolean> {

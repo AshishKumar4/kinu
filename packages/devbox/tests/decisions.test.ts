@@ -13,6 +13,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
@@ -52,6 +53,11 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
+import {
+  JOURNAL_READY_WAIT_SECONDS,
+  journalReadyCommand,
+  readJournalReady,
+} from '../src/capture/journal/command';
 import { requireSessionShellAccepts } from './support/session-shell';
 import {
   assertChainId,
@@ -562,23 +568,38 @@ describe('every self-re-arming schedule needs a first link', () => {
     }
   });
 
-  test('onStart arms schedule chains PLAINLY — bounded work wears no deadline', () => {
-    // Arming is the WHOLE body — no attach, no restore — three local storage
-    // writes whose bound is inherent. The old shape wrapped them in
-    // withContainerStartDeadline, a timer that cannot even fire inside
-    // blockConcurrencyWhile: a paper bound, ruled out. The deadline belongs to
-    // genuinely external container admission, outside the init gate
-    // (scripts/do-init-gate.ts holds both shapes from the other side).
-    const hook = bodyOf('override onStart(');
+  test('the activation arms the chains PLAINLY — the in-gate restore wears no timer bound', () => {
+    // The arming is three local storage writes whose bound is inherent, and the
+    // restore beside it is bounded by a POLLED budget. Neither may wear
+    // `withContainerStartDeadline`: a timer cannot fire inside
+    // `blockConcurrencyWhile`, so wrapping either would claim a bound that
+    // cannot arrive. scripts/do-init-gate.ts holds this from the other side.
+    const restore = bodyOf('async restoreInStartGate(');
+    expect(restore).not.toContain('withContainerStartDeadline(');
+    expect(restore).toContain('this.#armContainerSchedules()');
+    expect(restore).toContain('gateRestoreSteps(budget)');
+    // And the hook itself holds exactly the one admitted await.
+    const hook = bodyOf('override async onStart(');
+    expect(hook).toContain('await this.restoreInStartGate();');
     expect(hook).not.toContain('withContainerStartDeadline(');
-    expect(hook).toContain('BOUNDED_STORAGE_ONLY');
-    expect(hook).toContain('this.#armContainerSchedules()');
+  });
+
+  test('the rows are armed BEFORE the restore, so a refusing box is still repairable', () => {
+    // ORDER IS THE CONTENT. The schedule rows are what the fallback rides: the
+    // heartbeat that notices a replaced container, and the startup row a
+    // classified failure re-arms. A restore that ends `unattached` — or an
+    // activation the platform cancels mid-restore — must still leave those rows
+    // behind, so the arming cannot sit after the work that might not finish.
+    const restore = bodyOf('async restoreInStartGate(');
+    expect(restore.indexOf('this.#armContainerSchedules()'))
+      .toBeLessThan(restore.indexOf('this.#restoreNow('));
   });
 
   test('the incident row is armed on demand, not at start', () => {
     // The fourth row is deliberately NOT a start link: an incident schedule with
     // no incidents to deliver is a wakeup that does nothing forever.
-    expect(bodyOf('override onStart(')).not.toContain('INCIDENT_CALLBACK');
+    expect(bodyOf('async restoreInStartGate(')).not.toContain('INCIDENT_CALLBACK');
+    expect(bodyOf('async #armContainerSchedules(')).not.toContain('INCIDENT_CALLBACK');
     expect(source).toContain('this.#arm(INCIDENT_CALLBACK');
   });
 
@@ -1078,18 +1099,32 @@ describe('a composed container command is one a POSIX shell will run', () => {
    * THE COMMAND, RUN FOR REAL, against this host's own `/proc`.
    *
    * The parse gate proves a shell will accept it; only running it proves what
-   * it does, and the property that matters cannot be asserted against a string:
-   * the scan must remove a stranger holding the directory and must NOT remove
-   * the session it is running inside. Signalling an ancestor kills the exec
-   * channel the stop is speaking through, so the box's own stop would be the
-   * thing that made the box unreachable — the same class as the syntax error
-   * above, with no message at all.
+   * it does, and the properties that matter cannot be asserted against a
+   * string. Three of them, one per class of holder this command distinguishes:
+   *
+   *   - a STRANGER holding an fd is signalled, dies, and is therefore ABSENT
+   *     from the answer. That absence is the repair: the command used to echo
+   *     the list it captured BEFORE signalling, so a writer it had just killed
+   *     was still reported as holding. Deployed runs `probe09011530` and
+   *     `hp0901170218` both refused a stop naming a `bun` pid that the `/proc`
+   *     report taken afterwards proves was already gone — a survivor of
+   *     SIGKILL, which cannot exist, sent the diagnosis after the wrong process
+   *     entirely.
+   *   - a CWD-ONLY holder is NAMED and never signalled. A cwd inside a mount is
+   *     a mount reference exactly as an open fd is, and this command matched
+   *     only fds — so in the deployed container six `node` children of the
+   *     container server sat on `/workspace` completely unreported.
+   *   - an ANCESTOR of the scan's own shell is named and never signalled,
+   *     because signalling it kills the exec channel the stop is speaking
+   *     through: the box's own stop would be the thing that made the box
+   *     unreachable, the same class as a syntax error and with no message at
+   *     all.
    *
    * Linux only, like the `/proc` walk it exercises, and it really waits out
    * HOLDER_TERM_WAIT_MS.
    */
   test.skipIf(process.platform !== 'linux')(
-    'a stranger holding the work directory is signalled; the session running the scan is not',
+    'a stranger is signalled and unnamed; a cwd holder and the scan\'s own session are named',
     async () => {
       const dir = scratchDir('devbox-workdir-holders');
       const script = join(dir, 'release.sh');
@@ -1105,31 +1140,150 @@ describe('a composed container command is one a POSIX shell will run', () => {
         stranger.on('exit', (_code, signal) => { resolve(signal === 'SIGTERM' ? 15 : null); });
       });
       await new Promise<void>((resolve) => { stranger.stdout.once('data', () => { resolve(); }); });
+      // A holder whose ONLY reference is its working directory: no fd under the
+      // directory at all, so an fd-only scan cannot see it, and the kernel
+      // refuses an unmount for it all the same.
+      const cwdHolder = spawn('sh', ['-c', `cd ${dir}; printf ready; exec sleep 60`], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      await new Promise<void>((resolve) => { cwdHolder.stdout.once('data', () => { resolve(); }); });
       // The scan runs as a CHILD of a shell that also holds the directory, so
       // that shell is an ancestor of the scan and a holder at the same time.
       const ran = spawnSync('sh', ['-c', `exec 8>${dir}/ancestor.bin; sh ${script}; printf 'ALIVE %s' "$$"`], {
         encoding: 'utf8', timeout: HOLDER_TERM_WAIT_MS + 15_000,
       });
       const holders = parseWorkdirHolders(ran.stdout.split('ALIVE')[0] ?? '');
+      const named = (pid: number): boolean =>
+        holders.some((holder) => holder.pid === String(pid));
       expect({
         // The shell that hosted the scan ran the statement AFTER it: it is alive.
         sessionSurvived: ran.stdout.includes('ALIVE'),
-        // Every holder is reported, the unsignalled ones included, because a
-        // refused detach names them.
-        strangerNamed: holders.some((holder) => holder.pid === String(stranger.pid)),
+        // SIGNALLED, and said so — but not reported as still holding, because it
+        // is not: it is dead.
+        strangerSignalled: ran.stderr.includes('signalling:'),
+        strangerStillNamed: named(stranger.pid ?? -1),
+        strangerSignal: await exited,
+        // NAMED AND ALIVE: neither of these may be signalled, and both really
+        // are still holding the directory when the command ends.
+        cwdHolderNamed: named(cwdHolder.pid ?? -1),
+        cwdHolderSurvived: cwdHolder.exitCode === null && cwdHolder.signalCode === null,
+        cwdHolderExplained: ran.stderr.includes('cwd-only holders'),
         ancestorNamed: holders.length > 1,
         ancestorExplained: ran.stderr.includes("this session's own"),
-        strangerSignal: await exited,
       }).toEqual({
         sessionSurvived: true,
-        strangerNamed: true,
+        strangerSignalled: true,
+        strangerStillNamed: false,
+        strangerSignal: 15,
+        cwdHolderNamed: true,
+        cwdHolderSurvived: true,
+        cwdHolderExplained: true,
         ancestorNamed: true,
         ancestorExplained: true,
-        strangerSignal: 15,
       });
+      cwdHolder.kill('SIGKILL');
       rmSync(dir, { recursive: true, force: true });
     },
     HOLDER_TERM_WAIT_MS + 20_000,
+  );
+
+  test('the journal readiness probe parses, waits in the container, and never ends the shell', () => {
+    const command = journalReadyCommand({
+      mount: DEVBOX_WORKDIR,
+      socket: '/var/tmp/devbox/candidate-journal/state/control.sock',
+    });
+    requireSessionShellAccepts(command);
+    expect(command).not.toMatch(/(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/);
+    // A WALL DEADLINE, NOT AN ITERATION COUNT, and it is the constant rather
+    // than a second opinion of it. The loop this replaced counted forty
+    // attempts, which bounds nothing when each attempt is a round trip that
+    // can retry inside the SDK for minutes.
+    expect(command).toContain(`$(date +%s)+${String(JOURNAL_READY_WAIT_SECONDS)}`);
+    // The answer is on stdout. A probe that reported through its exit status
+    // would be indistinguishable from a container that refused the command.
+    expect(command).toContain('echo "socket=$socket mount=$mount"');
+  });
+
+  test('a socket path holding a quote is still one shell word', () => {
+    requireSessionShellAccepts(journalReadyCommand({
+      mount: "/work'dir",
+      socket: "/state'dir/control.sock",
+    }));
+  });
+
+  test('the probe\'s own answers are read back, and an unanswered probe is not a reading', () => {
+    expect(readJournalReady('socket=yes mount=yes\n')).toEqual({ socket: true, mount: true });
+    expect(readJournalReady('socket=yes mount=no\n')).toEqual({ socket: true, mount: false });
+    expect(readJournalReady('socket=no mount=no\n')).toEqual({ socket: false, mount: false });
+    // NOT `{ socket: false, mount: false }`: a container that never ran the
+    // command and a daemon that never came up are different findings, and the
+    // failure the caller reports says which.
+    expect(readJournalReady('')).toBeUndefined();
+    expect(readJournalReady('sh: syntax error')).toBeUndefined();
+  });
+
+  /**
+   * THE PROBE, RUN FOR REAL, against this host's own `/proc` and a real socket.
+   *
+   * The parse gate proves a shell accepts it; only running it proves the wait
+   * is honoured, that a fractional `sleep` does not break it, and that both
+   * halves are read from the world rather than assumed. The deployed defect
+   * was a readiness question that cost forty round trips and no deadline; a
+   * replacement that answers wrongly, or that returns instantly because its
+   * loop never runs, would be no better.
+   *
+   * Linux only, like the `/proc/mounts` read it exercises.
+   */
+  test.skipIf(process.platform !== 'linux')(
+    'the probe waits out its deadline for a daemon that never serves, and breaks early for one that does',
+    async () => {
+      const dir = scratchDir('devbox-journal-ready');
+      const socket = join(dir, 'control.sock');
+      // A mount this host really has whose type begins `fuse` — the same shape
+      // the daemon's own mount has, found rather than assumed.
+      const fuseMount = readFileSync('/proc/mounts', 'utf8')
+        .split('\n')
+        .map((line) => line.split(' '))
+        .find((fields) => fields[2]?.startsWith('fuse') === true)?.[1];
+      const run = (mount: string, waitSeconds: number) => {
+        const at = Date.now();
+        const ran = spawnSync('sh', ['-c', journalReadyCommand({ mount, socket }, waitSeconds)], {
+          encoding: 'utf8', timeout: 30_000,
+        });
+        return { stdout: ran.stdout, ms: Date.now() - at };
+      };
+
+      // Nothing present: both halves read `no`, and the command really waited.
+      // `date +%s` counts whole seconds, so a deadline of N spends between
+      // N-1 and N of them — bounded either way, which is the property the
+      // forty-attempt loop it replaced did not have.
+      const absent = run(DEVBOX_WORKDIR, 2);
+      expect(readJournalReady(absent.stdout)).toEqual({ socket: false, mount: false });
+      expect(absent.ms).toBeGreaterThanOrEqual(1_000);
+      expect(absent.ms).toBeLessThan(3_000);
+
+      const listening = createServer();
+      await new Promise<void>((resolve) => { listening.listen(socket, () => { resolve(); }); });
+      try {
+        // The socket half alone is not readiness: the daemon has a control
+        // surface and no mount, and the probe still spends its deadline.
+        const half = run(DEVBOX_WORKDIR, 2);
+        expect(readJournalReady(half.stdout)).toEqual({ socket: true, mount: false });
+        expect(half.ms).toBeGreaterThanOrEqual(1_000);
+
+        if (fuseMount !== undefined) {
+          // Both halves: the loop breaks on the first pass rather than sleeping
+          // out a deadline nobody is waiting for.
+          const served = run(fuseMount, 5);
+          expect(readJournalReady(served.stdout)).toEqual({ socket: true, mount: true });
+          expect(served.ms).toBeLessThan(2_000);
+        }
+      } finally {
+        await new Promise<void>((resolve) => { listening.close(() => { resolve(); }); });
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    40_000,
   );
 });
 

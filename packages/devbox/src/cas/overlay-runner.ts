@@ -28,6 +28,7 @@ import {
   CAS_FORMAT_VERSION,
   CHUNK_SIZE,
   appendJournalBatch,
+  counterDelta,
   emptyCounters,
   encodeJson,
   foldJournalIntoTree,
@@ -56,6 +57,58 @@ const ScanCacheSchema = v.strictObject({
 });
 
 /**
+ * WHERE A RUN SPENT ITSELF, when someone asks it to say.
+ *
+ * A phase's milliseconds do not name its cost. Every phase below is a straight
+ * line of store calls over a FUSE mount whose per-call latency dwarfs anything
+ * local, so a row carries the store's own counter delta beside the wall time:
+ * a minute spent on two thousand metadata round trips and a minute spent moving
+ * a gigabyte are the same number and different defects, and only the counters
+ * tell them apart. `detail` carries whatever else that phase counted — paths
+ * walked, files digested — so a breakdown can be attributed to a term rather
+ * than admired.
+ *
+ * Off unless a sink is supplied: a production run pays one branch per phase and
+ * allocates nothing.
+ */
+export interface ProfileRow {
+  readonly phase: string;
+  readonly ms: number;
+  readonly store: StoreCounters;
+  readonly detail?: Readonly<Record<string, number>>;
+}
+
+export type ProfileSink = (row: ProfileRow) => void;
+
+/** Time one phase and bill it to the store that served it. */
+function profiler(store: CasStore, sink: ProfileSink | undefined) {
+  return async <T>(
+    phase: string,
+    run: () => Promise<T>,
+    detail?: (value: T) => Readonly<Record<string, number>>,
+  ): Promise<T> => {
+    if (sink === undefined) return await run();
+    const before = { ...store.counters };
+    const started = performance.now();
+    const value = await run();
+    const row = { phase, ms: Math.round(performance.now() - started), store: counterDelta(before, store.counters) };
+    sink(detail === undefined ? row : { ...row, detail: detail(value) });
+    return value;
+  };
+}
+
+/** A phase that touches no store, timed the same way so one table holds both. */
+function localPhase(
+  sink: ProfileSink | undefined,
+  phase: string,
+  started: number,
+  detail: Readonly<Record<string, number>>,
+): void {
+  if (sink === undefined) return;
+  sink({ phase, ms: Math.round(performance.now() - started), store: emptyCounters(), detail });
+}
+
+/**
  * What the previous scan recorded, or nothing.
  *
  * A cache is not authority — the pending journal is — so a row this release
@@ -80,6 +133,22 @@ async function readScanCache(store: CasStore): Promise<ReadonlyMap<string, Upper
   return parsed.success ? new Map(Object.entries(parsed.output.signatures)) : new Map();
 }
 
+/** Two rows for the same path, field for field. Only these fields decide
+ *  whether the next scan re-reads a path, so only these decide whether the row
+ *  on the store is stale. */
+function sameSignature(a: UpperSignature | undefined, b: UpperSignature): boolean {
+  return a !== undefined && a.kind === b.kind && a.mode === b.mode && a.mtimeMs === b.mtimeMs
+    && a.size === b.size && a.hash === b.hash && a.target === b.target
+    && a.device === b.device && a.inode === b.inode;
+}
+
+/** The rows a tick would leave on the store, and whether storing them would
+ *  change anything. `changed` is the write condition — see {@link nextScanCache}. */
+export interface ScanCacheUpdate {
+  readonly signatures: ReadonlyMap<string, UpperSignature>;
+  readonly changed: boolean;
+}
+
 /**
  * THE STALE BYSTANDER RULE, applied to the cache this scan may write.
  *
@@ -90,6 +159,16 @@ async function readScanCache(store: CasStore): Promise<ReadonlyMap<string, Upper
  * PREVIOUS row and is detected again; a tombstoned path loses its row, because
  * the path no longer exists to be detected.
  *
+ * `changed` IS THE WRITE CONDITION, and it is reported from here because here
+ * is the only place that knows it. The caller used to infer it — "staging took
+ * fewer entries than the scan measured, so some row is stale" — and that
+ * inference is PERMANENTLY TRUE for an upper holding one deletion or one opaque
+ * directory: both re-emit an entry on every pass and neither leaves a row that
+ * could ever satisfy the comparison. A box holding a single deleted file
+ * therefore rewrote its whole scan cache every interval, forever, to store
+ * bytes identical to the ones already there. Measured on the deployed 1 MB arm
+ * at one 25,072 B PUT of 1,975 ms per idle tick.
+ *
  * Exported because the rule is reached only when staging refuses a file that
  * changed under it, which no caller can arrange from outside this process.
  */
@@ -98,14 +177,18 @@ export function nextScanCache(
   scanned: ReadonlyMap<string, UpperSignature>,
   unjournalled: ReadonlySet<string>,
   tombstoned: ReadonlySet<string>,
-): ReadonlyMap<string, UpperSignature> {
+): ScanCacheUpdate {
   const next = new Map(previous);
+  let changed = false;
   for (const [path, signature] of scanned) {
     if (unjournalled.has(path)) continue;
+    if (!sameSignature(next.get(path), signature)) changed = true;
     next.set(path, signature);
   }
-  for (const path of tombstoned) next.delete(path);
-  return next;
+  for (const path of tombstoned) {
+    if (next.delete(path)) changed = true;
+  }
+  return { signatures: next, changed };
 }
 
 function safeKey(key: string): string {
@@ -343,9 +426,11 @@ async function digestFile(path: string): Promise<FileDigest> {
 async function scanUpper(
   upper: string,
   previous: ReadonlyMap<string, UpperSignature>,
+  sink?: ProfileSink,
 ): Promise<{ entries: readonly NewJournalEntry[]; signatures: ReadonlyMap<string, UpperSignature> }> {
   const records: { path: string; absolute: string; stat: Stats }[] = [];
   const files: typeof records = [];
+  const walked = performance.now();
   try {
     for await (const absolute of walk(upper)) {
       records.push({ path: relative(upper, absolute).split(sep).join('/'), absolute, stat: await lstat(absolute) });
@@ -356,6 +441,8 @@ async function scanUpper(
     }
     throw error;
   }
+  localPhase(sink, 'scan/walk-upper', walked, { paths: records.length });
+  const classified = performance.now();
   const opaque = new Set<string>();
   const entries: NewJournalEntry[] = [];
   const signatures = new Map<string, UpperSignature>();
@@ -393,6 +480,10 @@ async function scanUpper(
     }
     if (record.stat.isFile()) files.push(record);
   }
+  localPhase(sink, 'scan/classify', classified, { files: files.length, entries: entries.length });
+  const digested = performance.now();
+  let rehashed = 0;
+  let rehashedBytes = 0;
   const links = new Map<string, typeof records>();
   for (const file of files) {
     const key = `${file.stat.dev}:${file.stat.ino}`;
@@ -415,6 +506,8 @@ async function scanUpper(
       continue;
     }
     const digest = await digestFile(canonical.absolute);
+    rehashed += 1;
+    rehashedBytes += digest.size;
     const signature: UpperSignature = {
       kind: 'file', mode, mtimeMs, size: digest.size, hash: digest.hash, device, inode,
     };
@@ -431,6 +524,7 @@ async function scanUpper(
       });
     }
   }
+  localPhase(sink, 'scan/digest', digested, { rehashed, rehashedBytes, reused: files.length - rehashed });
   entries.sort(byApplyOrder);
   return { entries, signatures };
 }
@@ -534,6 +628,9 @@ export type OverlayRunnerRequest = {
   readonly operation: 'checkpoint' | 'fold' | 'restore';
   readonly upper: string;
   readonly store: CasStore;
+  /** Where a phase breakdown goes, when one was asked for. Absent in every
+   *  production invocation: the DO reads a receipt, not a profile. */
+  readonly profile?: ProfileSink;
 };
 
 /**
@@ -569,12 +666,14 @@ export type OverlayRunnerReceipt = {
 
 /** Run the CAS mutation beside the mounted R2 prefix; the DO receives only the receipt. */
 export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<OverlayRunnerReceipt> {
-  const { operation, upper, store } = request;
+  const { operation, upper, store, profile } = request;
+  const phase = profiler(store, profile);
   const openedBytesPut = store.counters.bytesPut;
   if (operation === 'restore') {
     const root = new BeneathRoot(upper);
     try {
-      const replayed = await materializePending(root, store);
+      const replayed = await phase('restore/replay', async () => await materializePending(root, store),
+        value => ({ entries: value.entries, foldedSeq: value.foldedSeq }));
       return {
         operation: 'restore',
         entries: replayed.entries,
@@ -587,12 +686,15 @@ export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<O
       root.close();
     }
   }
-  const previous = await readScanCache(store);
-  const scan = await scanUpper(upper, previous);
+  const previous = await phase('tick/read-scan-cache', async () => await readScanCache(store),
+    value => ({ rows: value.size }));
+  const scan = await phase('tick/scan-upper', async () => await scanUpper(upper, previous, profile),
+    value => ({ entries: value.entries.length, signatures: value.signatures.size }));
   const pendingState = new PendingJournalState();
-  await pendingState.load(store);
+  await phase('tick/load-pending', async () => { await pendingState.load(store); },
+    () => ({ foldedSeq: pendingState.foldedSeq() }));
   const changed = pendingState.filterChanged(scan.entries);
-  const staged = await stageBlobs({
+  const staged = await phase('tick/stage-blobs', async () => await stageBlobs({
     store,
     entries: stampEntries(changed, pendingState.sequence()),
     known: pendingState.blobHashes(),
@@ -614,47 +716,47 @@ export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<O
       }
     },
     commitBatch: async batch => await appendJournalBatch(store, batch),
-  });
+  }), value => ({ staged: value.staged.length }));
   pendingState.record(staged.staged);
   const journalled = new Set(staged.staged.map(entry => entry.path));
-  // THE CACHE IS WRITTEN ONLY WHEN IT CAN CHANGE WHAT THE NEXT SCAN READS, and
-  // an idle tick therefore writes NOTHING AT ALL. This object carries one row
-  // per path in the upper, so an npm-shaped workspace makes it the largest
-  // thing a tick touches — and it used to be rewritten unconditionally, so a
-  // box sitting idle paid a PUT proportional to its own size every interval,
-  // forever, to store bytes identical to the ones already there. The receipt
-  // then said `entries: 0` while the prefix had grown, and the adapter turned
-  // that into a skip claiming nothing moved.
+  // THE CACHE IS WRITTEN ONLY WHEN A ROW CHANGED, and an idle tick therefore
+  // writes NOTHING AT ALL. This object carries one row per path in the upper,
+  // so an npm-shaped workspace makes it the largest thing a tick touches — and
+  // it used to be rewritten unconditionally, so a box sitting idle paid a PUT
+  // proportional to its own size every interval, forever, to store bytes
+  // identical to the ones already there. The receipt then said `entries: 0`
+  // while the prefix had grown, and the adapter turned that into a skip
+  // claiming nothing moved.
   //
-  // The two cases that need no write, and why detection is unharmed:
-  //   - a scanned path that produced NO entry is a path whose existing row
-  //     already satisfies the comparison that produced that verdict, so a fresh
-  //     row would say the same thing;
-  //   - a changed path staging REFUSED keeps its PREVIOUS row anyway, which is
-  //     the stale bystander rule above — writing is how that path stays
-  //     detectable, and it is already detectable.
-  // What does need a write is a path `filterChanged` dropped: the scan measured
-  // it, so its row is stale, but the pending journal already holds that exact
-  // state, so nothing is staged for it. Left uncached it is re-digested on
-  // every tick until the next fold.
-  if (staged.staged.length > 0 || changed.length !== scan.entries.length) {
-    await store.put(KEY_SCAN, encodeJson({
-      version: CAS_FORMAT_VERSION,
-      signatures: Object.fromEntries(nextScanCache(
-        previous,
-        scan.signatures,
-        new Set(changed.map(entry => entry.path).filter(path => !journalled.has(path))),
-        new Set(staged.staged.filter(entry => entry.kind === 'delete').map(entry => entry.path)),
-      )),
-    }));
+  // The condition is the ROW SET, not a count of entries, and that is the whole
+  // correction: counting said "write whenever staging took fewer entries than
+  // the scan measured", which is permanently true for an upper holding one
+  // whiteout or one opaque directory, because `scanUpper` re-emits both on
+  // every pass and `filterChanged` drops both every time. `nextScanCache`
+  // answers what the count was standing in for — see the rule there.
+  const cache = nextScanCache(
+    previous,
+    scan.signatures,
+    new Set(changed.map(entry => entry.path).filter(path => !journalled.has(path))),
+    new Set(staged.staged.filter(entry => entry.kind === 'delete').map(entry => entry.path)),
+  );
+  if (cache.changed) {
+    await phase('tick/write-scan-cache', async () => {
+      await store.put(KEY_SCAN, encodeJson({
+        version: CAS_FORMAT_VERSION,
+        signatures: Object.fromEntries(cache.signatures),
+      }));
+    });
   }
   let folded = { foldedEntries: 0, sweptBlobs: 0, foldedSeq: pendingState.foldedSeq() };
   if (operation === 'fold') {
-    const result = await foldJournalIntoTree(store);
+    const result = await phase('fold/journal-into-tree', async () => await foldJournalIntoTree(store),
+      value => ({ foldedEntries: value.foldedEntries, treeWrites: value.treeWrites, treeDeletes: value.treeDeletes }));
     // THE REAP COMES AFTER THE CURSOR, never before: a blob deleted while a
     // journal entry still names it is a blob the next replay would be asked
     // for, so the sweep runs on the state the fold left behind.
-    const swept = await sweepOrphanBlobs(store);
+    const swept = await phase('fold/sweep-orphan-blobs', async () => await sweepOrphanBlobs(store),
+      value => ({ deleted: value.deleted }));
     folded = {
       foldedEntries: result.foldedEntries,
       sweptBlobs: swept.deleted,
@@ -673,7 +775,11 @@ export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<O
 }
 
 /** The CLI's argv, with `--store PATH` opened into the store the run measures
- *  itself against. This is the one place a path becomes a store. */
+ *  itself against. This is the one place a path becomes a store.
+ *
+ *  `--profile stderr` asks for the phase breakdown. It goes to STDERR because
+ *  stdout carries the receipt and exactly one line of it, and a diagnostic that
+ *  moved the receipt would change the contract it exists to explain. */
 function cliRequest(argv: readonly string[]): OverlayRunnerRequest {
   const values = new Map<string, string>();
   for (let at = 0; at < argv.length; at += 2) {
@@ -691,7 +797,12 @@ function cliRequest(argv: readonly string[]): OverlayRunnerRequest {
     || upper === undefined || store === undefined) {
     throw new Error('usage: overlay-cas-runner --operation checkpoint|fold|restore --upper PATH --store PATH');
   }
-  return { operation, upper, store: new FileCasStore(store) };
+  const request: OverlayRunnerRequest = { operation, upper, store: new FileCasStore(store) };
+  if (values.get('profile') !== 'stderr') return request;
+  return {
+    ...request,
+    profile: row => { process.stderr.write(`[profile] ${JSON.stringify(row)}\n`); },
+  };
 }
 
 if (import.meta.main) {

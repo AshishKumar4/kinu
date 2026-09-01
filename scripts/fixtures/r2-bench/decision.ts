@@ -142,6 +142,18 @@ export type DecisionVerdict =
   | { readonly kind: 'inconclusive'; readonly reason: string };
 
 /**
+ * The workloads the rule reads, and therefore the only measurements that decide
+ * the default.
+ *
+ * Exported so a ranking built elsewhere sums the SAME workloads this rule takes
+ * its ratios over. `sqlite` is deliberately absent: it decides whether
+ * extent-level tracking is worth building, never which strategy ships, and
+ * `npm-excluded` is a policy variant measured beside `npm` rather than a third
+ * vote.
+ */
+export const RULE_WORKLOADS = ['git', 'npm'] as const;
+
+/**
  * The rule, applied to measured ticks and to nothing else.
  *
  *   ratio(w) = Σ ticks(chain, w) / Σ ticks(candidate, w)
@@ -168,7 +180,7 @@ export function decide(
     ticks.filter((tick) => tick.arm === arm && tick.workload === workload).length;
 
   const ratios: Record<string, number> = {};
-  for (const workload of ['git', 'npm'] as const) {
+  for (const workload of RULE_WORKLOADS) {
     if (countFor(chainArm, workload) === 0) {
       return { kind: 'inconclusive', reason: `${chainArm} produced no ${workload} ticks` };
     }

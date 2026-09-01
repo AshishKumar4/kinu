@@ -13,34 +13,36 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import {
   R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, decide, opsAreBlind, priceOps,
   sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import { refusalText } from './fixtures/storage-matrix/admission';
+import { loadManifest, manifestPath } from './fixtures/storage-matrix/cleanup';
 import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
-import { scratchDir } from '@kinu.run/test-utils';
 import {
   addressArmRequest,
-  armLogTail,
-  underArmLog,
   benchmarkExitCode,
+  boxName,
   CANDIDATE_CONTAINER_CLASSES,
   candidateLifecycleChecks,
   chainArchiveExpectations,
   controlWitnessChecks,
   cleanupObservationProbes,
   checkpointOperation,
-  comparablePair,
+  comparablePairs,
+  createFixtureResources,
   describeStartupState,
   devboxAdmission,
   devboxArmEvidence,
   drainBucketResidue,
   EXPECTED_LADDER_ROWS,
+  INCUMBENT,
   fixtureConfigForArms,
   frozenControlStatus,
   isTransientContainerCreateError,
@@ -49,22 +51,19 @@ import {
   pollForAttach,
   postLiveTeardown,
   rankableTicks,
-  readArmArtifact,
-  refuseFailedArm,
-  resetArmLogs,
   runArm,
   runArmsInFlight,
   renderFrozenControls,
+  orphanTeardownExecutor,
+  plannedTeardownManifest,
   resourceNames,
   SANDBOX_IMAGE,
   SANDBOX_IMAGE_DIGEST,
-  startupOperation,
+  STRATEGIES,
   startupPollVerdict,
   stopOperation,
   recommend,
   teardownLiveArms,
-  externallyAbortedArm,
-  writeArmArtifact,
   type ArmResult,
   type ControlWitnessFacts,
   type CandidateFactsReply,
@@ -819,217 +818,6 @@ async function capturedStderr(run: () => Promise<void>): Promise<string> {
   return written.join('');
 }
 
-/** `/state` answers the same internal error forever; `/exec` never answers at
- *  all, which is what a readiness drive against a wedged box really does. */
-function fixtureAnsweringInternalError() {
-  const asked: string[] = [];
-  const real = globalThis.fetch;
-  const answer = async (
-    input: Parameters<typeof globalThis.fetch>[0],
-    init?: Parameters<typeof globalThis.fetch>[1],
-  ): Promise<Response> => {
-    const url = new URL(String(input));
-    const method = init?.method ?? 'GET';
-    asked.push(`${method} ${url.pathname}`);
-    if (url.pathname === '/exec') return await new Promise<Response>(() => {});
-    return new Response(JSON.stringify({ error: 'internal error; reference = cc4po3dqdeu4t8g7a7fg5aps' }));
-  };
-  globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
-  return { asked, restore: () => { globalThis.fetch = real; } };
-}
-
-describe('a startup whose state poll answers internal error forever refuses at the ceiling, not never', () => {
-  /**
-   * THE RED PROOF THE TICKET ASKS FOR, as a scripted fixture: `/state` answers
-   * `internal error` on every poll — the reading the calibration run's
-   * `bounded-layers` cold attach sat on for its whole 900,000 ms wall while the
-   * unbounded kick loop below it re-kicked every 15 s and nothing named either
-   * one. The pre-fix `pollForAttach` had no deadline and the pre-fix kick loop
-   * none either, so this test HANGS against that seam (5 s test timeout) rather
-   * than refusing; here the ceiling is the only thing that ends it, and the
-   * refusal names the box's own words.
-   */
-  test('refuses at the caller\'s ceiling, naming the reading it kept getting', async () => {
-    const fixture = fixtureAnsweringInternalError();
-    try {
-      const started = Date.now();
-      await expect(pollForAttach(
-        BENCH_FIXTURE, 'ab-bounded-layers-20260831233915', 'cold attach', ['attached'],
-        { deadlineMs: 600 },
-      )).rejects.toThrow(/cold attach did not attach within its 600 ms ceiling \(last reading: pending.*internal error/);
-      // NOT A LOOP. A poll that merely kept asking would outlive any test
-      // budget; refusing inside a small multiple of the ceiling is the whole
-      // claim. One drive is in flight at most (the hanging /exec), and the
-      // refusal names it rather than reporting it as the verdict.
-      expect(Date.now() - started).toBeLessThan(5_000);
-      // The poll kept ASKING throughout the window rather than blocking on one
-      // request: a ceiling that fires over a single unanswered call would prove
-      // nothing about the loop.
-      expect(fixture.asked.filter((call) => call === 'GET /state').length).toBeGreaterThan(1);
-    } finally {
-      fixture.restore();
-    }
-  });
-
-  /**
-   * The kick loop's half of the same defect, same run: a `/create` that keeps
-   * answering transient capacity re-kicked forever, unbounded by the caller's
-   * window. `startupOperation` with a ceiling must refuse naming the last kick.
-   */
-  test('the capacity kick loop honours the ceiling and names the last kick', async () => {
-    const asked: string[] = [];
-    const real = globalThis.fetch;
-    const answer = async (
-      input: Parameters<typeof globalThis.fetch>[0],
-      init?: Parameters<typeof globalThis.fetch>[1],
-    ): Promise<Response> => {
-      const url = new URL(String(input));
-      const method = init?.method ?? 'GET';
-      asked.push(`${method} ${url.pathname}`);
-      return new Response(JSON.stringify({
-        ok: false,
-        error: 'no container instance is available right now, try again later',
-      }));
-    };
-    globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
-    try {
-      await expect(startupOperation(
-        BENCH_FIXTURE, 'ab-bounded-layers-20260831233915', '/create', 'cold attach', ['attached'],
-        { deadlineMs: 1 },
-      )).rejects.toThrow(
-        /was still being admitted at its 1 ms ceiling after 1 kick\(s\) \(last kick: no container instance is available right now, try again later\)/,
-      );
-      expect(asked).toEqual(['POST /create']);
-    } finally {
-      globalThis.fetch = real;
-    }
-  });
-});
-
-describe('durable per-arm artifacts', () => {
-  /** A temporary repo root with its own bench-artifacts, so a test never reads
-   *  or writes a real run's directory. Minted through the repo's own scratch
-   *  namespace, which is what preflight counts and reclaims. */
-  const artifactRoot = (): string => scratchDir('devbox-arm-artifacts');
-
-  test('a row written the moment it settles reads back whole, atomically, with the log tail', () => {
-    const root = artifactRoot();
-    const row = measuredArm('snapshot-chain');
-    row.attachColdMs = 1_968;
-    resetArmLogs();
-    const artifact = writeArmArtifact(root, 'redprobe1', 'snapshot-chain', row);
-    // No `.tmp` residue: a kill between write and rename must never leave a
-    // partial file a reader could mistake for the arm's answer.
-    expect(existsSync(join(root, 'bench-artifacts', 'redprobe1', 'snapshot-chain.json.tmp'))).toBe(false);
-    const read = readArmArtifact(root, 'redprobe1', 'snapshot-chain');
-    expect(read.error).toBeNull();
-    expect(read.artifact?.schema).toBe('devbox-arm-artifact/1');
-    expect(read.artifact?.row).toEqual(row);
-    expect(artifact.settledAt.length).toBeGreaterThan(0);
-    // An arm that never ran reads as absent, not as a read failure.
-    expect(readArmArtifact(root, 'redprobe1', 'merkle-pack')).toEqual({ artifact: null, error: null });
-  });
-
-  test('a corrupted artifact is a named finding, never a silent absence', () => {
-    const root = artifactRoot();
-    mkdirSync(join(root, 'bench-artifacts', 'redprobe2'), { recursive: true });
-    writeFileSync(
-      join(root, 'bench-artifacts', 'redprobe2', 'r2fs.json'),
-      '{not json',
-    );
-    const read = readArmArtifact(root, 'redprobe2', 'r2fs');
-    expect(read.artifact).toBeNull();
-    expect(read.error).toContain('unreadable');
-    expect(read.error).toContain('r2fs.json');
-  });
-
-  /**
-   * THE KILLED-DRIVER RED PROOF, as a scripted fixture. Two arms settle —
-   * cold attach + ladder + wake recorded — and the third is killed mid-flight:
-   * no artifact exists for it. What survives on disk must be exactly the two
-   * settled arms' measurements, readable by a process that never watched them
-   * settle, and the run-level assembly records the third as externally-aborted
-   * carrying its log tail rather than as an unmeasured row.
-   */
-  test('a driver killed after two arms settled leaves those two arms readable and the third externally-aborted', async () => {
-    const root = artifactRoot();
-    const runId = 'killedprobe';
-    // Arm one: measured through the wake.
-    const one = measuredArm('snapshot-chain');
-    one.attachColdMs = 1_968;
-    one.wakeMs = 5_854;
-    // Arm two: measured through the ladder only.
-    const two = measuredArm('r2fs');
-    two.attachColdMs = 2_210;
-    two.wakeMs = null;
-    writeArmArtifact(root, runId, 'snapshot-chain', one);
-    writeArmArtifact(root, runId, 'r2fs', two);
-
-    // The killed third arm left log lines but no artifact — the wedge killed the
-    // process mid-poll. Its last words are the tail it never got to write, and
-    // they are what the run-level row carries in their place. The lines come
-    // from the DRIVER's own poll, not from a stub: a tail assembled by the test
-    // would prove nothing about what a live arm records.
-    resetArmLogs();
-    const killed = await underArmLog('overlay-cas', async () => {
-      const wedged = fixtureAnsweringInternalError();
-      try {
-        // The refusal is the POINT: this is the arm dying at its ceiling, and
-        // the lines it logged getting there are what the tail must carry.
-        await expect(pollForAttach(
-          BENCH_FIXTURE, `ab-overlay-cas-${runId}`, 'wake', ['attached'], { deadlineMs: 400 },
-        )).rejects.toThrow(/wake did not attach within its 400 ms ceiling/);
-      } finally {
-        wedged.restore();
-      }
-      return externallyAbortedArm(
-        'overlay-cas',
-        `ab-overlay-cas-${runId}`,
-        'the run was killed while this arm was still measuring',
-      );
-    });
-    // The driver really did record those lines against THIS arm.
-    expect(armLogTail('overlay-cas').some((line) => line.includes('internal error'))).toBe(true);
-
-    // WHAT SURVIVED IS READABLE, from a process that never watched it settle.
-    const first = readArmArtifact(root, runId, 'snapshot-chain');
-    const second = readArmArtifact(root, runId, 'r2fs');
-    expect(first.artifact?.row).toEqual(one);
-    expect(first.artifact?.row.attachColdMs).toBe(1_968);
-    expect(first.artifact?.row.wakeMs).toBe(5_854);
-    expect(second.artifact?.row).toEqual(two);
-    expect(second.artifact?.row.wakeMs).toBeNull();
-
-    // AND THE UNSETTLED ARM IS NOT LOST AS NULLS. The row the assembly records
-    // for it names the abort, fails verification, and ranks nothing.
-    expect(killed.notes.at(-1)).toBe('externally-aborted: the run was killed while this arm was still measuring');
-    // THE LOG TAIL RIDES ALONG. Without it the row says an arm vanished and
-    // nothing about what it was doing when it did.
-    expect(killed.notes.some((note) => note.startsWith('log: ') && note.includes('internal error'))).toBe(true);
-    expect(killed.verifyPassed).toBe(false);
-    expect(killed.attachColdMs).toBeNull();
-    expect(killed.wakeMs).toBeNull();
-    expect(killed.checkpoints).toEqual([]);
-    expect(killed.verifyChecks.some((check) =>
-      check.pass === false && check.detail.includes('externally-aborted'))).toBe(true);
-    expect(rankableTicks([killed], killed.decisiveTicks)).toEqual([]);
-    expect(readArmArtifact(root, runId, 'overlay-cas')).toEqual({ artifact: null, error: null });
-  });
-
-  test('an arm artifact written after a refusal keeps the reason with what was measured', () => {
-    const root = artifactRoot();
-    const row = measuredArm('merkle-pack');
-    row.attachColdMs = 15_721;
-    row.wakeMs = null;
-    const refused = refuseFailedArm(row, 'arm failed mid-measurement: wake refused: [abandoned -> refuse] Devbox.attach exceeded its 300000ms budget');
-    writeArmArtifact(root, 'refuseprobe', 'merkle-pack', refused);
-    const read = readArmArtifact(root, 'refuseprobe', 'merkle-pack');
-    expect(read.artifact?.row.attachColdMs).toBe(15_721);
-    expect(read.artifact?.row.verifyPassed).toBe(false);
-    expect(read.artifact?.row.notes.join(' ')).toContain('arm failed mid-measurement');
-  });
-});
-
 describe('the arms are measured in flight together', () => {
   test('a later arm starts before an earlier one has finished', async () => {
     const lanes = recordingLanes({ slow: 'snapshot-chain', fast: 'r2fs' });
@@ -1101,7 +889,7 @@ const WITNESSED: ControlWitnessFacts = {
 const witnessNames = (checks: readonly { name: string; observed: boolean }[]): string[] =>
   checks.filter((check) => check.observed).map((check) => check.name);
 
-describe('the control witness cells', () => {
+describe('the preregistered witness cells', () => {
   test('every preregistered witness is answered, by name and in order', () => {
     expect(controlWitnessChecks('snapshot-chain', WITNESSED).map((check) => check.name))
       .toEqual(['cumulative-delta-seed', 'mutable-delta']);
@@ -1109,7 +897,9 @@ describe('the control witness cells', () => {
       .toEqual(['unbounded-pending-replay', 'O(u)-scan']);
     expect(controlWitnessChecks('r2fs', WITNESSED).map((check) => check.name))
       .toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
-    // A candidate preregisters none, so it can never carry an observed red check.
+    // An arm that preregistered nothing answers nothing. That is a statement
+    // about what its strategy is known to do wrong, not about whether it may
+    // win: `devboxArmEvidence` ranks every arm either way.
     expect(controlWitnessChecks('bounded-layers', WITNESSED)).toEqual([]);
     expect(controlWitnessChecks('merkle-pack', WITNESSED)).toEqual([]);
   });
@@ -1211,6 +1001,52 @@ describe('the control witness cells', () => {
     });
     expect(evidence.expectedRedChecks).toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
     expect(evidence.observedRedChecks).toEqual(['open-write-loss', 'non-atomic-rename', 'POSIX-gap']);
+  });
+
+  test('a witness is a cost, not an eligibility filter: every arm ranks', () => {
+    // THE FILTER THIS REMOVES. `devboxArmEvidence` answered
+    // `kind: 'control', rankEligible: false` for the three shipped arms, so G2
+    // refused them a place in the ranking whatever they measured — an arm's
+    // documented defects decided the outcome before a single tick was taken.
+    for (const strategy of STRATEGIES) {
+      const evidence = devboxArmEvidence({
+        strategy,
+        verifyPassed: true,
+        verifyChecks: [],
+        phases: [],
+        checkpoints: [],
+        decisiveTicks: [],
+        witnessChecks: controlWitnessChecks(strategy, WITNESSED),
+      });
+
+      expect(evidence.kind).toBe('candidate');
+      expect(evidence.rankEligible).toBe(true);
+      // And the preregistration still binds: an arm that promised witnesses
+      // still has to produce exactly those, which is what makes the cost real.
+      expect(evidence.expectedRedChecks).toEqual(evidence.observedRedChecks);
+    }
+  });
+
+  test('a rank-eligible arm whose promised witness vanished still refuses the run', () => {
+    // Witness enforcement used to live on the non-candidate branch of the
+    // admission gate, so making these arms rank-eligible would have silently
+    // switched their drift detector off. It keys off the preregistration now.
+    const drifted = devboxArmEvidence({
+      strategy: 'overlay-cas',
+      verifyPassed: true,
+      verifyChecks: [],
+      phases: [],
+      checkpoints: [],
+      decisiveTicks: [],
+      witnessChecks: controlWitnessChecks('overlay-cas', {
+        ...WITNESSED,
+        unboundedPendingReplay: { smallPending: 50, smallReplayed: 8, largePending: 500, largeReplayed: 8 },
+      }),
+    });
+
+    expect(drifted.rankEligible).toBe(true);
+    expect(drifted.expectedRedChecks).toContain('unbounded-pending-replay');
+    expect(drifted.observedRedChecks).not.toContain('unbounded-pending-replay');
   });
 });
 
@@ -1378,6 +1214,104 @@ describe('the lifecycle-proof gate at the rule', () => {
       tick('snapshot-chain', 'npm', 800), tick('overlay-cas', 'npm', 795),
     ], 'snapshot-chain', 'overlay-cas');
     expect(verdict.kind).toBe('chain-stays');
+  });
+});
+
+describe('the recommendation ranks every measured arm', () => {
+  const ADMITTED = { admitted: true, gates: [] };
+  /** One arm with the fields `recommend` reads and nothing else. */
+  const rankArm = (
+    strategy: Strategy,
+    ms: { git: number; npm: number },
+    witnesses: readonly string[] = [],
+  ): ArmResult => ({
+    strategy,
+    box: `box-${strategy}`,
+    verifyPassed: true,
+    verifyChecks: [],
+    attachColdMs: null, attachColdKind: '', attachColdBootId: null,
+    attachWarmMs: null, attachWarmKind: '', wakeBootId: null, attachWarmBootId: null,
+    checkpoints: [], stopMs: null, wakeMs: null, wakeKind: 'attached',
+    phases: [],
+    decisiveTicks: [tick(strategy, 'git', ms.git), tick(strategy, 'npm', ms.npm)],
+    quiescesBeforeDecisive: 0, decisiveQuiesces: 0,
+    generationBeforeLadder: null, generationAfterLadder: null, treeBytes: {},
+    ops: null, teardown: null,
+    witnessChecks: witnesses.map((name) => ({ name, observed: true, detail: 'observed' })),
+    notes: [],
+  });
+
+  test('every arm appears in the ranking, ordered by decisive tick cost', () => {
+    // THE FILTER THIS REPLACES. `recommend` scored on metadata latency and named
+    // one best and one worst, over arms `devboxArmEvidence` had already narrowed
+    // to {bounded-layers, merkle-pack}. All five are ranked now, and `r2fs` —
+    // which no declared pair even contained — is one of the rows.
+    const report = recommend([
+      rankArm('snapshot-chain', { git: 1200, npm: 400 }),
+      rankArm('r2fs', { git: 900, npm: 380 }, ['open-write-loss', 'POSIX-gap']),
+      rankArm('overlay-cas', { git: 300, npm: 200 }),
+      rankArm('bounded-layers', { git: 100, npm: 100 }),
+      rankArm('merkle-pack', { git: 150, npm: 120 }),
+    ], ADMITTED);
+
+    for (const strategy of STRATEGIES) expect(report).toContain(`\`${strategy}\``);
+    const order = STRATEGIES
+      .map((strategy) => ({ strategy, at: report.indexOf(`| \`${strategy}\``) }))
+      .filter((row) => row.at !== -1)
+      .sort((a, b) => a.at - b.at)
+      .map((row) => row.strategy);
+    expect(order).toEqual([
+      'bounded-layers', 'merkle-pack', 'overlay-cas', 'r2fs', 'snapshot-chain',
+    ]);
+    expect(report).toContain(`\`${INCUMBENT}\` (incumbent)`);
+  });
+
+  test('an observed witness is priced beside the arm, never used to drop it', () => {
+    const report = recommend([
+      rankArm('snapshot-chain', { git: 1200, npm: 400 }),
+      rankArm('r2fs', { git: 20, npm: 20 }, ['open-write-loss', 'non-atomic-rename']),
+    ], ADMITTED);
+
+    // r2fs carries three documented semantic defects and still wins the ranking
+    // on cost; the defects are reported as the price of adopting it.
+    expect(report).toContain('`open-write-loss`, `non-atomic-rename`');
+    expect(report).toContain('DEFAULT TO `r2fs`');
+    expect(report).toContain('preregistered defect(s) this run OBSERVED');
+  });
+
+  test('costing least does not displace the incumbent without clearing the bar', () => {
+    // 2x on git and 1.3x on npm: cheaper, nowhere near the preregistered
+    // 10x/3x bar. The ranking and the decision rule must not disagree.
+    const report = recommend([
+      rankArm('snapshot-chain', { git: 200, npm: 130 }),
+      rankArm('merkle-pack', { git: 100, npm: 100 }),
+    ], ADMITTED);
+
+    expect(report).toContain('`snapshot-chain` STAYS DEFAULT');
+    expect(report).toContain('`merkle-pack` costs 1.6x less decisive tick time');
+    expect(report).not.toContain('DEFAULT TO `merkle-pack`');
+  });
+
+  test('a run without the incumbent ranks its arms but claims no default', () => {
+    const report = recommend([
+      rankArm('bounded-layers', { git: 100, npm: 100 }),
+      rankArm('merkle-pack', { git: 300, npm: 300 }),
+    ], ADMITTED);
+
+    expect(report).toContain('`bounded-layers` COSTS LEAST HERE');
+    expect(report).toContain(`the incumbent \`${INCUMBENT}\` is not in the ranking`);
+    expect(report).not.toContain('DEFAULT TO');
+  });
+
+  test('an arm missing a decisive workload is named unranked, not silently dropped', () => {
+    const partial = rankArm('overlay-cas', { git: 100, npm: 100 });
+    const report = recommend([
+      rankArm('snapshot-chain', { git: 1200, npm: 400 }),
+      { ...partial, decisiveTicks: [tick('overlay-cas', 'git', 100)] },
+    ], ADMITTED);
+
+    expect(report).toContain('unranked: no ticks on npm');
+    expect(report).toContain('`overlay-cas`');
   });
 });
 
@@ -1623,7 +1557,7 @@ describe('per-arm fixture deployment', () => {
 });
 
 
-describe('candidate-only controls', () => {
+describe('arm selection and frozen historical context', () => {
   const multiArmArtifact = JSON.stringify({
     meta: {
       date: '2026-08-25',
@@ -1640,22 +1574,25 @@ describe('candidate-only controls', () => {
     ],
   });
 
-  test('selects current candidates and accepts optional, strategy-qualified controls', () => {
+  test('every arm runs by default, a subset is named outright, and controls are strategy-qualified', () => {
+    // NO PRIVILEGED SUBSET. `--candidates-only` used to select
+    // {bounded-layers, merkle-pack} — the two arms the old taxonomy allowed to
+    // win — so the default shape of a run encoded the conclusion. The default
+    // is now every arm, and a subset has to be asked for by name.
+    expect(parseOptions([]).arms).toEqual([...STRATEGIES]);
+    expect(parseOptions(['--arms', 'bounded-layers,merkle-pack']).arms)
+      .toEqual(['bounded-layers', 'merkle-pack']);
+
     const options = parseOptions([
-      '--candidates-only',
+      '--arms', 'bounded-layers,merkle-pack',
       '--control', 'snapshot-chain=bench-artifacts/controls.json',
       '--control', 'r2fs=bench-artifacts/controls.json',
     ]);
-
-    expect(options.arms).toEqual(['bounded-layers', 'merkle-pack']);
     expect(options.controls).toEqual([
       { strategy: 'snapshot-chain', path: 'bench-artifacts/controls.json' },
       { strategy: 'r2fs', path: 'bench-artifacts/controls.json' },
     ]);
-    expect(parseOptions(['--candidates-only']).controls).toEqual([]);
-    expect(() => parseOptions(['--candidates-only', '--arms', 'snapshot-chain'])).toThrow(
-      '--candidates-only selects bounded-layers and merkle-pack',
-    );
+    expect(parseOptions([]).controls).toEqual([]);
     expect(() => parseOptions(['--arms', 'bounded-layers,bounded-layers'])).toThrow(
       '--arms repeats "bounded-layers"; each requested arm must appear exactly once',
     );
@@ -1665,8 +1602,13 @@ describe('candidate-only controls', () => {
     expect(() => parseOptions(['--control', 'snapshot-chain'])).toThrow(
       '--control requires <strategy>=<path>; got "snapshot-chain"',
     );
-    expect(() => parseOptions(['--control', 'bounded-layers=bench-artifacts/control.json'])).toThrow(
-      '--control strategy "bounded-layers" is not a historical control; known controls: snapshot-chain, r2fs, overlay-cas',
+    // ANY strategy may be supplied frozen. "Frozen" says the numbers came from
+    // a previous run, never that the arm is one of a set barred from winning,
+    // so the arms this used to reject are exactly the ones it must accept.
+    expect(parseOptions(['--control', 'bounded-layers=bench-artifacts/control.json']).controls)
+      .toEqual([{ strategy: 'bounded-layers', path: 'bench-artifacts/control.json' }]);
+    expect(() => parseOptions(['--control', 'not-a-strategy=bench-artifacts/control.json'])).toThrow(
+      `--control strategy "not-a-strategy" is not a known strategy; known strategies: ${STRATEGIES.join(', ')}`,
     );
     expect(() => parseOptions([
       '--control', 'snapshot-chain=bench-artifacts/one.json',
@@ -1674,22 +1616,35 @@ describe('candidate-only controls', () => {
     ])).toThrow('--control must not repeat strategy "snapshot-chain"');
   });
 
-  test('plans candidate-only work and reports strategy-qualified control context', () => {
-    // One owner per file: minted through the scratch namespace preflight counts
-    // and reclaims, so nothing here has to remember to remove it.
-    const path = join(scratchDir('devbox-control'), 'control.json');
+  test('plans the named arms and reports strategy-qualified control context', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'devbox-control-'));
+    const path = join(directory, 'control.json');
     writeFileSync(path, multiArmArtifact);
+    try {
+      const plan = Bun.spawnSync(
+        [
+          'bun', 'scripts/bench-devbox-strategies.ts', '--arms', 'bounded-layers,merkle-pack', '--plan',
+          '--control', `snapshot-chain=${path}`,
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+
+      expect(plan.exitCode, plan.stderr.toString()).toBe(0);
+      expect(plan.stdout.toString()).toContain('arms          bounded-layers, merkle-pack');
+      expect(plan.stdout.toString()).toContain(`controls      snapshot-chain=${path}`);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('a plan with no --arms deploys every strategy', () => {
     const plan = Bun.spawnSync(
-      [
-        'bun', 'scripts/bench-devbox-strategies.ts', '--candidates-only', '--plan',
-        '--control', `snapshot-chain=${path}`,
-      ],
+      ['bun', 'scripts/bench-devbox-strategies.ts', '--plan'],
       { stdout: 'pipe', stderr: 'pipe' },
     );
 
     expect(plan.exitCode, plan.stderr.toString()).toBe(0);
-    expect(plan.stdout.toString()).toContain('arms          bounded-layers, merkle-pack');
-    expect(plan.stdout.toString()).toContain(`controls      snapshot-chain=${path}`);
+    expect(plan.stdout.toString()).toContain(`arms          ${STRATEGIES.join(', ')}`);
   });
 
   test('documents strategy-qualified controls in CLI help', () => {
@@ -1700,7 +1655,9 @@ describe('candidate-only controls', () => {
 
     expect(help.exitCode, help.stderr.toString()).toBe(0);
     expect(help.stdout.toString()).toContain('--control <strategy>=<path>');
-    expect(help.stdout.toString()).toContain('snapshot-chain, r2fs, overlay-cas');
+    expect(help.stdout.toString()).toContain(STRATEGIES.join(', '));
+    // The flag that named a privileged subset is gone, not merely unused.
+    expect(help.stdout.toString()).not.toContain('--candidates-only');
   });
 
   test('selects exactly one named control from a multi-arm artifact and preserves provenance', () => {
@@ -1732,7 +1689,10 @@ describe('candidate-only controls', () => {
     // its own boolean is not evidence about anything this instrument tests.
     expect(report).toContain('UNUSABLE (legacy contract)');
     expect(report).not.toContain('VERIFIED');
-    expect(report).toContain('Candidate ranking uses only measurements from this run.');
+    // A frozen row is context because it came from ANOTHER run, never because
+    // its arm belongs to a set barred from winning this one.
+    expect(report).toContain('They come from a PREVIOUS run');
+    expect(report).toContain('uses only arms this run measured');
   });
 
   test('refuses missing or duplicate selected strategies in a valid multi-arm artifact', () => {
@@ -1889,50 +1849,61 @@ describe('long teardown transport', () => {
   });
 });
 
-describe('the compared pair comes from the arms the run measured', () => {
-  test('a candidates-only run compares bounded-layers against merkle-pack', () => {
-    const pair = comparablePair([{ strategy: 'bounded-layers' }, { strategy: 'merkle-pack' }]);
+describe('every challenger is compared against the incumbent', () => {
+  const challengers = (arms: readonly { strategy: string }[]): string[] => {
+    const comparison = comparablePairs(arms);
+    return comparison.kind === 'pairs' ? comparison.pairs.map((pair) => pair.candidate) : [];
+  };
 
-    expect(pair.kind).toBe('pair');
-    expect(pair.kind === 'pair' ? [pair.baseline, pair.candidate] : []).toEqual([
-      'bounded-layers', 'merkle-pack',
+  test('a full run takes one ratio per challenger, incumbent on every baseline', () => {
+    const comparison = comparablePairs(STRATEGIES.map((strategy) => ({ strategy })));
+
+    expect(comparison.kind).toBe('pairs');
+    expect(challengers(STRATEGIES.map((strategy) => ({ strategy })))).toEqual([
+      'r2fs', 'overlay-cas', 'bounded-layers', 'merkle-pack',
     ]);
+    expect(comparison.kind === 'pairs' ? comparison.pairs.every((pair) => pair.baseline === INCUMBENT) : false)
+      .toBe(true);
   });
 
-  test('a run missing half of every declared pair yields no ratio at all', () => {
-    // THE SHAPE OF THE FINAL STAGING RUN BEFORE THIS REPAIR. `--candidates-only`
-    // deploys two arms; the report nonetheless printed a decision rule whose
-    // ratio was taken over `snapshot-chain` and `overlay-cas`, arms whose
-    // durable-object bindings the generated fixture config omits entirely. The
-    // guard was `STRATEGIES.find((id) => id === 'overlay-cas') !== undefined`
-    // over a frozen constant, so it was true on every run ever made.
-    const pair = comparablePair([{ strategy: 'bounded-layers' }]);
-
-    expect(pair.kind).toBe('absent');
-    expect(pair.kind === 'absent' ? pair.reason : '').toContain('`bounded-layers`');
-    expect(pair.kind === 'absent' ? pair.reason : '').toContain('no declared pair');
+  test('r2fs is a challenger like any other, and is no longer uncomparable', () => {
+    // THE TAXONOMY DEFECT THIS PINS. `DECISION_PAIRS` held two hand-written
+    // pairs and neither contained `r2fs`, so the one arm with a full set of
+    // preregistered semantic defects was also the one arm whose tick cost was
+    // never put beside anything. It answered `absent` here.
+    expect(challengers([{ strategy: 'snapshot-chain' }, { strategy: 'r2fs' }])).toEqual(['r2fs']);
   });
 
-  test('a shipped-arms run compares the chain against overlay-cas', () => {
-    const pair = comparablePair([
-      { strategy: 'snapshot-chain' }, { strategy: 'r2fs' }, { strategy: 'overlay-cas' },
-    ]);
+  test('a challenger-only run yields no ratio, and says the incumbent is missing', () => {
+    // THE SHAPE OF THE FINAL STAGING RUN. Two arms deployed, and the report
+    // nonetheless printed a decision rule whose ratio was taken over
+    // `snapshot-chain` and `overlay-cas`, arms whose durable-object bindings
+    // the generated fixture config omits entirely. The guard was
+    // `STRATEGIES.find((id) => id === 'overlay-cas') !== undefined` over a
+    // frozen constant, so it was true on every run ever made.
+    const comparison = comparablePairs([{ strategy: 'bounded-layers' }, { strategy: 'merkle-pack' }]);
 
-    expect(pair.kind === 'pair' ? [pair.baseline, pair.candidate] : []).toEqual([
-      'snapshot-chain', 'overlay-cas',
-    ]);
+    expect(comparison.kind).toBe('absent');
+    expect(comparison.kind === 'absent' ? comparison.reason : '').toContain('`bounded-layers`');
+    expect(comparison.kind === 'absent' ? comparison.reason : '').toContain(`\`${INCUMBENT}\` is not among them`);
+  });
+
+  test('the incumbent alone carries no challenger to compare against', () => {
+    const comparison = comparablePairs([{ strategy: INCUMBENT }]);
+
+    expect(comparison.kind).toBe('absent');
+    expect(comparison.kind === 'absent' ? comparison.reason : '').toContain('no challenger');
   });
 
   test('a run of no arms names no pair rather than a default one', () => {
-    expect(comparablePair([]).kind).toBe('absent');
+    expect(comparablePairs([]).kind).toBe('absent');
   });
 
-  test('an arm nobody paired with cannot borrow the other pair\'s baseline', () => {
-    // r2fs is in no declared pair. A rule that fell back to "whatever else ran"
-    // would produce a ratio over two arms the research never compared.
-    const pair = comparablePair([{ strategy: 'r2fs' }, { strategy: 'merkle-pack' }]);
-
-    expect(pair.kind).toBe('absent');
+  test('two challengers without the incumbent cannot borrow each other as a baseline', () => {
+    // The predecessor's leading pair was `bounded-layers` vs `merkle-pack`,
+    // which decides which challenger is better while never asking whether
+    // either beats what production runs.
+    expect(comparablePairs([{ strategy: 'r2fs' }, { strategy: 'merkle-pack' }]).kind).toBe('absent');
   });
 });
 
@@ -2530,5 +2501,112 @@ describe('the chain arm asks the store for what its record names', () => {
     // and a guard that could be tripped by its own explanation guards nothing.
     const code = chainBranch.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
     expect(code).not.toContain('delta.sqsh');
+  });
+});
+
+// ── the teardown manifest exists before the resources do ────────────────────
+
+describe('the run records what it will own before it owns anything', () => {
+  /** The root `createFixtureResources` writes its manifest under, resolved the
+   *  same way the driver resolves it. */
+  const repoRoot = dirname(dirname(new URL(import.meta.url).pathname));
+
+  test('the planned manifest names every resource, derived from the run id alone', () => {
+    // NOTHING HERE NEEDS A RESOURCE TO EXIST. That is what makes it writable
+    // first: every name is a function of the run id and the arms.
+    const manifest = plannedTeardownManifest('20260901090909', ['snapshot-chain', 'r2fs'], '/tmp/build-dir');
+
+    expect(manifest.entries.map((entry) => `${entry.kind}:${entry.name}`)).toEqual([
+      'worker:kinu-devbox-bench-20260901090909-snapshot-chain',
+      'container-app:kinu-devbox-bench-20260901090909-snapshot-chain-snapshotchainbox',
+      'r2-bucket:kinu-devbox-bench-20260901090909-snapshot-chain',
+      'do-state:ab-snapshot-chain-20260901090909',
+      'alarm:ab-snapshot-chain-20260901090909',
+      'mount:ab-snapshot-chain-20260901090909',
+      'worker:kinu-devbox-bench-20260901090909-r2fs',
+      'container-app:kinu-devbox-bench-20260901090909-r2fs-r2fsbox',
+      'r2-bucket:kinu-devbox-bench-20260901090909-r2fs',
+      'do-state:ab-r2fs-20260901090909',
+      'alarm:ab-r2fs-20260901090909',
+      'mount:ab-r2fs-20260901090909',
+      'local-path:/tmp/build-dir',
+    ]);
+    expect(manifest.entries.every((entry) => !entry.done)).toBe(true);
+    // The box rows agree with the box the run actually raises, because both
+    // come from `boxName` rather than from two copies of one format string.
+    for (const strategy of ['snapshot-chain', 'r2fs'] as const) {
+      expect(manifest.entries.some((entry) => entry.name === boxName('20260901090909', strategy))).toBe(true);
+    }
+  });
+
+  test('a driver that dies building its fixtures still leaves a complete manifest', async () => {
+    // THE WINDOW THIS CLOSES. The manifest used to be built by `main` from the
+    // fixtures `createFixtureResources` RETURNS, so between "the resource names
+    // are decided" and "the list is durable" sat two bundle builds, a
+    // Dockerfile render and a config write per arm. A driver killed in there —
+    // or one that threw, as here — left a run id nothing had recorded.
+    //
+    // Forced by pre-creating a FILE where the build directory belongs, so the
+    // `mkdirSync` on the line after the manifest write fails with EEXIST.
+    const runId = 'unittest20260901';
+    const buildDir = join(tmpdir(), `kinu-devbox-bench-${runId}`);
+    const manifestFile = manifestPath(repoRoot, runId);
+    rmSync(buildDir, { recursive: true, force: true });
+    rmSync(manifestFile, { force: true });
+    writeFileSync(buildDir, 'not a directory');
+    try {
+      await expect(createFixtureResources(runId, ['r2fs'])).rejects.toThrow();
+
+      const manifest = loadManifest(repoRoot, runId);
+      expect(manifest).not.toBeNull();
+      expect(manifest?.entries.map((entry) => entry.kind)).toEqual([
+        'worker', 'container-app', 'r2-bucket', 'do-state', 'alarm', 'mount', 'local-path',
+      ]);
+      // Including the build directory, which is named before it is created.
+      expect(manifest?.entries.at(-1)?.name).toBe(buildDir);
+    } finally {
+      rmSync(buildDir, { recursive: true, force: true });
+      rmSync(manifestFile, { force: true });
+    }
+  });
+});
+
+describe('an abandoned run is deleted from its names alone', () => {
+  test('durable state refuses until the Worker that serves it is gone', async () => {
+    // A recovered manifest carries no lane state, so the owning Worker is read
+    // back out of the box name. A recovery that reported durable state deleted
+    // while its Worker still ran would be reporting a fact it cannot know.
+    const exec = orphanTeardownExecutor(null);
+    const outcome = await exec({
+      kind: 'do-state',
+      name: boxName('20260901111111', 'overlay-cas'),
+      detail: '', done: false, attempts: 0, lastError: null,
+    });
+
+    expect(outcome).toEqual({
+      ok: false,
+      error: 'Worker kinu-devbox-bench-20260901111111-overlay-cas must be deleted before its durable state',
+    });
+  });
+
+  test('a box name no strategy produces refuses rather than guessing an owner', async () => {
+    const exec = orphanTeardownExecutor(null);
+
+    expect(await exec({
+      kind: 'mount', name: 'not-a-bench-box', detail: '', done: false, attempts: 0, lastError: null,
+    })).toEqual({ ok: false, error: 'no Worker name derives from box not-a-bench-box' });
+  });
+
+  test('the generated config directory is removed by path', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'devbox-control-'));
+    mkdirSync(join(directory, 'nested'), { recursive: true });
+    writeFileSync(join(directory, 'nested', 'wrangler.jsonc'), '{}');
+
+    const outcome = await orphanTeardownExecutor(null)({
+      kind: 'local-path', name: directory, detail: '', done: false, attempts: 0, lastError: null,
+    });
+
+    expect(outcome).toEqual({ ok: true });
+    expect(existsSync(directory)).toBe(false);
   });
 });

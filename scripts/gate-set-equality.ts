@@ -158,6 +158,14 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'choose, and `git ls-files` has never listed one — so the set is exactly what no repository '
     + 'enumerator can produce.',
   ],
+  [
+    'scripts/fixtures/storage-matrix/cleanup.ts',
+    'enumerates `bench-artifacts/teardown/` to find the teardown manifests of benchmark runs an '
+    + 'earlier driver was killed before finishing. That directory is gitignored and every file in '
+    + 'it is written at runtime by a run that may no longer exist, so `git ls-files` has never '
+    + 'listed one — the set is exactly what no repository enumerator can produce, and it is the '
+    + 'set whose members are live Cloudflare Workers and buckets nobody else will ever delete.',
+  ],
 ]);
 
 export type Kind = 'private-enumeration' | 'private-pattern' | 'unmeasured-publication'

@@ -180,9 +180,19 @@ export function fakeStorage(): FakeStorage {
   };
 }
 
-/** The one command the boot-id stamp issues, and the last write a restoration
- *  makes. Faulting or gating it fails or parks an attempt at its final await. */
-export const STAMP_COMMAND = 'printf %s';
+/**
+ * The one command the boot-id stamp issues, and the last write a restoration
+ * makes. Faulting or gating it fails or parks an attempt at its final await.
+ *
+ * THE PATH, NOT THE VERB. This used to be `printf %s`, and a prefix like that
+ * identifies a command by the least specific thing about it: the listener proof
+ * writes its answer with `printf %s` too, so the fake would have parked that
+ * probe on the stamp gate, fired a stamp fault at it, and counted it as a
+ * stamp — a silent, wrong answer to a real command, which is exactly the class
+ * of fake defect `session-shell.ts` exists to stop. The boot-id path is what
+ * makes this command the stamp.
+ */
+export const STAMP_COMMAND = '> /tmp/devbox-boot-id';
 
 /**
  * The container, as the SDK presents it.
@@ -233,13 +243,32 @@ export class FakeSandbox {
    *  still-busy unmount has to name rather than hide, or `session`, which is
    *  the container's own exec channel: the scan NAMES that one and declines to
    *  signal it, because killing an ancestor of the shell running the scan ends
-   *  the session the stop is speaking through. */
+   *  the session the stop is speaking through, or `cwdOnly`, which holds the
+   *  mount by its working directory and is invisible to any scan that matches
+   *  only `/proc/<pid>/fd`. */
   workdirHolder: {
     readonly pid: number;
     readonly comm: string;
     readonly survives?: boolean;
     readonly session?: boolean;
+    /** Holds the mount by cwd, not by an fd. Measured in deployed probe
+     *  `hp0901170218`: six of these, all invisible to an fd-only scan. Named,
+     *  never signalled — they are the container server's own children — so an
+     *  ordinary unmount stays refused and only a lazy detach releases it. */
+    readonly cwdOnly?: boolean;
   } | undefined;
+  /**
+   * WHERE THE SHARED SESSION SHELL IS STANDING.
+   *
+   * The SDK creates its default session with `cwd: "/workspace"` — the mount
+   * point — and `unmountBucket` goes through that session with no cwd of its
+   * own. A shell standing on a mount is a reference to it, so this field is
+   * what decides whether an unmount can succeed. Modelling it is the repair to
+   * this fake: without it, every deployed r2fs stop could refuse EBUSY while
+   * this suite stayed green, because the one reference that actually held the
+   * mount was not represented at all.
+   */
+  sessionCwd = '/workspace';
   readonly fileOperationFailures = {
     rename: Array<Error>(),
     move: Array<Error>(),
@@ -247,6 +276,18 @@ export class FakeSandbox {
   readonly startFaults: StartFault[] = [];
   startFaultBeforeRunning: Error | undefined;
   startFaultAfterRunning: Error | undefined;
+  /**
+   * A STANDING refusal from the platform: every `start` is refused while this is
+   * set, and it is never consumed.
+   *
+   * The two fields above are one-shot, which models a transient blip. Capacity
+   * exhaustion is not a blip — measured live, a contended account refused the
+   * same box 21 times in 15 s — and the properties that matter under it (an
+   * operation is refused rather than admitted onto a box with no work
+   * directory; the box stays re-armable) are invisible to a fault that clears
+   * itself after the first ask.
+   */
+  containerUnavailable: Error | undefined;
   providerStatus: 'running' | 'healthy' | 'stopped' | 'stopping' = 'healthy';
   readonly getFaults: Error[] = [];
   readonly killFaults: Error[] = [];
@@ -264,6 +305,29 @@ export class FakeSandbox {
   bootId: string | undefined;
   containerStarts = 0;
   readonly startWaitOptions: unknown[] = [];
+  /** Does the journal daemon's mount land once it is started? False is the
+   *  daemon that starts and never serves, which is the only reason the
+   *  readiness probe exists. */
+  journalMounts = true;
+
+  /** Is a journal daemon process live? The fake's process table IS the
+   *  container's, so this is the same fact the daemon's own supervisor reads
+   *  rather than a flag a test sets beside it. */
+  journalRunning(): boolean {
+    return [...this.processes.values()].some(
+      (row) => row.command.includes('kinu-journal-daemon') && row.status === 'running',
+    );
+  }
+  /**
+   * Set while the container-start hook holds the platform's init gate.
+   *
+   * The one platform fact this fake models that is NOT a container behaviour:
+   * while `onStart` is awaited inside `blockConcurrencyWhile` the runtime
+   * delivers no event to the Durable Object. A test that called `box.exec()`
+   * directly during that window would be asserting against an interleaving the
+   * platform cannot produce, so {@link deliver} awaits this first.
+   */
+  initGate: Promise<void> | undefined;
 
   constructor(readonly ctx: DurableObjectState) {
     FakeSandbox.last = this;
@@ -284,12 +348,22 @@ export class FakeSandbox {
    * stop came back as `Session 'sandbox-default' shell exited (exit code: 2)`.
    * A fake that answers what a shell refuses cannot hold that class of defect.
    */
-  async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async exec(
+    command: string,
+    options?: { readonly cwd?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const refused = sessionShellRefusal(command);
     if (refused !== undefined) {
       this.sequence.push(`sessionKilled:${command.split(' ')[0]}`);
       throw refused;
     }
+    // AN EXEC'S CWD MOVES THE SHARED SESSION, AND IT STAYS MOVED. The container
+    // server runs every command in one persistent session shell, so a cwd
+    // option is a `cd` that outlives the command — which is exactly why the
+    // SDK's own `unmountBucket`, which passes no cwd at all, inherits wherever
+    // the last caller left the shell. A fake that dropped this argument (this
+    // one did) cannot express the reference that refuses an unmount.
+    if (options?.cwd !== undefined) this.sessionCwd = options.cwd;
     this.execs.push(command);
     // The scan gets a NAME rather than its first word, because the ordering
     // assertions read this row and a template whose first word changes must not
@@ -307,14 +381,19 @@ export class FakeSandbox {
       return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
     }
     if (command === 'cat /proc/mounts') {
-      // The work directory reads as an s3fs mount exactly while the box's own
-      // mountBucket has it mounted — the same fact `/proc/mounts` reports in
-      // a real container, so a strategy's read-back observes the world the
-      // fake changed rather than a world the test staged.
+      // EVERY path the box's own `mountBucket` holds, not just the work
+      // directory — the same fact `/proc/mounts` reports in a real container,
+      // so a strategy's read-back observes the world the fake changed rather
+      // than a world the test staged. The candidate arms mount their object
+      // store somewhere else entirely and read it back the same way.
       const lines = [
         'proc /proc proc rw,relatime 0 0',
-        ...(this.s3fsMounts.has('/workspace')
-          ? [`s3fs /workspace fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`]
+        ...[...this.s3fsMounts].map(
+          (path) => `s3fs ${path} fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`,
+        ),
+        // The journal daemon's own mount, present exactly while it is serving.
+        ...(this.journalRunning() && this.journalMounts
+          ? ['kinu-journal /workspace fuse.kinu-journal rw,nosuid,nodev,relatime 0 0']
           : []),
       ];
       return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
@@ -350,14 +429,30 @@ export class FakeSandbox {
       const bootId = /^printf %s ([^ ]+) > \/tmp\/devbox-boot-id$/.exec(command);
       if (bootId !== null) this.bootId = bootId[1];
     }
+    // THE LAZY DETACH, which is the strategy's last resort for a reference it
+    // may not revoke. `MNT_DETACH` removes the mount from the namespace even
+    // while a holder lives, so it clears BOTH the mount and the fake's holder
+    // row — the holder survives as a process, it just no longer holds a mount.
+    if (command.includes('fusermount -uz')) {
+      this.sequence.push('exec:lazy-unmount');
+      this.s3fsMounts.delete('/workspace');
+      this.workdirHolder = undefined;
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
     // THE HOLDER-RELEASE COMMAND, answered the way the real container answers
-    // it: the holders are named on stdout, and the signal work happens inside
-    // the same command. The fake's `workdirHolder` IS its process table, so
-    // clearing it is what the real command's SIGTERM achieves; a holder marked
-    // `survives` is one the TERM and the KILL both failed on, and one marked
-    // `session` is an ancestor of the scan's own shell, which the command
-    // reports and never signals. Both leave the mount busy, which is the shape
-    // a still-busy unmount has to name rather than hide.
+    // it: the signal work happens inside the same command, and STDOUT IS WHO IS
+    // STILL HOLDING WHEN IT ENDS. That last part is the repair — the command
+    // used to echo the list it captured BEFORE signalling, so a writer it had
+    // just killed successfully was still named as a holder, which is how
+    // deployed runs `probe09011530` and `hp0901170218` both blamed a `bun` pid
+    // that the `/proc` report taken afterwards shows was already gone.
+    //
+    // The fake's `workdirHolder` IS its process table, so clearing it is what
+    // the real command's SIGTERM achieves; a holder marked `survives` is one the
+    // TERM and the KILL both failed on, one marked `session` is an ancestor of
+    // the scan's own shell, and one marked `cwdOnly` holds by working directory
+    // and is invisible to an fd match. None of the last three is signalled, so
+    // all three are still holding when the scan ends and all three are named.
     //
     // MATCHED ON THE SCAN ITSELF, not on the command's first word: the first
     // word changed the moment the command grew its ancestor walk, and a fake
@@ -370,8 +465,32 @@ export class FakeSandbox {
       if (holder.session === true) {
         return { stdout: named, stderr: `not signalled, this session's own: ${named}`, exitCode: 0 };
       }
-      if (!holder.survives) this.workdirHolder = undefined;
-      return { stdout: named, stderr: named, exitCode: 0 };
+      if (holder.cwdOnly === true) {
+        return { stdout: named, stderr: `not signalled, cwd-only holders: ${named}`, exitCode: 0 };
+      }
+      if (holder.survives) return { stdout: named, stderr: `signalling: ${named}`, exitCode: 0 };
+      // Signalled, and it died: the re-scan at the end of the real command finds
+      // nothing, so this answers `none` rather than the name it started with.
+      this.workdirHolder = undefined;
+      return { stdout: 'none', stderr: `signalling: ${named}`, exitCode: 0 };
+    }
+    // THE JOURNAL READINESS PROBE, answered as the container answers it: the
+    // daemon serves once it has been started, unless a test says the mount
+    // never lands. The command WAITS inside the container, so one exec is the
+    // whole question — a fake that answered it per attempt would let the
+    // forty-round-trip loop this replaced pass again.
+    //
+    // Matched on the answer it prints rather than on a path or a first word:
+    // the command's shape is what the caller reads back, and a fake keyed on
+    // anything else answers the empty string to a command it stopped
+    // recognising.
+    if (command.includes('echo "socket=$socket mount=$mount"')) {
+      const serving = this.journalRunning() && this.journalMounts;
+      return {
+        stdout: `socket=${serving ? 'yes' : 'no'} mount=${serving ? 'yes' : 'no'}\n`,
+        stderr: '',
+        exitCode: 0,
+      };
     }
     return { stdout: '', stderr: '', exitCode: 0 };
   }
@@ -385,6 +504,23 @@ export class FakeSandbox {
   async unmountBucket(mountPath: string): Promise<void> {
     this.mountCalls.push(`unmount:${mountPath}`);
     this.sequence.push(`unmount:${mountPath}`);
+    // TWO REFERENCES REFUSE THIS, and the second one is the whole defect.
+    //
+    // A live holder is the obvious one. The other is THIS CALL'S OWN SESSION:
+    // the SDK issues `fusermount -u` through its default session, created with
+    // `cwd: "/workspace"` and given no cwd of its own here, and a shell standing
+    // on a mount holds that mount. So an unmount asked for while the session
+    // still stands inside the work directory is refused no matter how many
+    // holders were killed first — which is the deterministic reason every
+    // deployed r2fs stop refused, measured in probe `hp0901170218`, where the
+    // identical `fusermount -u` returned 0 the moment the session was parked.
+    if (mountPath === '/workspace'
+      && (this.sessionCwd === mountPath || this.sessionCwd.startsWith(`${mountPath}/`))) {
+      throw new Error(
+        `fusermount -u failed (exit 1): fusermount: failed to unmount ${mountPath}: `
+        + 'Device or resource busy',
+      );
+    }
     if (this.workdirHolder !== undefined && mountPath === '/workspace') {
       // The holder is still alive, so the mount is still busy: the refusal a
       // real fusermount gives, before any state changes hands.
@@ -440,14 +576,36 @@ export class FakeSandbox {
     return row;
   }
 
+  /**
+   * Process ids whose next poll STOPS the container.
+   *
+   * The platform reclaims an instance whenever it likes, and the process table
+   * a caller polls lives on this side of that: the record keeps answering
+   * `running` for a process whose reporter is gone. "The sandbox container
+   * stopped while the operation was pending" is that event named from the
+   * outside, and it is what every arm that lost an operation to a ceiling in
+   * `e2ecal0901002202` and `e2e20260901140445` was told.
+   */
+  readonly stopsContainerOnPoll = new Set<string>();
+
   getProcess(id: string): Promise<FakeProcessRow | null> {
     const fault = this.getFaults.shift();
     if (fault !== undefined) return Promise.reject(fault);
+    if (this.stopsContainerOnPoll.has(id)) this.running.running = false;
     return Promise.resolve(this.processes.get(id) ?? null);
   }
 
   listProcesses(): Promise<readonly FakeProcessRow[]> {
     return Promise.resolve([...this.processes.values()]);
+  }
+
+  /** What a process printed. A failure that reports the daemon's own words is
+   *  the difference between "the mount did not land" and a reader guessing, so
+   *  a test can stage those words and assert they travel. */
+  readonly processLogs = new Map<string, { stdout: string; stderr: string }>();
+
+  getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }> {
+    return Promise.resolve(this.processLogs.get(id) ?? { stdout: '', stderr: '' });
   }
 
   killProcess(id: string): Promise<void> {
@@ -500,6 +658,9 @@ export class FakeSandbox {
       admitting.enter();
       await admitting.promise;
     }
+    // The standing refusal, checked after the park so a test can hold an
+    // attempt inside a refusal that is not going to clear.
+    if (this.containerUnavailable !== undefined) throw this.containerUnavailable;
     const beforeRunning = this.startFaultBeforeRunning;
     this.startFaultBeforeRunning = undefined;
     if (beforeRunning !== undefined) throw beforeRunning;
@@ -507,7 +668,27 @@ export class FakeSandbox {
     this.running.running = true;
     if (!wasRunning) {
       this.containerStarts += 1;
-      await this.onStart();
+      // THE INIT GATE, modelled where the SDK really opens it. `container.js`
+      // runs this hook inside `ctx.blockConcurrencyWhile`, so for as long as it
+      // is held the runtime delivers NO event to the object — which is the
+      // admission control the restore now relies on. The promise is published so
+      // a test can deliver a request the way the platform does (see
+      // {@link deliver}) instead of calling straight into a method the platform
+      // would still be holding back.
+      // OPENED WHEN THE HOOK SETTLES, however it settled — a rejection there is
+      // the platform resetting the object, and a request the runtime held back
+      // is released either way. So the marker is resolved in the `finally`
+      // rather than derived from the hook's promise: a rejection handler here
+      // would turn a failed activation into the same value a successful one
+      // produces, and the fake would be answering for something it did not see.
+      const opened = Promise.withResolvers<void>();
+      this.initGate = opened.promise;
+      try {
+        await this.onStart();
+      } finally {
+        this.initGate = undefined;
+        opened.resolve();
+      }
     }
     const fault = this.startFaultAfterRunning;
     this.startFaultAfterRunning = undefined;
@@ -648,4 +829,22 @@ export function harness<Box>(
   // call time, and the fake owns the handle it flips on stop and destroy.
   Object.defineProperty(state, 'container', { value: container.running, configurable: true });
   return { box, container, rows: storage.rows, storage };
+}
+
+/**
+ * Run one operation the way the PLATFORM would deliver it: not before the init
+ * gate opens.
+ *
+ * The difference matters for exactly one class of assertion, and it is the one
+ * the container-start restore rests on. A test that calls `box.exec()` while
+ * `onStart` is still held is asserting against an interleaving the runtime
+ * cannot produce — no event is delivered to a Durable Object inside
+ * `blockConcurrencyWhile` — so it would either prove nothing or prove a hazard
+ * that does not exist. Going through here says "this request arrived DURING the
+ * restore" honestly: it is issued then, and delivered when the platform would
+ * deliver it.
+ */
+export async function deliver<T>(container: FakeSandbox, work: () => Promise<T>): Promise<T> {
+  await container.initGate;
+  return await work();
 }

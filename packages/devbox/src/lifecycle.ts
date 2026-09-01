@@ -40,19 +40,25 @@ export interface DevboxPolicy {
    * Budget for the WHOLE restoration: attach, workload restart, listener proof,
    * port exposure and boot stamping.
    *
-   * Entirely this package's own bound, and one that can actually fire. The
-   * restoration runs in a scheduled callback, outside `blockConcurrencyWhile`,
-   * so a timer is delivered normally. It used to run inside that block, where
-   * the platform cancels (`do.block_concurrency.cancel_ms`) by RESETTING the
-   * object and where a timer set inside the block is not delivered until the
-   * block releases — so the bound was unreachable and the reset happened
-   * instead.
+   * THE NUMBER IS THE INIT GATE'S. The restoration's primary home is the
+   * container-start hook, which the SDK awaits inside `blockConcurrencyWhile`
+   * (`@cloudflare/containers`, `container.js`), and the platform cancels that
+   * block by RESETTING the object at `do.block_concurrency.cancel_ms`. So this
+   * budget is that ceiling minus a margin — see `KinuSandbox.policy`, which
+   * derives it from the platform catalog rather than retyping it — and holding
+   * to it is what makes the activation complete instead of being cancelled.
+   *
+   * HOW IT IS ENFORCED DIFFERS BY WHERE THE RESTORATION RUNS, and that is the
+   * whole of {@link RestoreSteps}. Inside the gate a timer is not delivered
+   * until the block releases (measured, not assumed), so the budget is POLLED:
+   * it is consulted before each phase and before each container command, and a
+   * spent budget stops the walk with a classified reason. Outside the gate —
+   * the schedule row that covers a mid-life container replacement — the timer
+   * delivers normally and the budget also ABANDONS the step it bounds.
    *
    * IT COVERS EVERY PHASE, not just the attach. Only `attach()` used to be
    * wrapped, so the phases after it ran unbounded while every caller waited in
-   * the readiness gate. Overrunning now abandons the restoration, and because
-   * abandoned work keeps running inside the container the recovery is to replace
-   * that container identity — see {@link ContainerStartOverrun}.
+   * the readiness gate.
    */
   readonly attachBudgetMs: number;
   /**
@@ -119,6 +125,32 @@ export class ContainerStartOverrun extends Error {
 }
 
 /**
+ * The activation's own restore ran out of the time it may hold the init gate,
+ * so it declined to issue the NEXT container command.
+ *
+ * THE OPPOSITE OF {@link ContainerStartOverrun}, and the difference decides the
+ * recovery. An overrun abandons work that is still running inside the
+ * container, which nothing here can fence, so the identity has to go. This one
+ * abandons NOTHING: the budget is polled before a command is issued, so the
+ * command was never sent and the only thing left behind is a half-built mount
+ * graph that the next attach releases and rebuilds anyway.
+ *
+ * A TYPE, NOT A SENTENCE, for the reason the overrun is one: it names its own
+ * recovery class ({@link RecoveryClass} `gate-bound`), whose whole point is
+ * that a container which is merely slower than one activation may hold must
+ * never be destroyed for it.
+ */
+export class GateBudgetSpent extends Error {
+  constructor(doing: string, budgetMs: number) {
+    super(
+      `the init gate's ${budgetMs}ms restore budget was spent before ${doing}, so the `
+      + 'command was not issued and the activation completes without it.',
+    );
+    this.name = 'GateBudgetSpent';
+  }
+}
+
+/**
  * The restoration's one clock, and the allowance it hands each step.
  *
  * ONE OWNER FOR THE WHOLE RESTORATION. Every phase after the attach —
@@ -135,6 +167,10 @@ export class ContainerStartOverrun extends Error {
  * it to the next.
  */
 export interface StartBudget {
+  /** The whole window this budget was opened with. Carried rather than passed
+   *  alongside: a refusal has to name the budget it spent, and a second copy of
+   *  that number at the call site is a second authority on it. */
+  readonly budgetMs: number;
   /** Milliseconds left before the deadline, never negative. */
   remainingMs(): number;
   /** Add to the work this budget must still cover. */
@@ -148,6 +184,7 @@ export function openStartBudget(budgetMs: number): StartBudget {
   let declared = 0;
   const remainingMs = (): number => Math.max(0, budgetMs - (Date.now() - openedAt));
   return {
+    budgetMs,
     remainingMs,
     declare: (steps) => { declared += Math.max(0, steps); },
     nextAllowanceMs: () => {
@@ -253,11 +290,10 @@ async function raceAllowance<T>(
  * scheduled restoration outside it) — two copies of this race drifted within a
  * day of the second landing.
  *
- * Inside `blockConcurrencyWhile` the timer is NOT delivered until the block
- * releases (measured, not assumed), so there the platform cancel
- * (`do.block_concurrency.cancel_ms`) is the real backstop and this budget is
- * the shape the do-init gate pins. Outside the block — the scheduled attach —
- * the timer delivers normally and the budget genuinely fires.
+ * ONLY OUTSIDE THE INIT GATE. Inside `blockConcurrencyWhile` the timer is not
+ * delivered until the block releases (measured, not assumed), so this bound
+ * cannot fire there and a caller that used it would be carrying a paper bound.
+ * The in-gate policy polls instead: see {@link gateRestoreSteps}.
  *
  * Detaching the work is not an alternative either: a promise left floating in a
  * Durable Object is cancelled on eviction with its rejection swallowed, so the
@@ -282,6 +318,104 @@ export async function withContainerStartDeadline<T>(
   return raced.value;
 }
 
+/**
+ * HOW ONE RESTORATION BOUNDS ITS STEPS, as a value the restore is handed.
+ *
+ * The restore itself is one walk — attach, processes, listeners, exposures,
+ * boot stamp — and it runs in two places that can bound it in two different
+ * ways. Passing the policy in is what keeps that ONE walk: the alternative is a
+ * second copy of the phase order per home, and two copies of a restoration
+ * drift the way the two copies of `raceAllowance` drifted within a day.
+ *
+ *   • {@link racedRestoreSteps} — outside the init gate, where a timer is
+ *     delivered. A step that outruns its allowance is ABANDONED and reported.
+ *   • {@link gateRestoreSteps} — inside it, where a timer is not. A step is
+ *     admitted only while the budget still has time for one, and a spent budget
+ *     reports without starting the step, so nothing is ever abandoned.
+ */
+export interface RestoreSteps {
+  /** One post-attach step: a process start, a listener proof, an exposure, the
+   *  boot stamp. Reports rather than throws, in both policies — see
+   *  {@link runRestoreStep} for why none of them may throw. */
+  run<T>(work: () => Promise<T>, onLate: (failure: LateStartFailure) => void): Promise<StepOutcome<T>>;
+  /** The attach: the one step whose failure THROWS, because it is the only one
+   *  that is mid-mount when it ends. */
+  attach<T>(work: () => Promise<T>, onOverrun: (failure: LateStartFailure) => void): Promise<T>;
+  /** Add to the work the budget must still cover. */
+  declare(steps: number): void;
+  /** A declared step that will NOT run, releasing its share to the ones after
+   *  it. The port whose listener never answered is never exposed, and the ports
+   *  behind it must not be charged for that silence. */
+  skip(): void;
+  /** Milliseconds this restoration may still spend. */
+  remainingMs(): number;
+}
+
+/** The policy for a restoration OUTSIDE the init gate: every step raced against
+ *  its allowance, and an abandoned attach classified `abandoned` so the ladder
+ *  replaces the identity whose mount it left half-built. */
+export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
+  return {
+    run: async (work, onLate) => await runRestoreStep(budget.nextAllowanceMs(), work, onLate),
+    attach: async (work, onOverrun) =>
+      await withContainerStartDeadline('Devbox.attach', budget, work, onOverrun),
+    declare: (steps) => budget.declare(steps),
+    skip: () => void budget.nextAllowanceMs(),
+    remainingMs: () => budget.remainingMs(),
+  };
+}
+
+/**
+ * The policy for a restoration INSIDE the init gate: the budget is POLLED, and
+ * that is the whole difference.
+ *
+ * WHY NOT THE RACE. A `setTimeout` set inside `blockConcurrencyWhile` is not
+ * delivered until the block releases, so the late arm of `raceAllowance` cannot
+ * resolve there: every step would read as `done` however long it took, and the
+ * platform's own cancel — which RESETS the object — would be the only bound. A
+ * budget that cannot fire is not a bound, and the do-init gate refuses one by
+ * name.
+ *
+ * WHAT POLLING BOUNDS, EXACTLY, said rather than implied. A step is started only
+ * while the budget still holds time, so gate occupancy is at most the budget
+ * plus ONE step. That is a real bound because every step of this restoration is
+ * itself bounded where it runs: each is a single container round trip, and the
+ * ones that must WAIT — a layer becoming visible, a mount releasing, a listener
+ * binding — do their waiting inside the container in one command with a counted
+ * loop, never by sleeping in the Durable Object. A sleep here would not be
+ * delivered either.
+ *
+ * NOTHING IS EVER ABANDONED, which is why the late arm carries no cause: a step
+ * that was not started has nothing running to settle later. That is strictly
+ * better than the raced policy, and it is why an exhausted gate budget is
+ * `gate-bound` rather than `abandoned` — no container has to die for it.
+ */
+export function gateRestoreSteps(budget: StartBudget): RestoreSteps {
+  const admit = <T>(work: () => Promise<T>): Promise<StepOutcome<T>> => {
+    // The allowance is consumed either way, so the divisor of the steps still
+    // to come is the same in both policies and a skipped step leaves its share
+    // behind exactly as a fast one does.
+    budget.nextAllowanceMs();
+    if (budget.remainingMs() <= 0) return Promise.resolve({ kind: 'late' });
+    return work().then<StepOutcome<T>, StepOutcome<T>>(
+      (value) => ({ kind: 'done', value }),
+      (cause: LateStartFailure['cause']) => ({ kind: 'failed', cause }),
+    );
+  };
+  return {
+    run: async (work) => await admit(work),
+    attach: async (work) => {
+      if (budget.remainingMs() <= 0) {
+        throw new GateBudgetSpent('the attach began', budget.budgetMs);
+      }
+      return await work();
+    },
+    declare: (steps) => budget.declare(steps),
+    skip: () => void budget.nextAllowanceMs(),
+    remainingMs: () => budget.remainingMs(),
+  };
+}
+
 // ── the recovery taxonomy ───────────────────────────────────────────────────
 
 /**
@@ -294,10 +428,11 @@ export async function withContainerStartDeadline<T>(
  * Matching on messages would be a second opinion on the same question and the
  * one that rots first.
  *
- * The point of the split is that these five need DIFFERENT things. One generic
+ * The point of the split is that these need DIFFERENT things. One generic
  * retry policy spends a retry on a configuration that cannot change, repeats a
- * copy into a filesystem that is already full, and treats work abandoned inside
- * a container as if asking the same container again were safe.
+ * copy into a filesystem that is already full, treats work abandoned inside a
+ * container as if asking the same container again were safe, and destroys a
+ * healthy container for being slower than one activation may wait.
  */
 export type RecoveryClass =
   /** THIS attempt left work running inside the container. Nothing in the
@@ -308,6 +443,19 @@ export type RecoveryClass =
    *  is not. Says NOTHING about the health of a container identity, so it must
    *  never advance a ladder that ends in destroying one. */
   | 'stale-owner'
+  /**
+   * The activation's own restore ran out of the time it may hold the init gate.
+   *
+   * ITS OWN CLASS BECAUSE THE ALTERNATIVE DESTROYS HEALTHY CONTAINERS. Left
+   * `unclassified`, a second slow activation walks the ladder to `replace` and
+   * kills a container whose only fault was needing more than one gate's worth
+   * of restore — the cure that destroys the patient, in a new place. Nothing was
+   * abandoned (the budget is polled BEFORE a command is issued, so the command
+   * was never sent), and the restore has a home where a real timer bounds it:
+   * the schedule row. So the answer is to ask the same identity again, there,
+   * without advancing the ladder.
+   */
+  | 'gate-bound'
   /** A resource ran out. Running the same work again spends it again. */
   | 'exhausted'
   /** Configuration the container cannot satisfy. The inputs are the same next
@@ -376,6 +524,7 @@ const CodedFailureSchema = v.object({ code: v.string() });
 export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryClass {
   for (let value = thrown.cause; ;) {
     if (value instanceof ContainerStartOverrun) return 'abandoned';
+    if (value instanceof GateBudgetSpent) return 'gate-bound';
     const coded = v.safeParse(CodedFailureSchema, value);
     if (coded.success) {
       const held = RECOVERY_BY_SDK_CODE.get(coded.output.code);
@@ -507,8 +656,10 @@ export interface RecoveryDecision {
  *
  * Read top to bottom, the rules are: a superseded attempt does nothing;
  * exhaustion and permanent configuration refuse without repeating the work,
- * destroying anything, or moving the ladder; a stale owner retries WITHOUT
- * advancing it, because the identity it failed on is already gone; a failure at
+ * destroying anything, or moving the ladder; a stale owner and a spent gate
+ * budget retry WITHOUT advancing it, because neither is evidence against the
+ * container identity — the first failed on an identity that is already gone,
+ * the second never issued the command it was refused for; a failure at
  * `replace` is terminal and STAYS at `replace`; and everything else walks the
  * ladder — retry the identity, then replace the identity. Abandoned work enters
  * at `replace`, since the only cancellation for it is the container's death.
@@ -522,7 +673,9 @@ export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   if (input.failure === 'exhausted' || input.failure === 'permanent') {
     return { action: 'refuse', stage };
   }
-  if (input.failure === 'stale-owner') return { action: 'retry', stage };
+  if (input.failure === 'stale-owner' || input.failure === 'gate-bound') {
+    return { action: 'retry', stage };
+  }
   if (stage === 'replace') return { action: 'refuse', stage };
   if (input.failure === 'abandoned' || stage === 'retry') {
     return { action: 'replace', stage: 'replace' };
@@ -635,11 +788,27 @@ const HOLDER_TERM_WAIT_MS = 5_000;
  *
  * PROCFS, NOT `fuser`/`lsof`. `/proc` is guaranteed present in the container
  * image (both already read `/proc/mounts` through it), reports pid + comm in
- * the same read as the holding fd, and needs no tool the image may not carry.
- * Both `/proc/<pid>/fd/*` and `/proc/<pid>/cwd` are scanned, but ONLY fd
- * holders are signalled: the deployed control proves a session shell holding
- * its cwd under the work directory does not block an s3fs unmount, and TERMing
- * it would kill the one shared session every later command needs.
+ * the same read as the holding reference, and needs no tool the image may not
+ * carry.
+ *
+ * BOTH `/proc/<pid>/fd/*` AND `/proc/<pid>/cwd` ARE SCANNED, and the second
+ * half is a measured repair rather than symmetry. This scan matched fds alone,
+ * on the stated ground that "a session shell holding its cwd under the work
+ * directory does not block an s3fs unmount". That is false as a kernel claim: a
+ * cwd inside a mount is a mount reference, and `umount` answers EBUSY for it
+ * exactly as it does for an open fd. Measured twice —
+ *
+ *   - on a real mount with no container: a process whose ONLY reference is its
+ *     cwd refuses the unmount, and an fd-only scan of it matches nothing;
+ *   - in the deployed container (probe `hp0901170218`): six `node` children of
+ *     the container server sitting at `cwd=/workspace` with zero fd matches,
+ *     invisible to this command for as long as it looked only at fds.
+ *
+ * A cwd holder is therefore NAMED and never signalled. Naming it is the whole
+ * point: these are the container server's own helpers and the session shell
+ * this command speaks through, so a TERM would end the exec channel or the
+ * container, while the one thing a caller needs is the name that explains a
+ * refusal it can otherwise not account for.
  *
  * PID 1 IS EXCLUDED, for the same reason from the other end: it is the
  * container's init, holds the root of everything, and signalling it is a
@@ -659,13 +828,26 @@ const HOLDER_TERM_WAIT_MS = 5_000;
  *
  * TERMINATE, THEN KILL, inside the one command so the wait needs no second
  * round trip: a process that catches TERM and flushes is given the chance, and
- * one that does not is removed anyway. `comm` is read BEFORE the signal so the
- * names a later refusal reports are the ones that were holding, not
- * post-mortem.
+ * one that does not is removed anyway.
  *
- * The output is one line per holder, `pid comm`, or the word `none` — a
- * distinct token so an empty answer reads as "nothing was holding" rather
- * than "the command said nothing".
+ * STDOUT IS WHO IS STILL HOLDING, RE-READ AFTER THE SIGNALS, and that is the
+ * second measured repair. The command used to echo the list it had captured
+ * BEFORE signalling anything, so its answer said "these were holding when I
+ * started" while every reader — `#detachStorage`'s refusal above all — took it
+ * to mean "these are holding now". Deployed run `probe09011530` refused a stop
+ * with `these processes were still holding it: 258 (bun)`, and the same shape
+ * reproduced in `hp0901170218` naming `253 (bun)`: in both, the scan had
+ * ALREADY killed that writer successfully, and the `/proc` report taken
+ * afterwards shows no such pid. The name was residue of a list captured one
+ * `sleep` earlier, and it sent the diagnosis after a process that had done
+ * nothing wrong — a survivor of SIGKILL, which cannot exist. A second scan
+ * costs one `/proc` walk inside a stop that has just spent five seconds
+ * sleeping, and it is the difference between a refusal a caller can act on and
+ * a refusal that lies.
+ *
+ * The output is one line of `pid:comm` entries, or the word `none` — a distinct
+ * token so an empty answer reads as "nothing is holding" rather than "the
+ * command said nothing".
  *
  * IT IS ONE LINE, AND EVERY SEPARATOR IS WRITTEN HERE, which is the defect
  * this shape repairs. The command was composed as an array joined with a
@@ -698,34 +880,46 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
     + 'while [ -n "$a" ] && [ "$a" != 0 ] && [ "$a" != 1 ]; do '
     + `a=$(sed 's/.*) //' /proc/$a/stat 2>/dev/null | cut -d' ' -f2); `
     + 'if [ -n "$a" ]; then mine="$mine$a "; fi; done; ';
-  return `${ancestors}holders=""; kin=""; `
+  // ONE scan, defined once and run twice: before the signals to decide who to
+  // signal, and after them to answer who is still holding. A second copy of
+  // this walk is a second thing to keep in agreement, and the two runs must
+  // classify identically or the answer means nothing. The name is deliberately
+  // unusable by anything else in the shared session shell this defines it in.
+  const scan = '__devbox_hold() { fdh=""; cwdh=""; kin=""; '
     + `for pid in $(ls /proc | grep -E '^[0-9]+$' | grep -v '^1$'); do `
-    + `if ls -l /proc/$pid/fd 2>/dev/null | grep -q -F ${quoted}; then `
+    + 'h=""; '
+    + `if ls -l /proc/$pid/fd 2>/dev/null | grep -q -F ${quoted}; then h=fd; `
+    + `else case "$(readlink /proc/$pid/cwd 2>/dev/null)" in `
+    + `${quoted}|${quoted}/*) h=cwd;; esac; fi; `
+    + 'if [ -n "$h" ]; then '
     + 'entry="$pid:$(cat /proc/$pid/comm 2>/dev/null)"; '
-    + 'case "$mine" in *" $pid "*) kin="$kin $entry";; *) holders="$holders $entry";; esac; '
-    + 'fi; '
-    + 'done; '
-    // EVERY holder is reported, signalled or not: the names are what a refused
-    // detach reports, and one this command declined to signal is the most
-    // important name in that sentence.
-    + 'all="$holders$kin"; '
+    + 'case "$mine" in *" $pid "*) kin="$kin $entry"; h=kin;; esac; '
+    + 'if [ "$h" = fd ]; then fdh="$fdh $entry"; elif [ "$h" = cwd ]; then '
+    + 'cwdh="$cwdh $entry"; fi; fi; '
+    + 'done; }; ';
+  return `${ancestors}${scan}__devbox_hold; `
+    // The pre-signal picture, on stderr, split by what this command is willing
+    // to do about each class. Only fd holders that are strangers are signalled.
     + 'if [ -n "$kin" ]; then echo "not signalled, this session\'s own:$kin" >&2; fi; '
-    + 'if [ -z "$all" ]; then echo none; else '
-    // Report first, signal second: the comm of a killed process cannot be
-    // read again, so the names travel on stderr before any signal lands.
-    + 'echo "$all" >&2; '
-    + 'for name in $holders; do kill -TERM "${name%%:*}" 2>/dev/null || true; done; '
+    + 'if [ -n "$cwdh" ]; then echo "not signalled, cwd-only holders:$cwdh" >&2; fi; '
+    + 'if [ -n "$fdh" ]; then echo "signalling:$fdh" >&2; '
+    + 'for name in $fdh; do kill -TERM "${name%%:*}" 2>/dev/null || true; done; '
     + `sleep ${termWait}; `
-    + 'for name in $holders; do p="${name%%:*}"; '
-    + 'if [ -d "/proc/$p" ]; then kill -KILL "$p" 2>/dev/null || true; fi; done; '
-    + 'echo "$all"; fi';
+    + 'for name in $fdh; do p="${name%%:*}"; '
+    + 'if [ -d "/proc/$p" ]; then kill -KILL "$p" 2>/dev/null || true; fi; done; fi; '
+    // AND NOW ASK AGAIN. Everything above is what this command DID; the line
+    // below is the only thing a caller can act on, so it is measured, not
+    // remembered.
+    + '__devbox_hold; still="$fdh$cwdh$kin"; '
+    + 'if [ -z "$still" ]; then echo none; else echo "$still"; fi';
 }
 
 /**
- * The pids and names one {@link releaseWorkdirHoldersCommand} run signalled,
- * parsed from its stdout. `none` — the command's own word for an empty scan —
- * is an empty answer rather than a parse failure, because the caller's
- * question ("did anything need signalling?") is answered either way.
+ * The pids and names that are STILL holding the work directory after one
+ * {@link releaseWorkdirHoldersCommand} run, parsed from its stdout. `none` —
+ * the command's own word for a clear scan — is an empty answer rather than a
+ * parse failure, because the caller's question ("is anything still holding?")
+ * is answered either way.
  */
 export function parseWorkdirHolders(
   stdout: string,
@@ -810,6 +1004,48 @@ export function healthProbeSilent(output: string): boolean {
   if (exitStr !== undefined && Number.parseInt(exitStr, 10) === 7) return true;
   const code = codeStr === undefined ? Number.NaN : Number.parseInt(codeStr, 10);
   return !Number.isFinite(code) || code === 0;
+}
+
+/**
+ * ONE container command that waits, bounded, for a listener to appear, and
+ * answers with the LAST probe's output so {@link healthProbeSilent} stays the
+ * only reader of that format.
+ *
+ * THE WAITING MOVED INTO THE CONTAINER, and that is not an optimisation — it is
+ * what makes the listener proof legal inside the init gate at all. The proof
+ * used to be a Durable Object loop: probe, `scheduler.wait`, probe again. Two
+ * things were wrong with it in the gate. A timer is not delivered until
+ * `blockConcurrencyWhile` releases, so the sleep never returns and the proof
+ * wedges the activation the platform then RESETS; and each probe is a separate
+ * DO↔container round trip, so a thirty-second window over a two-second interval
+ * spent fifteen of them on one port. The container's own `sleep` is not the
+ * Durable Object's clock, so the same window costs ONE hop and returns.
+ *
+ * BOUNDED BY A COUNT, in the shape `snapshot-chain`'s own layer probe uses: the
+ * loop runs at most `attempts` times, so the command's own duration is at most
+ * `attempts × (one probe + intervalMs)` — a bound the container enforces rather
+ * than one this object hopes to enforce from outside.
+ *
+ * IT BREAKS ON CURL'S OWN EXIT CODE, not on a second copy of
+ * {@link healthProbeSilent}'s rule. The probe already writes `%{exitcode}` as
+ * the answer's second field, and curl exits 0 exactly when it received an HTTP
+ * response — which IS the question "does a listener exist", 4xx and 5xx
+ * included. So the shell tests the same fact the parser tests, read from the
+ * same field, and there is no policy here to drift from the one in TypeScript.
+ *
+ * NOT ONE `exit`, for the reason `snapshot-chain`'s probe gives at length: this
+ * runs in the container's PERSISTENT session shell, and `exit` inside it
+ * terminates the session for every later command. `break` answers the same
+ * question and leaves the shell alive.
+ */
+export function awaitListenerCommand(port: number, attempts: number, intervalMs: number): string {
+  // Fractional seconds, because the cadence is expressed in milliseconds and
+  // `sleep` in an Alpine image takes a decimal.
+  const seconds = (Math.max(1, intervalMs) / 1_000).toFixed(2);
+  return `answer=; for _ in $(seq 1 ${String(Math.max(1, attempts))}); do `
+    + `answer=$(${healthProbeCommand(port)}); `
+    + `case "$answer" in *'|0') break ;; *) sleep ${seconds} ;; esac; `
+    + 'done; printf %s "$answer"';
 }
 
 /**

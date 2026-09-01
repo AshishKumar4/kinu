@@ -51,7 +51,6 @@ import {
   BENCH_ACCOUNT_ID, COLD_ATTACH_CEILING_MS, STRATEGIES, checkpointOperation,
   createFixtureResources, deployFixture, drainBucketResidue, execInBox, r2ResiduePlane,
   retryTransient, startupOperation, stopOperation, teardownLiveArms, writeFileInBox,
-  writeArmArtifact,
   type ArmFixture, type Fixture, type Strategy,
 } from './bench-devbox-strategies';
 import {
@@ -439,11 +438,6 @@ export interface LifecycleOptions {
   /** The workload program, as bytes to install in the box. */
   readonly workloadSource: string;
   readonly log: (message: string) => void;
-  /** Called with the verdict-so-far after every settled step, so a run whose
-   *  process dies mid-lifecycle still leaves every step that settled, on disk.
-   *  Absent means in-memory only, which is what this suite's own tests use —
-   *  they assert on the verdict, not on a file. */
-  readonly settle?: (verdict: StrategyVerdict) => void;
 }
 
 /**
@@ -465,11 +459,6 @@ export async function runLifecycle(
   const notes: string[] = [];
   const stranded: StrandedWork[] = [];
 
-  /** The verdict so far, as the durable per-arm artifact records it. */
-  const partial = (): StrategyVerdict => ({
-    strategy, box, passed: failures.length === 0, steps: [...steps], failures: [...failures], notes: [...notes],
-  });
-
   const step = async <T>(op: LifecycleOp, run: (deadlineMs: number) => Promise<T>): Promise<T> => {
     const ceiling = ceilingFor(op, options.ceilings);
     const started = Date.now();
@@ -477,7 +466,6 @@ export async function runLifecycle(
     try {
       const value = await underCeiling(`${strategy} ${op}`, ceiling.ms, stranded, run);
       steps.push({ op, ms: Date.now() - started, ceilingMs: ceiling.ms, ok: true, detail: 'settled' });
-      options.settle?.(partial());
       return value;
     } catch (error) {
       const elapsed = Date.now() - started;
@@ -487,7 +475,6 @@ export async function runLifecycle(
         : wrongAnswer(strategy, op, elapsed, detail);
       steps.push({ op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail });
       failures.push(text);
-      options.settle?.(partial());
       throw new Error(text, { cause: error });
     }
   };
@@ -585,6 +572,21 @@ export async function runLifecycle(
       require(settled.ok, `the stop did not confirm: ${settled.detail}`);
       return settled;
     });
+    // ── the wake ──────────────────────────────────────────────────────────
+    //
+    // THE LIVE PROOF OF THE GATE-TIME RESTORE IS NOT WIRED HERE, deliberately,
+    // and the reason is worth stating rather than leaving as an omission. The
+    // restore now runs inside the container-start hook, which the SDK awaits in
+    // `blockConcurrencyWhile`, so while it is held the runtime delivers no event
+    // to the box: an `/exec` posted the moment a wake starts is not queued
+    // behind a promise this code holds, it is not delivered at all until the
+    // restore has settled. Proving that needs a racing operation whose REPLY
+    // carries container bytes, and the only channel this suite has for that is
+    // the workload harness — which is installed after the wake, so a racing
+    // call cannot use it. The property is held instead by
+    // `packages/devbox/tests/restore-in-gate.test.ts`, which drives an operation
+    // during EVERY restore phase and pins that it observes only the finished
+    // world or a box that names what is missing.
     const woke = await step('wake-attach', async (deadlineMs) =>
       await seam.startup('/wake', `${strategy} wake`, ['attached'], deadlineMs),
     );
@@ -696,7 +698,6 @@ export async function runLifecycle(
   }
 
   for (const abandoned of stranded) notes.push(`abandoned at its ceiling: ${abandoned.what}`);
-  options.settle?.(partial());
   return { strategy, box, passed: failures.length === 0, steps, failures, notes };
 }
 
@@ -980,41 +981,27 @@ async function main(): Promise<number> {
     // checkpoint cannot take a sibling's evidence with it.
     verdicts.push(...await Promise.all(lanes.map(async (lane): Promise<StrategyVerdict> => {
       const live = lane.live;
-      const arm = lane.fixture.strategy;
-      // DURABLE PER-ARM, the same scheme the decisive driver uses: every
-      // settled step is on disk the moment it settles, so a wedged sibling or
-      // a killed driver cannot take this arm's evidence with it.
-      const settle = (verdict: StrategyVerdict): void => {
-        try {
-          writeArmArtifact(REPO_ROOT, options.runId, arm, verdict);
-        } catch (error) {
-          logLine(`${arm}: the durable arm artifact could not be written: ${describeThrown({ cause: error })}`);
-        }
-      };
       if (live === null) {
-        const refused: StrategyVerdict = {
-          strategy: arm,
+        return {
+          strategy: lane.fixture.strategy,
           box: lane.box,
           passed: false,
           steps: [],
-          failures: [`${arm}: ${lane.refusal ?? 'this arm was never deployed'}`],
+          failures: [`${lane.fixture.strategy}: ${lane.refusal ?? 'this arm was never deployed'}`],
           notes: [],
         };
-        settle(refused);
-        return refused;
       }
       const base = deployedSeam(live, lane.box);
       return await runLifecycle(
-        arm,
+        lane.fixture.strategy,
         lane.box,
-        options.wedge === arm ? wedgedSeam(base) : base,
+        options.wedge === lane.fixture.strategy ? wedgedSeam(base) : base,
         {
           ceilings,
           seed: options.seed,
           midScaleMib: options.midScaleMib,
           workloadSource,
           log: logLine,
-          settle,
         },
       );
     })));

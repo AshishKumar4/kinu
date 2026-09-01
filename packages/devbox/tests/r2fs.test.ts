@@ -15,9 +15,10 @@ import * as v from 'valibot';
 
 import { Devbox, harness as devboxHarness } from './support/devbox-harness';
 import { sessionShellRefusal } from './support/session-shell';
-import type { DevboxPolicy } from '../src/lifecycle';
+import { describeThrown, type DevboxPolicy } from '../src/lifecycle';
 import {
   CHECKPOINT_OUTCOME_KINDS,
+  DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
   type CheckpointKind,
   type CheckpointOutcome,
@@ -111,11 +112,25 @@ function harness(overrides: {
    *  like from here: s3fs is inside its own connect and retry budgets and this
    *  side has nothing to observe. */
   mountHangs?: boolean;
+  /** A reference the strategy may NOT revoke: an ancestor of the scan's own
+   *  shell, or one of the container server's own children sitting on the mount.
+   *  Parking the session cannot clear it, so an ordinary unmount stays refused
+   *  and only a lazy detach can release the mount. */
+  unrevocableHolder?: boolean;
+  /** Even `MNT_DETACH` cannot release the mount. The only state in which a
+   *  release failure reaches a caller, so it is the only one that can prove what
+   *  that caller is told. */
+  lazyUnmountRefuses?: boolean;
 } = {}): Harness {
   const calls: string[] = [];
   let mounted = overrides.mountedAtStart ?? false;
   let mountpoint = [...overrides.mountpointEntries ?? []];
   const quarantined: string[] = [];
+  // WHERE THE SHARED SESSION SHELL IS STANDING. The SDK creates its default
+  // session with `cwd: "/workspace"` — the mount point — so that is the state
+  // this starts in, and every port that runs a command moves it the way an
+  // exec's cwd option does.
+  let sessionCwd = DEVBOX_WORKDIR;
   const ports: R2fsPorts = {
     containerRunning: () => overrides.running ?? true,
     readMounts: () => Promise.resolve(mounted ? MOUNTED : NOT_MOUNTED),
@@ -157,10 +172,51 @@ function harness(overrides: {
       mounted = overrides.mountLands ?? true;
       return Promise.resolve();
     },
+    // THE REFUSAL A REAL fusermount GIVES, and the reference it gives it for.
+    // This stand-in used to unmount unconditionally, which is precisely why
+    // every deployed r2fs stop could refuse while this suite stayed green: the
+    // one thing that actually holds the mount was not modelled at all. A shell
+    // standing on a mount is a reference to it — measured on a real mount, and
+    // measured again in deployed probe `hp0901170218`, where the identical
+    // `fusermount -u` refused with the session inside and returned 0 with it
+    // parked outside.
     unmount: () => {
       calls.push('unmount');
+      if (sessionCwd === DEVBOX_WORKDIR || sessionCwd.startsWith(`${DEVBOX_WORKDIR}/`)) {
+        return Promise.reject(new Error(
+          `fusermount -u failed (exit 1): fusermount: failed to unmount ${DEVBOX_WORKDIR}: `
+          + 'Device or resource busy',
+        ));
+      }
+      if (overrides.unrevocableHolder === true) {
+        // A reference this strategy may not revoke — an ancestor of the scan's
+        // own shell, or one of the container server's children. Parking the
+        // session cannot clear it, so an ordinary unmount stays refused.
+        return Promise.reject(new Error(
+          `fusermount -u failed (exit 1): fusermount: failed to unmount ${DEVBOX_WORKDIR}: `
+          + 'Device or resource busy',
+        ));
+      }
       mounted = false;
       return Promise.resolve();
+    },
+    // `cd` MOVES THE SHARED SESSION, and it stays moved: that persistence is
+    // the whole mechanism, because the SDK's own unmount passes no cwd and
+    // inherits wherever this left the shell.
+    parkSession: () => {
+      calls.push('parkSession');
+      sessionCwd = DEVBOX_RUNTIME_DIR;
+      return Promise.resolve(DEVBOX_RUNTIME_DIR);
+    },
+    // MNT_DETACH removes the mount from the namespace even with live
+    // references, which is measured on a real mount against a live cwd holder.
+    // `lazyUnmountRefuses` is the one state where even that cannot release it —
+    // the only path on which a release failure reaches a caller at all.
+    lazyUnmount: () => {
+      calls.push('lazyUnmount');
+      if (overrides.lazyUnmountRefuses === true) return Promise.resolve(false);
+      mounted = false;
+      return Promise.resolve(true);
     },
     inventory: () => Promise.resolve({
       objects: overrides.objects ?? 12,
@@ -411,6 +467,45 @@ describe('attach — the mount must be observed, in the shape claimed', () => {
     expect((await r2fsStorage(record.ports).attach()).kind).toBe('already-attached');
     expect(record.calls).not.toContain('unmount');
   });
+
+  test('a refusal names the DEFECT and carries the release failure as its cause', async () => {
+    // A release failure MUST NOT REPLACE the sentence naming the defect, which
+    // is the only thing telling a caller why this mount was rejected. Measured
+    // against the init gate's restore deadline: past it a release command is not
+    // issued at all, and a bare throw from the release produced a report with no
+    // mention of what was wrong with the mount.
+    //
+    // Nothing is lost by wrapping instead: `classifyRecovery` walks the cause
+    // chain and returns on the first classified value, so a gate refusal buried
+    // under this sentence still classifies and still retries; `describeThrown`
+    // renders the chain, so ONE reason carries both facts.
+    const record = harness({
+      mountedAtStart: true,
+      cacheExists: false,
+      unrevocableHolder: true,
+      lazyUnmountRefuses: true,
+    });
+
+    let thrown: Error | undefined;
+    try {
+      await r2fsStorage(record.ports).attach();
+    } catch (error) {
+      thrown = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    if (thrown === undefined) return;
+    // The DEFECT, in the outermost sentence a caller reads first.
+    expect(thrown.message).toContain('mounted without its cache directory');
+    // And the honest consequence, because the mount is still up.
+    expect(thrown.message).toContain('could NOT be released');
+    // The refusal itself, reachable rather than discarded.
+    expect(describeThrown({ cause: thrown })).toContain('Device or resource busy');
+    // Both release attempts really were made before the caller was told.
+    expect(record.calls).toContain('parkSession');
+    expect(record.calls).toContain('lazyUnmount');
+    expect(record.mounted()).toBe(true);
+  });
 });
 
 // ── checkpoint ──────────────────────────────────────────────────────────────
@@ -628,36 +723,106 @@ describe('the stop order: holders are released before the mount is detached', ()
     expect(container.stops).toBe(1);
   });
 
-  test('a holder that IS this session is named, and never signalled', async () => {
+  test('the session is moved OUT of the work directory before the mount is released', async () => {
+    // THE DEFECT EVERY DEPLOYED r2fs STOP DIED OF, at class level. The SDK
+    // issues `fusermount -u` through a session it created with
+    // `cwd: "/workspace"`, and a shell standing on a mount holds that mount, so
+    // the unmount was refused by the very session asking for it — with the
+    // holder scan's names taking the blame. Measured as a controlled experiment
+    // in deployed probe `hp0901170218`: the identical `fusermount -u` answered
+    // `Device or resource busy` with the session inside the mount and `0` with
+    // it parked outside, adjacent in time, with no holder alive in either arm.
+    const { box, container } = devboxHarness(R2fsQuiesceBox);
+    await box.devboxStartup();
+    // The attach ran commands in the work directory, so the session is standing
+    // exactly where the SDK leaves it before a stop.
+    container.sessionCwd = DEVBOX_WORKDIR;
+
+    const outcome = await box.quiesce();
+
+    expect(['committed', 'skipped']).toContain(outcome.kind);
+    // Released outright — no lazy fallback needed, because the only reference
+    // was the session's own cwd and parking it is a real repair rather than a
+    // workaround.
+    expect(container.sequence).not.toContain('exec:lazy-unmount');
+    expect({
+      stillMounted: container.s3fsMounts.has(DEVBOX_WORKDIR),
+      stopped: container.stops,
+      parkedOutside: container.sessionCwd.startsWith(DEVBOX_WORKDIR),
+    }).toEqual({ stillMounted: false, stopped: 1, parkedOutside: false });
+  });
+
+  test('a holder that IS this session is named, and the mount is still released', async () => {
     // The container's exec channel can hold the work directory too, and the
     // scan runs inside it: signalling an ancestor of its own shell would kill
     // the session the stop is speaking through, so the command reports that
-    // holder instead. Proven against real `/proc` in `decisions.test.ts`;
-    // proven HERE to reach a caller as a named refusal rather than a silence.
+    // holder instead. Proven against real `/proc` in `decisions.test.ts`.
+    //
+    // WHAT CHANGED HERE: naming it used to be the END of the story, and the box
+    // was left unstoppable — mount up, container running, billing, with no
+    // sequence of calls that could ever release it, because the one holder the
+    // scan must never signal is also the one that never goes away. A reference
+    // this strategy may not revoke is exactly what `MNT_DETACH` is for, so the
+    // stop now completes and the holder is named in the log instead of in a
+    // refusal.
     const { box, container } = devboxHarness(R2fsQuiesceBox);
     container.workdirHolder = { pid: 31, comm: 'sandbox-session', session: true };
     await box.devboxStartup();
 
-    await expect(box.quiesce()).rejects.toThrow('sandbox-session');
+    const outcome = await box.quiesce();
+
+    expect(['committed', 'skipped']).toContain(outcome.kind);
+    expect(container.sequence).toContain('exec:lazy-unmount');
     expect({
-      stopped: container.stops,
       stillMounted: container.s3fsMounts.has(DEVBOX_WORKDIR),
+      stopped: container.stops,
       // The session survived the scan: the fake answers every later command,
       // which is exactly what a killed session would not do.
       answersAfterwards: (await container.exec('true')).exitCode,
-    }).toEqual({ stopped: 0, stillMounted: true, answersAfterwards: 0 });
+    }).toEqual({ stillMounted: false, stopped: 1, answersAfterwards: 0 });
   });
 
-  test('a holder that survives the signals is NAMED by the refused detach', async () => {
+  test('a cwd-only holder — invisible to an fd scan — is named and does not wedge the stop',
+    async () => {
+      // SIX OF THESE WERE LIVE IN THE DEPLOYED CONTAINER and none of them was
+      // ever reported: `node` children of the container server sitting at
+      // `cwd=/workspace` with zero `/proc/<pid>/fd` matches, while the scan
+      // matched fds alone. A cwd inside a mount is a mount reference — the same
+      // EBUSY an open fd earns — so these were both the least visible and the
+      // least accounted-for references on the mount.
+      const { box, container } = devboxHarness(R2fsQuiesceBox);
+      container.workdirHolder = { pid: 93, comm: 'node', cwdOnly: true };
+      await box.devboxStartup();
+
+      const outcome = await box.quiesce();
+
+      expect(['committed', 'skipped']).toContain(outcome.kind);
+      // NAMED, on the channel the scan uses for what it declined to signal.
+      expect(container.sequence).toContain('exec:lazy-unmount');
+      expect({
+        stillMounted: container.s3fsMounts.has(DEVBOX_WORKDIR),
+        stopped: container.stops,
+      }).toEqual({ stillMounted: false, stopped: 1 });
+    });
+
+  test('a holder that survives the signals is NAMED, and the mount is taken lazily', async () => {
     const { box, container } = devboxHarness(R2fsQuiesceBox);
     container.workdirHolder = { pid: 777, comm: 'stubborn-writer', survives: true };
     await box.devboxStartup();
 
-    await expect(box.quiesce()).rejects.toThrow('stubborn-writer');
-    // AND THE BOX WAS NOT STOPPED BEHIND THE REFUSAL: a stop that detaches
-    // nothing must not report one, or the caller would read a box as released
-    // whose mount is still live and whose holder still holds it.
-    expect(container.stops).toBe(0);
-    expect(container.s3fsMounts.has(DEVBOX_WORKDIR)).toBe(true);
+    const outcome = await box.quiesce();
+
+    // THE FLUSH RAN FIRST, which is what makes taking the mount lazily a
+    // release rather than a data loss: `detach` checks its `sync -f` before it
+    // reaches any unmount at all.
+    expect(['committed', 'skipped']).toContain(outcome.kind);
+    const synced = container.sequence.indexOf('exec:sync');
+    const lazy = container.sequence.indexOf('exec:lazy-unmount');
+    expect({ synced: synced >= 0, lazy: lazy >= 0 }).toEqual({ synced: true, lazy: true });
+    expect(lazy).toBeGreaterThan(synced);
+    expect({
+      stillMounted: container.s3fsMounts.has(DEVBOX_WORKDIR),
+      stopped: container.stops,
+    }).toEqual({ stillMounted: false, stopped: 1 });
   });
 });
