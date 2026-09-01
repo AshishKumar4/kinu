@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-01",
-  "files": 1907,
-  "functions": 48052,
+  "files": 1911,
+  "functions": 48453,
   "ceiling": 126,
   "line": 39,
   "inventory": [
@@ -102,15 +102,15 @@
       "complexity": 51
     },
     {
+      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
+      "complexity": 49
+    },
+    {
       "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 49
     },
     {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
-      "complexity": 48
-    },
-    {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
       "complexity": 48
     },
     {
