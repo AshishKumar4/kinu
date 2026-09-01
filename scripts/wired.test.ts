@@ -21,7 +21,18 @@ import {
 
 /* ── The fixture ───────────────────────────────────────────────────────── */
 
-const REGISTRY = `export const BUILTIN_TOOLS = ['run'] as const;`;
+/** The reach table the gate roots on, in the shape the registry declares it:
+ *  `native: true` is the membership rule, so the `release` row below must NOT
+ *  become an entrypoint name. `BUILTIN_TOOLS` is derived from it exactly as the
+ *  real registry derives it, and the fixture's tool builder iterates that. */
+const REGISTRY = [
+  "export const TOOL_REACH = {",
+  "  run: { native: true, codemode: 'workspace' },",
+  "  release: { native: false, codemode: 'release' },",
+  "} as const;",
+  "export const BUILTIN_TOOLS = Object.keys(TOOL_REACH)",
+  "  .filter((name) => TOOL_REACH[name as keyof typeof TOOL_REACH].native);",
+].join('\n');
 
 /** A barrel over a barrel, which is how `packages/core` publishes everything:
  *  `index.ts` -> `strategy/index.ts` -> the declaring file. */
@@ -47,12 +58,12 @@ export function runIt(deps: RunDeps): string {
 /** The only entrypoint: a handler bound under a name in `BUILTIN_TOOLS`. */
 function builtins(body: string): string {
   return `
-import { BUILTIN_TOOLS } from './registry';
+import { BUILTIN_TOOLS, TOOL_REACH } from './registry';
 import { usedThroughBarrel, runIt, type RunDeps } from '../index';
 
 export function buildTools(): Record<string, unknown> {
   const tools: Record<string, unknown> = {};
-  for (const name of BUILTIN_TOOLS) void name;
+  for (const name of BUILTIN_TOOLS) void TOOL_REACH[name as keyof typeof TOOL_REACH];
   tools.run = tool({ execute: async () => usedThroughBarrel() });
 ${body}
   return tools;
@@ -311,11 +322,11 @@ describe('the analysis refuses to shrink in silence', () => {
       [`${BASE}tools/registry.ts`, REGISTRY],
       [`${BASE}page.tsx`, 'export default function Page(): null { return null; }'],
       [`${BASE}tools/builtins.ts`, `
-        import { BUILTIN_TOOLS } from './registry';
+        import { BUILTIN_TOOLS, TOOL_REACH } from './registry';
         import Page from '../page';
         export function buildTools(): Record<string, unknown> {
           const tools: Record<string, unknown> = { run: tool({ execute: async () => Page() }) };
-          for (const name of BUILTIN_TOOLS) void name;
+          for (const name of BUILTIN_TOOLS) void TOOL_REACH[name as keyof typeof TOOL_REACH];
           return tools;
         }`],
     ]))).toEqual([]);

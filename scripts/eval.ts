@@ -135,13 +135,11 @@ interface PinnedStrategy {
 function pinnedSingleShot(id: string, model: LanguageModel): PinnedStrategy {
   const strategy: ExplorationStrategy = {
     id,
-    advertised: false,
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
       const { text, usage } = await generateText({
         model,
         prompt: ctx.task,
-        maxOutputTokens: ctx.budget?.maxOutputTokens ?? 2048,
         abortSignal: ctx.signal,
       });
       const out = text.trim();
@@ -165,7 +163,7 @@ function pinnedSingleShot(id: string, model: LanguageModel): PinnedStrategy {
 function makeJudge(model: LanguageModel): JudgeFn {
   return createLLMJudge(async (prompt, _schema): Promise<Verdict> => {
     const full = `${prompt}\n\nJSON shape: {"winner":"a"|"b"|"tie","scoreA":<0..1>,"scoreB":<0..1>,"rationale":"<terse>"}\n${jsonObjectOnlyInstruction()}`;
-    const { text } = await generateText({ model, prompt: full, maxOutputTokens: 512 });
+    const { text } = await generateText({ model, prompt: full });
     const parsed = safeParse(VerdictSchema, extractJsonObject(text));
     if (!parsed.success) {
       throw new Error(`judge output failed schema: ${parsed.issues.map((x) => x.message).join('; ')}`);
@@ -276,7 +274,6 @@ async function main(): Promise<void> {
       mode: 'build',
       rt: benchmarkRuntime,
       model: candidate.model,
-      budget: { maxOutputTokens: 2048 },
     }),
     judge,
     threshold: opts.threshold,

@@ -1,49 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  createStrategyRegistry, createSingleShotStrategy,
   workersAIEffortOption, effortFor, reasoningEffortOptions,
   mergeProviderOptions, REASONING_EFFORT_FOR_STAGE,
 } from '../src/index';
 import { REASONING_EFFORTS } from '../src/strategy/effort';
-import type { ExplorationStrategy } from '../src/index';
 import type { ReasoningEffort } from '../src/strategy/effort';
-
-describe('StrategyRegistry', () => {
-  function fakeStrategy(id: string): ExplorationStrategy {
-    return {
-      id,
-      async explore() {
-        return {
-          strategy: id,
-          best: { text: `from ${id}`, score: 1, source: id },
-          all: [{ text: `from ${id}`, score: 1, source: id }],
-          cost: { durationMs: 0 },
-        };
-      },
-    };
-  }
-
-  test('register + list', () => {
-    const r = createStrategyRegistry();
-    r.register(fakeStrategy('a'));
-    r.register(fakeStrategy('b'));
-    expect(r.list().map(s => s.id)).toEqual(['a', 'b']);
-    expect(r.get('a')?.id).toBe('a');
-    expect(r.get('missing')).toBeUndefined();
-  });
-
-  test('register rejects duplicate', () => {
-    const r = createStrategyRegistry();
-    r.register(fakeStrategy('x'));
-    expect(() => r.register(fakeStrategy('x'))).toThrow('already registered');
-  });
-
-  test('single-shot strategy exists with correct id', () => {
-    const s = createSingleShotStrategy();
-    expect(s.id).toBe('single-shot');
-    expect(s.label).toBe('Single shot');
-  });
-});
 
 describe('reasoning_effort plumbing', () => {
   test('REASONING_EFFORT_FOR_STAGE has all stages', () => {

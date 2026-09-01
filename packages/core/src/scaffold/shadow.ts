@@ -106,8 +106,6 @@ export interface ShadowConfig {
    *  sized to the DECISIVE yield of the order-swapped judge, not to raw turns
    *  (see DEFAULT_SHADOW_CONFIG). */
   maxTrials: number;
-  /** Auto-promote/rollback without user confirmation. Default false. */
-  autoPromote: boolean;
   /** Max decisive trials the pending may LOSE before it's rolled back.
    *  0 = any regression rolls it back — Monte-Carlo-shown to reject most
    *  genuinely-better variants under judge noise (see DEFAULT_SHADOW_CONFIG). */
@@ -196,7 +194,6 @@ export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
   promoteThreshold: 0.6,
   rollbackThreshold: 0.4,
   maxTrials: 20,
-  autoPromote: false,
   maxRegressions: 1,
   minDecisiveTrials: 5,
 };

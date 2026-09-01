@@ -9,7 +9,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { observeWrites } from '../src/vfs/observe';
-import { HeadFileChanges, formatHeadFileChanges } from '../src/heads/file-changes';
+import { HeadFileChanges } from '../src/heads/file-changes';
 import type { VFS } from '../src/types/primitives';
 import { makeVfsError } from '../src/vfs/errno';
 
@@ -139,22 +139,5 @@ describe('HeadFileChanges — the review a parent gets', () => {
     const workspace = memVfs({ 'f.ts': 'x\n' });
     await workspace.writeFile('f.ts', 'y\n');
     expect(workspace.reads).toBe(0);
-  });
-});
-
-describe('formatHeadFileChanges', () => {
-  test('renders status, path and counts; empty in, empty out', () => {
-    expect(formatHeadFileChanges([])).toEqual([]);
-    expect(formatHeadFileChanges([
-      { path: 'a.ts', status: 'added', added: 12, removed: 0 },
-      { path: 'b.ts', status: 'changed', added: 3, removed: 9 },
-      { path: 'c.ts', status: 'removed', added: 0, removed: 40 },
-      { path: 'd.png', status: 'added', added: 0, removed: 0, binary: true },
-    ])).toEqual([
-      '  A  a.ts  +12 −0',
-      '  M  b.ts  +3 −9',
-      '  D  c.ts  +0 −40',
-      '  A  d.png  (binary)',
-    ]);
   });
 });

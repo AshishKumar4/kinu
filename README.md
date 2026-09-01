@@ -163,8 +163,8 @@ and runs a step loop where the agent re-reads live workspace state between steps
   <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once, as a system prompt plus transformed history, where the compaction ladder fires, then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
 </picture>
 
-Four extension points live inside that loop: an actor kind, a `ModelProvider`, an
-`ExplorationStrategy`, and the inference loop itself.
+Three extension points live inside that loop: an actor kind, a `ModelProvider`,
+and the inference loop itself.
 [docs/EXTENSIBILITY.md](docs/EXTENSIBILITY.md) works each one through with a real
 example. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the object model, message
 flow, events and ingress.

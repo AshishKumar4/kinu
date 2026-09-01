@@ -413,21 +413,43 @@ export interface Entrypoint {
   readonly symbol: string | undefined;
 }
 
-/** The model's callable surface, read from the registry's own array literal so
- *  the set the gate roots on is the set the model is handed. */
+/**
+ * The model's callable surface, read from the registry's reach table so the set
+ * the gate roots on is the set the model is handed.
+ *
+ * It used to read the `BUILTIN_TOOLS` array literal. That literal is gone: the
+ * eight names are now DERIVED from `TOOL_REACH`'s `native: true` rows, because a
+ * hand list beside the table was membership-checked and not exhaustiveness-
+ * checked. So this reads the same rows the derivation does, one AST level up. A
+ * gate reading a spelling the source no longer has would measure nothing, which
+ * `assertMeasured` turns into a failure rather than a pass.
+ */
 export function builtinToolNames(modules: ReadonlyMap<string, Module>,
   read: (file: string) => string): Set<string> {
   const names = new Set<string>();
   for (const [file, module] of modules) {
-    if (!module.exports.has('BUILTIN_TOOLS')) continue;
+    if (!module.exports.has('TOOL_REACH')) continue;
     walk(parseOnce(file, read(file)).root, (node) => {
       if (node.raw.type !== 'VariableDeclarator') return;
       const [id, init] = node.children;
-      if (id === undefined || identifierText(id) !== 'BUILTIN_TOOLS' || init === undefined) return;
-      walk(init, (element) => {
-        if (element.parent?.raw.type !== 'ArrayExpression') return;
-        const literal = literalText(element);
-        if (literal !== undefined) names.add(literal);
+      if (id === undefined || identifierText(id) !== 'TOOL_REACH' || init === undefined) return;
+      walk(init, (row) => {
+        if (row.raw.type !== 'Property') return;
+        const [key, value] = row.children;
+        if (key === undefined || value === undefined || value.raw.type !== 'ObjectExpression') return;
+        const name = identifierText(key) ?? literalText(key);
+        if (name === undefined) return;
+        // `native: true` is the membership rule; a row that reaches only codemode
+        // is not handed to the model and must not root reachability.
+        let native = false;
+        walk(value, (field) => {
+          if (field.raw.type !== 'Property') return;
+          const [fieldKey, fieldValue] = field.children;
+          if (fieldKey === undefined || fieldValue === undefined) return;
+          if (identifierText(fieldKey) !== 'native') return;
+          if (literalText(fieldValue) === 'true') native = true;
+        });
+        if (native) names.add(name);
       });
     });
   }

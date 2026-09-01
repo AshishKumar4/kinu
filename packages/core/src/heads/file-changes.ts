@@ -21,8 +21,12 @@
  * not a file list, and recovering one would mean diffing a directory siblings
  * are writing to at the same time — the smear this design exists to avoid. Those
  * changes are real, and they are left unattributed rather than attributed to a
- * guess; {@link HEAD_FILE_CHANGE_PROVENANCE} is the sentence that says so
- * wherever the set is rendered.
+ * guess. ANY SURFACE THAT RENDERS THIS SET MUST SAY SO — a change list that
+ * reads as complete when it is not is the defect the gap creates. A constant
+ * held that sentence for the one renderer that existed (the `ExplorationStrategy`
+ * heads adapter); that renderer was deleted for having no caller, and the
+ * sentence lives here, next to the reason, rather than as an exported string
+ * nothing renders.
  *
  * Actor-private control state is stored beneath `.kinu` and is not part of
  * the head tool surface.
@@ -42,11 +46,6 @@ export interface HeadFileChange {
    *  counts are omitted rather than fabricated from decoded bytes. */
   readonly binary?: boolean;
 }
-
-/** The one sentence that keeps a rendered change set from implying it is the
- *  whole story. See the module docstring for why the gap exists. */
-export const HEAD_FILE_CHANGE_PROVENANCE =
-  "Recorded at each head's workspace file plane; files changed by shell commands a head ran are not attributed to a head.";
 
 interface Touched {
   baseline: string | null;
@@ -122,13 +121,4 @@ function asText(value: string | Uint8Array | null) {
   if (payload.kind === 'absent') return { text: null, binary: false };
   if (payload.kind === 'text') return { text: payload.text, binary: false };
   return { text: '', binary: true };
-}
-
-/** Render one head's change set the way a review states it. Empty in, empty
- *  out — a head that changed nothing contributes no lines. */
-export function formatHeadFileChanges(changes: readonly HeadFileChange[]): string[] {
-  const mark = { added: 'A', removed: 'D', changed: 'M' } satisfies Record<FileStatus, string>;
-  return changes.map((c) => c.binary
-    ? `  ${mark[c.status]}  ${c.path}  (binary)`
-    : `  ${mark[c.status]}  ${c.path}  +${c.added} −${c.removed}`);
 }

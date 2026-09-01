@@ -1,7 +1,7 @@
 // Eval runner — drives N cases × 2 strategies, asks a judge LLM for verdicts,
 // returns aggregated EvalSummary. Stateless — caller owns persistence (writes
 // to eval_results table or whatever the host wants).
-import type { ExplorationStrategy, StrategyContext } from '../strategy/types';
+import type { ExplorationStrategy, StrategyContext } from './strategy';
 import type { EvalCase, EvalRun, JudgeFn, EvalResult } from './types';
 import { renderThrownChain } from '../obs/index';
 
@@ -9,20 +9,14 @@ export interface RunEvalPairOpts {
   cases: EvalCase[];
   strategyA: ExplorationStrategy;
   strategyB: ExplorationStrategy;
-  /** Built fresh per-case so each strategy gets its own rt/model/options. */
+  /** Built fresh per-case so each arm gets its own rt/model. */
   buildContext: (caseInput: EvalCase) => StrategyContext;
   judge: JudgeFn;
-  /** Optional per-result hook (e.g. persist to eval_results table). */
-  onResult?: (result: EvalResult) => void | Promise<void>;
-  /** Optional per-case-start hook. */
-  onCase?: (caseInput: EvalCase, index: number, total: number) => void;
 }
 
 export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> {
   const out: EvalResult[] = [];
-  for (let i = 0; i < opts.cases.length; i++) {
-    const c = opts.cases[i];
-    opts.onCase?.(c, i, opts.cases.length);
+  for (const c of opts.cases) {
     const runA = await runOne(opts.strategyA, c, opts.buildContext);
     const runB = await runOne(opts.strategyB, c, opts.buildContext);
     let verdict;
@@ -33,14 +27,12 @@ export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> 
       verdict = { winner: 'tie' as const, scoreA: 0.5, scoreB: 0.5,
                   rationale: `judge error: ${message}` };
     }
-    const result: EvalResult = {
+    out.push({
       caseId: c.id,
       strategyA: opts.strategyA.id,
       strategyB: opts.strategyB.id,
       verdict, runA, runB,
-    };
-    out.push(result);
-    if (opts.onResult) await opts.onResult(result);
+    });
   }
   return out;
 }

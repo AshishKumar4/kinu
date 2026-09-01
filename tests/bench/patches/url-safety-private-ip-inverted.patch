@@ -1,13 +1,12 @@
-diff --git a/packages/core/src/web/url-safety.ts b/packages/core/src/web/url-safety.ts
-index 93c6a16..f5fec15 100644
---- a/packages/core/src/web/url-safety.ts
-+++ b/packages/core/src/web/url-safety.ts
-@@ -87,7 +87,7 @@ export function assertSafeUrl(url: string): URL {
+diff --git a/packages/core/src/safety/egress-destination.ts b/packages/core/src/safety/egress-destination.ts
+--- a/packages/core/src/safety/egress-destination.ts
++++ b/packages/core/src/safety/egress-destination.ts
+@@ -224,7 +224,7 @@ export function refusedHostname(hostname: string): Refusal | null {
    }
  
-   const ipv4 = parseIPv4(hostname);
--  if (ipv4 && isPrivateIPv4(ipv4)) {
-+  if (ipv4 && !isPrivateIPv4(ipv4)) {
-     throw new UnsafeUrlError(`blocked private/internal address: ${hostname}`);
+   const ipv4 = parseIPv4(host);
+-  if (ipv4 !== null && isRefusedIPv4(ipv4)) {
++  if (ipv4 !== null && !isRefusedIPv4(ipv4)) {
+     return refusalOf(new KinuError('denied', `blocked private/internal address: ${host}`));
    }
-   // Bracketed IPv6 literals: block loopback (::1) and any link-local (fe80::).
+   // A numeric form that is not a full dotted quad never leaves as a name. The

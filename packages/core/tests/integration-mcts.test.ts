@@ -8,7 +8,6 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import { createTestRuntime, createMockSession, captureConsole, makeSql } from './helpers';
 import { runMCTS } from '../src/mcts/engine';
@@ -721,12 +720,14 @@ describe('MCTS progress reporting', () => {
   });
 });
 
-describe('MCTS strategy — stored operator overrides', () => {
-  test('options.mcts budget/branches apply when the caller passes no explicit budget', async () => {
-    // This is the seam the backends use to inject AgentConfigStore.getMctsOverrides():
-    // think({strategy:'mcts'}) without an explicit budget must run with the
-    // stored knobs, not hardcoded defaults.
-    const { createMCTSStrategy } = await import('../src/strategy/mcts');
+describe('MCTS — the operator\'s stored knobs reach the tree', () => {
+  // The seam the backends inject `AgentConfigStore.getMctsOverrides()` into:
+  // a search started with stored knobs and no explicit budget must run THOSE,
+  // not hardcoded defaults. This ran through `createMCTSStrategy` until that
+  // adapter was deleted for having no production reader; the property it was
+  // really about is the engine's, and `evolution/engine.ts:1193` is the caller
+  // that passes the stored overrides straight in.
+  test('budget and branches decide how much tree gets written', async () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'explored' }),
@@ -734,44 +735,13 @@ describe('MCTS strategy — stored operator overrides', () => {
     });
     initTables(rt);
 
-    const strategy = createMCTSStrategy();
-    const result = await strategy.explore({
-      task: 'tuned task',
-      mode: 'build',
-      rt,
-      model: new MockLanguageModelV3(),
-      budget: { maxIterations: undefined },
-      options: { mcts: { session: createMockSession(), budget: 2, branches: 1 } },
+    await runMCTS(rt, createMockSession(), 'tuned task', {
+      mode: 'build', budget: 2, branches: 1,
     });
 
-    expect(result.cost.iterations).toBe(2);
     // 1 root + 2 iterations × 1 branch = 3 nodes.
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes WHERE task = 'tuned task'`;
     expect(nodes.length).toBe(3);
-  });
-
-  test('options.mcts.judgeSamples flows through to the evaluator', async () => {
-    const { createMCTSStrategy } = await import('../src/strategy/mcts');
-    const llm = countingLLM('{"score": 0.5}');
-    const { rt } = createTestRuntime();
-    rt.llm = llm;
-    rt.judgeModel = llm;
-    rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'explored' }),
-      generateReflection: async () => ({ text: 'n/a' }),
-    });
-    initTables(rt);
-
-    const strategy = createMCTSStrategy();
-    await strategy.explore({
-      task: 'judge-knob task',
-      mode: 'build',
-      rt,
-      model: new MockLanguageModelV3(),
-      budget: { maxIterations: undefined },
-      options: { mcts: { session: createMockSession(), budget: 1, branches: 2, judgeSamples: 1 } },
-    });
-    expect(llm.judgeCalls()).toBe(2); // 2 branches × 1 sample
   });
 });
 

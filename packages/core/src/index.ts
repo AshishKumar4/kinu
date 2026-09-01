@@ -225,7 +225,6 @@ export {
 // Configuration
 export { DEFAULT_CONFIG } from './config';
 export { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from './chat';
-export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } from './config';
 
 // Typed accessors over the `agent_config` key/value table — collapses ~23
 // raw-SQL sites into a deep module with known-key getters/setters.
@@ -473,7 +472,6 @@ export {
 // Canonical tool registry + factories (shared across CF and CLI)
 export {
   BUILTIN_TOOLS,
-  ACTIVE_TOOLS,
   BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOL_SPECS,
@@ -728,7 +726,6 @@ export {
   fnv1a64,
   searchDelegates,
   observeSystemPromptHash,
-  fnv1a64Bytes,
   renderDynamicContextBlock,
   renderTurnLocalContext,
   turnLocalContextMessage,
@@ -754,7 +751,6 @@ export {
   resolvePromptCacheStrategy,
   isCacheRetention,
   ANTHROPIC_MAX_BREAKPOINTS,
-  CACHE_RETENTIONS,
   DEFAULT_CACHE_RETENTION,
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
@@ -1170,8 +1166,7 @@ export * from './events/hub/index';
 // trust gate, the peer outbox, subordinate reports.
 export * from './events/ingress/index';
 
-// ExplorationStrategy — single seam for "search candidate continuations,
-// score, pick best." MCTS / Heads / ToT / Reflexion / single-shot fit this.
+// The swarm engine and the pieces a backend reaches it through.
 export * from './strategy/index';
 
 // Eval harness — A/B test arbitrary strategies/loops on a corpus of tasks.
@@ -1401,7 +1396,7 @@ export {
   type HeadInferenceDeps, type HeadWorkspaceLayout,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS, keepBuiltins,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
-  HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
+  HeadFileChanges,
 } from './heads/index';
 
 // Background-job system — auto-background long tool calls + wake-on-completion.

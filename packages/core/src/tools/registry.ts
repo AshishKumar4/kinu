@@ -130,19 +130,26 @@ export type BuiltinToolName = {
   [K in CapabilityName]: (typeof TOOL_REACH)[K]['native'] extends true ? K : never
 }[CapabilityName];
 
-export const BUILTIN_TOOLS = [
-  'execute_tools',
-  'run',
-  'file',
-  'agents',
-  'memory',
-  'tasks',
-  'web',
-  'report',
-] as const satisfies readonly BuiltinToolName[];
+/**
+ * The reach table's own keys, recovered once.
+ *
+ * SAFETY: `TOOL_REACH` is a `const` object literal declared in this module, so
+ * its runtime keys ARE its key union — `Object.keys` loses that in the lib
+ * signature and nothing outside this file can add a key. This is the only place
+ * that recovers it, so every derivation below indexes a typed name.
+ */
+const CAPABILITY_NAMES = Object.keys(TOOL_REACH) as readonly CapabilityName[];
 
-/** Whitelist applied in beforeTurn() on the CF backend. */
-export const ACTIVE_TOOLS = [...BUILTIN_TOOLS] as const;
+/**
+ * The standing eight, DERIVED. Hand-listing them was membership-checked and not
+ * exhaustiveness-checked — `satisfies readonly BuiltinToolName[]` refuses a name
+ * the table does not call native, but silently accepts a list missing one, so a
+ * capability could go native and never be handed to the model. Filtering the
+ * table cannot omit a row, and the order is the table's declaration order, which
+ * is what the hand list spelled.
+ */
+export const BUILTIN_TOOLS: readonly BuiltinToolName[] =
+  CAPABILITY_NAMES.filter((name): name is BuiltinToolName => TOOL_REACH[name].native);
 
 /** Set form for O(1) membership checks in hot paths (e.g. craft score filter). */
 export const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS);
@@ -193,16 +200,6 @@ interface CapabilityReach {
   readonly name: CapabilityName;
   readonly namespace: string;
 }
-
-/**
- * The reach table walked once, into the two indexes the narrowing needs.
- *
- * SAFETY: `TOOL_REACH` is a `const` object literal declared in this module, so
- * its runtime keys ARE its key union — `Object.keys` loses that in the lib
- * signature and nothing outside this file can add a key. This is the only place
- * that recovers it, so the derivations below index a typed name.
- */
-const CAPABILITY_NAMES = Object.keys(TOOL_REACH) as readonly CapabilityName[];
 
 /** Codemode-only capabilities with the namespace each owns. Derived rather than
  *  listed again, so a capability that changes reach cannot fall out of step. */
@@ -640,16 +637,18 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
 // costs a standing choice every turn it is not the answer to), but the
 // gate-on-engine-presence policy did not move.
 
-/** The governance ledger — wherever the release lane exists at all. */
-export const RELEASE_LEDGER_ACTIONS = [
+/** The governance ledger — wherever the release lane exists at all. Module-local:
+ *  `releaseToolActions` below is the seam every caller reads, and three exported
+ *  tables beside it were three more names for one answer. */
+const RELEASE_LEDGER_ACTIONS = [
   'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',
 ] as const;
 
 /** Results asserted rather than earned. Only without an execution engine. */
-export const RELEASE_RECORD_ACTIONS = ['record_check', 'record_deployment'] as const;
+const RELEASE_RECORD_ACTIONS = ['record_check', 'record_deployment'] as const;
 
 /** Results driven for real in the working copy. Only with an engine. */
-export const RELEASE_ENGINE_ACTIONS = ['apply', 'run_checks', 'preview', 'deploy', 'rollback'] as const;
+const RELEASE_ENGINE_ACTIONS = ['apply', 'run_checks', 'preview', 'deploy', 'rollback'] as const;
 
 export type ReleaseToolAction =
   | (typeof RELEASE_LEDGER_ACTIONS)[number]
@@ -866,6 +865,14 @@ export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
   ].join('\n');
 }
 
+/** One rendered docstring per spec.
+ *
+ *  Spelled out rather than derived from `BUILTIN_TOOL_SPECS` with
+ *  `Object.fromEntries`: an object literal under `satisfies Record<BuiltinToolName,
+ *  string>` is already EXHAUSTIVE — a missing key fails to compile — so this table
+ *  cannot fall behind the specs the way an array of names could fall behind the
+ *  reach table. Deriving it would trade a compiler-checked list for a type
+ *  assertion, which is the worse of the two. */
 export const BUILTIN_TOOL_DESCRIPTIONS = {
   execute_tools: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.execute_tools),
   run: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.run),

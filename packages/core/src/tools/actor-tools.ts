@@ -30,8 +30,8 @@ import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 // already owns an `ActorToolDeps` — the actor PROFILE's deps (team / peers /
 // report / submitPlan), which is what feeds `agents` below, not this factory.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
-  /** The `agents` delegation tool's deps: fork substrate (StrategyRegistry +
-   *  model + host-injected infra) and/or subordinate + peer transports. The
+  /** The `agents` delegation tool's deps: fork substrate (model +
+   *  host-injected infra) and/or subordinate + peer transports. The
    *  tool is registered when ANY group is wired; actions gate per group. */
   agents?: AgentsToolDeps;
   /** The durable once-only boundary for tools whose effects leave the process.

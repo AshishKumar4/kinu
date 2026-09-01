@@ -1,17 +1,30 @@
 /**
- * The egress destination classifier — whether a request's destination is one
- * untrusted code must never reach, as a pure judgment over a URL.
+ * The destination classifier — whether a request's destination is one
+ * untrusted code must never reach, as a pure judgment over a hostname.
+ *
+ * ── The one classifier, and its two enforcement points ───────────
+ * Two of them existed. This module judged BACKEND egress
+ * (`cf-backend/src/egress/outbound.ts`) while `web/url-safety.ts` judged the
+ * agent's OWN fetches, each with its own hand-rolled `parseIPv4` and its own
+ * copy of the seven-rule RFC1918 table — and they had drifted, so a fix to
+ * one was not a fix to the other: `[::ffff:10.0.0.1]` was refused here and
+ * reachable from the web tool, whose IPv6 test was a string-prefix compare.
+ * There is now one judgment. `assertSafeUrl` keeps what is genuinely its own
+ * (scheme, the secret-exfiltration test, its error type) and calls
+ * `refusedHostname` for the host, so both enforcement points refuse exactly
+ * the same set.
  *
  * ── Why the judgment is provider-independent ─────────────────────
  * Every input is a standard: the hostname arrives WHATWG-canonical (the URL
  * parser every JS runtime shares), the ranges are IETF address families
  * (RFC1918, RFC4193 ULA, RFC3927 link-local, RFC6598 CGNAT, loopback, the
- * RFC6761 `.localhost` domain), and the cloud-metadata names are internet
- * conventions, not platform facts. No transport primitive — Worker, proxy,
- * DNS — appears here. Backends whose egress crosses this module therefore
- * satisfy capability parity: the security policy compiles in core, and each
- * backend owns only the ENFORCEMENT (which request, at which hop, what the
- * refusal becomes on its wire).
+ * RFC6761 `.localhost` domain, ICANN's private-use `.internal` TLD), and the
+ * cloud-metadata names are internet conventions, not platform facts. No
+ * transport primitive — Worker, proxy, DNS — appears here. Backends whose
+ * egress crosses this module therefore satisfy capability parity: the
+ * security policy compiles in core, and each backend owns only the
+ * ENFORCEMENT (which request, at which hop, what the refusal becomes on its
+ * wire).
  *
  * ── The DNS residual, stated plainly ─────────────────────────────
  * A hostname that RESOLVES to a private address cannot be checked here —
@@ -188,7 +201,12 @@ export function refusedHostname(hostname: string): Refusal | null {
     return refusalOf(new KinuError('denied', `blocked internal host: ${bare}`));
   }
   // `foo.localhost` resolves to loopback on every conforming stack (RFC 6761).
-  if (host.endsWith('.localhost')) {
+  // `.internal` is ICANN's reserved private-use TLD (delegated to no registry,
+  // resolvable only inside a private network) and is what the cloud-metadata
+  // authorities already sit under, so a name there addresses someone's
+  // internal fabric by definition. Carried over from the web guard, which
+  // refused this suffix when the two classifiers were separate.
+  if (host.endsWith('.localhost') || host.endsWith('.internal')) {
     return refusalOf(new KinuError('denied', `blocked internal host: ${host}`));
   }
 

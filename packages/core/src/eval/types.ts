@@ -3,7 +3,7 @@
 //
 // Use cases:
 //   - A/B test "MCTS vs single-shot" on 30 tasks
-//   - Validate a new ExplorationStrategy doesn't regress on existing corpus
+//   - Validate a new search policy doesn't regress on existing corpus
 //   - Score a scaffold mutation against a held-out task set
 //   - Track which strategy wins on which task class (drives router policy)
 import * as v from 'valibot';

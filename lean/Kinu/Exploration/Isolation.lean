@@ -49,8 +49,8 @@
   states, and under `shared-origin-plane` there is no boundary, said out loud. In
   the shared-workspace layout heads are still merely ASKED to isolate themselves
   (`head-inference.ts`, the `shared-workspace` branch), and
-  `HEAD_FILE_CHANGE_PROVENANCE` states that shell-command changes a head ran are
-  not attributed to it.
+  `heads/file-changes.ts` states that shell-command changes a head ran are not
+  attributed to it.
 -/
 
 import Kinu.MCTS.StorageIsolation

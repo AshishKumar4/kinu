@@ -35,16 +35,14 @@ import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 
 import {
-  createMCTSStrategy,
-  createStrategyRegistry,
   DEFAULT_CONFIG,
   initWorkspaceSchema,
   type LLMProviderConfig,
   type MCTSProgressEvent,
   type SessionMessage,
   type SessionWriter,
-  type StrategyRegistry,
 } from '../../packages/core/src/index';
+import { runMCTS } from '../../packages/core/src/mcts/engine';
 import { createWorkspace } from '../../packages/core/src/identity/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
@@ -124,7 +122,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   let db: InstanceType<typeof Database>;
   let rt: CLIRuntime;
   let model: LanguageModel;
-  let registry: StrategyRegistry;
+
   /** The eval agent's surface from the PRODUCTION actor root. This used to
    *  assemble `buildActorTools` with a hand-rolled `agents.fork` — the same
    *  shape, minus every dep production passes — which made the surface a
@@ -166,17 +164,17 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // craftedToolExecute, same codemode providers, same fork-deps shape.
     model = liveChatModel(LLM_CONFIG);
     surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
-
-    // `mcts` is registered for the WORKS test to drive DIRECTLY. It is no longer
+    // The WORKS test below drives `runMCTS` DIRECTLY. The tree search is not
     // reachable from the tool's own surface — `agents-tool.ts:911` dispatches
-    // `fork` to the heads strategy and nothing else — and the eval harness is
+    // `fork` to the heads engine and nothing else — and the eval harness is
     // named in that decision: `unit-agents-tool.test.ts:71-73` records that
-    // fork-deps.ts keeps the registration "for the durable search store and the
-    // eval harness", so a fork that routed here would be a silent misdispatch.
-    // Driving the strategy is therefore the SUPPORTED programmatic path, not a
-    // way around the tool.
-    registry = createStrategyRegistry();
-    registry.register(createMCTSStrategy());
+    // fork-deps.ts keeps the search store wired "for the durable search store
+    // and the eval harness", so a fork that routed here would be a silent
+    // misdispatch. Driving the engine is therefore the SUPPORTED programmatic
+    // path, not a way around the tool. It used to go through
+    // `createMCTSStrategy` + a `StrategyRegistry`; both were adapters no
+    // production path read, and calling the engine is the same search with one
+    // less shape in front of it.
   });
 
   afterAll(() => {
@@ -199,11 +197,11 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   });
 
   liveTest('DRIVEN (instructed): a direct mcts search branches and ranks, durably', async () => {
-    // Driven through the STRATEGY, not through `agents.execute`. The tool used to
+    // Driven through the ENGINE, not through `agents.execute`. The tool used to
     // reach this with `{ action:'fork', settle:'mcts' }`; `settle` is gone from
     // the model-facing surface (it survives only as a stored-row translation in
     // `resumableForkInput`, which reports that it cannot carry the RANKING), and
-    // `fork` now dispatches to the heads strategy alone. So that call refused
+    // `fork` now dispatches to the heads engine alone. So that call refused
     // before writing anything, and every assertion below failed on its own
     // denominator guard in milliseconds — the guards working exactly as intended.
     //
@@ -214,9 +212,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // node, so a later reader sees the winner this run picked — is an MCTS
     // convergence property (`mcts/convergence.ts:146-153`). Re-pointing at swarm
     // would have meant deleting that assertion, which is the opposite of the job.
-    const mcts = registry.get('mcts');
-    if (!mcts) throw new Error('mcts strategy is not registered');
-
+    //
     // The search's shape is STATED rather than inherited from `DEFAULT_CONFIG.mcts`
     // — see EVAL_SEARCH_BUDGET for the measurements that set it. Nothing below is
     // weakened by that: every assertion is the same assertion over a search that
@@ -230,28 +226,20 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // the same thing about production: without this a search is invisible while it
     // runs.
     const progress: string[] = [];
-    const result = await mcts.explore({
-      task: EXPLORATION_TASK,
+    const result = await runMCTS(rt, makeSessionWriter(), EXPLORATION_TASK, {
       mode: 'build',
-      rt,
-      model,
-      options: {
-        mcts: {
-          session: makeSessionWriter(),
-          budget: EVAL_SEARCH_BUDGET,
-          branches: EVAL_SEARCH_BRANCHES,
-          onProgress: (event: MCTSProgressEvent) => {
-            if (event.type === 'branch-failed') {
-              progress.push(`${event.stage} branch failed: ${event.error}`);
-            } else if (event.type === 'iteration-complete') {
-              progress.push(`iteration ${String(event.iteration)} scores: `
-                + `${event.scores.map((s) => s.toFixed(3)).join(', ') || '(none)'}`);
-            } else if (event.type === 'grounding-unavailable') {
-              progress.push(`grounding unavailable for ${event.language}; `
-                + `executor runs ${event.canRun.join(', ') || '(nothing)'}`);
-            }
-          },
-        },
+      budget: EVAL_SEARCH_BUDGET,
+      branches: EVAL_SEARCH_BRANCHES,
+      onProgress: (event: MCTSProgressEvent) => {
+        if (event.type === 'branch-failed') {
+          progress.push(`${event.stage} branch failed: ${event.error}`);
+        } else if (event.type === 'iteration-complete') {
+          progress.push(`iteration ${String(event.iteration)} scores: `
+            + `${event.scores.map((s) => s.toFixed(3)).join(', ') || '(none)'}`);
+        } else if (event.type === 'grounding-unavailable') {
+          progress.push(`grounding unavailable for ${event.language}; `
+            + `executor runs ${event.canRun.join(', ') || '(nothing)'}`);
+        }
       },
       reportModelCall: liveModelCallSink(rt.storage.sql),
     });
@@ -278,18 +266,16 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // (mcts/convergence.ts:73-113): distinct approaches scoring BYTE-IDENTICALLY,
     // which means the scorer is not a function of the proposal; and a best score
     // under `minAcceptableScore`. Both abandon the tree, so both arrive at the
-    // assertions below as `ranked: 0` — indistinguishable without these scores.
+    // assertions below as `ranked: 0` — indistinguishable without this line.
     // Printed unconditionally rather than in a failure branch, because the
     // passing run's margin over the 0.3 floor is the number that says how close
-    // this suite is to going red for a reason nobody changed.
-    const scores = result.all.map((candidate) => candidate.score);
-    console.log(`    winner score: ${result.best.score.toFixed(3)} (floor `
-      + `${String(DEFAULT_CONFIG.mcts.minAcceptableScore)}), candidates: `
-      + `${scores.map((s) => s.toFixed(3)).join(', ') || '(none)'}`);
-    if (new Set(scores).size < scores.length) {
-      console.log('    NOTE: candidate scores contain an exact duplicate — the '
-        + 'undifferentiated-search refusal, not the score floor');
-    }
+    // this suite is to going red for a reason nobody changed. The engine NAMES
+    // which refusal it took (`reason`), where the strategy adapter this used to
+    // run through flattened both into one candidate score and left the reader
+    // inferring the difference from a duplicate.
+    console.log(`    winner score: ${result.winnerValue.toFixed(3)} (floor `
+      + `${String(DEFAULT_CONFIG.mcts.minAcceptableScore)}), converged: `
+      + `${String(result.converged)}${result.converged ? '' : ` (${result.reason})`}`);
 
     // The denominator, asserted before anything about quality. A fork that
     // never reached the store leaves every assertion below vacuously true.

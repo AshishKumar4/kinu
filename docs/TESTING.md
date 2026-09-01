@@ -613,26 +613,32 @@ test('sends Authorization: Bearer', async () => {
 });
 ```
 
-### Test for a new ExplorationStrategy
+### Test for a new search engine
+
+Drive the engine, not an adapter over it, and assert on what it WROTE — the
+durable tree is what a later reader sees, and an in-memory return value that
+disagrees with the store is the defect worth catching.
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { createMyStrategy } from '../src/strategy/my-strategy.ts';
-import { createTestRuntime, createScriptedLLM } from '@kinu.run/test-utils';
+import { runMCTS } from '../src/mcts/engine';
+import { createTestRuntime, createMockSession } from './helpers';
 
-test('my-strategy explores within budget', async () => {
-  const { rt } = createTestRuntime({
-    llm: createScriptedLLM(['option A', 'option B', 'final answer']),
+test('budget and branches decide how much tree gets written', async () => {
+  const { rt } = createTestRuntime();
+  rt.spawnBranch = async () => ({
+    explore: async () => ({ text: 'explored' }),
+    generateReflection: async () => ({ text: 'n/a' }),
   });
-  const strategy = createMyStrategy();
-  const result = await strategy.explore({
-    task: 'pick the best',
-    rt,
-    model: rt.llm as never,
-    budget: { maxIterations: 3 },
+  initTables(rt);
+
+  await runMCTS(rt, createMockSession(), 'tuned task', {
+    mode: 'build', budget: 2, branches: 1,
   });
-  expect(result.best.text).toBe('final answer');
-  expect(result.cost.iterations).toBeLessThanOrEqual(3);
+
+  // 1 root + 2 iterations x 1 branch = 3 nodes.
+  const nodes = rt.storage.sql`SELECT * FROM search_nodes WHERE task = 'tuned task'`;
+  expect(nodes.length).toBe(3);
 });
 ```
 

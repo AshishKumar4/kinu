@@ -501,8 +501,8 @@ files and execution to Nimbus, and the turn driver to Think; local binds them to
 | MCTS branches | `ExplorationAgent` Facets (`subAgent`) | `child_process.fork` |
 | Subordinates | `SubordinateAgent` Facets (`subAgent`) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
-The full contract and the four extension points (`ModelProvider`,
-`ExplorationStrategy`, `ActorAgent`, `KinuExtension`) are in
+The full contract and the three extension points (`ModelProvider`,
+`ActorAgent`, `KinuExtension`) are in
 [EXTENSIBILITY.md](./EXTENSIBILITY.md). One client contract, `AgentClient`,
 reaches either backend;
 [AGENT-CLIENT-ARCHITECTURE-SPEC.md](./AGENT-CLIENT-ARCHITECTURE-SPEC.md) holds

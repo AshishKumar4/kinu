@@ -1,23 +1,29 @@
 # Kinu extensibility
 
-Add a model provider, exploration strategy, actor kind, or turn extension. The
-orchestrator stays as it is.
+Add a model provider, actor kind, or turn extension. The orchestrator stays as
+it is.
 
-## The four extension points
+## The three extension points
 
 | Extension point | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
 | **`ModelProvider`** | `core/providers/types.ts` | `packages/core/src/providers/` (platform agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
-| **`ExplorationStrategy`** | `core/strategy/types.ts` | `packages/core/src/strategy/` | A search or sampling policy over candidate continuations | MCTS, Heads, Tree-of-Thoughts, Graph-of-Thoughts, Reflexion-rollouts |
 | **`ActorAgent`** | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent, SubordinateAgent |
 | **`KinuExtension`** | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
 
 Only `ModelProvider` is a production registry. `AgentProviderRegistry` holds
 stateless implementations; per-call state flows through `ProviderDeps`.
-`createStrategyRegistry` exists in `core/strategy/types.ts`, but production
-never calls it. An `ExplorationStrategy` reaches work through the dispatcher
-that owns its engine. `ActorAgent` is class-level; `KinuExtension` is
-per-turn and [EXTENSIONS.md](./EXTENSIONS.md) documents it separately.
+`ActorAgent` is class-level; `KinuExtension` is per-turn and
+[EXTENSIONS.md](./EXTENSIONS.md) documents it separately.
+
+A fourth point used to be listed here: `ExplorationStrategy`, a plug-in seam
+over "explore N candidates, score them, return the best", dispatched from a
+`StrategyRegistry`. No production path ever built that registry, and its three
+implementations (MCTS, heads, single-shot) had no reader outside the eval
+harness, so the seam and its adapters were removed. A new search policy is
+added the way the shipped ones are: an engine, and a dispatcher that reaches
+it. The harness's own A/B contract — two arms, one task, a cost — survives at
+`core/src/eval/strategy.ts`, where its only consumers are.
 
 ## Registration is not reachability
 
@@ -25,10 +31,9 @@ An importable implementation is not automatically model-facing. Production
 reaches exploration engines through their own paths: lifetime evolution calls
 `runMCTS` in `core/src/evolution/engine.ts`; branching work runs through
 `HeadController`; `agents.swarm()` calls `runSwarm` and resolves a named preset
-before spending anything. `ExplorationStrategy` adapters serve programmatic
-callers and evaluation.
+before spending anything.
 
-No production path builds a `StrategyRegistry`. Each backend constructs
+Each backend constructs
 `AgentsForkDeps` (`core/src/tools/agents-tool.ts:296`) directly: runtime,
 caller's model, tier-model resolver, cost model, swarm-node loop host,
 swarm-node private home, shared-prefix compaction. It carries no strategy
@@ -158,30 +163,21 @@ carries your provider, skip a handwritten provider:
 makes every catalog id usable once the user stores a `<id>.bearer` credential.
 Wrap a fetch in `withRateLimitRetry` or use the shared `createAuthedFetch`.
 
-## Adding a new ExplorationStrategy
+## Adding a new search policy
 
-Implement `ExplorationStrategy`:
+There is no strategy registry to register with, and no tool field selects a
+search policy. A new engine is reached the way the shipped ones are: write it,
+then give it a dispatcher. The swarm's is the closed preset-and-validity system
+(`strategy/swarm-presets.ts`), which resolves a named preset to a configuration
+before anything spends; MCTS's is `runMCTS`, called directly by lifetime
+evolution. An engine with no dispatcher reaches only callers that import it,
+which is what the deleted `ExplorationStrategy` adapters were.
 
-```ts
-export function createToTStrategy(): ExplorationStrategy {
-  return {
-    id: 'tot',
-    label: 'Tree of Thoughts',
-    async explore(ctx: StrategyContext): Promise<StrategyResult> {
-      // Generate K thoughts, score each, BFS/DFS with pruning, return best.
-      // ctx carries task, rt, model, budget, signal.
-    },
-  };
-}
-```
-
-The interface has `id`, optional `label` and `description`, optional
-`advertised`, and `explore`. Set `advertised: false` for an id programmatic
-and eval callers dispatch but a chat model never needs, as for the single-shot
-baseline. `StrategyResult` carries `strategy`, `best`, `all`, optional `trace`,
-and `cost`. Always respect `ctx.signal` for cancellation and `ctx.budget` for
-budget enforcement. Then choose the dispatcher that calls yours; no tool field
-selects a strategy today.
+To A/B two policies offline, implement `ExplorationStrategy`
+(`core/src/eval/strategy.ts`) — `id` plus `explore(ctx)` answering
+`{ strategy, best, all, cost }` — and hand both arms to `runEvalPair`. Respect
+`ctx.signal` for cancellation. That contract is the eval harness's alone: it
+governs a measurement, not a production path.
 
 ## Replacing the inference loop
 
@@ -442,14 +438,9 @@ codemode sandbox.
   frequency union. Nothing passes it: per-turn `query` would change the
   toolset and break the cache-dependent byte-stable prompt prefix. No config
   switch or test covers it.
-- **MCTS strategy adapter**, `core/strategy/mcts.ts`, wraps `runMCTS` for
-  programmatic/eval callers; lifetime evolution calls the engine directly.
-- **Heads strategy adapter**, `core/strategy/heads.ts`, wraps `HeadController`
-  for programmatic/eval callers; pinned by
-  `packages/core/tests/unit-heads-strategy-budget.test.ts` and
-  `packages/core/tests/unit-heads-file-report.test.ts`.
-- **Eval harness**, `core/eval/{types,runner,judge,corpus,report}.ts`: JSONL
-  corpus loader, A/B runner over two `ExplorationStrategy`s, Valibot verdicts.
+- **Eval harness**, `core/eval/{strategy,types,runner,judge,corpus,report}.ts`:
+  JSONL corpus loader, A/B runner over two `ExplorationStrategy` arms, Valibot
+  verdicts.
   Seed corpus: `tests/eval/corpus/seed.jsonl`. `scripts/eval.ts` gates a
   quality floor, exits 0 when the aggregate clears it and 1 on regression or
   misconfiguration.

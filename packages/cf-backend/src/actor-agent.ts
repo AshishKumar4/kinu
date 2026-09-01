@@ -111,11 +111,11 @@ import {
   type AgentsToolAction,
   type AgentsToolDeps,
   type AgentsForkDeps,
+  BUILTIN_TOOLS,
   type BuiltinToolName,
   type TurnProvenance,
   type PromptModelContext,
   type WorkMode, isWorkMode,
-  ACTIVE_TOOLS,
   nanoid,
   // Branching heads
   type HeadJournal, LiveHeadJournal,
@@ -559,7 +559,7 @@ export interface ActorToolDeps {
   submitPlan?: SubmitPlanToolDeps;
 }
 
-/** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
+/** BUILTIN_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent tools.
  *
  *  WHICH names are deps-gated is core's `DEPS_GATED_TOOLS`, and each is spelled
@@ -578,7 +578,7 @@ export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const gate = {
     [REPORT_TOOL]: !!deps.report,
   } satisfies Partial<Record<BuiltinToolName, boolean>>;
-  return ACTIVE_TOOLS.filter((name) => gate[name] ?? true);
+  return BUILTIN_TOOLS.filter((name) => gate[name] ?? true);
 }
 
 /** The `agents` actions this actor profile supports, for the prompt's
@@ -5605,7 +5605,7 @@ export abstract class ActorAgent extends Think<Env> {
   // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
   // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
-  // ACTIVE_TOOLS is sourced from @kinu.run/core/tools/registry (single truth).
+  // BUILTIN_TOOLS is sourced from @kinu.run/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     // The scaffold and the soul are both files this turn is about to read, and

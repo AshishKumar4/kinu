@@ -1,10 +1,11 @@
-export * from './types';
+// The swarm engine and the pieces a backend or the agents tool reaches it
+// through. The `ExplorationStrategy` seam that used to head this list is gone:
+// no production path built its registry, and its three adapters (mcts, heads,
+// single-shot) had no reader outside the eval harness, which now owns the
+// contract at `eval/strategy.ts`.
 export * from './objective';
 export * from './swarm';
-export * from './single-shot';
 export * from './effort';
-export * from './mcts';
-export * from './heads';
 // The metered-oracle measurement substrate, and the registry `VerifierSpec.kind` is
 // closed over. Separate files because one is an instrument and the other is the
 // membership rule that makes a kind resolvable at all.

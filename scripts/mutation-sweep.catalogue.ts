@@ -144,57 +144,40 @@ export const CATALOGUE: readonly Mutation[] = [
     control: 'unit-swarm-agent-nodes.test.ts',
   },
 
-  /* ── The second search implementation nothing dispatches to ───────────────── */
-  // THE FIX FOR THESE FOUR IS DELETION, NOT WIRING, and the distinction is worth
-  // stating because the report's own UNREACHED wording ("wire it or delete it") is
-  // neutral between them and the wrong branch is expensive.
+  /* ── The second search implementation nothing dispatched to: now deleted ──── */
+  // FOUR ENTRIES STOOD HERE AND NONE DOES NOW, because the fix this block
+  // prescribed was carried out. The prescription was stated as deletion rather
+  // than wiring, and the distinction was worth stating because the report's own
+  // UNREACHED wording ("wire it or delete it") is neutral between them and the
+  // wrong branch is expensive.
   //
-  // `selfMetered` is not a signal whose consumer was never written. It is a signal
-  // whose CALLER was removed. Its docstring names the consumer — "the fork seam then
-  // records only the spawn" — and that seam dispatched `ExplorationStrategy.explore()`
-  // through `AgentsForkDeps.registry`, which has no production reader. Established
-  // 2026-08-19 against source, after this catalogue first proposed the opposite:
-  // `selfMetered` sits on `StrategyResult.cost`, `SwarmResult` has no `cost` field at
-  // all, and `StrategyResult` appears in no file outside `strategy/{heads,mcts,
-  // single-shot,types}.ts` in any backend. So `agents-tool.ts`'s lump could never have
-  // read it, and making that lump conditional on a new flag would be the worse
-  // instrument anyway: a boolean that has to be right double-bills silently in its
-  // false branch, which looks exactly like the cap working. A deleted lump cannot be
-  // wrong. Per-call charging through the mission port, asserted as
-  // `total == provider-reported usage`, is what replaced it.
+  // `selfMetered` was not a signal whose consumer was never written. It was a
+  // signal whose CALLER was removed. Its docstring named the consumer — "the fork
+  // seam then records only the spawn" — and that seam dispatched
+  // `ExplorationStrategy.explore()` through `AgentsForkDeps.registry`, which had
+  // no production reader. Established 2026-08-19 against source, after this
+  // catalogue first proposed the opposite: `selfMetered` sat on
+  // `StrategyResult.cost`, `SwarmResult` has no `cost` field at all, and
+  // `StrategyResult` appeared in no file outside `strategy/{heads,mcts,
+  // single-shot,types}.ts` in any backend. So `agents-tool.ts`'s lump could never
+  // have read it, and making that lump conditional on a new flag would have been
+  // the worse instrument anyway: a boolean that has to be right double-bills
+  // silently in its false branch, which looks exactly like the cap working. A
+  // deleted lump cannot be wrong. Per-call charging through the mission port,
+  // asserted as `total == provider-reported usage`, is what replaced it.
   //
-  // `FORK_STRATEGY_ID` HAD AN ENTRY HERE AND NO LONGER NEEDS ONE. It was reported
-  // UNREACHED by the 2026-08-19 run and then deleted, together with
-  // `AgentsForkDeps.registry` and the three `registry.register(...)` calls — the fix
-  // this classification prescribes. The entry is retired rather than re-pointed at the
-  // `id: 'heads'` literal that replaced it, because a catalogue that keeps mutating a
-  // decision after the decision is gone reports on nothing. `createHeadsStrategy` and
-  // `createMCTSStrategy` now have no production reader at all, so the two `selfMetered`
-  // entries below carry the UNREACHED demonstration on their own.
-  {
-    id: 'heads-self-metered-write',
-    file: 'packages/core/src/strategy/heads.ts',
-    find: 'if (ctx.mission) cost.selfMetered = true;',
-    replace: 'if (!ctx.mission) cost.selfMetered = true;',
-    decision: "a mission's heads run reports its tokens as already charged",
-    symbol: 'selfMetered',
-  },
-  {
-    id: 'mcts-self-metered-write',
-    file: 'packages/core/src/strategy/mcts.ts',
-    find: 'selfMetered: ctx.mission ? true : undefined,',
-    replace: 'selfMetered: ctx.mission ? undefined : true,',
-    decision: "a mission's MCTS run reports its tokens as already charged",
-    symbol: 'selfMetered',
-  },
-  {
-    id: 'mcts-caller-budget-wins',
-    file: 'packages/core/src/strategy/mcts.ts',
-    find: 'const budget = ctx.budget?.maxIterations ?? o.budget ?? defaults.budget;',
-    replace: 'const budget = o.budget ?? ctx.budget?.maxIterations ?? defaults.budget;',
-    decision: "an explicit caller budget beats the per-strategy option, as the file's header says",
-    symbol: 'createMCTSStrategy',
-  },
+  // `FORK_STRATEGY_ID` went first, with `AgentsForkDeps.registry` and the three
+  // `registry.register(...)` calls. `heads-self-metered-write`,
+  // `mcts-self-metered-write` and `mcts-caller-budget-wins` follow it now that
+  // `strategy/{mcts,heads,single-shot}.ts` and `createStrategyRegistry` are gone
+  // too: their decisions were the adapters' own, and a catalogue that keeps
+  // mutating a decision after the decision is gone reports on nothing. Nothing is
+  // re-pointed at the engines underneath — `runMCTS`'s own `judgeSamples`
+  // precedence is defended by four `integration-mcts.test.ts` cases at the engine
+  // seam and seeded as a bench defect
+  // (`tests/bench/patches/mcts-strategy-ignores-judge-samples-override.patch`,
+  // re-authored onto `mcts/engine.ts` when the adapter it named was deleted),
+  // which is a measurement this catalogue would only duplicate.
 
   /* ── The swarm engine's undefended decisions ──────────────────────────────── */
   {

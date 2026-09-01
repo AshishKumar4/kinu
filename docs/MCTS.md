@@ -13,10 +13,11 @@ Models use `action:'swarm'`, `depth`, the verifier registry and
 `record-node.ts` and `pruning.ts`, but no dispatch. Read
 [EXPLORATION.md](./EXPLORATION.md) for that surface.
 
-Only programmatic callers are `createMCTSStrategy` (`strategy/mcts.ts`, eval
-and integration only, so no production registry or `createStrategyRegistry`
-reader), `runEvalPair` (`core/src/eval/runner.ts`), and lifetime evolution's
-`runMCTS` (`evolution/engine.ts`, `lifetimeMCTSBudget`). `mcts_search_runs`
+Every caller calls `runMCTS` directly: lifetime evolution
+(`evolution/engine.ts`, `lifetimeMCTSBudget`), `tests/evals/exploration.eval.test.ts`
+and `integration-mcts.test.ts`. The `createMCTSStrategy` adapter and the
+`StrategyRegistry` it was registered in are gone — no production path ever built
+that registry, so the adapter only added a shape in front of the engine. `mcts_search_runs`
 (`mcts/search-store.ts`) retains config, iteration and budget under a lease
 epoch for resume. Swarm shares it (`engine: 'swarm'`; `findRunningSwarms` in
 `strategy/swarm-resume.ts`); scoped queries keep trees apart. Swarm uses an

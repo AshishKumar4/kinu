@@ -48,8 +48,6 @@ type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
  */
 export type CacheRetention = 'none' | 'short' | 'long';
 
-export const CACHE_RETENTIONS: readonly CacheRetention[] = ['none', 'short', 'long'];
-
 /** The default every caller gets: cache normally, at the provider's own TTL. */
 export const DEFAULT_CACHE_RETENTION: CacheRetention = 'short';
 

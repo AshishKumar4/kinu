@@ -71,16 +71,15 @@ export interface ScaffoldDefaults {
   minRationaleLength: number;
 }
 
-/** Full agent configuration */
-export interface AgentConfig {
-  mcts: MCTSDefaults;
-  heads: HeadsDefaults;
-  craftStore: CraftStoreDefaults;
-  scaffold: ScaffoldDefaults;
-}
-
-/** Sensible defaults — all tunable, zero secrets */
-export const DEFAULT_CONFIG: AgentConfig = {
+/** Sensible defaults — all tunable, zero secrets.
+ *
+ *  Four constant tables, read field by field (`DEFAULT_CONFIG.mcts.judgeSamples`
+ *  and its like). There is no whole-config value to merge and no caller that
+ *  overrides one: per-knob overrides live in the `agent_config` table and are
+ *  applied at each call site by `??`, which is why `mergeConfig` and the
+ *  `AgentConfig` aggregate it took have been deleted rather than kept as the
+ *  shape nothing constructs. */
+export const DEFAULT_CONFIG = {
   mcts: {
     budget: 5,
     branches: 3,
@@ -116,16 +115,10 @@ export const DEFAULT_CONFIG: AgentConfig = {
   scaffold: {
     minRationaleLength: 50,
   },
+} satisfies {
+  mcts: MCTSDefaults;
+  heads: HeadsDefaults;
+  craftStore: CraftStoreDefaults;
+  scaffold: ScaffoldDefaults;
 };
-
-/** Deep-merge user config over defaults */
-export function mergeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
-  if (!overrides) return DEFAULT_CONFIG;
-  return {
-    mcts: { ...DEFAULT_CONFIG.mcts, ...overrides.mcts },
-    heads: { ...DEFAULT_CONFIG.heads, ...overrides.heads },
-    craftStore: { ...DEFAULT_CONFIG.craftStore, ...overrides.craftStore },
-    scaffold: { ...DEFAULT_CONFIG.scaffold, ...overrides.scaffold },
-  };
-}
 

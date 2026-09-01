@@ -36,9 +36,7 @@ export {
   storedHeadReportStatus,
 } from './types';
 
-export {
-  HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
-} from './file-changes';
+export { HeadFileChanges } from './file-changes';
 export { initHeadsTables } from './schema';
 export {
   HeadJournal, UNREPORTED_AT_MERGE_REASON,

@@ -7,6 +7,20 @@
  * (search-result expansion, fetch) run every target through `assertSafeUrl`
  * before a single byte leaves the runtime.
  *
+ * ── What is this module's own, and what is not ───────────────────
+ * Its own: the scheme restriction, the secret-prefix exfiltration test, and
+ * `UnsafeUrlError` — the throwing shape the web provider catches. NOT its
+ * own: whether a host is a destination untrusted code must never reach. That
+ * is one judgment for the whole project and it lives in
+ * `safety/egress-destination.ts`, which the backend's egress hop also calls.
+ *
+ * This module used to answer it a second time, with its own `parseIPv4` and
+ * its own copy of the RFC1918 table, and the copies had drifted: the IPv6
+ * test here was a string-prefix compare, so `[::ffff:10.0.0.1]` — the mapped
+ * spelling of an RFC1918 address — passed the agent's guard while the
+ * backend's refused it. Delegating removes the second answer, so a range
+ * added to the classifier binds the agent's own fetches too.
+ *
  * Ported from hermes-agent/tools/url_safety.py, adapted for the Workers/Bun
  * runtime: there is NO DNS resolution here (Workers has no `dns`/socket
  * primitive and resolution would be a TOCTOU vector anyway), so the check is
@@ -16,12 +30,7 @@
  * meaningful pre-flight layer. Fails closed on any parse error.
  */
 
-/** Cloud-metadata + internal hostnames blocked unconditionally. */
-const BLOCKED_HOSTNAMES: ReadonlySet<string> = new Set([
-  'metadata.google.internal',
-  'metadata.goog',
-  'localhost',
-]);
+import { refusedHostname } from '../safety/egress-destination';
 
 /** API-key / token prefixes — if a target URL contains one, it is almost
  *  certainly an exfiltration attempt. Mirrors hermes-agent/agent/redact.py. */
@@ -33,34 +42,6 @@ export class UnsafeUrlError extends Error {
     super(reason, options);
     this.name = 'UnsafeUrlError';
   }
-}
-
-/** Parse an IPv4 dotted-quad into its four octets, or null. */
-function parseIPv4(host: string): [number, number, number, number] | null {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (!m) return null;
-  const first = m[1];
-  const second = m[2];
-  const third = m[3];
-  const fourth = m[4];
-  if (first === undefined || second === undefined || third === undefined || fourth === undefined) return null;
-  const octets: [number, number, number, number] = [
-    Number(first), Number(second), Number(third), Number(fourth),
-  ];
-  return octets.every((o) => o >= 0 && o <= 255) ? octets : null;
-}
-
-/** Private / link-local / loopback / CGNAT IPv4 ranges that must never be a
- *  fetch target from the agent. */
-function isPrivateIPv4([a, b]: [number, number, number, number]): boolean {
-  if (a === 10) return true; // 10.0.0.0/8
-  if (a === 127) return true; // loopback
-  if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-  if (a === 192 && b === 168) return true; // 192.168.0.0/16
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
-  if (a === 0) return true; // 0.0.0.0/8
-  return false;
 }
 
 /** Throws {@link UnsafeUrlError} when `url` targets a private/internal address,
@@ -84,29 +65,12 @@ export function assertSafeUrl(url: string): URL {
     throw new UnsafeUrlError(`unsupported URL scheme: ${scheme || '<empty>'}`);
   }
 
-  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
-  if (!hostname) throw new UnsafeUrlError('URL has no hostname');
-  if (BLOCKED_HOSTNAMES.has(hostname)) {
-    throw new UnsafeUrlError(`blocked internal hostname: ${hostname}`);
-  }
-  if (hostname.endsWith('.localhost') || hostname.endsWith('.internal')) {
-    throw new UnsafeUrlError(`blocked internal hostname: ${hostname}`);
-  }
-
-  const ipv4 = parseIPv4(hostname);
-  if (ipv4 && isPrivateIPv4(ipv4)) {
-    throw new UnsafeUrlError(`blocked private/internal address: ${hostname}`);
-  }
-  // Bracketed IPv6 literals: block loopback (::1) and any link-local (fe80::).
-  if (parsed.hostname.startsWith('[')) {
-    const v6 = parsed.hostname.slice(1, -1).toLowerCase();
-    if (v6 === '::1' || v6.startsWith('fe80:') || v6.startsWith('fc') || v6.startsWith('fd')) {
-      throw new UnsafeUrlError(`blocked private/internal IPv6 address: ${v6}`);
-    }
-    if (v6.includes('169.254.') || v6.includes('::ffff:127.')) {
-      throw new UnsafeUrlError(`blocked private/internal IPv6 address: ${v6}`);
-    }
-  }
+  // The one destination judgment. `parsed.hostname` is the WHATWG-canonical
+  // form the classifier documents as its input, brackets and all. Its refusal
+  // payload carries the rendered cause chain, which is exactly the prose this
+  // module's error type wants as its reason.
+  const refusal = refusedHostname(parsed.hostname);
+  if (refusal) throw new UnsafeUrlError(refusal.error);
 
   return parsed;
 }

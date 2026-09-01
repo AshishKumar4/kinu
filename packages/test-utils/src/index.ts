@@ -8,7 +8,6 @@ export * from './turn-model';
 export * from './merge-policy';
 export * from './network';
 export * from './runtime';
-export * from './provider';
 export * from './credentials';
 export * from './ambient-env';
 export * from './answer-oracle';

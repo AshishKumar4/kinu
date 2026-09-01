@@ -1,13 +1,12 @@
-diff --git a/packages/core/src/strategy/mcts.ts b/packages/core/src/strategy/mcts.ts
-index 6ac65a7..cdb8af3 100644
---- a/packages/core/src/strategy/mcts.ts
-+++ b/packages/core/src/strategy/mcts.ts
-@@ -57,7 +57,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
-         pruneThreshold: o.pruneThreshold ?? defaults.pruneThreshold,
-         minAcceptableScore: o.minAcceptableScore ?? defaults.minAcceptableScore,
-         maxCostUSD: o.maxCostUSD ?? defaults.maxCostUSD,
--        judgeSamples: o.judgeSamples ?? defaults.judgeSamples,
-+        judgeSamples: defaults.judgeSamples ?? o.judgeSamples,
-         maxEvalLLMCalls: o.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls,
-         takesEpsilon: o.takesEpsilon ?? defaults.takesEpsilon,
-         signal: ctx.signal,
+diff --git a/packages/core/src/mcts/engine.ts b/packages/core/src/mcts/engine.ts
+--- a/packages/core/src/mcts/engine.ts
++++ b/packages/core/src/mcts/engine.ts
+@@ -92,7 +92,7 @@ export async function runMCTS(
+   const minVisitsForPrune = defaults.minVisitsForPrune;
+   const minAcceptableScore = effective.minAcceptableScore ?? defaults.minAcceptableScore;
+   const maxCostUSD = effective.maxCostUSD ?? defaults.maxCostUSD;
+-  const judgeSamples = effective.judgeSamples ?? defaults.judgeSamples;
++  const judgeSamples = defaults.judgeSamples ?? effective.judgeSamples;
+   const maxEvalLLMCalls = effective.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls;
+   const takesEpsilon = effective.takesEpsilon ?? defaults.takesEpsilon;
+   const reflectionThreshold = defaults.reflectionThreshold;

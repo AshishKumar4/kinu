@@ -269,6 +269,45 @@ describe('url safety (SSRF + exfil guards)', () => {
     expect(() => assertSafeUrl('https://evil.com/?leak=sk-abcdefghijklmnop')).toThrow(UnsafeUrlError);
   });
 
+  // The bypass this guard shipped with until the two SSRF classifiers were
+  // unified: the host judgment here matched IPv6 by string prefix
+  // (`fc`/`fd`/`fe80:`, substring `169.254.`), so every MAPPED spelling of a
+  // refused IPv4 address — the form `http://[::ffff:10.0.0.1]/` a page or a
+  // skill can hand the agent — walked straight through, while the backend's
+  // egress classifier had refused it all along. Each case below is one the
+  // string-prefix test answered `true` to.
+  test('SECURITY: an IPv4-mapped IPv6 literal is judged by its embedded address', () => {
+    expect(isSafeUrl('http://[::ffff:10.0.0.1]/')).toBe(false);
+    expect(isSafeUrl('http://[::ffff:169.254.169.254]/latest/meta-data')).toBe(false);
+    expect(isSafeUrl('http://[::ffff:192.168.1.1]/')).toBe(false);
+    expect(isSafeUrl('http://[::ffff:172.16.0.1]/')).toBe(false);
+    // The compatible (deprecated `::a.b.c.d`) spelling is the same rule.
+    expect(isSafeUrl('http://[::10.0.0.1]/')).toBe(false);
+    // …and a mapped PUBLIC address stays reachable, so the rule is the
+    // embedded address rather than the mapped form.
+    expect(isSafeUrl('http://[::ffff:93.184.216.34]/')).toBe(true);
+  });
+
+  test('the web guard refuses every family the destination classifier does', () => {
+    expect(isSafeUrl('http://[::1]/')).toBe(false); // loopback
+    expect(isSafeUrl('http://[fd00::1]/')).toBe(false); // RFC4193 ULA
+    expect(isSafeUrl('http://[fe80::1]/')).toBe(false); // link-local
+    expect(isSafeUrl('http://metadata/')).toBe(false); // bare metadata host
+    expect(isSafeUrl('http://100.64.0.1/')).toBe(false); // CGNAT
+    expect(isSafeUrl('http://0.0.0.0/')).toBe(false); // this-network
+    expect(isSafeUrl('http://api.service.localhost/')).toBe(false); // RFC6761
+    expect(isSafeUrl('http://svc.internal/')).toBe(false); // private-use TLD
+    // Fail-closed on a bracketed literal that is not IPv6 at all.
+    expect(isSafeUrl('http://[not-an-address]/')).toBe(false);
+  });
+
+  test('provider.fetch refuses the mapped form too — nothing leaves the runtime', async () => {
+    const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
+    const provider = createDefaultWebSearchProvider({ fetch });
+    await expect(provider.fetch('http://[::ffff:169.254.169.254]/')).rejects.toBeInstanceOf(WebFetchError);
+    expect(calls.length).toBe(0);
+  });
+
   test('provider.fetch refuses an unsafe URL', async () => {
     const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
     const provider = createDefaultWebSearchProvider({ fetch });
