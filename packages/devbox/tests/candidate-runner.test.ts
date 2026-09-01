@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -16,13 +16,14 @@ import {
 import { sha256Hex } from '../src/cas/hash';
 import { MutationLog, prefixState, toCapturedCut } from '../src/capture/model';
 import type { AuditedCapture, Capture } from '../src/capture/model';
-import type { CandidateRunControlV1 } from '../src/durability/contracts';
+import type { CandidateRunControlV1, RangeReadIntent } from '../src/durability/contracts';
 import {
   CandidateCaptureUnavailable,
   CandidateFenceRefused,
   createCandidateRestoreFile,
   publishCapturedCandidate,
   restoreCandidateRange,
+  restoreMerkleTree,
   runCandidate,
 } from '../bench/candidate-runner';
 import type {
@@ -32,12 +33,17 @@ import type {
   CandidateSeedResult,
 } from '../bench/candidate-runner';
 import { BeneathRoot } from '../src/native-openat2';
+import { openMerklePack } from '../src/candidates/merkle-pack';
+import type { MerklePackReader } from '../src/candidates/merkle-pack';
+import { readBarrier } from './support/read-barrier';
+import type { ReadBarrier } from './support/read-barrier';
 import { candidateContainerStorage } from '../src/candidates/container';
 import type {
   CandidateAttachmentHealth,
   CandidateContainerPorts,
   CandidateRunnerProcess,
 } from '../src/candidates/container';
+import type { AttachOutcome } from '../src/storage';
 import { MemoryControlStore, MemoryEnvelopeStore } from './support/candidate-control';
 
 const RUNNER = join(import.meta.dir, '..', 'bench', 'candidate-runner.ts');
@@ -385,20 +391,47 @@ const checkpointRunnerControl = {
 } as const satisfies CandidateRunControlV1;
 
 describe('candidate supervised runner', () => {
+  /** A control that HAS something to restore, which is what makes a restore
+   *  runner exist at all. The three tests below are about waiting for that
+   *  process, joining it after a reset, and reading the reply it already
+   *  wrote; with nothing published there is no runner to do any of it —
+   *  see the empty-attach test that follows them.
+   *
+   *  REALLY PUBLISHED, through this file's own host and checkpoint helpers: an
+   *  invented envelope would be a second opinion on the durable contract, and
+   *  a wrong one would still make these tests pass. */
+  const place = paths('attach-published');
+  let publishedControl: CandidateRunControlV1;
+  let attached = { kind: 'attached', detail: '' } satisfies AttachOutcome;
+  let publishedResult: string;
+  beforeAll(async () => {
+    const host = new Host('box-attach-published', place.store);
+    const journal = new MutationLog();
+    await journal.perform({
+      op: 'write', path: 'state.txt', content: { kind: 'dense', bytes: enc.encode('published') },
+    });
+    await checkpoint(host, 'bounded-layers', place, journal, 'attach-published');
+    publishedControl = await host.restoreControl();
+    const root = publishedControl.head?.pointer.rootEnvelopeId;
+    if (root === undefined) throw new Error('the attach fixture published no head');
+    publishedResult = JSON.stringify({ ok: true, rootId: root });
+    attached = { kind: 'attached', detail: `restored candidate root ${root}` };
+  });
+  afterAll(async () => {
+    await rm(join(place.workspace, '..'), { recursive: true, force: true });
+  });
+
   test('waits for runner completion through the non-streaming process status seam', async () => {
-    const fake = runnerFake({ deferred: true });
+    const fake = runnerFake({ deferred: true, control: publishedControl, result: publishedResult });
     const attaching = candidateContainerStorage(fake.ports).attach();
     await fake.waitStarted;
     expect(fake.runnerWaits()).toBe(1);
     fake.releaseWait();
-    await expect(attaching).resolves.toEqual({
-      kind: 'empty',
-      detail: 'candidate control has no published head',
-    });
+    await expect(attaching).resolves.toEqual(attached);
   });
 
   test('joins a reset to its one deferred restore process without remounting its store', async () => {
-    const fake = runnerFake({ deferred: true });
+    const fake = runnerFake({ deferred: true, control: publishedControl, result: publishedResult });
     const first = candidateContainerStorage(fake.ports).attach();
     await fake.waitStarted;
     const second = candidateContainerStorage(fake.ports).attach();
@@ -406,23 +439,46 @@ describe('candidate supervised runner', () => {
     expect(fake.mounts()).toBe(1);
     expect(fake.stops()).toBe(1);
     fake.releaseWait();
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { kind: 'empty', detail: 'candidate control has no published head' },
-      { kind: 'empty', detail: 'candidate control has no published head' },
-    ]);
+    await expect(Promise.all([first, second])).resolves.toEqual([attached, attached]);
     expect(fake.resultPaths).toHaveLength(2);
     expect(fake.stops()).toBe(2);
     expect(fake.journals()).toBe(2);
   });
 
   test('reads the result when the runner completed before start replied', async () => {
+    const fake = runnerFake({ control: publishedControl, result: publishedResult });
+    await expect(candidateContainerStorage(fake.ports).attach()).resolves.toEqual(attached);
+    expect(fake.starts).toHaveLength(2);
+    expect(fake.resultPaths).toHaveLength(2);
+  });
+
+  /**
+   * MEASURED DEFECT THIS PINS. An empty box's cold attach started TWO runner
+   * processes and waited for each — `--action restore`, which returns
+   * `rootId: null` before opening anything when the control has no head, and
+   * `--action seed`, which sends nothing when there is no base. Each is a
+   * `bun` start over this package's module graph inside the container followed
+   * by an unbounded exit poll, spent on the one path a box takes before it has
+   * ever held bytes: candidate cold attach measured 15,721 ms against a
+   * 25,000 ms product ceiling in `e2ecal0901002202`, and both candidate arms
+   * lost cold-attach to that ceiling in `e2e20260901140445`.
+   */
+  test('an empty control starts NO runner: there is nothing for one to do', async () => {
     const fake = runnerFake();
     await expect(candidateContainerStorage(fake.ports).attach()).resolves.toEqual({
       kind: 'empty',
       detail: 'candidate control has no published head',
     });
-    expect(fake.starts).toHaveLength(2);
-    expect(fake.resultPaths).toHaveLength(2);
+    expect({
+      starts: fake.starts.length,
+      waits: fake.runnerWaits(),
+      // And the box is still SERVING: the store is mounted for the checkpoint
+      // that follows, and the daemon that serves the work directory is the one
+      // this attach started rather than a previous generation's.
+      mounts: fake.mounts(),
+      stops: fake.stops(),
+      journals: fake.journals(),
+    }).toEqual({ starts: 0, waits: 0, mounts: 1, stops: 1, journals: 1 });
   });
 
   test.each([
@@ -906,6 +962,187 @@ describe('candidate bounded native restore ranges', () => {
       const result = await stat(join(place.workspace, 'hole.bin'));
       expect(result.size).toBe(size);
       expect(result.blocks).toBe(0);
+    } finally {
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+});
+
+// ── the merkle restore walk ───────────────────────────────────────────────────
+//
+// A deployed wake lost the merkle-pack arm to `Devbox.attach exceeded its
+// 300000ms budget`. The restore was serialized end to end — one stat, one
+// readdir, one 512 KiB slice at a time, each an awaited round trip against a
+// FUSE-mounted store — so the wake's cost was latency times the number of
+// reads, and a 30 MiB tree has thousands of them. These tests pin the two
+// properties the repair rests on: the walk fans out, and fanning out does not
+// break the one thing a concurrent walk can break, which is a shared inode.
+
+describe('a merkle restore walks the tree in parallel', () => {
+  /** The container's own FUSE store, behind the shared group barrier: a walk
+   *  that serializes its reads never assembles a group, and `widest` says so.
+   *  The bytes come from real files, so this is the production reader over the
+   *  production pack — only the WAITING is instrumented. */
+  class HoldingStore implements MerklePackReader {
+    readonly barrier: ReadBarrier;
+
+    constructor(private readonly store: string, width: number) {
+      this.barrier = readBarrier(width);
+    }
+
+    async readRange(intent: RangeReadIntent): Promise<Uint8Array> {
+      await this.barrier.hold();
+      const start = Number(intent.byteOffset);
+      const end = start + Number(intent.byteLength);
+      const bytes = Bun.file(join(this.store, intent.exactKey)).slice(start, end);
+      return new Uint8Array(await bytes.arrayBuffer());
+    }
+  }
+
+  /** One published tree with a hardlinked pair, a subdirectory and enough
+   *  siblings for a walk to have something to overlap. */
+  async function publishTree(place: { readonly workspace: string; readonly store: string; readonly journal: string }) {
+    const host = new Host('box-merkle-pack', place.store);
+    const journal = new MutationLog();
+    await journal.perform({ op: 'mkdir', path: 'pkg' });
+    await journal.perform({ op: 'mkdir', path: 'pkg/nested' });
+    const shared = enc.encode('the bytes one inode holds under two names');
+    await journal.perform({ op: 'write', path: 'pkg/lib.bin', content: { kind: 'dense', bytes: shared } });
+    await journal.perform({ op: 'link', existingPath: 'pkg/lib.bin', newPath: 'pkg/nested/alias.bin' });
+    for (let index = 0; index < 12; index++) {
+      await journal.perform({
+        op: 'write',
+        path: `pkg/leaf-${index}.bin`,
+        content: { kind: 'dense', bytes: enc.encode(`leaf ${index} `.repeat(400)) },
+      });
+    }
+    await checkpoint(host, 'merkle-pack', place, journal, 'merkle-parallel');
+    return { host, shared };
+  }
+
+  test('the walk overlaps its reads instead of taking one round trip at a time', async () => {
+    const place = paths('merkle-parallel');
+    try {
+      await mkdir(place.workspace, { recursive: true });
+      const { host, shared } = await publishTree(place);
+      const head = (await host.restoreControl()).head;
+      if (head === null) throw new Error('the published head did not come back');
+
+      // The real reader over the real pack, read through the barrier.
+      const store = new HoldingStore(place.store, 4);
+      const manifestBytes = await store.readRange({
+        operationId: 'restore-parallel', attemptId: '1', boxId: 'box-merkle-pack',
+        epoch: head.envelope.epoch, exactKey: head.envelope.rootObject.key, method: 'GET',
+        byteOffset: '0', byteLength: head.envelope.rootObject.byteLength,
+        sha256: head.envelope.rootObject.sha256, expiresAt: String(Date.now() + 60_000),
+      });
+      const view = await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, {
+        operationId: 'restore-parallel', attemptId: '1', boxId: 'box-merkle-pack',
+        epoch: head.envelope.epoch, expiresAt: String(Date.now() + 60_000),
+      });
+
+      await rm(place.workspace, { recursive: true, force: true });
+      await mkdir(place.workspace, { recursive: true });
+      const root = new BeneathRoot(place.workspace);
+      const notes: string[] = [];
+      try {
+        await restoreMerkleTree(view, root, notes);
+      } finally {
+        root.close();
+      }
+
+      expect(store.barrier.widest).toBeGreaterThanOrEqual(4);
+      // The tree is all there, and the phase breakdown says where the time went.
+      expect(await readFile(join(place.workspace, 'pkg/leaf-7.bin'), 'utf8'))
+        .toBe('leaf 7 '.repeat(400));
+      expect(await readFile(join(place.workspace, 'pkg/nested/alias.bin')))
+        .toEqual(Buffer.from(shared));
+      expect(notes.join(', ')).toMatch(/tree walk \(2 dirs, 13 files, 1 links\) \d+ ms/);
+      expect(notes.join(', ')).toMatch(/data \(\d+ bytes\) \d+ ms/);
+    } finally {
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('a wide directory never turns parallel restore into an unbounded fan-out', async () => {
+    // The pool is a correctness bound, not just a speed knob: a package tree
+    // can have tens of thousands of entries, and Promise.all over one such
+    // directory queues a promise per child while the reader's transport gate
+    // merely stops the requests. Empty files isolate the CHILD walk — there is
+    // one node fetch per file and no data fetches — so this measures the pool,
+    // not the codec's independent 16-fetch gate.
+    const place = paths('merkle-wide-directory');
+    try {
+      await mkdir(place.workspace, { recursive: true });
+      const host = new Host('box-merkle-wide', place.store);
+      const journal = new MutationLog();
+      for (let index = 0; index < 24; index++) {
+        await journal.perform({
+          op: 'write', path: 'empty-' + String(index) + '.bin',
+          content: { kind: 'dense', bytes: new Uint8Array() },
+        });
+      }
+      await checkpoint(host, 'merkle-pack', place, journal, 'merkle-wide-directory');
+      const head = (await host.restoreControl()).head;
+      if (head === null) throw new Error('the published wide-tree head did not come back');
+
+      // More than either pool can fill: setImmediate admits the current wave,
+      // then the test reads its widest wave. Without the child pool the reader
+      // reaches its own 16-request gate; with it, at most 12 leaf fetches wait.
+      const store = new HoldingStore(place.store, 99);
+      const manifestBytes = await store.readRange({
+        operationId: 'restore-wide', attemptId: '1', boxId: 'box-merkle-wide',
+        epoch: head.envelope.epoch, exactKey: head.envelope.rootObject.key, method: 'GET',
+        byteOffset: '0', byteLength: head.envelope.rootObject.byteLength,
+        sha256: head.envelope.rootObject.sha256, expiresAt: String(Date.now() + 60_000),
+      });
+      const view = await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, {
+        operationId: 'restore-wide', attemptId: '1', boxId: 'box-merkle-wide',
+        epoch: head.envelope.epoch, expiresAt: String(Date.now() + 60_000),
+      });
+      await rm(place.workspace, { recursive: true, force: true });
+      await mkdir(place.workspace, { recursive: true });
+      const root = new BeneathRoot(place.workspace);
+      try {
+        await restoreMerkleTree(view, root);
+      } finally {
+        root.close();
+      }
+
+      expect(store.barrier.widest).toBeGreaterThanOrEqual(4);
+      expect(store.barrier.widest).toBeLessThanOrEqual(12);
+      expect(await readFile(join(place.workspace, 'empty-23.bin'))).toEqual(Buffer.alloc(0));
+    } finally {
+      await rm(join(place.workspace, '..'), { recursive: true, force: true });
+    }
+  });
+
+  test('a hardlinked pair comes back as ONE inode, whichever occurrence wins the claim', async () => {
+    // What a concurrent walk can break: two occurrences of one inode
+    // discovered at once, both finding no claim, both writing a file — two
+    // inodes with the same contents, and a tree that no longer matches what
+    // was captured. The claim is taken between a read and a write with no
+    // await in between, so exactly one occurrence writes the bytes.
+    const place = paths('merkle-hardlink');
+    try {
+      await mkdir(place.workspace, { recursive: true });
+      const { host, shared } = await publishTree(place);
+      await rm(place.workspace, { recursive: true, force: true });
+
+      const reply = restored(await runCandidate({
+        ...runOptions('merkle-pack', place, await host.restoreControl()),
+        action: 'restore',
+      }));
+
+      expect(reply.rootId).toMatch(/^[0-9a-f]{64}$/);
+      const source = await stat(join(place.workspace, 'pkg/lib.bin'));
+      const alias = await stat(join(place.workspace, 'pkg/nested/alias.bin'));
+      expect({ ino: alias.ino, links: source.nlink }).toEqual({ ino: source.ino, links: 2 });
+      expect(await readFile(join(place.workspace, 'pkg/lib.bin'))).toEqual(Buffer.from(shared));
+      for (let index = 0; index < 12; index++) {
+        expect(await readFile(join(place.workspace, `pkg/leaf-${index}.bin`), 'utf8'))
+          .toBe(`leaf ${index} `.repeat(400));
+      }
     } finally {
       await rm(join(place.workspace, '..'), { recursive: true, force: true });
     }

@@ -350,7 +350,25 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
    */
   const detach = async (): Promise<void> => {
     if (!ports.containerRunning()) return;
-    if (isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) await ports.unmount();
+    if (isS3fsMounted(await ports.readMounts(), DEVBOX_WORKDIR)) {
+      // ONE SYNC BEFORE THE UNMOUNT, because s3fs only uploads a file when its
+      // last handle CLOSES — and the stop has just closed every holder's last
+      // handle for good. The bytes an open writer flushed are sitting in the
+      // kernel's page cache with the process that wrote them gone; this is the
+      // one moment they can be pushed into s3fs before the mount it belongs to
+      // is released. Without it the container dies holding them in cache, and
+      // the durability question the stop was asked to answer is answered by
+      // accident. Checked like the checkpoint's own sync, for the same reason:
+      // a refused flush is a refusal to lose bytes, not a warning.
+      const synced = await ports.exec(`sync -f '${DEVBOX_WORKDIR}'`);
+      if (synced.exitCode !== 0) {
+        throw new Error(
+          `sync of ${DEVBOX_WORKDIR} failed before its release: `
+          + `${synced.stderr.trim() || synced.stdout.trim() || `exit ${synced.exitCode}`}`,
+        );
+      }
+      await ports.unmount();
+    }
     const swept = await ports.quarantineMountpoint();
     ports.log(
       `${DEVBOX_WORKDIR} released (r2fs, mountpoint left empty`

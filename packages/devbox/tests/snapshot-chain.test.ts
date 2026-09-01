@@ -52,6 +52,7 @@ import {
   type CheckpointKind,
   type CheckpointOutcome,
 } from '../src/storage';
+import { sessionShellRefusal } from './support/session-shell';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const EXTRACT_ID = 'a1b2c3d4-0000-4000-8000-000000000002';
@@ -161,6 +162,13 @@ function excludePatternsOf(command: string): readonly string[] {
   return atob(encoded).split('\n')
     .filter(line => line !== '' && !line.startsWith('... '));
 }
+
+/**
+ * Every command this strategy composes, held to what the container's ONE
+ * persistent session shell would do with it — `support/session-shell.ts` owns
+ * the two failures that shell really answers with: a command that says `exit`,
+ * and a command it cannot parse.
+ */
 
 /**
  * Read one container command and answer as the container would.
@@ -363,7 +371,19 @@ function harness(overrides: {
     // strategy builds its own commands now, and this reads them: an assertion
     // below about `overlayAttach:…` is an assertion about the fuse-overlayfs
     // command line the production image would really receive.
+    //
+    // AND IT IS A PERSISTENT SHELL, which is the fact two deployed runs turned
+    // on: a command that says `exit` ends the session rather than the script,
+    // and a command the shell cannot parse ends it too. Both are modelled here
+    // rather than asserted anywhere, so the defect is unrepresentable — any
+    // command template that grows an `exit` or loses a separator fails every
+    // test that runs it. See `support/session-shell.ts`.
     exec: (command) => {
+      const refused = sessionShellRefusal(command);
+      if (refused !== undefined) {
+        calls.push(`sessionKilled:${command.split(' ')[0]!}`);
+        return Promise.reject(refused);
+      }
       const label = shellLabel(
         command, mounts(), overrides.missingPaths ?? [],
         overrides.freeBytes ?? Number.MAX_SAFE_INTEGER,

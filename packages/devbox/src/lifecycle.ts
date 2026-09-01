@@ -610,6 +610,137 @@ export function findMount(procMounts: string, dir: string): MountLine | undefine
   return undefined;
 }
 
+// ── work-directory holders, before a mount is released ──────────────────────
+
+/**
+ * How long a holder gets to notice SIGTERM before SIGKILL answers for it.
+ *
+ * Bounded, because this runs inside a stop that a caller is waiting on: an
+ * unbounded wait would make one rude process unstoppable, which is the exact
+ * defect the signal order exists to repair. Five seconds is enough for a
+ * process to flush on SIGTERM, and short enough that a box still stops inside
+ * its own ceilings.
+ */
+export const HOLDER_TERM_WAIT_MS = 5_000;
+
+/**
+ * ONE bounded container command that releases every process holding the work
+ * directory, so a mount can be unmounted underneath it.
+ *
+ * MEASURED DEFECT THIS REPAIRS. `quiesce` detached the mount before it
+ * signalled anything, and s3fs refuses an unmount with an open fd — EBUSY —
+ * so a box whose caller left one writer alive could neither stop nor be torn
+ * down: the refusal landed before `stop()` was ever reached. The order has to
+ * be: signal the holders, wait, kill the survivors, THEN detach.
+ *
+ * PROCFS, NOT `fuser`/`lsof`. `/proc` is guaranteed present in the container
+ * image (both already read `/proc/mounts` through it), reports pid + comm in
+ * the same read as the holding fd, and needs no tool the image may not carry.
+ * Both `/proc/<pid>/fd/*` and `/proc/<pid>/cwd` are scanned, but ONLY fd
+ * holders are signalled: the deployed control proves a session shell holding
+ * its cwd under the work directory does not block an s3fs unmount, and TERMing
+ * it would kill the one shared session every later command needs.
+ *
+ * PID 1 IS EXCLUDED, for the same reason from the other end: it is the
+ * container's init, holds the root of everything, and signalling it is a
+ * container stop — this command's job is to release a mount, not to race the
+ * platform's own shutdown. In the sandbox image pid 1 is the container server
+ * itself (`ENTRYPOINT ["/container-server/sandbox"]`), which is the process
+ * serving this very exec.
+ *
+ * AND SO IS EVERY ANCESTOR OF THIS COMMAND'S OWN SHELL, which pid 1 alone does
+ * not cover. The scan runs INSIDE the session the SDK keeps for the box, so its
+ * parent chain is the exec channel the stop is speaking through: signalling any
+ * link of it kills the answer to the command doing the signalling, and every
+ * command after it. An ancestor that really is holding the work directory is
+ * still NAMED — it travels in the output, so the detach refusal can report it —
+ * it is simply not signalled, because a refusal that names a holder is
+ * recoverable and a dead session is not.
+ *
+ * TERMINATE, THEN KILL, inside the one command so the wait needs no second
+ * round trip: a process that catches TERM and flushes is given the chance, and
+ * one that does not is removed anyway. `comm` is read BEFORE the signal so the
+ * names a later refusal reports are the ones that were holding, not
+ * post-mortem.
+ *
+ * The output is one line per holder, `pid comm`, or the word `none` — a
+ * distinct token so an empty answer reads as "nothing was holding" rather
+ * than "the command said nothing".
+ *
+ * IT IS ONE LINE, AND EVERY SEPARATOR IS WRITTEN HERE, which is the defect
+ * this shape repairs. The command was composed as an array joined with a
+ * SPACE, so the container received `… fi done if [ -z "$holders" ] …` — no
+ * separator before `done`, no separator before `if`. `sh` answered `Syntax
+ * error: "do" unexpected` and exited 2, and because every command runs inside
+ * the SDK's ONE persistent session shell that exit ENDED THE SESSION: run
+ * `e2e20260901140445` lost `stop-small` on snapshot-chain and r2fs to
+ * `SessionTerminatedError: Session 'sandbox-default' shell exited (exit code:
+ * 2)`, 2,362 ms and 785 ms into a stop that had already committed its
+ * checkpoint. A separator that lives in the data is a separator somebody can
+ * forget; the fakes now parse every composed command with `sh -n`, so this
+ * class cannot pass a test again.
+ *
+ * AND IT MUST NOT SAY `exit`. The empty scan used to answer `echo none; exit
+ * 0`, which ends the session shell exactly as the syntax error did — the same
+ * defect the chain's visibility probe was repaired for. `if`/`else` answers
+ * both cases and leaves the shell alive.
+ *
+ * `${name%%:*}` RATHER THAN `echo | cut`: POSIX parameter expansion, and two
+ * fewer processes per holder inside a stop a caller is waiting on.
+ */
+export function releaseWorkdirHoldersCommand(workdir: string): string {
+  const quoted = `'${workdir.replaceAll("'", `'\\''`)}'`;
+  const termWait = String(Math.ceil(HOLDER_TERM_WAIT_MS / 1_000));
+  // The parent chain of this shell, walked once through /proc. The comm field
+  // can hold spaces and parentheses, so ppid is read AFTER the last `)` rather
+  // than by column number — `pid (comm) state ppid …`.
+  const ancestors = 'mine=" $$ "; a=$$; '
+    + 'while [ -n "$a" ] && [ "$a" != 0 ] && [ "$a" != 1 ]; do '
+    + `a=$(sed 's/.*) //' /proc/$a/stat 2>/dev/null | cut -d' ' -f2); `
+    + 'if [ -n "$a" ]; then mine="$mine$a "; fi; done; ';
+  return `${ancestors}holders=""; kin=""; `
+    + `for pid in $(ls /proc | grep -E '^[0-9]+$' | grep -v '^1$'); do `
+    + `if ls -l /proc/$pid/fd 2>/dev/null | grep -q -F ${quoted}; then `
+    + 'entry="$pid:$(cat /proc/$pid/comm 2>/dev/null)"; '
+    + 'case "$mine" in *" $pid "*) kin="$kin $entry";; *) holders="$holders $entry";; esac; '
+    + 'fi; '
+    + 'done; '
+    // EVERY holder is reported, signalled or not: the names are what a refused
+    // detach reports, and one this command declined to signal is the most
+    // important name in that sentence.
+    + 'all="$holders$kin"; '
+    + 'if [ -n "$kin" ]; then echo "not signalled, this session\'s own:$kin" >&2; fi; '
+    + 'if [ -z "$all" ]; then echo none; else '
+    // Report first, signal second: the comm of a killed process cannot be
+    // read again, so the names travel on stderr before any signal lands.
+    + 'echo "$all" >&2; '
+    + 'for name in $holders; do kill -TERM "${name%%:*}" 2>/dev/null || true; done; '
+    + `sleep ${termWait}; `
+    + 'for name in $holders; do p="${name%%:*}"; '
+    + 'if [ -d "/proc/$p" ]; then kill -KILL "$p" 2>/dev/null || true; fi; done; '
+    + 'echo "$all"; fi';
+}
+
+/**
+ * The pids and names one {@link releaseWorkdirHoldersCommand} run signalled,
+ * parsed from its stdout. `none` — the command's own word for an empty scan —
+ * is an empty answer rather than a parse failure, because the caller's
+ * question ("did anything need signalling?") is answered either way.
+ */
+export function parseWorkdirHolders(
+  stdout: string,
+): readonly { readonly pid: string; readonly comm: string }[] {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0 || trimmed === 'none') return [];
+  const holders: { readonly pid: string; readonly comm: string }[] = [];
+  for (const token of trimmed.split(/\s+/)) {
+    const [pid, comm] = token.split(':');
+    if (pid === undefined || pid.length === 0) continue;
+    holders.push({ pid, comm: comm ?? 'unknown' });
+  }
+  return holders;
+}
+
 /** Render a thrown value and its cause chain.
  *
  *  A rejection reason is whatever the thrower threw, so a value that is not an

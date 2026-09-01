@@ -297,7 +297,7 @@ describe('startup readiness redrive', () => {
         return JSON.stringify({
           ok: false,
           error: 'this devbox has no attached work directory: the recovery ladder refused. '
-            + 'Operations are refused until an attach succeeds.',
+            + 'That recovery class is terminal: call attachNow() to attempt the attach again.',
         });
       }
       if (method === 'GET' && path === '/state') {

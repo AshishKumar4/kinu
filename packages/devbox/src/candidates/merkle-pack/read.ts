@@ -119,6 +119,44 @@ async function fetchExtent(
   return readCandidateRange(intent, reader);
 }
 
+/**
+ * How many range reads ONE open pack keeps in flight.
+ *
+ * THE ONE BOUND ON TRANSPORT CONCURRENCY, and it lives here because this is
+ * where the round trips are. A restore walks the tree from many branches at
+ * once and reads each file in slices; without a bound the fan-out of the WALK
+ * would decide how many reads hit the store, which is a number no caller
+ * chose. Sixteen because a chunked file's slice is a burst of small reads
+ * against one pack object, and the store answers those far better in parallel
+ * than one at a time — measured against the alternative this replaces, which
+ * was one.
+ */
+const EXTENT_FETCH_WIDTH = 16;
+
+/**
+ * A gate admitting at most `width` concurrent operations.
+ *
+ * The permit is HANDED to the next waiter rather than released and re-taken:
+ * releasing first leaves a window in which a fresh caller sees a free slot and
+ * takes it, and the woken waiter then takes one too, so the width is exceeded
+ * by however many wake-ups were in flight.
+ */
+function fetchGate(width: number): <T>(work: () => Promise<T>) => Promise<T> {
+  let live = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(work: () => Promise<T>): Promise<T> => {
+    if (live >= width) await new Promise<void>((admit) => { waiting.push(admit); });
+    else live += 1;
+    try {
+      return await work();
+    } finally {
+      const next = waiting.shift();
+      if (next === undefined) live -= 1;
+      else next();
+    }
+  };
+}
+
 interface ChunkItem {
   readonly loc: PackLocation;
   readonly digest: string;
@@ -179,9 +217,16 @@ export async function openMerklePack(
     throw new MerklePackError('corrupt-root', `root manifest did not decode: ${detail}`, { cause: error });
   }
 
+  // ONE GATE FOR EVERY FETCH THIS VIEW MAKES, so the store's concurrency is
+  // this module's decision rather than a consequence of how widely its caller
+  // happens to walk.
+  const gate = fetchGate(EXTENT_FETCH_WIDTH);
+  const fetch = async (loc: PackLocation): Promise<Uint8Array> =>
+    await gate(async () => await fetchExtent(reader, identity, loc));
+
   // The index arrives as data, so it goes through the same authenticated range
   // path as everything else: full span, expected plain digest from the root.
-  const indexBytes = await fetchExtent(reader, identity, {
+  const indexBytes = await fetch({
     key: manifest.index.key,
     offset: 0,
     length: Number(manifest.index.byteLength),
@@ -219,18 +264,29 @@ export async function openMerklePack(
     return Object.freeze([...objects.values()]);
   };
 
-  const nodeCache = new Map<string, Node>();
-  const fetchNode = async (digest: string): Promise<Node> => {
-    const cached = nodeCache.get(digest);
-    if (cached !== undefined) return cached;
-
+  /**
+   * The node cache holds the PROMISE, not the value.
+   *
+   * A parallel walk asks several branches for the same interior node at once,
+   * and caching only what has already come back dedupes nothing while a fetch
+   * is in flight: every concurrent asker issued its own range read for the
+   * node its neighbour was already fetching. Caching the in-flight promise
+   * makes the second asker await the first fetch.
+   *
+   * A FAILED FETCH IS EVICTED. It is not a fact about the tree — a dropped
+   * transport would otherwise be remembered as this node's answer for the life
+   * of the view, and a later ask would inherit an error the store no longer
+   * gives.
+   */
+  const nodeCache = new Map<string, Promise<Node>>();
+  const loadNode = async (digest: string): Promise<Node> => {
     const loc = locations.get(digest);
     if (loc === undefined) {
       throw new MerklePackError('missing-digest', `no packed location for node ${digest}`);
     }
     // The shared path already held the transport to the extent's plain sha;
     // the tagged hash re-derives the NODE identity from those same bytes.
-    const bytes = await fetchExtent(reader, identity, loc);
+    const bytes = await fetch(loc);
     if (hashNodeBytes(bytes) !== digest) {
       throw new MerklePackError('node-digest-mismatch', `node ${digest} failed verification`);
     }
@@ -243,8 +299,21 @@ export async function openMerklePack(
     }
     if (node.t === 'd') assertChildNames(node);
     if (node.t === 'f') requireFileGeometry(node, locations);
-    nodeCache.set(digest, node);
     return node;
+  };
+  const fetchNode = (digest: string): Promise<Node> => {
+    const cached = nodeCache.get(digest);
+    if (cached !== undefined) return cached;
+    const fetching = (async (): Promise<Node> => {
+      try {
+        return await loadNode(digest);
+      } catch (failure) {
+        nodeCache.delete(digest);
+        throw failure;
+      }
+    })();
+    nodeCache.set(digest, fetching);
+    return fetching;
   };
 
   const walk = async (path: string): Promise<Node | null> => {
@@ -384,10 +453,18 @@ export async function openMerklePack(
         if (fileOff >= end) break;
       }
 
+      // EVERY DISTINCT EXTENT AT ONCE, up to the gate's width. Serialized,
+      // this loop was the dominant term of a wake: a 512 KiB slice of a file
+      // chunked at the default 4 KiB target is 128 round trips against a
+      // FUSE-mounted store, one strictly after another, and a 30 MiB tree is
+      // thousands of them — which is how a restore overran a 300 s attach
+      // budget. The buffers held are the same ones the assembly loop below
+      // already needed, so nothing here costs memory the serial version did
+      // not spend.
       const buffers = new Map<string, Uint8Array>();
-      for (const [key, loc] of extents) {
-        buffers.set(key, await fetchExtent(reader, identity, loc));
-      }
+      await Promise.all([...extents].map(async ([key, loc]) => {
+        buffers.set(key, await fetch(loc));
+      }));
 
       for (const item of items) {
         const buffer = buffers.get(extentKeyOf(item.loc))!;

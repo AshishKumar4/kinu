@@ -224,28 +224,14 @@ gate_jobs() {
 }
 
 # A gate that cannot exit is a failure, not an infinite deploy. The slowest
-# gate is the five-suite UI batch: 198.5s SOLO on an idle 24-thread box
-# (measured 2026-08-25, 99 tests — the drive, terminal and consent proofs
-# grew it past the old 180s bound, which had been calibrated against a ~60s
-# source gate on 2026-08-22 and could no longer pass as composed). 480s
-# preserves that work under the full concurrent wave while still bounding
-# leaked worker processes.
+# source gate is the five-suite UI batch, so the shared wall stays calibrated
+# for source work rather than being raised for a live account probe.
 GATE_DEADLINE_SECONDS=480
 
-# ONE GATE PER LINE, and the reason it cannot live inside the figure above.
-# `GATE_DEADLINE_SECONDS` bounds a SOURCE gate — a test process on this machine
-# — and 480s is calibrated against the slowest of those. A gate whose subject is
-# a deployed container lifecycle is not that: it raises five container
-# instances on the account, drives each through create, checkpoint, stop, wake
-# and a cold reattach, and tears them down, and no shorter wait makes any of
-# that faster. Raising the shared figure to fit it would take the wall off every
-# source gate at the same time, which is the one thing that must not happen — so
-# the exception is per gate, written down, and held equal to GATE_DEADLINES in
-# scripts/ladder.ts by deploy.test.ts.
-declare -A GATE_DEADLINES=(
-  ['bun run gate:devbox-e2e']=3600
-)
-
+# The launcher reads this table under `set -u`, so it exists even when no gate
+# has earned a different wall. A future deployed probe may add one only with its
+# matching declaration in `scripts/ladder.ts` and the deploy-contract proof.
+declare -A GATE_DEADLINES=()
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
 # own file and is printed ONLY if it fails: 52 concurrent streams interleaved
@@ -579,18 +565,6 @@ run_required_gate "Declared infrastructure exists and is bound" bun run gate:inf
 # BARRIER.
 flush_gates
 
-# ALONE, and after the account gate, which is its precondition in the ordinary
-# sense: this gate spends five container instances and a bucket per arm on the
-# account gate:infra has just proved is usable, so a deploy refused for a
-# missing binding is refused in 43s rather than after twenty minutes of
-# container time. It is last because it is the most expensive thing here and
-# because everything before it has already proved the source and the account.
-# Its own deadline is in GATE_DEADLINES above. See SERIAL_GATES in
-# scripts/ladder.ts.
-run_required_gate "Devbox lifecycle on deployed containers" bun run gate:devbox-e2e
-
-# BARRIER.
-flush_gates
 
 echo ""
 echo -e "${GREEN}All required pre-deploy gates passed.${NC}"

@@ -974,14 +974,17 @@ function chainShell(exec: ContainerExec) {
      *  mounted after the last attempt is a NAMED failure, because an attach that
      *  proceeds over a mount it could not release would mount on top of it, and
      *  one that waits forever spends a budget belonging to the whole
-     *  restoration and reports nothing. */
+     *  restoration and reports nothing.
+     *
+     *  NOT ONE `exit` — see {@link awaitLayer}. */
     unmountPath: async (path: string): Promise<void> => {
       await must(`releasing the mount at ${path}`,
         `for _ in $(seq 1 ${String(MOUNT_RELEASE_ATTEMPTS)}); do `
-          + `grep -qs ${shellPath(` ${path} `)} /proc/mounts || exit 0; `
+          + `grep -qs ${shellPath(` ${path} `)} /proc/mounts || break; `
           + `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done; `
-          + `grep -qs ${shellPath(` ${path} `)} /proc/mounts || exit 0; `
-          + `echo "still mounted after ${String(MOUNT_RELEASE_ATTEMPTS)} release attempts" >&2; exit 1`);
+          + `if grep -qs ${shellPath(` ${path} `)} /proc/mounts; then `
+          + `echo "still mounted after ${String(MOUNT_RELEASE_ATTEMPTS)} release attempts" >&2; `
+          + 'false; fi');
     },
     /** Release every delta layer this container is still serving, whichever
      *  generation mounted it.
@@ -990,16 +993,20 @@ function chainShell(exec: ContainerExec) {
      *  generations and a container that was re-driven can hold one this attach
      *  did not make. Deepest first, so a nested path is released before its
      *  parent. Reached only where `/workspace` is NOT an overlay — the attach
-     *  early-returns otherwise — so nothing can still be reading them. */
+     *  early-returns otherwise — so nothing can still be reading them.
+     *
+     *  EVERY STUCK LAYER IS NAMED, not the first: the walk records the failure
+     *  and carries on, so one command answers "which layers would not go" rather
+     *  than one of them. See {@link awaitLayer} for why it cannot `exit`. */
     releaseDeltaLayers: async (): Promise<void> => {
       await must('releasing delta layers',
-        `for p in $(awk -v r=${shellPath(`${lowerDeltaRoot}/`)} `
+        `stuck=; for p in $(awk -v r=${shellPath(`${lowerDeltaRoot}/`)} `
           + `'index($2, r) == 1 {print $2}' /proc/mounts | sort -r); do `
           + `for _ in $(seq 1 ${String(MOUNT_RELEASE_ATTEMPTS)}); do `
           + `grep -qs " $p " /proc/mounts || break; `
           + `/usr/bin/fusermount3 -u "$p" 2>/dev/null || true; sleep 0.1; done; `
           + `if grep -qs " $p " /proc/mounts; then `
-          + `echo "delta layer $p is still mounted" >&2; exit 1; fi; done`);
+          + `echo "delta layer $p is still mounted" >&2; stuck=1; fi; done; [ -z "$stuck" ]`);
     },
     /**
      * Wait for one layer to become visible through the store mount, BY COUNT.
@@ -1014,13 +1021,23 @@ function chainShell(exec: ContainerExec) {
      * per probe, and the count cannot become an unbounded wait. What comes back
      * when it never appears is what the subtree DOES hold, which is the sentence
      * an operator needs.
+     *
+     * IT MUST NEVER SAY `exit`, AND THAT IS THE WHOLE DEFECT THIS SHAPE FIXES.
+     * Every command this strategy runs is fed to the SDK's PERSISTENT shell
+     * session, so `exit 0` on the success branch ended the shell itself: the
+     * probe that had just found the layer came back as
+     * `SessionTerminatedError: Session 'sandbox-default' shell exited (exit code:
+     * 0)`, the attach died on its own success, and every wake with a chain
+     * repeated it — 1,054 times in probe `wakeprobe09010702`. A flag and one
+     * `break` answer the same question and leave the shell alive.
      */
     awaitLayer: async (path: string): Promise<{ ready: boolean; holds: string }> => {
       const probed = await exec(
-        `for _ in $(seq 1 ${String(LAYER_VISIBILITY_PROBES)}); do `
-          + `if test -e ${shellPath(path)}; then printf ready; exit 0; fi; `
+        `seen=; for _ in $(seq 1 ${String(LAYER_VISIBILITY_PROBES)}); do `
+          + `if test -e ${shellPath(path)}; then seen=1; break; fi; `
           + `ls -1A ${shellPath(CHAIN_STORE_MOUNT)} >/dev/null 2>&1; sleep 0.25; done; `
-          + `printf 'missing '; ls -1A ${shellPath(CHAIN_STORE_MOUNT)} 2>&1 | head -20 | tr '\n' ' '`,
+          + 'if [ -n "$seen" ]; then printf ready; else '
+          + `printf 'missing '; ls -1A ${shellPath(CHAIN_STORE_MOUNT)} 2>&1 | head -20 | tr '\n' ' '; fi`,
       );
       const answer = probed.stdout.trim();
       return {

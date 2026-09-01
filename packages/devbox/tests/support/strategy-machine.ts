@@ -40,6 +40,7 @@ import {
   ControlReset,
   MemoryControlStore,
 } from './candidate-control';
+import { sessionShellRefusal } from './session-shell';
 import {
   appendJournalBatch,
   blobKey,
@@ -695,6 +696,10 @@ export interface ConformanceArm {
 function chainExec(disk: ContainerDisk, deaths: DeathWatch) {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
   return async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+    // The session shell first: a command it would refuse never reaches a
+    // strategy's answer, on a deployment or here. See `session-shell.ts`.
+    const refused = sessionShellRefusal(command);
+    if (refused !== undefined) throw refused;
     const fail = (stderr: string) => ({ stdout: '', stderr, exitCode: 1 });
     const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
     if (command === 'cat /proc/mounts') return ok(disk.procMounts());
@@ -1000,6 +1005,8 @@ function r2fsArm(): ConformanceArm {
       containerRunning: () => !disk.dead && !disk.stopped,
       readMounts: async () => disk.procMounts(),
       exec: async (command) => {
+        const refused = sessionShellRefusal(command);
+        if (refused !== undefined) throw refused;
         if (command.startsWith('mkdir -p')) {
           for (const path of command.slice('mkdir -p'.length).trim().split(' ')) {
             disk.mkdirp(path.replace(/^'|'$/g, ''));

@@ -11,8 +11,10 @@
 // rest of the container's life. So every test below asserts an OUTCOME rather
 // than that a function was reachable.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { scratchDir } from '@kinu.run/test-utils';
 
 // Imported from the modules that hold them, NOT from the barrel. The barrel
 // pulls in the Devbox class, which imports the Sandbox runtime and therefore
@@ -20,7 +22,7 @@ import { join } from 'node:path';
 // decisions are reachable without the platform is the point of separating them,
 // so this import is the property rather than a workaround. The barrel's own
 // coherence is checked by `tsc`.
-import { DEVBOX_RUNTIME_DIR, parseDevboxStrategyName } from '../src/storage';
+import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR, parseDevboxStrategyName } from '../src/storage';
 import {
   DEFAULT_DEVBOX_POLICY,
   describeThrown,
@@ -29,6 +31,9 @@ import {
   healthProbeCommand,
   healthProbeSilent,
   incidentRetryDelayMs,
+  HOLDER_TERM_WAIT_MS,
+  parseWorkdirHolders,
+  releaseWorkdirHoldersCommand,
   needsArming,
   PORT_TOKEN_ALPHABET,
   admissionStep,
@@ -48,6 +53,7 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
+import { requireSessionShellAccepts } from './support/session-shell';
 import {
   assertChainId,
   baseObjectKey,
@@ -736,12 +742,17 @@ describe('arming must ignore the row being dispatched', () => {
   });
 
   test('the guard the class uses is this one, not a row count', () => {
-    // The whole defect was `length > 0`. Pinned so it cannot come back.
+    // The whole defect was `length > 0`. Pinned so it cannot come back. The
+    // guard now has TWO readers — `#arm` before it writes a row, and
+    // `ensureReady` before it drives a retry the schedule already owes — so it
+    // is pinned where it lives, plus the delegation that keeps it single.
     const devbox = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-    const armed = devbox.slice(devbox.indexOf('async #arm('));
-    const body = armed.slice(0, armed.indexOf('\n  }'));
+    const guard = devbox.slice(devbox.indexOf('async #pending('));
+    const body = guard.slice(0, guard.indexOf('\n  }'));
     expect(body).toContain('needsArming(');
     expect(body).not.toContain('.length > 0');
+    const armed = devbox.slice(devbox.indexOf('async #arm('));
+    expect(armed.slice(0, armed.indexOf('\n  }'))).toContain('await this.#pending(callback)');
   });
 });
 
@@ -1009,6 +1020,115 @@ describe('mount facts — the kernel is asked, not a marker', () => {
     expect(findMount(NO_MOUNTS, '/workspace')).toBeUndefined();
     expect(findMount(NO_MOUNTS, '/')?.fstype).toBe('ext4');
   });
+});
+
+// ── the commands this package composes ──────────────────────────────────────
+//
+// MEASURED DEFECT THESE REPAIR. `releaseWorkdirHoldersCommand` joined its lines
+// with a SPACE, so the container received `… fi done if [ -z "$holders" ] …`.
+// `sh` answered `Syntax error: "do" unexpected`, exited 2, and because every
+// command runs inside the SDK's ONE persistent session shell that ended the
+// session: run `e2e20260901140445` lost `stop-small` on snapshot-chain (2,362
+// ms) and r2fs (785 ms) to `Session 'sandbox-default' shell exited (exit code:
+// 2)`, in both cases AFTER the checkpoint had already committed.
+//
+// The command is asked the same question the container asks — see
+// `support/session-shell.ts`, which every fake exec seam in this package now
+// runs first, so a template that loses a separator fails the suite rather than
+// the deployment.
+describe('a composed container command is one a POSIX shell will run', () => {
+  test('the holder-release command parses, and says nothing that ends the shell', () => {
+    const command = releaseWorkdirHoldersCommand(DEVBOX_WORKDIR);
+    requireSessionShellAccepts(command);
+    // `exit` is the other way one command ends a session: the chain's
+    // visibility probe did it with `printf ready; exit 0` and cost a wake 1,054
+    // terminated sessions. This command answers its empty scan with `else`.
+    expect(command).not.toMatch(/(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/);
+    // The wait is the constant, not a second opinion of it.
+    expect(command).toContain(`sleep ${String(HOLDER_TERM_WAIT_MS / 1_000)}`);
+  });
+
+  test('a work directory holding a quote is still one shell word', () => {
+    // The escape exists for this, and only a real parse can say whether it
+    // works: `'` closes the literal, so the quoted form has to reopen it.
+    requireSessionShellAccepts(releaseWorkdirHoldersCommand("/work'dir"));
+  });
+
+  test('the listener probe parses too', () => {
+    requireSessionShellAccepts(healthProbeCommand(8080));
+  });
+
+  test('the scan\'s own answers are read back: names, and the word for none', () => {
+    // The shape the command really prints, measured against a live holder on a
+    // Linux host: one ` pid:comm` token per holder, on stdout and stderr both.
+    expect(parseWorkdirHolders(' 1786951:sleep')).toEqual([{ pid: '1786951', comm: 'sleep' }]);
+    expect(parseWorkdirHolders(' 41:bun 42:node\n')).toEqual([
+      { pid: '41', comm: 'bun' },
+      { pid: '42', comm: 'node' },
+    ]);
+    // `none` is the command's own word for an empty scan, and an empty answer
+    // rather than a parse failure.
+    expect(parseWorkdirHolders('none')).toEqual([]);
+    expect(parseWorkdirHolders('')).toEqual([]);
+  });
+
+  /**
+   * THE COMMAND, RUN FOR REAL, against this host's own `/proc`.
+   *
+   * The parse gate proves a shell will accept it; only running it proves what
+   * it does, and the property that matters cannot be asserted against a string:
+   * the scan must remove a stranger holding the directory and must NOT remove
+   * the session it is running inside. Signalling an ancestor kills the exec
+   * channel the stop is speaking through, so the box's own stop would be the
+   * thing that made the box unreachable — the same class as the syntax error
+   * above, with no message at all.
+   *
+   * Linux only, like the `/proc` walk it exercises, and it really waits out
+   * HOLDER_TERM_WAIT_MS.
+   */
+  test.skipIf(process.platform !== 'linux')(
+    'a stranger holding the work directory is signalled; the session running the scan is not',
+    async () => {
+      const dir = scratchDir('devbox-workdir-holders');
+      const script = join(dir, 'release.sh');
+      writeFileSync(script, releaseWorkdirHoldersCommand(dir));
+      // A process with an open fd under the directory and no relation to the
+      // scan: exactly what a stop has to clear before an unmount. It ANNOUNCES
+      // the open fd rather than being slept after, so the scan runs against a
+      // holder that provably exists.
+      const stranger = spawn('sh', ['-c', `exec 9>${dir}/stranger.bin; printf ready; exec sleep 60`], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const exited = new Promise<number | null>((resolve) => {
+        stranger.on('exit', (_code, signal) => { resolve(signal === 'SIGTERM' ? 15 : null); });
+      });
+      await new Promise<void>((resolve) => { stranger.stdout.once('data', () => { resolve(); }); });
+      // The scan runs as a CHILD of a shell that also holds the directory, so
+      // that shell is an ancestor of the scan and a holder at the same time.
+      const ran = spawnSync('sh', ['-c', `exec 8>${dir}/ancestor.bin; sh ${script}; printf 'ALIVE %s' "$$"`], {
+        encoding: 'utf8', timeout: HOLDER_TERM_WAIT_MS + 15_000,
+      });
+      const holders = parseWorkdirHolders(ran.stdout.split('ALIVE')[0] ?? '');
+      expect({
+        // The shell that hosted the scan ran the statement AFTER it: it is alive.
+        sessionSurvived: ran.stdout.includes('ALIVE'),
+        // Every holder is reported, the unsignalled ones included, because a
+        // refused detach names them.
+        strangerNamed: holders.some((holder) => holder.pid === String(stranger.pid)),
+        ancestorNamed: holders.length > 1,
+        ancestorExplained: ran.stderr.includes("this session's own"),
+        strangerSignal: await exited,
+      }).toEqual({
+        sessionSurvived: true,
+        strangerNamed: true,
+        ancestorNamed: true,
+        ancestorExplained: true,
+        strangerSignal: 15,
+      });
+      rmSync(dir, { recursive: true, force: true });
+    },
+    HOLDER_TERM_WAIT_MS + 20_000,
+  );
 });
 
 // ── identity ────────────────────────────────────────────────────────────────

@@ -80,6 +80,8 @@ import {
   admissionStep,
   classifyRecovery,
   parseRecoveryRow,
+  parseWorkdirHolders,
+  releaseWorkdirHoldersCommand,
   quiesceStep,
   recoveryStep,
   restartPlan,
@@ -380,8 +382,17 @@ type Restoration =
   /** The work directory is attached. `incomplete` names what did not come back,
    *  or is undefined when everything did. */
   | { readonly phase: 'attached'; readonly incomplete: string | undefined }
-  /** There is no attached work directory, so operations refuse. */
-  | { readonly phase: 'unattached'; readonly reason: string };
+  /**
+   * There is no attached work directory, so operations refuse.
+   *
+   * `retry` is the ladder's own answer, carried rather than re-derived: TRUE
+   * means the taxonomy promised this identity another attempt, FALSE means the
+   * class is terminal and `attachNow()` is the only repair. It is a FIELD
+   * because the promise has to be actionable by something other than the one
+   * schedule row that carries it — a `retry` whose arming write is lost leaves
+   * a box refusing for ever on a retry nothing is holding.
+   */
+  | { readonly phase: 'unattached'; readonly reason: string; readonly retry: boolean };
 
 /** One attempt's hold on the ladder row: the token it claimed, the stage that
  *  claim preserved, and whether the row it read was readable at all. */
@@ -441,6 +452,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  waiting on work whose result is already discarded. */
   #startup: { readonly generation: number; readonly run: Promise<void> } | undefined;
   #restoration: Restoration = { phase: 'unstarted' };
+  /** The work-directory holders the last release pass signalled, kept only
+   *  long enough for a refused detach to name them. Cleared on every detach
+   *  attempt, successful or not, so a later refusal cannot blame a stale list. */
+  #lastWorkdirHolders: readonly { readonly pid: string; readonly comm: string }[] | undefined;
   #lastInteraction: number | undefined;
   #lastInteractionPersisted = 0;
   /** Every strategy checkpoint on this instance runs through one gate, so two
@@ -993,7 +1008,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // the row to the terminal stage, so this refusal is readable and finite:
       // `attachNow()` re-attempts, and a success deletes the row.
       const reason = `the attach-recovery record did not parse [unreadable → refuse]`;
-      this.#restoration = { phase: 'unattached', reason };
+      this.#restoration = { phase: 'unattached', reason, retry: false };
       await this.#record('attach', reason);
       throw new Error(reason);
     }
@@ -1249,7 +1264,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // the reported cause to learn which recovery was chosen, so the tag has to
     // survive the bound rather than be the first thing past it.
     const reason = `[${failure} → ${decision.action}] ${describe(thrown)}`;
-    this.#restoration = { phase: 'unattached', reason };
+    // THE DECISION TRAVELS WITH THE STATE. The arm below is ONE durable write,
+    // made from an isolate the platform may reset at any point after the
+    // decision; carrying the answer here is what lets a later caller notice
+    // the row is missing and deliver the retry the ladder promised.
+    this.#restoration = { phase: 'unattached', reason, retry: decision.action === 'retry' };
     await this.#record('attach', reason);
     if (!this.#owns(generation)) return;
     if (decision.action === 'retry') {
@@ -1293,6 +1312,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         phase: 'unattached',
         reason: `${reason}; and the container identity could not be destroyed: `
           + describe({ cause: error }),
+        // TERMINAL, whatever the class was. The abandoned work is still inside
+        // that container, so nothing may attach over it until a caller asks by
+        // name — the retry this refuses is exactly the overlap the destruction
+        // was meant to prevent.
+        retry: false,
       };
       throw error;
     }
@@ -1486,9 +1510,19 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // Scheduling is durable and never waits on container admission. The
     // scheduled startup callback owns raw start, attach, and readiness outside
     // the edge request that asked for this kick.
-    if (this.#restoration.phase === 'unstarted' && this.#startup === undefined) {
-      await this.#arm(STARTUP_CALLBACK, 1);
-    }
+    //
+    // A RETRYABLE UNATTACH IS PENDING WORK TOO. The ladder answered `retry` and
+    // armed one row to deliver it; if that write was lost the box holds a
+    // promise with nothing keeping it, and for an idle box this poll is the
+    // only caller there is. `#arm` is future-only, so a retry that IS scheduled
+    // costs one schedule read and writes nothing. A terminal class is left
+    // alone: waking a box to repeat work the ladder refused is the incident
+    // storm this whole taxonomy exists to avoid.
+    if (this.#startup !== undefined) return;
+    const held = this.#restoration;
+    if (held.phase === 'attached') return;
+    if (held.phase === 'unattached' && !held.retry) return;
+    await this.#arm(STARTUP_CALLBACK, 1);
   }
 
   /**
@@ -1513,12 +1547,41 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // service. `ready` is what stays false, and `devboxState()` says why.
     if (this.#restoration.phase === 'attached') return;
     if (this.#restoration.phase === 'unattached') {
-      // Refuse fast, with the reason and the recovery the taxonomy chose.
-      // Re-attaching here would turn one broken box into an incident per call,
-      // and a class the ladder refused would repeat the work it refused.
+      // THE RETRY THE TAXONOMY PROMISED, DRIVEN HERE WHEN NOTHING ELSE WILL.
+      //
+      // MEASURED DEFECT THIS REPAIRS. `stale-owner → retry` is the ordinary
+      // answer to platform churn, and the ONE schedule row `#recover` arms is
+      // the only thing that can re-drive it: this gate refused every operation
+      // on `unattached`, and `kickStartup` no-opped on any phase but
+      // `unstarted`. Lose that single write — the isolate can be reset between
+      // the decision and the arm — and /create, /wake and every operation are
+      // inert for ever on a box the ladder said to try again.
+      //
+      // So the question asked here is not "how many times have I tried" but "is
+      // anything going to try": an attempt in flight, or a future row. When the
+      // answer is no, THIS caller drives the attach. The schedule stays the rate
+      // limit — a failed attempt arms its own successor before it returns — so
+      // one broken box still cannot file an incident per call, and a class the
+      // ladder called terminal is never re-attempted here at all.
+      if (
+        this.#restoration.retry
+        && this.#startup === undefined
+        && !await this.#pending(STARTUP_CALLBACK)
+      ) {
+        await this.devboxStartup();
+        // A drive that failed again leaves a FRESH reason and a fresh arm, and
+        // only a box still unattached refuses below.
+        if (this.#restoration.phase !== 'unattached') return;
+      }
+      // THE REFUSAL NAMES BOTH HALVES: the taxonomy's own `[class → action]`
+      // tag, which the reason already carries, and whether anything is going to
+      // try again. A caller told this is terminal is being told to call
+      // `attachNow()`; one told a retry is under way is being told to ask again.
       throw new Error(
         `this devbox has no attached work directory: ${this.#restoration.reason}. `
-        + 'Operations are refused until an attach succeeds.',
+        + (this.#restoration.retry
+          ? 'A retry is already under way; operations are refused until it lands.'
+          : 'That recovery class is terminal: call attachNow() to attempt the attach again.'),
       );
     }
     await this.devboxStartup();
@@ -1603,8 +1666,30 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   /**
-   * Stop the container the graceful way: final checkpoint, then SIGTERM.
-   * A failed checkpoint refuses to stop because stopping would lose work.
+   * THE ORDER A STOP OWES ITS MOUNT: checkpoint, release the holders, detach,
+   * then stop.
+   *
+   * MEASURED DEFECT THIS REPAIRS. This method used to call
+   * `storage.detach()` BEFORE `this.stop('SIGTERM')`, and the r2fs detach
+   * unmounts through the SDK's `unmountBucket` — which refuses with EBUSY
+   * while any process holds an fd on the s3fs mount. The refusal landed
+   * BEFORE `this.stop()` was ever reached, so a box with one open writer was
+   * UNSTOPPABLE and UNTEARDOWNABLE: every later stop died the same way, and
+   * no teardown could clean the box up.
+   *
+   * The checkpoint stays first — it is the final commit, and a failed one
+   * still refuses to stop rather than lose work. What moves is everything the
+   * mount's release depends on:
+   *
+   *   1. Supervised processes are killed by their own ids first. Their SPECS
+   *      stay, so the wake restarts them; killing them here only releases the
+   *      fds their cwd and open files hold under the work directory.
+   *   2. Every other holder is signalled by ONE bounded container command
+   *      (see {@link releaseWorkdirHoldersCommand}): TERM, wait, KILL, with
+   *      pid 1 excluded and only fd holders signalled.
+   *   3. Only then does the detach run, wrapped so a refusal that STILL lands
+   *      names the holders it found rather than the bare EBUSY the SDK
+   *      answers with.
    */
   async quiesce(): Promise<CheckpointOutcome> {
     // The final commit is the one a wake reads back, so it is the last place a
@@ -1615,11 +1700,81 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
       return outcome;
     }
-    await this.#requireStorage().detach?.();
+    await this.#releaseWorkdirHolders();
+    await this.#detachStorage();
     this.#invalidateGeneration();
     await this.stop('SIGTERM');
     await this.#awaitContainerStopped();
     return outcome;
+  }
+
+  /**
+   * Kill the supervised processes by their ids, then signal every other
+   * process holding an fd under the work directory.
+   *
+   * SUPERVISED FIRST, BY ID, and only the live ones: a spec whose process is
+   * already gone needs nothing, and `stopSupervised` would drop the spec —
+   * which is the opposite of what a stop owes a wake, since the wake's
+   * restoration restarts exactly those specs. `killProcess` on the SDK's own
+   * process table is what releases the fd without touching the durable row.
+   */
+  async #releaseWorkdirHolders(): Promise<void> {
+    if (this.ctx.container?.running !== true) return;
+    for (const live of await this.listProcesses()) {
+      if (!isProcessLive(live.status)) continue;
+      try {
+        await this.killProcess(live.id);
+      } catch (error) {
+        // A stop must not be held hostage by one id the container cannot kill:
+        // the holder scan below still catches whatever the process holds
+        // under the work directory by pid, which is the resource that matters.
+        console.error(
+          `[devbox] supervised process ${live.id} could not be killed before the stop: `
+          + describe({ cause: error }),
+        );
+      }
+    }
+    const released = await this.#rawExec(
+      releaseWorkdirHoldersCommand(DEVBOX_WORKDIR),
+      DEVBOX_RUNTIME_DIR,
+    );
+    if (released.exitCode !== 0) {
+      // Refused rather than swallowed: a scan that cannot run says nothing
+      // about the holders, and proceeding to the detach would hand the next
+      // refusal to a caller with no names to act on. The words travel on
+      // stderr — see the command's own contract.
+      throw new Error(
+        `the holders of ${DEVBOX_WORKDIR} could not be released: `
+        + `${released.stderr.trim() || released.stdout.trim() || `exit ${released.exitCode}`}`,
+      );
+    }
+    const holders = parseWorkdirHolders(released.stdout);
+    if (holders.length > 0) {
+      this.#lastWorkdirHolders = holders;
+    } else {
+      this.#lastWorkdirHolders = undefined;
+    }
+  }
+
+  /** Detach the storage, rethrowing a still-busy refusal NAMED for the
+   *  holders the release pass found. The bare `fusermount: failed to unmount:
+   *  Device or resource busy` the SDK answers with names nothing, and a caller
+   * told only that cannot act on the one fact that would fix it. */
+  async #detachStorage(): Promise<void> {
+    try {
+      await this.#requireStorage().detach?.();
+    } catch (error) {
+      const holders = this.#lastWorkdirHolders;
+      if (holders === undefined || holders.length === 0) throw error;
+      const named = holders.map(holder => `${holder.pid} (${holder.comm})`).join(', ');
+      throw new Error(
+        `the work directory could not be detached while these processes were still holding it: `
+        + `${named}: ${describe({ cause: error })}`,
+        { cause: error },
+      );
+    } finally {
+      this.#lastWorkdirHolders = undefined;
+    }
   }
 
   /** Forget this box's durable bytes. Called when the box itself is deleted;
@@ -3044,9 +3199,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * be deleted a moment later with the chain dead. See `needsArming`.
    */
   async #arm(callback: string, delaySeconds: number): Promise<void> {
-    const rows = await this.listSchedules(callback);
-    if (!needsArming(rows, Date.now() / 1000)) return;
+    if (await this.#pending(callback)) return;
     await this.schedule(delaySeconds, callback, null);
+  }
+
+  /** Is a row for this callback already scheduled in the FUTURE? The question
+   *  `#arm` asks before writing one, and the question `ensureReady` asks before
+   *  driving a retry the schedule already owes. */
+  async #pending(callback: string): Promise<boolean> {
+    return !needsArming(await this.listSchedules(callback), Date.now() / 1000);
   }
 }
 

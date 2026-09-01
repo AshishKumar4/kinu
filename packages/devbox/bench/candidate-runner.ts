@@ -10,6 +10,7 @@ import * as v from 'valibot';
 import type { AuditedCapture } from '../src/capture/model';
 import { build as buildBounded, open as openBounded } from '../src/candidates/bounded-layers';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../src/candidates/merkle-pack';
+import type { MerklePackView } from '../src/candidates/merkle-pack';
 import { JournalDaemonClient, captureFromJournalFence } from '../src/capture/journal/client';
 import type { JournalBase, JournalFence } from '../src/capture/journal/client';
 import type { PosixMetadata } from '../src/capture/model';
@@ -324,47 +325,190 @@ async function restoreBounded(options: CandidateRunOptions, head: StoredHead, st
   }
 }
 
-async function restoreMerkle(options: CandidateRunOptions, head: StoredHead, store: FusePayloadStore): Promise<void> {
-  const identity = restoreIdentity(options, head);
-  const manifestBytes = await store.readRange({
-    ...identity, exactKey: head.envelope.rootObject.key, method: 'GET', byteOffset: '0',
-    byteLength: head.envelope.rootObject.byteLength, sha256: head.envelope.rootObject.sha256,
-  });
-  const view = await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, identity);
-  const root = new BeneathRoot(options.workspace);
-  const inodes = new Map<number, string>();
-  const restoreAt = async (path: string): Promise<void> => {
+/**
+ * How much of one Merkle restore runs at once.
+ *
+ * It bounds directory children AND file materialization. The reader owns the
+ * separate transport bound beneath this: a pool slot holds metadata or one
+ * slice's bytes, while the reader decides how many authenticated reads reach
+ * the FUSE store. Twelve leaves a few megabytes of slice buffers live, rather
+ * than one per file in an npm-shaped tree.
+ */
+const RESTORE_POOL_WIDTH = 12;
+
+/** Run a finite restore phase through one shared-width work pool. Directory
+ * children, data files and deferred hardlinks all use this exact scheduler, so
+ * their bound cannot drift apart when one phase changes shape. */
+async function runRestorePool<Item>(
+  items: readonly Item[],
+  run: (item: Item) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      await run(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(RESTORE_POOL_WIDTH, items.length) }, () => worker()));
+}
+
+interface InodeClaim {
+  /** The one pathname that receives this inode's bytes. */
+  readonly source: string;
+  /** Settles only after those bytes and their metadata landed. */
+  readonly ready: Promise<void>;
+  /** Publish that the source is safe to hardlink. */
+  readonly complete: () => void;
+}
+
+/**
+ * Restore one opened Merkle tree into `root`: every directory's children run
+ * through a bounded pool, then files and hardlinks materialize through the
+ * same bound. Each phase appends `<name> <elapsed> ms` to `notes`, so a run
+ * that threw still says how far it got.
+ *
+ * THE DEFECT THIS SHAPE REPAIRS. The walk was strictly sequential — one
+ * `stat`, one `readdir`, one 512 KiB slice at a time, each an awaited round
+ * trip against a FUSE-mounted store — so a 30 MiB tree chunked at the default
+ * 4 KiB target cost thousands of serialized reads and the wake overran its
+ * 300 s attach budget with nothing but latency.
+ *
+ * BeneathRoot's mkdir is synchronous and tolerates EEXIST, so the only points
+ * that interleave are the view reads. The inode claim is made between one read
+ * and the next await; a later occurrence holds the same deferred and cannot
+ * hardlink until the source resolved it. That makes two concurrent paths one
+ * inode rather than two coincidentally equal files.
+ *
+ * Directory metadata still has to run after all children: every child, and a
+ * hardlink too, changes its parent mtime. The reversed directory pass is the
+ * same ordering `restoreBounded` uses.
+ *
+ * TAKES THE VIEW, NOT THE HEAD, so the walk can be driven against a store that
+ * holds its reads: what it must prove is that it does not serialize, and that
+ * is a property of the calls it makes rather than of the bytes behind them.
+ */
+export async function restoreMerkleTree(
+  view: MerklePackView,
+  root: BeneathRoot,
+  notes: string[] = [],
+): Promise<void> {
+  let phaseAt = Date.now();
+  const mark = (phase: string): void => {
+    const now = Date.now();
+    notes.push(`${phase} ${String(now - phaseAt)} ms`);
+    phaseAt = now;
+  };
+  /** One deferred source per captured inode. */
+  const inodes = new Map<number, InodeClaim>();
+  const files: {
+    path: string;
+    mode: number;
+    size: number;
+    metadata: PosixMetadata | undefined;
+    claim: InodeClaim;
+  }[] = [];
+  const links: { path: string; claim: InodeClaim }[] = [];
+  const directories: { path: string; metadata: PosixMetadata | undefined }[] = [];
+  const discover = async (path: string): Promise<void> => {
     const entry = await view.stat(path);
     if (entry === null) throw new Error(`published Merkle path disappeared: ${path}`);
     if (entry.kind === 'dir') {
-      if (path !== '') root.mkdir(path, entry.mode);
-      for (const child of await view.readdir(path)) await restoreAt(path === '' ? child : `${path}/${child}`);
-      if (path !== '') restoreMetadata(root, path, entry.metadata);
-    } else if (entry.kind === 'symlink') {
+      if (path !== '') {
+        root.mkdir(path, entry.mode);
+        directories.push({ path, metadata: entry.metadata });
+      }
+      const children = await view.readdir(path);
+      await runRestorePool(children, async (child) =>
+        await discover(path === '' ? child : `${path}/${child}`));
+      return;
+    }
+    if (entry.kind === 'symlink') {
       root.symlink(entry.target!, path);
       restoreMetadata(root, path, entry.metadata, true);
-    } else {
-      if (entry.size === undefined || entry.ino === undefined) throw new Error(`published Merkle file has incomplete metadata: ${path}`);
-      const source = inodes.get(entry.ino);
-      if (source !== undefined) {
-        root.hardlink(source, path);
-        return;
-      }
-      createCandidateRestoreFile(root, path, entry.mode, entry.size);
-      for (const extent of await view.extents(path)) {
-        if (extent.kind === 'data') {
-          await restoreCandidateRange(root, path, extent.offset, extent.length, async (offset, length) =>
-            await view.readRange(path, offset, length));
-        }
-      }
-      restoreMetadata(root, path, entry.metadata);
-      inodes.set(entry.ino, path);
+      return;
     }
+    if (entry.size === undefined || entry.ino === undefined) {
+      throw new Error(`published Merkle file has incomplete metadata: ${path}`);
+    }
+    // CLAIM BEFORE THE NEXT AWAIT. JavaScript cannot interleave this read and
+    // write, so exactly one occurrence owns the source; every later one sees
+    // its deferred and waits for the source rather than creating a second file.
+    const held = inodes.get(entry.ino);
+    if (held !== undefined) {
+      links.push({ path, claim: held });
+      return;
+    }
+    const deferred = Promise.withResolvers<void>();
+    const claim: InodeClaim = {
+      source: path,
+      ready: deferred.promise,
+      complete: deferred.resolve,
+    };
+    inodes.set(entry.ino, claim);
+    files.push({ path, mode: entry.mode, size: entry.size, metadata: entry.metadata, claim });
   };
+
+  await discover('');
+  mark(`tree walk (${String(directories.length)} dirs, ${String(files.length)} files, ${String(links.length)} links)`);
+
+  let restoredBytes = 0;
+  const materializing = runRestorePool(files, async (file) => {
+    createCandidateRestoreFile(root, file.path, file.mode, file.size);
+    for (const extent of await view.extents(file.path)) {
+      if (extent.kind !== 'data') continue;
+      await restoreCandidateRange(root, file.path, extent.offset, extent.length,
+        async (offset, length) => await view.readRange(file.path, offset, length));
+      restoredBytes += extent.length;
+    }
+    restoreMetadata(root, file.path, file.metadata);
+    file.claim.complete();
+  });
+  // A link worker waits on its source WITHOUT taking a data worker's slot. A
+  // directory with many aliases therefore cannot deadlock by filling the pool
+  // with waiters while the one source it needs is still queued.
+  const linking = runRestorePool(links, async (link) => {
+    await link.claim.ready;
+    root.hardlink(link.claim.source, link.path);
+  });
+  await Promise.all([materializing, linking]);
+  mark(`data (${String(restoredBytes)} bytes)`);
+
+  // LAST, and deepest first: creating a child is what moved a directory's
+  // mtime, so its captured timestamps can only be restored once no child is
+  // still to come.
+  for (const directory of directories.reverse()) {
+    restoreMetadata(root, directory.path, directory.metadata);
+  }
+  mark('directory metadata');
+}
+
+async function restoreMerkle(options: CandidateRunOptions, head: StoredHead, store: FusePayloadStore): Promise<void> {
+  // WHERE THE TIME WENT, phase by phase, on stderr. The overrun this repairs
+  // reported one line — that it had overrun — and nothing about which half of
+  // the walk spent the budget. The container hands this stream back with a
+  // failed run, so a partial breakdown is what a killed restore leaves behind.
+  const startedAt = Date.now();
+  const notes: string[] = [];
+  const identity = restoreIdentity(options, head);
   try {
-    for (const path of await view.readdir('')) await restoreAt(path);
+    const manifestBytes = await store.readRange({
+      ...identity, exactKey: head.envelope.rootObject.key, method: 'GET', byteOffset: '0',
+      byteLength: head.envelope.rootObject.byteLength, sha256: head.envelope.rootObject.sha256,
+    });
+    const view = await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, identity);
+    notes.push(`manifest+index ${String(Date.now() - startedAt)} ms`);
+    const root = new BeneathRoot(options.workspace);
+    try {
+      await restoreMerkleTree(view, root, notes);
+    } finally {
+      root.close();
+    }
   } finally {
-    root.close();
+    process.stderr.write(`merkle-pack restore: ${notes.join(', ')}, `
+      + `wall ${String(Date.now() - startedAt)} ms\n`);
   }
 }
 

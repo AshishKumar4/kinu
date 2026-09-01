@@ -13,6 +13,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 
+import { Devbox, harness as devboxHarness } from './support/devbox-harness';
+import { sessionShellRefusal } from './support/session-shell';
+import type { DevboxPolicy } from '../src/lifecycle';
+import {
+  CHECKPOINT_OUTCOME_KINDS,
+  DEVBOX_WORKDIR,
+  type CheckpointKind,
+  type CheckpointOutcome,
+  type DevboxStrategyName,
+  type DevboxStore,
+} from '../src/storage';
 import {
   isS3fsMounted,
   R2FS_CACHE_DIR,
@@ -21,18 +32,13 @@ import {
   type R2fsPorts,
 } from '../src/r2fs';
 import {
+  DEFAULT_DEVBOX_POLICY,
   classifyRecovery,
   ContainerStartOverrun,
   recoveryStep,
   openStartBudget,
   withContainerStartDeadline,
 } from '../src/lifecycle';
-import {
-  CHECKPOINT_OUTCOME_KINDS,
-  DEVBOX_WORKDIR,
-  type CheckpointKind,
-  type CheckpointOutcome,
-} from '../src/storage';
 
 const MOUNTED = [
   'proc /proc proc rw,relatime 0 0',
@@ -54,6 +60,39 @@ interface Harness {
   readonly mountpoint: () => readonly string[];
   /** What was moved aside, so a test can prove nothing was destroyed. */
   readonly quarantined: () => readonly string[];
+}
+
+/**
+ * ONE r2fs box on the platform stand-in, with a store the ports can read.
+ *
+ * The stop order is a property of the Devbox class's own `quiesce`, not of the
+ * strategy's detach alone, so the red test has to drive the real class with
+ * the r2fs adapter underneath it — the same stand-in `lifecycle-generation`
+ * drives, with the one addition the stop order needs: the container fake
+ * holds a work-directory holder whose unmount answers EBUSY, exactly as a
+ * live s3fs mount does.
+ */
+class R2fsQuiesceBox extends Devbox<Record<string, never>> {
+  protected override get strategy(): DevboxStrategyName {
+    return 'r2fs';
+  }
+
+  protected override get store(): DevboxStore {
+    // SAFETY: constructed against the R2Bucket contract — the fake provides
+    // exactly the members the r2fs ports reach (`prefixInventory` on a listing
+    // and `deletePrefix` on the same), verified by this suite driving the
+    // whole attach/checkpoint/stop cycle through the real class below.
+    const bucket: R2Bucket = Object.create({ list: () => ({ objects: [], truncated: false }) });
+    return { binding: 'BACKUP_BUCKET', bucket };
+  }
+
+  protected override get ambientCheckpoints(): boolean {
+    return false;
+  }
+
+  protected override get policy(): DevboxPolicy {
+    return { ...DEFAULT_DEVBOX_POLICY, portWaitMs: 4, portProbeIntervalMs: 1 };
+  }
 }
 
 function harness(overrides: {
@@ -80,7 +119,15 @@ function harness(overrides: {
   const ports: R2fsPorts = {
     containerRunning: () => overrides.running ?? true,
     readMounts: () => Promise.resolve(mounted ? MOUNTED : NOT_MOUNTED),
+    // THE PARSE FIRST, as the container's session shell does it: a composed
+    // command it cannot run kills the session rather than answering. See
+    // `support/session-shell.ts`.
     exec: (command) => {
+      const refused = sessionShellRefusal(command);
+      if (refused !== undefined) {
+        calls.push(`sessionKilled:${command.split(' ')[0]}`);
+        return Promise.reject(refused);
+      }
       calls.push(`exec:${command.split(' ')[0]}`);
       if (command.startsWith('sync')) {
         const code = overrides.syncExit ?? 0;
@@ -532,4 +579,85 @@ describe('denominator', () => {
       expect(fresh.kind).toBe('attached');
       expect(fresh.detail).toBe('r2fs 0 objects 0B');
     });
+});
+
+// ── the stop order, against the real Devbox class ──────────────────────────
+//
+// MEASURED DEFECT THIS REPAIRS. `quiesce` used to run `storage.detach()` —
+// s3fs's unmount — BEFORE `stop('SIGTERM')`, and fusermount refuses an
+// unmount with an open fd (EBUSY). One open writer therefore made the box
+// UNSTOPPABLE: the refusal landed before `stop()` was ever reached, every
+// later stop died the same way, and no teardown could clean the box up.
+//
+// The order has to be: checkpoint (the final commit), release the work
+// directory's holders, detach, stop. The platform stand-in in
+// `support/devbox-harness.ts` models the holder exactly as the real one
+// behaves — an unmount refuses while the holder lives, and the release
+// command's signal work is what clears it — so the assertions below read the
+// sequence rather than a mock's tally of calls.
+describe('the stop order: holders are released before the mount is detached', () => {
+  test('an open writer does not make the box unstoppable', async () => {
+    const { box, container } = devboxHarness(R2fsQuiesceBox);
+    container.workdirHolder = { pid: 4242, comm: 'bun' };
+    await box.devboxStartup();
+    expect(container.s3fsMounts.has(DEVBOX_WORKDIR)).toBe(true);
+
+    const outcome = await box.quiesce();
+
+    // The stop completed: the holder was signalled inside the release command
+    // (which the stand-in clears, as the real TERM does), the unmount landed
+    // behind it, and the container was stopped. The checkpoint itself reports
+    // `skipped` because the store holds no objects — the honest answer for an
+    // empty prefix, and not what this test is about.
+    expect(['committed', 'skipped']).toContain(outcome.kind);
+    // ONE chronological channel for both the release command and the unmount,
+    // because the order this test pins lives ACROSS the exec and mount APIs.
+    //
+    // BOTH ROWS ARE REQUIRED TO EXIST BEFORE THEY ARE COMPARED. `findIndex`
+    // answers -1 for a row that is not there and -1 is less than every index,
+    // so an ordering written only as a comparison stays green when the command
+    // it names changes shape — which this assertion really did the moment the
+    // release command's first word changed.
+    const released = container.sequence.indexOf('exec:release-workdir-holders');
+    const detached = container.sequence.indexOf('unmount:/workspace');
+    expect({ released: released >= 0, detached: detached >= 0 })
+      .toEqual({ released: true, detached: true });
+    expect(detached).toBeGreaterThan(released);
+    expect(container.s3fsMounts.has(DEVBOX_WORKDIR)).toBe(false);
+    expect(container.running.running).toBe(false);
+    expect(container.stops).toBe(1);
+  });
+
+  test('a holder that IS this session is named, and never signalled', async () => {
+    // The container's exec channel can hold the work directory too, and the
+    // scan runs inside it: signalling an ancestor of its own shell would kill
+    // the session the stop is speaking through, so the command reports that
+    // holder instead. Proven against real `/proc` in `decisions.test.ts`;
+    // proven HERE to reach a caller as a named refusal rather than a silence.
+    const { box, container } = devboxHarness(R2fsQuiesceBox);
+    container.workdirHolder = { pid: 31, comm: 'sandbox-session', session: true };
+    await box.devboxStartup();
+
+    await expect(box.quiesce()).rejects.toThrow('sandbox-session');
+    expect({
+      stopped: container.stops,
+      stillMounted: container.s3fsMounts.has(DEVBOX_WORKDIR),
+      // The session survived the scan: the fake answers every later command,
+      // which is exactly what a killed session would not do.
+      answersAfterwards: (await container.exec('true')).exitCode,
+    }).toEqual({ stopped: 0, stillMounted: true, answersAfterwards: 0 });
+  });
+
+  test('a holder that survives the signals is NAMED by the refused detach', async () => {
+    const { box, container } = devboxHarness(R2fsQuiesceBox);
+    container.workdirHolder = { pid: 777, comm: 'stubborn-writer', survives: true };
+    await box.devboxStartup();
+
+    await expect(box.quiesce()).rejects.toThrow('stubborn-writer');
+    // AND THE BOX WAS NOT STOPPED BEHIND THE REFUSAL: a stop that detaches
+    // nothing must not report one, or the caller would read a box as released
+    // whose mount is still live and whose holder still holds it.
+    expect(container.stops).toBe(0);
+    expect(container.s3fsMounts.has(DEVBOX_WORKDIR)).toBe(true);
+  });
 });

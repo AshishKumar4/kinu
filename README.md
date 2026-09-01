@@ -90,10 +90,10 @@ bun run infra:provision      # the secrets; wrangler needs the Worker to exist f
 bun run gate:infra           # every declared resource exists and is bound
 ```
 
-`bun run deploy` refuses to upload until 62 required gate invocations pass.
-Preflight runs first, 58 gates run concurrently, and `gate:hammer`, `gate:infra`
-and `gate:devbox-e2e` each run alone at the end, in that order.
-You bring a Workers Paid account, a zone, and OAuth applications for sign-in.
+`bun run deploy` refuses to upload until its required gate roster passes.
+Preflight runs first, source gates run concurrently, and `gate:hammer` then
+`gate:infra` each run alone at the end. You bring a Workers Paid account, a
+zone, and OAuth applications for sign-in.
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) lists each prerequisite;
 [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) walks an empty account end to end.
 

@@ -824,6 +824,107 @@ describe('one container identity is retried, then replaced, then refused', () =>
     });
 });
 
+// ── the retry the ladder promised ───────────────────────────────────────────
+
+describe('a promised retry is delivered even when the row carrying it is gone', () => {
+  /** The one command a landed attach ends on, so a test can say whether an
+   *  attach was attempted at all rather than only what state it left. */
+  const stamps = (container: FakeSandbox): number =>
+    container.execs.filter(command => command.includes(STAMP_COMMAND)).length;
+
+  /** The isolate reset that made this defect permanent: the ladder decided
+   *  `retry` and its arming write never landed, so the box holds a promise with
+   *  nothing keeping it. The fake's rows ARE the schedule, so dropping them is
+   *  the same world the reset leaves behind. */
+  const loseTheArmedRow = (container: FakeSandbox): void => {
+    container.scheduleRows.length = 0;
+  };
+
+  test('the next operation drives the attach when no row is left to deliver it', async () => {
+    // The deployed shape: `overlay-cas` failed its attach with
+    // OPERATION_INTERRUPTED, the taxonomy answered `stale-owner → retry`, and
+    // the ONE schedule row that answer armed was the only thing that could
+    // re-drive it — `ensureReady` refused every operation on `unattached` and
+    // `kickStartup` no-opped on any phase but `unstarted`. Lose that write and
+    // /create, /wake and every operation are inert for ever.
+    const harnessed = harness(TestBox);
+    const { box, container, rows } = harnessed;
+    failAttempt(harnessed, 'OPERATION_INTERRUPTED');
+    await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
+    expect({ armed: armed(container), destroys: container.destroys, stamps: stamps(container) })
+      .toEqual({ armed: 1, destroys: 0, stamps: 0 });
+
+    loseTheArmedRow(container);
+
+    const result = await box.exec('ls');
+
+    expect({ exitCode: result.exitCode, stamps: stamps(container) })
+      .toEqual({ exitCode: 0, stamps: 1 });
+    expect((await box.devboxState()).restoration).toBe('attached');
+    // The attach that landed is what clears the ladder row.
+    expect(rows.has(RECOVERY_KEY)).toBe(false);
+  });
+
+  test('a retry that IS scheduled refuses the caller and attaches nothing', async () => {
+    // The rate limit is the schedule, not a counter: while a row is pending,
+    // one broken box answers every caller from the same decision instead of
+    // filing an incident per call.
+    const harnessed = harness(TestBox);
+    const { box, container } = harnessed;
+    failAttempt(harnessed, 'OPERATION_INTERRUPTED');
+    await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
+
+    await expect(box.exec('ls')).rejects.toThrow('A retry is already under way');
+    await expect(box.exec('ls')).rejects.toThrow('stale-owner → retry');
+    expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 0 });
+  });
+
+  test('a terminal class is never re-driven, and its refusal names the repair', async () => {
+    // The complement, and the reason this is a promise rather than a retry
+    // loop: exhaustion armed nothing, so there is no row in the way — and the
+    // box must still refuse instead of repeating work the ladder refused.
+    const harnessed = harness(TestBox);
+    const { box, container } = harnessed;
+    failAttempt(harnessed, 'NO_SPACE');
+    await expect(box.devboxStartup()).rejects.toThrow('NO_SPACE');
+    expect(armed(container)).toBe(0);
+
+    await expect(box.exec('ls')).rejects.toThrow('exhausted → refuse');
+    await expect(box.exec('ls')).rejects.toThrow('terminal: call attachNow()');
+    expect(stamps(container)).toBe(0);
+  });
+
+  test('an idle box with no caller gets its lost retry armed by the state poll', async () => {
+    // `devboxState` is the only thing that touches an idle box, and it kicks
+    // the startup row. A retryable unattach is pending work, so the kick arms
+    // it; a terminal one is left alone.
+    const harnessed = harness(TestBox);
+    const { box, container } = harnessed;
+    failAttempt(harnessed, 'OPERATION_INTERRUPTED');
+    await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
+    loseTheArmedRow(container);
+
+    await box.devboxState();
+
+    expect(container.scheduleRows.filter(row => row.callback === 'devboxStartup')).toHaveLength(1);
+    // And the arm is idempotent: a second poll finds the row it just wrote.
+    await box.devboxState();
+    expect(container.scheduleRows.filter(row => row.callback === 'devboxStartup')).toHaveLength(1);
+  });
+
+  test('a terminal unattach is not woken by the state poll', async () => {
+    const harnessed = harness(TestBox);
+    const { box, container } = harnessed;
+    failAttempt(harnessed, 'MISSING_CREDENTIALS');
+    await expect(box.devboxStartup()).rejects.toThrow('MISSING_CREDENTIALS');
+    loseTheArmedRow(container);
+
+    await box.devboxState();
+
+    expect(container.scheduleRows.filter(row => row.callback === 'devboxStartup')).toEqual([]);
+  });
+});
+
 // ── one budget for the whole restoration ────────────────────────────────────
 
 describe('one budget, two policies: the attach may replace, the phases after it may not', () => {

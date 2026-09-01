@@ -262,8 +262,37 @@ async function seedJournal(
 export function candidateContainerStorage(ports: CandidateContainerPorts): DevboxStorage {
   let attaching: Promise<AttachOutcome> | undefined;
 
+  /**
+   * NOTHING PUBLISHED MEANS NOTHING TO RUN, and that is decided HERE rather
+   * than inside the container.
+   *
+   * MEASURED DEFECT THIS REPAIRS. An empty box's cold attach started TWO
+   * supervised runner processes — `--action restore` and `--action seed` —
+   * and both answered the same `head === null` this side already holds:
+   * `restoreCandidate` returns `{ rootId: null }` before it opens anything and
+   * `seedCandidateJournal` sends nothing when the control has no base. Each
+   * one is a `bun` start over this package's whole module graph inside the
+   * container, followed by an UNBOUNDED `waitForRunnerExit` poll, on the one
+   * path a box takes before it has ever held bytes. Cold attach on the
+   * candidate arms measured 15,721 ms against a 25,000 ms product ceiling in
+   * `e2ecal0901002202`, and both candidate arms lost cold-attach to that
+   * ceiling in `e2e20260901140445`.
+   *
+   * The store still gets mounted and the journal still gets replaced: an empty
+   * box must serve writes through the daemon and its next checkpoint reads the
+   * store through that mount. What goes is only the work that had no work in
+   * it.
+   */
   const attach = async (): Promise<AttachOutcome> => {
     const control = await ports.restoreState();
+    if (control.head === null) {
+      await ports.mountStore();
+      // Replaced rather than assumed healthy, for the reason the restore path
+      // states: two daemons must never recover or append one journal/WAL.
+      await ports.stopJournal();
+      await ports.startJournal();
+      return { kind: 'empty', detail: 'candidate control has no published head' };
+    }
     // A restore runner stays in the container after an isolate reset. Find it
     // before mountStore, because a replacement mount cuts off its payload read.
     const bootId = await ports.bootId();

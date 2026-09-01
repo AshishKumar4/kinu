@@ -25,6 +25,7 @@
 import { mock } from 'bun:test';
 
 import type { StoredValue } from '../../src/storage';
+import { sessionShellRefusal } from './session-shell';
 
 /**
  * A failure as `@cloudflare/sandbox` really presents one.
@@ -212,6 +213,33 @@ export class FakeSandbox {
    *  a refused connection does, which is what the shipped probe reads. */
   readonly listening = new Set<number>();
   readonly fileOperations: FileOperation[] = [];
+  /** Every bucket mount/unmount the box asked the SDK for, as
+   * `mount:<path>` / `unmount:<path>` rows. A quiesce's stop order is a
+   * property of THIS sequence, so the fake records it the way `execs` records
+   * commands. */
+  readonly mountCalls: string[] = [];
+  /** Every mount operation and every exec, in ONE chronological sequence, as
+   *  `mount:<path>`, `unmount:<path>` and `exec:<first word>`. The stop order
+   *  is a property of the order ACROSS these two channels, so it is recorded
+   *  here rather than reconstructed from two separate lists. */
+  readonly sequence: string[] = [];
+  /** Paths the box's own `mountBucket` holds mounted, which is what
+   *  `/proc/mounts` reports for them. */
+  readonly s3fsMounts = new Set<string>();
+  /** While a holder is present an unmount answers with the EBUSY refusal a
+   *  real fusermount gives for a mount with open files. Cleared by the
+   *  holder-release command the way the real stop clears it by killing the
+   *  holder — unless the holder is marked `survives`, which is the shape a
+   *  still-busy unmount has to name rather than hide, or `session`, which is
+   *  the container's own exec channel: the scan NAMES that one and declines to
+   *  signal it, because killing an ancestor of the shell running the scan ends
+   *  the session the stop is speaking through. */
+  workdirHolder: {
+    readonly pid: number;
+    readonly comm: string;
+    readonly survives?: boolean;
+    readonly session?: boolean;
+  } | undefined;
   readonly fileOperationFailures = {
     rename: Array<Error>(),
     move: Array<Error>(),
@@ -244,9 +272,31 @@ export class FakeSandbox {
   onStart(): Promise<void> {
     return Promise.resolve();
   }
-
+  /**
+   * One command, answered as the container's PERSISTENT session shell answers
+   * it.
+   *
+   * THE PARSE COMES FIRST, and it is a real one — see `session-shell.ts`. This
+   * fake used to accept any string and answer it by prefix, so a command
+   * template that no shell would run was green here and dead on the
+   * deployment: `releaseWorkdirHoldersCommand` reached run
+   * `e2e20260901140445` with no separator before its `done`, and every arm's
+   * stop came back as `Session 'sandbox-default' shell exited (exit code: 2)`.
+   * A fake that answers what a shell refuses cannot hold that class of defect.
+   */
   async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const refused = sessionShellRefusal(command);
+    if (refused !== undefined) {
+      this.sequence.push(`sessionKilled:${command.split(' ')[0]}`);
+      throw refused;
+    }
     this.execs.push(command);
+    // The scan gets a NAME rather than its first word, because the ordering
+    // assertions read this row and a template whose first word changes must not
+    // silently stop matching them.
+    this.sequence.push(command.includes('/proc/$pid/fd')
+      ? 'exec:release-workdir-holders'
+      : `exec:${command.split(' ')[0]}`);
     const held = this.execGate;
     if (held !== undefined) {
       this.execGate = undefined;
@@ -255,6 +305,31 @@ export class FakeSandbox {
     }
     if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') {
       return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
+    }
+    if (command === 'cat /proc/mounts') {
+      // The work directory reads as an s3fs mount exactly while the box's own
+      // mountBucket has it mounted — the same fact `/proc/mounts` reports in
+      // a real container, so a strategy's read-back observes the world the
+      // fake changed rather than a world the test staged.
+      const lines = [
+        'proc /proc proc rw,relatime 0 0',
+        ...(this.s3fsMounts.has('/workspace')
+          ? [`s3fs /workspace fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`]
+          : []),
+      ];
+      return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
+    }
+    if (command.startsWith('sync')) {
+      // `sync -f <dir> && sync; echo $?`: the flush this fake has no pages for,
+      // answered with the success the real command reports.
+      return { stdout: '0', stderr: '', exitCode: 0 };
+    }
+    if (command.startsWith('test -e')) {
+      // `#pathExists` asks `test -e '<path>' && echo yes || echo no`; the fake
+      // holds no filesystem, so the answer is yes for any path a strategy
+      // asked about — the cache directory the r2fs attach read-back wants is
+      // the one `mountBucket` created beside its mount.
+      return { stdout: 'yes', stderr: '', exitCode: 0 };
     }
     const probed = /127\.0\.0\.1:(\d+)/.exec(command);
     if (probed !== null) {
@@ -275,8 +350,49 @@ export class FakeSandbox {
       const bootId = /^printf %s ([^ ]+) > \/tmp\/devbox-boot-id$/.exec(command);
       if (bootId !== null) this.bootId = bootId[1];
     }
+    // THE HOLDER-RELEASE COMMAND, answered the way the real container answers
+    // it: the holders are named on stdout, and the signal work happens inside
+    // the same command. The fake's `workdirHolder` IS its process table, so
+    // clearing it is what the real command's SIGTERM achieves; a holder marked
+    // `survives` is one the TERM and the KILL both failed on, and one marked
+    // `session` is an ancestor of the scan's own shell, which the command
+    // reports and never signals. Both leave the mount busy, which is the shape
+    // a still-busy unmount has to name rather than hide.
+    //
+    // MATCHED ON THE SCAN ITSELF, not on the command's first word: the first
+    // word changed the moment the command grew its ancestor walk, and a fake
+    // keyed on it answered the empty string to a command it no longer
+    // recognised — a silent, wrong answer to a real command.
+    if (command.includes('/proc/$pid/fd')) {
+      const holder = this.workdirHolder;
+      if (holder === undefined) return { stdout: 'none', stderr: '', exitCode: 0 };
+      const named = `${String(holder.pid)}:${holder.comm}`;
+      if (holder.session === true) {
+        return { stdout: named, stderr: `not signalled, this session's own: ${named}`, exitCode: 0 };
+      }
+      if (!holder.survives) this.workdirHolder = undefined;
+      return { stdout: named, stderr: named, exitCode: 0 };
+    }
     return { stdout: '', stderr: '', exitCode: 0 };
   }
+
+  async mountBucket(_binding: string, mountPath: string): Promise<void> {
+    this.mountCalls.push(`mount:${mountPath}`);
+    this.sequence.push(`mount:${mountPath}`);
+    this.s3fsMounts.add(mountPath);
+  }
+
+  async unmountBucket(mountPath: string): Promise<void> {
+    this.mountCalls.push(`unmount:${mountPath}`);
+    this.sequence.push(`unmount:${mountPath}`);
+    if (this.workdirHolder !== undefined && mountPath === '/workspace') {
+      // The holder is still alive, so the mount is still busy: the refusal a
+      // real fusermount gives, before any state changes hands.
+      throw new Error(`fusermount: failed to unmount ${mountPath}: Device or resource busy`);
+    }
+    this.s3fsMounts.delete(mountPath);
+  }
+
   async renameFile(oldPath: string, newPath: string, sessionId?: string): Promise<FileOperation> {
     return this.#recordFileOperation('rename', oldPath, newPath, sessionId);
   }

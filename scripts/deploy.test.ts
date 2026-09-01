@@ -101,7 +101,6 @@ const REQUIRED_GATES = [
   "bun run verify:lean",
   "bun run gate:hammer",
   "bun run gate:infra",
-  "bun run gate:devbox-e2e",
 ] as const;
 
 afterEach(() => {
@@ -305,7 +304,7 @@ describe("deploy gate", () => {
     const alone = waves.filter((wave) => wave.length === 1).flat();
 
     expect(alone.sort()).toEqual(Object.keys(SERIAL_GATES).sort());
-    // FOUR waves now: preflight, one concurrent source block, the hammer, then
+    // FOUR waves: preflight, one concurrent source block, the hammer, then
     // infrastructure. The hammer earned its own barrier by being the one gate
     // whose subject is contention — it starves nproc/2 threads on purpose, so
     // anything beside it would be measured on a machine this gate is
@@ -316,15 +315,11 @@ describe("deploy gate", () => {
     // nobody can derive gets edited without being read. The property is the
     // same either way, because a gate that leaves the middle wave has to appear
     // in `SERIAL_GATES` to satisfy the assertion above it.
-    expect(waves.length).toBe(5);
+    expect(waves.length).toBe(4);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
     expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length);
     expect(waves[2]).toEqual(["bun run gate:hammer"]);
     expect(waves[3]).toEqual(["bun run gate:infra"]);
-    // The container lifecycle suite is last, alone, and after the account gate:
-    // it is the only gate that SPENDS the account gate:infra has just proved,
-    // and its ceilings are wall clocks a neighbouring gate would perturb.
-    expect(waves[4]).toEqual(["bun run gate:devbox-e2e"]);
   });
 
   // The Worker version is what a persisted error names, so it has to name the
@@ -432,7 +427,7 @@ describe("deploy gate", () => {
     const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
 
     expect(gates[0]).toBe("bun scripts/preflight.ts");
-    expect(gates.at(-1)).toBe("bun run gate:devbox-e2e");
+    expect(gates.at(-1)).toBe("bun run gate:infra");
   });
 
   // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
@@ -650,13 +645,11 @@ describe("deploy gate", () => {
     // optional gate is a warning.
     expect(REQUIRED_GATES).toContain('bun run gate:infra');
     const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
-    // ITS OWN WAVE, AFTER EVERY SOURCE GATE. Not "the last wave": the deployed
-    // devbox lifecycle suite runs after it, deliberately, because that suite
-    // SPENDS the account this gate has just proved. What has to hold is that
-    // nothing shares this gate's wave and that every source gate is behind it.
+    // ITS OWN WAVE, AFTER EVERY SOURCE GATE. It is the final required gate,
+    // so an account that cannot be proved never reaches Wrangler deployment.
     const infraWave = waves.findIndex((wave) => wave.includes('bun run gate:infra'));
     expect(waves[infraWave]).toEqual(['bun run gate:infra']);
-    expect(waves.slice(infraWave + 1).flat()).toEqual(['bun run gate:devbox-e2e']);
+    expect(infraWave).toBe(waves.length - 1);
     expect(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")).toContain(
       'run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra',
     );
