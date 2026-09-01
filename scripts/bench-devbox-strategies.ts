@@ -1980,6 +1980,16 @@ type ReadinessDrive =
  * `POST /exec` — while nothing had been asked of `/state` for nine minutes. The
  * container-side restoration is unaffected by a client abort, so a drive whose
  * reply was lost is reported and the poll goes back to reading state.
+ *
+ * AND A BOX THAT SAYS "ASK AGAIN" HAS NOT REFUSED EITHER. `ensureReady()` has
+ * three answers and only one of them is a verdict: a terminal recovery class
+ * says so and names `attachNow()`, while both "a startup is armed, so ask
+ * again" and "a retry is already under way" mean the drive found the box
+ * mid-startup. Reading either as the boundary's verdict ended a deployed cold
+ * attach at 12,810 ms on a container that was still coming up (2026-09-01,
+ * snapshot-chain, both sides of the byte-plane change), so the startup was
+ * recorded as refused while the box was doing exactly what it said. The wait
+ * stays bounded by the caller's own ceiling; only the classification changes.
  */
 async function driveReadiness(
   fixture: Fixture,
@@ -1997,7 +2007,7 @@ async function driveReadiness(
   }
   if (driven.ok === true) return { kind: 'drove' };
   const detail = driven.error ?? `the readiness probe exited ${driven.exitCode ?? -1}`;
-  return isTransientContainerCreateError(detail)
+  return isTransientContainerCreateError(detail) || isRearmableStartupRefusal(detail)
     ? { kind: 'unanswered', detail }
     : { kind: 'refused', detail };
 }
@@ -3357,6 +3367,21 @@ export function chainArchiveExpectations(
 export function isTransientContainerCreateError(error: string | undefined): boolean {
   return /no container instance|container service is unreachable|try again later|ContainerUnavailable|OperationInterrupted/i
     .test(error ?? '');
+}
+
+/**
+ * A refusal the BOX itself says to retry, in the box's own words.
+ *
+ * `Devbox.ensureReady()` writes three sentences and only the terminal one is a
+ * verdict: it names `attachNow()`. The other two — a startup armed and a retry
+ * under way — say the operation arrived while the box was starting, which is
+ * the ordinary state of a container that was created a moment ago. Matching
+ * the product's own phrases keeps the two readings in one place; a driver that
+ * inferred re-armability from a phase code would be reading a field the reply
+ * does not carry.
+ */
+export function isRearmableStartupRefusal(error: string | undefined): boolean {
+  return /a startup is armed, so ask again|a retry is already under way/i.test(error ?? '');
 }
 
 /**

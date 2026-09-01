@@ -45,6 +45,7 @@ import {
   INCUMBENT,
   fixtureConfigForArms,
   frozenControlStatus,
+  isRearmableStartupRefusal,
   isTransientContainerCreateError,
   parseFrozenControlArtifact,
   parseOptions,
@@ -312,6 +313,55 @@ describe('startup readiness redrive', () => {
       fixture.restore();
     }
     expect(fixture.asked).toEqual(['GET /state', 'POST /exec']);
+  });
+
+  /**
+   * DEPLOYED INCIDENT, 2026-09-01: `bun scripts/devbox-e2e.ts --arms
+   * snapshot-chain` ended its cold attach at 12,810 ms with the box's own
+   * "a startup is armed, so ask again", on both sides of the byte-plane change
+   * (12,817 ms at the commit before it). `Devbox.ensureReady()` writes three
+   * sentences and only the terminal one is a verdict; this driver read all
+   * three as one, so a container that was still coming up was recorded as a
+   * refusal.
+   */
+  test('a box that says to ask again is still starting, and the poll keeps asking', async () => {
+    let drives = 0;
+    const fixture = fixtureAnswering((method, path) => {
+      if (method === 'POST' && path === '/exec') {
+        drives += 1;
+        return JSON.stringify({
+          ok: false,
+          error: 'this devbox is not ready: no restoration has run for this container yet. '
+            + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
+        });
+      }
+      if (method === 'GET' && path === '/state') {
+        return JSON.stringify(drives === 0
+          ? { ok: true, state: { running: false, restoration: 'unstarted' } }
+          : {
+            ok: true,
+            state: {
+              running: true,
+              restoration: 'attached',
+              lastAttach: { kind: 'attached', detail: 'the work directory is mounted' },
+            },
+          });
+      }
+      throw new Error(`the driver asked for ${method} ${path}`);
+    });
+    try {
+      const poll = await pollForAttach(
+        BENCH_FIXTURE, 'ab-snapshot-chain-e2e20260901213301', 'cold attach', ['empty', 'attached'],
+        { deadlineMs: 30_000 },
+      );
+      expect(poll.attach.kind).toBe('attached');
+      expect(poll.redrives).toBe(1);
+    } finally {
+      fixture.restore();
+    }
+    // The refusal did not end the wait: the NEXT state reading did, which is
+    // the same oracle every other reading goes through.
+    expect(fixture.asked.slice(-1)).toEqual(['GET /state']);
   });
 
   /**
@@ -1481,6 +1531,24 @@ describe('container create retry classification', () => {
       'The container service is unreachable, try again later',
     )).toBe(true);
     expect(isTransientContainerCreateError('invalid strategy')).toBe(false);
+  });
+  test('the box\u2019s own re-armable sentences are told apart from its terminal one', () => {
+    // Verbatim from `Devbox.ensureReady()`. A driver that guessed at this
+    // wording would drift the moment the box reworded itself, which is why the
+    // test quotes all three rather than paraphrasing.
+    expect(isRearmableStartupRefusal(
+      'this devbox is not ready: no restoration has run for this container yet. '
+      + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
+    )).toBe(true);
+    expect(isRearmableStartupRefusal(
+      'this devbox has no attached work directory: the store was unreachable. '
+      + 'A retry is already under way; operations are refused until it lands.',
+    )).toBe(true);
+    expect(isRearmableStartupRefusal(
+      'this devbox has no attached work directory: the recovery ladder refused. '
+      + 'That recovery class is terminal: call attachNow() to attempt the attach again.',
+    )).toBe(false);
+    expect(isRearmableStartupRefusal(undefined)).toBe(false);
   });
 });
 
