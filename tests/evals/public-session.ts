@@ -225,6 +225,11 @@ export interface PublicSessionPlan {
    *  model the run did not pin. */
   readonly llm: LLMProviderConfig;
   readonly origin: string;
+  /** The authority this plan resolved for the browser plane. It rides on the
+   *  plan because the ACCOUNT routes no workspace can answer for — the device
+   *  list, a consent grant, a revocation — belong to the same identity, and a
+   *  second read of the environment is a second answer to who this run is. */
+  readonly identity: PublicWebIdentity;
   /** Create the workspace, connect the socket, pin the model. Throws rather
    *  than returning a degraded session; `teardown` pairs with it. */
   open(request: PublicSessionRequest): Promise<KinuPublicSession>;
@@ -301,6 +306,7 @@ export function resolvePublicSessionPlan(
         + `· model ${plan.llm.model}`,
       llm: plan.llm,
       origin: verdict.origin,
+      identity,
       open: (request) => openPublicSession({
         origin: verdict.origin,
         identity,
@@ -582,6 +588,20 @@ const RunPageSchema = v.variant('status', [
 const RunEventsSchema = v.array(RunEventSchema);
 const SetModelSchema = v.object({ spec: v.string() });
 const SteerSchema = v.object({ landed: v.picklist(['mid-turn', 'queued']) });
+/** What `executeInExecutor` answers, exactly as `ExecutorCommandResult`
+ *  declares it (cf-backend/src/lib/protocol.ts:132) — every field optional,
+ *  because the orchestrator answers `{error}` alone when the executor is absent
+ *  or unavailable and `{stdout, stderr, exitCode}` when the command ran. */
+const ExecutorCommandSchema = v.object({
+  stdout: v.optional(v.string()),
+  stderr: v.optional(v.string()),
+  exitCode: v.optional(v.number()),
+  error: v.optional(v.string()),
+});
+
+/** One command's answer on an executor, as the Env pane receives it. */
+export type PublicExecutorResult = v.InferOutput<typeof ExecutorCommandSchema>;
+
 /** The SDK's message rows as `get-messages` serves them. Narrowed to what a
  *  trajectory asserts on — who spoke, and the text they said — because the parts
  *  array also carries tool and reasoning parts this projection does not read. */
@@ -639,7 +659,7 @@ async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicS
   return session;
 }
 
-function webHeaders(identity: PublicWebIdentity): Record<string, string> {
+export function webHeaders(identity: PublicWebIdentity): Record<string, string> {
   return identity.kind === 'secret' ? { 'x-kinu-dev-identity': identity.secret } : {};
 }
 
@@ -784,6 +804,24 @@ export class KinuPublicSession {
     const landed = await infraBoundary(`steerTurn on ${this.input.origin}/${this.workspace}`, () =>
       this.rpc('steerTurn', [text, 'build']));
     return v.parse(SteerSchema, landed).landed;
+  }
+
+  /**
+   * Run one command on an executor, the way the Env tab's terminal runs one.
+   *
+   * `executeInExecutor` is the RPC the pane is bound to (hooks/use-kinu.ts:1775)
+   * and this is the same frame over the same socket, so a green here is a
+   * statement about the surface a person uses. The answer is returned whole
+   * rather than reduced to stdout: a refusal arrives as `{error}` or as a
+   * classified payload on the stdout channel, and which one it is is the finding
+   * a device case reads.
+   */
+  async execute(executor: string, command: string): Promise<PublicExecutorResult> {
+    const result = await infraBoundary(
+      `executeInExecutor(${executor}) on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('executeInExecutor', [executor, command]),
+    );
+    return v.parse(ExecutorCommandSchema, result);
   }
 
   /** The durable transcript the web pane is seeded from. */

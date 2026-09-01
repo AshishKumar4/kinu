@@ -195,14 +195,30 @@ OPTIMIZATION_EVAL=tests/evals/optimization.eval.ts
 # public-API one, which is the confusion this block exists to prevent.
 TRAJECTORY_EVAL=tests/evals/trajectory.eval.ts
 
+# The other CLOUD-ONLY arm: ONE MACHINE, linked to the deployment and driven
+# from a workspace — `connectDevice` (the CLI's own connect implementation),
+# `GET /api/cli/devices`, the consent and revoke routes Account settings uses,
+# and `executeInExecutor('laptop', …)`, the RPC the Env tab's terminal is bound
+# to. Cloud only for the reason the trajectory arm is: a device links to a
+# deployment, and an in-process runtime is not one.
+#
+# ITS LIVENESS IS NOT A MODEL CALL, and that is why `arm` below carries a
+# currency. This arm calls no model at all: it drives routes and a WebSocket to
+# this machine. Holding it to `eval-spend.ts --expect-live` would assert
+# something it never claims, so it asserts its own subject instead — under
+# `--backend cloud` a missing credential FAILS the suite rather than skipping it
+# (tests/evals/device-session.ts `deviceArmGate`), so an arm that measured no
+# device cannot report green.
+DEVICE_EVAL=tests/evals/device.eval.ts
+
 # The BEHAVIOUR arm's identity. It is the only arm that SELECTS BY EXCLUSION —
 # the config's `include` minus the three files above — so it passes no path to
 # vitest and this string is never argv. It is here because the skip ratchet
 # proves one target per arm non-empty, and an arm with no name cannot be proven:
 # before the arms carried their targets, this file's path lived only inside
 # `SKIP_RATCHET_VITEST_TARGETS` and the two could disagree about which arm
-# existed. `scripts/ladder.test.ts` holds the five names here equal to the
-# `*.eval.ts` files on disk, so a sixth cannot join the behaviour arm silently.
+# existed. `scripts/ladder.test.ts` holds the six names here equal to the
+# `*.eval.ts` files on disk, so a seventh cannot join the behaviour arm silently.
 BEHAVIOUR_EVAL=tests/evals/behaviour.eval.ts
 
 # ── WHICH ARMS THIS BACKEND CAN MEASURE ───────────────────────────────────────
@@ -242,6 +258,9 @@ if [[ "$BACKEND" == cloud ]]; then
   # The trajectory arm runs HERE AND NOWHERE ELSE: its whole subject is the
   # deployed public API, so this backend is the only one that has one.
   RUN_TRAJECTORY_ARM=1
+  # The device arm, same rule: it links THIS machine to the deployment, and a
+  # local runtime has no device plane to link it to.
+  RUN_DEVICE_ARM=1
   SKIPPED_ARMS="behaviour evals, research, optimization (not on the target seam yet); \
 e2e-lifecycle and the swarm suite's in-process arms (they drive a CLIRuntime, which no \
 deployed workspace hands out)"
@@ -251,9 +270,11 @@ else
   RUN_RESEARCH_ARM=1
   RUN_OPTIMIZATION_ARM=1
   RUN_TRAJECTORY_ARM=0
+  RUN_DEVICE_ARM=0
   SKIPPED_ARMS="trajectory (its subject is the DEPLOYED public API — REST, the web client's \
 chat frames, the run-event and file routes — and no such surface stands in front of an \
-in-process runtime; run \`bun run evals:cloud\`)"
+in-process runtime); device (it links this machine to a DEPLOYMENT over the device tunnel, \
+and an in-process runtime is not one); run \`bun run evals:cloud\` for both"
 fi
 
 # Per ARM, because "what did the tier cost" is not one number and reporting it as
@@ -271,12 +292,14 @@ JUNIT_SWARM="$REPORT_DIR/junit-swarm-$BACKEND.xml"
 JUNIT_RESEARCH="$REPORT_DIR/junit-research-$BACKEND.xml"
 JUNIT_OPTIMIZATION="$REPORT_DIR/junit-optimization-$BACKEND.xml"
 JUNIT_TRAJECTORY="$REPORT_DIR/junit-trajectory-$BACKEND.xml"
+JUNIT_DEVICE="$REPORT_DIR/junit-device-$BACKEND.xml"
 SPEND_BUN="$REPORT_DIR/spend-bun-$BACKEND.jsonl"
 SPEND_EVALS="$REPORT_DIR/spend-vitest-$BACKEND.jsonl"
 SPEND_SWARM="$REPORT_DIR/spend-swarm-$BACKEND.jsonl"
 SPEND_RESEARCH="$REPORT_DIR/spend-research-$BACKEND.jsonl"
 SPEND_OPTIMIZATION="$REPORT_DIR/spend-optimization-$BACKEND.jsonl"
 SPEND_TRAJECTORY="$REPORT_DIR/spend-trajectory-$BACKEND.jsonl"
+SPEND_DEVICE="$REPORT_DIR/spend-device-$BACKEND.jsonl"
 SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_BUN"
 : > "$SPEND_EVALS"
@@ -284,6 +307,7 @@ SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_RESEARCH"
 : > "$SPEND_OPTIMIZATION"
 : > "$SPEND_TRAJECTORY"
+: > "$SPEND_DEVICE"
 trap 'rm -rf "$REPORT_DIR"' EXIT
 
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
@@ -421,14 +445,14 @@ if [[ $RUN_EVALS_ARM -eq 1 ]]; then
   # run in this arm as well as its own — one episode, two bills, and a spend file
   # per arm that double-counts. The arms below are where they run.
   #
-  # The trajectory file is excluded HERE EVEN THOUGH this arm only runs under
-  # `--backend local`, where the trajectory arm is off: without the exclusion
-  # that suite would be collected by THIS arm on the local backend, resolve no
-  # public plan, skip its three cases, and leave three undeclared skips in the
+  # The trajectory and device files are excluded HERE EVEN THOUGH this arm only
+  # runs under `--backend local`, where both of those arms are off: without the
+  # exclusion each suite would be collected by THIS arm on the local backend,
+  # resolve no public plan, skip its cases, and leave undeclared skips in the
   # behaviour arm's report — a suite billed to an arm that cannot run it.
   bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts \
     --exclude "$SWARM_EVAL" --exclude "$RESEARCH_EVAL" --exclude "$OPTIMIZATION_EVAL" \
-    --exclude "$TRAJECTORY_EVAL" \
+    --exclude "$TRAJECTORY_EVAL" --exclude "$DEVICE_EVAL" \
     --reporter=default --reporter=junit --outputFile="$JUNIT_EVALS"
   EVAL_STATUS=$?
   EVALS_SECONDS=$((SECONDS - ARM_STARTED))
@@ -506,9 +530,26 @@ if [[ $RUN_TRAJECTORY_ARM -eq 1 ]]; then
   if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$TRAJECTORY_STATUS; fi
 fi
 
+# The device arm: one machine linked to the deployment and driven from a
+# workspace. Cloud only, for the reason the trajectory arm is — a device links
+# to a DEPLOYMENT — and its own invocation so its report and its spend file are
+# its own. It calls no model, so `arm` below gives it `self` liveness and the
+# suite refuses rather than skips when a credential half is missing.
+ARM_STARTED=$SECONDS
+DEVICE_STATUS=0
+DEVICE_SECONDS=0
+export KINU_EVAL_SPEND_FILE="$SPEND_DEVICE"
+if [[ $RUN_DEVICE_ARM -eq 1 ]]; then
+  bun --bun ./node_modules/.bin/vitest run --config vitest.evals.config.ts "$DEVICE_EVAL" \
+    --reporter=default --reporter=junit --outputFile="$JUNIT_DEVICE"
+  DEVICE_STATUS=$?
+  DEVICE_SECONDS=$((SECONDS - ARM_STARTED))
+  if [[ $TEST_STATUS -eq 0 ]]; then TEST_STATUS=$DEVICE_STATUS; fi
+fi
+
 # THE ACTIVE ARMS, as one indexed list.
 #
-# Five arms used to be spelled five times each in the three blocks below — a
+# Six arms used to be spelled that many times each in the three blocks below — a
 # report check, a timing line and a liveness assertion — so adding an arm meant
 # four edits and forgetting one meant an arm nobody measured. That is the shape
 # of the hole this tier was built to close, one level up: the set the assertions
@@ -527,11 +568,22 @@ fi
 # tier could not pass while doing exactly what it was told. Now the arm array is
 # also the target list, so the set the ratchet governs is the set this run
 # produced, by construction rather than by two lists agreeing.
+#
+# AND EACH ARM CARRIES ITS LIVENESS CURRENCY, which is the sixth thing. Five arms
+# prove they ran by reaching a MODEL, and `eval-spend.ts --expect-live` is that
+# proof. The device arm never calls one — its subject is a machine linked over
+# the device tunnel — so holding it to a model call would assert something it
+# does not claim, and passing it would mean nothing. It carries `self`: the
+# suite refuses rather than skips when the cloud backend cannot supply a
+# credential, so an arm that linked no device cannot report green. The currency
+# is printed on the SUCCESS path below, because an assertion nobody makes must
+# be visible exactly when the tier is green.
 ARM_NAMES=()
 ARM_JUNITS=()
 ARM_SPENDS=()
 ARM_SECONDS=()
 ARM_TARGETS=()
+ARM_LIVENESS=()
 
 arm() {
   ARM_NAMES+=("$1")
@@ -539,6 +591,7 @@ arm() {
   ARM_SPENDS+=("$3")
   ARM_SECONDS+=("$4")
   ARM_TARGETS+=("$5")
+  ARM_LIVENESS+=("$6")
 }
 
 # The bun arm's target is its OWN argv, not a fixed `./tests/`: under cloud that
@@ -554,12 +607,13 @@ if [[ ${#TARGETS[@]} -ne 1 ]]; then
     "target list" >&2
   exit 1
 fi
-arm 'bun suites' "$JUNIT" "$SPEND_BUN" "$BUN_SECONDS" "${TARGETS[0]}"
-if [[ $RUN_EVALS_ARM -eq 1 ]]; then arm 'behaviour evals' "$JUNIT_EVALS" "$SPEND_EVALS" "$EVALS_SECONDS" "./$BEHAVIOUR_EVAL"; fi
-if [[ $RUN_SWARM_ARM -eq 1 ]]; then arm 'live swarm' "$JUNIT_SWARM" "$SPEND_SWARM" "$SWARM_SECONDS" "./$SWARM_EVAL"; fi
-if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then arm 'research' "$JUNIT_RESEARCH" "$SPEND_RESEARCH" "$RESEARCH_SECONDS" "./$RESEARCH_EVAL"; fi
-if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then arm 'optimization' "$JUNIT_OPTIMIZATION" "$SPEND_OPTIMIZATION" "$OPTIMIZATION_SECONDS" "./$OPTIMIZATION_EVAL"; fi
-if [[ $RUN_TRAJECTORY_ARM -eq 1 ]]; then arm 'trajectory' "$JUNIT_TRAJECTORY" "$SPEND_TRAJECTORY" "$TRAJECTORY_SECONDS" "./$TRAJECTORY_EVAL"; fi
+arm 'bun suites' "$JUNIT" "$SPEND_BUN" "$BUN_SECONDS" "${TARGETS[0]}" model
+if [[ $RUN_EVALS_ARM -eq 1 ]]; then arm 'behaviour evals' "$JUNIT_EVALS" "$SPEND_EVALS" "$EVALS_SECONDS" "./$BEHAVIOUR_EVAL" model; fi
+if [[ $RUN_SWARM_ARM -eq 1 ]]; then arm 'live swarm' "$JUNIT_SWARM" "$SPEND_SWARM" "$SWARM_SECONDS" "./$SWARM_EVAL" model; fi
+if [[ $RUN_RESEARCH_ARM -eq 1 ]]; then arm 'research' "$JUNIT_RESEARCH" "$SPEND_RESEARCH" "$RESEARCH_SECONDS" "./$RESEARCH_EVAL" model; fi
+if [[ $RUN_OPTIMIZATION_ARM -eq 1 ]]; then arm 'optimization' "$JUNIT_OPTIMIZATION" "$SPEND_OPTIMIZATION" "$OPTIMIZATION_SECONDS" "./$OPTIMIZATION_EVAL" model; fi
+if [[ $RUN_TRAJECTORY_ARM -eq 1 ]]; then arm 'trajectory' "$JUNIT_TRAJECTORY" "$SPEND_TRAJECTORY" "$TRAJECTORY_SECONDS" "./$TRAJECTORY_EVAL" model; fi
+if [[ $RUN_DEVICE_ARM -eq 1 ]]; then arm 'device' "$JUNIT_DEVICE" "$SPEND_DEVICE" "$DEVICE_SECONDS" "./$DEVICE_EVAL" self; fi
 
 for index in "${!ARM_NAMES[@]}"; do
   if [[ ! -f "${ARM_JUNITS[$index]}" ]]; then
@@ -603,15 +657,23 @@ echo "────────────────────────�
 # EACH ARM'S OWN LIVENESS, before the tier-wide one. A tier-wide total cannot
 # fail on one arm's behalf because another arm's spend can hide it. The same
 # `EXPECT_LIVE` value controls the banner and every assertion.
+#
+# A `self` arm is held to its own subject instead, by the suite, and says so
+# here. Its spend is still REPORTED — what a run cost is a fact whichever
+# currency proves it ran — and it still joins the tier-wide total below.
 ARM_SPEND_STATUS=0
 FAILED_ARM=''
 for index in "${!ARM_NAMES[@]}"; do
   echo
   echo "── ${ARM_NAMES[$index]} arm ───────────────────────────────"
   SPEND_ARGS=("${ARM_SPENDS[$index]}")
-  if [[ $EXPECT_LIVE -eq 1 ]]; then SPEND_ARGS+=(--expect-live); fi
+  if [[ $EXPECT_LIVE -eq 1 && "${ARM_LIVENESS[$index]}" == model ]]; then SPEND_ARGS+=(--expect-live); fi
   bun scripts/eval-spend.ts "${SPEND_ARGS[@]}"
   STATUS=$?
+  if [[ "${ARM_LIVENESS[$index]}" == self ]]; then
+    echo "liveness: asserted BY THE ARM, not by model spend — this arm calls no model, and its"
+    echo "  suite fails rather than skips when the cloud backend cannot supply a credential"
+  fi
   echo "──────────────────────────────────────────────────────────"
   # FIRST failing arm, kept: "the research arm reached no model" is a sharper
   # sentence than "the tier reached no model", and every arm still reports so a
