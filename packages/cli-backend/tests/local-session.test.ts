@@ -30,7 +30,7 @@ import {
   type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor, type SqlValue,
   createAgentSelfProvider,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
-  SKILLS_DIR, TURN_CONTEXT_HEADER,
+  SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
@@ -4389,29 +4389,71 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     await session.end();
   });
 
-  test('both CLI head-runtime roots hand over the same sinks and the same merge policy', () => {
-    // The runtime is constructed inside this module at exactly two sites; each
-    // must pass the session sink, or a head's non-turn calls strand uncounted.
-    const source = readFileSync(join(import.meta.dir, '..', 'src', 'local-session.ts'), 'utf8');
-    const calls = [...source.matchAll(/= createCLIHeadRuntime\(/g)].map((m) => m.index ?? -1);
-    expect(calls.length).toBe(2);
-    // The session-constructor root builds its deps into `headRuntimeOptions`
-    // before calling; the model-rebind root inlines them. Each assertion ends
-    // at that root's own call, so neither can pass for the other.
-    const ctorRoot = source.slice(source.indexOf('const headRuntimeOptions'), calls[0]!);
-    const rebindRoot = source.slice(calls[1]!, source.indexOf('});', calls[1]!));
-    for (const root of [ctorRoot, rebindRoot]) {
-      expect(root).toContain('operations: this.modelOperations');
-      // The merge routes off the profile through the ONE local binder both
-      // routed lanes share. A root that named its own model or its own effort
-      // here is how this backend came to run the session's chat model at a
-      // constant `'low'` while filing the call as `judge` spend.
-      expect(root).toContain('profile: () => this.routingProfile()');
-      expect(root).toContain('bindMergeModel: (route) => this.bindRouteModel(route)');
-      expect(root).not.toContain('providerFamily');
-      // And derives no effort of its own: the tier that chose the model chose
-      // how hard to run it, and `bindRouteModel` is the one place that reads it.
-      expect(root).not.toContain('reasoningEffortOptions');
-    }
+  /** What the merge model must answer for `MergeOutputSchema` to parse it. */
+  const MERGE_ANSWER = '{"narrative":"one angle, checked","selected_decisions":[],'
+    + '"unresolved_questions":[],"recommendations":["ship it"]}';
+
+  /**
+   * What the source-shape version of this test could only assert by grepping
+   * two construction roots, asserted on the runtime a fork actually gets.
+   *
+   * The two roots are now ONE builder (`headRuntimeOptions`), so "they hand
+   * over the same sinks" is true by construction; what still needs proving is
+   * that the runtime installed by a MODEL REBIND — the one every fork receives,
+   * since `headRuntime` claims the session model before handing it over — has
+   * the three properties the roots were grepped for: per-fork model resolution,
+   * a merge routed off the profile through the local binder, and the session's
+   * own spend sinks. The rebind root used to omit `resolveModel` outright, so
+   * `agents fork`'s per-fork model was a silent no-op on this backend.
+   */
+  test('the head runtime a model rebind installs resolves per-fork models and reports its merge to the session', async () => {
+    const asked: string[] = [];
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() || 'local/chat',
+      // `resolveModel` admits a null/absent spec, which means "whatever this
+      // session's default is" — only a NAMED one says which model a caller
+      // asked for, so only a named one is recorded.
+      resolveModel: (spec) => {
+        if (spec) asked.push(spec);
+        return fakeModel(MERGE_ANSWER);
+      },
+      listProviders: async () => [],
+      listModels: async () => ({
+        models: [{ provider: 'local', id: 'chat', label: 'chat', capabilities: ['streaming' as const] }],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+    const { session, events } = setupWithResolver(resolver);
+
+    // Reading `headRuntime` claims the session model, which rebuilds the head
+    // runtime: this handle is the rebind root's own.
+    const runtime = session.headRuntime;
+    const head = await runtime.spawnHead({
+      id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
+      task: 'look at the parser', rationale: 'because', inheritedContext: [],
+      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      mergeStrategy: 'synthesize', model: 'local/fork',
+    });
+    await head.run();
+    // The fork's OWN spec reached the resolver. Without `resolveModel` on this
+    // root every fork silently ran the session's model instead, so a panel
+    // asked for three vendors got three copies of one.
+    expect(asked).toContain('local/fork');
+
+    // The merge is core's policy off the routed profile, bound by the session's
+    // one local binder — never the chat model at an effort chosen here.
+    asked.length = 0;
+    await runtime.mergeLLM('merging the findings of 1 head', MergeOutputSchema);
+    expect(asked.length).toBe(1);
+    expect(asked[0]).not.toBe('local/fork');
+
+    // And its spend reached THIS session's ledger: `judge` is what core files a
+    // head merge under, and both sinks the roots were grepped for write here.
+    const rows = events.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
+    expect(rows.some((row) => row.type === 'model_call' && row.source === 'judge')).toBe(true);
+    expect(rows.some((row) => row.type === 'model_operation' && row.source === 'judge')).toBe(true);
+    await session.end();
   });
 });

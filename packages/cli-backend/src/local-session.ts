@@ -910,38 +910,9 @@ export class LocalAgentSession implements BackendHost {
       },
     });
 
-    const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
-      model: () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
-      // The merge's model, effort and spend label are core's policy
-      // (`headMergeLLM`) off this profile; the binding below is the only local
-      // say in it. It used to be the SESSION'S CHAT MODEL at a hardcoded `'low'`
-      // effort, filed as `judge` spend regardless — so the same split was
-      // synthesised by the deep tier in the cloud and by whatever `/model` was
-      // set to here, and the ledger could not tell the two apart.
-      profile: () => this.routingProfile(),
-      bindMergeModel: (route) => this.bindRouteModel(route),
-      // No `spec` stamp: this sink carries the MERGE only (a head's own
-      // inference is aggregated from `head_journal`), and the merge runs on the
-      // routed judge tier rather than on this session's chat model. Stamping the
-      // chat spec here was the label that made a deep-tier grading look like it
-      // ran on whatever `/model` was set to. `modelId` from the provider's own
-      // response is the honest record, exactly as on the cloud backend.
-      reportModelCall: (report) => this.modelCallSink(report),
-      operations: this.modelOperations,
-      parentRuntime: this.rt,
-      webSearch: this.getWebSearchProvider(),
-      codemodeExtras: () => this.headCodemodeExtras(),
-      grounding: this.buildHeadGrounding(),
-      governor: () => this.budget,
-      journal: () => this.headJournal,
-    };
-    // Per-fork models only mean something where a resolver exists; a static
-    // model session has one model and every fork inherits it, as before.
-    if (this.modelResolver) {
-      const modelResolver = this.modelResolver;
-      headRuntimeOptions.resolveModel = (spec) => modelResolver.resolveModel(spec);
-    }
-    this._headRuntime = createCLIHeadRuntime(headRuntimeOptions);
+    this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(
+      () => this.cachedModel ?? this.defaultModel("a head with no model of its own"),
+    ));
 
     // The EventsHub substrate (reactor source of truth). Local external
     // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
@@ -1888,6 +1859,31 @@ export class LocalAgentSession implements BackendHost {
   private drainDeadline(): number {
     return this.settleDeadline ??= Date.now() + this.jobRunner.policy.settleGraceMs;
   }
+  /**
+   * Hold one settlement in the join set until it settles.
+   *
+   * The promise has to be IN the set before anything can await it and OUT of it
+   * once it settles, which is a self-reference. Both call sites spelled that as
+   * a `let … : Promise | null = null` the body's own `finally` then re-checked
+   * for null — a state neither could ever be in, since the body reaches that
+   * `finally` only past an `await` and the assignment happens before the first
+   * one resolves. One mechanism, no null state, and a joiner still wakes AFTER
+   * the entry is gone, which is what terminates `joinBackgroundFibers`.
+   */
+  private tracked(settle: () => Promise<void>): void {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.backgroundFibers.add(promise);
+    // BOTH outcomes prune, and the entry resolves only after it is gone — which
+    // is what lets `joinBackgroundFibers` re-read the size and terminate. A
+    // settlement observer that rejected would otherwise leave a set entry
+    // nothing ever removes, so the rejection path is named rather than voided.
+    const prune = (): void => {
+      this.backgroundFibers.delete(promise);
+      resolve();
+    };
+    settle().then(prune, prune);
+  }
+
   private trackFiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> {
     const running = this.rt.schedule.fiber(name, fn);
     // Tracked as a SETTLEMENT rather than as an outcome: joinBackgroundFibers
@@ -1896,8 +1892,7 @@ export class LocalAgentSession implements BackendHost {
     // not even record its own outcome — a stash or row-delete against a
     // database closed under it at teardown — which has no other reader, so it
     // is stated rather than dropped as an unhandled rejection.
-    let settled: Promise<void> | null = null;
-    settled = (async () => {
+    this.tracked(async () => {
       try {
         for (const outcome of await Promise.allSettled([running])) {
           if (outcome.status !== 'rejected') continue;
@@ -1913,11 +1908,8 @@ export class LocalAgentSession implements BackendHost {
           toKinuError({ doing: 'recording a durable background fiber settlement', cause, otherwise: 'io' }),
           { fiber: name },
         );
-      } finally {
-        if (settled !== null) this.backgroundFibers.delete(settled);
       }
-    })();
-    this.backgroundFibers.add(settled);
+    });
     return running;
   }
 
@@ -3803,8 +3795,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
     const closing = this.trackFiber('turn.terminal_close', async () => { await close(); });
-    let recovered: Promise<void> | null = null;
-    recovered = (async () => {
+    this.tracked(async () => {
       try {
         await closing;
       } catch (cause) {
@@ -3838,11 +3829,8 @@ export class LocalAgentSession implements BackendHost {
             { turnId: transition.turnId, messageId: transition.messageId },
           );
         }
-      } finally {
-        if (recovered !== null) this.backgroundFibers.delete(recovered);
       }
-    })();
-    this.backgroundFibers.add(recovered);
+    });
   }
 
   /**
@@ -4853,17 +4841,36 @@ export class LocalAgentSession implements BackendHost {
     ];
   }
 
-  private rebuildModelBoundState(model: LanguageModel): void {
-    // Branching heads — in-process runtime over an isolated ephemeral store.
-    // The agent's VFS backs the shared findings scratch sibling heads write to.
-    this._headRuntime = createCLIHeadRuntime({
-      model: () => model,
-      // The merge's model/effort/spend is core's `headMergeLLM` off the routed
-      // profile, not this rebind's chat model at a constant effort — so a model
-      // switch changes what the HEADS run on and leaves the synthesis on its own
-      // routed tier, where it belongs.
+  /**
+   * The head runtime's dependencies, with the head's own model as the argument.
+   *
+   * ONE builder for the two places that construct it — the constructor, before
+   * any model is claimed, and every rebind after one. Two copies stood here,
+   * and the second silently omitted `resolveModel`: the constructor's own
+   * `ensureModelState()` rebuilds immediately, so `agents fork`'s per-fork
+   * model was a no-op on this backend forever — a panel asked for three
+   * vendors got three copies of one, which is exactly the defect
+   * `createCLIHeadRuntime`'s own tests pin one layer down.
+   */
+  private headRuntimeOptions(
+    model: () => LanguageModel,
+  ): Parameters<typeof createCLIHeadRuntime>[0] {
+    const options: Parameters<typeof createCLIHeadRuntime>[0] = {
+      model,
+      // The merge's model, effort and spend label are core's policy
+      // (`headMergeLLM`) off this profile; the binding below is the only local
+      // say in it. It used to be the SESSION'S CHAT MODEL at a hardcoded `'low'`
+      // effort, filed as `judge` spend regardless — so the same split was
+      // synthesised by the deep tier in the cloud and by whatever `/model` was
+      // set to here, and the ledger could not tell the two apart.
       profile: () => this.routingProfile(),
       bindMergeModel: (route) => this.bindRouteModel(route),
+      // No `spec` stamp: this sink carries the MERGE only (a head's own
+      // inference is aggregated from `head_journal`), and the merge runs on the
+      // routed judge tier rather than on this session's chat model. Stamping the
+      // chat spec here was the label that made a deep-tier grading look like it
+      // ran on whatever `/model` was set to. `modelId` from the provider's own
+      // response is the honest record, exactly as on the cloud backend.
       reportModelCall: (report) => this.modelCallSink(report),
       operations: this.modelOperations,
       parentRuntime: this.rt,
@@ -4872,7 +4879,20 @@ export class LocalAgentSession implements BackendHost {
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
       journal: () => this.headJournal,
-    });
+    };
+    // Per-fork models only mean something where a resolver exists; a static
+    // model session has one model and every fork inherits it.
+    if (this.modelResolver) {
+      const modelResolver = this.modelResolver;
+      options.resolveModel = (spec) => modelResolver.resolveModel(spec);
+    }
+    return options;
+  }
+
+  private rebuildModelBoundState(model: LanguageModel): void {
+    // Branching heads — in-process runtime over an isolated ephemeral store.
+    // The agent's VFS backs the shared findings scratch sibling heads write to.
+    this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(() => model));
     for (const mode of ['build', 'plan'] as const) {
       const raw = buildActorTools(this.actorToolsetDeps(
         mode,

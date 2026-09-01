@@ -293,6 +293,26 @@ function formatStartResult(result: NimbusStartResult, namespace: string): string
   return lines.join('\n');
 }
 
+/**
+ * The session's process, port and runtime control surface, as a namespace
+ * declares it to the model.
+ *
+ * ONE list with two readers: `createNimbusExecutor` renders it into its own
+ * namespace, and `createNimbusWorkspaceExecutor` appends it to the inline
+ * `workspace` one. It was written out twice, so a tool the session gained could
+ * be declared to one namespace and hidden from the other — and the tools
+ * themselves are already shared, which is what made the divergence silent.
+ */
+const SESSION_CONTROL_TYPES =
+  `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string>;
+  function killProcess(pid: number | { pid: number }): Promise<string>;
+  function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string>;
+  function exposePort(port: number | { port: number }): Promise<string>;
+  function unexposePort(port: number | { port: number }): Promise<string>;
+  function listPorts(): Promise<string>;
+  function installRuntime(spec: string): Promise<string>;
+  function listRuntimes(): Promise<string>;`;
+
 export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweringExecutor {
   const box = opts.box;
   const configured = box != null;
@@ -695,14 +715,7 @@ declare namespace ${namespace} {
   function stat(path: string): Promise<string>;
   function mkdir(path: string): Promise<string>;
   function rm(path: string): Promise<string>;
-  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string>;
-  function killProcess(pid: number | { pid: number }): Promise<string>;
-  function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string>;
-  function exposePort(port: number | { port: number }): Promise<string>;
-  function unexposePort(port: number | { port: number }): Promise<string>;
-  function listPorts(): Promise<string>;
-  function installRuntime(spec: string): Promise<string>;
-  function listRuntimes(): Promise<string>;
+${SESSION_CONTROL_TYPES}
 }`,
     positionalArgs: true,
     async exposePort(port: number) {
@@ -758,14 +771,7 @@ export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts)
   } = session.tools;
   const sessionTypes = `
   function runCode(code: string, options?: { language?: 'javascript'|'typescript'|'python'|'ruby'|'shell'; install?: 'never'|'ifMissing' }): Promise<string>;
-  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<string>;
-  function killProcess(pid: number | { pid: number }): Promise<string>;
-  function logs(pid: number | { pid: number; lines?: number; bytes?: number }): Promise<string>;
-  function exposePort(port: number | { port: number }): Promise<string>;
-  function unexposePort(port: number | { port: number }): Promise<string>;
-  function listPorts(): Promise<string>;
-  function installRuntime(spec: string): Promise<string>;
-  function listRuntimes(): Promise<string>;`;
+${SESSION_CONTROL_TYPES}`;
 
   return {
     ...inline,

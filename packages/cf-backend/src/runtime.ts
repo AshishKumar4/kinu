@@ -177,15 +177,13 @@ interface RuntimeUserDONamespace {
 function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClient | null {
   const userId = actor.ownerUserId();
   if (!userId) return null;
-  const namespaceView: Partial<RuntimeUserDONamespace> = {};
-  Object.assign(namespaceView, {
-    idFromName: (name: string) => env.UserDO.idFromName(name),
-    get: (id: DurableObjectId) => env.UserDO.get(id),
-  });
   // SAFETY: the generated Env.UserDO binding contract exposes these exact
-  // UserDO RPC methods; the narrower view avoids instantiating every unrelated
-  // RPC signature at each runtime call site.
-  const namespace = namespaceView as RuntimeUserDONamespace;
+  // UserDO RPC methods; the narrower view keeps each runtime call site on the
+  // subset it owns rather than instantiating every unrelated RPC signature.
+  // NARROWED, NEVER COPIED — a JSRPC stub's methods live behind a Proxy, so an
+  // `Object.assign` of one yields `{}` and every call on it is undefined (see
+  // `listOwnerEgressVault`).
+  const namespace: RuntimeUserDONamespace = env.UserDO;
   return namespace.get(namespace.idFromName(userId));
 }
 
@@ -425,9 +423,23 @@ export function createCFRuntime(
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
   const executor = createExecutor(envForExec.LOADER);
-  const llm = createDualPathLLM(
-    agent, env, actor, hooks.turnProfile, hooks.resolveProfile, hooks.reportModelCall,
+  // Every non-turn model lane this runtime carries, off ONE binding of the
+  // three inputs they all resolve from (see `createProfileLaneLLM`): the four
+  // call sites used to repeat that binding, and the reflection one repeated the
+  // whole factory beside it.
+  const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM(
+    agent, env, actor, hooks.turnProfile, hooks.resolveProfile, source, hooks.reportModelCall,
   );
+  // The one REQUIRED lane. `judgeModel`/`fastLlm`/`advisorLlm` may be absent —
+  // a caller that finds one missing skips that lane — but `AgentRuntime.llm` is
+  // not optional, so a runtime built with no profile hooks at all still carries
+  // it and says so at USE, exactly as it always has.
+  const llm: LLM = profileLane('reflection') ?? {
+    async *stream() { yield ""; },
+    async complete(): Promise<string> {
+      throw new Error('reflection model lane has no active profile');
+    },
+  };
   const schedule = createRealSchedule(agent);
   const identity = createIdentity(agent, access.ctx, observedWorkspaceVfs, sql, actor.scaffoldPath);
 
@@ -680,21 +692,9 @@ export function createCFRuntime(
     agentStateVfs: baseWorkspaceVfs,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
-    get judgeModel() {
-      return createProfileLaneLLM(
-        agent, env, actor, hooks.turnProfile, hooks.resolveProfile, 'judge', hooks.reportModelCall,
-      );
-    },
-    get fastLlm() {
-      return createProfileLaneLLM(
-        agent, env, actor, hooks.turnProfile, hooks.resolveProfile, 'fast', hooks.reportModelCall,
-      );
-    },
-    get advisorLlm() {
-      return createProfileLaneLLM(
-        agent, env, actor, hooks.turnProfile, hooks.resolveProfile, 'advisor', hooks.reportModelCall,
-      );
-    },
+    get judgeModel() { return profileLane('judge'); },
+    get fastLlm() { return profileLane('fast'); },
+    get advisorLlm() { return profileLane('advisor'); },
     spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
     releaseBranch: createFacetReleaser(agent),
@@ -860,46 +860,8 @@ function actorProviderRegistry(
   });
 }
 
-/**
- * Only a COMPLETED call reports. A seam that threw produced no usage and, as far
- * as anything here can see, was not billed — counting it as an unmeasured call
- * would depress the workspace's coverage fraction with requests that genuinely
- * cost nothing, which is the mirror of the error this whole change removes.
- */
-function createDualPathLLM(
-  agent: AgentHost,
-  env: Env,
-  actor: ActorRuntimeIdentity,
-  turnProfile: (() => ResolvedTurnProfile | null) | undefined,
-  resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined,
-  report?: ModelCallSink,
-): LLM {
-  return {
-    async *stream() { yield ""; },
-    async complete(prompt: string): Promise<string> {
-      const profile = turnProfile?.() ?? await resolveProfile?.();
-      if (!profile) throw new Error('reflection model lane has no active profile');
-      const route = resolveModelRoute('reflection', profile);
-      if (!route) throw new Error('reflection cannot use the fixed platform model route');
-      const registry = actorProviderRegistry(agent, env, actor, 'Kinu (reflection)');
-      const providerOptions = reasoningEffortOptions(
-        route.reasoningEffort,
-        parseModelSpec(route.model).provider,
-      );
-      const request: Parameters<typeof generateText>[0] = {
-        model: registry.resolveModel(route.model),
-        prompt,
-      };
-      if (providerOptions) request.providerOptions = providerOptions;
-      const result = await generateText(request);
-      reportCall(report, 'reflection', route.model, result);
-      return result.text.trim();
-    },
-  };
-}
-
-/** One shape for the three seams below, so a source label and a spec cannot be
- *  attached one way here and another way there. */
+/** One shape for every lane the factory below builds, so a source label and a
+ *  spec cannot be attached one way for one lane and another way for the next. */
 function reportCall(
   report: ModelCallSink | undefined,
   source: SpendSource,
@@ -916,12 +878,19 @@ function reportCall(
     : { source, spec, usage });
 }
 
-/** Build one fixed-tier lane from the active immutable profile.
+/** Build one fixed-tier lane from the active immutable profile — every non-turn
+ *  model seam this runtime has, including the reflection lane that used to
+ *  carry a byte-identical copy of this factory beside it.
  *
  *  `source` is core's `FixedTierSource`, derived from MODEL_ROUTE_POLICY's
  *  fixed rows. It used to be a local `'judge' | 'fast' | 'advisor'` union — a
  *  hand-mirror of a SUBSET of those rows, so moving a producer onto a fixed tier
- *  in core left this factory unable to name it and nothing said so. */
+ *  in core left this factory unable to name it and nothing said so.
+ *
+ *  Only a COMPLETED call reports. A seam that threw produced no usage and, as
+ *  far as anything here can see, was not billed — counting it as an unmeasured
+ *  call would depress the workspace's coverage fraction with requests that
+ *  genuinely cost nothing. */
 function createProfileLaneLLM(
   agent: AgentHost,
   env: Env,

@@ -325,6 +325,47 @@ export function createSandboxExecutor(
     return fn();
   };
 
+  /**
+   * Does anything answer on `port` inside the container?
+   *
+   * `unprobeable` is not evidence either way, and what to do about it is left
+   * to the caller because the two surfaces below genuinely differ: the codemode
+   * tool records a probe glitch and lets the SDK call report its own failure,
+   * while the generic provider method refuses — the shell swallows curl's own
+   * failure with `|| true`, so all that is left is "this container cannot
+   * execute a command", and exposing a port on such a container has nothing
+   * left to mean.
+   */
+  const probeListener = async (
+    box: SandboxHandle, port: number,
+  ): Promise<{ listening: boolean } | { unprobeable: unknown }> => {
+    try {
+      const probe = await withSandboxRetry(() => touch(() =>
+        box.exec(healthProbeCommand(port), { cwd: WORKSPACE_BACKUP_DIR })));
+      const out = (probe.stdout ?? probe.output ?? '').toString().trim();
+      return { listening: !healthProbeSilent(out) };
+    } catch (cause) {
+      return { unprobeable: cause };
+    }
+  };
+
+  /**
+   * The public URL `port` becomes reachable at, with THE DURABLE TOKEN MINTED
+   * FIRST — so the URL handed back is the URL the restart path rebuilds.
+   * Minting it afterwards published one token and stored another, and the
+   * caller's link died on the first recycle. One implementation, because the
+   * codemode tool and the generic provider method must not disagree about that
+   * order.
+   */
+  const exposeWithDurableToken = async (
+    box: SandboxHandle, suffix: string, port: number, name?: string,
+  ): Promise<string> => {
+    const { urlToken } = await box.portToken(port, name);
+    const opts: SandboxExposeOptions = { hostname: suffix, token: urlToken };
+    if (name !== undefined) opts.name = name;
+    return (await withSandboxRetry(() => touch(() => box.exposePort(port, opts)))).url;
+  };
+
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the sandbox container. '
@@ -442,9 +483,10 @@ export function createSandboxExecutor(
     },
     readdir: {
       description: 'Alias for listFiles — list entries in a directory.',
-      execute: async (...args: unknown[]): Promise<string> => {
-        return v.parse(v.string(), await tools.listFiles.execute(args[0]));
-      },
+      // Straight through — `listFiles` already answers with the rendered
+      // listing or its own refusal, and re-validating it here could only
+      // throw over its own return type.
+      execute: async (...args: unknown[]) => tools.listFiles.execute(args[0]),
     },
     deleteFile: {
       description: 'Delete a file or directory.',
@@ -496,52 +538,44 @@ export function createSandboxExecutor(
         // Pre-flight: verify a server is listening on the port inside the
         // container. Without this we hand back a preview URL that 502s
         // because nothing answers — the failure mode the agent (and user)
-        // actually hit. We try HEAD then GET; either responding (any HTTP
-        // status, even 4xx/5xx) means a server is up. Connection refused
-        // means no listener.
-        try {
-          const probe = await withSandboxRetry(() => touch(() =>
-            handle.exec(healthProbeCommand(p), { cwd: '/workspace' })));
-          const out = (probe.stdout ?? probe.output ?? '').toString().trim();
-          if (healthProbeSilent(out)) {
-            // `bad_input`, and it is the honest one of three near misses. Nothing
-            // was tried, and what must change is the caller's own request — start
-            // the server, then ask again. `unavailable` would file a container
-            // that is up and healthy under the platform gap that means Kinu
-            // never provisioned one, and `missing` is not a refusal at all, so it
-            // would land a correct decline in the candidate-defect part of the
-            // census (read-models/tool-failures.ts).
-            return refusalText(new KinuError('bad_input',
-              `nothing is listening on port ${p} inside the sandbox. `
-              + `Start your server FIRST with a SUPERVISED process, then call `
-              + `sandbox.exposePort again. Examples:\n`
-              + `  • Static site: await sandbox.startProcess(`
-              + `"python3 -m http.server ${p} --directory /workspace/<app-dir>")\n`
-              + `  • Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
-              + `Supervision is what makes the process survive a container restart; `
-              + `a bare \`nohup … &\` does not and will be lost.`,
-            ));
-          }
-        } catch (err) {
-          // Probe failed for a non-listener reason (sandbox exec errored).
-          // Continue — the SDK exposePort call below will surface its own
-          // error if exposure can't be set up; we don't want to gate the
-          // happy path on a probe glitch.
+        // actually hit. Any HTTP status, even 4xx/5xx, means a server is up;
+        // connection refused means no listener.
+        const probe = await probeListener(handle, p);
+        if ('unprobeable' in probe) {
+          // The probe failed for a non-listener reason (sandbox exec errored).
+          // Recorded, then stepped over — the SDK exposePort call below will
+          // surface its own error if exposure cannot be set up, and the happy
+          // path is not gated on a probe glitch.
           diagnostics.failure(
             'sandbox.port_probe_failed',
-            toKinuError({ doing: 'probe a sandbox port before exposing it', cause: err, otherwise: 'unavailable' }),
+            toKinuError({
+              doing: 'probe a sandbox port before exposing it',
+              cause: probe.unprobeable,
+              otherwise: 'unavailable',
+            }),
             { port: p },
           );
+        } else if (!probe.listening) {
+          // `bad_input`, and it is the honest one of three near misses. Nothing
+          // was tried, and what must change is the caller's own request — start
+          // the server, then ask again. `unavailable` would file a container
+          // that is up and healthy under the platform gap that means Kinu
+          // never provisioned one, and `missing` is not a refusal at all, so it
+          // would land a correct decline in the candidate-defect part of the
+          // census (read-models/tool-failures.ts).
+          return refusalText(new KinuError('bad_input',
+            `nothing is listening on port ${p} inside the sandbox. `
+            + `Start your server FIRST with a SUPERVISED process, then call `
+            + `sandbox.exposePort again. Examples:\n`
+            + `  • Static site: await sandbox.startProcess(`
+            + `"python3 -m http.server ${p} --directory /workspace/<app-dir>")\n`
+            + `  • Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
+            + `Supervision is what makes the process survive a container restart; `
+            + `a bare \`nohup … &\` does not and will be lost.`,
+          ));
         }
         try {
-          // The durable token FIRST, so the URL this call hands back is the URL
-          // the restart path rebuilds. Minting it afterwards published one token
-          // and stored another, and the caller's link died on the first recycle.
-          const { urlToken } = await handle.portToken(p, name != null ? String(name) : undefined);
-          const opts: SandboxExposeOptions = { hostname: previewHostSuffix, token: urlToken };
-          if (name != null) opts.name = String(name);
-          const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(p, opts)));
-          return exposed.url;
+          return await exposeWithDurableToken(handle, previewHostSuffix, p, name);
         } catch (err) {
           return refusalText(sandboxFailure({ doing: `sandbox exposePort ${p}`, cause: err }));
         }
@@ -775,31 +809,28 @@ declare namespace sandbox {
         return { supported: false, reason: `invalid port ${port}` };
       }
       // Pre-flight: verify a server is responsive on the port. Without this the
-      // caller gets a preview URL that 502s — so a probe that cannot RUN is
+      // caller gets a preview URL that 502s — and a probe that cannot RUN is
       // reported, not stepped over: the shell swallows curl's own failure with
       // `|| true`, leaving only "this container cannot execute a command", and
       // exposing a port on such a container has nothing left to mean.
+      const probe = await probeListener(handle, Number(port));
+      if ('unprobeable' in probe) {
+        return { supported: false, reason: renderThrownChain({ cause: probe.unprobeable }) };
+      }
+      if (!probe.listening) {
+        return {
+          supported: false,
+          reason:
+            `nothing is listening on port ${port} inside the sandbox. ` +
+            `Start a SUPERVISED server first — sandbox.startProcess("python3 -m http.server ${port}" +
+            " --directory /workspace/<app>") or sandbox.startProcess("node server.js") — ` +
+            `then call exposePort again. Supervision survives restarts; nohup does not.`,
+        };
+      }
       try {
-        const probe = await withSandboxRetry(() => touch(() =>
-          handle.exec(healthProbeCommand(Number(port)), { cwd: '/workspace' })));
-        const out = (probe.stdout ?? probe.output ?? '').toString().trim();
-        if (healthProbeSilent(out)) {
-          return {
-            supported: false,
-            reason:
-              `nothing is listening on port ${port} inside the sandbox. ` +
-              `Start a SUPERVISED server first — sandbox.startProcess("python3 -m http.server ${port}" +
-              " --directory /workspace/<app>") or sandbox.startProcess("node server.js") — ` +
-              `then call exposePort again. Supervision survives restarts; nohup does not.`,
-          };
-        }
-        const { urlToken } = await handle.portToken(port, opts?.name);
-        const sdkOpts: SandboxExposeOptions = { hostname: previewHostSuffix, token: urlToken };
-        if (opts?.name) sdkOpts.name = opts.name;
-        const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
         return {
           supported: true,
-          url: exposed.url,
+          url: await exposeWithDurableToken(handle, previewHostSuffix, port, opts?.name),
           port,
           name: opts?.name,
           // Reached only past the probe above, which is the verification.

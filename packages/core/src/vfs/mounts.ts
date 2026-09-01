@@ -386,24 +386,37 @@ export function withMountTable(
 		return files;
 	};
 
-	const rejectMountPointMutation = (path: string, operation: string): void => {
+	/**
+	 * A mutating call's route, resolved ONCE.
+	 *
+	 * A mount point is an entry of THIS plane, so mutating it is EPERM — and that
+	 * refusal outranks an absent mount, because the path names something no tree
+	 * behind the table owns either way. The reject used to be its own pass over
+	 * the path, so every write, unlink and mkdir parsed its argument twice and
+	 * two readers had to agree about which answer came first.
+	 */
+	const mutate = async <T>(
+		path: string, operation: string, op: (files: VFS, native: string) => Promise<T>,
+	): Promise<T> => {
 		const routed = routeOf(path);
-		if ('mount' in routed && routed.native === '/') {
+		if (!('mount' in routed)) return op(base, path);
+		if (routed.native === '/') {
 			throw makeVfsError('EPERM', `a mount point cannot be ${operation}`, path);
 		}
+		const files = routed.mount.files();
+		if (!files) throw absentError(routed.mount, path);
+		return op(files, routed.native);
 	};
 
 	return {
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
 		},
-		async writeFile(path, data) {
-			rejectMountPointMutation(path, 'written');
-			return delegate(path, (files, native) => files.writeFile(native, data));
+		writeFile(path, data) {
+			return mutate(path, 'written', (files, native) => files.writeFile(native, data));
 		},
-		async writeFileIfRevision(path, data, expectedRevision) {
-			rejectMountPointMutation(path, 'written');
-			return delegate(path, (files, native) => {
+		writeFileIfRevision(path, data, expectedRevision) {
+			return mutate(path, 'written', (files, native) => {
 				const conditional = files.writeFileIfRevision;
 				if (!conditional) {
 					throw makeVfsError(
@@ -440,13 +453,11 @@ export function withMountTable(
 			if (routed.native === '/') return MOUNT_POINT_STAT;
 			return files.stat(routed.native);
 		},
-		async unlink(path) {
-			rejectMountPointMutation(path, 'unlinked');
-			return delegate(path, (files, native) => files.unlink(native));
+		unlink(path) {
+			return mutate(path, 'unlinked', (files, native) => files.unlink(native));
 		},
-		async mkdir(path, opts) {
-			rejectMountPointMutation(path, 'created');
-			return delegate(path, (files, native) => files.mkdir(native, opts));
+		mkdir(path, opts) {
+			return mutate(path, 'created', (files, native) => files.mkdir(native, opts));
 		},
 		async exists(path) {
 			const routed = routeOf(path);
@@ -498,9 +509,8 @@ export function withMountTable(
 				{ files: base, path: newPath },
 			);
 		},
-		async removeRecursive(path) {
-			rejectMountPointMutation(path, 'removed');
-			return delegate(path, (files, native) => {
+		removeRecursive(path) {
+			return mutate(path, 'removed', (files, native) => {
 				const remove = nativeOps(files).removeRecursive;
 				return remove ? remove.call(files, native) : removeTreeWithVfsOps(files, native);
 			});

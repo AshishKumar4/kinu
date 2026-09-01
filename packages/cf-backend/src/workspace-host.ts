@@ -49,7 +49,7 @@ import type { WorkspaceBundle, WorkspaceSession } from '@kinu.run/core/workspace
 import { decodeJsonValue } from '@kinu.run/core';
 import type {
   JsonValue,
-  NimbusExecOptions, NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
+  NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -57,8 +57,6 @@ import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import {
   nimbusProgrammatic,
-  type NimbusProgrammatic,
-  type ProgrammaticExecOptions,
   type ProgrammaticHost,
 } from './nimbus-programmatic';
 
@@ -416,13 +414,6 @@ async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {
   return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
-/** Every command this actor runs goes into ITS named durable shell, which is
- *  what makes `cd` persist for it and stay invisible to its siblings. Three
- *  call sites that must not disagree about that. */
-function execOptions(shellId: string, options?: NimbusExecOptions): ProgrammaticExecOptions {
-  return { ...options, shellId };
-}
-
 function workspaceBox(deps: {
   host: () => Promise<ProgrammaticHost>;
   files: NimbusSandboxHandle['files'];
@@ -432,16 +423,17 @@ function workspaceBox(deps: {
   const { host, shellId } = deps;
   return {
     ready: async () => { await (await nimbusProgrammatic()).ensureProgrammaticReady(await host()); },
+    // `shellId` on every command: each actor's work goes into ITS named durable
+    // shell, which is what makes `cd` persist for it and stay invisible to its
+    // siblings. It rode a helper whose fixed return type dropped `runCode`'s own
+    // two fields, so that call site re-assigned — one `if` per field — what the
+    // spread had already copied.
     exec: async (command, options): Promise<NimbusExecResult> =>
-      await (await nimbusProgrammatic()).rpcExec(await host(), command, execOptions(shellId, options)),
+      await (await nimbusProgrammatic()).rpcExec(await host(), command, { ...options, shellId }),
     startProcess: async (command, options): Promise<NimbusStartResult> =>
-      await (await nimbusProgrammatic()).rpcStartProcess(await host(), command, execOptions(shellId, options)),
-    runCode: async (code, options): Promise<NimbusExecResult> => {
-      const runOptions: Parameters<NimbusProgrammatic['rpcRunCode']>[2] = execOptions(shellId, options);
-      if (options?.language !== undefined) runOptions.language = options.language;
-      if (options?.install !== undefined) runOptions.install = options.install;
-      return await (await nimbusProgrammatic()).rpcRunCode(await host(), code, runOptions);
-    },
+      await (await nimbusProgrammatic()).rpcStartProcess(await host(), command, { ...options, shellId }),
+    runCode: async (code, options): Promise<NimbusExecResult> =>
+      await (await nimbusProgrammatic()).rpcRunCode(await host(), code, { ...options, shellId }),
     files: deps.files,
     runtimes: {
       ensure: async (specs, options) => await json(

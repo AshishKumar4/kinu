@@ -70,15 +70,19 @@ export function createSandboxedExecutor(): Executor {
   return {
     get languages() { return detectedLanguages ??= detectLanguages(); },
     async execute(code, providers, opts): Promise<ExecuteResult> {
-      const providerList: ResolvedProvider[] = normalizeProviders(providers);
       const timeoutMs = opts?.timeoutMs;
       const language = opts?.language ?? 'javascript';
 
-      if (!this.languages.includes(language)) {
-        return { result: undefined, error: `Executor does not support language "${language}"` };
-      }
       if (language !== 'javascript') {
-        const interpreter = INTERPRETERS.get(language);
+        // ONE refusal, because there was only ever one state to refuse:
+        // `languages` is 'javascript' plus exactly those INTERPRETERS whose
+        // command resolved on PATH, so "declared but has no interpreter" cannot
+        // happen — and the two identical refusals that stood here read as if it
+        // could. The lookup stays because it is what hands the compiler a
+        // defined interpreter.
+        const interpreter = this.languages.includes(language)
+          ? INTERPRETERS.get(language)
+          : undefined;
         if (!interpreter) {
           return { result: undefined, error: `Executor does not support language "${language}"` };
         }
@@ -87,6 +91,7 @@ export function createSandboxedExecutor(): Executor {
 
       // If providers are needed, we can't pass functions across process
       // boundaries. Fall back to in-process vm for tool-backed execution.
+      const providerList: ResolvedProvider[] = normalizeProviders(providers);
       if (providerList.some(p => Object.keys(p.fns).length > 0)) {
         return executeInProcess(code, providerList, timeoutMs);
       }
