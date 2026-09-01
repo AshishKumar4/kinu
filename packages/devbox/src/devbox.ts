@@ -65,7 +65,7 @@
  *   placeholder.
  */
 
-import { Sandbox, streamFile } from '@cloudflare/sandbox';
+import { Sandbox } from '@cloudflare/sandbox';
 import type {
   BackupOptions, CheckChangesOptions, ExecOptions, ExecResult, ListFilesOptions,
 } from '@cloudflare/sandbox';
@@ -107,7 +107,7 @@ import {
   racedRestoreSteps, gateRestoreSteps, type RestoreSteps,
 } from './lifecycle';
 import { r2fsStorage, type R2fsPorts } from './r2fs';
-import { deletePrefix, prefixInventory, putStream } from './object-store';
+import { deletePrefix, prefixInventory } from './object-store';
 import {
   CAS_RUNNER_PATH,
   CAS_STORE_MOUNT,
@@ -159,7 +159,6 @@ import {
 } from './incidents';
 import {
   CHAIN_EXCLUDES,
-  CHAIN_STORE_MOUNT,
   assertChainId,
   isOverlayMounted,
   normalizeChainState,
@@ -3535,71 +3534,33 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
       exec: async (command) => await this.#rawExec(command),
       containerGeneration: async () => await this.#readBootId(),
-      mountStore: async (chainId) => {
-        await this.mountBucket(store.binding, CHAIN_STORE_MOUNT, {
+      mountStore: async (chainId, at, access) => {
+        // ONE PRIMITIVE, TWO ACCESSES, and the strategy names which it wants.
+        // The prefix is the generation's own subtree either way, so a writable
+        // mount can only ever create this chain's own layer names — and it
+        // carries no credential: this is the SDK's R2-binding mount, where the
+        // container's s3fs is handed a dummy password file and a Worker
+        // entrypoint resolves the binding for the intercepted request.
+        await this.mountBucket(store.binding, at, {
           prefix: `/backups/${assertChainId(chainId)}`,
-          readOnly: true,
+          readOnly: access === 'read',
         });
       },
-      unmountStore: async () => {
+      unmountStore: async (at) => {
         try {
-          await this.unmountBucket(CHAIN_STORE_MOUNT);
+          await this.unmountBucket(at);
         } catch (error) {
           // Not mounted is the ordinary case on a fresh container, and the SDK
           // says so by throwing. Anything else is worth knowing about but must
           // not fail an attach that has not started yet.
-          console.log(`[devbox] store mount was not released: ${describe({ cause: error })}`);
+          //
+          // A PUBLICATION DOES NOT RELY ON THIS TO FLUSH. The archive is fsynced
+          // by the command that wrote it, and the store is asked what it holds
+          // afterwards, so a release that could not report itself cannot cost
+          // bytes the record already names.
+          console.log(`[devbox] store mount at ${at} was not released: ${describe({ cause: error })}`);
         }
       },
-      readFileStream: async (path) => {
-        // INTERNAL STORAGE WORK, not a caller. The public override claims the
-        // resource lane and requires the SDK RPC transport for binary reads;
-        // this port runs inside the checkpoint/restoration that readiness and
-        // that lane may already be waiting on. Going through it either deadlocks
-        // that work or answers the real container with "encoding none requires
-        // rpc".
-        //
-        // The direct SDK stream is the real container seam. `streamFile` decodes
-        // its SSE frames incrementally, and the wrapper below refuses text chunks
-        // — a squashfs archive is bytes, so text would prove a protocol mismatch
-        // rather than a file worth archiving. Size comes from the same container
-        // through `stat`, before `putStream` chooses single vs multipart: no
-        // whole archive is buffered just to learn its size.
-        const sizeResult = await this.#rawExec(`stat -c %s -- ${JSON.stringify(path)}`);
-        const size = Number.parseInt(sizeResult.stdout.trim(), 10);
-        if (!Number.isSafeInteger(size) || size < 0) {
-          throw new Error(`could not read the size of staged archive ${path}: ${sizeResult.stdout}`);
-        }
-        const chunks = streamFile(await super.readFileStream(path));
-        const stream = new ReadableStream<Uint8Array>({
-          async pull(controller) {
-            const next = await chunks.next();
-            if (next.done) {
-              controller.close();
-              return;
-            }
-            if (!(next.value instanceof Uint8Array)) {
-              controller.error(new Error(`staged archive ${path} streamed text instead of bytes`));
-              return;
-            }
-            controller.enqueue(next.value);
-          },
-          async cancel() {
-            // The generator's return value is metadata. It is never consumed on
-            // cancellation; this concrete value only satisfies the generator's
-            // declared completion contract while telling it to release the
-            // underlying SSE reader.
-            await chunks.return({
-              mimeType: 'application/octet-stream',
-              size,
-              isBinary: true,
-              encoding: 'base64',
-            });
-          },
-        });
-        return { stream, size };
-      },
-      putObject: async (key, stream, size) => await putStream(store.bucket, key, stream, size),
       readSeedStamp: async () => {
         const read = await this.#rawExec(
           `cat '${CHAIN_SEED_STAMP_PATH}' 2>/dev/null || true`, DEVBOX_RUNTIME_DIR,
@@ -3624,22 +3585,24 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         }
       },
       objectFacts: async (key) => {
-        // ONE metadata read, exactly what the byte count always cost, and it
-        // carries TWO identities because neither covers every object. `digest`
-        // is R2's own checksum and exists only where R2 was given one, which
-        // `putStream` does on the single-PUT route; the Workers multipart API
-        // accepts no checksum, so a large archive has none. `objectVersion` is
-        // R2's own name for the upload that wrote the object and is always
-        // there, which is what lets the chain refuse a same-length replacement
-        // of a multipart archive that has no checksum to compare.
+        // ONE metadata read, and the ONLY thing this side learns about a layer:
+        // the archive itself moves container-side through the store mount, so a
+        // publication asks here for the record it must write.
         //
-        // The chain records both when a layer is written. When BOTH sides
-        // have a digest, the digest decides: equal content is sound even when a
-        // retry wrote it under R2's new version. Only when no digest can decide
-        // — the multipart route — does the store version decide. A same-length
-        // replacement is refused either way, the refusal recovers from the
-        // retained fallback generation, and an identity absent on either side is
-        // UNKNOWN rather than sound.
+        // TWO IDENTITIES, because neither covers every object. `digest` is R2's
+        // own checksum and exists only where R2 was given one; nothing on this
+        // path gives it one — an s3fs upload carries no checksum header the
+        // egress handler forwards, and the Workers multipart API accepts none
+        // either — so a chain layer's digest is normally absent. `objectVersion`
+        // is R2's own name for the upload that wrote the object and is always
+        // there, which is what lets the chain refuse a same-length replacement
+        // of an archive that has no checksum to compare.
+        //
+        // When BOTH sides have a digest, the digest decides: equal content is
+        // sound even when a retry wrote it under R2's new version. Otherwise the
+        // store version decides. A same-length replacement is refused either
+        // way, the refusal recovers from the retained fallback generation, and
+        // an identity absent on either side is UNKNOWN rather than sound.
         const head = await store.bucket.head(key);
         if (head === null) return undefined;
         const sha256 = head.checksums.sha256;
@@ -3772,22 +3735,24 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * must flush and check that flush BEFORE calling this. r2fs's detach does
    * exactly that, and says so.
    *
-   * WHICH MOUNTS THAT BINDS TODAY, AND WHICH IT WILL BIND NEXT. Of the current
-   * callers only r2fs's work directory is writable, and it flushes. The overlay
-   * and the candidate journal are released on teardown paths whose bytes are
-   * already published elsewhere. But `CHAIN_STORE_MOUNT` is mounted
-   * `readOnly: true` today precisely because the chain streams its archive
-   * through the owning Durable Object, and the measured way to stop paying that
-   * (7-9x on payload, from the payload-transport instrument) is to make that
-   * mount READ-WRITE and let the container write the archive straight to its
-   * final key. The moment that happens this precondition applies to it: a lazy
-   * release that beat the flush would lose the tail of an archive the chain has
-   * already recorded as landed, which is silent corruption of a committed head
-   * rather than a failed stop. Whoever makes that mount writable owes it a
-   * checked flush here, and must write to the final key directly — a
-   * write-temp-then-rename on s3fs is a server-side COPY that scales with the
-   * object, so the atomic-rename idiom the rest of this codebase reaches for is
-   * not available on that path.
+   * WHICH MOUNTS THAT BINDS TODAY. Of the callers that come through here, only
+   * r2fs's work directory is writable, and it flushes. The overlay and the
+   * candidate journal are released on teardown paths whose bytes are already
+   * published elsewhere.
+   *
+   * THE CHAIN'S PUBLICATION MOUNT IS WRITABLE AND DOES NOT COME THROUGH HERE,
+   * and it owes the same precondition where it does run. A chain archive used
+   * to cross this isolate as base64 frames and go back out through the R2
+   * binding; the instrument measured that relay at 3.34 MiB/s against 23.22
+   * container-direct at 64 MiB, and 3.64 against 39.00 at 256 MiB (2026-09-01).
+   * The container now writes the archive onto its own writable, prefix-scoped
+   * mount at a SEPARATE path, and `snapshot-chain.ts` pays the precondition in
+   * the command that writes it: `conv=fsync` inside the copy whose exit code is
+   * checked, the final key written directly — a write-temp-then-rename on s3fs
+   * is a server-side COPY that scales with the object — and the release through
+   * the SDK afterwards. So no lazy detach can beat that flush, and losing the
+   * tail of an archive the record already names is unrepresentable rather than
+   * remembered.
    */
   async #releaseMount(
     mountPath: string,

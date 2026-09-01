@@ -61,7 +61,6 @@ export {
   baseObjectKey,
   chainBackupOptions,
   CHAIN_EXCLUDES,
-  CHAIN_STORE_MOUNT,
   EXTRACT_TTL_SECONDS,
   deltaObjectKey,
   isChainId,

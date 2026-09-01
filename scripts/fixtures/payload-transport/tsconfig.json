@@ -8,6 +8,6 @@
     "allowImportingTsExtensions": true,
     "moduleDetection": "force"
   },
-  "include": ["worker.ts", "wrangler-text-modules.d.ts"],
+  "include": ["worker.ts", "isolate-relay.ts", "wrangler-text-modules.d.ts"],
   "exclude": ["container-harness.ts"]
 }

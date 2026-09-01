@@ -13,9 +13,9 @@
  *
  *   do-base64            the owning DO pulls the file out of the container as
  *                        base64 SSE frames and streams the decoded bytes into
- *                        the binding, through the PRODUCT'S OWN `putStream` —
- *                        the current devbox snapshot-chain path; GET streams
- *                        back via `writeFile()`
+ *                        the binding, through `isolate-relay.ts` — the
+ *                        snapshot-chain path this instrument priced and devbox
+ *                        then removed; GET streams back via `writeFile()`
  *   loopback-entrypoint   the container fetches `http://r2.internal/<bucket>/<key>`
  *                        through SDK outbound interception into the exported
  *                        ContainerProxy WorkerEntrypoint (mountBucket plane)
@@ -35,13 +35,13 @@ import { AwsClient } from 'aws4fetch';
 import { SignJWT } from 'jose';
 import { Sandbox, ContainerProxy, streamFile, type Process } from '@cloudflare/sandbox';
 import * as v from 'valibot';
-// THE PRODUCT'S UPLOAD, NOT A MODEL OF IT. `packages/devbox/src/object-store.ts`
-// is what a snapshot-chain checkpoint calls, small-PUT/multipart routing and
-// digest included, so this arm reports what devbox costs rather than what a
-// re-implementation in this file would cost. Imported by path because the
-// devbox package deliberately exports a narrow surface; the fixtures under
-// scripts/ already reach into packages/devbox/src the same way.
-import { putStream } from '../../../packages/devbox/src/object-store';
+// THE SHAPE THE PRODUCT NO LONGER HAS. This upload was
+// `packages/devbox/src/object-store.ts`'s until this instrument priced it: the
+// snapshot chain now writes its archive through a store mount, and the
+// isolate-side uploader is deleted from devbox. The arm keeps the shape as the
+// baseline that removal is measured against, so the code moved here with it,
+// unchanged in routing, part geometry and digest. See `isolate-relay.ts`.
+import { putStream } from './isolate-relay';
 import { operationNeedsStart } from './decision';
 import { HarnessResultSchema } from './wire';
 import type { HarnessResult } from './wire';
@@ -221,26 +221,27 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
   }
 
   /**
-   * Arm 1 PUT — THE PRODUCT'S OWNING-DO PATH, not a model of it.
+   * Arm 1 PUT — THE OWNING-DO RELAY, priced as devbox performed it.
    *
-   * `packages/devbox/src/snapshot-chain.ts`'s `stageAndPut` does exactly this:
+   * `packages/devbox/src/snapshot-chain.ts`'s `stageAndPut` did exactly this:
    * take the SDK's binary file stream out of the container, hand it to
-   * `putStream`, and let that route between a single PUT and multipart. So this
-   * arm calls the product's own `putStream` over the product's own container
-   * stream, and the number it reports is devbox's number.
+   * `putStream`, and let that route between a single PUT and multipart. This
+   * arm ran that code, the answer was 7 to 10 times slower than the container
+   * moving the same bytes, and the chain now publishes through a store mount
+   * instead. The code moved to `isolate-relay.ts` when it left the product, so
+   * the arm still reports the shape devbox had rather than a fresh guess at it.
    *
    * IT REPLACES AN IN-DO REASSEMBLY THAT MEASURED THE FIXTURE. The previous
    * body pulled bounded base64 chunks and welded them into exact 16 MiB
-   * multipart parts inside the isolate; that is not a shape devbox has, and it
-   * held roughly 40 MiB live per part — the owning DO was reset, three runs out
-   * of three, on the FIRST tier large enough to need multipart (64 MiB), with
-   * every 8 MiB cell before it green. An arm that cannot complete the tier it
-   * exists to price, in a way the product would not fail, is measuring its own
-   * assembly. Streaming holds one chunk plus one part, which is what the
-   * product holds.
+   * multipart parts inside the isolate; that is not a shape devbox ever had,
+   * and it held roughly 40 MiB live per part — the owning DO was reset, three
+   * runs out of three, on the FIRST tier large enough to need multipart (64
+   * MiB), with every 8 MiB cell before it green. An arm that cannot complete
+   * the tier it exists to price, in a way the product would not fail, is
+   * measuring its own assembly. Streaming holds one chunk plus one part.
    *
    * The digest is `putStream`'s, taken over the bytes as they pass, so it is
-   * the same identity a real checkpoint records — and comparing it against the
+   * the same identity a checkpoint recorded — and comparing it against the
    * container's own `sha256sum` is what proves the transport did not corrupt.
    */
   async fileThroughOwnerToObject(file: string, key: string): Promise<{ ms: number; sha256: string }> {

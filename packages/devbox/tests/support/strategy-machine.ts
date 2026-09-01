@@ -127,7 +127,6 @@ import {
 } from '../../src/overlay-cas';
 import { R2FS_CACHE_DIR, r2fsStorage, type R2fsPorts } from '../../src/r2fs';
 import {
-  CHAIN_STORE_MOUNT,
   baseObjectKey,
   deltaObjectKey,
   snapshotChainStorage,
@@ -140,6 +139,12 @@ import {
   type DevboxStorage,
   type DevboxStrategyName,
 } from '../../src/storage';
+
+/** A mirror of the strategy's own read mount point, which it does not export:
+ *  the host is handed the path as an argument, so this file states the one the
+ *  container would really see. Drift fails the whole chain arm — the fake would
+ *  materialise objects where the strategy is not looking. */
+const CHAIN_STORE_MOUNT = '/backups';
 
 // ── deaths ──────────────────────────────────────────────────────────────────
 
@@ -689,11 +694,18 @@ export interface ConformanceArm {
  * The strategy owns its shell, so this is where the battery meets it: each arm
  * recognises exactly one command the strategy really issues and does what the
  * container would do WITH REAL BYTES — mksquashfs writes an archive of the
- * directory it was pointed at, squashfuse unpacks one, and `cp -a` copies a
- * tree. That is what makes "the exact bytes came back" an assertion about the
+ * directory it was pointed at, squashfuse unpacks one, `cp -a` copies a tree,
+ * and `dd` publishes a staged archive into the store through the writable
+ * mount. That is what makes "the exact bytes came back" an assertion about the
  * chain rather than about a stub.
  */
-function chainExec(disk: ContainerDisk, deaths: DeathWatch) {
+function chainExec(
+  disk: ContainerDisk,
+  deaths: DeathWatch,
+  /** Publish a staged archive through the mount and answer what landed, or
+   *  undefined when the source is not there for `dd` to read. */
+  publish: (archivePath: string, mountedPath: string) => number | undefined,
+) {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
   return async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     // The session shell first: a command it would refuse never reaches a
@@ -768,6 +780,27 @@ function chainExec(disk: ContainerDisk, deaths: DeathWatch) {
       return ok(`0 ${archive.byteLength}`);
     }
 
+    // THE PUBLICATION, and the whole reason this arm has no payload port. The
+    // container reads its own staged archive and writes it onto the store
+    // mount; `conv=fsync` is the flush, so the upload's success is this
+    // command's exit code. Nothing is handed to the isolate.
+    const published = /^dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
+      .exec(command)?.groups;
+    if (published !== undefined) {
+      const landed = publish(published.archive!, published.mounted!);
+      // `<exit> <bytes>` on stdout either way, exactly as the real command
+      // reports it: dd's own failure is a non-zero code there, not a thrown
+      // shell error.
+      if (landed === undefined) {
+        return {
+          stdout: '1 0',
+          stderr: `dd: can't open '${published.archive!}': No such file or directory`,
+          exitCode: 0,
+        };
+      }
+      return ok(`0 ${landed}`);
+    }
+
     if (command.includes('df -Pk')) {
       // `<need> <free>`: room for anything, so the staging gate is never the
       // reason a case fails.
@@ -819,6 +852,31 @@ function chainExec(disk: ContainerDisk, deaths: DeathWatch) {
 function snapshotChainArm(): ConformanceArm {
   const durable = new DurableStore();
   const deaths = new DeathWatch();
+  /**
+   * The store as the ISOLATE may touch it: metadata only.
+   *
+   * WIRED TO REFUSE, so "no payload byte transits the Durable Object" is a
+   * postcondition of every case in this battery rather than a claim about the
+   * code. Every port below reaches for `head` or `delete`; the archive itself
+   * moves through `mounted`, which is the container's own filesystem over its
+   * own egress. A port that went back to carrying bytes would land on one of
+   * these two throws and fail every case that provoked it.
+   */
+  const isolate = {
+    head: (key: string) => durable.head(key),
+    delete: (key: string) => durable.delete(key),
+    get: (key: string): never => {
+      throw new Error(`payload must not be read through the isolate: ${key}`);
+    },
+    put: (key: string): never => {
+      throw new Error(`payload must not be written through the isolate: ${key}`);
+    },
+  };
+  /** The store as the MOUNT reaches it: whole objects, container-side. */
+  const mounted = {
+    get: (key: string) => durable.get(key),
+    put: (key: string, bytes: Uint8Array) => durable.put(key, bytes),
+  };
   /** The Durable Object's own row. It survives every container replacement,
    *  which is exactly why the chain's control plane is not in the store. */
   let row: ChainState | null = null;
@@ -826,10 +884,36 @@ function snapshotChainArm(): ConformanceArm {
   /** The seed stamp lives beside the upper on the container's own disk, so a
    *  replacement takes it with the upper it describes. */
   let seedStamp: string | undefined;
+  /** The writable mount a publication is happening through, while one is
+   *  mounted, and where a flush through it lands. Nothing else can write to the
+   *  store: an unmounted publication has nowhere to put bytes, which is the
+   *  shape the strategy's `finally` exists to leave behind. */
+  let publishing: { readonly at: string; readonly prefix: string } | undefined;
   let storage = build();
 
   function build(): DevboxStorage {
-    const exec = chainExec(disk, deaths);
+    /**
+     * One archive, moved by the container into the store.
+     *
+     * THE FLUSH IS THE UPLOAD, which is why the death seams are here: this is
+     * the moment an archive becomes an object nothing names yet, and the moment
+     * a container replacement can strand one. They are the same two seams the
+     * relay had, around the same transition.
+     */
+    const publish = (archivePath: string, mountedPath: string): number | undefined => {
+      deaths.at('before-payload');
+      const mount = publishing;
+      if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
+        throw new Error(`nothing writable is mounted for ${mountedPath}`);
+      }
+      const bytes = disk.readFile(archivePath);
+      if (bytes === undefined) return undefined;
+      disk.writeFile(mountedPath, bytes);
+      mounted.put(`${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`, bytes);
+      deaths.at('after-payload');
+      return bytes.byteLength;
+    };
+    const exec = chainExec(disk, deaths, publish);
     const ports: SnapshotChainPorts = {
       containerRunning: () => !disk.dead && !disk.stopped,
       allowExtraction: () => false,
@@ -853,55 +937,40 @@ function snapshotChainArm(): ConformanceArm {
         seedStamp = stamp;
       },
       exec,
-      mountStore: async (chainId) => {
+      mountStore: async (chainId, at, access) => {
         if (disk.dead) throw new ContainerDied('mountStore on a dead container');
-        // The SDK mounts the chain's own subtree read-only. Every object under
-        // it appears as a file named by the last segment of its key.
-        disk.mount(CHAIN_STORE_MOUNT, {
+        // The SDK mounts the chain's own subtree at the path the strategy names,
+        // with the access it asked for. Every object under it appears as a file
+        // named by the last segment of its key.
+        disk.mount(at, {
           source: `r2:backups/${chainId}`,
           fstype: 'fuse.s3fs',
-          options: 'ro',
+          options: access === 'read' ? 'ro' : 'rw',
         });
-        for (const key of durable.list(`backups/${chainId}/`)) {
-          disk.writeFile(`${CHAIN_STORE_MOUNT}/${key.split('/').pop()!}`, durable.get(key)!);
+        if (access === 'read') {
+          for (const key of durable.list(`backups/${chainId}/`)) {
+            disk.writeFile(`${at}/${key.split('/').pop()!}`, mounted.get(key)!);
+          }
+          return;
         }
+        publishing = { at, prefix: `backups/${chainId}/` };
       },
-      unmountStore: async () => {
+      unmountStore: async (at) => {
+        // The mount is gone whatever the container's state: a publication that
+        // cannot reach the store must not be able to write one anyway.
+        if (publishing?.at === at) publishing = undefined;
         if (disk.dead || disk.stopped) return;
-        for (const path of disk.entries(CHAIN_STORE_MOUNT)) {
-          disk.removeFile(`${CHAIN_STORE_MOUNT}/${path}`);
-        }
-        disk.unmount(CHAIN_STORE_MOUNT);
-      },
-      readFileStream: async (path) => {
-        const bytes = disk.readFile(path);
-        if (bytes === undefined) throw new Error(`${path} is absent`);
-        return {
-          stream: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(bytes);
-              controller.close();
-            },
-          }),
-          size: bytes.byteLength,
-        };
-      },
-      putObject: async (key, stream, size) => {
-        deaths.at('before-payload');
-        const bytes = await drain(stream);
-        if (bytes.byteLength !== size) throw new Error(`staged ${size}, landed ${bytes.byteLength}`);
-        const version = durable.put(key, bytes);
-        deaths.at('after-payload');
-        return { bytes: bytes.byteLength, digest: sha256Hex(bytes), objectVersion: version };
+        for (const path of disk.entries(at)) disk.removeFile(`${at}/${path}`);
+        disk.unmount(at);
       },
       objectFacts: async (key) => {
-        const held = durable.head(key);
+        const held = isolate.head(key);
         if (held === null) return undefined;
         return { bytes: held.size, digest: held.digest, objectVersion: held.version };
       },
       deleteObjects: async (keys) => {
         deaths.at('before-cleanup');
-        for (const key of keys) durable.delete(key);
+        for (const key of keys) isolate.delete(key);
       },
       countEntries: async (dir) => disk.entries(dir).length,
       restoreExtract: async () => ({ success: false }),
@@ -947,6 +1016,10 @@ function snapshotChainArm(): ConformanceArm {
       // The stamp described an upper on the disk that just died. A blank disk
       // holds neither, which is what makes a replacement seed in full.
       seedStamp = undefined;
+      // A mount belongs to the container that held it. The replacement has
+      // none, so a publication interrupted mid-flush cannot land bytes on the
+      // new disk under the old generation's name.
+      publishing = undefined;
       storage = build();
     },
     stopContainer: () => {

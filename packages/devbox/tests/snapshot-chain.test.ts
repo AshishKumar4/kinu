@@ -20,10 +20,10 @@ import {
   baseObjectKey,
   chainBackupOptions,
   CHAIN_EXCLUDES,
-  CHAIN_STORE_MOUNT,
   deltaObjectKey,
   isOverlayMounted,
   metadataObjectKey,
+  publishCommand,
   shouldRebase,
   snapshotChainStorage,
   supersedeGeneration,
@@ -42,6 +42,12 @@ const deltaLayerMountPoint = (chainId: string): string => ['/var/tmp/devbox', 'l
 const deltaLayerServed = (procMounts: string, chainId: string): boolean =>
   procMounts.split('\n').some((line) => line.split(' ')[1] === deltaLayerMountPoint(chainId));
 const LAYER_VISIBILITY_PROBES = 20;
+/** The two mount points the strategy owns: the read-only subtree an attach
+ *  serves its layers from, and the writable one a publication moves an archive
+ *  through. Mirrored for the same reason as the layer paths above — the host is
+ *  handed them as arguments, so nothing outside the strategy declares them. */
+const CHAIN_STORE_MOUNT = '/backups';
+const CHAIN_PUBLISH_MOUNT = '/var/tmp/devbox/publish';
 
 import {
   ATTACH_OUTCOME_KINDS,
@@ -273,7 +279,9 @@ function harness(overrides: {
   running?: boolean;
   change?: { status: ChangeStatus; version: string } | Error;
   now?: number;
-  failPut?: boolean;
+  /** The store takes nothing: the container's flush fails, which is the only
+   *  failure a publication can have. */
+  failPublish?: boolean;
   /** The store refuses every delete. The post-publication sweep runs on it. */
   failDelete?: boolean;
   /** Which `writeState` calls reject, by 1-based order of arrival. `[2]` fails
@@ -289,8 +297,18 @@ function harness(overrides: {
   /** What the archiver reports as `<exit> <bytes>`. `'0 0'` is the shape that
    *  bit a deployed run: success claimed, no file present. */
   stagedReport?: string;
-  /** Bytes the upload actually lands, when it differs from the staged size. */
+  /** Bytes the STORE ends up holding, when they differ from the staged size —
+   *  the deployed shape, where a mid-write stat read short and the copy landed
+   *  the whole archive. */
   landedBytes?: number;
+  /** Bytes the MOUNT reports after the flush, when they differ from what the
+   *  store took. Two readings of one finished upload: a difference is a flush
+   *  that did not carry every byte, and the publication must refuse it. */
+  flushedBytes?: number;
+  /** The copy reports success and the store ends up holding NOTHING under the
+   *  key. s3fs answers a flush from its own view, so a publication can report
+   *  a clean exit over an object the store never took. */
+  publishLandsNothing?: boolean;
   /** The digest the upload reports, when a test needs to pin it. */
   landedDigest?: string;
   /** The upload version the store reports, when a test needs to pin it. */
@@ -327,6 +345,43 @@ function harness(overrides: {
   let deltaLayerDied = false;
   let liveMark = overrides.upperMark ?? '7:4096:1700000000';
   let writes = 0;
+  /** The generation whose subtree is mounted WRITABLE right now, and the prefix
+   *  a flush through it lands under. Undefined means nothing writable is
+   *  mounted, which is what the strategy's `finally` must leave behind. */
+  let publishing: { readonly at: string; readonly prefix: string } | undefined;
+
+  /**
+   * The container's publication, as the container performs it.
+   *
+   * THE ONLY WAY AN OBJECT GETS INTO THIS STORE. There is no port that carries
+   * a payload byte any more, so a test that sees an object appear is watching
+   * the container write it through the mount — and one that sees none is
+   * watching a checkpoint that never published.
+   */
+  const publish = (mountedPath: string) => {
+    const mount = publishing;
+    if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
+      // What a real container answers when the path is not on a mount: the
+      // directory is not there to be written into.
+      calls.push(`publishArchive:unmounted:${mountedPath}`);
+      return { stdout: '1 0', stderr: `dd: can't open '${mountedPath}': No such file`, exitCode: 0 };
+    }
+    const key = `${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`;
+    calls.push(`publishArchive:${key}`);
+    const landed = overrides.landedBytes ?? DELTA_BYTES;
+    // The mount's own reading after the flush. Equal to what the store took
+    // unless a test says otherwise, which is the lost-tail shape.
+    const flushed = overrides.flushedBytes ?? landed;
+    if (overrides.failPublish === true) {
+      return { stdout: '1 0', stderr: 'dd: fsync failed: Input/output error', exitCode: 0 };
+    }
+    if (overrides.publishLandsNothing !== true) {
+      objects.set(key, landed);
+      digests.set(key, overrides.landedDigest ?? digestOf(key, landed));
+      versions.set(key, overrides.landedVersion ?? versionOf(key, landed));
+    }
+    return { stdout: `0 ${flushed}`, stderr: '', exitCode: 0 };
+  };
 
   const ports: SnapshotChainPorts = {
     containerRunning: () => overrides.running ?? true,
@@ -384,6 +439,12 @@ function harness(overrides: {
         calls.push(`sessionKilled:${command.split(' ')[0]!}`);
         return Promise.reject(refused);
       }
+      // THE PUBLICATION IS A COMMAND, which is the whole change: the archive
+      // moves because the container was told to copy it onto a mount, not
+      // because a port handed bytes to the isolate.
+      const published = /^dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
+        .exec(command)?.groups;
+      if (published !== undefined) return Promise.resolve(publish(published.mounted!));
       const label = shellLabel(
         command, mounts(), overrides.missingPaths ?? [],
         overrides.freeBytes ?? Number.MAX_SAFE_INTEGER,
@@ -418,36 +479,21 @@ function harness(overrides: {
       if (generations.length > 1) return generations.shift();
       return generations[0];
     },
-    mountStore: (chainId) => {
-      calls.push(`mountStore:${chainId}`);
-      return overrides.refuseStoreMount === true
+    mountStore: (chainId, at, access) => {
+      calls.push(`mountStore:${chainId}:${at}:${access}`);
+      if (overrides.refuseStoreMount === true) {
         // The real local failure: the container has no FUSE device. Deliberately
         // NOT the interception wording, so the degrade cannot be passing because
         // it recognised one particular sentence.
-        ? Promise.reject(new Error('S3FS mount failed: fuse: device not found'))
-        : Promise.resolve();
-    },
-    unmountStore: () => {
-      calls.push('unmountStore');
+        return Promise.reject(new Error('S3FS mount failed: fuse: device not found'));
+      }
+      if (access === 'write') publishing = { at, prefix: `backups/${chainId}/` };
       return Promise.resolve();
     },
-    readFileStream: (path) => {
-      calls.push(`readFileStream:${path}`);
-      return Promise.resolve({ stream: new ReadableStream<Uint8Array>(), size: DELTA_BYTES });
-    },
-    putObject: (key) => {
-      if (overrides.failPut === true) return Promise.reject(new Error('store unreachable'));
-      calls.push(`putObject:${key}`);
-      const landed = overrides.landedBytes ?? DELTA_BYTES;
-      const digest = overrides.landedDigest ?? digestOf(key, landed);
-      const objectVersion = overrides.landedVersion ?? versionOf(key, landed);
-      objects.set(key, landed);
-      digests.set(key, digest);
-      versions.set(key, objectVersion);
-      // What LANDED, which is what the record must carry: the count AND both
-      // identities, because a count cannot tell one archive from another
-      // archive of the same length.
-      return Promise.resolve({ bytes: landed, digest, objectVersion });
+    unmountStore: (at) => {
+      calls.push(`unmountStore:${at}`);
+      if (publishing?.at === at) publishing = undefined;
+      return Promise.resolve();
     },
     objectFacts: (key) => {
       calls.push(`objectFacts:${key}`);
@@ -615,7 +661,7 @@ describe('attach — the mount must be observed to have landed', () => {
     // Nothing was RESTORED: no store mount, no layer, no bytes.
     expect(record.calls.filter(call => call.startsWith('mountStore'))).toEqual([]);
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
-    expect(record.calls.filter(call => call.startsWith('readFileStream'))).toEqual([]);
+    expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
     // But the overlay exists, over an empty lower, so the changed set has
     // somewhere to accumulate from the very first write.
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
@@ -651,7 +697,7 @@ describe('attach — the mount must be observed to have landed', () => {
       expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
       // ZERO bytes moved: no stream is opened, no object is downloaded, and —
       // the point of this change — nothing is copied into the upper.
-      expect(record.calls.filter(call => call.startsWith('readFileStream'))).toEqual([]);
+      expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
       expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
       // BOTH LAYERS EXIST BEFORE THE OVERLAY TAKES THEM. An overlay is composed
       // from mount points it is handed; a mounted overlay therefore proves the
@@ -710,7 +756,7 @@ describe('attach — the mount must be observed to have landed', () => {
     });
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
-    expect(record.calls.filter(call => call.startsWith('readFileStream'))).toEqual([]);
+    expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
   });
 
   test('a complete but unreferenced delta adopts itself; the mount is its validator',
@@ -784,7 +830,7 @@ describe('attach — the mount must be observed to have landed', () => {
       expect(outcome.reason).toContain('not an overlay mount');
       // The delta the chain already holds is untouched: nothing was archived
       // over it, so the content the attach failed to restore is still there.
-      expect(record.calls).not.toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+      expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
     });
 
@@ -936,12 +982,12 @@ describe('attach — the mount must be observed to have landed', () => {
       const calls: string[] = [];
       const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
       expect((await attachOf(record)).kind).toBe('attached');
-      expect(record.calls).toContain('unmountStore');
+      expect(record.calls).toContain(`unmountStore:${CHAIN_STORE_MOUNT}`);
       // And the store path is never released by path, which would bypass the
       // registry.
       expect(record.calls).not.toContain(`unmountPath:${CHAIN_STORE_MOUNT}`);
       // A stale claim from a previous generation is cleared BEFORE the mount.
-      expect(record.calls.indexOf('unmountStore'))
+      expect(record.calls.indexOf(`unmountStore:${CHAIN_STORE_MOUNT}`))
         .toBeLessThan(record.calls.findIndex(call => call.startsWith('mountStore:')));
     });
 
@@ -1179,7 +1225,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     expect(record.state?.delta).toBeUndefined();
     // And the delta object of the generation being served is never rewritten,
     // which is the loss this rule exists to prevent.
-    expect(record.calls).not.toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
     // The superseded generation is RETAINED as the fallback rather than dropped:
     // its layers are what the live overlay is still serving from.
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
@@ -1208,7 +1254,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     // than on the generation would rebase here forever.
     expect(record.state?.base.id).toBe(collapsed);
     expect(record.state?.delta).toBeDefined();
-    expect(record.calls).toContain(`putObject:${deltaObjectKey(collapsed)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(collapsed)}`);
   });
 
   test('an ORPHAN delta the record does not name still forces the collapse', async () => {
@@ -1228,7 +1274,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
 
     expect(outcome.kind).toBe('committed');
     expect(record.state?.base.id).not.toBe(CHAIN_ID);
-    expect(record.calls).not.toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
   });
 
   test('a wake that wrote nothing pays for nothing', async () => {
@@ -1249,7 +1295,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
 
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toContain('nothing has been written since the attach');
-    expect(record.calls.filter(call => call.startsWith('putObject'))).toEqual([]);
+    expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
   });
 
   test('an upper that HOLDS the delta commits a delta, layer or no layer', async () => {
@@ -1267,7 +1313,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
 
     expect(outcome.kind).toBe('committed');
     expect(record.state?.base.id).toBe(CHAIN_ID);
-    expect(record.calls).toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
     expect(record.calls.some(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toBe(true);
   });
 });
@@ -1395,8 +1441,9 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const squashed = record.calls.find(call => call.startsWith('makeSquashfs'));
     expect(squashed).toStartWith(`makeSquashfs:${DEVBOX_WORKDIR}:`);
     expect(squashed).not.toBe(`makeSquashfs:${DEVBOX_WORKDIR}:0`);
-    expect(record.calls.some(call => call === `putObject:${baseObjectKey(record.state!.base.id)}`))
-      .toBe(true);
+    expect(record.calls.some(
+      call => call === `publishArchive:${baseObjectKey(record.state!.base.id)}`,
+    )).toBe(true);
     expect(record.state?.delta).toBeUndefined();
   });
 
@@ -1747,16 +1794,205 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // See the commit path: applying them to one side only delivered no saving
       // and made the rebase ratio compare incommensurable quantities.
       expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
-      expect(record.calls).toContain(`putObject:${deltaObjectKey(CHAIN_ID)}`);
-      // The base is untouched: same id, same bytes, and no PUT against its key.
+      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+      // The base is untouched: same id, same bytes, and nothing published to it.
       expect(record.state?.base).toEqual(baseLayer(CHAIN_ID, BASE_BYTES));
-      expect(record.calls).not.toContain(`putObject:${baseObjectKey(CHAIN_ID)}`);
+      expect(record.calls).not.toContain(`publishArchive:${baseObjectKey(CHAIN_ID)}`);
+    });
+
+  // ── the byte plane ────────────────────────────────────────────────────────
+  //
+  // MEASURED DEFECT THESE HOLD. The archive used to leave the container as
+  // base64 SSE frames, cross the owning Durable Object's isolate, and go back
+  // out to the store through the Workers R2 binding. On a live container against
+  // a real store that relay moved 3.34 MiB/s at 64 MiB and 3.64 at 256 MiB,
+  // against 23.22 and 39.00 for the same bytes moved by the container itself —
+  // and it was the ONLY arm that got slower as the archive grew, which is what
+  // says the cost is the isolate rather than a constant overhead.
+  //
+  // THE PORT SURFACE IS THE PROOF. `SnapshotChainPorts` has no entry that can
+  // carry a payload byte in either direction: no stream out, no object in. The
+  // first case below puts both of the deleted ones BACK as refusals, so the
+  // property is a postcondition of a real commit rather than an argument about
+  // an interface; the rest assert the mechanism that replaced them.
+
+  test('a commit lands with every payload-carrying port wired to REFUSE', async () => {
+    // The two entries the relay used, restored as throws. A strategy that still
+    // reached for either — a stream out of the container, or an object into the
+    // store from this side — fails here with the sentence it was refused with.
+    // This commits because nothing on this side is on the byte path.
+    const record = harness({ state: chainState(), mounts: MOUNTED });
+    const refusing = Object.assign(record.ports, {
+      readFileStream: (): never => {
+        throw new Error('payload must not be streamed out of the container');
+      },
+      putObject: (): never => {
+        throw new Error('payload must not be put into the store from the isolate');
+      },
+    });
+    const outcome = await snapshotChainStorage(refusing).checkpoint('tick');
+
+    expect(outcome.kind).toBe('committed');
+    expect(outcome.movedBytes).toBe(DELTA_BYTES);
+    // It moved the bytes the way it now moves them: the container copied the
+    // archive onto a writable mount, and this side read the store's metadata.
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).toContain(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
+  });
+
+  test('a checkpoint publishes through a WRITABLE mount and never through the isolate',
+    async () => {
+      const record = harness({ state: chainState(), mounts: MOUNTED });
+      expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+
+      // The publication mount is the strategy's own path, mounted WRITABLE, and
+      // it is a different path from the read mount an attach uses: the SDK
+      // refuses one binding mounted twice under different access, and the read
+      // path's `rm -rf` protections assume nothing can be written through it.
+      expect(record.calls).toContain(
+        `mountStore:${CHAIN_ID}:${CHAIN_PUBLISH_MOUNT}:write`,
+      );
+      expect(record.calls).not.toContain(
+        `mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}:write`,
+      );
+      // The archive went in through that mount, under the key the record names.
+      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+      expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
+      // And the ONLY thing this side learned about it is metadata.
+      expect(record.calls).toContain(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
+    });
+
+  test('the publication mount is released after the flush, and before the record',
+    async () => {
+      // R2's own precondition, and the one way this step could lose committed
+      // data: a release returns as soon as the mount leaves the namespace and
+      // cannot flush, so bytes still held by s3fs would be gone while the record
+      // already named them. The flush is therefore part of the copy command —
+      // `conv=fsync` — and the release happens after it, whatever it answered.
+      const record = harness({ state: chainState(), mounts: MOUNTED });
+      expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+
+      const mounted = record.calls.indexOf(`mountStore:${CHAIN_ID}:${CHAIN_PUBLISH_MOUNT}:write`);
+      const flushed = record.calls.indexOf(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+      const released = record.calls.indexOf(`unmountStore:${CHAIN_PUBLISH_MOUNT}`);
+      const read = record.calls.indexOf(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
+      const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
+      expect(mounted).toBeGreaterThan(-1);
+      expect(mounted).toBeLessThan(flushed);
+      expect(flushed).toBeLessThan(released);
+      // The store is asked what it holds only once the mount is gone, so the
+      // answer describes the object rather than a filesystem's view of it.
+      expect(released).toBeLessThan(read);
+      expect(read).toBeLessThan(wrote);
+      // The flush is IN the command, not a separate hope.
+      expect(publishCommand({ archivePath: 'a', mountedPath: 'b' })).toContain('conv=fsync');
+    });
+
+  test('a writable mount is released even when the publication fails', async () => {
+    // A mount left behind is refused by the SDK's own registry on the next
+    // publication — one binding cannot be mounted twice under different access —
+    // so a failure that kept it would turn one bad checkpoint into every later
+    // one.
+    const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });
+    expect((await checkpointOf(record, 'tick')).kind).toBe('failed');
+    expect(record.calls).toContain(`unmountStore:${CHAIN_PUBLISH_MOUNT}`);
+    // Nothing landed, and the record still describes what the box can attach.
+    expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
+    expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
+  });
+
+  test('a flush the store did not fully take is REFUSED, not recorded', async () => {
+    // The one failure a mount publication has that a relay did not: the copy
+    // reports what it wrote, the store reports what it holds, and a difference
+    // between two readings of one finished upload is a lost tail. Recording it
+    // would commit a head over an archive that cannot mount.
+    const record = harness({
+      state: chainState(),
+      mounts: MOUNTED,
+      flushedBytes: 700_000,
+      landedBytes: 512,
+    });
+    const outcome = await checkpointOf(record, 'tick');
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.reason).toContain('did not carry every byte');
+    expect(outcome.reason).toContain('512');
+    expect(outcome.reason).toContain('700000');
+    // The record still names the generation the box can still attach from.
+    expect(record.state?.rev).toBe(1);
+    expect(record.state?.lastFailure?.reason).toContain('did not carry every byte');
+  });
+
+  test('a publication the store has no object for is REFUSED, not recorded', async () => {
+    // The other half of the cross-check, and the reason the store is asked at
+    // all. s3fs answers a flush from its own view of the mount, so a clean exit
+    // is not evidence the store took anything — and a record written on that
+    // exit alone would name an object no attach can ever find.
+    //
+    // A FIRST BASE, because that is where the absence is observable: a fresh
+    // generation's prefix holds nothing, so a publication that lands nothing
+    // leaves the store with nothing to answer for the key.
+    const record = harness({ state: null, mounts: MOUNTED, publishLandsNothing: true });
+    const outcome = await checkpointOf(record, 'tick');
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.reason).toContain('the store holds no such object');
+    // Nothing was recorded: no first generation exists to attach from.
+    expect(record.state).toBeNull();
+  });
+
+  test('an attach moves no payload either: mounts and metadata, nothing else', async () => {
+    // THE OTHER DIRECTION. Reading a chain back was already container-side —
+    // squashfuse parses the archive through the store mount and the bytes arrive
+    // when something touches them — and this is what keeps it that way. An
+    // attach that published, copied or streamed anything would show up here.
+    const calls: string[] = [];
+    const record = harness({
+      state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
+      mounts: mountsAfterAttach(calls),
+      calls,
+    });
+    expect((await attachOf(record)).kind).toBe('attached');
+    expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
+    expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
+    // What it DID ask the store for: metadata, and only metadata.
+    expect(record.calls).toContain(`objectFacts:${baseObjectKey(CHAIN_ID)}`);
+    // The layers were mounted, which is where the bytes come from.
+    expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
+  });
+
+  test('the read mount is never writable, and the writable mount is never the read path',
+    async () => {
+      // One binding, two accesses, two paths — and the pairing is asserted rather
+      // than remembered. A read-write mount at the attach path would put the
+      // chain's own archives inside the blast radius of the `rm -rf` an attach
+      // runs over its layout; a read-only mount at the publication path could
+      // not publish at all.
+      const checkpointCalls: string[] = [];
+      const committed = harness({
+        state: chainState(), mounts: MOUNTED, calls: checkpointCalls,
+      });
+      expect((await checkpointOf(committed, 'tick')).kind).toBe('committed');
+      const attachCalls: string[] = [];
+      const attached = harness({
+        state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
+        mounts: mountsAfterAttach(attachCalls),
+        calls: attachCalls,
+      });
+      expect((await attachOf(attached)).kind).toBe('attached');
+
+      const mounts = [...checkpointCalls, ...attachCalls]
+        .filter(call => call.startsWith('mountStore:'));
+      expect(mounts.length).toBeGreaterThan(0);
+      for (const mount of mounts) {
+        const [, , at, access] = mount.split(':');
+        expect(at === CHAIN_STORE_MOUNT ? 'read' : 'write').toBe(access);
+        expect([CHAIN_STORE_MOUNT, CHAIN_PUBLISH_MOUNT]).toContain(at);
+      }
     });
 
   test('CRASH ORDERING: the state write lands before any cleanup', async () => {
     const record = harness({ state: chainState(), mounts: MOUNTED });
     await checkpointOf(record, 'tick');
-    const put = record.calls.indexOf(`putObject:${deltaObjectKey(CHAIN_ID)}`);
+    const put = record.calls.indexOf(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
     const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
     const cleaned = record.calls.lastIndexOf('exec:rm');
     // PUT, then record, then clean up. A crash between the PUT and the record
@@ -1859,10 +2095,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(702791680);
       // EVERY STATE SIZE COMES FROM A COMPLETED UPLOAD. There are four writers
       // of a size into the record — the commit's own layer, the extract path's
-      // stored base, and the adoption below — and each one's provenance is
-      // either `putObject`'s returned landed count or an R2 head of a finished
-      // object. None is a mid-write stat, which is the measurement that read
-      // 4096-multiples low on the deployed runs.
+      // stored base, and the adoption below — and each one's provenance is an R2
+      // head of a finished object: the publication reads the store back rather
+      // than counting bytes it never saw. None is a mid-write stat, which is the
+      // measurement that read 4096-multiples low on the deployed runs.
       expect(record.state?.delta?.bytes).toBe(702791680);
       expect(record.state?.delta?.bytes).not.toBe(700387328);
       // And the consequence that was actually measured: the wake attaches.
@@ -1927,34 +2163,36 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
     });
 
-  test('an upload failure the stamp cannot record is still a classified failure',
+  test('a publication failure the stamp cannot record is still a classified failure',
     async () => {
       // The pre-commit half of the same storage hazard. Nothing was published
       // here, so the record the caller read is the right one to stamp — but the
-      // stamp is a durable write and can fail exactly as the upload did. Letting
-      // that rejection travel replaced the answer a scheduled callback needs
-      // with a throw, and the throw carried the STORAGE failure rather than the
-      // upload's reason: the caller lost both the classification and the cause.
+      // stamp is a durable write and can fail exactly as the publication did.
+      // Letting that rejection travel replaced the answer a scheduled callback
+      // needs with a throw, and the throw carried the STORAGE failure rather
+      // than the publication's reason: the caller lost both the classification
+      // and the cause.
       const record = harness({
         state: chainState({ upperMark: 'stale', at: 1 }),
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
-        failPut: true,
+        failPublish: true,
         rejectWrites: [1],
       });
       const outcome = await checkpointOf(record, 'tick');
 
       expect(outcome.kind).toBe('failed');
-      // The OPERATION's reason, not the storage failure that swallowed it.
-      expect(outcome.reason).toBe('store unreachable');
+      // THE OPERATION's reason, carrying the container's own words, and not the
+      // durable-storage failure that swallowed it.
+      expect(outcome.reason).toContain('dd: fsync failed');
+      expect(outcome.reason).not.toContain('durable storage unreachable');
       expect(outcome.bytes).toBeUndefined();
       // Nothing durable moved in either direction: no layer landed, and the
       // record still describes the generation the box can still attach from.
       expect(record.state).toEqual(chainState({ upperMark: 'stale', at: 1 }));
       // Both lines are on the console, which is the only record left.
-      expect(record.calls).toContain(
-        `log:${DEVBOX_WORKDIR} checkpoint failed: store unreachable`,
-      );
+      expect(record.calls.some(call => call.startsWith(`log:${DEVBOX_WORKDIR} checkpoint failed:`)
+        && call.includes('dd: fsync failed'))).toBe(true);
       expect(record.calls).toContain(
         `log:${DEVBOX_WORKDIR} that failure could not be stamped on the durable record`,
       );
@@ -2016,14 +2254,14 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       && call.includes('change watermark could not be advanced'))).toBe(true);
   });
 
-  test('a failed PUT leaves the previous record intact and records the reason', async () => {
-    const record = harness({ state: chainState(), mounts: MOUNTED, failPut: true });
+  test('a failed publication leaves the previous record intact and records the reason', async () => {
+    const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('failed');
     expect(outcome.bytes).toBeUndefined();
     expect(record.state?.rev).toBe(1);
     expect(record.state?.base).toEqual(baseLayer(CHAIN_ID, BASE_BYTES));
-    expect(record.state?.lastFailure?.reason).toContain('store unreachable');
+    expect(record.state?.lastFailure?.reason).toContain('dd: fsync failed');
   });
 
   test('a checkChanges failure is a recorded failure, not a silent skip', async () => {
@@ -2700,8 +2938,8 @@ describe('a restore that refuses the newest generation recovers from the older o
       expect(outcome.detail).toContain('recovered');
       // The FALLBACK's layers are what mounted, and the refused generation's
       // store subtree was never even mounted.
-      expect(record.calls).toContain(`mountStore:${FALLBACK_ID}`);
-      expect(record.calls).not.toContain(`mountStore:${CHAIN_ID}`);
+      expect(record.calls).toContain(`mountStore:${FALLBACK_ID}:${CHAIN_STORE_MOUNT}:read`);
+      expect(record.calls).not.toContain(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}:read`);
       // PROMOTED BEFORE SERVED: a crash after the mount must never leave the box
       // running on these bytes under a record that still names what it refused,
       // because the next checkpoint would write a delta into a generation whose

@@ -23,10 +23,12 @@ import {
 import { mulberry32 } from './fixtures/payload-transport/container-harness';
 import { wranglerProvesAbsence } from './fixtures/r2-bench/deploy-substrate';
 import { withAuthoritativeBucket } from './bench-payload-transports';
+import { isProductSource, readMatching } from './sources';
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname));
 const FIXTURE_DIR = join(ROOT, 'fixtures/payload-transport');
 const workerSource = readFileSync(join(FIXTURE_DIR, 'worker.ts'), 'utf8');
+const relaySource = readFileSync(join(FIXTURE_DIR, 'isolate-relay.ts'), 'utf8');
 const driverSource = readFileSync(join(ROOT, 'bench-payload-transports.ts'), 'utf8');
 const harnessSource = readFileSync(join(FIXTURE_DIR, 'container-harness.ts'), 'utf8');
 const configSource = readFileSync(join(FIXTURE_DIR, 'wrangler.jsonc'), 'utf8');
@@ -86,27 +88,56 @@ describe('payload workload determinism (in-container generator)', () => {
   });
 });
 
-describe('the owning-DO arm measures the product, not the fixture', () => {
-  test('it streams through devbox\u2019s own putStream, holding no assembled part', () => {
-    // The arm exists to price what a snapshot-chain checkpoint costs. Calling
-    // packages/devbox/src/object-store.ts directly is what makes the number
-    // devbox's: small-PUT/multipart routing and the recorded digest are that
-    // module's decisions, and a copy here would price the copy.
-    expect(workerSource).toContain("from '../../../packages/devbox/src/object-store'");
+describe('the owning-DO arm measures the shape devbox had, not a fresh reassembly', () => {
+  test('the arm streams the container file into the relay that left the product', () => {
+    // The arm exists to price what a snapshot-chain checkpoint cost, and the
+    // code it calls IS that code. `putStream` was
+    // packages/devbox/src/object-store.ts's until the chain stopped carrying
+    // payload through its isolate; it moved into this fixture unchanged in
+    // routing, part geometry and digest, so the arm's number stays comparable
+    // across the change that removed it. A re-implementation here would price
+    // the re-implementation.
+    expect(workerSource).toContain("from './isolate-relay'");
     expect(workerSource).toContain('await putStream(this.env.BACKUP_BUCKET, key, body, sizeBytes)');
     expect(workerSource).toContain('streamFile(await this.readFileStream(file))');
+    expect(relaySource).toContain('export async function putStream(');
+  });
+  test('no product source reaches back for the relay', () => {
+    // This is the property the removal bought: a devbox that carries payload
+    // through its own isolate is the defect a store mount replaced. The
+    // fixture keeps the shape so the baseline stays measurable, and an import
+    // of it from packages/ would put the shape back in the product.
+    //
+    // AN IMPORT, NOT A MENTION. `object-store.ts` says in prose where its
+    // upload went, which is the sentence a reader needs and is not a
+    // dependency; a substring scan would report that sentence as the defect
+    // and would then have to be relaxed to pass, which is how a gate loses its
+    // teeth on the day it is written.
+    const reaches = /from\s+'[^']*isolate-relay'|import\(\s*'[^']*isolate-relay'\s*\)/;
+    const importers = [...readMatching(isProductSource)]
+      .filter(([, text]) => reaches.test(text))
+      .map(([file]) => file);
+    expect(importers).toEqual([]);
   });
   test('the in-isolate part assembly that could not reach 64 MiB is gone', () => {
     // Three runs out of three reset the owning DO on the first tier needing
     // multipart, every 8 MiB cell before it green: the arm held ~40 MiB live
-    // per 16 MiB part, a shape devbox does not have. Its geometry is deleted
+    // per 16 MiB part, a shape devbox never had. Its geometry is deleted
     // rather than tuned, because tuning it would keep pricing the fixture.
-    for (const dead of [
-      'base64ReadPlan', 'PART_SIZE_BYTES', 'usesMultipart', 'readBase64Chunk',
-      'uploadPart', 'createMultipartUpload',
-    ]) {
-      expect({ dead, inWorker: workerSource.includes(dead) }).toEqual({ dead, inWorker: false });
+    // BOTH sources, because the upload now sits in one of them and naming only
+    // the Worker would let the assembly come back one import away.
+    for (const dead of ['base64ReadPlan', 'PART_SIZE_BYTES', 'usesMultipart', 'readBase64Chunk']) {
+      expect({ dead, inArm: workerSource.includes(dead) || relaySource.includes(dead) })
+        .toEqual({ dead, inArm: false });
     }
+    // The Worker keeps no multipart bookkeeping of its own, the relay keeps all
+    // of it, and the relay holds one carry rather than a list of whole parts.
+    for (const owned of ['uploadPart', 'createMultipartUpload']) {
+      expect({ owned, inWorker: workerSource.includes(owned) }).toEqual({ owned, inWorker: false });
+      expect({ owned, inRelay: relaySource.includes(owned) }).toEqual({ owned, inRelay: true });
+    }
+    expect(relaySource).toContain('const MULTIPART_PART_BYTES = 8 * 1024 * 1024;');
+    expect(relaySource).not.toContain('16 * 1024 * 1024');
     const armsSource = readFileSync(join(FIXTURE_DIR, 'arms.ts'), 'utf8');
     expect(armsSource).not.toContain('export const PART_SIZE_BYTES');
     expect(armsSource).not.toContain('export function base64ReadPlan');

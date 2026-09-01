@@ -53,11 +53,13 @@
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
 
-  1. BYTES PER CLASS-A. `SINGLE_PUT_MAX_BYTES` is 8 MiB
-     (`object-store.ts`), so a real tick's class-A count is
-     O(p / 8 MiB). The model counts staged blobs, and the divisor is
-     the bench's. A blob count that grew with n would be visible
-     here; a wrong divisor would not.
+  1. BYTES PER CLASS-A. A single PUT carried at most 8 MiB while
+     an isolate uploaded the bytes, so a real tick's class-A count
+     is O(p / part size). The model counts staged blobs, and the
+     divisor is the bench's: the chain now writes through a store
+     mount, where the part size is s3fs's rather than this tree's.
+     A blob count that grew with n would be visible here; a wrong
+     divisor would not.
 
   2. CONTENT-DEFINED CHUNKING. Blob identity is a content hash in the
      source and a count here. Whether two versions of a file share

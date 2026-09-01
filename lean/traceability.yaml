@@ -932,11 +932,10 @@ requirements:
       - packages/devbox/src/cas/sync.ts#foldJournalIntoTree
       - packages/devbox/src/cas/journal.ts#listJournalAfter
       - packages/devbox/src/cas/types.ts#FilePartSchema
-      - packages/devbox/src/object-store.ts#SMALL_PUT_BYTES
       - packages/devbox/src/storage.ts#CheckpointOutcome
     remainingEvidence:
       - The quiesce fold rewrites the manifest over every path and is linear in the tree, which is the one term in this design that is not sub-linear and is proved rather than excluded
-      - Class-A operations are counted as staged blobs while the real count is the pending change divided by the eight-megabyte single-put ceiling, so the divisor is the deployed bench's constant
+      - Class-A operations are counted as staged blobs while the real count is the pending change divided by the single-put ceiling of whatever moves the bytes, so the divisor is the deployed bench's rather than a constant this tree declares
       - Chunk identity is a natural number here, so whether two versions of a file really share chunks is a property of the chunker that no theorem reaches
       - The sweep is proved to sit off the attach and checkpoint paths but its completeness, which rests on a prefix listing minus the reachable set, is the sweep's own correctness and is not modelled
       - The tree write per folded entry is counted as one operation per entry while a directory tombstone deletes every path beneath it, so a recursive delete costs more operations than the entry count this model charges

@@ -95,12 +95,12 @@ export const armSpec = (id: PayloadArmId): ArmSpec =>
  * The payload tiers, in MiB.
  *
  * CHOSEN AGAINST THE THING BEING MEASURED, not for round numbers. 8 MiB is
- * `SMALL_PUT_BYTES` in packages/devbox/src/object-store.ts — the exact line
- * where the owning DO stops buffering one copy and promotes to multipart, so
- * the smallest tier sits ON the routing boundary the product actually has. 64
- * and 256 MiB are the sizes a real workspace archive reaches: the deployed
- * failure quoted in snapshot-chain.ts moved a 700 MB delta, and a tier that
- * stopped at 100 MiB would have measured only the regime where nothing hurts.
+ * `SMALL_PUT_BYTES` in `isolate-relay.ts` — the exact line where the owning DO
+ * stops buffering one copy and promotes to multipart, so the smallest tier
+ * sits ON the relay's own routing boundary. 64 and 256 MiB are the sizes a
+ * real workspace archive reaches: the deployed failure quoted in
+ * snapshot-chain.ts moved a 700 MB delta, and a tier that stopped at 100 MiB
+ * would have measured only the regime where nothing hurts.
  */
 export const PAYLOAD_SIZES_MIB = [8, 64, 256] as const;
 export type PayloadSizeMiB = (typeof PAYLOAD_SIZES_MIB)[number];
@@ -127,11 +127,12 @@ export const MIB = 1024 * 1024;
  * This file used to carry `PART_SIZE_BYTES`, `base64ReadPlan` and a chunk/part
  * algebra, because that arm read bounded base64 chunks and welded them into
  * exact 16 MiB R2 multipart parts inside the Durable Object. None of it
- * described devbox: `snapshot-chain.ts` hands the container's byte stream
- * straight to `packages/devbox/src/object-store.ts`'s `putStream`, which does
- * its own routing. The arm now calls that function, so the geometry belongs to
- * the product and the numbers are the product's — and the fixture keeps no
- * second copy of a decision it does not own.
+ * described devbox: `snapshot-chain.ts` handed the container's byte stream
+ * straight to an uploader that did its own routing. The arm calls that
+ * uploader, so the geometry is the measured one and not a second copy of a
+ * decision this file owns. The uploader now lives in `isolate-relay.ts`,
+ * because the chain publishes through a store mount and devbox deleted it —
+ * the shape moved to the arm that still prices it, unchanged.
  */
 
 /**

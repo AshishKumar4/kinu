@@ -106,10 +106,52 @@ import {
   stampFailure,
 } from './storage';
 
-/** Where this chain's own object-store subtree is mounted read-only inside the
- *  container during an attach. Scoped to exactly this chain's UUID prefix, so
- *  the container can see its own layers and nothing else. */
-export const CHAIN_STORE_MOUNT = '/backups';
+/**
+ * Where this chain's own object-store subtree is mounted READ-ONLY inside the
+ * container during an attach. Scoped to exactly this chain's UUID prefix, so
+ * the container can see its own layers and nothing else.
+ *
+ * Read-only is defence rather than decoration: an attach runs `rm -rf` over its
+ * own layout beside this path, and a read-write mount here would put the
+ * chain's archives inside that blast radius. Publication mounts a SEPARATE
+ * path — {@link CHAIN_PUBLISH_MOUNT} — for exactly that reason.
+ *
+ * PRIVATE, like every other path in this file's layout. The host is handed the
+ * mount point it must use as an argument, so nothing outside this module has to
+ * know or agree about where a chain's bytes appear; the suites that assert
+ * these paths mirror them and fail on drift, which is what keeps the mirror
+ * honest.
+ */
+const CHAIN_STORE_MOUNT = '/backups';
+
+/**
+ * Where this chain's subtree is mounted WRITABLE while one archive is
+ * published, and the reason no payload byte reaches the Durable Object.
+ *
+ * THE MOUNT IS THE BYTE PATH. A staged archive used to leave the container as
+ * base64 SSE frames, cross the owning isolate, and go back out to the store
+ * through the Workers R2 binding — the archive's whole length twice through the
+ * one thread every other operation on this box is queued behind. Measured on a
+ * live container against a real store: 3.34 MiB/s at 64 MiB and 3.64 at 256 MiB
+ * through the isolate, against 23.22 and 39.00 MiB/s for the same bytes moved
+ * by the container itself. The relay was the only arm that got SLOWER as the
+ * archive grew, which is what says the cost is the isolate rather than a
+ * constant overhead being amortised.
+ *
+ * WHAT THE CONTAINER GAINS, IT GAINS WITHOUT A SECRET. This is the SDK's
+ * credential-less R2 mount: s3fs is handed a dummy password file, its requests
+ * are intercepted at `r2.internal`, and a Worker entrypoint — not this object —
+ * resolves the binding and performs the R2 call. The authority stays where it
+ * already was, and the container is handed nothing it could read, replay, or
+ * point elsewhere. That is the property a presigned URL would have cost, and
+ * the measurement says it costs no throughput to keep.
+ *
+ * A SEPARATE PATH, and never mounted while the read mount is: the SDK refuses
+ * one binding mounted twice under different access, and the read path's `rm -rf`
+ * protections assume nothing can be written through it. Two paths make both
+ * statements structural rather than remembered.
+ */
+const CHAIN_PUBLISH_MOUNT = `${DEVBOX_RUNTIME_DIR}/publish`;
 
 class ContainerChangedDuringAttach extends Error {
   constructor() {
@@ -397,9 +439,9 @@ export function isOverlayMounted(procMounts: string, dir: string): boolean {
  * valid mounts and serves the wrong content.
  *
  * TWO INDEPENDENT IDENTITIES, and they fail over for each other. `digest` is
- * the SHA-256 of the bytes that landed — see `LandedObject` — which the store
- * itself can confirm only for an object it was handed a checksum for, meaning a
- * single-request PUT. `objectVersion` is the store's OWN name for the upload
+ * the SHA-256 of the bytes the store holds, which the store itself can confirm
+ * only for an object it was handed a checksum for, meaning a single-request
+ * PUT. `objectVersion` is the store's OWN name for the upload
  * that wrote the object: R2 mints one per upload, hands it back from `put` and
  * from multipart `complete`, and reports it from `head` forever after. So a
  * large archive, which the Workers multipart API will not checksum, still has
@@ -471,8 +513,9 @@ export type ChangeStatus = 'unchanged' | 'changed' | 'resync';
  * The same three facts either way, so the same type either way: a comparison
  * between a record's claim and a store's answer that had to enumerate fields at
  * every call site is a comparison that silently stops covering the field
- * somebody adds next. Every construction goes through {@link chainLayer} or the
- * parse, and {@link layerIntegrityFailure} takes whole layers rather than loose
+ * somebody adds next. A layer is now only ever CONSTRUCTED by the parse or by
+ * `objectFacts` — the store's own answer, which is what a publication records
+ * too — and {@link layerIntegrityFailure} takes whole layers rather than loose
  * parts.
  *
  * `digest` and `objectVersion` are both optional and both mean UNKNOWN when
@@ -491,17 +534,6 @@ export interface ChainLayer {
  *  store prefix every key in that generation is built from. */
 export interface ChainBaseLayer extends ChainLayer {
   readonly id: string;
-}
-
-/** The record's descriptor for a layer that just landed. The ONE place a layer
- *  is built from an upload's answer, so a new fact cannot be forgotten at one
- *  of several call sites. */
-export function chainLayer(landed: {
-  readonly bytes: number;
-  readonly digest: string;
-  readonly objectVersion: string;
-}): ChainLayer {
-  return { bytes: landed.bytes, digest: landed.digest, objectVersion: landed.objectVersion };
 }
 
 /**
@@ -757,11 +789,24 @@ export interface SnapshotChainPorts {
   exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Ephemeral generation id, when the host can observe one. */
   containerGeneration?(): Promise<string | undefined>;
-  /** Mount this chain's store subtree read-only at `CHAIN_STORE_MOUNT`.
-   *  Credentials never leave the Durable Object. */
-  mountStore(chainId: string): Promise<void>;
   /**
-   * Release the store mount THROUGH THE SDK, not through the kernel.
+   * Mount this chain's store subtree at `at`, for reading or for writing.
+   *
+   * ONE PORT FOR BOTH ROLES, because they are one SDK primitive asked for two
+   * accesses, and the strategy — not the host — owns which path carries which:
+   * {@link CHAIN_STORE_MOUNT} read-only for an attach, {@link CHAIN_PUBLISH_MOUNT}
+   * writable for one publication. A host that had to remember the pairing could
+   * get it wrong in one place only.
+   *
+   * The subtree is scoped to this chain's own UUID prefix, so the container sees
+   * its own generation and nothing else, and CREDENTIALS NEVER LEAVE THE
+   * DURABLE OBJECT: the container's s3fs holds a dummy password file and its
+   * requests are resolved against the binding by a Worker entrypoint. Writable
+   * therefore hands the container no capability it can read or replay.
+   */
+  mountStore(chainId: string, at: string, access: 'read' | 'write'): Promise<void>;
+  /**
+   * Release the mount at `at` THROUGH THE SDK, not through the kernel.
    *
    * The SDK keeps its own registry of the bucket mounts it made and refuses a
    * mount whose path it still believes is in use. Releasing one with a raw
@@ -769,24 +814,14 @@ export interface SnapshotChainPorts {
    * path forever, so the NEXT attach is refused for a mount that no longer
    * exists. Deployed symptom: a chain that could be written and then never
    * attached again, with every operation refused because the attach failed.
-   */
-  unmountStore(): Promise<void>;
-  /** Stream a container file out as binary, with no base64 framing. */
-  readFileStream(path: string): Promise<{ stream: ReadableStream<Uint8Array>; size: number }>;
-  /**
-   * Put one object into the store and answer WHAT LANDED. The visible object
-   * appears complete or not at all.
    *
-   * All three facts are what the record must carry. A size measured before the
-   * upload can disagree with the object — measured on a deployed run — and a
-   * size cannot tell one archive from another archive of the same length. The
-   * digest is taken over the bytes as they stream past and is not recoverable
-   * afterwards without reading the object back; `objectVersion` is the store's
-   * own name for this upload, which is the identity that survives where the
-   * digest cannot be compared.
+   * A RELEASE IS NOT A FLUSH, and a publication must not rely on it as one: a
+   * lazy unmount returns as soon as the mount leaves the namespace, so bytes
+   * still held by s3fs would be lost while the record already named them. See
+   * {@link chainShell}'s `publishArchive`, which flushes and CHECKS the flush
+   * before anything here runs.
    */
-  putObject(key: string, stream: ReadableStream<Uint8Array>, size: number):
-    Promise<{ bytes: number; digest: string; objectVersion: string }>;
+  unmountStore(at: string): Promise<void>;
   /**
    * What the store currently holds for one object, or undefined when it holds
    * nothing.
@@ -795,6 +830,13 @@ export interface SnapshotChainPorts {
    * and either may be undefined when the store has none to give — see
    * {@link layerIntegrityFailure}. This is one metadata read, the same call the
    * byte count always cost.
+   *
+   * IT IS ALSO HOW A PUBLICATION LEARNS WHAT LANDED. The container writes the
+   * archive through a mount, so this side never sees the bytes and cannot count
+   * them; the store is asked instead. That makes the record describe THE OBJECT
+   * rather than the intention — which is what the deployed disagreement
+   * `delta archive is 702791680 bytes, state declares 700387328` cost, and it
+   * is now the only reading there is.
    */
   objectFacts(key: string): Promise<ChainLayer | undefined>;
   /** Delete objects. Used by discard, and to drop a superseded extraction
@@ -891,6 +933,20 @@ const lowerEmpty = `${DEVBOX_RUNTIME_DIR}/lower-empty`;
  */
 function deltaLayerMountPoint(chainId: string): string {
   return `${lowerDeltaRoot}/${assertChainId(chainId)}`;
+}
+
+/**
+ * Where one generation's object appears inside a mount scoped to that
+ * generation's prefix.
+ *
+ * ONE DERIVATION FOR BOTH MOUNTS. A store subtree mounted at `backups/<uuid>/`
+ * shows each object as a file named by the last segment of its key, so the read
+ * path's `squashfuse` source and the write path's `dd` target are the same
+ * question asked twice. Spelling it twice is how the two would drift into
+ * writing one name and mounting another.
+ */
+function mountedLayerPath(mountPoint: string, objectKey: string): string {
+  return `${mountPoint}/${objectKey.split('/').pop() ?? objectKey}`;
 }
 
 /**
@@ -1060,9 +1116,8 @@ function chainShell(exec: ContainerExec) {
      * it tolerates kernel-delayed FUSE cleanup and never hides user files.
      */
     mountLayer: async (objectKey: string, mountPoint: string): Promise<void> => {
-      const layerName = objectKey.split('/').pop() ?? objectKey;
       await must('squashfuse mount', `mkdir -p ${shellPath(mountPoint)} && /usr/bin/squashfuse `
-        + `${shellPath(`${CHAIN_STORE_MOUNT}/${layerName}`)} ${shellPath(mountPoint)} `
+        + `${shellPath(mountedLayerPath(CHAIN_STORE_MOUNT, objectKey))} ${shellPath(mountPoint)} `
         + '-o allow_other,ro,nonempty');
     },
     /** Attach `lowers` (first entry is newest) with a fresh writable upper. Its
@@ -1106,6 +1161,52 @@ function chainShell(exec: ContainerExec) {
         throw new Error(
           `mksquashfs reported success but ${archivePath} is ${size ?? 'absent'}: `
           + `${result.stderr.trim() || 'the archiver left no diagnostics'}`,
+        );
+      }
+      return bytes;
+    },
+    /**
+     * Move one staged archive into the store THROUGH THE MOUNT, and answer what
+     * the mount then holds.
+     *
+     * THIS IS THE WHOLE BYTE PATH. The container reads its own disk and writes
+     * an object; the Durable Object is not on the wire. See
+     * {@link CHAIN_PUBLISH_MOUNT} for the measurement that moved it here.
+     *
+     * `dd` RATHER THAN A REDIRECT, and the reason is the only way this step can
+     * lose data. s3fs uploads on flush, so the upload's failure surfaces at
+     * close — and a shell redirect's close error is reported by no exit code,
+     * so `cat archive > mount/layer` would report success over a store that got
+     * nothing. `conv=fsync` makes the flush part of the command and its failure
+     * the command's own exit, which is what lets the release that follows be a
+     * release rather than a gamble: a lazy unmount returns before s3fs has
+     * finished, and the tail of an archive the record already names would be
+     * gone with it.
+     *
+     * WRITTEN STRAIGHT TO THE FINAL NAME. A temporary name plus a rename is the
+     * usual way to make a write appear atomically, and on s3fs it is a
+     * server-side COPY of every byte — the one shape that would pay the whole
+     * archive twice again. It is not needed: the object under this key becomes
+     * visible only when s3fs completes its upload, so a reader sees the previous
+     * archive or this one, never a partial.
+     *
+     * dd's own transfer summary is left on stderr deliberately: it is this
+     * path's only throughput reading, and the failure message carries it.
+     */
+    publishArchive: async (archivePath: string, mountedPath: string): Promise<number> => {
+      const result = await exec(publishCommand({ archivePath, mountedPath }));
+      const [code, size] = result.stdout.trim().split(/\s+/);
+      if (code !== '0') {
+        throw new Error(
+          `publishing ${archivePath} through ${mountedPath} failed (${code ?? '?'}): `
+          + `${result.stderr.trim() || 'no output'}`,
+        );
+      }
+      const bytes = Number(size);
+      if (!Number.isFinite(bytes) || bytes <= 0) {
+        throw new Error(
+          `the store mount reports ${mountedPath} as ${size ?? 'absent'} after a publication `
+          + `that reported success: ${result.stderr.trim() || 'no diagnostics'}`,
         );
       }
       return bytes;
@@ -1288,11 +1389,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * wrote the delta, so a replaced delta of identical size never matches a stamp
    * written for its predecessor.
    *
-   * THE DIGEST IS DELIBERATELY ABSENT. `putObject` always has one and
-   * `objectFacts` does not: R2 reports no checksum for an object the multipart
-   * API wrote, which is every delta large enough for this to matter. A stamp
-   * carrying it would therefore never match the store's own answer for exactly
-   * the archives whose copy costs the most, and the skip would be dead code.
+   * THE DIGEST IS DELIBERATELY ABSENT. Nothing gives the store a checksum for
+   * a layer: the container writes the archive through the mount, and R2 reports
+   * none for what it took that way. A stamp carrying a digest would therefore
+   * never match the store's own answer, and the skip would be dead code.
    */
   const seedStampOf = (chainId: string, delta: ChainLayer): string =>
     `${chainId}:${delta.bytes}:${delta.objectVersion ?? 'no-version'}`;
@@ -1321,14 +1421,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // Release any mount the SDK still believes it holds at this path before
     // asking for a new one. A previous container generation's entry survives in
     // that registry, and it refuses the mount rather than replacing it.
-    await ports.unmountStore();
+    await ports.unmountStore(CHAIN_STORE_MOUNT);
     // A chain whose layers EXIST cannot be served by extraction, so a mount
     // failure here fails the start rather than degrading. Degrading would hand
     // the caller an empty tree and report success. The thrown reason travels as
     // it came: the platform's own words are the diagnosis, and this code has no
     // better one.
     try {
-      await ports.mountStore(generation.base.id);
+      await ports.mountStore(generation.base.id, CHAIN_STORE_MOUNT, 'read');
     } catch (error) {
       throw new Error(
         `chain ${generation.base.id} is stored as lazy layers and its store subtree could not `
@@ -1353,7 +1453,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
       throw new LayerUnreadable(layer, generation.base.id, thrown);
     };
-    const mountedBase = `${CHAIN_STORE_MOUNT}/data.sqsh`;
+    const mountedBase = mountedLayerPath(CHAIN_STORE_MOUNT, baseObjectKey(generation.base.id));
     // WAIT BY COUNT, THEN SAY WHAT IS THERE. The wait used to be an unbounded
     // poll in the host adapter: one `test -e` per RPC, every 100 ms, with no
     // exit except the path appearing — and its container-replacement exit was
@@ -1466,7 +1566,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it names, and the whiteouts that hide what the base still has.
     await shell.overlayAttach(DEVBOX_WORKDIR, composing ? [deltaLayer, lowerBase] : [lowerBase]);
     await assertOverlayLanded(`chain ${generation.base.id}`);
-    await ports.unmountStore();
+    await ports.unmountStore(CHAIN_STORE_MOUNT);
 
     const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
     // WHICH SHAPE THIS BOX IS IN, because the next commit's behaviour follows
@@ -1752,23 +1852,42 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   /**
-   * Build a squashfs of `sourceDir`, push it to `key`, and return what the state
-   * write records.
+   * Build a squashfs of `sourceDir`, publish it as `key`, and return what the
+   * store then holds for it.
    *
-   * NO CONTENT DIGEST. There was one: a `sha256sum` over the whole staged
-   * archive, validated against a hex regex, with its own failure branch — and
-   * nothing recorded it, nothing compared it, and `ChainState` has no field for
-   * it. That is a full CPU pass over every byte of every checkpoint plus a
-   * spurious way to fail, bought for nothing. The integrity gate that exists is
-   * `layerIntegrityFailure`, which compares the size the store holds against the
-   * size the record declares, before an attach spends the container-start budget
-   * on a layer that cannot land.
+   * THE BYTES NEVER REACH THIS ISOLATE. The archive is staged on the container's
+   * own disk, and the container copies it into the store through a writable,
+   * prefix-scoped mount — see {@link CHAIN_PUBLISH_MOUNT} for the measurement
+   * that put it there and for why the mount needs no credential. This side
+   * mounts, asks the container to publish, releases the mount, and then asks the
+   * STORE what it holds. Three round trips and one metadata read; no payload.
+   *
+   * THE RECORD DESCRIBES WHAT THE STORE HOLDS, and it is CHECKED against the
+   * container's own reading of the same object rather than against the staged
+   * count. Those are two independent measurements of one finished upload —
+   * what the mount reports after the flush, and what the store reports for the
+   * key — so a disagreement is the one failure this step can have: a flush that
+   * did not carry every byte. The staged count is deliberately NOT the
+   * comparison: it is taken before the copy, a deployed run recorded exactly
+   * that drift (`delta archive is 702791680 bytes, state declares 700387328`)
+   * and every later wake refused, and `dd` copies the file to its end whatever
+   * an earlier `stat` said about it.
+   *
+   * NO CONTENT DIGEST IS COMPUTED HERE. There was one once: a `sha256sum` over
+   * the whole staged archive, recorded by nothing and compared by nothing —
+   * a full CPU pass over every byte of every checkpoint, bought for nothing.
+   * What the record carries is whatever identity the STORE has for the object,
+   * which for an archive written through the mount is its upload version; R2
+   * mints one per upload, so a same-length replacement is still refusable. See
+   * {@link layerIntegrityFailure}, which treats an absent digest as unknown
+   * rather than as sound.
    */
   const stageAndPut = async (
+    chainId: string,
     key: string,
     sourceDir: string,
     excludes: readonly string[],
-  ): Promise<{ bytes: number; digest: string; objectVersion: string }> => {
+  ): Promise<ChainLayer> => {
     const archivePath = `${stageDir}/layer.sqsh`;
     // ROOM TO WRITE IT, ASKED BEFORE WRITING IT. An archiver that fills the
     // container's disk takes the whole box down with it, and a box that dies
@@ -1778,19 +1897,42 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // own requirement and the container reports what it has. Refusing here is a
     // returned failure, which the caller turns into an incident; it is never a
     // crash.
+    //
+    // STILL THE STAGING DISK, because the archive is still staged there. The
+    // publication reads that file and streams it out; it does not need a second
+    // copy, and mksquashfs cannot write into the mount directly — it seeks back
+    // to its own superblock at the end, which is not a thing an object store's
+    // filesystem can be asked to do.
     const short = await shell.stagingShortfall(sourceDir, excludes);
     if (short !== null) throw new Error(short);
-    const staged = await shell.makeSquashfs(sourceDir, archivePath, excludes);
-    const { stream } = await ports.readFileStream(archivePath);
-    // THE RECORD DESCRIBES WHAT LANDED, not what was staged. These disagreed on
-    // a deployed run — `delta archive is 702791680 bytes, state declares
-    // 700387328` — and every wake then refused, because the integrity probe
-    // compares the two. The staged size is measured before the bytes are read,
-    // so a file still settling reads short; the upload counts what it actually
-    // sent. One truth, captured after landing — and the digest with it, taken
-    // over the same bytes on their way past, because a count cannot tell this
-    // archive from another archive of the same length.
-    return await ports.putObject(key, stream, staged);
+    await shell.makeSquashfs(sourceDir, archivePath, excludes);
+    await ports.mountStore(chainId, CHAIN_PUBLISH_MOUNT, 'write');
+    let published: number;
+    try {
+      published = await shell.publishArchive(
+        archivePath, mountedLayerPath(CHAIN_PUBLISH_MOUNT, key),
+      );
+    } finally {
+      // RELEASED WHETHER OR NOT IT WORKED. A writable mount left behind is
+      // refused by the SDK's own registry on the next publication — one binding
+      // cannot be mounted twice under different access — so a failure that kept
+      // the mount would turn one bad checkpoint into every later one.
+      await ports.unmountStore(CHAIN_PUBLISH_MOUNT);
+    }
+    const landed = await ports.objectFacts(key);
+    if (landed === undefined) {
+      throw new Error(
+        `the container published ${key} through ${CHAIN_PUBLISH_MOUNT} and the store holds no `
+        + 'such object, so nothing has been recorded.',
+      );
+    }
+    if (landed.bytes !== published) {
+      throw new Error(
+        `the store holds ${landed.bytes} bytes for ${key} where the container flushed `
+        + `${published}. Refusing to record a layer whose upload did not carry every byte.`,
+      );
+    }
+    return landed;
   };
 
   const commitExtract = async (
@@ -1810,12 +1952,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const committed: ChainState = {
       mode: 'extract',
       rev: (previous?.rev ?? 0) + 1,
-      // THE SDK WROTE THIS ARCHIVE, not `putObject`, so its identity is
-      // whatever the store itself reports — which is no digest at all when the
-      // SDK uploaded it in parts, though the store's version is always there.
-      // Recording the store's own answer keeps the record honest either way:
-      // absent means unknown, and the probe skips the comparison it cannot make
-      // rather than inventing one.
+      // THE SDK WROTE THIS ARCHIVE, so its identity is whatever the store
+      // itself reports — which is no digest at all when the SDK uploaded it in
+      // parts, though the store's version is always there. Recording the
+      // store's own answer keeps the record honest either way: absent means
+      // unknown, and the probe skips the comparison it cannot make rather than
+      // inventing one.
       base: { id: backup.id, ...stored },
       delta: undefined,
       at: ports.now(),
@@ -1937,8 +2079,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // One mount and one unmount, once per box.
     if (first) {
       try {
-        await ports.mountStore(chainId);
-        await ports.unmountStore();
+        await ports.mountStore(chainId, CHAIN_STORE_MOUNT, 'read');
+        await ports.unmountStore(CHAIN_STORE_MOUNT);
       } catch (error) {
         // Where extraction is not permitted, a failed proof is a FAILED
         // CHECKPOINT carrying the platform's own reason. Converting it into
@@ -1960,10 +2102,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     await shell.resetDirs([stageDir]);
-    let layer: { bytes: number; digest: string; objectVersion: string };
+    let layer: ChainLayer;
     if (fresh) {
       layer = await stageAndPut(
-        baseObjectKey(chainId), DEVBOX_WORKDIR, ports.archiveExcludes(),
+        chainId, baseObjectKey(chainId), DEVBOX_WORKDIR, ports.archiveExcludes(),
       );
     } else {
       // The upper is the path THIS strategy passed to the mount command, not one
@@ -2001,19 +2143,20 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // delta" was true only until one happened. A box whose `dist/` really is
       // the work overrides `archiveExcludes` and keeps it in both.
       layer = await stageAndPut(
-        deltaObjectKey(chainId), upperDir, ports.archiveExcludes(),
+        chainId, deltaObjectKey(chainId), upperDir, ports.archiveExcludes(),
       );
     }
 
-    // State first, cleanup second. A delta's key was already replaced by the
-    // atomic PUT above; a rebase wrote a whole new generation and leaves the old
-    // one standing until the record naming its replacement is durable, so a
-    // crash leaves two generations and never zero.
+    // State first, cleanup second. A delta's key was replaced by a publication
+    // that is complete or absent — the object becomes visible only when the
+    // store finishes taking it — and a rebase wrote a whole new generation and
+    // leaves the old one standing until the record naming its replacement is
+    // durable, so a crash leaves two generations and never zero.
     const committed: ChainState = {
       mode: 'chain',
       rev: (previous?.rev ?? 0) + 1,
-      base: fresh ? { id: chainId, ...chainLayer(layer) } : previous.base,
-      delta: fresh ? undefined : chainLayer(layer),
+      base: fresh ? { id: chainId, ...layer } : previous.base,
+      delta: fresh ? undefined : layer,
       at: ports.now(),
       changeVersion: version,
       upperMark,
@@ -2270,6 +2413,33 @@ export function archiveCommand(input: {
     + `-comp zstd -no-progress -wildcards -ef ${shellPath(input.excludeFile)} >/dev/null; `
     + `rc=$?; printf '%s %s' "$rc" `
     + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
+}
+
+/**
+ * Copy a staged archive onto the store mount, flush it, and print
+ * `<exit> <bytes>`.
+ *
+ * ONE COMMAND, for the reason {@link archiveCommand} states: a spot container
+ * can be replaced between two RPCs, so the write and the read-back of what
+ * landed cannot be two of them.
+ *
+ * `conv=fsync` IS THE CORRECTNESS. s3fs uploads on flush, and a flush that
+ * fails has nowhere to report itself unless something asks: a shell redirect
+ * drops the close error entirely, and an unmount can return before the upload
+ * finishes. With the fsync inside the command, a store that did not take the
+ * bytes is a non-zero exit HERE — before the record names the object, and
+ * before the mount is released.
+ *
+ * `bs=4M` is a read/write size, not a buffer this side holds: the bytes never
+ * leave the container. It is large enough that s3fs sees whole multipart parts
+ * — its default part size on an R2 mount is 5 MB — and small enough to be
+ * ordinary container memory.
+ */
+export function publishCommand(input: { archivePath: string; mountedPath: string }): string {
+  return `dd if=${shellPath(input.archivePath)} of=${shellPath(input.mountedPath)} `
+    + 'bs=4M conv=fsync; '
+    + `rc=$?; printf '%s %s' "$rc" `
+    + `"$(stat -c %s ${shellPath(input.mountedPath)} 2>/dev/null || echo 0)"`;
 }
 
 /**
