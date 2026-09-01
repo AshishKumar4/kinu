@@ -35,7 +35,7 @@ class ModelEndpointTest(unittest.TestCase):
         """The default used to be production, so a run that named nothing hit it."""
         self.assertEqual(
             DEFAULT_WORKERS_AI_MODEL_ID,
-            "@cf/deepseek-ai/deepseek-v4-pro-0813",
+            "@cf/zai-org/glm-5.3",
         )
         self.assertEqual(
             DEFAULT_KINU_AI_BASE_URL,

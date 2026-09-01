@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-DEFAULT_WORKERS_AI_MODEL_ID = "@cf/deepseek-ai/deepseek-v4-pro-0813"
+DEFAULT_WORKERS_AI_MODEL_ID = "@cf/zai-org/glm-5.3"
 
 #: The production deployment. Named here for ONE purpose — deciding that an
 #: origin is a Kinu deployment and may therefore receive a Kinu
