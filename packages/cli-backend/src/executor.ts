@@ -210,7 +210,16 @@ function normalizeProviders(
   return [{ name: 'codemode', fns: providers }];
 }
 
-/** In-process execution for when tool providers are needed */
+/**
+ * In-process execution — for tool-backed code, and for the JS lane on a machine
+ * with no subprocess runtime on its PATH.
+ *
+ * Which runtime resolved decides WHERE the work runs, never what it answers, so
+ * a bare expression is given the same value here as the subprocess wrapper gives
+ * it: `addImplicitReturn` is the one rule both lanes apply. Without it a model
+ * that asked for `7 * 6` was answered `42` beside a `bun` and `undefined` inside
+ * a compiled-binary deploy — the same code, silently emptied by a PATH.
+ */
 async function executeInProcess(
   code: string, providers: ResolvedProvider[], timeoutMs?: number,
 ): Promise<ExecuteResult> {
@@ -234,7 +243,7 @@ async function executeInProcess(
   // Use Function constructor with explicitly passed context vars
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);
-  const wrapped = `return (async (${argNames.join(', ')}) => { ${code} })(${argNames.map((_, i) => `arguments[${i}]`).join(', ')})`;
+  const wrapped = `return (async (${argNames.join(', ')}) => { ${addImplicitReturn(code)} })(${argNames.map((_, i) => `arguments[${i}]`).join(', ')})`;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

@@ -131,6 +131,12 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
 /** One device command Stop asked its durable owner to cancel. `unknown` is an
  *  honest daemon result, not a success: the request may still be running. */
 export interface DeviceStopOutcome {
+  /** WHICH command this outcome is about — the identity the daemon registered
+   *  its process group under. Every per-request answer carries it, so a `failed`
+   *  one can be named to the owner and retried; it is absent only when the
+   *  durable sweep itself could not run and the report is about no single
+   *  command. */
+  readonly requestId?: string;
   readonly outcome: 'terminated' | 'unknown' | 'failed';
   readonly detail?: string;
 }
