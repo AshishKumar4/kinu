@@ -1,4 +1,5 @@
 [
   "packages/cf-backend/src/actor-agent.ts#ActorAgent.getWorkspaceInstructionApprovals",
+  "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.experienceAction",
   "packages/cf-backend/src/subordinate-agent.ts#SubordinateAgent.getWorkspaceInstructionApprovals"
 ]

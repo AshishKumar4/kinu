@@ -15,6 +15,7 @@
 import { callable, type AgentContext, type SubAgentClass } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
+  runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   type NimbusSandboxHandle,
@@ -418,6 +419,44 @@ export class OrchestratorAgent extends ActorAgent {
    * exploration head, a swarm node — and `sealRpcSurface` keeps it off the
    * public transport.
    */
+  /** This workspace's own stores plus a client for the owner's library, every
+   *  call of which crosses the UserDO capability gate. Absent until the
+   *  workspace is claimed — there is no owner library to reach before that. */
+  private getExperienceDeps(): ExperienceActionDeps | undefined {
+    if (!this.getOwnerUserDO()) return undefined;
+    const hub = () => this.userHub();
+    return {
+      rt: this.rt,
+      facts: this.facts,
+      library: {
+        publish: async (candidate) => { const { stub, caller } = await hub(); return stub.publishExperience(caller, candidate); },
+        search: async (options) => { const { stub, caller } = await hub(); return stub.searchExperience(caller, options); },
+        get: async (id) => { const { stub, caller } = await hub(); return stub.getExperienceEntry(caller, id); },
+      },
+    };
+  }
+
+  /**
+   * The owner's experience library — publish / search / import, driven by the
+   * owner rather than by the agent.
+   *
+   * It was a tool once. Sharing proven work between workspaces is a rare and
+   * deliberate decision, and a tool costs the model attention on every turn it
+   * is not the answer to, so the same dispatcher now sits behind this RPC for
+   * the webUI to call. It runs on the workspace DO, not the UserDO, for a
+   * reason the UserDO enforces: publishing happens under a workspace's own
+   * name, and import stages into this workspace's ledger.
+   */
+  @callable()
+  async experienceAction(input: ExperienceActionInput) {
+    this.ensureSchema();
+    const deps = this.getExperienceDeps();
+    if (!deps) {
+      return { error: 'This workspace has no owner yet, so there is no experience library to reach.' };
+    }
+    return runExperienceAction(deps, input);
+  }
+
   async workspaceBoxOp(shellId: string, op: WorkspaceBoxOp): Promise<WorkspaceBoxResult> {
     return await applyWorkspaceBoxOp(this.workspaceBox(shellId), op);
   }
