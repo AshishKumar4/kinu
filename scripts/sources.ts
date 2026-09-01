@@ -80,6 +80,17 @@ const TEXT_SOURCE = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|ya?ml|toml|sh|env|pe
  *  code — which is why document checks need it separately from `isTextSource`. */
 const DOCUMENT = /\.md$/;
 
+/** A package manifest, at the root or in a workspace. */
+const MANIFEST = /(?:^|\/)package\.json$/;
+
+/** A resolved dependency graph, written by an installer rather than by a
+ *  person. Every package name in the tree appears in one. */
+const LOCKFILE = /(?:^|\/)(?:bun\.lock|bun\.lockb|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/;
+
+/** A stylesheet. Outside `TEXT_SOURCE` deliberately — a `.css` holds no prose
+ *  claim and no pasted credential — but it does name packages. */
+const STYLESHEET = /\.css$/;
+
 /**
  * What `bun test` ITSELF selects, measured rather than assumed: a directory
  * holding `a.test.ts`, `c.spec.ts`, `d_test.ts`, `e_spec.ts`, `g.test.tsx`,
@@ -291,6 +302,26 @@ export const isTextSource = (file: string): boolean => TEXT_SOURCE.test(file);
  *  states a count in words and names a symbol in a code span, and a `.json`
  *  states neither. */
 export const isDocument = (file: string): boolean => DOCUMENT.test(file);
+
+/**
+ * A package MANIFEST. The census of declared dependencies reads these, and a
+ * gate asking "who uses this package" must know which of its own bytes are the
+ * DECLARATION rather than a use: `"clsx": "^2.1.1"` under `dependencies` is
+ * what is being questioned, while `"lint": "oxlint ."` under `scripts` is a
+ * genuine reference and the only one `oxlint` has.
+ */
+export const isManifest = (file: string): boolean => MANIFEST.test(file);
+
+/** A dependency LOCKFILE. It names every package in the resolved graph by
+ *  construction, so reading one while asking who USES a package answers yes for
+ *  all of them — the lock's mention of `clsx` is the installation, not a use. */
+export const isLockfile = (file: string): boolean => LOCKFILE.test(file);
+
+/** A stylesheet. Its own package references are at-rules — this tree's
+ *  `@import "@cloudflare/kumo/styles/tailwind"` resolves a package the build
+ *  needs — and `.css` is outside {@link isTextSource}, so a dependency census
+ *  that read only text sources would report a CSS-only package as unused. */
+export const isStylesheet = (file: string): boolean => STYLESHEET.test(file);
 
 /**
  * A seeded bench defect patch. The corpus `gate:bench-corpus` governs, narrowed

@@ -1,0 +1,213 @@
+{
+  "measuredAt": "2026-09-01",
+  "files": 1907,
+  "functions": 48052,
+  "ceiling": 126,
+  "line": 39,
+  "inventory": [
+    {
+      "key": "packages/cf-backend/src/user/routes.ts#handleUserRequest",
+      "complexity": 126
+    },
+    {
+      "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
+      "complexity": 124
+    },
+    {
+      "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
+      "complexity": 114
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#measureArm",
+      "complexity": 94
+    },
+    {
+      "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
+      "complexity": 93
+    },
+    {
+      "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
+      "complexity": 87
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#candidateLifecycleChecks",
+      "complexity": 73
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useKeyboard",
+      "complexity": 72
+    },
+    {
+      "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
+      "complexity": 72
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "complexity": 71
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 68
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
+      "complexity": 66
+    },
+    {
+      "key": "packages/devbox/src/candidates/merkle-pack/build.ts#buildMerklePack",
+      "complexity": 62
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
+      "complexity": 61
+    },
+    {
+      "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
+      "complexity": 59
+    },
+    {
+      "key": "scripts/sandbox-durability-probe.ts#run",
+      "complexity": 59
+    },
+    {
+      "key": "packages/cli/src/commands/setup.ts#setupCommand",
+      "complexity": 55
+    },
+    {
+      "key": "packages/core/src/strategy/swarm-scoring.ts#scoreExpansion",
+      "complexity": 55
+    },
+    {
+      "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
+      "complexity": 55
+    },
+    {
+      "key": "packages/devbox/bench/worker.ts#fetch",
+      "complexity": 53
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#render",
+      "complexity": 52
+    },
+    {
+      "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
+      "complexity": 52
+    },
+    {
+      "key": "packages/core/src/strategy/swarm-setup.ts#seedResumedSearch",
+      "complexity": 51
+    },
+    {
+      "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
+      "complexity": 51
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
+      "complexity": 49
+    },
+    {
+      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
+      "complexity": 48
+    },
+    {
+      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
+      "complexity": 48
+    },
+    {
+      "key": "scripts/do-init-gate.ts#auditFile>walk",
+      "complexity": 48
+    },
+    {
+      "key": "scripts/literature-citations.ts#auditProse",
+      "complexity": 48
+    },
+    {
+      "key": "scripts/silent-drop.ts#auditFile>walk",
+      "complexity": 48
+    },
+    {
+      "key": "lean/check-traceability.mjs#tsScan",
+      "complexity": 46
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 46
+    },
+    {
+      "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
+      "complexity": 46
+    },
+    {
+      "key": "scripts/bench-r2-workspace.ts#main",
+      "complexity": 46
+    },
+    {
+      "key": "scripts/wired.ts#findEntrypoints>walk",
+      "complexity": 43
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#controlWitnessChecks>map",
+      "complexity": 42
+    },
+    {
+      "key": "scripts/bench-payload-transports.ts#main",
+      "complexity": 42
+    },
+    {
+      "key": "scripts/infra-manifest.ts#draftsFor",
+      "complexity": 42
+    },
+    {
+      "key": "scripts/platform-catalog.ts#auditSchema",
+      "complexity": 42
+    },
+    {
+      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn",
+      "complexity": 41
+    },
+    {
+      "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
+      "complexity": 41
+    },
+    {
+      "key": "scripts/bench-pilot.ts#validatePilotReport",
+      "complexity": 41
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "complexity": 40
+    },
+    {
+      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
+      "complexity": 40
+    },
+    {
+      "key": "packages/devbox/src/capture/model.ts#requireCompleteCaptureTree",
+      "complexity": 40
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#frozenControlStatus",
+      "complexity": 40
+    },
+    {
+      "key": "scripts/wired.ts#measureFields>walk#3",
+      "complexity": 40
+    },
+    {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 39
+    },
+    {
+      "key": "packages/devbox/src/candidates/bounded-layers.ts#build",
+      "complexity": 39
+    },
+    {
+      "key": "packages/devbox/tests/journal-daemon-runtime-matrix.ts#posixAndFence>scenario",
+      "complexity": 39
+    },
+    {
+      "key": "scripts/axis-ergonomics/report.ts#score",
+      "complexity": 39
+    }
+  ]
+}

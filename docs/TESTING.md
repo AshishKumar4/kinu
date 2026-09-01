@@ -540,6 +540,45 @@ had already rotted onto a different entry.
 workspace filesystem over their own SQLite and its `runtime-bash` shell. Its
 five files cover memory and workspace resolution.
 
+## Mutation testing: three programs, one loop
+
+A green suite says the tests pass, never that they would notice a change. These
+three ask the second question, and they differ in who names the line.
+
+| Program | Names the line | Runs where | Verdict |
+|---|---|---|---|
+| `bun run gate:mutation-fences` | a human, in `FENCES` | push tier, every run | GATE: the owning test must go red |
+| `bun run sweep:mutation` | a human, in `mutation-sweep.catalogue.ts` | on request | reports survivors |
+| `bash scripts/nightly-mutation.sh` | nobody — generated from the syntax tree | nightly, unattended | reports survivors |
+
+`gate:mutation-fences` proves four RECORDED proofs have not rotted: a fence
+whose owning test stays green once the fence is stripped is a guard nothing
+defends. Its own green output states the hole it cannot close — "a fence nobody
+declared".
+
+`scripts/mutation-pilot.ts` is what searches for those. It generates mutants
+mechanically over `packages/core/src/{heads,events,mcts}` — negate a condition,
+flip a boundary, swap `&&` for `||`, drop a guard clause — takes a stated budget
+(24 by default, spread round-robin over the four operators and then over files
+so one crowded file cannot take the whole sample), runs the suites that import
+the mutated file, and escalates anything that survives to every suite under
+`packages/core/` before reporting it. Measured 2026-09-01 on this scope: 865
+mutants generated over 59 files, and a core-tier baseline of 93 s, which is what
+a survivor costs.
+
+The loop is: the pilot searches, a human reads a survivor and decides whether it
+is an equivalent mutant or a missing assertion, and what the reading finds gets
+pinned as a fence — where the gate re-proves it on every push. A survivor is
+never a failing build; `nightly-mutation.sh` exits non-zero only when the run
+could not be MADE (no worktree, no modules, or a baseline that was already red).
+
+The pilot mutates source IN PLACE and refuses to run in the main checkout. The
+reason is measured and recorded in `mutation-sweep.ts`: a sandbox copy resolves
+`@kinu.run/*` through the donor's `node_modules` to the pristine package, so two
+thirds of a mutant's own defenders would never see it. `nightly-mutation.sh`
+therefore builds a detached worktree, runs `setup-worktree.sh` in it, and
+removes it in a trap.
+
 ## Mocking philosophy
 
 Mock boundaries, never the pure function under test.

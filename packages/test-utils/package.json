@@ -9,8 +9,7 @@
     "./turn-model": "./src/turn-model.ts"
   },
   "dependencies": {
-    "@kinu.run/core": "workspace:*",
-    "@kinu.run/agent-utils": "workspace:*"
+    "@kinu.run/core": "workspace:*"
   },
   "scripts": {
     "check": "tsc --noEmit"

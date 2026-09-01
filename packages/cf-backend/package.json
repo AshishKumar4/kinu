@@ -34,7 +34,6 @@
     "agents": "^0.20.1",
     "ai": "^6.0.182",
     "chat": "^4.30.0",
-    "clsx": "^2.1.1",
     "d3": "^7.9.0",
     "jose": "^6.2.3",
     "just-bash": "^3.0.1",
@@ -47,14 +46,11 @@
     "react-resizable-panels": "^4.10.0",
     "react-router-dom": "^7.14.1",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^3.5.0",
     "valibot": "^1.4.1",
-    "workers-ai-provider": "^3.1.10",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@kinu.run/test-utils": "workspace:*",
-    "@babel/plugin-proposal-decorators": "^7.25.9",
     "@cloudflare/vite-plugin": "^1.53.1",
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^4.20260414.1",

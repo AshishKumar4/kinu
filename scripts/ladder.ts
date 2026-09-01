@@ -364,10 +364,24 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:dead-code',
     tier: 'push',
-    seconds: 5.5,
-    catches: 'an export referenced only by its own test, and a file no entry point '
-      + 'reaches at all. `ensureActorSchema` was the first of ten.',
-    blind: 'a symbol referenced from live code that does nothing.',
+    // 7.0 s measured 2026-09-01: two knip runs dominate, the dependency census
+    // adds ~0.2 s over 11 manifests, 105 declarations and 961 installed
+    // package manifests read for their peer contracts.
+    seconds: 7,
+    catches: 'an export referenced only by its own test, a file no entry point reaches at '
+      + 'all, and a MANIFEST DECLARATION nothing imports. `ensureActorSchema` was the first '
+      + 'of ten; the dependency class deleted thirteen declarations across four manifests on '
+      + '2026-09-01, `shell-quote` among them — carried for a quadratic `parse()` no tracked '
+      + 'source calls, behind an advisory the security scanner had to accept by name. That '
+      + 'class is derived here rather than taken from knip, which reported `vitest-evals` '
+      + 'unused because its root `entry` glob (`scripts/*.ts!`) cannot see the eval suites '
+      + 'that import it; `dead-code.test.ts` joins both answers so the single difference '
+      + 'stays explained. A row that survives must carry the resolution fact that keeps it '
+      + '(hoisting, a phantom type-import, a peer contract), and an unreasoned lock row or a '
+      + 'reason outliving its row both fail.',
+    blind: 'a symbol referenced from live code that does nothing, and a dependency imported '
+      + 'only through a runtime-computed specifier — the census reads import FORMS, so '
+      + '`await import(name)` over a variable is invisible to it.',
   },
   {
     run: 'bun run gate:wired',
@@ -409,6 +423,31 @@ export const LADDER: readonly Gate[] = [
       + 'output is invisible exactly when somebody is deciding how far to trust the tree.',
   },
   {
+    run: 'bun run gate:complexity',
+    // PUSH, beside the other whole-tree censuses: 1.8s measured 2026-09-01 on
+    // the 24-thread box for 1,906 files and 48,048 functions, and a function
+    // cannot become complex between a commit and the push that follows it.
+    tier: 'push',
+    seconds: 1.8,
+    catches: 'a new function at the hard end of this codebase, arriving unnamed. The budget is '
+      + 'MEASURED rather than chosen: cyclomatic complexity for every function in the '
+      + 'enumeration, a ceiling at the highest (126, `handleUserRequest`) and a budget line at '
+      + 'the 99.9th percentile (39), with all 51 functions at or above the line pinned by name '
+      + 'and number. Growth is what fails — a fresh 40-branch dispatcher scores 41 and is red, '
+      + 'a locked function that gains one branch is red, and a locked one that is simplified '
+      + 'goes stale so the cleanup is recorded rather than quietly absorbed. The number is not '
+      + "this program's opinion: `complexity.test.ts` joins it to `oxlint`'s own "
+      + '`eslint/complexity` over the same corpus, offset by offset, and 47,994 of 47,994 '
+      + 'agree.',
+    blind: 'nesting depth, which cyclomatic complexity does not model — a flat twenty-case '
+      + 'dispatch and five conditionals nested five deep score the same. Complexity MOVED '
+      + 'rather than removed: six 10-branch helpers pass where one 60-branch function failed, '
+      + 'with the same branching in the same call path. Growth below the line, since only the '
+      + '51 at or above 39 are pinned and 232 functions sit at 20 or more. A file\'s total, a '
+      + 'type-level union, and runtime cost — one branch around a quadratic scan scores 2. All '
+      + 'of them are printed on the gate\'s GREEN path.',
+  },
+  {
     run: 'bun run gate:silent-drop',
     tier: 'push',
     seconds: 1.4,
@@ -447,7 +486,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a column that exists and is never written; that is dead-field territory.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27).

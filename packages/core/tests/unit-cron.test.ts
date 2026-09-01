@@ -4,6 +4,15 @@ import { nextAlarmTime, nextCronFire } from '../src/events/hub/cron';
 const BASE = Date.UTC(2026, 5, 2, 10, 17, 30);
 
 describe('nextCronFire', () => {
+  test('a six-field Quartz seconds-form expression is refused, not misread', () => {
+    // The arity guard is load-bearing: without it a six-field expression
+    // destructures to its first five fields, reads as all wildcards, and
+    // silently fires every minute on the wrong schedule. Found by the
+    // mutation pilot — deleting the guard survived every existing suite.
+    expect(nextCronFire('0 */5 * * * *', 1_700_000_000_000)).toBeNull();
+    expect(nextCronFire('0 0 12 * * ?', 1_700_000_000_000)).toBeNull();
+  });
+
   test('supports wildcard, step, and integer minute fields', () => {
     expect(new Date(nextCronFire('0 * * * *', BASE)!).toISOString())
       .toBe('2026-06-02T11:00:00.000Z');

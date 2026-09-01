@@ -1,4 +1,6 @@
 [
+  "packages/cf-backend/package.json#@ai-sdk/anthropic (unused-dependency)",
+  "packages/cf-backend/package.json#@ai-sdk/openai (unused-dependency)",
   "packages/cf-backend/src/lib/user-api.ts#PollResult (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#RegisteredDevice (unreferenced)",
   "packages/cf-backend/src/lib/user-api.ts#listConfig (unreferenced)",
@@ -8,7 +10,7 @@
   "packages/cf-backend/src/user/credential-envelope.ts#isSealedCredential (test-only)",
   "packages/cf-backend/src/user/mcp.ts#McpServerConfig (unreferenced)",
   "packages/cf-backend/src/user/workspace-capability.ts#setWorkspaceTier (test-only)",
-  "packages/core/src/vfs/index.ts (unreachable-file)",
+  "packages/devbox/package.json#@cloudflare/containers (unused-dependency)",
   "packages/devbox/src/candidates/merkle-pack/build.ts#parentFromPublishedParent (test-only)",
   "packages/devbox/src/candidates/publication.ts#PublicationInterrupted (test-only)",
   "packages/devbox/src/candidates/publication.ts#publishedParentOf (test-only)",
@@ -19,7 +21,6 @@
   "packages/devbox/src/capture/freeze-drain.ts#logFreezeSeam (test-only)",
   "packages/devbox/src/capture/journal-capture.ts#WatchEventQueue (test-only)",
   "packages/devbox/src/capture/journal-capture.ts#materializeJournalPrefix (test-only)",
-  "packages/devbox/src/capture/journal-factory.ts (unreachable-file)",
   "packages/devbox/src/capture/journal/client.ts (unreachable-file)",
   "packages/devbox/src/capture/model.ts#contentExtents (unreferenced)",
   "packages/devbox/src/capture/model.ts#issueVerifiedJournalCapture (test-only)",

@@ -7,15 +7,5 @@
     "./vfs": "./src/vfs/index.ts",
     "./memory": "./src/memory/index.ts",
     "./stores": "./src/stores/index.ts"
-  },
-  "dependencies": {
-    "minimist": "^1.2.8",
-    "picomatch": "^4.0.2",
-    "shell-quote": "^1.8.3"
-  },
-  "devDependencies": {
-    "@types/minimist": "^1.2.5",
-    "@types/picomatch": "^4.0.2",
-    "@types/shell-quote": "^1.7.5"
   }
 }
