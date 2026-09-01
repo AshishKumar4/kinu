@@ -51,6 +51,7 @@ import {
   BENCH_ACCOUNT_ID, COLD_ATTACH_CEILING_MS, STRATEGIES, checkpointOperation,
   createFixtureResources, deployFixture, drainBucketResidue, execInBox, r2ResiduePlane,
   retryTransient, startupOperation, stopOperation, teardownLiveArms, writeFileInBox,
+  writeArmArtifact,
   type ArmFixture, type Fixture, type Strategy,
 } from './bench-devbox-strategies';
 import {
@@ -438,6 +439,11 @@ export interface LifecycleOptions {
   /** The workload program, as bytes to install in the box. */
   readonly workloadSource: string;
   readonly log: (message: string) => void;
+  /** Called with the verdict-so-far after every settled step, so a run whose
+   *  process dies mid-lifecycle still leaves every step that settled, on disk.
+   *  Absent means in-memory only, which is what this suite's own tests use —
+   *  they assert on the verdict, not on a file. */
+  readonly settle?: (verdict: StrategyVerdict) => void;
 }
 
 /**
@@ -459,6 +465,11 @@ export async function runLifecycle(
   const notes: string[] = [];
   const stranded: StrandedWork[] = [];
 
+  /** The verdict so far, as the durable per-arm artifact records it. */
+  const partial = (): StrategyVerdict => ({
+    strategy, box, passed: failures.length === 0, steps: [...steps], failures: [...failures], notes: [...notes],
+  });
+
   const step = async <T>(op: LifecycleOp, run: (deadlineMs: number) => Promise<T>): Promise<T> => {
     const ceiling = ceilingFor(op, options.ceilings);
     const started = Date.now();
@@ -466,6 +477,7 @@ export async function runLifecycle(
     try {
       const value = await underCeiling(`${strategy} ${op}`, ceiling.ms, stranded, run);
       steps.push({ op, ms: Date.now() - started, ceilingMs: ceiling.ms, ok: true, detail: 'settled' });
+      options.settle?.(partial());
       return value;
     } catch (error) {
       const elapsed = Date.now() - started;
@@ -475,6 +487,7 @@ export async function runLifecycle(
         : wrongAnswer(strategy, op, elapsed, detail);
       steps.push({ op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail });
       failures.push(text);
+      options.settle?.(partial());
       throw new Error(text, { cause: error });
     }
   };
@@ -698,6 +711,7 @@ export async function runLifecycle(
   }
 
   for (const abandoned of stranded) notes.push(`abandoned at its ceiling: ${abandoned.what}`);
+  options.settle?.(partial());
   return { strategy, box, passed: failures.length === 0, steps, failures, notes };
 }
 
@@ -981,27 +995,41 @@ async function main(): Promise<number> {
     // checkpoint cannot take a sibling's evidence with it.
     verdicts.push(...await Promise.all(lanes.map(async (lane): Promise<StrategyVerdict> => {
       const live = lane.live;
+      const arm = lane.fixture.strategy;
+      // DURABLE PER-ARM, the same scheme the decisive driver uses: every
+      // settled step is on disk the moment it settles, so a wedged sibling or
+      // a killed driver cannot take this arm's evidence with it.
+      const settle = (verdict: StrategyVerdict): void => {
+        try {
+          writeArmArtifact(REPO_ROOT, options.runId, arm, verdict);
+        } catch (error) {
+          logLine(`${arm}: the durable arm artifact could not be written: ${describeThrown({ cause: error })}`);
+        }
+      };
       if (live === null) {
-        return {
-          strategy: lane.fixture.strategy,
+        const refused: StrategyVerdict = {
+          strategy: arm,
           box: lane.box,
           passed: false,
           steps: [],
-          failures: [`${lane.fixture.strategy}: ${lane.refusal ?? 'this arm was never deployed'}`],
+          failures: [`${arm}: ${lane.refusal ?? 'this arm was never deployed'}`],
           notes: [],
         };
+        settle(refused);
+        return refused;
       }
       const base = deployedSeam(live, lane.box);
       return await runLifecycle(
-        lane.fixture.strategy,
+        arm,
         lane.box,
-        options.wedge === lane.fixture.strategy ? wedgedSeam(base) : base,
+        options.wedge === arm ? wedgedSeam(base) : base,
         {
           ceilings,
           seed: options.seed,
           midScaleMib: options.midScaleMib,
           workloadSource,
           log: logLine,
+          settle,
         },
       );
     })));

@@ -43,7 +43,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import {
-  copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -998,10 +998,38 @@ export interface Options {
  */
 const armLogContext = new AsyncLocalStorage<Strategy>();
 
+/** How much of an arm's own log a durable artifact carries. Bounded, because
+ *  the artifact is a diagnosis aid, not a log archive: the last lines before a
+ *  wedge are the ones that name it, and everything before them is noise a
+ *  reader would page past anyway. */
+const ARM_LOG_TAIL_LINES = 80;
+
+const armLogTails = new Map<Strategy, string[]>();
+
 const log = (message: string): void => {
   const arm = armLogContext.getStore();
   process.stderr.write(`[devbox-bench${arm === undefined ? '' : `:${arm}`}] ${message}\n`);
+  if (arm === undefined) return;
+  const tail = armLogTails.get(arm) ?? [];
+  tail.push(message);
+  if (tail.length > ARM_LOG_TAIL_LINES) tail.splice(0, tail.length - ARM_LOG_TAIL_LINES);
+  armLogTails.set(arm, tail);
 };
+
+/** This arm's own log tail, as a durable artifact records it. */
+export const armLogTail = (arm: Strategy): readonly string[] => [...(armLogTails.get(arm) ?? [])];
+
+/** Everything the driver said about every arm, reset for the next run. */
+export const resetArmLogs = (): void => { armLogTails.clear(); };
+
+/** Run `work` in one arm's log context, so everything the shared transport says
+ *  inside it is attributed — and mirrored — to that arm. Exported because the
+ *  lifecycle suite drives arms through its own lanes rather than through
+ *  `runArmsInFlight`, and an arm whose lines nobody attributes has no tail for
+ *  its durable artifact to carry. */
+export function underArmLog<T>(arm: Strategy, work: () => T): T {
+  return armLogContext.run(arm, work);
+}
 
 
 /** Valibot's own field-level words for a payload that missed its contract. What
@@ -3426,6 +3454,24 @@ async function measureArm(
   const result = unmeasuredArm(strategy, box, notes);
   observe(result);
   noteLiveBox(box);
+
+  /** Write this arm's row to its own durable file at every phase boundary.
+   *
+   *  The row is one mutable object the whole pipeline fills in, so what this
+   *  writes is exactly what the arm has settled so far — never a copy that can
+   *  disagree with the row the run-level assembly will read. A write that
+   *  itself throws is logged and swallowed: the artifact is a safety net, and
+   *  a net that trips the measurement it was catching has stopped being one.
+   *  Failures here are visible in the log and in `readArmArtifact`'s verdict
+   *  when the run-level assembly reads the file back. */
+  const settle = (what: string): void => {
+    try {
+      writeArmArtifact(REPO_ROOT, options.runId, strategy, result);
+    } catch (error) {
+      log(`the durable arm artifact could not be written after ${what}: ${describeThrown({ cause: error })}`);
+    }
+  };
+  settle('the arm started');
   const teardown = async (): Promise<ArmResult> => {
     if (result.teardown === null) {
       result.teardown = await call(
@@ -3471,11 +3517,13 @@ async function measureArm(
     const note = `create failed: ${describeThrown({ cause: error })}`;
     log(note);
     notes.push(note);
+    settle('a refused create');
     return result;
   }
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
+  settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
 
@@ -3546,6 +3594,7 @@ async function measureArm(
   result.wakeMs = woke.ms;
   result.wakeKind = woke.attach.kind;
   result.wakeBootId = woke.state.state?.bootId ?? null;
+  settle('the wake');
   verify(
     'the wake attached durable bytes',
     result.wakeKind === 'attached',
@@ -3697,6 +3746,7 @@ async function measureArm(
     );
   }
   result.verifyPassed = result.verifyChecks.every((check) => check.pass);
+  settle('the lifecycle proof');
   if (!result.verifyPassed) {
     notes.push('LIFECYCLE VERIFY FAILED: this arm measured a blank disk and is not ranked');
     notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
@@ -3716,6 +3766,7 @@ async function measureArm(
   }
 
   result.generationAfterLadder = await chainGeneration(fixture, box);
+  settle('the workload phases');
 
   // THE DECISIVE EXPERIMENT. Placed after the workload phases and BEFORE
   // stop/wake, deliberately: these workloads leave hundreds of megabytes behind,
@@ -3747,6 +3798,7 @@ async function measureArm(
   result.attachWarmMs = warm.ms;
   result.attachWarmKind = warm.attach.kind;
   result.attachWarmBootId = warm.state.state?.bootId ?? null;
+  settle('the warm attach');
 
   log('ops accounting and teardown');
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
@@ -3776,6 +3828,8 @@ async function measureArm(
       );
     }
   }
+
+  settle('the witness cells');
 
   // Everything below is CLEANUP, and a cleanup failure is not a measurement
   // failure. The 2026-08-29 02:42 run lost a fully measured `bounded-layers`
@@ -3813,6 +3867,7 @@ async function measureArm(
       notes.push(`the box was not released after the arm: ${released.error ?? 'stop did not confirm'}`);
     }
   });
+  settle('the arm finished');
   return result;
 }
 
@@ -3835,6 +3890,156 @@ export function refuseFailedArm(arm: ArmResult, reason: string): ArmResult {
   arm.verifyChecks.push({ name: 'the arm completed every measured step', pass: false, detail: reason });
   arm.verifyPassed = false;
   return arm;
+}
+
+// ── durable per-arm artifacts ───────────────────────────────────────────────
+//
+// MEASURED DEFECT THIS REPAIRS: the 20260831233915 decisive run and the
+// devbox-e2e-e2ecal0901002202 calibration both spent hours measuring arms whose
+// rows existed only inside the process that measured them. The run-level
+// artifact is written once, at the end, by the same process — so a wedged
+// sibling, a killed driver or a run that never reached its own assembly left
+// NOTHING but a log. An arm's settled measurements are the one thing the run
+// cannot afford to lose to a process it does not control, so every arm writes
+// its own row to disk the moment it settles, and the final assembly reads those
+// files rather than trusting its own memory.
+
+/** Where one run's per-arm artifacts live: under `bench-artifacts`, one
+ *  directory per run, one file per arm. The run id — not the `--out` basename —
+ *  is the directory, so two runs sharing a `--out` path never collide and one
+ *  run's directory holds exactly the arms that run requested. */
+export function armArtifactDir(repoRoot: string, runId: string): string {
+  return join(repoRoot, 'bench-artifacts', runId);
+}
+
+export function armArtifactPath(repoRoot: string, runId: string, arm: Strategy): string {
+  return join(armArtifactDir(repoRoot, runId), `${arm}.json`);
+}
+
+/** What one arm's own artifact holds: the row, and the log tail.
+ *
+ *  The row is the same `ArmResult` the run-level artifact assembles from, so
+ *  there is no second shape to keep in agreement. The log tail is the driver's
+ *  own last words about the arm — bounded by `ARM_LOG_TAIL_LINES` — which is
+ *  all an arm that never settled can offer. `settledAt` dates the write, so a
+ *  reader comparing this file against a run-level artifact that never landed can
+ *  see WHICH of the two is missing rather than guessing. */
+export interface ArmArtifact<Row = ArmResult> {
+  readonly schema: 'devbox-arm-artifact/1';
+  readonly arm: Strategy;
+  readonly runId: string;
+  readonly settledAt: string;
+  readonly logTail: readonly string[];
+  readonly row: Row;
+}
+
+/** The file's contract, parsed at the boundary like every wire reply here. The
+ *  ROW is left unparsed on purpose: two drivers write two row shapes through
+ *  this one writer, and the envelope — schema, arm, run — is what a reader has
+ *  to be able to trust before it reads either. */
+const ArmArtifactSchema: v.GenericSchema<ArmArtifact<unknown>> = v.looseObject({
+  schema: v.literal('devbox-arm-artifact/1'),
+  arm: v.picklist(STRATEGIES),
+  runId: v.string(),
+  settledAt: v.string(),
+  logTail: v.array(v.string()),
+  row: v.unknown(),
+});
+
+/**
+ * Write one arm's row to its own file, atomically, the moment it settles.
+ *
+ *  ATOMICALLY (tmp + rename, the repo's own `writeLedger` pattern): the reader
+ *  of this file is a process that has already lost its sibling, and a file cut
+ *  off mid-write by that same death would be a second wedge sitting on the
+ *  first. `rename` within one filesystem is the one write a reader either sees
+ *  whole or does not see at all.
+ *
+ *  THE MOMENT IT SETTLES, not once at the end: called at every phase boundary
+ *  with whatever the row holds, so the file is monotone — a cold attach, a
+ *  ladder, a wake each overwrite the last partial row — and a kill between
+ *  boundaries costs at most the phase in flight, never a number that already
+ *  landed. Success and refusal both write, because a refusal IS the arm's
+ *  settled answer.
+ */
+export function writeArmArtifact<Row>(
+  repoRoot: string,
+  runId: string,
+  arm: Strategy,
+  row: Row,
+): ArmArtifact<Row> {
+  const artifact: ArmArtifact<Row> = {
+    schema: 'devbox-arm-artifact/1',
+    arm,
+    runId,
+    settledAt: new Date().toISOString(),
+    logTail: armLogTail(arm),
+    row,
+  };
+  const path = armArtifactPath(repoRoot, runId, arm);
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(artifact, null, 2)}\n`);
+  renameSync(temporary, path);
+  return artifact;
+}
+
+/** What one arm's settled artifact read back as. `error` is set only when a
+ *  file EXISTS and cannot be used — an absent file is a verdict of its own
+ *  (externally-aborted), not a read failure, and conflating the two would hide
+ *  a wedged arm behind a missing one. */
+export interface ReadArmArtifact {
+  readonly artifact: ArmArtifact | null;
+  readonly error: string | null;
+}
+
+/**
+ * Read one arm's settled artifact back from disk.
+ *
+ *  The run-level assembly reads THESE FILES rather than the rows it still holds
+ *  in memory, which is the whole point: a wedged arm's siblings settled on disk
+ *  before the wedge, and the assembly must not depend on having watched them
+ *  settle. A file that cannot be used is reported rather than skipped — an
+ *  `externally-aborted` row carrying the read failure is a finding, while an
+ *  unreadable file read as "never measured" would be one more silent loss.
+ */
+export function readArmArtifact(repoRoot: string, runId: string, arm: Strategy): ReadArmArtifact {
+  const path = armArtifactPath(repoRoot, runId, arm);
+  if (!existsSync(path)) return { artifact: null, error: null };
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (cause) {
+    return { artifact: null, error: `unreadable (${path}): ${describeThrown({ cause })}` };
+  }
+  const parsed = v.safeParse(ArmArtifactSchema, decoded);
+  if (!parsed.success) {
+    return {
+      artifact: null,
+      error: `not an arm artifact (${path}): ${issueText(parsed.issues)}`,
+    };
+  }
+  // SAFETY: the envelope is parsed above; the row is whatever THIS run's own
+  // lane wrote through `writeArmArtifact` minutes earlier, and the decisive
+  // assembly is the only reader of the `ArmResult` shape it wrote itself. A
+  // cross-driver read would need its own row parse and has no caller.
+  return { artifact: parsed.output as ArmArtifact, error: null };
+}
+
+/**
+ * The row for an arm this process never saw settle.
+ *
+ *  `reason` names what happened to the run rather than to the arm — the arm's
+ *  own answer lives in its durable file when it has one, and the two must not
+ *  wear each other's words. The log tail rides along as `log:` notes because
+ *  that is the shape the report already prints for a failed arm.
+ */
+export function externallyAbortedArm(arm: Strategy, box: string, reason: string): ArmResult {
+  // The tail first, the verdict last: `refuseFailedArm` appends the reason as
+  // the closing note and as the failed lifecycle check, so writing it here too
+  // would print it twice in a report whose whole job is to be read.
+  const notes = armLogTail(arm).map((line) => `log: ${line}`);
+  return refuseFailedArm(unmeasuredArm(arm, box, notes), `externally-aborted: ${reason}`);
 }
 
 /**
@@ -3875,7 +4080,16 @@ export async function runArm(
         `the failed arm's box could not be released: ${describeThrown({ cause: releaseError })}`,
       );
     }
-    return refuseFailedArm(measured, reason);
+    // The refusal is the arm's settled answer, and it goes to disk like every
+    // other settled one — a killed run must not be able to lose the reason an
+    // arm died, which is the one fact the next reader of that arm needs.
+    const refused = refuseFailedArm(measured, reason);
+    try {
+      writeArmArtifact(REPO_ROOT, options.runId, strategy, refused);
+    } catch (writeError) {
+      log(`the durable arm artifact could not be written after the failure: ${describeThrown({ cause: writeError })}`);
+    }
+    return refused;
   }
 }
 
@@ -3926,7 +4140,23 @@ export async function runArmsInFlight(
       } catch (error) {
         const reason = `arm lane failed: ${describeThrown({ cause: error })}`;
         log(reason);
-        return refuseFailedArm(unmeasuredArm(strategy, `ab-${strategy}-${runId}`, []), reason);
+        // A lane that never reached `measureArm` owns no `settle` boundary, so
+        // the refusal is written here — the artifact for this arm must exist
+        // whatever shape the failure took, or the run-level assembly would read
+        // its absence as an external abort. The row is a REFUSED one carrying
+        // the log tail, because a lane failure is this run's own answer about
+        // the arm, not something external that happened to the run.
+        const refused = refuseFailedArm(unmeasuredArm(
+          strategy,
+          `ab-${strategy}-${runId}`,
+          armLogTail(strategy).map((line) => `log: ${line}`),
+        ), reason);
+        try {
+          writeArmArtifact(REPO_ROOT, runId, strategy, refused);
+        } catch (writeError) {
+          log(`the durable arm artifact could not be written after the lane failure: ${describeThrown({ cause: writeError })}`);
+        }
+        return refused;
       }
     })));
 }
@@ -5446,6 +5676,26 @@ async function main(): Promise<number> {
   } finally {
     await runTeardownOnce();
   }
+
+  // THE ASSEMBLY READS THE DURABLE FILES, NOT ITS OWN MEMORY. Every arm wrote
+  // its row to bench-artifacts/<run>/<arm>.json at each phase boundary, so a
+  // run whose in-flight window was interrupted by anything this catch already
+  // survived still assembles exactly what its arms settled. An arm with no
+  // file never settled in THIS process — recorded as externally-aborted with
+  // the log tail, never as an unmeasured row that would misread a wedge as a
+  // strategy that measured nothing.
+  const settledArms = options.arms.map((strategy) => {
+    const read = readArmArtifact(REPO_ROOT, options.runId, strategy);
+    if (read.error !== null) {
+      log(`the durable artifact for ${strategy} could not be read: ${read.error}`);
+      failure ??= `the durable artifact for ${strategy} could not be read`;
+    }
+    if (read.artifact !== null) return read.artifact.row;
+    const reason = read.error ?? failure ?? 'this arm never settled before the run ended';
+    return externallyAbortedArm(strategy, `ab-${strategy}-${options.runId}`, reason);
+  });
+  arms.length = 0;
+  arms.push(...settledArms);
 
   const meta: RunMeta = {
     date: new Date().toISOString().slice(0, 10),
