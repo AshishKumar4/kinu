@@ -666,8 +666,8 @@ export class AgentOrchestrator {
   /**
    * Ingress trigger: a fresh external event was admitted (webhook, email,
    * peer message, timer). Debounced (~250ms fixed window) so a burst drains
-   * into ONE turn — the post-turn drain path stays immediate (settleTurn /
-   * the backend's post-turn hook) because it is already serialized behind a
+   * into ONE turn — the post-turn drain path stays immediate (the settled
+   * turn's own `event_drain` row) because it is already serialized behind a
    * just-finished turn and coalesced everything that arrived during it.
    */
   scheduleDrain(): void {
@@ -816,62 +816,22 @@ export class AgentOrchestrator {
     await this.signals.deliver(signal);
   }
 
-  // `completeTurn` used to sit here as a status-blind record+drain pair. It was
-  // replaced by `settleTurn`, which takes the driver's verdict: the old shape
-  // could not express "record this failed turn" without the caller deciding,
-  // and one caller decided not to.
-
-  /**
-   * Settle a finished turn, whatever it finished as.
-   *
-   * THE RULE, which is why this exists: a turn that aborted or errored is still
-   * evidence, and its extensions still see its end. One backend already did
-   * both; the other early-returned on any status but `'completed'`, so a failed
-   * cloud turn reached neither the outcome-review buffer nor the session
-   * cadence, and its extensions never got `onTurnEnd`. Failures are the most
-   * informative turns the evolution loop has — dropping them left the
-   * classifier grading successes against successes on one backend and the whole
-   * distribution on the other. The comment justifying that early return covered
-   * only the alternate-takes purge beside it, never the recording, so it read as
-   * an accident rather than a decision. This method is the decision.
-   *
-   * `status` is the driver's own verdict, not a flag the caller chose: backends
-   * hand it the same value they seal the run with (see `classifyRunEnd`) and
-   * this method decides what follows from it.
-   *
-   * `hadError` is corrected by {@link recordedTurn}, on the `'error'` arm only.
-   *
-   * Ordering is turn-end, then record, then drain. The extension hook runs
-   * first because its effects (memory writes, compaction state) are part of the
-   * turn the review then reads, and because that is already the order both
-   * drivers produce — one fires it inside `runChat` before settling, the other
-   * right after the response.
-   *
-   * The RETURN VALUE is the second rule this method owns, and it is
-   * {@link improvementLanesOpen} — one derivation, asked here rather than
-   * repeated here.
-   */
-  async settleTurn(input: {
-    status: RunEndReason;
-    turn: CompletedTurn;
-    continuity: TurnContinuity;
-    /**
-     * Fire this turn's extension end.
-     *
-     * A callback rather than a payload because the two drivers differ in who
-     * already fired it: `runChat` emits `onTurnEnd` itself for every turn it
-     * drives, including a cut one, and it also drives heads and swarm nodes
-     * that never settle through an orchestrator — so it must keep doing so, and
-     * a backend built on it passes nothing here. A backend driving its own loop
-     * passes the emit, and gets the guarantee that it runs on failed turns too.
-     */
-    onTurnEnd?: () => void | Promise<void>;
-  }): Promise<{ improvementLanesOpen: boolean }> {
-    if (input.onTurnEnd) await input.onTurnEnd();
-    this.recordTurn(this.recordedTurn(input.status, input.turn), input.continuity);
-    await this.drainPendingEvents();
-    return { improvementLanesOpen: this.improvementLanesOpen(input.status) };
-  }
+  // THE SETTLE SPINE IS THE TERMINAL ROSTER, and it is not here.
+  //
+  // Two shapes stood here before it: `completeTurn`, a status-blind record+drain
+  // pair, and then `settleTurn`, which took the driver's verdict and ran
+  // turn-end → record → drain in one call. Both are gone, because a settle that
+  // runs as one call cannot record which half of itself an eviction interrupted.
+  // `declareTerminalRoster` (orchestrator/terminal-roster.ts) owns that sequence
+  // now — `turn_end_extensions`, `turn_record`, `event_drain`,
+  // `improvement_lanes`, in that order, each a separately claimed row — and
+  // every backend drives it through `TerminalTransitions.settle`.
+  //
+  // What survives here is what those rows ASK: {@link recordTurn} for the
+  // recording itself, {@link drainPendingEvents} for the reactor, and the two
+  // pure rules below. They are public precisely because a backend claiming the
+  // sub-effects separately has to ask each question without running a settle,
+  // and asking twice is how the two backends drifted in the first place.
 
   /**
    * Whether the COMPLETED-only improvement lanes — shadow trial, advisor
@@ -908,10 +868,10 @@ export class AgentOrchestrator {
    * nothing earned, which is the fabricated signal this codebase refuses
    * everywhere else.
    *
-   * PURE and public for the same reason as `improvementLanesOpen`: a backend
-   * that claims the recording as its OWN durable effect records the turn
-   * without passing through `settleTurn`, and this rule must not be spelled a
-   * second time there.
+   * PURE and public for the same reason as `improvementLanesOpen`: the backend
+   * that claims the recording as its own durable effect records the turn from
+   * inside that row's body, and this rule must not be spelled a second time
+   * there.
    */
   recordedTurn(status: RunEndReason, turn: CompletedTurn): CompletedTurn {
     return status === 'error' && !turn.hadError ? { ...turn, hadError: true } : turn;

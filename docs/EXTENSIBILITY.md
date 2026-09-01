@@ -387,7 +387,7 @@ Core owns these six turn parts. Check it before writing one in a backend.
 | What | Core owns | A backend supplies |
 |---|---|---|
 | The `model_call` event | `buildModelCallEvent(report, opts)` (`core/src/events/model-call-event.ts:43`) over a `ModelCallReport` (`core/src/events/model-call.ts:114`) | the sink that writes the row |
-| Turn settle | `AgentOrchestrator.settleTurn` (`core/src/orchestrator/agent-orchestrator.ts`) | the driver's verdict; both backends now drive settlement through `TerminalTransitions.settle` (`core/src/orchestrator/terminal-transition.ts`), whose effect table records the turn |
+| Turn settle | `declareTerminalRoster` (`core/src/orchestrator/terminal-roster.ts`) declares WHICH effects a settled response owes, in order; `TerminalTransitions.settle` (`core/src/orchestrator/terminal-transition.ts`) runs them once; `AgentOrchestrator.recordedTurn` / `.improvementLanesOpen` / `.drainPendingEvents` are what those rows ask | the driver's verdict, the effect BODIES, and the wake |
 | Steer provenance | `STEER_METADATA_KEY` and `STEER_STEP_METADATA_KEY` (`core/src/orchestrator/user-steer.ts:175-180`) | nothing; both backends stamp the same two keys |
 | Auto-title | `planWorkspaceTitle` and `applyWorkspaceTitle` (`core/src/identity/naming.ts:192`, `:211`) | `ownMission()` and `persistAutoTitle()`; the CLI wraps them in `autoTitleLocalWorkspace` (`cli/src/local-agent-client.ts:168`) |
 | Provider snapshot cache | `ProviderListingCache` and `buildProviderCatalogSnapshot` (`core/src/profiles/provider-catalog.ts:106`, `:53`) | the sweep that lists providers |

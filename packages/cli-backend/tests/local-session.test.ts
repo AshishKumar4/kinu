@@ -2408,7 +2408,8 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
     // The parity arm for the settle verdict: a turn the provider killed has no
     // subject to replay and no answer to review, so it requests no advice —
     // exactly what the cloud spine already did. The condition is ONE core
-    // decision now (settleTurn's verdict), not this backend's own spelling of
+    // decision now (`improvementLanesOpen`, asked from inside the
+    // `improvement_lanes` row), not this backend's own spelling of
     // completed-and-build beside core's recording rule.
     const exploding = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-model',

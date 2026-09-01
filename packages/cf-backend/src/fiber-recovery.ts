@@ -8,7 +8,7 @@
  *
  *   • a detached tool call   (`bg:<kind>`, minted by core's BackgroundJobRunner)
  *   • a search               (`mcts`, minted by core's SEARCH_FIBER_NAME)
- *   • the evolution lane     (`evolution:settle`, started by settleTurnSpine)
+ *   • the evolution lane     (`evolution:settle`, started by settleEvolutionInBackground)
  *   • the advisor lane       (`advisor:review`, started by reviewTurnInBackground)
  *
  * That activation needs NO client and NO request: with nothing connected, the

@@ -438,10 +438,11 @@ describe('turn-pipeline correctness wiring', () => {
     // buffer nor `extensions.onTurnEnd`, while the identical turn on the CLI
     // reached both. Failures are the most informative evidence the evolution
     // loop has, and the comment justifying that early return covered only the
-    // alternate-takes purge beside it. Core's `AgentOrchestrator.settleTurn` is
-    // the one entry now, and it fires the extension end BEFORE recording; the
-    // extension half is core's (it runs unconditionally inside settleTurn), so
-    // what THIS asserts is the half that was unprovable here — the durable row.
+    // alternate-takes purge beside it. Core's terminal roster is the one
+    // declaration now, and it owes `turn_end_extensions` before `turn_record` on
+    // every status; the ordering half is core's (unit-core-adapter-seams pins
+    // it), so what THIS asserts is the half that was unprovable here — the
+    // durable row.
     const harness = orchestratorHarness();
     // What `beforeTurn` establishes for a turn with no durable identity: this
     // session records evolution state, and the settled response carries that
@@ -940,8 +941,9 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
   // effect both actor classes dispatch, and what each verdict leaves behind is
   // read from storage. A FAILED build turn has no subject to replay and no answer to
   // review; a plan turn belongs in neither evidence set. Both facts are ONE
-  // core decision (settleTurn's verdict) — these arms fail independently on
-  // any backend that starts spelling its own condition again.
+  // core decision (`improvementLanesOpen`, asked from inside the row) — these
+  // arms fail independently on any backend that starts spelling its own
+  // condition again.
   const NOTE = JSON.stringify({
     note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work',
   });

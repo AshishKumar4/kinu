@@ -7,6 +7,7 @@ import { createTestSql } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { RUN_END_REASONS } from '../src/orchestrator/turn-lifecycle';
+import { declareTerminalRoster } from '../src/orchestrator/terminal-roster';
 import { MissionGovernor } from '../src/mission-budget';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
@@ -332,60 +333,76 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   });
 });
 
-describe('AgentOrchestrator.settleTurn — split into claimable parts', () => {
-  // The cloud backend claims the settle's sub-effects as separate durable rows,
-  // so it asks for the improvement-lane verdict WITHOUT running the settle.
-  // Two spellings of that verdict is the drift this pins: the CLI once queued
-  // shadow trials for turns that FAILED while the cloud spine did not.
-  test('the predicate and the settle’s returned verdict agree on every (status, mode)', async () => {
-    for (const kinuMode of ['build', 'plan'] as const) {
+describe('AgentOrchestrator — the settle’s claimable parts', () => {
+  // The settle runs as a ROSTER of separately claimed rows, so each rule it
+  // once applied inside one call is asked on its own. The lane verdict is what
+  // both backends ask from inside the `improvement_lanes` row; the roster's
+  // completed-Build gate is the same rule spelled where the rows are declared.
+  // Two spellings that could disagree is the drift this pins: the CLI once
+  // queued shadow trials for turns that FAILED while the cloud spine did not.
+  test('the lane verdict and the roster’s own gate agree on every (status, mode)', () => {
+    for (const workMode of ['build', 'plan'] as const) {
       for (const status of RUN_END_REASONS) {
         const { engine } = fakeEngine();
         const { host } = fakeHost();
         const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
-        orch.beginTurn(Date.now(), { kinuMode });
+        orch.beginTurn(Date.now(), { kinuMode: workMode });
 
         const predicate = orch.improvementLanesOpen(status);
-        const settled = await orch.settleTurn({
-          status, turn: aTurn(0), continuity: 'conversation',
-        });
+        // The roster's own gate, read through a row only a completed Build turn
+        // earns: everything after `!completed || workMode === 'plan'` is behind it.
+        const owed = declareTerminalRoster({
+          messageId: 'answer-1', status, workMode, continuity: 'conversation',
+          completed: status === 'completed', userText: 'q', assistantText: 'a',
+          scopedTurn: {}, recordedAt: 1, evolutionEnabled: true,
+        }, { autoGepa: true });
+        const rosterGate = owed.some((effect) => effect.name === 'auto_gepa');
 
-        expect({ kinuMode, status, open: settled.improvementLanesOpen })
-          .toEqual({ kinuMode, status, open: predicate });
+        expect({ workMode, status, open: rosterGate })
+          .toEqual({ workMode, status, open: predicate });
         // And the rule itself, so an agreeing pair of WRONG answers still fails.
-        expect(predicate).toBe(status === 'completed' && kinuMode === 'build');
+        expect(predicate).toBe(status === 'completed' && workMode === 'build');
       }
     }
   });
 
-  test('settleTurn fires the extension end, records the turn, and drains — in that order', async () => {
-    const { engine, store } = fakeEngine();
+  test('the roster owes the extension end, then the recording, then the drain', () => {
+    // The order the spine runs in, now that it is a roster rather than one call:
+    // the extension's effects (memory writes, compaction state) are part of the
+    // turn the review then reads, and the drain follows the recording so a woken
+    // turn cannot be graded ahead of the turn that woke it.
+    const owed = declareTerminalRoster({
+      messageId: 'answer-1', status: 'completed', workMode: 'build',
+      continuity: 'conversation', completed: true, userText: 'q', assistantText: 'a',
+      scopedTurn: {}, recordedAt: 1, evolutionEnabled: true,
+    }, { turnEndExtensions: { message: {} } });
+    const at = (name: string): number => owed.findIndex((effect) => effect.name === name);
+
+    expect(at('turn_end_extensions')).toBeGreaterThanOrEqual(0);
+    expect(at('turn_record')).toBeGreaterThan(at('turn_end_extensions'));
+    expect(at('event_drain')).toBeGreaterThan(at('turn_record'));
+    expect(at('improvement_lanes')).toBeGreaterThan(at('event_drain'));
+  });
+
+  test('the drain the settled turn owes injects one turn for the pending backlog', async () => {
+    // The `event_drain` row's whole body is this method — what the settle used
+    // to run inline once the recording was in.
+    const { engine } = fakeEngine();
     const { host, enqueued } = fakeHost();
     const eventLog = newEventLog();
     eventLog.publish({ descriptor: webhook('d1'), now: 1 });
     const orch = new AgentOrchestrator({ host, engine, eventLog });
     orch.beginTurn(Date.now(), {});
 
-    const order: string[] = [];
-    await orch.settleTurn({
-      status: 'completed',
-      turn: aTurn(0),
-      continuity: 'conversation',
-      onTurnEnd: () => {
-        // The extension sees the end BEFORE the recording the review reads.
-        order.push(`turn-end@window=${store.size()}`);
-      },
-    });
+    await orch.drainPendingEvents();
 
-    expect(order).toEqual(['turn-end@window=0']);
-    expect(store.size()).toBe(1);
-    expect(enqueued).toHaveLength(1);          // the webhook drained into a turn
+    expect(enqueued).toHaveLength(1);
   });
 
   // Only the `'error'` arm. A user pressing Stop did not make the agent fail,
-  // and stamping their turn as an error would feed the classifier a negative
-  // label nothing earned.
-  test('the recorded turn carries hadError only when the driver said error', async () => {
+  // and stamping their turn as an error would feed the outcome classifier a
+  // negative label nothing earned.
+  test('the recorded turn carries hadError only when the driver said error', () => {
     const recorded: Array<boolean> = [];
     const predicted: Array<boolean> = [];
     for (const status of RUN_END_REASONS) {
@@ -393,10 +410,12 @@ describe('AgentOrchestrator.settleTurn — split into claimable parts', () => {
       const { host } = fakeHost();
       const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
       orch.beginTurn(Date.now(), {});
-      // Asked BEFORE the settle: a backend claiming the recording separately
-      // has to get the same answer without running it.
-      predicted.push(orch.recordedTurn(status, aTurn(0)).hadError);
-      await orch.settleTurn({ status, turn: aTurn(0), continuity: 'conversation' });
+      // The `turn_record` row's body is exactly this pair: the rule is asked,
+      // and its answer is what gets recorded, with nothing in between that
+      // could disagree.
+      const stamped = orch.recordedTurn(status, aTurn(0));
+      predicted.push(stamped.hadError);
+      orch.recordTurn(stamped, 'conversation');
       recorded.push(store.claim()!.turns[0]!.hadError);
     }
     expect(recorded).toEqual([false, false, true]);

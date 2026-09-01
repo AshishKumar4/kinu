@@ -15,6 +15,7 @@ import {
   buildModelCallEvent, type ModelCallReport,
   classifyRunEnd, RUN_END_REASONS, type RunEndReason,
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
+  declareTerminalRoster,
   AgentOrchestrator, type AgentOrchestratorDeps,
   buildProviderCatalogSnapshot, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
@@ -307,66 +308,72 @@ const settledTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   hadError: false, feedback: null, turnId: 'm1', origin: 'programmatic', ...over,
 });
 
-describe('AgentOrchestrator.settleTurn — every settled turn is recorded', () => {
+describe('the settled turn’s recording — every settled turn is recorded', () => {
+  /** The roster a settled turn owes, for the status under test. What the
+   *  `turn_record` and `turn_end_extensions` rows are read off. */
+  const roster = (status: RunEndReason, over: Partial<Parameters<typeof declareTerminalRoster>[0]> = {}) =>
+    declareTerminalRoster({
+      messageId: 'm1', status, workMode: 'build', continuity: 'independent_task',
+      completed: status === 'completed', userText: 'q', assistantText: 'a',
+      scopedTurn: {}, recordedAt: 1, evolutionEnabled: true, ...over,
+    }, { turnEndExtensions: { message: {} } });
+
   // THE DIVERGENCE. One backend early-returned on any status but 'completed', so
   // a failed cloud turn reached neither the outcome-review buffer nor the
   // session cadence — the evolution loop graded successes against successes
   // there and the whole distribution locally.
-  test('an errored turn is recorded', async () => {
+  test('an errored turn is recorded', () => {
     const { orch, recorded } = seamOrchestrator();
-    await orch.settleTurn({ status: 'error', turn: settledTurn(), continuity: 'independent_task' });
+    orch.recordTurn(orch.recordedTurn('error', settledTurn()), 'independent_task');
     expect(recorded).toHaveLength(1);
   });
 
-  test('an aborted turn is recorded', async () => {
+  test('an aborted turn is recorded', () => {
     const { orch, recorded } = seamOrchestrator();
-    await orch.settleTurn({ status: 'aborted', turn: settledTurn(), continuity: 'independent_task' });
+    orch.recordTurn(orch.recordedTurn('aborted', settledTurn()), 'independent_task');
     expect(recorded).toHaveLength(1);
   });
 
-  test('extensions see a failed turn end, and see it before the turn is recorded', async () => {
-    const { orch, recorded } = seamOrchestrator();
-    const order: string[] = [];
-    await orch.settleTurn({
-      status: 'error', turn: settledTurn(), continuity: 'independent_task',
-      onTurnEnd: () => { order.push(`turn_end@${recorded.length}`); },
-    });
+  test('a FAILED turn still owes its extension end, and owes it before the recording', () => {
     // Recorded AFTER the hook: the hook's effects (memory writes, compaction
-    // state) are part of the turn the review then reads.
-    expect(order).toEqual(['turn_end@0']);
-    expect(recorded).toHaveLength(1);
+    // state) are part of the turn the review then reads. Both rows are owed on
+    // every status, which is the half that used to be lost — a failed cloud turn
+    // reached neither.
+    for (const status of RUN_END_REASONS) {
+      const owed = roster(status).map((effect) => effect.name);
+      expect(owed).toContain('turn_end_extensions');
+      expect(owed.indexOf('turn_record')).toBeGreaterThan(owed.indexOf('turn_end_extensions'));
+    }
   });
 
-  test('an errored turn is stamped hadError even when the accumulator missed it', async () => {
+  test('an errored turn is stamped hadError even when the accumulator missed it', () => {
     // A turn can throw outside the accumulator's view, which is why one backend
     // had to set acc.hadError by hand in its catch.
     const { orch, recorded } = seamOrchestrator();
-    await orch.settleTurn({
-      status: 'error', turn: settledTurn({ hadError: false }), continuity: 'independent_task',
-    });
+    orch.recordTurn(
+      orch.recordedTurn('error', settledTurn({ hadError: false })), 'independent_task',
+    );
     expect(recorded[0]?.hadError).toBe(true);
   });
 
   // A user pressing Stop did not make the agent fail. Stamping their turn as an
   // error would feed the outcome classifier a negative label nothing earned.
-  test('an aborted turn is NOT stamped as an error', async () => {
+  test('an aborted turn is NOT stamped as an error', () => {
     const { orch, recorded } = seamOrchestrator();
-    await orch.settleTurn({
-      status: 'aborted', turn: settledTurn({ hadError: false }), continuity: 'independent_task',
-    });
+    orch.recordTurn(
+      orch.recordedTurn('aborted', settledTurn({ hadError: false })), 'independent_task',
+    );
     expect(recorded[0]?.hadError).toBe(false);
   });
 
-  test('with evolution off nothing is recorded, and the hook still runs', async () => {
+  test('with evolution off nothing is recorded, and the extension end is still owed', () => {
     const { orch, recorded } = seamOrchestrator({ enabled: false });
-    let hooked = false;
-    await orch.settleTurn({
-      status: 'completed', turn: settledTurn(), continuity: 'independent_task',
-      onTurnEnd: () => { hooked = true; },
-    });
+    orch.recordTurn(orch.recordedTurn('completed', settledTurn()), 'independent_task');
     expect(recorded).toEqual([]);
-    // Extensions are not evolution: `--no-auto-evolve` must not silence them.
-    expect(hooked).toBe(true);
+    // Extensions are not evolution: `--no-auto-evolve` must not silence them, so
+    // the row that announces the turn's end is owed whatever the gate says.
+    expect(roster('completed', { evolutionEnabled: false }).map((effect) => effect.name))
+      .toContain('turn_end_extensions');
   });
 });
 
@@ -684,7 +691,7 @@ describe('the declared ids the adapters used to spell by hand', () => {
   });
 });
 
-describe('AgentOrchestrator.settleTurn — the post-settle lane verdict is ONE core decision', () => {
+describe('the post-settle lane verdict is ONE core decision', () => {
   const cases = [
     ['completed', 'build', true],
     ['completed', 'plan', false],
@@ -692,13 +699,14 @@ describe('AgentOrchestrator.settleTurn — the post-settle lane verdict is ONE c
     ['aborted', 'build', false],
   ] as const;
   for (const [status, mode, open] of cases) {
-    test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the improvement lanes`, async () => {
+    test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the improvement lanes`, () => {
       const { orch } = seamOrchestrator();
       orch.beginTurn(Date.now(), mode === 'plan' ? { kinuMode: 'plan' } : {});
-      const verdict = await orch.settleTurn({
-        status, turn: settledTurn(), continuity: 'independent_task',
-      });
-      expect(verdict.improvementLanesOpen).toBe(open);
+      // Asked exactly as the `improvement_lanes` row's body asks it: the live
+      // turn's mode when the row is running on the activation that produced it,
+      // and the RECORDED mode on a replay.
+      expect(orch.improvementLanesOpen(status)).toBe(open);
+      expect(orch.improvementLanesOpen(status, mode)).toBe(open);
     });
   }
 });
