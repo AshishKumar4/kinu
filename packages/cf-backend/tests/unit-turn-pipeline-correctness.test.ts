@@ -702,22 +702,26 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('activation classifies owed deliveries; only the durable wake dispatches', () => {
-    // Activation reaches one reconcile…
+    // Activation asks ONE predicate and arms one row…
     const onStart = memberBody(source, 'async onStart(): Promise<void>', 'orchestrator.ts');
-    expect(onStart).toContain('this.reconcileEventDeliveries(sweepsTruncated)');
+    expect(onStart).toContain('sweepsTruncated || this.owedWorkExists()');
+    expect(onStart).toContain('this.scheduleTerminalRetry(Date.now())');
 
-    // …and that reconcile is EXISTENCE READS AND ONE ARM — the init ruling
+    // …and that predicate is EXISTENCE READS AND NOTHING ELSE — the init ruling
     // covers spawned work too, so the lease join, the stale sweep and every
-    // dispatch belong to the wake's frame.
-    const reconcile = memberBody(
-      source, 'protected async reconcileEventDeliveries(sweepsTruncated = false): Promise<void>', 'orchestrator.ts',
+    // dispatch belong to the wake's frame. Behaviour:
+    // unit-durable-terminal-recovery.test.ts drives an activation over an owed
+    // lease and asserts both halves — the classification answers true and the
+    // lease is untouched until the tick runs.
+    const classify = memberBody(
+      source, 'protected owedWorkExists(): boolean', 'orchestrator.ts',
     );
-    expect(reconcile).toContain('hasOpenDrainLease()');
-    expect(reconcile).toContain('hasIncomplete()');
-    expect(reconcile).toContain('await this.scheduleTerminalRetry(');
-    expect(reconcile).not.toContain('owedDrainReplies');
-    expect(reconcile).not.toContain('unbindStale');
-    expect(reconcile).not.toContain('resumeAll');
+    expect(classify).toContain('hasOpenDrainLease()');
+    expect(classify).toContain('hasIncomplete()');
+    expect(classify).not.toContain('await');
+    expect(classify).not.toContain('owedDrainReplies');
+    expect(classify).not.toContain('unbindStale');
+    expect(classify).not.toContain('resumeAll');
 
     // The wake: sweep with the answered set excluded, then the replies, then
     // the terminal replay — one frame, one order that cannot lose work.

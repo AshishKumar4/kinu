@@ -2087,60 +2087,72 @@ export abstract class ActorAgent extends Think<Env> {
 
 
   /**
-   * Arm a DURABLE wake for the terminal effects still owed.
+   * Idempotent soonest-wins arm of ONE durable wake row for `callback`.
    *
-   * A JavaScript reference to a pending promise is not a wake: once
-   * `onChatResponse` returns, the runtime may terminate the isolate with email
-   * replies, parent RPCs and model lanes still in flight, and an idle workspace
-   * would then owe a reply that nothing ever retries. The schedule row is what
-   * makes the retry exist independently of this activation.
+   * THE convergence rule for every Kinu wake chain — the terminal retry here,
+   * the workspace timer in `OrchestratorAgent.armTimer` — because both chains
+   * ask the same question of the same registry and an answer that differed
+   * between them would be a second, silently divergent collapse. A JavaScript
+   * reference to a pending promise is not a wake: once an invocation returns
+   * the runtime may terminate the isolate with replies, RPCs and model lanes
+   * still in flight, and the schedule row is what makes the work exist
+   * independently of this activation.
    *
-   * One row per actor, soonest-wins: the write comes FIRST and the collapse
-   * reads after it, because cancelling before scheduling opens a window with no
-   * wake row in it, and a failure inside that window ends the retry chain for
-   * good. An extra row is the harmless failure instead — the tick is idempotent
-   * and re-arms from durable state, so it costs one early wake.
+   * WRITE FIRST, then collapse. Cancelling before scheduling opens a window
+   * with NO wake row in it, and a failure inside that window ends the chain for
+   * good — nothing re-arms a workspace whose only wake was the one just
+   * cancelled. An extra row is the harmless failure instead: every tick is
+   * idempotent and re-arms from durable state, so it costs one early wake.
+   *
+   * The collapse READS AFTER ITS OWN WRITE, and that is what makes two
+   * concurrent arms converge. Every `await` here is a suspension point, so two
+   * callers can both pre-read an empty registry and both write; a collapse over
+   * either caller's own PRE-read set cancels nothing and leaves two rows
+   * permanently. The POST-write set contains every racing row, and the survivor
+   * is chosen by a rule both callers compute identically — earliest wake, ties
+   * broken by the SDK's own row id — so they agree without coordinating and the
+   * loser's second cancel of an already-cancelled id is a no-op.
+   *
+   * FUTURE ROWS ONLY. While a tick runs, the SDK keeps its own one-shot row in
+   * `listSchedules()` until the callback returns — so a collapse that counted it
+   * would pick the overdue executing row as the earliest keeper, cancel the
+   * future row this call just wrote, and then lose the keeper when the SDK
+   * deletes it. A target in the past therefore becomes the NEXT second rather
+   * than this one: a row at `nowSec` is one this method would immediately read
+   * as un-armed, so it would be written again on the next call.
    */
-  protected async scheduleTerminalRetry(atMs: number, laps = 0): Promise<void> {
+  protected async armWakeRow(callback: keyof this & string, atMs: number): Promise<void> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round UP: the SDK stores schedule times in whole seconds, and waking
-    // before the target leaves the retry not-yet-due, which would re-arm for the
+    // before the target leaves the work not-yet-due, which would re-arm for the
     // same second and busy-spin the alarm until the millisecond passed.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
-    await this.schedule(new Date(targetSec * 1000), TERMINAL_RETRY_CALLBACK, laps);
-    // FUTURE rows only. While `_kinuTerminalRetryTick` runs, the SDK keeps its
-    // own one-shot row in `listSchedules()` until the callback returns — so a
-    // collapse that counted it would pick the overdue executing row as the
-    // earliest keeper, cancel the future row this call just wrote, and then lose
-    // the keeper when the SDK deletes it. Any effect needing a second alarm
-    // attempt would stop retrying. Same exclusion, same reason, as `armTimer`.
-    const armed = (await this.listSchedules())
-      .filter((row) => row.callback === TERMINAL_RETRY_CALLBACK && row.time > nowSec);
-    if (armed.length <= 1) return;
-    // The keeper is chosen by a rule every concurrent arm computes identically —
-    // earliest wake, ties broken by the SDK's own row id — so two arms converge
-    // on the same survivor without coordinating, and the loser's second cancel of
-    // an already-cancelled id is a no-op. THE LAP FLOOR SURVIVES THE COLLAPSE:
-    // the keeper is rewritten carrying the MAX laps any collapsed row held, so
-    // an activation's promptness pull cannot reset a durable backoff a failing
-    // sweep already earned — restarts included, because the floor is a ROW.
-    const keeper = armed.reduce((best, row) =>
+    const pending = async (): Promise<{ id: string; time: number }[]> =>
+      (await this.listSchedules())
+        .filter((row) => row.callback === callback && row.time > nowSec)
+        .map((row) => ({ id: row.id, time: row.time }));
+    const armed = await pending();
+    const desired = Math.min(targetSec, ...armed.map((row) => row.time));
+    if (armed.length === 1 && armed[0].time === desired) return;
+    await this.schedule(new Date(desired * 1000), callback);
+    const settled = await pending();
+    if (settled.length <= 1) return;
+    const keeper = settled.reduce((best, row) =>
       row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best);
-    const lapFloor = armed.reduce((most, row) => {
-      const parsed = v.safeParse(v.number(), row.payload);
-      return parsed.success ? Math.max(most, parsed.output) : most;
-    }, laps);
-    for (const row of armed) {
+    // The keeper is never cancelled, so a failure here leaves EXTRA wakes and
+    // never zero, and it propagates: the caller's own write is what the output
+    // gate is holding, and a silent collapse failure would report a converged
+    // registry that is not.
+    for (const row of settled) {
       if (row.id !== keeper.id) await this.cancelSchedule(row.id);
     }
-    const keeperLaps = v.safeParse(v.number(), keeper.payload);
-    if (!keeperLaps.success || keeperLaps.output < lapFloor) {
-      // WRITE FIRST, cancel second — the replacement lands before the old
-      // keeper goes, so no reset in the gap can leave the workspace with no
-      // retry row at all. The extra row is momentary and idempotent to cancel.
-      await this.schedule(new Date(keeper.time * 1000), TERMINAL_RETRY_CALLBACK, lapFloor);
-      await this.cancelSchedule(keeper.id);
-    }
+  }
+
+  /** The terminal-retry chain's arm: the wake that carries every post-activation
+   *  obligation — owed effects, budgeted sweep remainders, activation-scoped
+   *  recovery. One row per actor, soonest-wins. */
+  protected scheduleTerminalRetry(atMs: number): Promise<void> {
+    return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs);
   }
 
   /**
@@ -2150,31 +2162,20 @@ export abstract class ActorAgent extends Think<Env> {
    * excludes protected members. Idempotent: it reads the owed roster from
    * storage and re-arms from what is left, so a duplicate wake costs one read.
    */
-  async _kinuTerminalRetryTick(payload?: JsonValue): Promise<void> {
+  async _kinuTerminalRetryTick(): Promise<void> {
     // Maintenance first: the budgeted sweeps and the activation-scoped
     // recovery run in this alarm frame, then the owed external deliveries.
     // One wake, one carrier, collapse semantics included — a pass that left
     // work unfinished re-arms THIS tick through the same singleton-safe armer,
     // at the shared capped backoff: a deep backlog drains at a growing pace,
-    // and a persistently FAILING sweep (which also answers unfinished) settles
-    // at the ceiling instead of a one-second loop.
-    //
-    // THE LAP FLOOR IS DURABLE: it rides this wake's own schedule-row payload,
-    // so a deploy, runtime restart or eviction mid-backoff resumes the ramp
-    // where it left off instead of at one second — the in-memory counter only
-    // carries it between alarms of one warm isolate.
-    const floor = v.safeParse(v.number(), payload);
-    if (floor.success && floor.output > this.#maintenanceLaps) {
-      this.#maintenanceLaps = floor.output;
-    }
+    // and a pass that keeps answering unfinished settles at the ceiling
+    // instead of a one-second loop.
     const sweepsUnfinished = this.maintenanceSweeps();
     const recoveryUnfinished = await this.maintenanceWork();
     await this.owedDeliveryWork();
     if (sweepsUnfinished || recoveryUnfinished) {
       this.#maintenanceLaps = this.#maintenanceLaps + 1;
-      await this.scheduleTerminalRetry(
-        Date.now() + recoveryBackoffMs(this.#maintenanceLaps), this.#maintenanceLaps,
-      );
+      await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(this.#maintenanceLaps));
     } else {
       this.#maintenanceLaps = 0;
     }
@@ -2184,45 +2185,31 @@ export abstract class ActorAgent extends Think<Env> {
    * Consecutive unfinished maintenance laps — the pace input for the tick's
    * own re-arm.
    *
-   * In-memory ON PURPOSE, and the durability lives one level down: the delay
-   * is baked into the schedule ROW the re-arm writes, so an eviction cannot
-   * shorten a wake already armed. What resets this counter is an ACTIVATION —
-   * which deliberately pulls one immediate tick for its owed classification —
-   * and the exponential ramp then bounds the fast laps to about six per
-   * activation before the sixty-second ceiling holds again. A persistently
-   * failing sweep therefore costs a handful of sub-minute alarms per
-   * activation, never a one-second loop.
+   * In-memory, and the durability that matters lives one level down: the delay
+   * is baked into the schedule ROW the re-arm writes, so nothing — not an
+   * eviction, not a concurrent arm — can shorten a wake already armed. A
+   * restart resets the counter and the ramp re-climbs, five sub-minute wakes to
+   * the sixty-second ceiling, which is why the count does not ride the row
+   * itself: carrying it there saved one re-climb per restart and cost a
+   * max-fold over every armed row plus a rewrite of the keeper on every
+   * activation that pulls the wake forward.
    */
   #maintenanceLaps = 0;
 
   /**
-   * When this activation began — the isolate's own construction instant.
+   * Everything a wake dispatches after the maintenance passes, in the one order
+   * that cannot lose work.
    *
-   * The recovery cutoff: a head spawned AFTER this moment belongs to a live
-   * request of THIS activation (requests can land between construction and
-   * the wake's first tick), and no recovery pass may mark it.
-   */
-  protected readonly activationStartedAt = Date.now();
-
-  /**
-   * Whether this activation still owes its ONE recovery pass.
+   * SEPARATE from {@link maintenanceWork} rather than folded into it, because
+   * the tick treats the two differently and must: maintenance answers
+   * "unfinished" and paces the re-arm, while these deliveries run on EVERY tick
+   * whatever maintenance answered — an owed reply is an answer somebody is
+   * waiting on, and it must not queue behind a budgeted sweep's remainder.
    *
-   * In-memory ON PURPOSE: "once per activation" is a property of the isolate,
-   * and an eviction resets both together. It is what keeps the recovery in
-   * `maintenanceWork` off the ordinary terminal retries that arm the same
-   * wake mid-activation — `reconcileInterruptedForks` assumes every running
-   * head it sees is stale, which is true for heads spawned before
-   * {@link activationStartedAt} and FALSE for live ones after it.
-   */
-  protected activationRecoveryPending = true;
-
-  /**
-   * Everything a wake dispatches, in the one order that cannot lose work.
-   *
-   * A seam rather than the tick body so a subclass with MORE owed external
-   * lanes (the orchestrator's event drain replies) prepends them here and the
-   * whole set rides ONE durable wake — the init gate arms this and never runs
-   * it, per the ruling that an activation launches no external work.
+   * A seam so a subclass with MORE owed external lanes (the orchestrator's
+   * event-drain replies) prepends them here and the whole set rides ONE durable
+   * wake — the init gate arms this and never runs it, per the ruling that an
+   * activation launches no external work.
    */
   protected async owedDeliveryWork(): Promise<void> {
     await this.terminal.replayOwedAndRearm();
@@ -6400,11 +6387,42 @@ export abstract class ActorAgent extends Think<Env> {
    *  whether the pass filled a budget and must continue on the next tick. */
   protected async maintenanceWork(): Promise<boolean> { return false; }
 
-  /** Every budgeted activation sweep this actor owns; a subclass with more
-   *  tables overrides and folds its own in. Answers whether ANY pass filled
-   *  its budget — the caller arms the wake on true. */
   /** Detached work this actor owns until its lexical error boundary settles. */
   protected readonly _backgroundTasks = new Set<AsyncTaskOwner>();
+
+  /**
+   * Hold one detached task for as long as this activation owns it.
+   *
+   * The plumbing every detached chain in this backend had written out by hand:
+   * take an owner, run the body, release the owner whatever happened. Written
+   * once because the ownership is the point — a Durable Object cancels an
+   * in-flight promise on reset with its rejection swallowed
+   * (`do.background_task.cancelled_on_reset`), so a floating promise is work
+   * nothing can join, name or report. This is NOT durability: a task that must
+   * survive an eviction rides a fiber row ({@link redriveRecoveredLane}).
+   *
+   * THE BODY CLASSIFIES ITS OWN FAILURE, and that division is deliberate: an
+   * event name is only queryable where it is written as a constant, so the
+   * outcome is named by the site that owns it rather than handed here as a
+   * parameter. The catch below is a backstop for a body that broke that
+   * contract, not the reporting path — an unhandled rejection in a Durable
+   * Object is invisible, and one named event is what makes it not.
+   */
+  protected detachOwned(body: () => Promise<void>): void {
+    const owner: AsyncTaskOwner = { promise: null };
+    this._backgroundTasks.add(owner);
+    owner.promise = (async () => {
+      try {
+        await body();
+      } catch (cause) {
+        diagnostics.failure('actor.detached_task_unclassified', toKinuError({
+          doing: 'running a detached activation task', cause, otherwise: 'io',
+        }), { workspace: this.name });
+      } finally {
+        this._backgroundTasks.delete(owner);
+      }
+    })();
+  }
 
   /**
    * Await every detached task this activation currently owns.
@@ -6428,6 +6446,11 @@ export abstract class ActorAgent extends Think<Env> {
     );
   }
 
+  /** Every budgeted activation sweep this actor owns; a subclass with more
+   *  tables overrides and folds its own in. Answers whether ANY pass filled
+   *  its budget — the caller arms the wake on true. Synchronous and bounded by
+   *  construction, which is what lets the init gate run the SAME seam the alarm
+   *  frame runs instead of a hand-folded copy of it. */
   protected maintenanceSweeps(): boolean {
     return this.sweepUnrecoverableFiberRows();
   }
@@ -6486,13 +6509,6 @@ export abstract class ActorAgent extends Think<Env> {
     };
   }
 
-  /** Detached lane re-drives this activation dispatched and still owns — the
-   *  same ownership every detached chain in this class has, so a re-drive is a
-   *  task something holds rather than a floating promise. One entry per DISPATCH
-   *  rather than per lane: a single scan can offer two rows of one lane, and each
-   *  carries its own checkpoint. */
-  private readonly _laneRedrives = new Set<AsyncTaskOwner>();
-
   /**
    * Re-drive one interrupted lane OFF the init gate, durably.
    *
@@ -6505,19 +6521,23 @@ export abstract class ActorAgent extends Think<Env> {
    * obligation the SDK is about to delete has a replacement carrier by the time
    * the hook answers, and an interruption of the re-drive is handed back to the
    * same classification, under the same lane name, with the same checkpoint.
+   *
+   * The DURABLE carrier is the fiber row; the in-memory owner is
+   * {@link detachOwned}'s, shared with every other detached chain here — one
+   * dispatch per entry, because a single scan can offer two rows of one lane
+   * and each carries its own checkpoint.
    */
   protected redriveRecoveredLane(
     lane: string, checkpoint: JsonValue, body: () => Promise<void>,
   ): void {
-    const owner: AsyncTaskOwner = { promise: null };
-    this._laneRedrives.add(owner);
-    owner.promise = (async () => {
+    this.detachOwned(async () => {
       try {
-        // The SDK's protected stash wrapper writes `initialSnapshot` in the
-        // SAME synchronous prefix as the row insert — so there is no window in
-        // which a reset finds a recoverable lane with a null payload. The
-        // public `runFiber` has no such option; this seam exists for exactly
-        // this composition.
+        // The SDK's protected stash wrapper writes `initialSnapshot` in the SAME
+        // synchronous prefix as the row insert (`agents/dist/index.js`
+        // `_runFiberInternal`: the INSERT, then `writeSnapshot`, both before the
+        // first await) — so there is no window in which a reset finds a
+        // recoverable lane with a null payload. The public `runFiber` reaches
+        // the same internal with no options; this seam is that composition.
         await this._runFiberWithStashWrapper(lane, async () => { await body(); }, {
           initialSnapshot: checkpoint,
         });
@@ -6527,10 +6547,8 @@ export abstract class ActorAgent extends Think<Env> {
           cause,
           otherwise: 'unavailable',
         }), { workspace: this.name, lane });
-      } finally {
-        this._laneRedrives.delete(owner);
       }
-    })();
+    });
   }
 
   /** Invalidate every cache that depends on the resolved model so the next

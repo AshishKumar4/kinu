@@ -14,7 +14,6 @@
  * tests/workerd/do-alarm.test.ts — including the redelivery-on-throw contract
  * the re-arm now depends on.
  */
-import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { orchestratorHarness, subordinateHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
@@ -246,13 +245,17 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(ended('live-run')).toBe(false);
   });
 
-  test('the backoff floor rides the wake row, so a restart cannot reset the ramp', async () => {
-    // A recovery pass that fills its budget answers unfinished, and its pace
-    // is durable: the lap count is the schedule row's own payload, a fresh
-    // isolate resumes the ramp from it, and an activation's promptness pull
-    // carries the max floor through the collapse instead of resetting it.
-    // Driven by REAL work — a branch-head backlog past the 256-row seal
-    // budget — with no failure injection.
+  test('an unfinished pass re-arms in the FUTURE, at a pace that grows per lap', async () => {
+    // The property the pacing exists for, stated as rows: a pass that fills its
+    // budget answers unfinished and re-arms LATER than the next second, and a
+    // second unfinished lap is armed later still — so a backlog drains at a
+    // growing pace and a pass that keeps answering unfinished cannot become a
+    // one-second loop. The DELAY is what is durable: it is baked into the
+    // schedule row, so nothing an eviction or a concurrent arm does can shorten
+    // a wake already armed.
+    //
+    // Driven by REAL work — a branch-head backlog past the 256-row seal budget
+    // — with no failure injection.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
@@ -261,20 +264,36 @@ describe('the workspace keeps exactly one wake row', () => {
        VALUES (?, ?, 0, 'take a branch', 'running', ?)`,
     );
     const stale = Date.now() - 60_000;
-    for (let i = 0; i < 513; i++) insert.run(`floor-head-${i}`, `branch-floor-${i}`, stale);
+    for (let i = 0; i < 769; i++) insert.run(`floor-head-${i}`, `branch-floor-${i}`, stale);
+    // ONE alarm, as the platform delivers it: the SDK deletes its own one-shot
+    // row once the callback returns, so the next tick starts with no armed row
+    // — and the delay the tick chose is what the platform waited. Modelled
+    // here because that deletion is the whole reason a ramp can grow: without
+    // it a soonest-wins arm would keep the earliest row forever.
+    const fireArmedTick = async (): Promise<number> => {
+      const before = (await agent.listSchedules())
+        .filter((row) => row.callback === '_kinuTerminalRetryTick');
+      for (const row of before) await agent.cancelSchedule(row.id);
+      const firedAtSec = Math.floor(Date.now() / 1000);
+      await agent._kinuTerminalRetryTick();
+      const armed = (await agent.listSchedules())
+        .filter((row) => row.callback === '_kinuTerminalRetryTick');
+      return armed.length === 0 ? 0 : (armed[0]?.time ?? 0) - firedAtSec;
+    };
 
-    // Lap one: 256 sealed, the pass is unfinished, the re-arm carries laps=1.
-    await agent._kinuTerminalRetryTick();
-    const first = (await agent.listSchedules()).find((row) => row.callback === '_kinuTerminalRetryTick');
-    if (!first) throw new Error('the unfinished tick did not re-arm');
-    expect(first.payload).toBe(1);
+    // Lap one: 256 sealed, 513 left, so the pass is unfinished and its re-arm
+    // is a real delay out — never the next second.
+    const first = await fireArmedTick();
+    expect(first).toBeGreaterThan(1);
 
-    // A RESTARTED isolate (fresh in-memory counter) receives the row's own
-    // payload and resumes at lap two, not lap one.
-    await agent._kinuTerminalRetryTick(v.parse(v.number(), first.payload));
-    const second = (await agent.listSchedules()).find((row) => row.callback === '_kinuTerminalRetryTick');
-    if (!second) throw new Error('the resumed tick did not re-arm');
-    expect(second.payload).toBe(2);
+    // Lap two waits strictly longer than lap one: the ramp, in the rows.
+    const second = await fireArmedTick();
+    expect(second).toBeGreaterThan(first);
+
+    // And the ramp ends: with the backlog drained the tick stops re-arming
+    // instead of pacing forever.
+    expect(await fireArmedTick()).toBeGreaterThan(second);
+    expect(await fireArmedTick()).toBe(0);
   });
 
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {
@@ -357,6 +376,28 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.reconcileWakeRow();
 
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual([armed.id]);
+  });
+
+  test('a due row is not counted as armed, so the chain re-arms over it', async () => {
+    // The other half of the same rule, and the one only an ARM can show: a row
+    // that is already due belongs to the tick that is running (or about to),
+    // which re-arms when it finishes. Counting it as "armed" would make that
+    // closing re-arm a no-op against itself and end the chain — so an arm for
+    // later work must write its own FUTURE row and leave the due one to fire.
+    const { agent, db } = orchestratorHarness();
+    await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
+    const [armed] = await agent.listSchedules();
+    if (!armed) throw new Error('the trigger did not arm a wake row');
+    const dueSec = Math.floor(Date.now() / 1000) - 5;
+    db.prepare(`UPDATE cf_agents_schedules SET time = ? WHERE id = ?`).run(dueSec, armed.id);
+
+    await agent.createTimerTrigger({ atMs: Date.now() + 2 * DAY_MS, label: 'later' });
+
+    const rows = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
+    // The due row survives (it is a wake the platform still owes) and the new
+    // work has a future row of its own.
+    expect(rows.map((row) => row.time).sort((a, b) => a - b))
+      .toEqual([dueSec, Math.ceil((Date.now() + 2 * DAY_MS) / 1000)]);
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {

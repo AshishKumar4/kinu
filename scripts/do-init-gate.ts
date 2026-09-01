@@ -323,24 +323,80 @@ const ADMITTED_INIT_AWAITS: readonly string[] = [
   'await this.hostedWorkspace().bundle.session()',
 ];
 
-/** Every own-scope await in `body` that is NOT on
- *  {@link ADMITTED_INIT_AWAITS}, plus every value-carrying `return` — an async
- *  function ADOPTS a returned promise, so `return this.slowThing()` holds the
- *  gate with zero AwaitExpression; the approved form returns nothing. Spelled
- *  as written. Callers gate on isAsync. */
+/** Statements that RUN THEIR BODY MORE THAN ONCE. An admitted await inside one
+ *  spells exactly the admitted text and holds the gate N times, so the
+ *  admission — bounded work owed once at the start of the object's life — would
+ *  be satisfied by unbounded work. */
+const LOOPS: readonly string[] = [
+  'ForStatement', 'ForInStatement', 'ForOfStatement',
+  'WhileStatement', 'DoWhileStatement',
+];
+
+/**
+ * Every own-scope way this body can hold the gate, spelled as written.
+ *
+ * FOUR SHAPES, because `await` is only the commonest one:
+ *   • `AwaitExpression` — admitted when its spelling is on the list AND it is
+ *     not inside a loop, since a loop turns one admitted await into N.
+ *   • a value-carrying `return` — an async function ADOPTS a returned promise,
+ *     so `return this.slowThing()` holds the gate with zero AwaitExpression.
+ *   • `for await (… of …)` — a `ForOfStatement` carrying `await: true`. It
+ *     awaits once per iteration and contains no AwaitExpression node at all,
+ *     which is exactly why the await scan could not see it.
+ *   • `await using x = …` — a `VariableDeclaration` whose `kind` carries the
+ *     await. Same blind spot, same reason: no AwaitExpression node.
+ * A nested `async` function has its own scope and cannot extend the gate, so
+ * the walk does not descend into one — descending would report the detached
+ * task that IS the prescribed fix.
+ */
 function rejectedInitAwaits(text: string, body: SyntaxNode | undefined): string[] {
   if (body === undefined) return [];
   const rejected: string[] = [];
-  const collect = (node: SyntaxNode): void => {
+  const spell = (node: SyntaxNode): string =>
+    text.slice(node.start, node.end).replace(/\s+/g, ' ').trim();
+  const collect = (node: SyntaxNode, inLoop: boolean): void => {
     for (const child of node.children) {
+      const looping = inLoop || LOOPS.includes(child.type);
       if (child.type === 'AwaitExpression') {
-        const spelled = text.slice(child.start, child.end).replace(/\s+/g, ' ').trim();
+        const spelled = spell(child);
         if (!ADMITTED_INIT_AWAITS.includes(spelled)) rejected.push(spelled);
+        else if (looping) rejected.push(`${spelled} inside a loop`);
         continue;
       }
       if (child.type === 'ReturnStatement' && child.children.length > 0) {
-        const spelled = text.slice(child.start, child.end).replace(/\s+/g, ' ').trim();
-        rejected.push(spelled);
+        rejected.push(spell(child));
+        continue;
+      }
+      if (child.type === 'ForOfStatement' && child.raw.type === 'ForOfStatement'
+        && child.raw.await === true) {
+        rejected.push(`for await (…) at ${spell(child).slice(0, 40)}`);
+      }
+      if (child.type === 'VariableDeclaration' && child.raw.type === 'VariableDeclaration'
+        && child.raw.kind.startsWith('await ')) {
+        rejected.push(spell(child));
+        continue;
+      }
+      if (isFunctionLike(child)) continue;
+      collect(child, looping);
+    }
+  };
+  collect(body, false);
+  return rejected;
+}
+
+/** An admitted-async gate must actually HOLD one admitted await. `async` with
+ *  none is a gate that gains nothing from being async while opting out of the
+ *  synchronous population's own rules (no own-scope await, `: void`) — and a
+ *  body whose only work is a detached `.then` chain is exactly that shape. */
+function admittedInitAwaits(text: string, body: SyntaxNode | undefined): number {
+  if (body === undefined) return 0;
+  let held = 0;
+  const collect = (node: SyntaxNode): void => {
+    for (const child of node.children) {
+      if (child.type === 'AwaitExpression') {
+        if (ADMITTED_INIT_AWAITS.includes(text.slice(child.start, child.end).replace(/\s+/g, ' ').trim())) {
+          held += 1;
+        }
         continue;
       }
       if (isFunctionLike(child)) continue;
@@ -348,7 +404,7 @@ function rejectedInitAwaits(text: string, body: SyntaxNode | undefined): string[
     }
   };
   collect(body);
-  return rejected;
+  return held;
 }
 
 function ownScopeAwait(body: SyntaxNode): SyntaxNode | undefined {
@@ -486,9 +542,24 @@ export function auditFile(
       // fails by name, so admitting a new one is a conscious edit HERE.
       const admittedAsyncGate = isAsync(member) && hook !== 'recovery' && hook !== 'container-start';
       if (admittedAsyncGate) {
-        for (const awaitText of rejectedInitAwaits(text, blockBodyOf(functionOf(member) ?? member))) {
+        const gateBody = blockBodyOf(functionOf(member) ?? member);
+        const rejected = rejectedInitAwaits(text, gateBody);
+        for (const awaitText of rejected) {
           fail(`holds the gate with \`${awaitText}\` — not on the admitted init-await list `
-            + '(ADMITTED_INIT_AWAITS); the gate admits the workspace boot alone, returned nothing');
+            + '(ADMITTED_INIT_AWAITS); the gate admits the workspace boot alone, once, '
+            + 'outside every loop, and returns nothing');
+        }
+        // `async` is the admission's own cost, so a gate that holds nothing
+        // admitted has paid it for nothing — and has left the synchronous
+        // population's rules (no own-scope await, annotated `: void`) while
+        // gaining no reason to. The shape this refuses is an `async onStart`
+        // whose work is a detached `.then` chain: no await, no return, nothing
+        // the await scan can see, and every synchronous rule opted out of. Only
+        // when nothing above fired, because a body already refused by name has
+        // been told what to fix.
+        if (rejected.length === 0 && admittedInitAwaits(text, gateBody) === 0) {
+          fail('declared `async` while holding no admitted init await — drop `async` and the '
+            + '`: void` rules apply again, or hold the admitted boot');
         }
       } else if (isAsync(member)) {
         fail('declared `async` — its promise is what `blockConcurrencyWhile` waits on');

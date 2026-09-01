@@ -158,8 +158,9 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     expect(harness.agent.harnessBeginTerminalTransition('u-owed')).toBe('first');
 
     // Classification arms the wake and dispatches NOTHING — the init ruling
-    // covers spawned work too. The alarm frame is what pays for the reply.
-    await harness.agent.harnessReconcileEventDeliveries();
+    // covers spawned work too. The activation's whole answer is this boolean;
+    // the alarm frame is what pays for the reply.
+    expect(harness.agent.harnessOwedWorkExists()).toBe(true);
     expect(lease(harness, 'ev-owed')).toEqual({ turn_id: 'evt-owed', consumed_at: 5 });
     await harness.agent._kinuTerminalRetryTick();
 

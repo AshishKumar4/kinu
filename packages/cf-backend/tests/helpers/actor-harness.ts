@@ -488,12 +488,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.terminal.resumeAll();
   }
 
-  /** The WHOLE activation delivery reconcile, AWAITED: the owed replies first,
-   *  then the interrupted transitions, then the stale sweep. Production detaches
-   *  it from `onStart`, so a suite that wants its outcome rather than its timing
-   *  calls it here. */
-  harnessReconcileEventDeliveries(): Promise<void> {
-    return this.reconcileEventDeliveries();
+  /** The activation's OWN classification: does this workspace owe a wake?
+   *  Production reads exactly this in `onStart` and arms one schedule row on
+   *  true, dispatching nothing — so a suite that wants the verdict (and wants
+   *  to prove nothing was dispatched with it) asks here. */
+  harnessOwedWorkExists(): boolean {
+    return this.owedWorkExists();
   }
 
   /** The budget-first interrupted-fiber prune, exactly as `onStart` runs it. */

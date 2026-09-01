@@ -534,6 +534,71 @@ export class A extends Agent {
     expect(found[0]).toContain('not on the admitted init-await list');
   });
 
+  test('an admitted await inside a LOOP is not one admitted await', () => {
+    // The admission is "bounded work owed once at the start of the object's
+    // life". A loop spells the admitted text exactly and holds the gate N
+    // times, so the spelling check alone would license unbounded work.
+    const found = reasons(`
+export class A extends Agent {
+  async onStart(): Promise<void> {
+    for (const _ of this.pending()) {
+      await this.hostedWorkspace().bundle.session();
+    }
+  }
+}
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('inside a loop');
+  });
+
+  test('`for await` holds the gate with no AwaitExpression to find', () => {
+    // `for await (… of …)` is a ForOfStatement carrying `await: true`: it awaits
+    // once per iteration and contains no AwaitExpression node at all, so an
+    // await scan reads the body as await-free. Same family as the adopted
+    // return — a gate hold the spelling rule cannot see.
+    const found = reasons(`
+export class A extends Agent {
+  async onStart(): Promise<void> {
+    await this.hostedWorkspace().bundle.session();
+    for await (const row of this.remoteRows()) { void row; }
+  }
+}
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('for await');
+  });
+
+  test('`await using` holds the gate with no AwaitExpression either', () => {
+    // The other node that carries its await in a `kind` rather than an
+    // expression: `await using res = …` awaits the disposal protocol.
+    const found = reasons(`
+export class A extends Agent {
+  async onStart(): Promise<void> {
+    await this.hostedWorkspace().bundle.session();
+    await using lease = this.remoteLease();
+  }
+}
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('await using lease');
+  });
+
+  test('`async` with nothing admitted to hold is refused outright', () => {
+    // The shape that satisfies every other rule: no await, no return, and a
+    // detached `.then` chain doing the work — `async` paid for, the synchronous
+    // population's rules (`: void`, no own-scope await) opted out of, and
+    // nothing admitted held.
+    const found = reasons(`
+export class A extends Agent {
+  async onStart(): Promise<void> {
+    void this.hostedWorkspace().bundle.session().then(() => { this.ready = true; });
+  }
+}
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('holding no admitted init await');
+  });
+
   test('cut the wire: an UNADMITTED await in the real async gate goes red', () => {
     // Against the real file, not a fixture — one await added in memory. The
     // gate is legitimately async now (the admitted workspace boot), so the
@@ -631,24 +696,21 @@ export class A extends Agent {
   test('cut the wire: re-spawning the auto-title task from the real onStart goes red', () => {
     // The defect this rule exists for, restored against the real file. The block
     // was deleted from `onStart` and its work now runs from the workspace-open
-    // @callable; put it back and the gate must refuse it — while the
-    // delivery reconcile spawned immediately above it stays legal, which is
-    // the discrimination the whole rule rests on.
+    // @callable; put it back and the gate must refuse it — while the wake arm
+    // detached immediately above it stays legal, which is the discrimination
+    // the whole rule rests on.
     const file = 'packages/cf-backend/src/orchestrator.ts';
     const real = SOURCES.get(file);
     expect(real).toBeDefined();
 
-    const tail = '        this._backgroundTasks.delete(eventDeliveryReconcileTask);\n'
-      + '      }\n    })();\n';
-    expect(real).toContain(tail);
-    const respawned = real!.replace(tail, `${tail}    if (this.getOwnerUserId()) {
-      const autoTitleTask: AsyncTaskOwner = { promise: null };
-      this._backgroundTasks.add(autoTitleTask);
-      autoTitleTask.promise = (async () => {
+    const anchor = '    const sweepsTruncated = this.maintenanceSweeps();\n';
+    expect(real).toContain(anchor);
+    const respawned = real!.replace(anchor, `${anchor}    if (this.getOwnerUserId()) {
+      this.detachOwned(async () => {
         await this.hydrateTitle();
         const soul = await readSoul(this.rt.storage.vfs);
         await this.maybeAutoTitle(summarizeSoul(soul ?? ''));
-      })();
+      });
     }
 `);
     expect(respawned).not.toBe(real);

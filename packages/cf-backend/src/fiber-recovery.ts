@@ -71,12 +71,19 @@ import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The most rows one activation's pre-pass scans — the inherent bound the init
- * ruling requires. Metadata-only pages, so the worst case is a handful of
- * indexed reads; a backlog deeper than this waits for the next activation
- * rather than holding this one hostage to a stopwatch.
+ * The most rows ONE activation sweep scans — the inherent bound the init
+ * ruling requires, and the same number the framework's own scan carries
+ * (`patches/agents@0.20.1.patch`, where a stopwatch bounded nothing but the
+ * wait). Shared by every row-budgeted sweep in this backend, because three
+ * spellings of one budget are three numbers that can drift; a sweep whose
+ * per-row cost is different says so with its own constant and its reason
+ * (`ORPHAN_SEAL_MAX_ROWS`).
+ *
+ * Metadata-only pages, so the worst case is a handful of indexed reads; a
+ * backlog deeper than this drains on the maintenance wake rather than holding
+ * an activation hostage.
  */
-const FIBER_SWEEP_MAX_ROWS = 4096;
+export const SWEEP_MAX_ROWS = 4096;
 
 /**
  * One metadata row per read. This is not a policy cap: the framework's own
@@ -211,7 +218,7 @@ export interface FiberSweepResult {
  *     over the budget at its own id, so a page — a snapshot of a table a
  *     concurrent framework scan writes to — cannot authorise a stale removal.
  *   • A ROW BUDGET, NOT A STOPWATCH. One activation scans at most
- *     {@link FIBER_SWEEP_MAX_ROWS} rows — an inherent bound on the work
+ *     {@link SWEEP_MAX_ROWS} rows — an inherent bound on the work
  *     itself, where the wall-clock cutoff this replaces bounded nothing but
  *     the wait. What the pass does not reach stays for the next wake,
  *     exactly as the framework's own scan leaves it.
@@ -238,7 +245,7 @@ export function sweepUnrecoverableFibers(
   let dropped = 0;
   let scanned = 0;
   for (;;) {
-    if (scanned >= FIBER_SWEEP_MAX_ROWS) {
+    if (scanned >= SWEEP_MAX_ROWS) {
       return { dropped, scanned, truncated: true };
     }
     const page = store.page(cursor, boundary, cutoff);
@@ -540,13 +547,20 @@ function redriveForkNoticeLane(
  * `undelivered` = the enqueue was pre-empted or refused, so the notice is
  * still owed: a FRESH fiber row carries each retry (durable across evictions,
  * with the attempt count in its checkpoint so the backoff resumes where it
- * left off), and the idempotency key makes any landed duplicate collide. The
- * sleep is PACING, not a deadline — nothing is abandoned at any attempt.
+ * left off), and the idempotency key makes any landed duplicate collide.
+ *
+ * WHAT THE PACE PROTECTS is a TURN, not a row. This notice carries an
+ * idempotency key, so its delivery goes through `submitMessages`, and
+ * `undelivered` there means the submitted turn came back aborted, skipped or
+ * errored — after running. An unpaced retry would therefore re-run agent turns
+ * in a loop, which is why the sleep is not optional and why it survives an
+ * eviction: attempts are UNBOUNDED (a cap loses the notice the carrier exists
+ * to keep) and only the pace holds them apart.
  */
 export function dispatchRecoveredNotice(
   transports: Pick<FiberLaneTransports, 'redrive' | 'deliverSignal'>,
   signal: RecoveredNotice,
-  attempts: number,
+  attempts = 0,
 ): void {
   const checkpoint: JsonValue = { ...signal, attempts };
   transports.redrive(FORK_NOTICE_LANE_FIBER, checkpoint, async () => {
