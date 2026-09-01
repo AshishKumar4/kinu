@@ -548,8 +548,9 @@ function devboxVerdict(
     identity,
     meta: {
       date: '2026-08-30',
-      worker: 'kinu-devbox-bench-20260830',
-      bucket: 'kinu-devbox-bench-20260830',
+      run: 'kinu-devbox-bench-20260830',
+      worker: 'kinu-devbox-bench-20260830-bounded-layers, kinu-devbox-bench-20260830-merkle-pack',
+      bucket: 'kinu-devbox-bench-20260830-bounded-layers, kinu-devbox-bench-20260830-merkle-pack',
       image: SANDBOX_IMAGE,
       seed: '20260824',
       'loop budget ms': '8000',

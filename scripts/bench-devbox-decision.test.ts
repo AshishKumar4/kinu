@@ -47,6 +47,7 @@ import {
   postLiveTeardown,
   rankableTicks,
   runArm,
+  runArmsInFlight,
   renderFrozenControls,
   resourceNames,
   SANDBOX_IMAGE,
@@ -58,6 +59,7 @@ import {
   type ArmResult,
   type ControlWitnessFacts,
   type CandidateFactsReply,
+  type Strategy,
 } from './bench-devbox-strategies';
 const tick = (
   arm: string, workload: string, wallMs: number,
@@ -588,6 +590,171 @@ describe('an arm that fails mid-measurement', () => {
   }, 20_000);
 });
 
+/** When a stub lane started or finished: the ORDER it happened in, which is
+ *  what an overlap claim rests on, and the wall clock it happened at, which is
+ *  what a reader of a failure wants to see. */
+interface LaneStamp {
+  readonly order: number;
+  readonly ms: number;
+}
+
+/**
+ * Yield the event loop `count` times, waiting no duration at all.
+ *
+ * A concurrent driver has already started the next arm by the time the first
+ * of these resolves, so the wait ends immediately on evidence. A SEQUENTIAL
+ * driver cannot start it inside them — nothing else is scheduled — so the wait
+ * still ends, and the overlap assertion below fails on a recorded order rather
+ * than on a test timeout.
+ */
+async function eventLoopTurns(count: number): Promise<void> {
+  for (let turn = 0; turn < count; turn += 1) await Promise.resolve();
+}
+
+/**
+ * A fake-armed driver: one stub lane per arm, each recording when it started
+ * and when it finished.
+ *
+ * The stubs are the whole point. What is under test is the DRIVER's own
+ * scheduling — whether two arms are in flight at once, and whether one arm's
+ * throw can reach a sibling — and a real lane would answer that question only
+ * by deploying five Workers.
+ */
+function recordingLanes(options: {
+  readonly slow: Strategy;
+  readonly fast: Strategy;
+  /** Thrown by the slow lane once it has finished, or never. */
+  readonly slowThrows?: string;
+}) {
+  const started: Record<string, LaneStamp> = {};
+  const finished: Record<string, LaneStamp> = {};
+  let order = 0;
+  const stamp = (): LaneStamp => {
+    order += 1;
+    return { order, ms: Date.now() };
+  };
+  const fastStarted = Promise.withResolvers<void>();
+  const lane = async (strategy: Strategy): Promise<ArmResult> => {
+    started[strategy] = stamp();
+    if (strategy === options.fast) {
+      fastStarted.resolve();
+      await Promise.resolve();
+    } else {
+      await Promise.race([fastStarted.promise, eventLoopTurns(20)]);
+    }
+    finished[strategy] = stamp();
+    if (strategy === options.slow && options.slowThrows !== undefined) {
+      throw new Error(options.slowThrows);
+    }
+    return measuredArm(strategy);
+  };
+  return { lane, started, finished };
+}
+
+/** A row shaped like a completed arm. Only the fields these tests read carry
+ *  anything; the rest is the empty shape `unmeasuredArm` writes. */
+function measuredArm(strategy: Strategy): ArmResult {
+  return {
+    strategy,
+    box: `ab-${strategy}-in-flight`,
+    verifyPassed: true,
+    verifyChecks: [{ name: 'the arm completed every measured step', pass: true, detail: 'stub' }],
+    attachColdMs: 1_200,
+    attachColdKind: 'attached',
+    attachColdBootId: 'boot-1',
+    attachWarmMs: 30,
+    attachWarmKind: 'attached',
+    wakeBootId: 'boot-2',
+    attachWarmBootId: 'boot-2',
+    checkpoints: [],
+    stopMs: 900,
+    wakeMs: 1_100,
+    wakeKind: 'attached',
+    phases: [],
+    decisiveTicks: [],
+    quiescesBeforeDecisive: 0,
+    decisiveQuiesces: 0,
+    generationBeforeLadder: null,
+    generationAfterLadder: null,
+    treeBytes: {},
+    ops: { calls: { put: 3 }, classA: 3, classB: 0, classFree: 0, total: 3 },
+    teardown: null,
+    witnessChecks: [],
+    notes: [],
+  };
+}
+
+/** Everything the driver wrote to stderr while `run` was in flight. `log`
+ *  writes whole lines as strings, and anything a library writes instead is
+ *  stringified rather than dropped. */
+async function capturedStderr(run: () => Promise<void>): Promise<string> {
+  const written: string[] = [];
+  const real = process.stderr.write.bind(process.stderr);
+  const capture = (chunk: Uint8Array | string): boolean => {
+    written.push(String(chunk));
+    return true;
+  };
+  process.stderr.write = capture;
+  try {
+    await run();
+  } finally {
+    process.stderr.write = real;
+  }
+  return written.join('');
+}
+
+describe('the arms are measured in flight together', () => {
+  test('a later arm starts before an earlier one has finished', async () => {
+    const lanes = recordingLanes({ slow: 'snapshot-chain', fast: 'r2fs' });
+
+    const rows = await runArmsInFlight(['snapshot-chain', 'r2fs'], 'overlap-probe', lanes.lane);
+
+    // THE OVERLAP ITSELF. Sequentially the second arm cannot start until the
+    // first has returned, so this comparison is the difference between the two
+    // shapes rather than a restatement of the call order.
+    const slowFinished = lanes.finished['snapshot-chain'];
+    const fastStarted = lanes.started['r2fs'];
+    expect(slowFinished).toBeDefined();
+    expect(fastStarted).toBeDefined();
+    expect(fastStarted?.order ?? Infinity).toBeLessThan(slowFinished?.order ?? 0);
+    expect(fastStarted?.ms ?? Infinity).toBeLessThanOrEqual(slowFinished?.ms ?? 0);
+
+    // AND THE ROWS COME BACK IN THE ORDER THE ARMS WERE ASKED FOR, because the
+    // report, the admission record and the decision pair all read them by
+    // position as well as by name.
+    expect(rows.map((row) => row.strategy)).toEqual(['snapshot-chain', 'r2fs']);
+  }, 20_000);
+
+  test('one arm throwing keeps its sibling and classifies only itself', async () => {
+    const refusal = 'no container instance is available for this arm';
+    const lanes = recordingLanes({ slow: 'snapshot-chain', fast: 'r2fs', slowThrows: refusal });
+
+    let rows: ArmResult[] = [];
+    const stderr = await capturedStderr(async () => {
+      rows = await runArmsInFlight(['snapshot-chain', 'r2fs'], 'isolation-probe', lanes.lane);
+    });
+
+    // THE SIBLING SURVIVED. A rejected lane used to take the whole run with it:
+    // every arm behind the thrown one was never measured and never reported.
+    const sibling = rows.find((row) => row.strategy === 'r2fs');
+    expect(sibling?.verifyPassed).toBe(true);
+    expect(sibling?.attachColdMs).toBe(1_200);
+
+    // AND THE THROWN ARM IS A CLASSIFIED FAILURE, not a hole: a row that ranks
+    // nothing, carrying the reason in both places a reader looks.
+    const refused = rows.find((row) => row.strategy === 'snapshot-chain');
+    expect(refused?.verifyPassed).toBe(false);
+    expect(refused?.box).toBe('ab-snapshot-chain-isolation-probe');
+    expect(refused?.notes.join(' ')).toContain(refusal);
+    expect(refused?.verifyChecks.some((check) => !check.pass && check.detail.includes(refusal))).toBe(true);
+    expect(rankableTicks(rows, rows.flatMap((row) => row.decisiveTicks))).toEqual([]);
+
+    // AND THE LINE THAT REPORTED IT NAMES THE ARM IT BELONGS TO. Interleaved
+    // output is unreadable — and unusable as evidence — without it.
+    expect(stderr).toContain('[devbox-bench:snapshot-chain]');
+  }, 20_000);
+});
+
 /** Facts in which every control's documented defect DID show up. */
 const WITNESSED: ControlWitnessFacts = {
   cumulativeDeltaSeed: {
@@ -839,7 +1006,7 @@ describe('the lifecycle-proof gate at the rule', () => {
       arms: [arm],
       requested: ['bounded-layers'],
       meta: {
-        date: '2026-08-28', worker: 'blank-fixture', bucket: 'blank-bucket',
+        date: '2026-08-28', run: 'blank-run', worker: 'blank-fixture', bucket: 'blank-bucket',
         image: SANDBOX_IMAGE, seed: '1', 'loop budget ms': '1',
       },
       identity: {
@@ -1056,46 +1223,37 @@ describe('container create retry classification', () => {
   });
 });
 
-describe('per-run fixture deployment', () => {
+describe('per-arm fixture deployment', () => {
   const template = readFileSync(join(import.meta.dir, '..', 'packages/devbox/bench/wrangler.jsonc'), 'utf8');
   const runId = '20260826003000';
   /** Typed by the driver's own parameter, so a strategy typo fails here. */
   interface FixtureCase {
-    readonly arms: Parameters<typeof resourceNames>[1];
+    readonly arm: Parameters<typeof resourceNames>[1];
     readonly classes: readonly string[];
-    readonly apps: readonly string[];
+    readonly app: string;
   }
   const cases: readonly FixtureCase[] = [
-    {
-      arms: ['bounded-layers', 'merkle-pack'],
-      classes: ['BoundedLayersBox', 'MerklePackBox', 'BenchOpCounter'],
-      apps: ['boundedlayersbox', 'merklepackbox'],
-    },
-    {
-      arms: ['merkle-pack'],
-      classes: ['MerklePackBox', 'BenchOpCounter'],
-      apps: ['merklepackbox'],
-    },
-    {
-      arms: ['snapshot-chain', 'r2fs', 'overlay-cas', 'bounded-layers', 'merkle-pack'],
-      classes: ['SnapshotChainBox', 'R2fsBox', 'OverlayCasBox', 'BoundedLayersBox', 'MerklePackBox', 'BenchOpCounter'],
-      apps: ['snapshotchainbox', 'r2fsbox', 'overlaycasbox', 'boundedlayersbox', 'merklepackbox'],
-    },
-    {
-      arms: [],
-      classes: ['BenchOpCounter'],
-      apps: [],
-    },
+    { arm: 'snapshot-chain', classes: ['SnapshotChainBox', 'BenchOpCounter'], app: 'snapshotchainbox' },
+    { arm: 'r2fs', classes: ['R2fsBox', 'BenchOpCounter'], app: 'r2fsbox' },
+    { arm: 'overlay-cas', classes: ['OverlayCasBox', 'BenchOpCounter'], app: 'overlaycasbox' },
+    { arm: 'bounded-layers', classes: ['BoundedLayersBox', 'BenchOpCounter'], app: 'boundedlayersbox' },
+    { arm: 'merkle-pack', classes: ['MerklePackBox', 'BenchOpCounter'], app: 'merklepackbox' },
   ];
 
-  for (const { arms, classes, apps } of cases) {
-    test(`deploys only the selected [${arms.join(', ')}] fixture classes`, () => {
-      const resources = resourceNames(runId, arms);
-      const config = JSON.parse(fixtureConfigForArms(template, resources, arms, '/tmp/candidate.Dockerfile'));
+  for (const { arm, classes, app } of cases) {
+    test(`gives ${arm} its own Worker, bucket and container application`, () => {
+      const resources = resourceNames(runId, arm);
+      const config = JSON.parse(fixtureConfigForArms(template, resources, [arm], '/tmp/candidate.Dockerfile'));
 
-      expect(resources.worker).toBe(`kinu-devbox-bench-${runId}`);
+      // THE ARM IS IN EVERY NAME. Concurrent arms that shared any of these three
+      // would share a keyspace, a `/teardown` purge or an operation counter.
+      expect(resources.worker).toBe(`kinu-devbox-bench-${runId}-${arm}`);
       expect(resources.bucket).toBe(resources.worker);
-      expect(resources.containerApps).toEqual(apps.map((app) => `${resources.worker}-${app}`));
+      expect(resources.containerApps).toEqual([`${resources.worker}-${app}`]);
+      expect(config.name).toBe(resources.worker);
+      expect(config.vars.BENCH_SELECTED_ARMS).toBe(arm);
+      expect(config.r2_buckets.map((bucket: { bucket_name: string }) => bucket.bucket_name))
+        .toEqual([resources.bucket]);
       expect(config.durable_objects.bindings.map((binding: { class_name: string }) => binding.class_name)).toEqual(classes);
       expect(config.migrations[0].new_sqlite_classes).toEqual(classes);
       expect(config.containers.map((container: { class_name: string }) => container.class_name)).toEqual(
@@ -1114,6 +1272,14 @@ describe('per-run fixture deployment', () => {
       }
     });
   }
+
+  test('no two arms are given the same Worker or the same bucket', () => {
+    const everyArm = cases.map(({ arm }) => resourceNames(runId, arm));
+    expect(new Set(everyArm.map((names) => names.worker)).size).toBe(cases.length);
+    expect(new Set(everyArm.map((names) => names.bucket)).size).toBe(cases.length);
+    expect(new Set(everyArm.flatMap((names) => names.containerApps)).size).toBe(cases.length);
+  });
+
   test('drops a future migration whose classes are all pruned', () => {
     const synthetic = template.replace(
       '"migrations": [',
@@ -1121,7 +1287,7 @@ describe('per-run fixture deployment', () => {
     );
     const config = JSON.parse(fixtureConfigForArms(
       synthetic,
-      resourceNames(runId, ['bounded-layers']),
+      resourceNames(runId, 'bounded-layers'),
       ['bounded-layers'],
       '/tmp/candidate.Dockerfile',
     ));

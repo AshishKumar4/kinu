@@ -6,8 +6,8 @@ import * as v from 'valibot';
 import { fixtureConfigForArms, resourceNames } from './bench-devbox-strategies';
 
 const ROOT = dirname(import.meta.dir);
-const ARMS = ['bounded-layers', 'merkle-pack'] as const;
-const CLASSES = ['BoundedLayersBox', 'MerklePackBox', 'BenchOpCounter'];
+const ARM = 'bounded-layers';
+const CLASSES = ['BoundedLayersBox', 'BenchOpCounter'];
 
 const GeneratedConfig = v.looseObject({
   containers: v.array(v.looseObject({ class_name: v.string() })),
@@ -22,14 +22,14 @@ const GeneratedConfig = v.looseObject({
 });
 
 describe('bench fixture Durable Object bindings', () => {
-  test('captures the generated selected-arm config before disposal', () => {
+  test('captures one arm\'s generated config before disposal', () => {
     const directory = mkdtempSync(join(tmpdir(), 'kinu-devbox-workerd-'));
     try {
       const configPath = join(directory, 'wrangler.jsonc');
       const captured = fixtureConfigForArms(
         readFileSync(join(ROOT, 'packages/devbox/bench/wrangler.jsonc'), 'utf8'),
-        resourceNames('workerd-binding-probe', ARMS),
-        ARMS,
+        resourceNames('workerd-binding-probe', ARM),
+        [ARM],
         join(directory, 'candidate-runner.Dockerfile'),
       );
       writeFileSync(configPath, captured);
@@ -39,7 +39,7 @@ describe('bench fixture Durable Object bindings', () => {
       expect(config.durable_objects.bindings.map((binding) => binding.class_name)).toEqual(CLASSES);
       expect(config.migrations).toEqual([{ tag: 'v1', new_sqlite_classes: CLASSES }]);
       expect(config.containers.map((container) => container.class_name)).toEqual(CLASSES.slice(0, -1));
-      expect(config.vars.BENCH_SELECTED_ARMS).toBe('bounded-layers,merkle-pack');
+      expect(config.vars.BENCH_SELECTED_ARMS).toBe(ARM);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

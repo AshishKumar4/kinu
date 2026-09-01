@@ -38,6 +38,7 @@
  *   and polled for a sentinel.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
@@ -275,11 +276,30 @@ interface FixtureImageDigests {
   readonly journalDaemonSha256: string;
 }
 
-interface FixtureResources extends FixtureNames {
+/**
+ * One arm's own deployment: the Worker that serves it, the bucket it writes to,
+ * the container application its class raises, and the generated config that
+ * names all three. Nothing in here is shared with another arm.
+ */
+interface ArmFixture extends FixtureNames {
+  readonly strategy: Strategy;
   readonly configPath: string;
-  /** The exact per-run Wrangler config, retained while teardown owns its directory. */
+  /** The exact per-arm Wrangler config, retained while teardown owns its directory. */
   readonly config: string;
+}
+
+/**
+ * Every arm's deployment, plus the one directory they were generated from.
+ *
+ * The runner bundles and the candidate Dockerfile are built ONCE and shared as
+ * bytes by every arm's config: the image is the same image, so building it per
+ * arm would add a container build to every deploy and change nothing about
+ * what ran. The digests below are therefore the digests of every arm.
+ */
+interface FixtureResources {
+  readonly arms: readonly ArmFixture[];
   readonly digests: FixtureImageDigests;
+  readonly configDir: string;
   disposeConfig(): void;
 }
 
@@ -304,12 +324,25 @@ function fixtureClasses(arms: readonly Strategy[]): readonly string[] {
   return arms.map((arm) => FIXTURE_CLASS_BY_STRATEGY[arm]);
 }
 
-export function resourceNames(runId: string, arms: readonly Strategy[]): FixtureNames {
-  const worker = `${FIXTURE_BASE}-${runId}`;
+/**
+ * One arm's resource names — PER ARM, and the arm is in every one of them.
+ *
+ * WHY NOT PER RUN, WHICH IS WHAT THIS WAS. The arms are measured concurrently.
+ * Two arms sharing a bucket would share a keyspace, a residue account and a
+ * `/teardown` purge — which empties the WHOLE bucket, `prefix: ''`,
+ * `whole: true` — so the first arm to finish would drain the store out from
+ * under every arm still measuring. Two arms sharing a Worker would share its
+ * `BenchOpCounter`, whose tally one arm's `/ops/reset` zeroes, so the priced
+ * operation column of a concurrent sibling would be whatever was left after
+ * somebody else's reset. One Worker and one bucket per arm removes both, and
+ * leaves teardown able to delete one arm's complete deployed set on its own.
+ */
+export function resourceNames(runId: string, arm: Strategy): FixtureNames {
+  const worker = `${FIXTURE_BASE}-${runId}-${arm}`;
   return {
     worker,
     bucket: worker,
-    containerApps: fixtureClasses(arms).map((className) => `${worker}-${className.toLowerCase()}`),
+    containerApps: [`${worker}-${FIXTURE_CLASS_BY_STRATEGY[arm].toLowerCase()}`],
   };
 }
 
@@ -347,8 +380,8 @@ function candidateImageDockerfile(): string {
 }
 
 /** One Worker, only the selected Durable Object classes, their container-app
- * set and one bucket per run. Nothing is shared with an earlier run, and
- * teardown can delete the complete deployed set. */
+ * set and the one bucket that Worker binds. Nothing is shared with another arm
+ * or with an earlier run, and teardown can delete the complete deployed set. */
 export function fixtureConfigForArms(
   template: string,
   names: FixtureNames,
@@ -392,9 +425,7 @@ export async function createFixtureResources(
   runId: string,
   arms: readonly Strategy[],
 ): Promise<FixtureResources> {
-  const names = resourceNames(runId, arms);
   const dir = mkdtempSync(join(tmpdir(), 'kinu-devbox-bench-'));
-  const configPath = join(dir, 'wrangler.jsonc');
   const bundlePath = join(dir, 'candidate-runner.bundle.mjs');
   const overlayBundlePath = join(dir, 'overlay-cas-runner.bundle.mjs');
   const dockerfilePath = join(dir, 'candidate-runner.Dockerfile');
@@ -420,22 +451,25 @@ export async function createFixtureResources(
   copyFileSync(JOURNAL_DAEMON_SOURCE, join(dir, 'journal-daemon.c'));
   const dockerfile = candidateImageDockerfile();
   writeFileSync(dockerfilePath, dockerfile);
-  const config = fixtureConfigForArms(
-    readFileSync(join(BENCH_DIR, 'wrangler.jsonc'), 'utf8'),
-    names,
-    arms,
-    dockerfilePath,
-  );
-  writeFileSync(configPath, config);
+  const template = readFileSync(join(BENCH_DIR, 'wrangler.jsonc'), 'utf8');
+  // ONE CONFIG PER ARM, all in the one build directory: each names its own
+  // Worker, binds its own bucket and deploys only its own class, and all of
+  // them point at the same generated Dockerfile so the image is built once.
+  const armFixtures = arms.map((strategy): ArmFixture => {
+    const names = resourceNames(runId, strategy);
+    const configPath = join(dir, `wrangler-${strategy}.jsonc`);
+    const config = fixtureConfigForArms(template, names, [strategy], dockerfilePath);
+    writeFileSync(configPath, config);
+    return { ...names, strategy, configPath, config };
+  });
   // DIGESTED FROM THE BYTES THAT WERE WRITTEN, not from the sources they came
   // from: the bundles are built here, so only these bytes describe what the
   // containers will actually load.
   const digest = (bytes: string | Uint8Array): string =>
     `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
   return {
-    ...names,
-    configPath,
-    config,
+    arms: armFixtures,
+    configDir: dir,
     digests: {
       imageSha256: SANDBOX_IMAGE_DIGEST,
       dockerfileSha256: digest(dockerfile),
@@ -800,8 +834,23 @@ export interface Options {
   out: string;
 }
 
+/**
+ * The arm whose pipeline the current async context belongs to.
+ *
+ * WHY A CONTEXT RATHER THAN A LOGGER PARAMETER. Every arm writes to one stderr
+ * and the arms now run at once, so a line without its arm on it belongs to
+ * nobody. Most of those lines come from the shared transport — `call`'s
+ * transport-loss retry, `pollForAttach`'s state poll, `awaitArmedOperation`'s
+ * outcome poll, `runPhase`'s harness reinstall — none of which take an arm and
+ * none of which should. Threading a logger through those fifteen signatures
+ * would attribute the call sites somebody remembered to change and silently
+ * lose the rest, which is the exact failure this exists to prevent.
+ */
+const armLogContext = new AsyncLocalStorage<Strategy>();
+
 const log = (message: string): void => {
-  process.stderr.write(`[devbox-bench] ${message}\n`);
+  const arm = armLogContext.getStore();
+  process.stderr.write(`[devbox-bench${arm === undefined ? '' : `:${arm}`}] ${message}\n`);
 };
 
 
@@ -1157,12 +1206,15 @@ async function retryTransient<T extends { error?: string }>(
 
 // ── lifecycle ───────────────────────────────────────────────────────────────
 
-function deleteFixtureResources(resources: FixtureResources): readonly string[] {
+/** Delete ONE arm's Worker and the container application its class raised.
+ *  Every arm owns both alone, so this is the whole of that arm's deployed
+ *  compute and it can run while a sibling is still measuring. */
+function deleteFixtureResources(fixture: ArmFixture): readonly string[] {
   let deleted = wrangler([
-    'delete', '--config', resources.configPath, '--force',
+    'delete', '--config', fixture.configPath, '--force',
   ], { allowFailure: true });
   if (deleted.startsWith(WRANGLER_FAILED)) {
-    deleted = wrangler(['delete', '--name', resources.worker, '--force'], { allowFailure: true });
+    deleted = wrangler(['delete', '--name', fixture.worker, '--force'], { allowFailure: true });
   }
   const workerResult = deleted.startsWith(WRANGLER_FAILED)
     && !/not found|does not exist/i.test(deleted)
@@ -1170,16 +1222,16 @@ function deleteFixtureResources(resources: FixtureResources): readonly string[] 
     : 'worker: deleted or absent';
   return [
     workerResult,
-    ...deleteContainerApps(REPO_ROOT, resources.containerApps, log),
+    ...deleteContainerApps(REPO_ROOT, fixture.containerApps, log),
   ];
 }
 
 async function deployFixture(
   token: string,
-  resources: FixtureResources,
+  fixture: ArmFixture,
 ): Promise<{ fixture: Fixture; workerVersion: string; stop: () => readonly string[] }> {
   const output = wrangler([
-    'deploy', '--config', resources.configPath, '--var', `BENCH_TOKEN:${token}`,
+    'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
   ]);
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
   if (origin === undefined) throw new Error(`deploy printed no workers.dev origin:\n${output.slice(-2500)}`);
@@ -1225,7 +1277,7 @@ async function deployFixture(
   return {
     fixture: { origin, token },
     workerVersion,
-    stop: () => deleteFixtureResources(resources),
+    stop: () => deleteFixtureResources(fixture),
   };
 }
 
@@ -3039,7 +3091,7 @@ async function measureArm(
     return completed;
   };
 
-  log(`${strategy}: create (cold attach)`);
+  log('create (cold attach)');
   let cold: StartupCompletion;
   try {
     cold = await startup('/create', 'cold attach', ['empty', 'attached']);
@@ -3050,14 +3102,14 @@ async function measureArm(
     // overlay-cas failed here twice in a row and said why only inside the
     // artifact.
     const note = `create failed: ${describeThrown({ cause: error })}`;
-    log(`${strategy}: ${note}`);
+    log(note);
     notes.push(note);
     return result;
   }
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
-  log(`${strategy}: install harness`);
+  log('install harness');
   await installHarness(fixture, box);
 
   const verify = (name: string, pass: boolean, detail: string): void => {
@@ -3076,7 +3128,7 @@ async function measureArm(
 
   // The checkpoint ladder is the verification commit. Its first forced quiesce
   // carries the marker and its normal rows remain the measurement rows.
-  log(`${strategy}: ops reset and ladder`);
+  log('ops reset and ladder');
   await call(fixture, 'POST', `/ops/reset?box=${box}`, AckReplySchema);
 
   // The checkpoint ladder writes known bytes, then records each commit.
@@ -3120,7 +3172,7 @@ async function measureArm(
 
   // The normal recycle follows the normal ladder. Each request is independently
   // retryable if a replacement interrupts it; nothing reruns the whole proof.
-  log(`${strategy}: stop then wake`);
+  log('stop then wake');
   const stopped = await stopOperation(fixture, box, 'stop');
   result.stopMs = stopped.ms ?? null;
   const woke = await startup('/wake', 'wake', ['attached']);
@@ -3285,13 +3337,13 @@ async function measureArm(
     notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
   }
 
-  log(`${strategy}: workload phases`);
+  log('workload phases');
   for (const phase of PHASES) {
     try {
       result.phases.push(await runPhase(fixture, box, `/workspace/ab-${strategy}`, phase, options.seed, options.budgetMs));
     } catch (error) {
       const reason = describeThrown({ cause: error });
-      log(`${strategy}: phase ${phase} failed: ${reason.slice(0, 160)}`);
+      log(`phase ${phase} failed: ${reason.slice(0, 160)}`);
       notes.push(`phase ${phase} did not complete: ${reason.slice(0, 240)}`);
     }
     // FLUSH AT THE PHASE BOUNDARY, not a settle-and-hope.
@@ -3306,7 +3358,7 @@ async function measureArm(
   // rows and nothing else.
   if (options.decisive) {
     for (const spec of DECISIVE_WORKLOADS) {
-      log(`${strategy}: decisive ${spec.id}`);
+      log(`decisive ${spec.id}`);
       try {
         // A timed-out container operation can stop the spot container and lose
         // the harness with it. Reinstall through the box before each workload;
@@ -3318,7 +3370,7 @@ async function measureArm(
         notes.push(...run.notes);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        log(`${strategy}: decisive ${spec.id} failed: ${reason.slice(0, 160)}`);
+        log(`decisive ${spec.id} failed: ${reason.slice(0, 160)}`);
         notes.push(`decisive ${spec.id} did not complete: ${reason.slice(0, 240)}`);
       }
     }
@@ -3331,7 +3383,7 @@ async function measureArm(
   result.attachWarmKind = warm.attach.kind;
   result.attachWarmBootId = warm.state.state?.bootId ?? null;
 
-  log(`${strategy}: ops accounting and teardown`);
+  log('ops accounting and teardown');
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
 
@@ -3343,7 +3395,7 @@ async function measureArm(
   // they run past the priced window on purpose: an arm billed for its witness
   // cells would report a cost the comparison is not about.
   if (strategy === 'snapshot-chain' || strategy === 'r2fs' || strategy === 'overlay-cas') {
-    log(`${strategy}: witness cells`);
+    log('witness cells');
     const witnessed = await runControlWitnessCells(fixture, box, strategy, { markerFile, openWrite });
     result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts);
     notes.push(...witnessed.notes);
@@ -3367,7 +3419,7 @@ async function measureArm(
       await step();
     } catch (error) {
       const note = `${what} failed after the arm was measured: ${describeThrown({ cause: error })}`;
-      log(`${strategy}: ${note}`);
+      log(note);
       notes.push(note);
     }
   };
@@ -3437,7 +3489,7 @@ export async function runArm(
     return await measureArm(fixture, strategy, options, noteLiveBox, (row) => { partial = row; });
   } catch (error) {
     const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
-    log(`${strategy}: ${reason}`);
+    log(reason);
     const measured = partial ?? unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, []);
     try {
       const released = await stopOperation(fixture, measured.box, 'release after failure', {
@@ -3455,6 +3507,58 @@ export async function runArm(
     }
     return refuseFailedArm(measured, reason);
   }
+}
+
+/** One arm's whole measured pipeline, from its first request to its last. */
+export type ArmLane = (strategy: Strategy) => Promise<ArmResult>;
+
+/**
+ * Every arm's lane, in flight at once, and every arm's failure its own.
+ *
+ * WHY CONCURRENCY DOES NOT MOVE A MEASUREMENT. An arm is measured inside its
+ * OWN container: each arm has its own Worker, its own Durable Object class and
+ * therefore its own container application, and `instance_type` reserves that
+ * container's vCPU, memory and disk. Two arms never share a container, so no
+ * measured operation shares CPU with another arm's — running five arms at once
+ * is five separate instances doing the same work they would do alone, not five
+ * workloads dividing one machine. What the arms do share is THIS process, and
+ * everything it does inside this window is I/O: HTTPS requests to the fixture
+ * and the poll loops that wait on them. Every duration inside an arm is either
+ * the fixture's own `ms`, measured in the container, or a poll loop whose time
+ * is spent waiting on the network.
+ *
+ * WHAT THEREFORE MAY NOT RUN HERE, and why the caller deploys and deletes
+ * outside this window: `runWrangler` is `execFileSync`. A wrangler call does
+ * not wait on I/O from this loop's point of view — it STOPS the loop, so no
+ * sibling can poll for its duration, and a cold attach is a driver-side wall
+ * clock held to a 25s admission ceiling. One arm's deploy or delete inside
+ * this window would be charged to another arm's attach.
+ *
+ * PER-ARM FAILURE ISOLATION. A lane that throws is recorded as ITS OWN arm's
+ * refusal and nothing more. `Promise.all` rejects on the first throw, so
+ * without this catch one arm's death would abandon every sibling still in
+ * flight — unreported, unranked and with nothing having released their boxes —
+ * which is exactly the failure the sequential loop's per-arm await was there to
+ * prevent. The refused row keeps the shape a reader already knows: a note, a
+ * failed lifecycle check, and nothing ranked.
+ */
+export async function runArmsInFlight(
+  arms: readonly Strategy[],
+  runId: string,
+  lane: ArmLane,
+): Promise<ArmResult[]> {
+  // `Promise.all` answers in the order it was given, which is the order the
+  // report, the admission record and the decision pair read the arms in.
+  return await Promise.all(arms.map(async (strategy): Promise<ArmResult> =>
+    await armLogContext.run(strategy, async (): Promise<ArmResult> => {
+      try {
+        return await lane(strategy);
+      } catch (error) {
+        const reason = `arm lane failed: ${describeThrown({ cause: error })}`;
+        log(reason);
+        return refuseFailedArm(unmeasuredArm(strategy, `ab-${strategy}-${runId}`, []), reason);
+      }
+    })));
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
@@ -3502,6 +3606,10 @@ const HEADLINE = [
  *  run that stopped early says so rather than looking whole. */
 export interface RunMeta {
   date: string;
+  /** The run itself, which is the one name every arm's resources are derived
+   *  from. The rows below name a Worker and a bucket PER ARM, so neither of
+   *  them identifies the run on its own. */
+  run: string;
   worker: string;
   bucket: string;
   image: string;
@@ -4093,14 +4201,14 @@ function identityVersions(identity: RunIdentity) {
 
 function devboxProvenance(identity: RunIdentity, meta: RunMeta): RunProvenance {
   return {
-    runId: meta.worker,
+    runId: meta.run,
     commit: identity.commit,
     startedAt: identity.startedAt,
     finishedAt: identity.finishedAt,
     seed: meta.seed,
     image: identity.image,
     versions: identityVersions(identity),
-    containerFacts: `fixture Worker ${meta.worker} at version ${identity.workerVersion} on ${identity.image} `
+    containerFacts: `one fixture Worker per arm (${meta.worker}) at ${identity.workerVersion} on ${identity.image} `
       + `(${identity.imageSha256}), built from Dockerfile ${identity.dockerfileSha256} with candidate runner `
       + `${identity.candidateRunnerSha256} and journal daemon source ${identity.journalDaemonSha256}`,
   };
@@ -4435,6 +4543,30 @@ export function benchmarkExitCode(failure: string | null, admission: AdmissionVe
 
 // ── main ────────────────────────────────────────────────────────────────────
 
+/**
+ * What one arm's deployment is doing RIGHT NOW, as teardown has to see it.
+ *
+ * Written as each step completes rather than returned when the arm is done,
+ * because teardown can run at any instant: the signal handler is armed before
+ * the first deploy, and the arms are in flight together, so an interruption
+ * finds some arms live, some never deployed and some already swept. Each field
+ * is the answer to a question teardown asks about exactly one arm.
+ */
+interface ArmLaneState {
+  readonly fixture: ArmFixture;
+  /** The box this arm measures, and the manifest row for its durable state. */
+  readonly box: string;
+  /** Every box this arm raised, including any the run added after the first. */
+  readonly boxes: Set<string>;
+  /** The deployed origin and token, once this arm's Worker accepted them. */
+  live: Fixture | null;
+  stop: (() => readonly string[]) | null;
+  workerStopped: boolean;
+  workerVersion: string;
+  /** Why this arm never reached its measured pipeline, if it did not. */
+  refusal: string | null;
+}
+
 const HELP = `Usage: bun scripts/bench-devbox-strategies.ts [options]
 
 Options:
@@ -4522,7 +4654,7 @@ async function main(): Promise<number> {
   }
   const options = parseOptions(argv);
   const frozenControls = frozenControlArtifacts(options.controls);
-  const planned = resourceNames(options.runId, options.arms);
+  const planned = options.arms.map((strategy) => resourceNames(options.runId, strategy));
   if (options.plan) {
     const controls = options.controls.length === 0
       ? 'none (optional)'
@@ -4533,7 +4665,8 @@ async function main(): Promise<number> {
       + `phases        ${PHASES.join(',')}\n`
       + `process-driven ${[...PROCESS_PHASES].join(',')}\n`
       + `change sizes  ${CHANGE_SIZES_KIB.map((k) => (k >= 1024 ? `${k / 1024}MiB` : `${k}KiB`)).join(', ')}\n`
-      + `bucket        ${planned.bucket}\nworker        ${planned.worker}\n`
+      + `workers       ${planned.map((names) => names.worker).join(', ')}\n`
+      + `buckets       ${planned.map((names) => names.bucket).join(', ')}\n`
       + `artifact      ${options.out}\n\nNothing has run. Drop --plan to execute.\n`,
     );
     return 0;
@@ -4555,20 +4688,32 @@ async function main(): Promise<number> {
   const startedAt = new Date().toISOString();
 
 
-  const resources = await createFixtureResources(options.runId, options.arms);
+  const fixtures = await createFixtureResources(options.runId, options.arms);
+  const lanes = fixtures.arms.map((fixture): ArmLaneState => ({
+    fixture,
+    box: `ab-${fixture.strategy}-${options.runId}`,
+    boxes: new Set([`ab-${fixture.strategy}-${options.runId}`]),
+    live: null,
+    stop: null,
+    workerStopped: false,
+    workerVersion: '',
+    refusal: null,
+  }));
   const teardownManifest = createManifest(options.runId, [
-    { kind: 'worker', name: resources.worker, detail: 'per-run fixture Worker' },
-    ...resources.containerApps.map((name) => ({ kind: 'container-app' as const, name, detail: 'fixture container application' })),
-    { kind: 'r2-bucket', name: resources.bucket, detail: 'dedicated benchmark bucket' },
-    ...options.arms.flatMap((strategy) => {
-      const box = `ab-${strategy}-${options.runId}`;
-      return [
-        { kind: 'do-state' as const, name: box, detail: 'per-arm durable box state' },
-        { kind: 'alarm' as const, name: box, detail: 'per-arm durable alarm' },
-        { kind: 'mount' as const, name: box, detail: 'per-arm mounted workspace' },
-      ];
-    }),
-    { kind: 'local-path', name: dirname(resources.configPath), detail: 'generated Wrangler config directory' },
+    // ONE COMPLETE SET PER ARM. Each row names a resource exactly one arm owns,
+    // so an interrupted run deletes each arm's Worker, container application
+    // and bucket on its own evidence rather than as one shared lump.
+    ...lanes.flatMap((lane) => [
+      { kind: 'worker' as const, name: lane.fixture.worker, detail: `${lane.fixture.strategy} fixture Worker` },
+      ...lane.fixture.containerApps.map((name) => ({
+        kind: 'container-app' as const, name, detail: `${lane.fixture.strategy} container application`,
+      })),
+      { kind: 'r2-bucket' as const, name: lane.fixture.bucket, detail: `dedicated ${lane.fixture.strategy} bucket` },
+      { kind: 'do-state' as const, name: lane.box, detail: 'per-arm durable box state' },
+      { kind: 'alarm' as const, name: lane.box, detail: 'per-arm durable alarm' },
+      { kind: 'mount' as const, name: lane.box, detail: 'per-arm mounted workspace' },
+    ]),
+    { kind: 'local-path', name: fixtures.configDir, detail: 'generated Wrangler config directory' },
   ]);
   writeManifest(REPO_ROOT, teardownManifest);
   const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
@@ -4578,9 +4723,6 @@ async function main(): Promise<number> {
     : null;
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
-  let stop: (() => readonly string[]) | null = null;
-  const liveArmBoxes = new Set(options.arms.map((strategy) => `ab-${strategy}-${options.runId}`));
-  let liveFixture: Fixture | null = null;
   let cleanupReport: CleanupReport | null = null;
   const cleanupErrors: string[] = [];
   let failure: string | null = null;
@@ -4591,19 +4733,24 @@ async function main(): Promise<number> {
       log('--keep left the Worker, container applications, bucket, and generated config in place');
       return;
     }
-    if (liveFixture !== null) {
-      const liveTeardownErrors = await teardownLiveArms(liveFixture, liveArmBoxes);
+    // EVERY LIVE ARM'S BOXES, THROUGH THAT ARM'S OWN WORKER. There is no one
+    // fixture that can sweep them all: an arm answers only on its own
+    // deployment, and an arm that never deployed has nothing to sweep.
+    for (const lane of lanes) {
+      if (lane.live === null) continue;
+      const liveTeardownErrors = await teardownLiveArms(lane.live, lane.boxes);
       cleanupErrors.push(...liveTeardownErrors);
       if (liveTeardownErrors.length > 0) {
         failure ??= `live teardown failed: ${liveTeardownErrors.join('; ')}`;
       }
     }
-    let workerStopped = false;
     const replay = await replayTeardown(REPO_ROOT, teardownManifest, async (entry): Promise<DeleteOutcome> => {
       if (entry.kind === 'worker') {
-        const statuses = (stop ?? (() => deleteFixtureResources(resources)))();
-        workerStopped = true;
-        if (statuses.length > 0) log(`fixture resources: ${statuses.join(', ')}`);
+        const lane = lanes.find((candidate) => candidate.fixture.worker === entry.name);
+        if (lane === undefined) return { ok: false, error: `no arm owns Worker ${entry.name}` };
+        const statuses = (lane.stop ?? (() => deleteFixtureResources(lane.fixture)))();
+        lane.workerStopped = true;
+        if (statuses.length > 0) log(`${lane.fixture.strategy} fixture resources: ${statuses.join(', ')}`);
         const failed = statuses.find((status) => /failed/i.test(status));
         return failed === undefined ? { ok: true } : { ok: false, error: failed };
       }
@@ -4627,10 +4774,15 @@ async function main(): Promise<number> {
         return { ok: false, error: deleted.slice(0, 240) };
       }
       if (entry.kind === 'do-state' || entry.kind === 'alarm' || entry.kind === 'mount') {
-        return workerStopped ? { ok: true } : { ok: false, error: 'Worker must be deleted before its durable state' };
+        // Gated on THIS box's own Worker. An arm whose Worker is still up has
+        // durable state nothing has proved gone, however many siblings are.
+        const lane = lanes.find((candidate) => candidate.box === entry.name);
+        return lane?.workerStopped === true
+          ? { ok: true }
+          : { ok: false, error: 'Worker must be deleted before its durable state' };
       }
       if (entry.kind === 'local-path') {
-        resources.disposeConfig();
+        fixtures.disposeConfig();
         return { ok: true };
       }
       return { ok: false, error: `unsupported teardown resource ${entry.kind}` };
@@ -4644,9 +4796,9 @@ async function main(): Promise<number> {
       cleanupCheck = await checkCleanup(REPO_ROOT, teardownManifest, {
         ...cleanupObservationProbes({ wrangler, residue }),
         containerAppAbsent: async (name) => containerAppIds(REPO_ROOT, [name], log).length === 0,
-        boxStateEmpty: async () => workerStopped,
-        alarmAbsent: async () => workerStopped,
-        mountAbsent: async () => workerStopped,
+        boxStateEmpty: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
+        alarmAbsent: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
+        mountAbsent: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
         localPathAbsent: async (path) => !existsSync(path),
         processAbsent: async () => true,
         counters: async () => ({ ...teardownManifest.counters }),
@@ -4662,30 +4814,55 @@ async function main(): Promise<number> {
       cleanupErrors.push(...cleanupCheck.checks.filter((row) => !row.ok).map((row) => `${row.gate}: ${row.detail}`));
       failure ??= 'cleanup admission checks failed';
     }
-    if (!workerStopped) resources.disposeConfig();
+    if (!lanes.every((lane) => lane.workerStopped)) fixtures.disposeConfig();
   });
 
-  let workerVersion = '';
   try {
-    wrangler(['r2', 'bucket', 'create', resources.bucket]);
-    const started = await deployFixture(token, resources);
-    stop = started.stop;
-    workerVersion = started.workerVersion;
-    liveFixture = started.fixture;
-    for (const strategy of options.arms) {
-      // Per arm, so one arm's death costs only that arm. A single `await` for
-      // the whole loop meant an exception anywhere took the arms measured after
-      // it as well as the one that threw, and the run reported a bare
-      // `TimeoutError` for all of them. `runArm` owns the failure: it keeps the
-      // rows the arm did measure, releases its container instance so the next
-      // arm can have one, and refuses the arm on its own merits.
-      const arm = await runArm(started.fixture, strategy, options, (box) => liveArmBoxes.add(box));
-      arms.push(arm);
+    // EVERY ARM'S OWN WORKER AND BUCKET, DEPLOYED BEFORE ANY ARM IS MEASURED.
+    //
+    // Deliberately not inside the in-flight window below, for a mechanical
+    // reason: every wrangler call is `execFileSync`, which does not yield this
+    // process's event loop. A deploy running beside a measuring sibling would
+    // stop that sibling's polling for the length of a container image build,
+    // and the first thing it would corrupt is the cold attach — a driver-side
+    // wall clock the admission contract holds to a 25 s ceiling. The deletes
+    // are kept out of that window for the same reason: they run from the
+    // teardown replay, after the last arm has returned.
+    //
+    // ONE ARM'S DEPLOY IS ONE ARM'S FAILURE. A refusal here is recorded on the
+    // lane and answered when that arm's turn to measure comes, so an arm that
+    // could not be deployed refuses itself and its siblings still run.
+    for (const lane of lanes) {
+      await armLogContext.run(lane.fixture.strategy, async (): Promise<void> => {
+        try {
+          wrangler(['r2', 'bucket', 'create', lane.fixture.bucket]);
+          const started = await deployFixture(token, lane.fixture);
+          lane.stop = started.stop;
+          lane.live = started.fixture;
+          lane.workerVersion = started.workerVersion;
+        } catch (error) {
+          lane.refusal = `deploy failed: ${describeThrown({ cause: error })}`;
+          log(lane.refusal);
+        }
+      });
+    }
+
+    // EVERY ARM AT ONCE. Each arm holds its own Worker, its own bucket and its
+    // own container instance, so the only thing they share from here is this
+    // driver's polling, which waits on the network rather than on a CPU.
+    // `runArmsInFlight` keeps one arm's death off its siblings; `runArm` keeps
+    // the rows an arm did measure and hands its container instance back.
+    arms.push(...await runArmsInFlight(options.arms, options.runId, async (strategy) => {
+      const lane = lanes.find((candidate) => candidate.fixture.strategy === strategy);
+      if (lane === undefined) throw new Error(`no deployment was prepared for ${strategy}`);
+      if (lane.live === null) throw new Error(lane.refusal ?? 'this arm was never deployed');
+      const arm = await runArm(lane.live, strategy, options, (box) => lane.boxes.add(box));
       for (const [name, count] of Object.entries(arm.ops?.calls ?? {})) {
         teardownManifest.counters[name] = (teardownManifest.counters[name] ?? 0) + count;
       }
       writeManifest(REPO_ROOT, teardownManifest);
-    }
+      return arm;
+    }));
   } catch (error) {
     failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     // The stack is the diagnosis: three runs died as a bare `TimeoutError`
@@ -4701,8 +4878,9 @@ async function main(): Promise<number> {
 
   const meta: RunMeta = {
     date: new Date().toISOString().slice(0, 10),
-    worker: resources.worker,
-    bucket: resources.bucket,
+    run: `${FIXTURE_BASE}-${options.runId}`,
+    worker: lanes.map((lane) => lane.fixture.worker).join(', '),
+    bucket: lanes.map((lane) => lane.fixture.bucket).join(', '),
     image: SANDBOX_IMAGE,
     seed: String(options.seed),
     'loop budget ms': String(options.budgetMs),
@@ -4734,11 +4912,18 @@ async function main(): Promise<number> {
   const identity: RunIdentity = {
     commit: revision.commit,
     dirtyDigest: revision.dirtyDigest,
-    workerVersion,
+    // ONE VERSION PER DEPLOYED ARM, named by the arm it served. A run with five
+    // Workers has five deployed versions, and a single id could only be one of
+    // them; an arm that never deployed contributes nothing, so a run that
+    // deployed nothing records nothing and G0 refuses it.
+    workerVersion: lanes
+      .filter((lane) => lane.workerVersion !== '')
+      .map((lane) => `${lane.fixture.strategy}=${lane.workerVersion}`)
+      .join(', '),
     startedAt,
     finishedAt: new Date().toISOString(),
     image: SANDBOX_IMAGE,
-    ...resources.digests,
+    ...fixtures.digests,
   };
   const admission = devboxAdmission({
     arms,
