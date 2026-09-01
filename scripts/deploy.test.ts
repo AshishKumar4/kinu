@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { EXCLUSION_GROUPS, SERIAL_GATES, deployExclusions, deployWaves } from "./ladder";
+import {
+  EXCLUSION_GROUPS, GATE_DEADLINES, SERIAL_GATES, deployDeadlines, deployExclusions, deployWaves,
+} from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
 import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
@@ -33,6 +35,7 @@ const BENCH_GATE_FILES = [
   "scripts/storage-matrix-protocol.test.ts",
   "scripts/deploy-substrate.test.ts",
   "scripts/payload-transport.test.ts",
+  "scripts/devbox-e2e.test.ts",
 ] as const;
 
 const REQUIRED_GATES = [
@@ -98,6 +101,7 @@ const REQUIRED_GATES = [
   "bun run verify:lean",
   "bun run gate:hammer",
   "bun run gate:infra",
+  "bun run gate:devbox-e2e",
 ] as const;
 
 afterEach(() => {
@@ -312,11 +316,15 @@ describe("deploy gate", () => {
     // nobody can derive gets edited without being read. The property is the
     // same either way, because a gate that leaves the middle wave has to appear
     // in `SERIAL_GATES` to satisfy the assertion above it.
-    expect(waves.length).toBe(4);
+    expect(waves.length).toBe(5);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
     expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length);
     expect(waves[2]).toEqual(["bun run gate:hammer"]);
     expect(waves[3]).toEqual(["bun run gate:infra"]);
+    // The container lifecycle suite is last, alone, and after the account gate:
+    // it is the only gate that SPENDS the account gate:infra has just proved,
+    // and its ceilings are wall clocks a neighbouring gate would perturb.
+    expect(waves[4]).toEqual(["bun run gate:devbox-e2e"]);
   });
 
   // The Worker version is what a persisted error names, so it has to name the
@@ -334,8 +342,27 @@ describe("deploy gate", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     expect(source).toContain("GATE_DEADLINE_SECONDS=480");
     expect(source).toContain(
-      'timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]}',
+      'timeout --signal=TERM --kill-after=5s "${GATE_DEADLINES[${GATE_CMDS[pick]}]:-$GATE_DEADLINE_SECONDS}"'
+      + ' ${GATE_CMDS[pick]}',
     );
+
+    // A PER-GATE EXCEPTION IS A DECLARATION, in both files. The runner is bash
+    // and cannot import the reason, so the two tables are written twice and
+    // held equal here — the same shape as the exclusion table above. Without
+    // this, the shared 480s wall could be lifted off every source gate by one
+    // edit that looks like it only touches one of them.
+    const declared = Object.fromEntries(
+      Object.entries(GATE_DEADLINES).map(([run, entry]) => [run, entry.seconds]),
+    );
+    expect(deployDeadlines(source)).toEqual(declared);
+    for (const [run, entry] of Object.entries(GATE_DEADLINES)) {
+      const gates: string[] = [...REQUIRED_GATES];
+      expect(gates, `${run} has a deadline and is not a gate`).toContain(run);
+      expect(entry.seconds, `${run} declares no longer than the shared deadline`)
+        .toBeGreaterThan(480);
+      expect(entry.why.length, `${run} declares no reason for its own deadline`)
+        .toBeGreaterThan(80);
+    }
   });
 
   // A gate can end without saying anything about itself: the OOM killer takes it,
@@ -405,7 +432,7 @@ describe("deploy gate", () => {
     const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
 
     expect(gates[0]).toBe("bun scripts/preflight.ts");
-    expect(gates.at(-1)).toBe("bun run gate:infra");
+    expect(gates.at(-1)).toBe("bun run gate:devbox-e2e");
   });
 
   // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
@@ -414,6 +441,15 @@ describe("deploy gate", () => {
   // spawns.
   test("every gate fails closed even when the former skip variable is set", () => {
     const last = REQUIRED_GATES.at(-1);
+    // WHICH WAVE EACH DECLARED GATE IS IN, BY POSITION. deploy.sh spells one
+    // gate with a glob and REQUIRED_GATES carries what that glob expands to in
+    // the fixture, so matching the two by text finds nothing for that one line
+    // — and a not-found wave silently made the assertion below "no gate ran at
+    // all". Both lists are the same gates in the same order, which is what the
+    // set-equality test above already holds, so position is the exact mapping.
+    const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
+    const waveOfGate = waves.flatMap((wave, index) => wave.map(() => index));
+    expect(waveOfGate).toHaveLength(REQUIRED_GATES.length);
     for (const gate of REQUIRED_GATES) {
       const run = runDeploy({ failingGate: gate });
 
@@ -425,11 +461,23 @@ describe("deploy gate", () => {
       ).toBe(false);
       // A failure TRUNCATES the run. Only the final gate can fail with every
       // other gate already behind it.
+      //
+      // Expressed over WAVES, which is what the runner actually orders: gates
+      // inside one wave run concurrently and finish in no fixed order, so the
+      // checkable property is that no gate from a LATER wave ran at all. This
+      // was written as "the Cloudflare gate never ran", which said the same
+      // thing only while that gate happened to be last — and silently stopped
+      // saying anything about the wave that followed it.
+      const failedWave = waveOfGate[REQUIRED_GATES.indexOf(gate)] ?? -1;
+      const downstream = REQUIRED_GATES.filter(
+        (_gate, index) => (waveOfGate[index] ?? -1) > failedWave,
+      );
+      for (const later of downstream) {
+        expect(run.events, `${gate} failed and ${later} ran anyway`).not.toContain(later);
+      }
       if (gate !== last) {
         expect(run.events.length, `${gate} failed and the whole tier ran anyway`)
           .toBeLessThan(REQUIRED_GATES.length);
-        expect(run.events, `${gate} failed and the Cloudflare gate ran anyway`)
-          .not.toContain("bun run gate:infra");
       }
     }
   }, 60_000);
@@ -602,7 +650,13 @@ describe("deploy gate", () => {
     // optional gate is a warning.
     expect(REQUIRED_GATES).toContain('bun run gate:infra');
     const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
-    expect(waves.at(-1)).toEqual(['bun run gate:infra']);
+    // ITS OWN WAVE, AFTER EVERY SOURCE GATE. Not "the last wave": the deployed
+    // devbox lifecycle suite runs after it, deliberately, because that suite
+    // SPENDS the account this gate has just proved. What has to hold is that
+    // nothing shares this gate's wave and that every source gate is behind it.
+    const infraWave = waves.findIndex((wave) => wave.includes('bun run gate:infra'));
+    expect(waves[infraWave]).toEqual(['bun run gate:infra']);
+    expect(waves.slice(infraWave + 1).flat()).toEqual(['bun run gate:devbox-e2e']);
     expect(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")).toContain(
       'run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra',
     );

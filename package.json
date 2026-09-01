@@ -66,6 +66,7 @@
     "gate:commit-message": "bun scripts/commit-hygiene.ts",
     "gate:agents-fields": "bun scripts/agents-fields.ts",
     "gate:infra": "bun scripts/infra-verify.ts",
+    "gate:devbox-e2e": "bun scripts/devbox-e2e.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
     "infra:teardown": "bun scripts/infra-teardown.ts",
     "evals:full": "bash scripts/eval-tier.sh",

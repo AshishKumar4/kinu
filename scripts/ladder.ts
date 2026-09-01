@@ -909,7 +909,7 @@ export const LADDER: readonly Gate[] = [
     // bench-payload-transports, and the r2-bench deploy substrate. Not one of
     // their names starts with `bench`, so all eight shipped tracked, passing by
     // hand, and claimed by NO tier: 89 tests that ran in no pipeline.
-    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts',
+    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts',
     tier: 'ci',
     // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
     // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
@@ -1402,6 +1402,34 @@ export const LADDER: readonly Gate[] = [
       + 'UNKNOWN and fail, because a machine that could not look at the admin plane\'s outer gate '
       + 'has not verified it.',
   },
+  {
+    run: 'bun run gate:devbox-e2e',
+    tier: 'deploy',
+    // MEASURED on the enforcing run recorded in the suite's own artifact:
+    // five arms in flight, deploys and deletes phased outside the measured
+    // window. Dominated by the five serial wrangler deploys and the container
+    // starts, not by this box.
+    seconds: 900,
+    catches: 'a devbox storage strategy that cannot complete its own lifecycle on a real '
+      + 'container: a checkpoint that never publishes, an attach that abandons its budget, a '
+      + 'restore that comes back with different bytes, a deletion the restore undoes, or bytes '
+      + 'an application flushed before the checkpoint that die with the container. Every arm '
+      + 'runs the whole cycle — create, ~1 MB of mixed files, checkpoint, stop, wake, byte '
+      + 'verify, a 30 MiB npm-shaped tree, a second checkpoint, a cold attach from a fresh '
+      + 'instance, byte verify again, teardown — with a MEASURED settle ceiling per operation '
+      + 'as the oracle, so a hang is a named failure in minutes instead of a benchmark that '
+      + 'runs all afternoon and reports nulls. Three deployed strategy runs were lost that way '
+      + 'before it existed: 20260831031426 and 20260831143544 refused all five arms at the '
+      + 'wake, and the 20260831184750 smoke lost snapshot-chain to a 300 s attach overrun — '
+      + 'each an hour of container time to learn one lifecycle fact.',
+    blind: 'speed. Its durations are driver-side wall clocks with five arms in flight, so they '
+      + 'answer "did this settle" and never "which arm is faster" — that is '
+      + '`bench-devbox-strategies.ts`, on the fixture\'s own in-container timings. Also blind '
+      + 'to any defect that needs a tree bigger than 30 MiB, more than one recycle per size, '
+      + 'or two writers in one box; and, running one lifecycle per arm per run, blind to a '
+      + 'strategy that fails one run in ten. A ceiling is a TEST deadline, not a product '
+      + 'bound: nothing in the product waits on these numbers.',
+  },
 ];
 
 /**
@@ -1432,10 +1460,18 @@ export const SERIAL_GATES = {
     + 'fails for a reason unrelated to the change under test. It runs AFTER the source '
     + 'wave so a cheap source failure still fails first, and before the account gate.',
   'bun run gate:infra':
-    'runs alone and LAST. It is the only gate that talks to Cloudflare, `npx wrangler whoami` '
-    + 'is its precondition, and its place in the order carries meaning: everything before it '
-    + 'proves the SOURCE is deployable and it proves the ACCOUNT is. Running it early would '
-    + 'spend account calls on a tree that has not been shown to compile.',
+    'runs alone, after every source gate. It is the cheapest gate that talks to Cloudflare, '
+    + '`npx wrangler whoami` is its precondition, and its place in the order carries meaning: '
+    + 'everything before it proves the SOURCE is deployable and it proves the ACCOUNT is. '
+    + 'Running it early would spend account calls on a tree that has not been shown to compile.',
+  'bun run gate:devbox-e2e':
+    'runs alone and LAST, and both halves are load-bearing. ALONE because its verdicts are '
+    + 'settle ceilings measured as driver-side wall clocks: a gate beside it competing for '
+    + 'this box would be charged to an arm\'s cold attach, which is the one failure mode a '
+    + 'gate must never have. LAST because it is the only gate that spends container instances '
+    + '— five, one per arm, plus a bucket each — so it runs once the source is proved and '
+    + '`gate:infra` has proved the account it is about to spend. Its deadline is its own: see '
+    + 'GATE_DEADLINES in scripts/deploy.sh.',
 } satisfies Record<string, string>;
 
 /**
@@ -1500,6 +1536,65 @@ export function deployWaves(
 }
 
 /**
+ * Gates that may not be bounded by the shared source-gate deadline, each with
+ * the reason and the seconds it gets instead.
+ *
+ * `GATE_DEADLINE_SECONDS` in deploy.sh bounds a test process on the deploy
+ * box, and 480s is calibrated against the slowest of those. A gate whose
+ * SUBJECT is a deployed container lifecycle is not one, and raising the shared
+ * figure to fit it would take the wall off every source gate at once. So the
+ * exception is per gate and written down; `deploy.test.ts` holds this equal to
+ * deploy.sh's own table, which the bash runner cannot import.
+ */
+export const GATE_DEADLINES = {
+  'bun run gate:devbox-e2e': {
+    seconds: 3_600,
+    why: 'five serial wrangler deploys with a container image each, then five container '
+      + 'lifecycles in flight, then teardown. Its own ceilings — the thing it judges by — sum '
+      + 'to well under this; the figure is the wall that ends a run whose deploys hang, and it '
+      + 'is four times the measured 900s so a slow account day is not read as a devbox defect.',
+  },
+} satisfies Record<string, { readonly seconds: number; readonly why: string }>;
+
+/**
+ * The `['key']=value` rows of ONE named bash associative array.
+ *
+ * Scoped to its own `declare -A NAME=( … )` block rather than matched over the
+ * whole file, because deploy.sh now declares two such tables and a file-wide
+ * match read the deadline table's rows as exclusion groups — an exclusion
+ * group named `3600`, holding a gate that excludes nothing.
+ */
+function bashTable(source: string, name: string): [string, string][] {
+  const lines = source.split('\n');
+  const opened = lines.findIndex((line) => line.includes(`declare -A ${name}=(`));
+  if (opened === -1) return [];
+  const rows: [string, string][] = [];
+  for (let index = opened; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const match = /^\s*\['([^']+)'\]=(\S+)\s*$/.exec(line);
+    const key = match?.[1];
+    const value = match?.[2];
+    if (key !== undefined && value !== undefined) rows.push([key, value]);
+    // The array closes on the first line ending in `)`, which is also the
+    // OPENING line for an empty table written `declare -A NAME=()`. Reading
+    // past it is what let one table's rows be attributed to another's.
+    if (line.trimEnd().endsWith(')')) break;
+  }
+  return rows;
+}
+
+/** deploy.sh's per-gate deadline table, parsed. The runner is bash and cannot
+ *  import {@link GATE_DEADLINES}, so the two are written twice and asserted
+ *  once — the same shape as the exclusion table below. */
+export function deployDeadlines(
+  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
+): Record<string, number> {
+  return Object.fromEntries(
+    bashTable(source, 'GATE_DEADLINES').map(([run, seconds]) => [run, Number.parseInt(seconds, 10)]),
+  );
+}
+
+/**
  * deploy.sh's own exclusion table, parsed. Held equal to {@link EXCLUSION_GROUPS}
  * by `deploy.test.ts`: the runner is bash and cannot import the declaration, so
  * the two are written twice and asserted once.
@@ -1508,13 +1603,7 @@ export function deployExclusions(
   source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
 ) {
   const groups: Record<string, string[]> = {};
-  for (const line of source.split('\n')) {
-    const match = /^\s*\['([^']+)'\]=(\S+)\s*$/.exec(line);
-    const run = match?.[1];
-    const group = match?.[2];
-    if (run === undefined || group === undefined) continue;
-    (groups[group] ??= []).push(run);
-  }
+  for (const [run, group] of bashTable(source, 'GATE_GROUP')) (groups[group] ??= []).push(run);
   return groups;
 }
 
@@ -1624,6 +1713,12 @@ export const CI_EXEMPT = {
     'needs the elan toolchain and a 15-minute Lean build. It runs in the path-filtered '
     + 'lean-verify workflow on pull requests and as a main-push gate, which is where '
     + 'that cost belongs.',
+  'bun run gate:devbox-e2e':
+    'deploys five Workers with container applications and a bucket each, and drives real '
+    + 'container lifecycles on them. That needs a Cloudflare session with write scope — the '
+    + 'same reason `gate:infra` is exempt — and it costs container minutes per run, which a '
+    + 'pull request must not spend. Without a session it reports the refusal and exits '
+    + 'non-zero rather than skipping, so it cannot be run in CI and read as a pass.',
 } satisfies Record<string, string>;
 
 /** Every gate at or below `tier`. At `deploy`, anything deploy.sh runs that no

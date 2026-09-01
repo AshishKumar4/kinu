@@ -13,9 +13,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, decide, opsAreBlind, priceOps,
@@ -24,8 +23,11 @@ import {
 import { refusalText } from './fixtures/storage-matrix/admission';
 import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
+import { scratchDir } from '@kinu.run/test-utils';
 import {
   addressArmRequest,
+  armLogTail,
+  underArmLog,
   benchmarkExitCode,
   CANDIDATE_CONTAINER_CLASSES,
   candidateLifecycleChecks,
@@ -34,6 +36,7 @@ import {
   cleanupObservationProbes,
   checkpointOperation,
   comparablePair,
+  describeStartupState,
   devboxAdmission,
   devboxArmEvidence,
   drainBucketResidue,
@@ -46,16 +49,22 @@ import {
   pollForAttach,
   postLiveTeardown,
   rankableTicks,
+  readArmArtifact,
+  refuseFailedArm,
+  resetArmLogs,
   runArm,
   runArmsInFlight,
   renderFrozenControls,
   resourceNames,
   SANDBOX_IMAGE,
   SANDBOX_IMAGE_DIGEST,
+  startupOperation,
   startupPollVerdict,
   stopOperation,
   recommend,
   teardownLiveArms,
+  externallyAbortedArm,
+  writeArmArtifact,
   type ArmResult,
   type ControlWitnessFacts,
   type CandidateFactsReply,
@@ -162,6 +171,31 @@ describe('startup polling contract', () => {
   test('a reply that does not report the container proves nothing and stays pending', () => {
     expect(startupPollVerdict({ state: { restoration: 'unstarted' } }))
       .toEqual({ kind: 'pending' });
+  });
+
+  /**
+   * PROBE wakeprobe09010650: a `snapshot-chain` box, alone on its own Worker,
+   * answered this reading for 300 s. `pending` describes the driver's
+   * knowledge; the box had already filed two incidents, and a ceiling refusal
+   * that says only "pending" throws that away.
+   */
+  test('the reading a refusal reports names the incidents a pending verdict hides', () => {
+    expect(describeStartupState({
+      state: {
+        running: true,
+        restoration: 'unstarted',
+        unready: 'no restoration has run for this container yet',
+        incidents: { total: 2, undelivered: 2 },
+      },
+    })).toBe(
+      'running=true restoration=unstarted, 2 incident(s) recorded (2 undelivered), '
+      + 'unready: no restoration has run for this container yet',
+    );
+  });
+
+  test('a reply with no state at all reports the error rather than an invented reading', () => {
+    expect(describeStartupState({ error: 'internal error; reference = cc4po3dqdeu4t8g7a7fg5aps' }))
+      .toBe('no state in the reply: internal error; reference = cc4po3dqdeu4t8g7a7fg5aps');
   });
 });
 
@@ -279,6 +313,88 @@ describe('startup readiness redrive', () => {
       fixture.restore();
     }
     expect(fixture.asked).toEqual(['GET /state', 'POST /exec']);
+  });
+
+  /**
+   * A fixture whose `/exec` never answers, which is what a readiness drive
+   * posted against a slow restoration really looks like: `/exec` waits on
+   * `ensureReady()`, so the request stays open for as long as the attach takes
+   * and the client's own deadline is the only thing that ends it.
+   */
+  function fixtureWithAHangingExec(state: () => string) {
+    const asked: string[] = [];
+    const real = globalThis.fetch;
+    const answer = async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init?: Parameters<typeof globalThis.fetch>[1],
+    ): Promise<Response> => {
+      const url = new URL(String(input));
+      const method = init?.method ?? 'GET';
+      asked.push(`${method} ${url.pathname}`);
+      if (url.pathname === '/exec') return await new Promise<Response>(() => {});
+      return new Response(state());
+    };
+    globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+    return { asked, restore: () => { globalThis.fetch = real; } };
+  }
+
+  /**
+   * DEPLOYED INCIDENT, the `snapshot-chain` wake in devbox-e2e-e2ecal0901002202
+   * (540,050 ms = `CALL_ATTEMPTS` x `CALL_DEADLINE_MS`) and the same arm in the
+   * decisive run 20260831233915, whose log shows the wake's drive losing two
+   * `POST /exec` attempts before the arm died on `The operation timed out.`.
+   *
+   * Awaiting the drive meant nothing asked `/state` for nine minutes, so a box
+   * that attached during the wait was recorded as one that never attached at
+   * all — the transport's verdict wearing the product's name.
+   */
+  test('a drive whose reply never lands does not become the startup verdict', async () => {
+    let driven = false;
+    const fixture = fixtureWithAHangingExec(() => JSON.stringify(driven
+      ? {
+        ok: true,
+        state: {
+          running: true,
+          restoration: 'attached',
+          lastAttach: { kind: 'attached', detail: 'the work directory is mounted' },
+        },
+      }
+      : { ok: true, state: { running: false, restoration: 'unstarted' } }));
+    try {
+      const polled = pollForAttach(
+        BENCH_FIXTURE, 'ab-snapshot-chain-e2ecal0901002202', 'wake', ['attached'],
+        { deadlineMs: 30_000 },
+      );
+      // The restoration finishes while the drive's request is still open, which
+      // is the case the old loop could not see.
+      driven = true;
+      const poll = await polled;
+      expect(poll.attach.kind).toBe('attached');
+      expect(poll.redrives).toBe(1);
+    } finally {
+      fixture.restore();
+    }
+    // The poll kept reading state THROUGH the unanswered drive.
+    expect(fixture.asked.filter((call) => call === 'POST /exec')).toEqual(['POST /exec']);
+    expect(fixture.asked.slice(-1)).toEqual(['GET /state']);
+  });
+
+  test('the ceiling refusal names the drive that never answered', async () => {
+    const fixture = fixtureWithAHangingExec(() =>
+      JSON.stringify({ ok: true, state: { running: false, restoration: 'unstarted' } }));
+    try {
+      const refused = pollForAttach(
+        BENCH_FIXTURE, 'ab-snapshot-chain-e2ecal0901002202', 'wake', ['attached'],
+        { deadlineMs: 800 },
+      );
+      await expect(refused).rejects.toThrow(
+        /wake did not attach within its 800 ms ceiling .*a readiness drive posted \d+ ms ago has not answered/,
+      );
+    } finally {
+      fixture.restore();
+    }
+    // ONE drive, however many readings the ceiling window held.
+    expect(fixture.asked.filter((call) => call === 'POST /exec')).toEqual(['POST /exec']);
   });
 });
 
@@ -702,6 +818,217 @@ async function capturedStderr(run: () => Promise<void>): Promise<string> {
   }
   return written.join('');
 }
+
+/** `/state` answers the same internal error forever; `/exec` never answers at
+ *  all, which is what a readiness drive against a wedged box really does. */
+function fixtureAnsweringInternalError() {
+  const asked: string[] = [];
+  const real = globalThis.fetch;
+  const answer = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => {
+    const url = new URL(String(input));
+    const method = init?.method ?? 'GET';
+    asked.push(`${method} ${url.pathname}`);
+    if (url.pathname === '/exec') return await new Promise<Response>(() => {});
+    return new Response(JSON.stringify({ error: 'internal error; reference = cc4po3dqdeu4t8g7a7fg5aps' }));
+  };
+  globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+  return { asked, restore: () => { globalThis.fetch = real; } };
+}
+
+describe('a startup whose state poll answers internal error forever refuses at the ceiling, not never', () => {
+  /**
+   * THE RED PROOF THE TICKET ASKS FOR, as a scripted fixture: `/state` answers
+   * `internal error` on every poll — the reading the calibration run's
+   * `bounded-layers` cold attach sat on for its whole 900,000 ms wall while the
+   * unbounded kick loop below it re-kicked every 15 s and nothing named either
+   * one. The pre-fix `pollForAttach` had no deadline and the pre-fix kick loop
+   * none either, so this test HANGS against that seam (5 s test timeout) rather
+   * than refusing; here the ceiling is the only thing that ends it, and the
+   * refusal names the box's own words.
+   */
+  test('refuses at the caller\'s ceiling, naming the reading it kept getting', async () => {
+    const fixture = fixtureAnsweringInternalError();
+    try {
+      const started = Date.now();
+      await expect(pollForAttach(
+        BENCH_FIXTURE, 'ab-bounded-layers-20260831233915', 'cold attach', ['attached'],
+        { deadlineMs: 600 },
+      )).rejects.toThrow(/cold attach did not attach within its 600 ms ceiling \(last reading: pending.*internal error/);
+      // NOT A LOOP. A poll that merely kept asking would outlive any test
+      // budget; refusing inside a small multiple of the ceiling is the whole
+      // claim. One drive is in flight at most (the hanging /exec), and the
+      // refusal names it rather than reporting it as the verdict.
+      expect(Date.now() - started).toBeLessThan(5_000);
+      // The poll kept ASKING throughout the window rather than blocking on one
+      // request: a ceiling that fires over a single unanswered call would prove
+      // nothing about the loop.
+      expect(fixture.asked.filter((call) => call === 'GET /state').length).toBeGreaterThan(1);
+    } finally {
+      fixture.restore();
+    }
+  });
+
+  /**
+   * The kick loop's half of the same defect, same run: a `/create` that keeps
+   * answering transient capacity re-kicked forever, unbounded by the caller's
+   * window. `startupOperation` with a ceiling must refuse naming the last kick.
+   */
+  test('the capacity kick loop honours the ceiling and names the last kick', async () => {
+    const asked: string[] = [];
+    const real = globalThis.fetch;
+    const answer = async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init?: Parameters<typeof globalThis.fetch>[1],
+    ): Promise<Response> => {
+      const url = new URL(String(input));
+      const method = init?.method ?? 'GET';
+      asked.push(`${method} ${url.pathname}`);
+      return new Response(JSON.stringify({
+        ok: false,
+        error: 'no container instance is available right now, try again later',
+      }));
+    };
+    globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+    try {
+      await expect(startupOperation(
+        BENCH_FIXTURE, 'ab-bounded-layers-20260831233915', '/create', 'cold attach', ['attached'],
+        { deadlineMs: 1 },
+      )).rejects.toThrow(
+        /was still being admitted at its 1 ms ceiling after 1 kick\(s\) \(last kick: no container instance is available right now, try again later\)/,
+      );
+      expect(asked).toEqual(['POST /create']);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});
+
+describe('durable per-arm artifacts', () => {
+  /** A temporary repo root with its own bench-artifacts, so a test never reads
+   *  or writes a real run's directory. Minted through the repo's own scratch
+   *  namespace, which is what preflight counts and reclaims. */
+  const artifactRoot = (): string => scratchDir('devbox-arm-artifacts');
+
+  test('a row written the moment it settles reads back whole, atomically, with the log tail', () => {
+    const root = artifactRoot();
+    const row = measuredArm('snapshot-chain');
+    row.attachColdMs = 1_968;
+    resetArmLogs();
+    const artifact = writeArmArtifact(root, 'redprobe1', 'snapshot-chain', row);
+    // No `.tmp` residue: a kill between write and rename must never leave a
+    // partial file a reader could mistake for the arm's answer.
+    expect(existsSync(join(root, 'bench-artifacts', 'redprobe1', 'snapshot-chain.json.tmp'))).toBe(false);
+    const read = readArmArtifact(root, 'redprobe1', 'snapshot-chain');
+    expect(read.error).toBeNull();
+    expect(read.artifact?.schema).toBe('devbox-arm-artifact/1');
+    expect(read.artifact?.row).toEqual(row);
+    expect(artifact.settledAt.length).toBeGreaterThan(0);
+    // An arm that never ran reads as absent, not as a read failure.
+    expect(readArmArtifact(root, 'redprobe1', 'merkle-pack')).toEqual({ artifact: null, error: null });
+  });
+
+  test('a corrupted artifact is a named finding, never a silent absence', () => {
+    const root = artifactRoot();
+    mkdirSync(join(root, 'bench-artifacts', 'redprobe2'), { recursive: true });
+    writeFileSync(
+      join(root, 'bench-artifacts', 'redprobe2', 'r2fs.json'),
+      '{not json',
+    );
+    const read = readArmArtifact(root, 'redprobe2', 'r2fs');
+    expect(read.artifact).toBeNull();
+    expect(read.error).toContain('unreadable');
+    expect(read.error).toContain('r2fs.json');
+  });
+
+  /**
+   * THE KILLED-DRIVER RED PROOF, as a scripted fixture. Two arms settle —
+   * cold attach + ladder + wake recorded — and the third is killed mid-flight:
+   * no artifact exists for it. What survives on disk must be exactly the two
+   * settled arms' measurements, readable by a process that never watched them
+   * settle, and the run-level assembly records the third as externally-aborted
+   * carrying its log tail rather than as an unmeasured row.
+   */
+  test('a driver killed after two arms settled leaves those two arms readable and the third externally-aborted', async () => {
+    const root = artifactRoot();
+    const runId = 'killedprobe';
+    // Arm one: measured through the wake.
+    const one = measuredArm('snapshot-chain');
+    one.attachColdMs = 1_968;
+    one.wakeMs = 5_854;
+    // Arm two: measured through the ladder only.
+    const two = measuredArm('r2fs');
+    two.attachColdMs = 2_210;
+    two.wakeMs = null;
+    writeArmArtifact(root, runId, 'snapshot-chain', one);
+    writeArmArtifact(root, runId, 'r2fs', two);
+
+    // The killed third arm left log lines but no artifact — the wedge killed the
+    // process mid-poll. Its last words are the tail it never got to write, and
+    // they are what the run-level row carries in their place. The lines come
+    // from the DRIVER's own poll, not from a stub: a tail assembled by the test
+    // would prove nothing about what a live arm records.
+    resetArmLogs();
+    const killed = await underArmLog('overlay-cas', async () => {
+      const wedged = fixtureAnsweringInternalError();
+      try {
+        // The refusal is the POINT: this is the arm dying at its ceiling, and
+        // the lines it logged getting there are what the tail must carry.
+        await expect(pollForAttach(
+          BENCH_FIXTURE, `ab-overlay-cas-${runId}`, 'wake', ['attached'], { deadlineMs: 400 },
+        )).rejects.toThrow(/wake did not attach within its 400 ms ceiling/);
+      } finally {
+        wedged.restore();
+      }
+      return externallyAbortedArm(
+        'overlay-cas',
+        `ab-overlay-cas-${runId}`,
+        'the run was killed while this arm was still measuring',
+      );
+    });
+    // The driver really did record those lines against THIS arm.
+    expect(armLogTail('overlay-cas').some((line) => line.includes('internal error'))).toBe(true);
+
+    // WHAT SURVIVED IS READABLE, from a process that never watched it settle.
+    const first = readArmArtifact(root, runId, 'snapshot-chain');
+    const second = readArmArtifact(root, runId, 'r2fs');
+    expect(first.artifact?.row).toEqual(one);
+    expect(first.artifact?.row.attachColdMs).toBe(1_968);
+    expect(first.artifact?.row.wakeMs).toBe(5_854);
+    expect(second.artifact?.row).toEqual(two);
+    expect(second.artifact?.row.wakeMs).toBeNull();
+
+    // AND THE UNSETTLED ARM IS NOT LOST AS NULLS. The row the assembly records
+    // for it names the abort, fails verification, and ranks nothing.
+    expect(killed.notes.at(-1)).toBe('externally-aborted: the run was killed while this arm was still measuring');
+    // THE LOG TAIL RIDES ALONG. Without it the row says an arm vanished and
+    // nothing about what it was doing when it did.
+    expect(killed.notes.some((note) => note.startsWith('log: ') && note.includes('internal error'))).toBe(true);
+    expect(killed.verifyPassed).toBe(false);
+    expect(killed.attachColdMs).toBeNull();
+    expect(killed.wakeMs).toBeNull();
+    expect(killed.checkpoints).toEqual([]);
+    expect(killed.verifyChecks.some((check) =>
+      check.pass === false && check.detail.includes('externally-aborted'))).toBe(true);
+    expect(rankableTicks([killed], killed.decisiveTicks)).toEqual([]);
+    expect(readArmArtifact(root, runId, 'overlay-cas')).toEqual({ artifact: null, error: null });
+  });
+
+  test('an arm artifact written after a refusal keeps the reason with what was measured', () => {
+    const root = artifactRoot();
+    const row = measuredArm('merkle-pack');
+    row.attachColdMs = 15_721;
+    row.wakeMs = null;
+    const refused = refuseFailedArm(row, 'arm failed mid-measurement: wake refused: [abandoned -> refuse] Devbox.attach exceeded its 300000ms budget');
+    writeArmArtifact(root, 'refuseprobe', 'merkle-pack', refused);
+    const read = readArmArtifact(root, 'refuseprobe', 'merkle-pack');
+    expect(read.artifact?.row.attachColdMs).toBe(15_721);
+    expect(read.artifact?.row.verifyPassed).toBe(false);
+    expect(read.artifact?.row.notes.join(' ')).toContain('arm failed mid-measurement');
+  });
+});
 
 describe('the arms are measured in flight together', () => {
   test('a later arm starts before an earlier one has finished', async () => {
@@ -1348,24 +1675,21 @@ describe('candidate-only controls', () => {
   });
 
   test('plans candidate-only work and reports strategy-qualified control context', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'devbox-control-'));
-    const path = join(directory, 'control.json');
+    // One owner per file: minted through the scratch namespace preflight counts
+    // and reclaims, so nothing here has to remember to remove it.
+    const path = join(scratchDir('devbox-control'), 'control.json');
     writeFileSync(path, multiArmArtifact);
-    try {
-      const plan = Bun.spawnSync(
-        [
-          'bun', 'scripts/bench-devbox-strategies.ts', '--candidates-only', '--plan',
-          '--control', `snapshot-chain=${path}`,
-        ],
-        { stdout: 'pipe', stderr: 'pipe' },
-      );
+    const plan = Bun.spawnSync(
+      [
+        'bun', 'scripts/bench-devbox-strategies.ts', '--candidates-only', '--plan',
+        '--control', `snapshot-chain=${path}`,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
 
-      expect(plan.exitCode, plan.stderr.toString()).toBe(0);
-      expect(plan.stdout.toString()).toContain('arms          bounded-layers, merkle-pack');
-      expect(plan.stdout.toString()).toContain(`controls      snapshot-chain=${path}`);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+    expect(plan.exitCode, plan.stderr.toString()).toBe(0);
+    expect(plan.stdout.toString()).toContain('arms          bounded-layers, merkle-pack');
+    expect(plan.stdout.toString()).toContain(`controls      snapshot-chain=${path}`);
   });
 
   test('documents strategy-qualified controls in CLI help', () => {
@@ -1456,6 +1780,9 @@ class DeferredVerifyResponse extends EventEmitter {
 class DeferredVerifyRequest extends EventEmitter {
   body = '';
   onEnd: ((body: string) => void) | null = null;
+  /** Whether the transport RELEASED the socket, not merely rejected its own
+   *  promise: an elapsed bound that leaves the request open bounds nothing. */
+  destroyed = false;
 
   end(body: string): void {
     this.body = body;
@@ -1463,6 +1790,7 @@ class DeferredVerifyRequest extends EventEmitter {
   }
 
   destroy(error?: Error): void {
+    this.destroyed = true;
     if (error !== undefined) this.emit('error', error);
   }
 }
@@ -1537,6 +1865,27 @@ describe('long teardown transport', () => {
     response.emit('data', JSON.stringify({ ok: true, purged: 4 }));
     response.emit('end');
     await expect(teardown).resolves.toBeUndefined();
+  });
+
+  /**
+   * MEASURED: the calibration run devbox-e2e-e2ecal0901002202 spent a 900,000 ms
+   * teardown ceiling on `r2fs` and another on `overlay-cas`, and probe
+   * wakeprobe09010702 reproduced it against a box wedged in its own attach
+   * loop. The reply-size bound this transport already had says nothing about a
+   * box that never answers, so a caller with a ceiling supplies an elapsed one
+   * and the second idempotent pass is the retry.
+   */
+  test('a purge that never answers is abandoned at the bound its caller supplied', async () => {
+    const request = new DeferredVerifyRequest();
+    const teardown = postLiveTeardown(
+      { origin: 'https://fixture.invalid', token: 'memory-only-token' },
+      'ab-r2fs-e2ecal0901002202',
+      () => request,
+      25,
+    );
+
+    await expect(teardown).rejects.toThrow(/\/teardown did not answer inside 25 ms/);
+    expect(request.destroyed).toBe(true);
   });
 });
 

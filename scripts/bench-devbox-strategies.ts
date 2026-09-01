@@ -43,7 +43,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -117,9 +117,17 @@ interface StartupState {
     mode?: string;
     rev?: number;
   } | null;
+  /** What the box has already RECORDED about itself while a poll was calling
+   *  it pending. A startup that keeps refusing admission files one of these per
+   *  attempt, so a wait that ends with a non-zero count was never a wait: it was
+   *  a box saying so in the one channel a driver can read. Measured on probe
+   *  `wakeprobe09010650`, where a snapshot-chain box sat `running` and
+   *  `unstarted` for its whole 300 s ceiling holding two undelivered
+   *  incidents. */
+  incidents?: { total?: number; undelivered?: number };
 }
 
-interface StateReply {
+export interface StateReply {
   error?: string;
   extractionAllowed?: boolean;
   storePrefix?: string;
@@ -142,6 +150,10 @@ const StateReplySchema: v.GenericSchema<StateReply> = v.looseObject({
       mode: v.optional(v.string()),
       rev: v.optional(v.number()),
     }))),
+    incidents: v.optional(v.looseObject({
+      total: v.optional(v.number()),
+      undelivered: v.optional(v.number()),
+    })),
   })),
 });
 
@@ -180,6 +192,30 @@ export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
     };
   }
   return { kind: 'pending' };
+}
+
+/**
+ * The box's own reading, in the words a refusal has to carry.
+ *
+ * `pending` is a verdict about the DRIVER's knowledge, not about the box, and a
+ * ceiling that reports only that is unattributable. The three fields below are
+ * what separate the states a reader has to tell apart: a container the platform
+ * never admitted, one that is up with a restoration nobody ran, and one that is
+ * refusing. The incident count is the decisive one — a box that filed incidents
+ * while a poll called it pending was never waiting, it was already failing, and
+ * probe `wakeprobe09010650` spent its whole 300 s ceiling on exactly that
+ * reading (`running` true, `unstarted`, two undelivered incidents).
+ */
+export function describeStartupState(reply: StateReply): string {
+  const state = reply.state;
+  if (state === undefined) return `no state in the reply${reply.error === undefined ? '' : `: ${reply.error}`}`;
+  const incidents = state.incidents;
+  return `running=${state.running === undefined ? 'unreported' : String(state.running)} `
+    + `restoration=${state.restoration ?? 'unreported'}`
+    + `${incidents?.total === undefined || incidents.total === 0
+      ? ''
+      : `, ${String(incidents.total)} incident(s) recorded (${String(incidents.undelivered ?? 0)} undelivered)`}`
+    + `${state.unready === undefined ? '' : `, unready: ${state.unready}`}`;
 }
 
 async function chainGeneration(fixture: Fixture, box: string): Promise<ChainGeneration> {
@@ -225,7 +261,10 @@ function parseDecisiveRun(text: string, source: string): DecisiveRun {
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 const BENCH_DIR = join(REPO_ROOT, 'packages/devbox/bench');
-const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
+/** The account every devbox fixture is raised on. Exported so the deployed
+ *  lifecycle suite names the same account rather than declaring a second copy
+ *  of it — `gate:policy-drift`'s subject exactly. */
+export const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
 const FIXTURE_BASE = 'kinu-devbox-bench';
 const FIXTURE_CLASS_BY_STRATEGY = {
   'snapshot-chain': 'SnapshotChainBox',
@@ -254,7 +293,7 @@ export const CANDIDATE_CONTAINER_CLASSES: ReadonlySet<string> = new Set([
   'MerklePackBox',
 ]);
 
-interface FixtureNames {
+export interface FixtureNames {
   readonly worker: string;
   readonly bucket: string;
   readonly containerApps: readonly string[];
@@ -281,7 +320,7 @@ interface FixtureImageDigests {
  * the container application its class raises, and the generated config that
  * names all three. Nothing in here is shared with another arm.
  */
-interface ArmFixture extends FixtureNames {
+export interface ArmFixture extends FixtureNames {
   readonly strategy: Strategy;
   readonly configPath: string;
   /** The exact per-arm Wrangler config, retained while teardown owns its directory. */
@@ -296,7 +335,7 @@ interface ArmFixture extends FixtureNames {
  * arm would add a container build to every deploy and change nothing about
  * what ran. The digests below are therefore the digests of every arm.
  */
-interface FixtureResources {
+export interface FixtureResources {
   readonly arms: readonly ArmFixture[];
   readonly digests: FixtureImageDigests;
   readonly configDir: string;
@@ -555,7 +594,7 @@ const PROCESS_DEADLINE_MS = 1_500_000;
  * what makes a three-way comparison the same experiment as a two-way one.
  */
 export type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas' | 'bounded-layers' | 'merkle-pack';
-const STRATEGIES: readonly Strategy[] = [
+export const STRATEGIES: readonly Strategy[] = [
   'snapshot-chain',
   'r2fs',
   'overlay-cas',
@@ -848,10 +887,38 @@ export interface Options {
  */
 const armLogContext = new AsyncLocalStorage<Strategy>();
 
+/** How much of an arm's own log a durable artifact carries. Bounded, because
+ *  the artifact is a diagnosis aid, not a log archive: the last lines before a
+ *  wedge are the ones that name it, and everything before them is noise a
+ *  reader would page past anyway. */
+const ARM_LOG_TAIL_LINES = 80;
+
+const armLogTails = new Map<Strategy, string[]>();
+
 const log = (message: string): void => {
   const arm = armLogContext.getStore();
   process.stderr.write(`[devbox-bench${arm === undefined ? '' : `:${arm}`}] ${message}\n`);
+  if (arm === undefined) return;
+  const tail = armLogTails.get(arm) ?? [];
+  tail.push(message);
+  if (tail.length > ARM_LOG_TAIL_LINES) tail.splice(0, tail.length - ARM_LOG_TAIL_LINES);
+  armLogTails.set(arm, tail);
 };
+
+/** This arm's own log tail, as a durable artifact records it. */
+export const armLogTail = (arm: Strategy): readonly string[] => [...(armLogTails.get(arm) ?? [])];
+
+/** Everything the driver said about every arm, reset for the next run. */
+export const resetArmLogs = (): void => { armLogTails.clear(); };
+
+/** Run `work` in one arm's log context, so everything the shared transport says
+ *  inside it is attributed — and mirrored — to that arm. Exported because the
+ *  lifecycle suite drives arms through its own lanes rather than through
+ *  `runArmsInFlight`, and an arm whose lines nobody attributes has no tail for
+ *  its durable artifact to carry. */
+export function underArmLog<T>(arm: Strategy, work: () => T): T {
+  return armLogContext.run(arm, work);
+}
 
 
 /** Valibot's own field-level words for a payload that missed its contract. What
@@ -1005,7 +1072,10 @@ export function cleanupObservationProbes(deps: {
   };
 }
 
-interface Fixture { origin: string; token: string }
+/** One deployed arm's addressable fixture: where it answers and what it
+ *  accepts. Exported because the deployed lifecycle suite drives the same
+ *  routes through these seams rather than opening a second HTTP client. */
+export interface Fixture { origin: string; token: string }
 
 /** Every field the driver ever sends. The fixture parses the same closed set at
  *  its edge, so a key nobody declares here cannot reach a route. */
@@ -1166,7 +1236,7 @@ const AckReplySchema: v.GenericSchema<AckReply> = v.looseObject({
   error: v.optional(v.string()),
 });
 
-interface ExecReply { ok?: boolean; exitCode?: number; stdout?: string; stderr?: string; ms?: number; error?: string }
+export interface ExecReply { ok?: boolean; exitCode?: number; stdout?: string; stderr?: string; ms?: number; error?: string }
 
 const ExecReplySchema: v.GenericSchema<ExecReply> = v.looseObject({
   ok: v.optional(v.boolean()),
@@ -1177,15 +1247,33 @@ const ExecReplySchema: v.GenericSchema<ExecReply> = v.looseObject({
   error: v.optional(v.string()),
 });
 
-async function sh(fixture: Fixture, box: string, command: string): Promise<ExecReply> {
-  return await call(fixture, 'POST', `/exec?box=${box}`, ExecReplySchema, { command });
+/** One command inside the box, through the fixture's own `/exec` route.
+ *
+ *  `timeoutMs` is per attempt and defaults to the shared transport deadline. A
+ *  caller whose own window is smaller than that — the startup readiness drive,
+ *  bounded by the ceiling it is helping to decide — supplies it, because
+ *  `/exec` waits on `ensureReady()` and a slow restoration otherwise holds the
+ *  request open for the whole default budget. */
+export async function execInBox(
+  fixture: Fixture, box: string, command: string, timeoutMs?: number,
+): Promise<ExecReply> {
+  return await call(fixture, 'POST', `/exec?box=${box}`, ExecReplySchema, { command }, timeoutMs);
+}
+
+/** One file into the box, through the fixture's own `/write` route. Re-callable
+ *  on purpose: nothing on a container's disk survives a recycle, so a caller
+ *  that finds its own harness gone writes it again. */
+export async function writeFileInBox(
+  fixture: Fixture, box: string, path: string, content: string,
+): Promise<void> {
+  await call(fixture, 'POST', `/write?box=${box}`, AckReplySchema, { path, content });
 }
 
 const TRANSIENT_REPLACEMENT = /OperationInterrupted|runtime connection was closing|broken\.constructorFailed|container.*(?:replac|restart)/i;
 
 /** Retry only the interrupted edge operation. There is no elapsed deadline and
  * no retry of a completed lifecycle. */
-async function retryTransient<T extends { error?: string }>(
+export async function retryTransient<T extends { error?: string }>(
   operation: string,
   run: () => Promise<T>,
 ): Promise<T> {
@@ -1226,7 +1314,7 @@ function deleteFixtureResources(fixture: ArmFixture): readonly string[] {
   ];
 }
 
-async function deployFixture(
+export async function deployFixture(
   token: string,
   fixture: ArmFixture,
 ): Promise<{ fixture: Fixture; workerVersion: string; stop: () => readonly string[] }> {
@@ -1300,7 +1388,7 @@ const OpTallySchema: v.GenericSchema<OpTally> = v.looseObject({
  * artifact, then excludes its arm from ranking. */
 interface VerifyCheck { name: string; pass: boolean; detail: string }
 
-interface HeadReply {
+export interface HeadReply {
   ok?: boolean;
   key?: string;
   exists?: boolean;
@@ -1321,6 +1409,23 @@ const HeadReplySchema: v.GenericSchema<HeadReply> = v.looseObject({
   etag: v.optional(v.string()),
   error: v.optional(v.string()),
 });
+
+/** What the box says about itself, through the fixture's own `/state` route.
+ *  The startup poll reads the same reply; a caller that needs the arm's store
+ *  prefix or its durable chain record asks here rather than deriving either. */
+export async function boxState(fixture: Fixture, box: string): Promise<StateReply> {
+  return await call(
+    fixture, 'GET', `/state?box=${box}`, StateReplySchema, undefined, STATE_POLL_REQUEST_TIMEOUT_MS,
+  );
+}
+
+/** What the STORE holds under one key, through the fixture's own `/head` route.
+ *  The only fact about durable bytes no container command can answer. */
+export async function headObject(fixture: Fixture, box: string, key: string): Promise<HeadReply> {
+  return await call(
+    fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
+  );
+}
 
 // ── the candidate lifecycle contract ───────────────────────────────────────
 //
@@ -1649,21 +1754,34 @@ const requestOverHttps: HttpsRequester = (url, options, respond) =>
  * Live teardown can outlast a cold-container window. Node's HTTPS client has
  * no elapsed request timeout unless one is set explicitly. Retain only a
  * bounded reply, and reject a connection that closes before it finishes.
+ *
+ * `timeoutMs` IS THE ELAPSED BOUND, and its absence still means unbounded: the
+ * benchmark's teardown is allowed to take as long as a purge takes. A caller
+ * that judges teardown by a CEILING passes one, because the reply-size bound
+ * this function already had does nothing for a box that never answers — the
+ * calibration run's `r2fs` and `overlay-cas` teardowns each burned a 900,000 ms
+ * ceiling on one such request, and probe `wakeprobe09010702` reproduced it
+ * against a box wedged in its own attach loop. The purge is idempotent and
+ * `teardownLiveArms` posts a second pass, so an abandoned request costs a retry
+ * rather than the work.
  */
 async function postBoundedHttps(
   fixture: Fixture,
   path: string,
   body: DriverRequest,
   requester: HttpsRequester,
+  timeoutMs?: number,
 ): Promise<string> {
   const addressed = addressArmRequest('POST', path, body);
   const endpoint = new URL(path, 'https://bench.invalid').pathname;
   const payload = JSON.stringify(addressed.body);
   return await new Promise<string>((resolve, reject) => {
     let settled = false;
+    let elapsed: ReturnType<typeof setTimeout> | undefined;
     const fail = (error: Error): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(elapsed);
       reject(error);
     };
     const request = requester(
@@ -1695,11 +1813,19 @@ async function postBoundedHttps(
         response.once('end', () => {
           if (settled) return;
           settled = true;
+          clearTimeout(elapsed);
           resolve(Buffer.concat(chunks, bytes).toString('utf8'));
         });
       },
     );
     request.once('error', fail);
+    if (timeoutMs !== undefined) {
+      elapsed = setTimeout(() => {
+        const expiry = new Error(`${endpoint} did not answer inside ${String(timeoutMs)} ms`);
+        request.destroy(expiry);
+        fail(expiry);
+      }, timeoutMs);
+    }
     request.end(payload);
   });
 }
@@ -1716,7 +1842,7 @@ const KickReplySchema: v.GenericSchema<KickReply> = v.looseObject({
 
 const STARTUP_POLL_INTERVAL_MS = 250;
 
-interface StartupPoll {
+export interface StartupPoll {
   readonly attach: AttachOutcome;
   readonly state: StateReply;
   /** How many times this poll had to drive the readiness boundary itself. It
@@ -1726,7 +1852,7 @@ interface StartupPoll {
   readonly redrives: number;
 }
 
-interface StartupCompletion extends StartupPoll {
+export interface StartupCompletion extends StartupPoll {
   readonly ms: number;
 }
 
@@ -1741,6 +1867,16 @@ interface StartupCompletion extends StartupPoll {
  */
 const READINESS_DRIVE_COMMAND = 'true';
 
+/** What one readiness drive settled as.
+ *
+ *  A REFUSAL IS THE BOUNDARY'S OWN ANSWER and ends the startup. Everything else
+ *  is a drive that has not answered, which proves nothing either way: the drive
+ *  is a KICK, not a measurement, and `/state` stays the oracle. */
+type ReadinessDrive =
+  | { readonly kind: 'drove' }
+  | { readonly kind: 'unanswered'; readonly detail: string }
+  | { readonly kind: 'refused'; readonly detail: string };
+
 /**
  * Take this startup through the boundary a real operation goes through.
  *
@@ -1751,21 +1887,36 @@ const READINESS_DRIVE_COMMAND = 'true';
  * consumed row will never deliver, and one authenticated no-op exec is the
  * entire repair.
  *
- * A refusal from that boundary ends the startup here, in the boundary's own
- * words. Transient container capacity is not a refusal: the poll re-observes
- * the state and drives again, exactly as the kick loop below re-kicks.
+ * WHY A LOST REPLY IS NOT A REFUSAL, MEASURED. `/exec` waits on `ensureReady()`,
+ * so a drive posted against a slow restoration stays open for as long as the
+ * attach takes, and `call` gives up after `CALL_ATTEMPTS` x `CALL_DEADLINE_MS`
+ * = 540 s with a stackless `TimeoutError: The operation timed out.`. Both
+ * deployed drivers reported exactly that number as the startup's own verdict —
+ * `snapshot-chain` wake, 540,050 ms in devbox-e2e-e2ecal0901002202, and the same
+ * arm in the decisive run 20260831233915 after two logged transport losses on
+ * `POST /exec` — while nothing had been asked of `/state` for nine minutes. The
+ * container-side restoration is unaffected by a client abort, so a drive whose
+ * reply was lost is reported and the poll goes back to reading state.
  */
-async function driveReadiness(fixture: Fixture, box: string, operation: string): Promise<void> {
-  const driven = await retryTransient(`${operation} readiness drive`, async () =>
-    await sh(fixture, box, READINESS_DRIVE_COMMAND),
-  );
-  if (driven.ok === true) return;
-  const detail = driven.error ?? `the readiness probe exited ${driven.exitCode ?? -1}`;
-  if (isTransientContainerCreateError(detail)) {
-    log(`${operation}: the readiness drive found no container instance yet: ${detail}`);
-    return;
+async function driveReadiness(
+  fixture: Fixture,
+  box: string,
+  operation: string,
+  timeoutMs?: number,
+): Promise<ReadinessDrive> {
+  let driven: ExecReply;
+  try {
+    driven = await retryTransient(`${operation} readiness drive`, async () =>
+      await execInBox(fixture, box, READINESS_DRIVE_COMMAND, timeoutMs),
+    );
+  } catch (error) {
+    return { kind: 'unanswered', detail: describeThrown({ cause: error }) };
   }
-  throw new Error(`${operation} refused: ${detail}`);
+  if (driven.ok === true) return { kind: 'drove' };
+  const detail = driven.error ?? `the readiness probe exited ${driven.exitCode ?? -1}`;
+  return isTransientContainerCreateError(detail)
+    ? { kind: 'unanswered', detail }
+    : { kind: 'refused', detail };
 }
 
 /**
@@ -1777,26 +1928,58 @@ async function driveReadiness(fixture: Fixture, box: string, operation: string):
  * throw. The one addition is the `stopped` reading, which is not a wait at all
  * — see the startup redrive test for the deployed run that waited on it for an
  * hour while repeated `/create` kicks kept answering `{ ok: true }`.
+ *
+ * THE DRIVE RUNS BESIDE THE POLL, NEVER IN FRONT OF IT. One drive is in flight
+ * at a time and the loop does not wait for its reply, because the drive only
+ * pushes the box through the readiness gate while the ANSWER is the next
+ * `/state` reading. Awaiting it made a slow restoration indistinguishable from a
+ * dead one: the poll went blind for the drive's whole 540 s transport budget and
+ * then reported the transport's timeout as the box's verdict, so an attach that
+ * completed inside the caller's ceiling would have been recorded as a startup
+ * that never happened.
  */
 export async function pollForAttach(
   fixture: Fixture,
   box: string,
   operation: string,
   allowedKinds: readonly string[],
+  bounds: StartupBounds = {},
 ): Promise<StartupPoll> {
+  // UNBOUNDED BY DEFAULT, because the benchmark's own budget is the container
+  // start budget and a poll that gave up early would report a refusal the box
+  // never made. A caller whose SUBJECT is the wait — the deployed lifecycle
+  // suite, whose oracle is a settle ceiling — supplies its own deadline and
+  // gets a refusal naming the last reading instead of a poll nobody stops.
+  const deadline = bounds.deadlineMs === undefined ? null : Date.now() + bounds.deadlineMs;
   let redrives = 0;
+  let lastReading = 'no /state reply has been decoded yet';
+  /** The one drive in flight, HELD rather than floated: the loop that started
+   *  it owns it, and its rejection can never reach the process unhandled. */
+  let driving: { readonly since: number; readonly settled: Promise<void> } | null = null;
+  let refusal: string | null = null;
   for (;;) {
+    // The boundary's refusal, collected from whichever drive carried it. It is
+    // read here rather than thrown from the drive so that one lane's refusal
+    // still travels through this loop's own accounting.
+    if (refusal !== null) throw new Error(`${operation} refused: ${refusal}`);
+    if (deadline !== null && Date.now() > deadline) {
+      throw new Error(
+        `${operation} did not attach within its ${String(bounds.deadlineMs)} ms ceiling `
+        + `(last reading: ${lastReading}`
+        + `${driving === null ? '' : `; a readiness drive posted ${String(Date.now() - driving.since)} ms ago has not answered`})`,
+      );
+    }
     let reply: StateReply;
     try {
-      reply = await call(
-        fixture, 'GET', `/state?box=${box}`, StateReplySchema, undefined, STATE_POLL_REQUEST_TIMEOUT_MS,
-      );
+      reply = await boxState(fixture, box);
     } catch (error) {
       log(`${operation}: state poll retrying: ${describeThrown({ cause: error })}`);
       await delay(STARTUP_POLL_INTERVAL_MS);
       continue;
     }
     const verdict = startupPollVerdict(reply);
+    lastReading = `${verdict.kind}${'detail' in verdict ? `: ${verdict.detail}` : ''}`
+      + `${'reason' in verdict ? `: ${verdict.reason}` : ''} — ${describeStartupState(reply)}`;
     if (verdict.kind === 'attached') {
       if (allowedKinds.includes(verdict.attach.kind)) {
         return { attach: verdict.attach, state: reply, redrives };
@@ -1804,57 +1987,105 @@ export async function pollForAttach(
       throw new Error(`${operation} restored ${verdict.attach.kind}, expected ${allowedKinds.join(' or ')}`);
     }
     if (verdict.kind === 'failed') throw new Error(`${operation} refused: ${verdict.reason}`);
-    if (verdict.kind === 'stopped') {
+    if (verdict.kind === 'stopped' && driving === null) {
       redrives += 1;
       log(`${operation}: ${verdict.detail}; driving readiness through one no-op exec (drive ${redrives})`);
-      await driveReadiness(fixture, box, operation);
+      // Bounded by what is left of the caller's own window, so a drive cannot
+      // outlive the verdict it was meant to help produce. Aborting the request
+      // does not abort the restoration: the container-side attach runs to its
+      // own budget either way, and the next `/state` reading is what sees it.
+      const remaining = deadline === null ? undefined : Math.max(1_000, deadline - Date.now());
+      const since = Date.now();
+      driving = {
+        since,
+        settled: (async (): Promise<void> => {
+          try {
+            const drive = await driveReadiness(fixture, box, operation, remaining);
+            if (drive.kind === 'refused') refusal = drive.detail;
+            else if (drive.kind === 'unanswered') {
+              log(`${operation}: the readiness drive did not answer (${drive.detail}); the state poll keeps the verdict`);
+            }
+          } catch (error) {
+            // `driveReadiness` ANSWERS rather than throws, so this is reachable
+            // only if that contract breaks. It is still handled here: a drive
+            // nobody awaits must never end a run that already has its verdict.
+            log(`${operation}: the readiness drive threw instead of answering: ${describeThrown({ cause: error })}`);
+          } finally {
+            driving = null;
+          }
+        })(),
+      };
     } else if (reply.error !== undefined) {
       log(`${operation}: state poll retrying: ${reply.error}`);
     }
     // ONE cadence for every unsettled reading, a drive included: the next poll
-    // is what accepts the attach, and the drive above already blocked on the
-    // readiness gate, so nothing here can spin.
+    // is what accepts the attach, and only one drive is ever in flight, so
+    // nothing here can spin or stack requests on a box that is already starting.
     await delay(STARTUP_POLL_INTERVAL_MS);
   }
 }
 
-async function kickAndPoll(
+/** How long a startup may take before the caller reads the wait itself as the
+ *  failure. Absent means unbounded — see `pollForAttach`. */
+export interface StartupBounds {
+  readonly deadlineMs?: number;
+}
+
+/** Kick one startup and wait for THIS generation's attach, measured end to end
+ *  from the kick. The two startup routes are the same operation to a caller;
+ *  which one it is decides only what the container is allowed to restore. */
+export async function startupOperation(
   fixture: Fixture,
   box: string,
   path: '/create' | '/wake',
   operation: string,
   allowedKinds: readonly string[],
+  bounds: StartupBounds = {},
 ): Promise<StartupCompletion> {
   const started = Date.now();
+  // THE CALLER'S CEILING COVERS THE KICK TOO. The capacity retry below is
+  // unbounded by design for the benchmark, and a bounded caller that inherited
+  // it spent its whole window re-kicking a box that never admitted a container
+  // and then reported the ceiling with nothing named. `bounds` now ends that
+  // loop with the last kick's own words.
+  const deadline = bounds.deadlineMs === undefined ? null : started + bounds.deadlineMs;
   for (let attempt = 1; ; attempt += 1) {
+    let transient: string;
     try {
       const kicked = await call(fixture, 'POST', `${path}?box=${box}`, KickReplySchema, {});
       if (kicked.ok === true) break;
       const detail = kicked.error ?? 'the startup kick did not confirm';
       if (!isTransientContainerCreateError(detail)) throw new Error(`${operation} failed: ${detail}`);
-      log(`${operation}: transient container capacity on attempt ${attempt}; retrying the same box`);
+      transient = detail;
     } catch (error) {
       const detail = describeThrown({ cause: error });
       if (!isTransientContainerCreateError(detail)) throw error;
-      log(`${operation}: transient container capacity on attempt ${attempt}; retrying the same box`);
+      transient = detail;
+    }
+    log(`${operation}: transient container capacity on attempt ${attempt}; retrying the same box`);
+    if (deadline !== null && Date.now() + 15_000 > deadline) {
+      throw new Error(
+        `${operation} was still being admitted at its ${String(bounds.deadlineMs)} ms ceiling `
+        + `after ${String(attempt)} kick(s) (last kick: ${transient})`,
+      );
     }
     await delay(15_000);
   }
-  const attached = await pollForAttach(fixture, box, operation, allowedKinds);
+  const attached = await pollForAttach(fixture, box, operation, allowedKinds, bounds);
   return { ...attached, ms: Date.now() - started };
 }
 
 /** What one settled checkpoint reports. Its wire form is the poll reply below:
  *  the fixture answers a checkpoint's outcome by token, never inside the
  *  request that asked for it. */
-interface CheckpointReply {
+export interface CheckpointReply {
   ok?: boolean;
   outcome?: { kind: string; reason?: string; bytes?: number; movedBytes?: number };
   ms?: number;
   error?: string;
 }
 
-interface StopReply { ok?: boolean; ms?: number; error?: string }
+export interface StopReply { ok?: boolean; ms?: number; error?: string }
 
 // ── the async operation protocol ────────────────────────────────────────────
 //
@@ -2015,9 +2246,13 @@ async function awaitArmedOperation(
       throw new Error(`${route} answered state "${poll.state ?? 'none'}": ${poll.error ?? 'no reason given'}`);
     }
     if (Date.now() > deadline) {
+      // The EFFECTIVE bound, not the default one. This named the module
+      // constant while honouring `bounds.deadlineMs`, so a caller that bounded
+      // an operation at 30 s was told it had waited 1,500,000 ms — the one
+      // number a reader of a settle failure needs, reported wrong.
       throw new Error(
-        `${route} did not settle within the ${OPERATION_DEADLINE_MS} ms operation deadline `
-        + `(token ${token} still pending)`,
+        `${route} did not settle within the ${String(bounds.deadlineMs ?? OPERATION_DEADLINE_MS)} ms `
+        + `operation deadline (token ${token} still pending)`,
       );
     }
   }
@@ -2093,18 +2328,23 @@ type LiveTeardownSender = (
   fixture: Fixture,
   box: string,
   payload: TeardownPurgePayload,
+  /** The elapsed bound one pass may take, or undefined for the benchmark's own
+   *  unbounded purge. */
+  timeoutMs?: number,
 ) => Promise<void>;
 
 export async function postLiveTeardown(
   fixture: Fixture,
   box: string,
   requester: LiveTeardownHttpsRequester = requestOverHttps,
+  timeoutMs?: number,
 ): Promise<void> {
   const responseText = await postBoundedHttps(
     fixture,
     `/teardown?box=${box}`,
     TEARDOWN_PURGE_PAYLOAD,
     requester,
+    timeoutMs,
   );
   let decoded: unknown;
   try {
@@ -2123,24 +2363,30 @@ export async function postLiveTeardown(
   }
 }
 
-const sendLiveTeardown: LiveTeardownSender = async (fixture, box): Promise<void> => {
-  await postLiveTeardown(fixture, box);
+const sendLiveTeardown: LiveTeardownSender = async (fixture, box, _payload, timeoutMs): Promise<void> => {
+  await postLiveTeardown(fixture, box, requestOverHttps, timeoutMs);
 };
 
 /** Purge each possible arm twice before deleting shared fixture resources. A
  * failed first pass is recorded, never allowed to skip a sibling or the
- * idempotence pass. */
+ * idempotence pass.
+ *
+ * `timeoutMs` BOUNDS ONE PASS, not the sweep, and only for a caller that has a
+ * ceiling to answer to: both passes are the same idempotent purge, so a pass
+ * abandoned at its bound is retried by the next one rather than lost. The
+ * benchmark passes nothing and keeps the unbounded purge it has always had. */
 export async function teardownLiveArms(
   fixture: Fixture,
   boxes: Iterable<string>,
   send: LiveTeardownSender = sendLiveTeardown,
+  timeoutMs?: number,
 ): Promise<readonly string[]> {
   const errors: string[] = [];
   const uniqueBoxes = [...new Set(boxes)];
   for (const pass of [1, 2]) {
     for (const box of uniqueBoxes) {
       try {
-        await send(fixture, box, TEARDOWN_PURGE_PAYLOAD);
+        await send(fixture, box, TEARDOWN_PURGE_PAYLOAD, timeoutMs);
       } catch (error) {
         errors.push(`live teardown pass ${pass} ${box}: ${describeThrown({ cause: error })}`);
       }
@@ -2221,12 +2467,12 @@ export function rankableTicks<T extends TickRecord>(
 }
 
 async function installHarness(fixture: Fixture, box: string): Promise<void> {
-  await sh(fixture, box, `mkdir -p ${HARNESS}`);
+  await execInBox(fixture, box, `mkdir -p ${HARNESS}`);
   for (const file of PROBE_FILES) {
-    await call(fixture, 'POST', `/write?box=${box}`, AckReplySchema, {
-      path: `${HARNESS}/${file}`,
-      content: readFileSync(join(REPO_ROOT, 'scripts/fixtures/r2-bench', file), 'utf8'),
-    });
+    await writeFileInBox(
+      fixture, box, `${HARNESS}/${file}`,
+      readFileSync(join(REPO_ROOT, 'scripts/fixtures/r2-bench', file), 'utf8'),
+    );
   }
 }
 
@@ -2247,7 +2493,7 @@ async function runPhase(
     // already recovers from exactly this; run 6 lost five phases to it here
     // because this driver did not.
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const reply = await sh(fixture, box, `cd ${HARNESS} && ${base}`);
+      const reply = await execInBox(fixture, box, `cd ${HARNESS} && ${base}`);
       const start = (reply.stdout ?? '').indexOf('{');
       if (start !== -1) {
         return parseProbeRun((reply.stdout ?? '').slice(start), `${phase}: blocking exec stdout, attempt ${attempt}`);
@@ -2266,21 +2512,21 @@ async function runPhase(
   // Same recycle hazard, checked before spawning rather than discovered by a
   // sentinel that never appears: a detached process cannot report that its own
   // interpreter was missing.
-  const present = await sh(fixture, box, `test -f ${HARNESS}/probe.ts && echo YES || echo NO`);
+  const present = await execInBox(fixture, box, `test -f ${HARNESS}/probe.ts && echo YES || echo NO`);
   if ((present.stdout ?? '').includes('NO')) {
     log(`${phase}: the harness was gone; reinstalling before spawning`);
     await installHarness(fixture, box);
   }
-  await sh(fixture, box, `rm -f ${out} ${out}.done`);
-  await sh(fixture, box, `cd ${HARNESS} && nohup ${base} --out ${out} >/dev/null 2>&1 & echo spawned`);
+  await execInBox(fixture, box, `rm -f ${out} ${out}.done`);
+  await execInBox(fixture, box, `cd ${HARNESS} && nohup ${base} --out ${out} >/dev/null 2>&1 & echo spawned`);
   const deadline = Date.now() + PROCESS_DEADLINE_MS;
   for (;;) {
     await delay(POLL_MS);
-    const poll = await sh(fixture, box, `test -f ${out}.done && echo DONE || echo WAIT`);
+    const poll = await execInBox(fixture, box, `test -f ${out}.done && echo DONE || echo WAIT`);
     if ((poll.stdout ?? '').includes('DONE')) break;
     if (Date.now() > deadline) throw new Error(`${phase} did not finish within the process deadline`);
   }
-  const read = await sh(fixture, box, `cat ${out}`);
+  const read = await execInBox(fixture, box, `cat ${out}`);
   const start = (read.stdout ?? '').indexOf('{');
   if (start === -1) throw new Error(`${phase}: result file unreadable`);
   return parseProbeRun((read.stdout ?? '').slice(start), `${phase}: ${out} read back after the process run`);
@@ -2333,7 +2579,7 @@ async function runDecisive(
   for (let segment = 0; segment <= SEGMENTS_PER_WORKLOAD; segment++) {
     const command = `bun ${HARNESS}/decisive.ts --root ${root} --workload ${spec.workload} `
       + `--seed ${seed} --segment ${segment} ${spec.args}`;
-    const reply = await sh(fixture, box, command);
+    const reply = await execInBox(fixture, box, command);
     const start = (reply.stdout ?? '').indexOf('{');
     if (start === -1) {
       notes.push(`${spec.id} segment ${segment}: no JSON: ${(reply.error ?? reply.stderr ?? '').slice(0, 200)}`);
@@ -2698,7 +2944,7 @@ async function armOpenWriteHolder(
   // lifetime: `printf` writes, `sync` pushes the kernel's dirty pages into
   // s3fs, and the handle is never closed. `nohup … &` because `/exec` waits for
   // the command it runs.
-  await sh(
+  await execInBox(
     fixture,
     box,
     `nohup sh -c 'exec 9>${path}; printf %s ${payload} >&9; sync; sleep 1800' >/dev/null 2>&1 & echo spawned`,
@@ -2707,16 +2953,14 @@ async function armOpenWriteHolder(
   // nothing in the arm waits on it. The claim under test is that neither makes
   // the bytes durable, so a delay cannot manufacture the observation.
   await delay(3_000);
-  const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+  const state = await boxState(fixture, box);
   const prefix = state.storePrefix ?? '';
   const key = prefix.length === 0 ? '' : `${prefix}witness-open-write.bin`;
   let syncedKeyPresent = false;
   if (key.length === 0) {
     notes.push('the POSIX-gap cell could not run: /state reported no store prefix for this arm');
   } else {
-    const head = await call(
-      fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
-    );
+    const head = await headObject(fixture, box, key);
     syncedKeyPresent = head.exists === true && (head.size ?? 0) >= payload.length;
   }
   return { path, wroteBytes: payload.length, syncedKeyPresent, key, notes };
@@ -2746,7 +2990,7 @@ async function pendingReplayPoint(
   entries: number,
 ): Promise<{ replayed: number | null; detail: string }> {
   const root = `/workspace/witness-pending-${String(entries)}`;
-  await sh(
+  await execInBox(
     fixture,
     box,
     `mkdir -p ${root} && i=1; while [ $i -le ${String(entries)} ]; do `
@@ -2778,7 +3022,7 @@ async function upperScanPoint(
   entries: number,
 ): Promise<{ entries: number; ms: number }> {
   const root = '/workspace/witness-scan';
-  await sh(
+  await execInBox(
     fixture,
     box,
     `mkdir -p ${root} && i=1; while [ $i -le ${String(entries)} ]; do `
@@ -2788,7 +3032,7 @@ async function upperScanPoint(
   await checkpointOperation(fixture, box, 'tick', `scan cell ${String(entries)} commit`);
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
   const unchanged = await checkpointOperation(fixture, box, 'tick', `scan cell ${String(entries)} unchanged`);
-  const counted = await sh(fixture, box, 'find /workspace -type f | wc -l');
+  const counted = await execInBox(fixture, box, 'find /workspace -type f | wc -l');
   return {
     entries: Number.parseInt((counted.stdout ?? '0').trim(), 10) || 0,
     ms: unchanged.ms ?? -1,
@@ -2834,10 +3078,10 @@ async function runControlWitnessCells(
       const chainId = state.state?.chain?.base?.id ?? '';
       if (chainId.length === 0) throw new Error('/state reported no chain generation');
       const delta = await headKey(`backups/${chainId}/delta.sqsh`);
-      const inUpper = await sh(
+      const inUpper = await execInBox(
         fixture, box, `test -f ${CHAIN_UPPER_DIR}/${input.markerFile} && echo yes || echo no`,
       );
-      const stamp = await sh(fixture, box, `cat ${CHAIN_SEED_STAMP} 2>/dev/null || true`);
+      const stamp = await execInBox(fixture, box, `cat ${CHAIN_SEED_STAMP} 2>/dev/null || true`);
       facts.cumulativeDeltaSeed = {
         deltaBytes: delta.exists === true ? delta.size ?? 0 : 0,
         markerInUpper: (inUpper.stdout ?? '').trim() === 'yes',
@@ -2896,7 +3140,7 @@ async function runControlWitnessCells(
     await cell('open-write-loss', async () => {
       const holder = input.openWrite;
       if (holder === null) throw new Error('no open-write holder was armed before the stop');
-      const read = await sh(fixture, box, `wc -c < ${holder.path} 2>/dev/null || echo MISSING`);
+      const read = await execInBox(fixture, box, `wc -c < ${holder.path} 2>/dev/null || echo MISSING`);
       const text = (read.stdout ?? '').trim();
       facts.openWriteLoss = {
         wroteBytes: holder.wroteBytes,
@@ -2915,7 +3159,7 @@ async function runControlWitnessCells(
       if (prefix.length === 0) throw new Error('/state reported no store prefix for this arm');
       const source = 'witness-rename-src.bin';
       const destination = 'witness-rename-dst.bin';
-      await sh(
+      await execInBox(
         fixture,
         box,
         `dd if=/dev/urandom of=/workspace/${source} bs=1024 count=${String(RENAME_CELL_KIB)} 2>/dev/null && sync`,
@@ -2925,7 +3169,7 @@ async function runControlWitnessCells(
       // against the rename.
       await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
       const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-      await sh(fixture, box, `mv /workspace/${source} /workspace/${destination} && sync`);
+      await execInBox(fixture, box, `mv /workspace/${source} /workspace/${destination} && sync`);
       await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
       const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
       const sourceHead = await headKey(`${prefix}${source}`);
@@ -2949,7 +3193,7 @@ async function deltaAfterOneChange(
   box: string,
   label: string,
 ): Promise<{ chainId: string; key: string; etag: string; bytes: number }> {
-  await sh(fixture, box, `printf %s mutable-delta-${label} > /workspace/witness-delta-${label}.txt && sync`);
+  await execInBox(fixture, box, `printf %s mutable-delta-${label} > /workspace/witness-delta-${label}.txt && sync`);
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
   await checkpointOperation(fixture, box, 'tick', `mutable-delta cell ${label}`);
   const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
@@ -3059,6 +3303,24 @@ async function measureArm(
   const result = unmeasuredArm(strategy, box, notes);
   observe(result);
   noteLiveBox(box);
+
+  /** Write this arm's row to its own durable file at every phase boundary.
+   *
+   *  The row is one mutable object the whole pipeline fills in, so what this
+   *  writes is exactly what the arm has settled so far — never a copy that can
+   *  disagree with the row the run-level assembly will read. A write that
+   *  itself throws is logged and swallowed: the artifact is a safety net, and
+   *  a net that trips the measurement it was catching has stopped being one.
+   *  Failures here are visible in the log and in `readArmArtifact`'s verdict
+   *  when the run-level assembly reads the file back. */
+  const settle = (what: string): void => {
+    try {
+      writeArmArtifact(REPO_ROOT, options.runId, strategy, result);
+    } catch (error) {
+      log(`the durable arm artifact could not be written after ${what}: ${describeThrown({ cause: error })}`);
+    }
+  };
+  settle('the arm started');
   const teardown = async (): Promise<ArmResult> => {
     if (result.teardown === null) {
       result.teardown = await call(
@@ -3081,7 +3343,7 @@ async function measureArm(
     operation: string,
     allowedKinds: readonly string[],
   ): Promise<StartupCompletion> => {
-    const completed = await kickAndPoll(fixture, box, path, operation, allowedKinds);
+    const completed = await startupOperation(fixture, box, path, operation, allowedKinds);
     if (completed.redrives > 0) {
       notes.push(
         `${operation}: the driver drove readiness ${completed.redrives}x through a no-op exec `
@@ -3104,11 +3366,13 @@ async function measureArm(
     const note = `create failed: ${describeThrown({ cause: error })}`;
     log(note);
     notes.push(note);
+    settle('a refused create');
     return result;
   }
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
+  settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
 
@@ -3118,7 +3382,7 @@ async function measureArm(
   const markerFile = '.devbox-verify-marker.txt';
   const marker = `devbox-verify-${crypto.randomUUID()}`;
   const markerWrite = await retryTransient('marker write', async () =>
-    await sh(fixture, box, `printf %s ${marker} > ./${markerFile} && cat ./${markerFile}`),
+    await execInBox(fixture, box, `printf %s ${marker} > ./${markerFile} && cat ./${markerFile}`),
   );
   verify(
     'default cwd is the durable work directory',
@@ -3135,7 +3399,7 @@ async function measureArm(
   result.generationBeforeLadder = await chainGeneration(fixture, box);
   for (const kib of CHANGE_SIZES_KIB) {
     await retryTransient(`ladder ${kib}KiB write`, async () =>
-      await sh(fixture, box, `mkdir -p /workspace/ladder && dd if=/dev/urandom of=/workspace/ladder/c${kib}.bin bs=1024 count=${kib} 2>/dev/null && sync`),
+      await execInBox(fixture, box, `mkdir -p /workspace/ladder && dd if=/dev/urandom of=/workspace/ladder/c${kib}.bin bs=1024 count=${kib} 2>/dev/null && sync`),
     );
     for (const kind of ['quiesce', 'tick'] as const) {
       if (kind === 'quiesce') result.quiescesBeforeDecisive++;
@@ -3179,6 +3443,7 @@ async function measureArm(
   result.wakeMs = woke.ms;
   result.wakeKind = woke.attach.kind;
   result.wakeBootId = woke.state.state?.bootId ?? null;
+  settle('the wake');
   verify(
     'the wake attached durable bytes',
     result.wakeKind === 'attached',
@@ -3188,7 +3453,7 @@ async function measureArm(
   const afterWake = woke.state;
   const mode = afterWake.state?.chain?.mode;
   const mounts = await retryTransient('work-directory mount read', async () =>
-    await sh(fixture, box, 'cat /proc/mounts'),
+    await execInBox(fixture, box, 'cat /proc/mounts'),
   );
   const mountText = mounts.stdout ?? '';
   // The row for the work directory itself, matched on the MOUNTPOINT field.
@@ -3198,7 +3463,7 @@ async function measureArm(
   const mountLine = workdirMount?.line ?? '';
 
   const survived = await retryTransient('marker read after wake', async () =>
-    await sh(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
+    await execInBox(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
   );
   verify(
     'the pre-stop write survived the recycle',
@@ -3212,7 +3477,7 @@ async function measureArm(
       return;
     }
     const found = await retryTransient(`${name} head`, async () =>
-      await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema),
+      await headObject(fixture, box, key),
     );
     verify(
       name,
@@ -3228,9 +3493,7 @@ async function measureArm(
       return;
     }
     const found = await retryTransient(`${expectation.name} head`, async () =>
-      await call(
-        fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(expectation.key)}`, HeadReplySchema,
-      ),
+      await headObject(fixture, box, expectation.key),
     );
     verify(
       expectation.name,
@@ -3245,13 +3508,13 @@ async function measureArm(
   // resembling another one.
   const writableLayer = async (path: string): Promise<void> => {
     const exists = await retryTransient('writable-layer read', async () =>
-      await sh(fixture, box, `test -d ${path} && echo yes || echo no`),
+      await execInBox(fixture, box, `test -d ${path} && echo yes || echo no`),
     );
     verify('the writable layer exists', (exists.stdout ?? '').trim() === 'yes', `${path} -> ${(exists.stdout ?? '').trim()}`);
   };
   const lowerLayer = async (name: string, path: string): Promise<void> => {
     const lower = await retryTransient(`${name} read`, async () =>
-      await sh(fixture, box, `test -d ${path} && grep -qs " ${path} " /proc/mounts && echo yes || echo no`),
+      await execInBox(fixture, box, `test -d ${path} && grep -qs " ${path} " /proc/mounts && echo yes || echo no`),
     );
     verify(name, (lower.stdout ?? '').trim() === 'yes', `${path} -> ${(lower.stdout ?? '').trim()}`);
   };
@@ -3332,6 +3595,7 @@ async function measureArm(
     );
   }
   result.verifyPassed = result.verifyChecks.every((check) => check.pass);
+  settle('the lifecycle proof');
   if (!result.verifyPassed) {
     notes.push('LIFECYCLE VERIFY FAILED: this arm measured a blank disk and is not ranked');
     notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
@@ -3351,6 +3615,7 @@ async function measureArm(
   }
 
   result.generationAfterLadder = await chainGeneration(fixture, box);
+  settle('the workload phases');
 
   // THE DECISIVE EXPERIMENT. Placed after the workload phases and BEFORE
   // stop/wake, deliberately: these workloads leave hundreds of megabytes behind,
@@ -3382,6 +3647,7 @@ async function measureArm(
   result.attachWarmMs = warm.ms;
   result.attachWarmKind = warm.attach.kind;
   result.attachWarmBootId = warm.state.state?.bootId ?? null;
+  settle('the warm attach');
 
   log('ops accounting and teardown');
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
@@ -3406,6 +3672,8 @@ async function measureArm(
       );
     }
   }
+
+  settle('the witness cells');
 
   // Everything below is CLEANUP, and a cleanup failure is not a measurement
   // failure. The 2026-08-29 02:42 run lost a fully measured `bounded-layers`
@@ -3443,6 +3711,7 @@ async function measureArm(
       notes.push(`the box was not released after the arm: ${released.error ?? 'stop did not confirm'}`);
     }
   });
+  settle('the arm finished');
   return result;
 }
 
@@ -3465,6 +3734,156 @@ export function refuseFailedArm(arm: ArmResult, reason: string): ArmResult {
   arm.verifyChecks.push({ name: 'the arm completed every measured step', pass: false, detail: reason });
   arm.verifyPassed = false;
   return arm;
+}
+
+// ── durable per-arm artifacts ───────────────────────────────────────────────
+//
+// MEASURED DEFECT THIS REPAIRS: the 20260831233915 decisive run and the
+// devbox-e2e-e2ecal0901002202 calibration both spent hours measuring arms whose
+// rows existed only inside the process that measured them. The run-level
+// artifact is written once, at the end, by the same process — so a wedged
+// sibling, a killed driver or a run that never reached its own assembly left
+// NOTHING but a log. An arm's settled measurements are the one thing the run
+// cannot afford to lose to a process it does not control, so every arm writes
+// its own row to disk the moment it settles, and the final assembly reads those
+// files rather than trusting its own memory.
+
+/** Where one run's per-arm artifacts live: under `bench-artifacts`, one
+ *  directory per run, one file per arm. The run id — not the `--out` basename —
+ *  is the directory, so two runs sharing a `--out` path never collide and one
+ *  run's directory holds exactly the arms that run requested. */
+export function armArtifactDir(repoRoot: string, runId: string): string {
+  return join(repoRoot, 'bench-artifacts', runId);
+}
+
+export function armArtifactPath(repoRoot: string, runId: string, arm: Strategy): string {
+  return join(armArtifactDir(repoRoot, runId), `${arm}.json`);
+}
+
+/** What one arm's own artifact holds: the row, and the log tail.
+ *
+ *  The row is the same `ArmResult` the run-level artifact assembles from, so
+ *  there is no second shape to keep in agreement. The log tail is the driver's
+ *  own last words about the arm — bounded by `ARM_LOG_TAIL_LINES` — which is
+ *  all an arm that never settled can offer. `settledAt` dates the write, so a
+ *  reader comparing this file against a run-level artifact that never landed can
+ *  see WHICH of the two is missing rather than guessing. */
+export interface ArmArtifact<Row = ArmResult> {
+  readonly schema: 'devbox-arm-artifact/1';
+  readonly arm: Strategy;
+  readonly runId: string;
+  readonly settledAt: string;
+  readonly logTail: readonly string[];
+  readonly row: Row;
+}
+
+/** The file's contract, parsed at the boundary like every wire reply here. The
+ *  ROW is left unparsed on purpose: two drivers write two row shapes through
+ *  this one writer, and the envelope — schema, arm, run — is what a reader has
+ *  to be able to trust before it reads either. */
+const ArmArtifactSchema: v.GenericSchema<ArmArtifact<unknown>> = v.looseObject({
+  schema: v.literal('devbox-arm-artifact/1'),
+  arm: v.picklist(STRATEGIES),
+  runId: v.string(),
+  settledAt: v.string(),
+  logTail: v.array(v.string()),
+  row: v.unknown(),
+});
+
+/**
+ * Write one arm's row to its own file, atomically, the moment it settles.
+ *
+ *  ATOMICALLY (tmp + rename, the repo's own `writeLedger` pattern): the reader
+ *  of this file is a process that has already lost its sibling, and a file cut
+ *  off mid-write by that same death would be a second wedge sitting on the
+ *  first. `rename` within one filesystem is the one write a reader either sees
+ *  whole or does not see at all.
+ *
+ *  THE MOMENT IT SETTLES, not once at the end: called at every phase boundary
+ *  with whatever the row holds, so the file is monotone — a cold attach, a
+ *  ladder, a wake each overwrite the last partial row — and a kill between
+ *  boundaries costs at most the phase in flight, never a number that already
+ *  landed. Success and refusal both write, because a refusal IS the arm's
+ *  settled answer.
+ */
+export function writeArmArtifact<Row>(
+  repoRoot: string,
+  runId: string,
+  arm: Strategy,
+  row: Row,
+): ArmArtifact<Row> {
+  const artifact: ArmArtifact<Row> = {
+    schema: 'devbox-arm-artifact/1',
+    arm,
+    runId,
+    settledAt: new Date().toISOString(),
+    logTail: armLogTail(arm),
+    row,
+  };
+  const path = armArtifactPath(repoRoot, runId, arm);
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(artifact, null, 2)}\n`);
+  renameSync(temporary, path);
+  return artifact;
+}
+
+/** What one arm's settled artifact read back as. `error` is set only when a
+ *  file EXISTS and cannot be used — an absent file is a verdict of its own
+ *  (externally-aborted), not a read failure, and conflating the two would hide
+ *  a wedged arm behind a missing one. */
+export interface ReadArmArtifact {
+  readonly artifact: ArmArtifact | null;
+  readonly error: string | null;
+}
+
+/**
+ * Read one arm's settled artifact back from disk.
+ *
+ *  The run-level assembly reads THESE FILES rather than the rows it still holds
+ *  in memory, which is the whole point: a wedged arm's siblings settled on disk
+ *  before the wedge, and the assembly must not depend on having watched them
+ *  settle. A file that cannot be used is reported rather than skipped — an
+ *  `externally-aborted` row carrying the read failure is a finding, while an
+ *  unreadable file read as "never measured" would be one more silent loss.
+ */
+export function readArmArtifact(repoRoot: string, runId: string, arm: Strategy): ReadArmArtifact {
+  const path = armArtifactPath(repoRoot, runId, arm);
+  if (!existsSync(path)) return { artifact: null, error: null };
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (cause) {
+    return { artifact: null, error: `unreadable (${path}): ${describeThrown({ cause })}` };
+  }
+  const parsed = v.safeParse(ArmArtifactSchema, decoded);
+  if (!parsed.success) {
+    return {
+      artifact: null,
+      error: `not an arm artifact (${path}): ${issueText(parsed.issues)}`,
+    };
+  }
+  // SAFETY: the envelope is parsed above; the row is whatever THIS run's own
+  // lane wrote through `writeArmArtifact` minutes earlier, and the decisive
+  // assembly is the only reader of the `ArmResult` shape it wrote itself. A
+  // cross-driver read would need its own row parse and has no caller.
+  return { artifact: parsed.output as ArmArtifact, error: null };
+}
+
+/**
+ * The row for an arm this process never saw settle.
+ *
+ *  `reason` names what happened to the run rather than to the arm — the arm's
+ *  own answer lives in its durable file when it has one, and the two must not
+ *  wear each other's words. The log tail rides along as `log:` notes because
+ *  that is the shape the report already prints for a failed arm.
+ */
+export function externallyAbortedArm(arm: Strategy, box: string, reason: string): ArmResult {
+  // The tail first, the verdict last: `refuseFailedArm` appends the reason as
+  // the closing note and as the failed lifecycle check, so writing it here too
+  // would print it twice in a report whose whole job is to be read.
+  const notes = armLogTail(arm).map((line) => `log: ${line}`);
+  return refuseFailedArm(unmeasuredArm(arm, box, notes), `externally-aborted: ${reason}`);
 }
 
 /**
@@ -3505,7 +3924,16 @@ export async function runArm(
         `the failed arm's box could not be released: ${describeThrown({ cause: releaseError })}`,
       );
     }
-    return refuseFailedArm(measured, reason);
+    // The refusal is the arm's settled answer, and it goes to disk like every
+    // other settled one — a killed run must not be able to lose the reason an
+    // arm died, which is the one fact the next reader of that arm needs.
+    const refused = refuseFailedArm(measured, reason);
+    try {
+      writeArmArtifact(REPO_ROOT, options.runId, strategy, refused);
+    } catch (writeError) {
+      log(`the durable arm artifact could not be written after the failure: ${describeThrown({ cause: writeError })}`);
+    }
+    return refused;
   }
 }
 
@@ -3556,7 +3984,23 @@ export async function runArmsInFlight(
       } catch (error) {
         const reason = `arm lane failed: ${describeThrown({ cause: error })}`;
         log(reason);
-        return refuseFailedArm(unmeasuredArm(strategy, `ab-${strategy}-${runId}`, []), reason);
+        // A lane that never reached `measureArm` owns no `settle` boundary, so
+        // the refusal is written here — the artifact for this arm must exist
+        // whatever shape the failure took, or the run-level assembly would read
+        // its absence as an external abort. The row is a REFUSED one carrying
+        // the log tail, because a lane failure is this run's own answer about
+        // the arm, not something external that happened to the run.
+        const refused = refuseFailedArm(unmeasuredArm(
+          strategy,
+          `ab-${strategy}-${runId}`,
+          armLogTail(strategy).map((line) => `log: ${line}`),
+        ), reason);
+        try {
+          writeArmArtifact(REPO_ROOT, runId, strategy, refused);
+        } catch (writeError) {
+          log(`the durable arm artifact could not be written after the lane failure: ${describeThrown({ cause: writeError })}`);
+        }
+        return refused;
       }
     })));
 }
@@ -4875,6 +5319,26 @@ async function main(): Promise<number> {
   } finally {
     await runTeardownOnce();
   }
+
+  // THE ASSEMBLY READS THE DURABLE FILES, NOT ITS OWN MEMORY. Every arm wrote
+  // its row to bench-artifacts/<run>/<arm>.json at each phase boundary, so a
+  // run whose in-flight window was interrupted by anything this catch already
+  // survived still assembles exactly what its arms settled. An arm with no
+  // file never settled in THIS process — recorded as externally-aborted with
+  // the log tail, never as an unmeasured row that would misread a wedge as a
+  // strategy that measured nothing.
+  const settledArms = options.arms.map((strategy) => {
+    const read = readArmArtifact(REPO_ROOT, options.runId, strategy);
+    if (read.error !== null) {
+      log(`the durable artifact for ${strategy} could not be read: ${read.error}`);
+      failure ??= `the durable artifact for ${strategy} could not be read`;
+    }
+    if (read.artifact !== null) return read.artifact.row;
+    const reason = read.error ?? failure ?? 'this arm never settled before the run ended';
+    return externallyAbortedArm(strategy, `ab-${strategy}-${options.runId}`, reason);
+  });
+  arms.length = 0;
+  arms.push(...settledArms);
 
   const meta: RunMeta = {
     date: new Date().toISOString().slice(0, 10),

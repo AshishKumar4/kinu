@@ -232,6 +232,20 @@ gate_jobs() {
 # leaked worker processes.
 GATE_DEADLINE_SECONDS=480
 
+# ONE GATE PER LINE, and the reason it cannot live inside the figure above.
+# `GATE_DEADLINE_SECONDS` bounds a SOURCE gate — a test process on this machine
+# — and 480s is calibrated against the slowest of those. A gate whose subject is
+# a deployed container lifecycle is not that: it raises five container
+# instances on the account, drives each through create, checkpoint, stop, wake
+# and a cold reattach, and tears them down, and no shorter wait makes any of
+# that faster. Raising the shared figure to fit it would take the wall off every
+# source gate at the same time, which is the one thing that must not happen — so
+# the exception is per gate, written down, and held equal to GATE_DEADLINES in
+# scripts/ladder.ts by deploy.test.ts.
+declare -A GATE_DEADLINES=(
+  ['bun run gate:devbox-e2e']=3600
+)
+
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
 # own file and is printed ONLY if it fails: 52 concurrent streams interleaved
@@ -331,7 +345,7 @@ flush_gates() {
       # the status `wait` reports below is the gate's own, not a wrapper's.
       (
         # shellcheck disable=SC2086
-        exec timeout --signal=TERM --kill-after=5s "$GATE_DEADLINE_SECONDS" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
+        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINES[${GATE_CMDS[pick]}]:-$GATE_DEADLINE_SECONDS}" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
       ) &
       gate_of_pid[$!]=$pick
       running=$((running + 1))
@@ -478,7 +492,7 @@ run_required_gate "Durable Object semantics under workerd" bun run test:workerd
 run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
 run_required_gate "Full production CLI suite" bun run test:cli
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts
-run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts
+run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts
 run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts scripts/sources.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
@@ -561,6 +575,19 @@ flush_gates
 # why what varies per run travels in the environment beside it — exactly as
 # KINU_DEPLOY_ENV already does.
 run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra
+
+# BARRIER.
+flush_gates
+
+# ALONE, and after the account gate, which is its precondition in the ordinary
+# sense: this gate spends five container instances and a bucket per arm on the
+# account gate:infra has just proved is usable, so a deploy refused for a
+# missing binding is refused in 43s rather than after twenty minutes of
+# container time. It is last because it is the most expensive thing here and
+# because everything before it has already proved the source and the account.
+# Its own deadline is in GATE_DEADLINES above. See SERIAL_GATES in
+# scripts/ladder.ts.
+run_required_gate "Devbox lifecycle on deployed containers" bun run gate:devbox-e2e
 
 # BARRIER.
 flush_gates
