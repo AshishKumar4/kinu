@@ -621,7 +621,7 @@ export function findMount(procMounts: string, dir: string): MountLine | undefine
  * process to flush on SIGTERM, and short enough that a box still stops inside
  * its own ceilings.
  */
-export const HOLDER_TERM_WAIT_MS = 5_000;
+const HOLDER_TERM_WAIT_MS = 5_000;
 
 /**
  * ONE bounded container command that releases every process holding the work

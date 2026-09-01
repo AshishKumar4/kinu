@@ -31,7 +31,6 @@ import {
   healthProbeCommand,
   healthProbeSilent,
   incidentRetryDelayMs,
-  HOLDER_TERM_WAIT_MS,
   parseWorkdirHolders,
   releaseWorkdirHoldersCommand,
   needsArming,
@@ -69,6 +68,9 @@ import {
   type ChainLayer,
 } from '../src/snapshot-chain';
 import { isS3fsMounted } from '../src/r2fs';
+
+/** Mirrors lifecycle.ts's private TERM wait; drift fails these tests, which is the point. */
+const HOLDER_TERM_WAIT_MS = 5_000;
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 /** The generation a record retains as its restore fallback. */
