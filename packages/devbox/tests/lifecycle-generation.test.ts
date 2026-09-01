@@ -444,6 +444,45 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     await stale;
     expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
   });
+
+  test('a superseded ADMISSION refusal arms nothing and files nothing', async () => {
+    // The window before an attempt owns anything. `start()` is the admission
+    // probe every attempt awaits, and it is the longest await on the path — a
+    // whole `portWaitMs`. A quiesce can land inside it, because an attempt
+    // parked there holds no resource lane, no checkpoint lane and no
+    // single-flight entry, so the heartbeat's own busy check cannot see it.
+    //
+    // What the refusal then did was arm a startup one second out and file an
+    // attach incident. Both outlive the deliberate stop: `quiesce` arms NOTHING
+    // on purpose, so the armed row wakes a box that was put to sleep and starts
+    // its container again, and the incident reaches the agent as a live blocker
+    // about a container nobody asked to exist.
+    const harnessed = harness(TestBox);
+    const { box, container, rows } = harnessed;
+    await container.stop();
+    const admitting = gate();
+    container.containerStartGate = admitting;
+    // Refused WITHOUT an instance, which is what a capacity refusal is: the
+    // container never comes up, so the class's own start hook never runs and the
+    // only thing that could arm a row here is the refusal itself.
+    container.startFaultBeforeRunning = failure('CONTAINER_UNAVAILABLE');
+    const stale = box.devboxStartup();
+    await admitting.reached;
+
+    // The box is deliberately quiesced while that probe is parked: the
+    // generation turns over, the container stops, and nothing is armed.
+    await box.quiesce();
+    const armedByQuiesce = armed(container);
+
+    admitting.release();
+    await stale;
+
+    expect(armed(container)).toBe(armedByQuiesce);
+    expect(incidents(rows)).toEqual([]);
+    // And the box is still asleep: nothing woke it to serve an attempt whose
+    // generation is gone.
+    expect(container.running.running).toBe(false);
+  });
 });
 
 // ── readiness is attach plus complete restoration ───────────────────────────

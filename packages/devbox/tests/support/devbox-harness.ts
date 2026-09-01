@@ -224,6 +224,10 @@ export class FakeSandbox {
   readonly killFaults: Error[] = [];
   readonly stampFaults: (Error | undefined)[] = [];
   startGate: Gate | undefined;
+  /** Parks the container's own admission probe — `start()`, which every attempt
+   *  awaits before it captures a generation. `startGate` is the process start;
+   *  these are two different calls and two different windows. */
+  containerStartGate: Gate | undefined;
   execGate: Gate | undefined;
   stampGate: Gate | undefined;
   exposeGate: Gate | undefined;
@@ -370,6 +374,16 @@ export class FakeSandbox {
    *  test needs. */
   async start(...args: unknown[]): Promise<void> {
     this.startWaitOptions.push(args[1]);
+    // The ADMISSION await, which a startup attempt sits inside before it owns
+    // anything. Parking here is the only way to pin what a superseded admission
+    // is allowed to do: nothing above it is durable yet, so the interleave
+    // cannot be reached from any other seam.
+    const admitting = this.containerStartGate;
+    if (admitting !== undefined) {
+      this.containerStartGate = undefined;
+      admitting.enter();
+      await admitting.promise;
+    }
     const beforeRunning = this.startFaultBeforeRunning;
     this.startFaultBeforeRunning = undefined;
     if (beforeRunning !== undefined) throw beforeRunning;

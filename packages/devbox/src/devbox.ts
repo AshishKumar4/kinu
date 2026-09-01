@@ -641,18 +641,18 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * object keeps a copy; a mismatch is a replacement, and it is the only
    * reliable signal there is.
    *
-   * FENCED, like every other write a restoration makes. The stamp is the last
-   * phase and the one with the most awaits before its writes: the previous-id
-   * read, the container read, the replacement count, and the exec itself. A
-   * stale attempt that parked at any of them used to run its writes anyway —
-   * overwriting the SUCCESSOR's boot id with one naming a container that no
-   * longer exists, which the heartbeat's replacement detector then read as a
-   * mismatch on a healthy container and answered with a spurious replacement.
-   * The replacement count is fenced for the same reason: the successor counts
-   * the replacement it sees, so a stale attempt counting again is the same
-   * event measured twice.
+   * FENCED, like every other write a restoration makes, and fenced BEFORE the
+   * container write as well as after it. The stamp is the last phase and the one
+   * with the most awaits before its writes: the previous-id read, the container
+   * read, the replacement count, and the exec itself. A stale attempt that
+   * parked at any of them used to run its writes anyway — overwriting the
+   * SUCCESSOR's boot id with one naming a container that no longer exists, which
+   * the heartbeat's replacement detector then read as a mismatch on a healthy
+   * container and answered with a spurious replacement. The replacement count is
+   * fenced for the same reason: the successor counts the replacement it sees, so
+   * a stale attempt counting again is the same event measured twice.
    */
-  async #stampBootId(generation: number): Promise<string> {
+  async #stampBootId(generation: number): Promise<void> {
     // COUNT THE REPLACEMENT HERE, where the evidence is, not where it happens to
     // be noticed. Every restoration passes through this method, whether it was
     // driven by the container-start hook or by a heartbeat that spotted the
@@ -665,28 +665,33 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       if (this.#owns(generation)) await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
       console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
     }
-    let bootId: string = crypto.randomUUID();
+    // NOTHING IS WRITTEN INTO A CONTAINER THIS ATTEMPT NO LONGER OWNS. Every
+    // line above is an await, so the generation can already have turned over by
+    // the time this one runs — and writing here and repairing below is NOT the
+    // same as never writing. `#containerWasReplaced` compares the container file
+    // against the durable row, so for the whole gap between a stale write and
+    // its repair a HEALTHY container reads as replaced: a heartbeat landing
+    // there re-drives the entire restoration and counts a phantom replacement.
+    // The successor owes both writes; a superseded attempt owes neither.
+    if (!this.#owns(generation)) return;
+    const bootId = crypto.randomUUID();
     await this.#rawExec(`printf %s ${bootId} > ${BOOT_ID_PATH}`);
-    // The exec is the one await a stale attempt can park INSIDE, so ownership
-    // is re-asked after it rather than only before. A lost race here means a
-    // successor has already stamped this container and the durable row with ITS
-    // id; the stale attempt's exec has just written its own id over the file.
-    // The stale mint is not allowed to survive that: the durable row is the
-    // identity of record, so the file is rewritten to whatever the row now
-    // holds — the successor's id when the row moved, the stale one when it did
-    // not — leaving file and row in agreement rather than diverged with no
-    // writer left to reconcile them. A divergence is what the heartbeat's
-    // replacement detector would misread as a replacement of a healthy box.
+    // The exec is the one await a stale attempt can park INSIDE, which the check
+    // above cannot cover, so ownership is re-asked after it too. A lost race
+    // here means a successor has already stamped this container and the durable
+    // row with ITS id, and this attempt's exec has just written its own id over
+    // the file. The stale mint is not allowed to survive that: the durable row
+    // is the identity of record, so the file is rewritten to whatever the row
+    // now holds, leaving file and row in agreement rather than diverged with no
+    // writer left to reconcile them.
     if (!this.#owns(generation)) {
       const settled = await this.ctx.storage.get<string>(BOOT_ID_KEY);
       if (settled !== undefined && settled !== bootId) {
-        bootId = settled;
-        await this.#rawExec(`printf %s ${bootId} > ${BOOT_ID_PATH}`);
+        await this.#rawExec(`printf %s ${settled} > ${BOOT_ID_PATH}`);
       }
-      return bootId;
+      return;
     }
     await this.ctx.storage.put(BOOT_ID_KEY, bootId);
-    return bootId;
   }
 
   /**
@@ -897,6 +902,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // caller meant to JOIN it would open a second restoration against the same
     // container instead.
     if (this.ctx.container?.running !== true) this.#invalidateGeneration();
+    // THE GENERATION THIS ADMISSION SPEAKS FOR, read before its own await. It is
+    // a SECOND read from the one below on purpose: a refusal is only this
+    // attempt's to report, while a probe that SUCCEEDED across a turnover is
+    // still the restoration the live generation needs — so the refusal is fenced
+    // and the restoration adopts whatever generation is current.
+    const admitting = this.#generation;
     let admissionRefusal: string | null = null;
     try {
       await this.start(undefined, {
@@ -913,9 +924,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // Capacity and a container that has not answered yet are both admission
       // outcomes, not failed attachments. No recovery ladder applies to an
       // identity that was never admitted.
+      //
+      // AND A SUPERSEDED ADMISSION IS INERT, for the reason `#recover` is.
+      // `start()` is the longest await on this path — a whole `portWaitMs` — and
+      // an attempt parked inside it holds no resource lane, no checkpoint lane
+      // and no single-flight entry, so the heartbeat's own busy check cannot see
+      // it and a quiesce can land there. Recording then puts a live blocker
+      // about a container nobody asked to exist on the one channel built to be
+      // trusted, and arming wakes a box that was deliberately stopped, one
+      // second after a `quiesce` that arms nothing on purpose.
+      if (!this.#owns(admitting)) return;
       const failure = classifyRecovery({ cause: error });
       admissionRefusal = `[${failure} → retry] ${describe({ cause: error })}`;
       await this.#record('attach', admissionRefusal);
+      if (!this.#owns(admitting)) return;
       // ASK AGAIN ON THE STARTUP CADENCE, not the heartbeat's. The re-arm used
       // to be `heartbeatSeconds`, so a container that needed a few more seconds
       // than one port probe allows was left unattached for a full heartbeat —
