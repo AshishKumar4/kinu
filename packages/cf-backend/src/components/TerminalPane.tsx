@@ -12,14 +12,15 @@
  *           `error` in — so the wire format is the SDK's, not ours, and
  *           reconnect/replay come with it.
  *
- *   LINE  — every environment with no pseudo-terminal (see lib/terminal-lane.ts
- *           for what each one is missing). A command in, its output back, and
- *           the pane SAYS it is line mode. This is the honest version of what
- *           the whole pane used to be: an emulated prompt over one-shot exec
- *           that looked like a shell and could not run one.
+ *   LINE  — every environment with no pseudo-terminal. A command in, its
+ *           output back, and the pane SAYS it is line mode. This is the honest
+ *           version of what the whole pane used to be: an emulated prompt over
+ *           one-shot exec that looked like a shell and could not run one.
  *
  * The lane decides which driver runs, and the route agrees with it because both
- * read the same table.
+ * read the same table. lib/terminal-lane.ts holds the table, what each
+ * environment is missing, and the line editor and painter this file mounts —
+ * everything that is decided over strings rather than over the DOM.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -30,22 +31,15 @@ import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { useTheme, type ThemeMode } from "@/hooks/use-theme";
-import { LineTerminalState, terminalLane } from "@/lib/terminal-lane";
+import {
+  BUSY, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
+  type TerminalPaneOutput,
+} from "@/lib/terminal-lane";
 import type { ExecutorCommandResult } from "@/lib/protocol";
 
-export interface TerminalPaneOutput {
-  id: string;
-  command: string;
-  stdout: string;
-  stderr: string;
-  /** Stored lengths of the two streams. The server clips what it sends, and a
-   *  pane that showed the prefix alone would present part of an output as the
-   *  whole of it — so the clip is drawn, never implied. */
-  stdout_len: number;
-  stderr_len: number;
-  exit_code: number;
-  created_at: number;
-}
+// The row type is declared with the driver that paints it and named here
+// because this pane's props are what a reader looks at to find it.
+export type { TerminalPaneOutput };
 
 export interface TerminalPaneProps {
   /** The workspace this terminal belongs to. The socket is per workspace, so
@@ -273,9 +267,6 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
 
 /* ── line mode ────────────────────────────────────────────────────────── */
 
-/** The in-flight marker, on its own line so it can be erased whole. */
-const BUSY = "\x1b[2m⋯ running\x1b[0m";
-
 function LineTerminal(
   { executor, missing, outputs, onExecute }: {
     executor: string;
@@ -308,73 +299,56 @@ function LineTerminal(
     term.open(host);
     fit.fit();
     termRef.current = term;
-    promptLine(term);
+    writePrompt(term);
 
     const typing = term.onData((data) => {
       const run = execute.current;
       if (lineState.running || !run) return;
-      for (const ch of data) {
-        const code = ch.charCodeAt(0);
-        if (code === 0x0d) {
-          const cmd = lineState.takeLine();
-          term.write("\r\n");
-          if (!cmd.trim()) {
-            promptLine(term);
-            continue;
+      // The editor owns the echo and decides when a command is finished; a
+      // heredoc and a pasted script both reach here as ordinary chunks.
+      const cmd = feedInput(term, lineState, data);
+      if (cmd === null) return;
+      // Keystrokes are dropped while a command runs, so say so; the marker
+      // is cleared by whichever of the two paths below lands.
+      lineState.beginCommand();
+      term.write(BUSY);
+      setFailure(null);
+      // xterm owns a synchronous data callback, so retain the background
+      // promise until it settles even though the executor generation fences it.
+      const owner: TerminalOperation = { promise: null };
+      commandOperation.current = owner;
+      owner.promise = (async () => {
+        try {
+          // A command that FAILS is an outcome, not a lost failure: its error
+          // belongs on the terminal row. The rejection is therefore held as a
+          // value, and the two fences — a reset generation, a rebuilt terminal
+          // — are decided once below, on the same footing for a command that
+          // failed and one that did not, instead of as a return out of the
+          // handler that reads identically for a stale row and a failed one.
+          let thrown: { readonly cause: unknown } | undefined;
+          try {
+            await run(cmd);
+          } catch (cause) {
+            thrown = { cause };
           }
-          // Keystrokes are dropped while a command runs, so say so; the marker
-          // is cleared by whichever of the two paths below lands.
-          lineState.beginCommand();
-          term.write(BUSY);
-          setFailure(null);
-          // xterm owns a synchronous data callback, so retain the background
-          // promise until it settles even though the executor generation fences it.
-          const owner: TerminalOperation = { promise: null };
-          commandOperation.current = owner;
-          owner.promise = (async () => {
-            try {
-              // A command that FAILS is an outcome, not a lost failure: its error
-              // belongs on the terminal row. The rejection is therefore held as a
-              // value, and the two fences — a reset generation, a rebuilt terminal
-              // — are decided once below, on the same footing for a command that
-              // failed and one that did not, instead of as a return out of the
-              // handler that reads identically for a stale row and a failed one.
-              let thrown: { readonly cause: unknown } | undefined;
-              try {
-                await run(cmd);
-              } catch (cause) {
-                thrown = { cause };
-              }
-              if (!lineState.finishCommand(generation)) return;
-              if (termRef.current !== term) return;
-              if (thrown !== undefined) {
-                // A rejected exec produces no output row, so nothing else would
-                // ever clear the marker or reprint the prompt.
-                clearBusy(term, lineState);
-                term.write(`\x1b[31m${describeError(thrown.cause)}\x1b[0m\r\n`);
-                promptLine(term);
-              }
-            } catch (cause) {
-              if (lineState.finishCommand(generation) && termRef.current === term) {
-                clearBusy(term, lineState);
-                setFailure(describeError(cause));
-              }
-            } finally {
-              if (commandOperation.current === owner) commandOperation.current = null;
-            }
-          })();
-          return;
-        } else if (code === 0x7f || code === 0x08) {
-          if (lineState.backspace()) term.write("\b \b");
-        } else if (code === 0x03) {
-          lineState.clearLine();
-          term.write("^C\r\n");
-          promptLine(term);
-        } else if (code >= 0x20) {
-          lineState.append(ch);
-          term.write(ch);
+          if (!lineState.finishCommand(generation)) return;
+          if (termRef.current !== term) return;
+          if (thrown !== undefined) {
+            // A rejected exec produces no output row, so nothing else would
+            // ever clear the marker or reprint the prompt.
+            clearBusy(term, lineState);
+            term.write(`\x1b[31m${describeError(thrown.cause)}\x1b[0m\r\n`);
+            writePrompt(term);
+          }
+        } catch (cause) {
+          if (lineState.finishCommand(generation) && termRef.current === term) {
+            clearBusy(term, lineState);
+            setFailure(describeError(cause));
+          }
+        } finally {
+          if (commandOperation.current === owner) commandOperation.current = null;
         }
-      }
+      })();
     });
 
     const observer = new ResizeObserver(() => {
@@ -405,19 +379,10 @@ function LineTerminal(
     for (const out of outputs) {
       if (!lineState.recordOutput(out.id)) continue;
       clearBusy(term, lineState);
-      if (out.stdout) {
-        term.write(out.stdout);
-        if (!out.stdout.endsWith("\n")) term.write("\r\n");
-      }
-      writeClipNote(term, "stdout", out.stdout.length, out.stdout_len);
-      if (out.stderr && out.exit_code !== 0) {
-        term.write(`\x1b[31m${out.stderr}\x1b[0m`);
-        if (!out.stderr.endsWith("\n")) term.write("\r\n");
-      }
-      if (out.exit_code !== 0) writeClipNote(term, "stderr", out.stderr.length, out.stderr_len);
+      writeOutputRow(term, out);
       wrote = true;
     }
-    if (wrote) promptLine(term);
+    if (wrote) writePrompt(term);
   }, [outputs]);
 
   return (
@@ -446,23 +411,6 @@ function newTerminal(mode: ThemeMode): Terminal {
     scrollback: SCROLLBACK_LINES,
     theme: terminalTheme(mode),
   });
-}
-
-function promptLine(term: Terminal) {
-  term.write("\x1b[32m$\x1b[0m ");
-}
-
-function clearBusy(term: Terminal, state: LineTerminalState) {
-  if (!state.clearBusy()) return;
-  term.write("\r\x1b[2K"); // carriage return + erase line
-}
-
-/** Say what the row is not showing. Silence here would turn a clipped prefix
- *  into a claim about the whole output. */
-function writeClipNote(term: Terminal, stream: string, shown: number, stored: number) {
-  const withheld = stored - shown;
-  if (withheld <= 0) return;
-  term.write(`\x1b[2m… ${withheld.toLocaleString()} more ${stream} characters are stored and not shown here\x1b[0m\r\n`);
 }
 
 /**

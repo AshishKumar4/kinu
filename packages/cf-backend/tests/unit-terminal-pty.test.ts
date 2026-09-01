@@ -483,7 +483,7 @@ describe('line terminal executor switches', () => {
     // makes one of the assertions below red.
     expect(generation).not.toBe(oldGeneration);
     expect(state.recordOutput('old-output')).toBe(true);
-    expect(state.takeLine()).toBe('');
+    expect(state.takeCommand()).toBe('');
     expect(state.running).toBe(false);
     expect(state.clearBusy()).toBe(false);
     expect(state.finishCommand(oldGeneration)).toBe(false);
