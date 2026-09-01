@@ -227,7 +227,7 @@ describe('CHECK-widening rebuild for live DOs', () => {
       fire_count          INTEGER NOT NULL DEFAULT 0
     )`;
 
-  const noAlarm: AlarmScheduler = { async scheduleAt() {}, currentAlarm: () => null };
+  const noAlarm: AlarmScheduler = { async scheduleAt() {} };
 
   test('existing rows survive the rebuild and the new enum members insert', async () => {
     const sql = makeSql();
@@ -281,7 +281,7 @@ describe('the agent inbox', () => {
     initEventsHubTables(sql);
     initWebhookRateLimitTables(sql);
     const log = new EventLog(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
     const { vfs } = createMemoryVfs();
     let drains = 0;
     return {

@@ -942,7 +942,6 @@ function getLocalToolSummary(db: SqliteDb): LocalToolSummary {
  *  so there is no host to wake and nothing to arm. */
 const NOOP_ALARM: AlarmScheduler = {
   async scheduleAt() {},
-  currentAlarm() { return null; },
 };
 
 function hubSql(db: SqliteDb): SqlExec {

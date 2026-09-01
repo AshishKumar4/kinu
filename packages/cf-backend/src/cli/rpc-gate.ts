@@ -209,10 +209,10 @@ export const AGENT_RPC_ACCESS = {
   cancelTrigger: 'interactive',
   // The seven old-websocket-read-allowlist methods — 'interactive', not
   // workspace.read: reachable only over an exec-gated socket before (see the
-  // block comment above).
+  // block comment above). Six now; getWorkspaceAgents was deleted with its
+  // dead RPC — the UI roster read is listSubordinates.
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
-  getWorkspaceAgents: 'interactive',
   listSubordinates: 'interactive',
   latestAlternateTakes: 'interactive',
   listFileCheckpoints: 'interactive',
@@ -265,9 +265,6 @@ export const AGENT_RPC_ACCESS = {
   // The owner's backup of their own workspace. Interactive-only: a CI token
   // that can run a task must not be able to walk off with the whole database.
   exportWorkspaceArchive: 'interactive',
-  // Publishing this workspace's proven work to the owner's library, and
-  // importing from it, is the owner's call — interactive for the same reason.
-  experienceAction: 'interactive',
   forkAgent: 'interactive',
   getActivitySnapshot: 'interactive',
   getAlwaysActiveSkills: 'interactive',

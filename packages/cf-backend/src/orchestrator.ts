@@ -30,9 +30,8 @@ import type {
   ActivitySnapshot,
   SubordinateRosterEntry,
   TabPresence,
-  WorkspaceAgent,
 } from "./lib/protocol";
-import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster";
+import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from "./lib/cron";
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
@@ -115,9 +114,6 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseStatus, type ReleaseToolDeps,
-  runExperienceAction,
-  type ExperienceActionDeps,
-  type ExperienceActionInput,
   // Release execution engine — the driver beneath the governance ledger
   ReleaseEngine, createSandboxReleaseExec,
   // Peer-agent teams (the agents tool's team deps contract)
@@ -650,7 +646,6 @@ export class OrchestratorAgent extends ActorAgent {
       const alarmScheduler: AlarmScheduler = {
         // Idempotent: pick the soonest of (existing alarm, new ts).
         scheduleAt: (ts: number) => this.armTimer(ts),
-        currentAlarm: (): number | null => null,
       };
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
     }
@@ -1062,44 +1057,6 @@ export class OrchestratorAgent extends ActorAgent {
         return { agent: agentName, created, ...outcome };
       },
     };
-  }
-
-  /** This workspace's own stores plus a client for the owner's library, every
-   *  call of which crosses the UserDO capability gate. Absent until the
-   *  workspace is claimed — there is no owner library to reach before that. */
-  private getExperienceDeps(): ExperienceActionDeps | undefined {
-    if (!this.getOwnerUserDO()) return undefined;
-    const hub = () => this.userHub();
-    return {
-      rt: this.rt,
-      facts: this.facts,
-      library: {
-        publish: async (candidate) => { const { stub, caller } = await hub(); return stub.publishExperience(caller, candidate); },
-        search: async (options) => { const { stub, caller } = await hub(); return stub.searchExperience(caller, options); },
-        get: async (id) => { const { stub, caller } = await hub(); return stub.getExperienceEntry(caller, id); },
-      },
-    };
-  }
-
-  /**
-   * The owner's experience library — publish / search / import, driven by the
-   * owner rather than by the agent.
-   *
-   * It was a tool once. Sharing proven work between workspaces is a rare and
-   * deliberate decision, and a tool costs the model attention on every turn it
-   * is not the answer to, so the same dispatcher now sits behind this RPC for
-   * the webUI to call. It runs on the workspace DO, not the UserDO, for a
-   * reason the UserDO enforces: publishing happens under a workspace's own
-   * name, and import stages into this workspace's ledger.
-   */
-  @callable()
-  async experienceAction(input: ExperienceActionInput) {
-    this.ensureSchema();
-    const deps = this.getExperienceDeps();
-    if (!deps) {
-      return { error: 'This workspace has no owner yet, so there is no experience library to reach.' };
-    }
-    return runExperienceAction(deps, input);
   }
 
   /** release.* (tools/release-codemode.ts) is constructed once per DO
@@ -2919,20 +2876,16 @@ export class OrchestratorAgent extends ActorAgent {
    *
    * When `useShadowOverride` is true, runs the pending scaffold instead of
    * the current one (if a pending exists).
+   *
+   * Wire form only: the MCP Worker adapter is this method's one consumer, and
+   * no remote transport dispatches the plain name, so the structured result
+   * crosses as its JSON twin and is decoded at the call site.
    */
-  async runScaffoldOnce(
-    task: string,
-    opts?: { useShadowOverride?: boolean },
-  ): Promise<ScaffoldRunResult> {
-    return runScaffoldOnce(this.scaffoldControl, task, opts);
-  }
-
-  /** Cross-DO wire form for the MCP Worker adapter. */
   async runScaffoldOnceWire(
     task: string,
     opts?: { useShadowOverride?: boolean },
   ): Promise<string> {
-    return JSON.stringify(await this.runScaffoldOnce(task, opts));
+    return JSON.stringify(await runScaffoldOnce(this.scaffoldControl, task, opts));
   }
 
   /**
@@ -3925,25 +3878,12 @@ export class OrchestratorAgent extends ActorAgent {
     return this.rt.executionRouter ? listEnvironments(this.rt.executionRouter) : [];
   }
 
-  /** The agent roster as seen from this workspace: this DO's orchestrator is
-   *  the default agent (always present); durable subordinate facets follow. */
-  @callable() async getWorkspaceAgents(): Promise<WorkspaceAgent[]> {
-    const self = { name: this.name, displayName: this.getDisplayName() };
-    try {
-      return buildWorkspaceAgents(self, await this.subordinateViews());
-    } catch (error) {
-      diagnostics.event('orchestrator.roster_unreadable', { error: renderThrownChain({ cause: error }) });
-      return buildWorkspaceAgents(self, []);
-    }
-  }
-
   /** Browser-only subordinate controls. These delegate to the exact same
-   * orchestration policy as the model's agents tool, including rollback and the
-   * authoritative roster broadcast. */
+   *  orchestration policy as the model's agents tool, including rollback and the
+   *  authoritative roster broadcast. */
   @callable() async listSubordinates(): Promise<SubordinateRosterEntry[]> {
     return this.subordinateViews();
   }
-
 
   /**
    * Add an agent to this workspace with nothing said about it.

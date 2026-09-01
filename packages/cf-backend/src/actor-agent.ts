@@ -2938,7 +2938,7 @@ export abstract class ActorAgent extends Think<Env> {
    * settled turn warms again, so the retry needs no record. One autonomous or
    * post-eviction turn may honestly lack MCP tools and says so on its surface.
    */
-  private _mcpWarmTask: AsyncTaskOwner | null = null;
+  protected _mcpWarmTask: AsyncTaskOwner | null = null;
 
   protected warmUserMcpInBackground(): void {
     if (!this.getOwnerUserId() || this._mcpWarmTask !== null) return;
@@ -2966,11 +2966,6 @@ export abstract class ActorAgent extends Think<Env> {
         if (this._mcpWarmTask === owner) this._mcpWarmTask = null;
       }
     })();
-  }
-
-  /** The current MCP warm's observable settlement, for lifecycle joins. */
-  protected mcpWarmSettlement(): Promise<void> {
-    return this._mcpWarmTask?.promise ?? Promise.resolve();
   }
 
   /**

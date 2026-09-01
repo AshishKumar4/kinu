@@ -417,7 +417,6 @@ const ORCHESTRATOR_METHODS = [
   'readExecutorFileChunk',
   'receivePeerMessage',
   'recordHeadStep',
-  'runScaffoldOnce',
   'runScaffoldOnceWire',
   'runTaskFromMcp',
   'saveNoteFromMcp',

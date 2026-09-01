@@ -361,9 +361,12 @@ defines axes, presets, `custom`, nodes, and legal calls.
 
 ## experience: cross-workspace transfer
 
-`experience` is an owner-facing RPC, not a tool or namespace. The web UI calls
-`experienceAction`, then `runExperienceAction`; the capability-gated, `full`-tier
-UserDO library leaves shared workspaces with neither `experience.*` capability.
+`experience` is owner-facing, not a tool or namespace: the owner drives it
+through core's `runExperienceAction` over the capability-gated, `full`-tier
+UserDO library, which leaves shared workspaces with neither `experience.*`
+capability. The workspace-side `experienceAction` RPC that used to front it
+had no caller on any transport and was deleted; the engine and the library
+stay, driven directly.
 
 `publish` needs real uses plus injection score for crafted tools, CORROBORATED
 lessons, confident facts, or a LIVE scaffold with passing `decidePromotion`,

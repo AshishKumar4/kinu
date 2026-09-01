@@ -587,10 +587,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * `workspaceCapabilityToken` actually selects from, and the hub comes from the
    * `env.UserDO` binding the production path resolves. Nothing here asserts a
    * type it has not established.
+   *
+   * The JOIN is harness-local: production never waits on the warm (the next
+   * turn finds the connections), so ActorAgent carries no settlement accessor —
+   * only the lane's own owner field, which stays protected for exactly this
+   * kind of subclass seam.
    */
   async harnessWarmUserMcp(): Promise<void> {
     this.warmUserMcpInBackground();
-    await this.mcpWarmSettlement();
+    await (this._mcpWarmTask?.promise ?? Promise.resolve());
   }
 
   /** Give this workspace the capability token every user-plane call is gated

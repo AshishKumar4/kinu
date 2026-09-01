@@ -32,8 +32,6 @@ class RecordingAlarm implements AlarmScheduler {
     this.requested.push(ts);
     if (this.at === null || ts < this.at) this.at = ts;
   }
-
-  currentAlarm(): number | null { return this.at; }
 }
 
 const NOW = 1_700_000_000_000;

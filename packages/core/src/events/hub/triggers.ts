@@ -99,8 +99,6 @@ export interface AlarmScheduler {
    *  Durable Object has is an await inside the invocation that asked for the
    *  wake, so this returns the promise instead of discarding it. */
   scheduleAt(ts: number): Promise<void>;
-  /** Current scheduled alarm time, or null if none. */
-  currentAlarm(): number | null;
 }
 
 export class TriggerRegistry {

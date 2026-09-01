@@ -152,13 +152,10 @@ actors that work inside it.
     `scope: 'workspace'` spawns a whole specialist workspace instead of a
     subordinate, and only the workspace orchestrator may: a fresh workspace is
     the root of its own delegation tree, so a subordinate that could call it
-    would escape the depth cap.
-
-  `getWorkspaceAgents()` (RPC, `cf-backend/src/orchestrator.ts:2920`) returns the
-  roster the UI shows: the default orchestrator first, then this workspace's
-  durable subordinates. Nodes stay off it, because they live only for the search
-  that spawned them.
-- Fork = a new workspace. Forking copies SOUL.md, messages, and memory to
+    could not be its child. The roster the UI shows comes from
+    `listSubordinates()` (RPC, plus the `subordinates_changed` socket event) —
+    this workspace's durable subordinates; nodes stay off it, because they live
+    only for the search that spawned them.
   a fresh workspace by a new name and records `fork_lineage`
   (`source_workspace_id/name`). `forkWorkspaceStorage`
   (`core/src/identity/fork.ts#forkWorkspaceStorage`) does the copy in one

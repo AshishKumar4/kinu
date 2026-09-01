@@ -133,7 +133,7 @@ describe('rpc gate on scoped connections', () => {
 
   test('the old websocket-read-allowlist methods are interactive-only now — a read+exec scoped token cannot reach them (no read-only widening)', () => {
     for (const method of [
-      'checkpointStatus', 'getEvolutionChangelog', 'getWorkspaceAgents', 'listSubordinates',
+      'checkpointStatus', 'getEvolutionChangelog', 'listSubordinates',
       'latestAlternateTakes', 'listFileCheckpoints', 'listMounts', 'planFileRestore',
     ] as const) {
       expect(AGENT_RPC_ACCESS[method]).toBe('interactive');

@@ -259,7 +259,6 @@ const SHARED_TRANSPORTS = {
   suggestTitle: 'suggestWorkspaceTitle',
   showRefinement: 'showRefinementRoute',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
-  runScaffoldOnce: 'runScaffoldOnce',
   // Accessors over ONE core object (ModelCatalogSession), three lines each.
   sessionAcceptedMedia: '.acceptedMedia',
   sessionContextWindow: '.contextWindow',

@@ -30,7 +30,7 @@ function hub() {
   initEventsHubTables(sql);
   initWebhookIngressTables(sql);
   const log = new EventLog(sql);
-  const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
+  const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
   const secrets = createWebhookSecretStore(sql);
   const { vfs, files } = createMemoryVfs();
   let drains = 0;
@@ -369,7 +369,7 @@ describe('webhook registration', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
     const secrets = createWebhookSecretStore(sql);
 
     const webhook = await registerDurableWebhook(triggers, secrets, { label: 'ci', auth_mode: 'bearer', secret: 'shhh' }, NOW);
@@ -444,7 +444,7 @@ describe('webhook registration', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
     const secrets = createWebhookSecretStore(sql);
 
     await expect(registerDurableWebhook(
@@ -528,7 +528,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {}, currentAlarm: () => null });
+    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
     const secrets = createWebhookSecretStore(sql);
 
     const live = await registerDurableWebhook(triggers, secrets, { label: 'live', auth_mode: 'bearer' }, NOW);

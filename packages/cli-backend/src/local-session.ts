@@ -960,7 +960,6 @@ export class LocalAgentSession implements BackendHost {
       // because the cloud host's arm is a Durable Object write that must land
       // inside its invocation (`do.wait_until.no_op`).
       scheduleAt: async (ts) => { this.scheduleLocalAlarm(ts); },
-      currentAlarm: () => this.scheduledAlarmAt,
     };
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
     this.replyChannels = new ReplyChannelStore(hubSql);

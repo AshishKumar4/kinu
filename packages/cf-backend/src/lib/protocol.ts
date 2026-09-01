@@ -136,14 +136,6 @@ export interface ExecutorCommandResult {
 	error?: string;
 }
 
-/** One agent in the workspace roster (getWorkspaceAgents). The orchestrator
- *  is the workspace's default agent; durable subordinate facets follow it. */
-export interface WorkspaceAgent {
-	name: string;
-	displayName: string;
-	role: "orchestrator" | "subordinate";
-}
-
 export type SubordinateStatus = "idle" | "working" | "awaiting_input" | "dismissed";
 
 /** Parent-owned product roster delivered by listSubordinates and the
