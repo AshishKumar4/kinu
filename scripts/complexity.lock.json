@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-01",
-  "files": 1911,
-  "functions": 48453,
+  "files": 1915,
+  "functions": 48676,
   "ceiling": 126,
   "line": 39,
   "inventory": [
@@ -18,16 +18,16 @@
       "complexity": 114
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#measureArm",
-      "complexity": 94
-    },
-    {
       "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
       "complexity": 93
     },
     {
+      "key": "scripts/bench-devbox-strategies.ts#measureArm",
+      "complexity": 92
+    },
+    {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
-      "complexity": 87
+      "complexity": 89
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#candidateLifecycleChecks",
@@ -82,12 +82,12 @@
       "complexity": 55
     },
     {
-      "key": "packages/devbox/bench/worker.ts#fetch",
-      "complexity": 53
+      "key": "scripts/bench-devbox-strategies.ts#render",
+      "complexity": 54
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#render",
-      "complexity": 52
+      "key": "packages/devbox/bench/worker.ts#fetch",
+      "complexity": 53
     },
     {
       "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
@@ -98,7 +98,7 @@
       "complexity": 51
     },
     {
-      "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
+      "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 51
     },
     {
@@ -111,10 +111,6 @@
     },
     {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
-      "complexity": 48
-    },
-    {
-      "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 48
     },
     {
@@ -140,6 +136,10 @@
     {
       "key": "scripts/bench-r2-workspace.ts#main",
       "complexity": 46
+    },
+    {
+      "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
+      "complexity": 43
     },
     {
       "key": "scripts/wired.ts#findEntrypoints>walk",
