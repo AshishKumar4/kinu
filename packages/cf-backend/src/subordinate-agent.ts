@@ -7,8 +7,6 @@ import {
   initWorkspaceSchema,
   renderSoulMarkdown,
   snapshotCompletedTurn,
-  // Names how this turn ended, from facts. Never a string chosen here.
-  classifyRunEnd,
   projectJsonValue, nanoid,
   shadowTrialPlan, trimTrialContext,
   type SubordinateEventResult,
@@ -683,7 +681,9 @@ export class SubordinateAgent extends ActorAgent {
   async onChatResponse(result: ChatResponseResult): Promise<void> {
     const { programmaticUserMessage, errorText, completed, outputContinuation } =
       this.settleTurnEvents(result);
-    const overflowRecovery =
+    // The seal's own classification comes back with it — this facet used to
+    // classify the identical facts a second time for its roster's status.
+    const { overflowRecovery, end } =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     // The identity of THIS terminal sequence: the durable turn plus the response
     // being settled. Both, because Think fires this hook once per response and a
@@ -725,12 +725,10 @@ export class SubordinateAgent extends ActorAgent {
     };
     if (result.message.id) completedTurn.turnId = result.message.id;
     const turn = snapshotCompletedTurn(this.acc, completedTurn);
-    const status = classifyRunEnd({
-      completed, interrupted: result.status === 'aborted', errorText,
-      // Think reports 'completed' for a turn its own stop condition cut, so the
-      // model's last word is the only thing that can tell the two apart.
-      lastFinishReason: this.acc.lastFinishReason,
-    }).reason;
+    // The name the durable run was sealed with, carried rather than re-derived:
+    // the facts include the model's last word, which is the only thing that
+    // separates a finished turn from one Think's own stop condition cut.
+    const status = end.reason;
     const messageId = result.message.id;
 
     // Sampled only for a turn the promotion gate can learn from, and keyed on

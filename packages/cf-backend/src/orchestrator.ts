@@ -186,7 +186,7 @@ import {
   JsonValueSchema, type JsonValue, type KinuEvent,
   // The one declaration of the event-variant set, and the one classifier that
   // names how a run ended. Both were hand-mirrored here.
-  EVENT_VARIANTS, classifyRunEnd, type RunEndReason,
+  EVENT_VARIANTS, type RunEndReason,
   type WorkMode,
   resolveModelRoute, type ResolvedTurnProfile,
   WORKSPACE_RUN_ID,
@@ -1556,7 +1556,10 @@ export class OrchestratorAgent extends ActorAgent {
       drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
       outputContinuation,
     } = this.settleTurnEvents(result);
-    const overflowRecovery =
+    // The run is sealed here, and the name it was sealed with comes back rather
+    // than being classified again below for the roster: one turn, one reading of
+    // how it ended.
+    const { overflowRecovery, end } =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     // The identity of THIS terminal sequence — the durable turn plus the response
     // being settled. Both, because Think fires this hook once per response and a
@@ -1604,12 +1607,10 @@ export class OrchestratorAgent extends ActorAgent {
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
     });
-    const status = classifyRunEnd({
-      completed, interrupted: result.status === 'aborted', errorText,
-      // Think reports 'completed' for a turn its own stop condition cut, so
-      // the model's last word is the only thing that can tell the two apart.
-      lastFinishReason: this.acc.lastFinishReason,
-    }).reason;
+    // The same name the durable run carries — the classifier ran once, over the
+    // facts the seal used (including the model's last word, which is the only
+    // thing that separates a finished turn from one Think's stop condition cut).
+    const status = end.reason;
     // Alternate Takes and steer branches were both captured mid-turn, before
     // this id existed, and both are attributed to it — one decision, made by
     // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once

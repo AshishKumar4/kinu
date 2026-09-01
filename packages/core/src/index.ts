@@ -1456,7 +1456,7 @@ export {
   classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, OUTPUT_LIMIT_REACHED, TURN_ENDED_MID_WORK,
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT,
   type CompactionTriggerState, type SettledTurn, type OutputContinuationFacts,
-  type RunEndReason, type RunEndFacts,
+  type RunEndReason, type RunEndFacts, type RunEndClassification,
 } from './orchestrator/turn-lifecycle';
 export {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,

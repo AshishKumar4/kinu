@@ -103,7 +103,8 @@ import {
   // facts, so neither backend chooses the string — and the output-limit
   // continuation policy, which is the same three facts asked of a turn that
   // finished with more to say.
-  openTurnRun, closeTurnRun, classifyRunEnd, persistMeasuredPromptTokens, applyOverflowRecovery,
+  openTurnRun, closeTurnRun, classifyRunEnd, type RunEndClassification,
+  persistMeasuredPromptTokens, applyOverflowRecovery,
   owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, AgentOrchestrator, type BackendHost,
@@ -312,6 +313,21 @@ interface SettledTurnEvents {
    *  `owesOutputLimitContinuation`). Decided in the shared spine, because both
    *  actors settle through it and the answer must not be derived twice. */
   outputContinuation: boolean;
+}
+
+/** What the settled turn's telemetry established for the roster that follows it:
+ *  the retry the overflow policy earned, and the ONE name this turn's end
+ *  carries.
+ *
+ *  The name travels because it is already decided here — the durable `run_end`
+ *  row has been sealed with it — and a caller that classified the same facts a
+ *  second time would be deriving one answer twice, exactly what
+ *  `outputContinuation` above is derived once for both actors to avoid. It is
+ *  also what makes the ledger and the roster agree by construction: the terminal
+ *  roster's `status` IS this reason, not a parallel reading of the same turn. */
+interface SettledTurnTelemetry {
+  readonly overflowRecovery: OverflowRecoveryDecision | null;
+  readonly end: RunEndClassification;
 }
 
 interface AsyncTaskOwner {
@@ -1764,12 +1780,19 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The settled turn's telemetry — the measured compaction trigger, the
    *  shared overflow-recovery policy, and the durable turn_end/run_end
-   *  events. Runs for completed AND aborted/errored turns. */
+   *  events. Runs for completed AND aborted/errored turns.
+   *
+   *  Hands back what the roster after it needs: the retry this turn earned, and
+   *  the run's own classified end. The second one is handed OVER rather than
+   *  re-derived by each caller — the two actors used to classify the identical
+   *  four facts again for their roster's `status`, so one turn carried two
+   *  independent readings of how it ended and nothing but their purity kept them
+   *  equal. */
   protected recordTurnTelemetry(result: ChatResponseResult, turn: {
     errorText: string | undefined;
     completed: boolean;
     programmaticUserMessage: UIMessage | null;
-  }): OverflowRecoveryDecision | null {
+  }): SettledTurnTelemetry {
     const { errorText, completed, programmaticUserMessage } = turn;
     let overflowRecovery: OverflowRecoveryDecision | null = null;
     // The NEXT turn's measured compaction trigger (core turn-lifecycle).
@@ -1854,7 +1877,7 @@ export abstract class ActorAgent extends Think<Env> {
       usage: this.acc.usage,
       usd: this.priceAt(this.acc.usage),
     });
-    return overflowRecovery;
+    return { overflowRecovery, end };
   }
 
   // ── The terminal transition ───────────────────────────────────────────

@@ -134,14 +134,14 @@ async function admitTurnSkills(
  *  the union is a widening operation, so an unapproved file could otherwise
  *  hand itself a tool a legitimately active skill had excluded — or invent a
  *  restriction where the owner intended none. A skill the agent may have
- *  written renders as reference material and sets no policy. */
-function allowedBySkills(name: string, allowedUnion: string[]): boolean {
-  return toolAllowedBySkills(name, allowedUnion);
-}
-
-/** Restrict a tool-NAME list (the cf activeTools whitelist) to the active
- *  skills' allowed union. Returns the input array untouched when skills don't
- *  restrict. */
+ *  written renders as reference material and sets no policy.
+ *
+ *  Applied by the two filters below — a tool-NAME list (the cf activeTools
+ *  whitelist) and a ToolSet (the CLI turn surface) — through the one predicate
+ *  `toolAllowedBySkills` owns.
+ *
+ *  Restrict a tool-NAME list to the active skills' allowed union. Returns the
+ *  input array untouched when skills don't restrict. */
 export function filterToolNamesBySkills<T extends string>(
   names: readonly T[],
   activeSkills: ActiveSkillSet | undefined,
@@ -149,18 +149,18 @@ export function filterToolNamesBySkills<T extends string>(
   if (!activeSkills) return [...names];
   const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
   if (allowedUnion.length === 0) return [...names];
-  return names.filter((name) => allowedBySkills(name, allowedUnion));
+  return names.filter((name) => toolAllowedBySkills(name, allowedUnion));
 }
 
-/** Restrict a ToolSet (the CLI turn surface) to the active skills' allowed
- *  union. Returns the input object untouched when skills don't restrict. */
+/** The same restriction over a ToolSet (the CLI turn surface). Returns the
+ *  input object untouched when skills don't restrict. */
 export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillSet | undefined): ToolSet {
   if (!activeSkills) return tools;
   const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
   if (allowedUnion.length === 0) return tools;
   const filtered: ToolSet = {};
   for (const [name, t] of Object.entries(tools)) {
-    if (allowedBySkills(name, allowedUnion)) filtered[name] = t;
+    if (toolAllowedBySkills(name, allowedUnion)) filtered[name] = t;
   }
   return filtered;
 }
