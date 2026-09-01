@@ -99,6 +99,18 @@ export interface TerminalTurnParts {
   /** A context-overflow retry this turn earned. Delivery is a claimed effect
    *  because enqueueing it is asynchronous and must survive a process cut. */
   readonly overflowRetry?: boolean;
+  /**
+   * The ONE continuation a turn cut at the provider's output limit earned
+   * (core `owesOutputLimitContinuation`), for a backend whose loop cannot
+   * continue inside the turn.
+   *
+   * Claimed for the same reason the retry beside it is: the answer is already
+   * durable and truncated, so a continuation lost to an eviction leaves exactly
+   * the state it exists to prevent — a turn published as finished whose work
+   * stopped mid-sentence. `runChat` passes nothing here; it continues inside the
+   * turn and has no follow-up to owe.
+   */
+  readonly outputContinuation?: boolean;
   /** The advisor's recovery snapshot, as the improvement lanes replay it. */
   readonly advisor?: JsonValue;
   /** The sampling plan, when this turn is sampled against a candidate. */
@@ -225,6 +237,13 @@ export function declareTerminalRoster(
   if (parts.overflowRetry) {
     owed.push({
       name: 'overflow_retry', scope: messageId, lane: 'inline', input: {},
+    });
+  }
+  // Beside the retry, and never with it: one answers a turn that failed, the
+  // other a turn that finished with more to say, and `completed` decides which.
+  if (parts.outputContinuation) {
+    owed.push({
+      name: 'output_continuation', scope: messageId, lane: 'inline', input: {},
     });
   }
   owed.push({

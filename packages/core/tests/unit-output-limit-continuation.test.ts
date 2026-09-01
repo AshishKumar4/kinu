@@ -18,7 +18,9 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3CallOptions, LanguageModelV3Prompt, LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
 import { runChat, type ChatEvent } from '../src/chat';
-import { OUTPUT_LIMIT_REACHED } from '../src/orchestrator/turn-lifecycle';
+import {
+  OUTPUT_LIMIT_REACHED, owesOutputLimitContinuation,
+} from '../src/orchestrator/turn-lifecycle';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
 type UnifiedFinish = FinishPart['finishReason']['unified'];
@@ -186,5 +188,42 @@ describe('output-limit continuation', () => {
     // `MAX_TOKENS` and `length` onto this one word, which is why detection reads
     // it rather than matching on the endpoint's own prose.
     expect(OUTPUT_LIMIT_REACHED).toBe('length');
+  });
+});
+
+/**
+ * The same allowance, for the loop that cannot spend it inside the turn.
+ *
+ * `runChat` continues its own turn above. Think's loop ends at a `length`
+ * finish and no hook can extend it, so the cloud backend asks this predicate
+ * whether the settled turn owes a continuation TURN. One policy, so the two
+ * loops cannot come to different answers about the same three facts.
+ */
+describe('the continuation a loop cannot run inside its turn', () => {
+  const cut = {
+    completed: true, lastFinishReason: OUTPUT_LIMIT_REACHED, turnWasContinuation: false,
+  };
+
+  test('a completed turn cut at the output limit owes one', () => {
+    expect(owesOutputLimitContinuation(cut)).toBe(true);
+  });
+
+  test('a turn that finished on its own owes none', () => {
+    expect(owesOutputLimitContinuation({ ...cut, lastFinishReason: 'stop' })).toBe(false);
+    // A turn still mid-work is the OTHER impossible ending (TURN_ENDED_MID_WORK)
+    // and is not an answer waiting to be finished.
+    expect(owesOutputLimitContinuation({ ...cut, lastFinishReason: 'tool-calls' })).toBe(false);
+    // No step reported one at all: nothing says the provider cut anything.
+    expect(owesOutputLimitContinuation({ ...cut, lastFinishReason: undefined })).toBe(false);
+  });
+
+  test('a turn that did not reach its own end owes none', () => {
+    // A cut turn was stopped by its owner and a failed one has the overflow
+    // recovery; continuing either would answer over the top of that decision.
+    expect(owesOutputLimitContinuation({ ...cut, completed: false })).toBe(false);
+  });
+
+  test('the allowance is exactly one, whichever way the continuation arrived', () => {
+    expect(owesOutputLimitContinuation({ ...cut, turnWasContinuation: true })).toBe(false);
   });
 });

@@ -681,7 +681,8 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   async onChatResponse(result: ChatResponseResult): Promise<void> {
-    const { programmaticUserMessage, errorText, completed } = this.settleTurnEvents(result);
+    const { programmaticUserMessage, errorText, completed, outputContinuation } =
+      this.settleTurnEvents(result);
     const overflowRecovery =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     // The identity of THIS terminal sequence: the durable turn plus the response
@@ -784,6 +785,10 @@ export class SubordinateAgent extends ActorAgent {
     };
     const parts: TerminalTurnParts = {
       overflowRetry: overflowRecovery?.enqueueRetry === true,
+      // A facet's truncated answer is its PARENT's problem too: the report it
+      // owes carries whatever the turn produced, so an answer cut mid-sentence
+      // is what the caller gets unless the continuation runs.
+      outputContinuation,
       turnEndExtensions: { message: projectJsonValue({ value: result.message }) },
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(turn)) }),
       shadowTrial,

@@ -62,7 +62,9 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { reconcileColumns } from '../identity/columns';
-import { RUN_END_REASONS } from './turn-lifecycle';
+import {
+  OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, RUN_END_REASONS,
+} from './turn-lifecycle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import type { TurnContinuity } from './agent-orchestrator';
@@ -166,7 +168,13 @@ export const TERMINAL_EFFECT_NAMES = [
   // turn-end but before the window append lost the remaining suffix and nothing
   // could tell which half had happened. Each of these is keyed on the turn's own
   // durable identity and is idempotent at its own boundary.
-  'turn_end_extensions', 'overflow_retry', 'turn_record', 'event_drain', 'improvement_lanes',
+  //
+  // `overflow_retry` and `output_continuation` are the two follow-up turns a
+  // settled turn can owe, and they are mutually exclusive by construction: the
+  // first answers a turn that FAILED on a context-length refusal, the second a
+  // turn that COMPLETED at the provider's output limit with more to say.
+  'turn_end_extensions', 'overflow_retry', 'output_continuation',
+  'turn_record', 'event_drain', 'improvement_lanes',
   // Separate from the improvement lanes it used to sit inside: a queue that is
   // full is a legitimate refusal, and the lanes' own model calls must not be
   // held behind it — nor repeated when it is retried.
@@ -244,24 +252,74 @@ export function terminalEffect<I>(spec: {
   return { run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
 }
 
-/** The one durable body both backends use for a context-overflow retry. */
-export function overflowRetryTerminalEffect(signals: SignalDeliverer): TerminalEffect {
+/**
+ * The one durable body for an effect whose whole job is to deliver ONE signal —
+ * a follow-up turn the settled turn owes.
+ *
+ * Both of them are the same three steps (name the fact, key it on this
+ * response's scope, report an undelivered signal as still owed), so they are one
+ * function rather than two near-copies that drift a field at a time. The KEY
+ * prefix is per-signal because two different follow-ups on one response must not
+ * collide onto one durable message id.
+ */
+function signalTerminalEffect(signals: SignalDeliverer, spec: {
+  readonly kind: string;
+  readonly text: string;
+  /** The `idempotencyKey` prefix. Omitted when the scope is unkeyed — a
+   *  response with no durable identity has nothing stable to key on, and a
+   *  shared key across such responses would collapse them into one turn. */
+  readonly keyPrefix: string;
+  /** What an undelivered signal leaves owed, in this signal's own words. */
+  readonly undelivered: string;
+}): TerminalEffect {
   return terminalEffect({
     input: v.object({}),
     run: async (_input, scope) => {
       const effectScope = keyedScope(scope);
       const signal = effectScope === undefined
-        ? { kind: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT }
+        ? { kind: spec.kind, text: spec.text }
         : {
-          kind: OVERFLOW_RETRY_EVENT,
-          text: OVERFLOW_RETRY_TEXT,
-          idempotencyKey: `overflow-retry:${effectScope}`,
+          kind: spec.kind,
+          text: spec.text,
+          idempotencyKey: `${spec.keyPrefix}:${effectScope}`,
         };
       const outcome = await signals.deliver(signal);
       return outcome === 'undelivered'
-        ? { status: 'owed', detail: 'the overflow retry signal was undelivered' }
+        ? { status: 'owed', detail: spec.undelivered }
         : { status: 'completed' };
     },
+  });
+}
+
+/** The one durable body both backends use for a context-overflow retry. */
+export function overflowRetryTerminalEffect(signals: SignalDeliverer): TerminalEffect {
+  return signalTerminalEffect(signals, {
+    kind: OVERFLOW_RETRY_EVENT,
+    text: OVERFLOW_RETRY_TEXT,
+    keyPrefix: 'overflow-retry',
+    undelivered: 'the overflow retry signal was undelivered',
+  });
+}
+
+/**
+ * The durable body for the ONE continuation a cloud turn cut at the provider's
+ * output limit earns.
+ *
+ * `runChat` continues such a turn inside itself, in the same provider call
+ * sequence. Think's loop cannot: it re-issues a request only while a step ended
+ * with tool calls whose outputs all landed, and no hook can extend it past a
+ * `length` finish. So the continuation is the next turn, and it rides this
+ * ledger for the same reason the overflow retry does — enqueueing is
+ * asynchronous, and a truncated answer whose continuation died with the isolate
+ * is exactly the state the audit named: a turn published as complete with the
+ * work after it never done.
+ */
+export function outputLimitContinuationTerminalEffect(signals: SignalDeliverer): TerminalEffect {
+  return signalTerminalEffect(signals, {
+    kind: OUTPUT_CONTINUATION_EVENT,
+    text: OUTPUT_CONTINUATION_TEXT,
+    keyPrefix: 'output-continuation',
+    undelivered: 'the output-limit continuation signal was undelivered',
   });
 }
 

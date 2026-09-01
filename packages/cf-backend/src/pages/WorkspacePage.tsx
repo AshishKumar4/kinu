@@ -741,9 +741,10 @@ export default function WorkspacePage() {
     if (!files.length) return;
     e.preventDefault();
     setDragOver(false);
-    startTransition(async () => {
-      await attachments.add(files);
-    });
+    // Handed straight over: the hook owns the conversion task through
+    // settlement and returns nothing to await, so the transition this used to
+    // be wrapped in resolved on an already-finished value and deferred nothing.
+    attachments.add(files);
   }, [attachments]);
 
   // Auto-grow the chat input with its content (kumo InputArea has no resize
@@ -1275,11 +1276,7 @@ export default function WorkspacePage() {
                 mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planAwaitingDecision }}
                 attachments={{
                   parts: [...attachments.parts],
-                  onAdd: (files) => {
-                    startTransition(async () => {
-                      await attachments.add(files);
-                    });
-                  },
+                  onAdd: attachments.add,
                   onRemove: attachments.remove,
                 }}
                 modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}

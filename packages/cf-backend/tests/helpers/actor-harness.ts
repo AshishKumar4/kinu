@@ -221,6 +221,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this.userSteer.beginTurn();
   }
 
+  /**
+   * The turn is RUNNING, as the delivery seam asks the question.
+   *
+   * `BackendHost.turnInFlight` reads this flag, and it is what routes a signal
+   * into the live turn's next step instead of into a queued turn of its own. A
+   * suite that needs the SPLICED route has to say so, because production sets
+   * the flag inside `beforeTurn`, which needs a model this harness cannot
+   * drive. `settleTurnEvents` clears it exactly as a real turn does.
+   */
+  harnessMarkTurnInFlight(): void { this._inFlight = true; }
+
   /** The persisted identity a fresh activation uses to stop old device work. */
   harnessPersistActiveTurn(turnId: string): void {
     this.ctx.storage.sql.exec(

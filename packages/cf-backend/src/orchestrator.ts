@@ -1286,6 +1286,7 @@ export class OrchestratorAgent extends ActorAgent {
     readonly status: RunEndReason;
     readonly answeredDrains: ReadonlySet<string>;
     readonly overflowRetry: boolean;
+    readonly outputContinuation: boolean;
   }): OwedEffect[] {
     const messageId = input.result.message.id;
     const completed = input.result.status === 'completed';
@@ -1326,6 +1327,7 @@ export class OrchestratorAgent extends ActorAgent {
       readonly turn: CompletedTurn;
       readonly answeredDrains: ReadonlySet<string>;
       readonly overflowRetry: boolean;
+      readonly outputContinuation: boolean;
     }, sampledVersion: number | null, mission: string | null,
   ): TerminalTurnParts {
     const parts: TerminalTurnParts = {
@@ -1339,6 +1341,7 @@ export class OrchestratorAgent extends ActorAgent {
       eventReplies: { answered: input.answeredDrains, requestId: input.result.requestId },
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
       overflowRetry: input.overflowRetry,
+      outputContinuation: input.outputContinuation,
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn)) }),
       sleepTime: { toolCalls: projectJsonValue({ value: this.acc.toolCalls }) },
       autoTitle: isPlaceholderMission(mission) || mission === null
@@ -1553,8 +1556,10 @@ export class OrchestratorAgent extends ActorAgent {
     const turnMode = this.turnWorkMode();
     // The actor-generic settle spine lives on ActorAgent; everything after it
     // here is orchestrator sequencing (takes, branches, evolution, naming).
-    const { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals } =
-      this.settleTurnEvents(result);
+    const {
+      drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
+      outputContinuation,
+    } = this.settleTurnEvents(result);
     const overflowRecovery =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     // The identity of THIS terminal sequence — the durable turn plus the response
@@ -1634,6 +1639,7 @@ export class OrchestratorAgent extends ActorAgent {
         // from two places, so the SET is what makes the settle exactly-once per
         // delivery.
         overflowRetry: overflowRecovery?.enqueueRetry === true,
+        outputContinuation,
         answeredDrains: drainTurnsAnswered(drainTurnId, injectedSignals),
       }),
       hold: (claimed, close) => { this.holdTerminalClose(claimed, close, result.requestId); },

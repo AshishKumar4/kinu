@@ -78,11 +78,55 @@ export const TOOL_CALLS_PENDING = 'tool-calls';
  *
  * A turn whose last step says this did NOT reach an end of its own either, and
  * unlike {@link TOOL_CALLS_PENDING} it is entirely ordinary — the answer was
- * simply longer than one response. `runChat` answers it with exactly one
- * continuation request (chat.ts), and a SECOND one is honest partial
- * completion: the turn keeps what it produced and says how it ended.
+ * simply longer than one response. Exactly one continuation answers it, and a
+ * SECOND `length` is honest partial completion: the turn keeps what it produced
+ * and says how it ended.
+ *
+ * WHERE that continuation happens is the one thing the two loops cannot share.
+ * `runChat` owns its own provider calls, so it continues INSIDE the turn
+ * (chat.ts): same meter, same text, same `done`. The cloud loop is Think's, and
+ * its agentic loop re-issues a request only while a step ended with tool calls
+ * whose outputs all landed — a `length` finish ends it, and no hook can extend
+ * it. So there the continuation is the next TURN, armed by
+ * {@link owesOutputLimitContinuation} through the same durable signal ledger
+ * every other owed follow-up rides.
  */
 export const OUTPUT_LIMIT_REACHED = 'length';
+
+/** The `kinuEvent` name stamped on the ONE continuation turn a truncated cloud
+ *  answer earns — the marker that stops the continuation from earning another,
+ *  the same way {@link OVERFLOW_RETRY_EVENT} bounds the retry it names. */
+export const OUTPUT_CONTINUATION_EVENT = 'output_continuation';
+
+/** The continuation turn's text. It names the fact (the answer was cut by the
+ *  provider, not by the model choosing to stop) and refuses the two wrong
+ *  readings of it: starting over, and re-running work whose results are already
+ *  in the history it is reading. */
+export const OUTPUT_CONTINUATION_TEXT =
+  'The previous answer stopped at the model output limit before it was finished. '
+  + 'Continue it from exactly where it stopped — do not restart it, repeat what it already '
+  + 'said, or re-run tool calls whose results are already above.';
+
+/** What a settled turn knows about whether it was cut at the output limit. */
+export interface OutputContinuationFacts {
+  /** The turn reached its own end. A cut turn was stopped by its owner and a
+   *  failed one has its own recovery; neither is an answer waiting to be
+   *  finished. */
+  readonly completed: boolean;
+  /** The `finishReason` of the turn's LAST step (`acc.lastFinishReason`). */
+  readonly lastFinishReason: string | undefined;
+  /** Whether THIS turn already WAS the continuation — it was driven by the
+   *  continuation signal, or absorbed it at a step boundary. Either way its one
+   *  continuation is spent, and a second `length` is partial completion. */
+  readonly turnWasContinuation: boolean;
+}
+
+/** Whether a settled turn owes exactly one output-limit continuation. */
+export function owesOutputLimitContinuation(facts: OutputContinuationFacts): boolean {
+  return facts.completed
+    && facts.lastFinishReason === OUTPUT_LIMIT_REACHED
+    && !facts.turnWasContinuation;
+}
 
 /**
  * THE INVARIANT: a turn that reached its own end never has tool calls pending.

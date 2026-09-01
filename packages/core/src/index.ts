@@ -15,6 +15,7 @@ export {
 } from './orchestrator/terminal-transition';
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
+  outputLimitContinuationTerminalEffect,
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -1458,7 +1459,8 @@ export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
   classifyRunEnd, RUN_END_REASONS, TOOL_CALLS_PENDING, OUTPUT_LIMIT_REACHED, TURN_ENDED_MID_WORK,
-  type CompactionTriggerState, type SettledTurn,
+  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT,
+  type CompactionTriggerState, type SettledTurn, type OutputContinuationFacts,
   type RunEndReason, type RunEndFacts,
 } from './orchestrator/turn-lifecycle';
 export {

@@ -100,8 +100,11 @@ import {
   OVERFLOW_RETRY_EVENT, type OverflowRecoveryDecision,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
   // plus the run_end vocabulary and the classifier that derives it from raw
-  // facts, so neither backend chooses the string.
+  // facts, so neither backend chooses the string — and the output-limit
+  // continuation policy, which is the same three facts asked of a turn that
+  // finished with more to say.
   openTurnRun, closeTurnRun, classifyRunEnd, persistMeasuredPromptTokens, applyOverflowRecovery,
+  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, AgentOrchestrator, type BackendHost,
   type SettledSignals, type InlineSteer,
@@ -252,7 +255,7 @@ import {
   // Core's once-only lifecycle for one settled response, and the per-effect
   // ledger it wraps. Both backends drive this same state machine.
   TerminalTransitions, initTerminalEffectTable,
-  terminalEffect, overflowRetryTerminalEffect, keyedScope,
+  terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, keyedScope,
   RunEndReasonSchema, ModelMessagesSchema, WorkModeSchema, TurnContinuitySchema,
   CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
@@ -305,6 +308,10 @@ interface SettledTurnEvents {
   errorText: string | undefined;
   completed: boolean;
   injectedSignals: SettledSignals;
+  /** Whether this settled turn owes the ONE output-limit continuation (core
+   *  `owesOutputLimitContinuation`). Decided in the shared spine, because both
+   *  actors settle through it and the answer must not be derived twice. */
+  outputContinuation: boolean;
 }
 
 interface AsyncTaskOwner {
@@ -1525,7 +1532,31 @@ export abstract class ActorAgent extends Think<Env> {
     this.rerunLeftoverSteers();
     const completed = result.status === 'completed';
     const injectedSignals = this.orch.signals.settle({ completed });
-    return { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals };
+    // THE OUTPUT-LIMIT CONTINUATION, decided here because this is the one place
+    // both actors settle through and the one moment all three facts are still
+    // readable: the accumulator's last finish reason (reset at the next turn's
+    // start), the driving message, and what this turn absorbed.
+    //
+    // A turn already IS the continuation two ways, and both spend it. It was
+    // queued as its own turn — the `kinuEvent` stamp on the message driving it —
+    // or it was spliced into a turn already running, which is the same signal
+    // reaching the model at a step boundary instead. Reading only the first
+    // would let a spliced continuation earn a second one, and the CLI's bound is
+    // exactly one: a SECOND `length` is honest partial completion.
+    const outputContinuation = owesOutputLimitContinuation({
+      completed,
+      lastFinishReason: this.acc.lastFinishReason,
+      turnWasContinuation:
+        this.turnUserMessageEvent(programmaticUserMessage) === OUTPUT_CONTINUATION_EVENT
+        || injectedSignals.absorbed.some((signal) => signal.kind === OUTPUT_CONTINUATION_EVENT),
+    });
+    if (outputContinuation) {
+      this.logActivity('output_limit_reached', 'the answer was cut at the output limit — one continuation owed');
+    }
+    return {
+      drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
+      outputContinuation,
+    };
   }
 
   /**
@@ -1910,7 +1941,12 @@ export abstract class ActorAgent extends Think<Env> {
         },
       }),
       overflow_retry: overflowRetryTerminalEffect(this.orch.signals),
-
+      // The other follow-up a settled turn can owe, and the shape is identical
+      // because the obligation is: one signal, keyed on this response, still
+      // owed until it is delivered. What differs is which turn earns it — the
+      // retry answers a context-length FAILURE, this one an answer the provider
+      // cut at its output limit while the model had more to say.
+      output_continuation: outputLimitContinuationTerminalEffect(this.orch.signals),
 
       turn_record: terminalEffect({
         input: v.object({
