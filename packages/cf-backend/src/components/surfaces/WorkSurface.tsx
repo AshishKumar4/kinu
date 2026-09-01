@@ -38,6 +38,7 @@ import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { AgentViewSurface } from "./AgentViewSurface";
 import { resolveGatedSurface, surfaceHasContent } from "./presence";
+import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 export const SURFACES = ["Output", "Work", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
 
@@ -130,6 +131,14 @@ export function WorkSurface(props: WorkSurfaceProps) {
     setFilesJump((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }));
     onSurface("Files");
   }, [onSurface]);
+  // Linking a machine is asked for from three places in this column — an
+  // offline Environment card, that card's call-to-action, and the drive's
+  // offline row — and all three used to be links to Account settings, which
+  // is a page change in the middle of a job. One dialog, owned here, because
+  // only one of those surfaces is mounted at a time.
+  const [connecting, setConnecting] = useState(false);
+  const openConnect = useCallback(() => setConnecting(true), []);
+  const closeConnect = useCallback(() => setConnecting(false), []);
 
   // A surface can be selected without being clicked (a deep link, a restored
   // tab) — keep the current one in view when the strip has to scroll.
@@ -222,7 +231,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           )}
           {surface === "Files" && (
-            <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} />
+            <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} onConnectDevice={openConnect} />
           )}
           {surface === "Releases" && <ReleasesSurface rpc={props.rpc} executors={props.executors} />}
           {surface === "Exploration" && (
@@ -251,12 +260,14 @@ export function WorkSurface(props: WorkSurfaceProps) {
               lastActiveExecutor={props.lastActiveExecutor}
               onExecute={props.onExecute}
               onOpenFiles={openFiles}
+              onConnectDevice={openConnect}
             />
           )}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
           {agentViewSlug(surface) !== null && <AgentViewSurface slug={agentViewSlug(surface)!} rpc={props.rpc} />}
         </ErrorBoundary>
       </div>
+      {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
     </div>
   );
 }

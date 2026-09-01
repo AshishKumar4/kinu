@@ -1,22 +1,32 @@
 /**
- * User-level settings — credentials + defaults that apply across ALL of
- * this user's agents. Connect ChatGPT once → every agent sees it.
+ * User-level settings — credentials, devices and defaults that apply across
+ * ALL of this user's agents. Connect ChatGPT once → every agent sees it.
  *
- * Sections:
- *   1. Profile (email read-only, displayName editable)
- *   2. Connections
- *      - ChatGPT Codex via device-code flow
- *      - BYO API keys for any models.dev catalog provider / openai-compat
- *   3. Defaults
- *      - default model new agents inherit
+ * FIVE SECTIONS, ONE AT A TIME. This was one column of eight stacked cards,
+ * and the owner's report was that it is hard to navigate: the thing you came
+ * for is somewhere in a scroll, and a link that lands you on it lands you
+ * mid-page with no way to tell where you are. The section is now in the URL
+ * hash, the rail says which one you are reading, and every deep link that
+ * existed (`/user/settings#devices`) opens its section instead of scrolling
+ * to it.
+ *
+ *   #account    profile
+ *   #devices    the machines linked to this account
+ *   #providers  Cloudflare AI, ChatGPT, API keys, MCP servers
+ *   #models     the default model and the role/tier catalog
+ *   #cli        the one command that installs the CLI
+ *
+ * The account reads stay on the PAGE rather than in the sections: they decide
+ * the page's own loading and failure states, and a section switch must not
+ * re-read an account that has not changed.
  */
 import { startTransition, useEffect, useState, useCallback, useRef, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Combobox, Loader } from "@cloudflare/kumo";
 import {
   PlugIcon, KeyIcon, GearSixIcon, CheckIcon, CopyIcon,
   UserCircleIcon, ArrowSquareOutIcon, TrashIcon, ArrowLeftIcon,
-  DesktopTowerIcon, WarningIcon, PencilSimpleIcon, XIcon,
+  DesktopTowerIcon, WarningIcon, PencilSimpleIcon, XIcon, TerminalIcon,
 } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { ModelPicker } from "@/components/ModelPicker";
@@ -26,7 +36,7 @@ import {
   listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
-  acknowledgeUnstoppedDevice, listDevices, registerDevice, renameDevice, revokeDevice,
+  acknowledgeUnstoppedDevice, registerDevice, renameDevice, revokeDevice,
   listDeviceConsents, revokeDeviceConsent,
   type CredentialSummary, type CodexStatus,
   type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
@@ -35,7 +45,12 @@ import {
 } from "../lib/user-api";
 import { Card, inputCls } from "@/components/ui/form";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
+import {
+  lastValue, useAsyncResource, type AsyncResource, type Revalidate,
+} from "@/hooks/use-async-resource";
+import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
+import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevicePanel";
+import { SettingsRail, settingsSection } from "@/components/SettingsRail";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
@@ -123,6 +138,10 @@ export default function UserSettingsPage() {
   // fallback until it is re-read.
   const selectedDefaultModel = defaultModel ?? lastValue(storedDefault.resource)?.value ?? '';
 
+  // Section state lives in the URL, so a deep link, a reload and the browser's
+  // Back button all land on the same section.
+  const section = settingsSection(useLocation().hash);
+
   const header = (
     <header>
       <Link to="/" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
@@ -143,7 +162,7 @@ export default function UserSettingsPage() {
   if (allLoading || failures.length === reads.length) {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+        <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
           {header}
           {allLoading
             ? <div className="flex justify-center py-10"><Loader size="base" /></div>
@@ -155,129 +174,143 @@ export default function UserSettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+      <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {header}
+        {/* A side rail needs room the workspace sidebar has already taken:
+            below 64rem the same entries wrap into a row above the section. */}
+        <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
+          <SettingsRail active={section} />
+          <div className="min-w-0 flex-1 space-y-6">
 
-        {/* Profile */}
-        <Card title="Profile" icon={UserCircleIcon}>
-          <CardSlot resource={profile.resource} what="your profile" onRetry={reloadAll}>
-            {(p) => (
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="space-y-1">
-                  <div className="p-text-3">Email</div>
-                  <div className="font-mono">{p?.email ?? '—'}</div>
+        {section === "account" && (
+          <Card title="Profile" icon={UserCircleIcon}>
+            <CardSlot resource={profile.resource} what="your profile" onRetry={reloadAll}>
+              {(p) => (
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1">
+                    <div className="p-text-3">Email</div>
+                    <div className="font-mono">{p?.email ?? '—'}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="p-text-3">Member since</div>
+                    <div>{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'}</div>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <div className="p-text-3">Member since</div>
-                  <div>{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'}</div>
-                </div>
-              </div>
-            )}
-          </CardSlot>
-        </Card>
-        <ProfileCatalogSettings />
+              )}
+            </CardSlot>
+          </Card>
+        )}
 
-
-        <Card title="CLI" icon={KeyIcon}>
-          <div className="space-y-3">
-            <p className="text-xs p-text-2">
-              Install the CLI, sign in through the browser, and configure local execution from one terminal command.
-            </p>
-            <CommandCopy label="Setup" command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
-          </div>
-        </Card>
+        {section === "cli" && (
+          <Card title="CLI" icon={TerminalIcon}>
+            <div className="space-y-3">
+              <p className="text-xs p-text-2">
+                Install the CLI, sign in through the browser, and configure local execution from one terminal command.
+              </p>
+              <CommandCopy label="Setup" command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
+            </div>
+          </Card>
+        )}
 
         {/* Devices — account-level PC/laptop registration; every agent can use
-            a connected device (with consent). Linked from the Environment tab. */}
-        <DevicesCard />
+            a connected device (with consent). The workspace surfaces open the
+            same connect panel in place; this is where the roster lives. */}
+        {section === "devices" && <DevicesCard />}
 
-        <Card title="Cloudflare AI" icon={PlugIcon}>
-          <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
-            {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 text-xs p-success">
-                  <CheckIcon size={13} /> Connected
-                </div>
-                {/* Which account serves Workers AI is upstream of which gateway
-                    is reachable, so it is asked first. */}
-                <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
-                  {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
-                </CardSlot>
-                <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
-                  {(status) => <CloudflareGatewaySection status={status} onChanged={reloadAll} />}
-                </CardSlot>
-              </div>
-            ) : (
-              <CloudflareAIConnectNotice
-                returnTo="/user/settings"
-                message="Connect Cloudflare so your workspaces can use your Workers AI quota and your own AI Gateway."
-              />
-            )}
-          </CardSlot>
-        </Card>
-
-        {/* Codex */}
-        <Card title="ChatGPT (Codex)" icon={PlugIcon}>
-          <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
-            {(status) => <CodexConnect status={status} onChanged={reloadAll} />}
-          </CardSlot>
-        </Card>
-
-        {/* BYO API keys */}
-        <Card title="API keys" icon={KeyIcon}>
-          <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
-            {(credentials) => (
-              <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
-                {(providers) => <ApiKeyManager creds={credentials} catalog={providers} onChanged={reloadAll} />}
-              </CardSlot>
-            )}
-          </CardSlot>
-        </Card>
-
-        {/* MCP servers */}
-        <Card title="MCP servers" icon={PlugIcon}>
-          <div className="space-y-2 text-xs">
-            <p className="p-text-2">
-              Connect Model Context Protocol servers (GitHub, Notion, your own…) so every agent
-              you own can call their tools. One OAuth grant per server; shared across all your
-              agents.
-            </p>
-            <Link
-              to="/user/settings/mcp"
-              className="inline-flex items-center gap-1 px-3 py-1.5 p-card p-card-hover"
-            >Manage MCP servers <ArrowSquareOutIcon size={12} /></Link>
-          </div>
-        </Card>
-
-        {/* Defaults */}
-        <Card title="Defaults" icon={GearSixIcon}>
-          <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
-            {(menu) => (
-              <CardSlot resource={storedDefault.resource} what="your default model" onRetry={reloadAll}>
-                {() => (
-                  <div className="space-y-2">
-                    <div className="text-xs p-text-2">Default model for new workspaces</div>
-                    <ModelPicker
-                      models={menu.models}
-                      failures={menu.failures}
-                      value={selectedDefaultModel}
-                      onChange={async (spec) => {
-                        setDefaultModel(spec);
-                        try { await setConfig('default_model', spec); }
-                        catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
-                      }}
-                      clearable
-                      placeholder="(use system default)"
-                    />
-                    <p className="p-meta p-text-3">
-                      New workspaces pick this up at creation. Existing workspaces keep their own choice (change per-workspace under "Workspace settings").
-                    </p>
+        {section === "providers" && (
+          <>
+            <Card title="Cloudflare AI" icon={PlugIcon}>
+              <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
+                {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-xs p-success">
+                      <CheckIcon size={13} /> Connected
+                    </div>
+                    {/* Which account serves Workers AI is upstream of which gateway
+                        is reachable, so it is asked first. */}
+                    <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
+                      {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
+                    </CardSlot>
+                    <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
+                      {(status) => <CloudflareGatewaySection status={status} onChanged={reloadAll} />}
+                    </CardSlot>
                   </div>
+                ) : (
+                  <CloudflareAIConnectNotice
+                    returnTo="/user/settings"
+                    message="Connect Cloudflare so your workspaces can use your Workers AI quota and your own AI Gateway."
+                  />
                 )}
               </CardSlot>
-            )}
-          </CardSlot>
-        </Card>
+            </Card>
+
+            <Card title="ChatGPT (Codex)" icon={PlugIcon}>
+              <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
+                {(status) => <CodexConnect status={status} onChanged={reloadAll} />}
+              </CardSlot>
+            </Card>
+
+            <Card title="API keys" icon={KeyIcon}>
+              <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
+                {(credentials) => (
+                  <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
+                    {(providers) => <ApiKeyManager creds={credentials} catalog={providers} onChanged={reloadAll} />}
+                  </CardSlot>
+                )}
+              </CardSlot>
+            </Card>
+
+            <Card title="MCP servers" icon={PlugIcon}>
+              <div className="space-y-2 text-xs">
+                <p className="p-text-2">
+                  Connect Model Context Protocol servers (GitHub, Notion, your own…) so every agent
+                  you own can call their tools. One OAuth grant per server; shared across all your
+                  agents.
+                </p>
+                <Link
+                  to="/user/settings/mcp"
+                  className="inline-flex items-center gap-1 px-3 py-1.5 p-card p-card-hover"
+                >Manage MCP servers <ArrowSquareOutIcon size={12} /></Link>
+              </div>
+            </Card>
+          </>
+        )}
+
+        {section === "models" && (
+          <>
+            <Card title="Defaults" icon={GearSixIcon}>
+              <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
+                {(menu) => (
+                  <CardSlot resource={storedDefault.resource} what="your default model" onRetry={reloadAll}>
+                    {() => (
+                      <div className="space-y-2">
+                        <div className="text-xs p-text-2">Default model for new workspaces</div>
+                        <ModelPicker
+                          models={menu.models}
+                          failures={menu.failures}
+                          value={selectedDefaultModel}
+                          onChange={async (spec) => {
+                            setDefaultModel(spec);
+                            try { await setConfig('default_model', spec); }
+                            catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
+                          }}
+                          clearable
+                          placeholder="(use system default)"
+                        />
+                        <p className="p-meta p-text-3">
+                          New workspaces pick this up at creation. Existing workspaces keep their own choice (change per-workspace under "Workspace settings").
+                        </p>
+                      </div>
+                    )}
+                  </CardSlot>
+                )}
+              </CardSlot>
+            </Card>
+            <ProfileCatalogSettings />
+          </>
+        )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -285,94 +318,53 @@ export default function UserSettingsPage() {
 
 // ── Devices — user-level PC/laptop tunnel registration ──────────────
 
-/** Register / revoke your PCs here (moved out of the work surface — this is
- *  account state on the user-do device hub, not a per-run concern). The
- *  daemon opens one outbound WebSocket; no inbound ports, runs as your user,
- *  never root. Per-agent file-access tiers live in each workspace's settings. */
 /** Device links renew themselves on every connect, so the only ones worth
  *  mentioning are the ones close enough to lapsing that the owner may need to
  *  go and start the daemon. Anything further out would be noise. */
 const DEVICE_LAPSE_NOTICE_MS = 14 * 24 * 60 * 60 * 1000;
 
-function lapsingDevices(devices: UserDevice[] | null): UserDevice[] {
+function lapsingDevices(devices: readonly UserDevice[]): UserDevice[] {
   const soon = Date.now() + DEVICE_LAPSE_NOTICE_MS;
-  return (devices ?? []).filter((device) =>
+  return devices.filter((device) =>
     device.revokedAt === null && device.expiresAt !== null && device.expiresAt <= soon);
 }
 
+/** Grants ride the SAME cadence as the roster: revoking one changes both what
+ *  a machine may do and who has reach, so one clock keeps them honest. */
+const keepPollingGrants: Revalidate<DeviceConsent[]> = () => DEVICE_ROSTER_POLL_MS;
+
+/**
+ * Register / revoke your machines here. This is account state on the user-do
+ * device hub, not a per-run concern, so the roster and the revocations live on
+ * this page. Linking a machine does not: the connect panel below is the same
+ * component the Environment tab and the drive open in place.
+ *
+ * The roster and the grants are `useAsyncResource` reads. A failed poll leaves
+ * the last known roster on screen AND says it failed — blanking it to `[]`
+ * flashed "register a device" over devices that are registered and running,
+ * and swallowing the rejection made an unreachable UserDO look exactly like an
+ * account with no devices.
+ */
 function DevicesCard() {
-  const [devices, setDevices] = useState<UserDevice[] | null>(null);
-  const [grants, setGrants] = useState<DeviceConsent[] | null>(null);
-  const [install, setInstall] = useState<string | null>(null);
-  const [issuing, setIssuing] = useState(false);
-  const { status: copyStatus, copy } = useCopy();
+  const roster = useDeviceRoster();
+  const grantRoster = useAsyncResource(listDeviceConsents, keepPollingGrants);
   const [err, setErr] = useState<string | null>(null);
   /** Counts come from the revoke response. The durable incident timestamp
    * keeps the row across reloads; count is shown when this tab observed it. */
   const [unstoppedCounts, setUnstoppedCounts] = useState<ReadonlyMap<string, number>>(new Map());
-  const [rosterErr, setRosterErr] = useState<string | null>(null);
-  const anchorRef = useRef<HTMLDivElement>(null);
+  /** An incident this tab acknowledged. The DELETE has already succeeded, so
+   *  the row is gone; this keeps it gone across the poll that confirms it. */
+  const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(new Set());
 
-  // A failed poll leaves the last known roster in place. Blanking it to `[]`
-  // flashed "register a device" over devices that are registered and running.
-  // But it has to SAY so: dropping the rejection made an unreachable UserDO
-  // look exactly like an account with no devices, and a stale roster look
-  // exactly like a live one. Reported apart from `err` because this runs every
-  // 5s — writing the action slot would wipe a register/revoke failure before
-  // the owner could read it.
-  const refreshDevices = useCallback((): void => {
-    startTransition(async () => {
-      try {
-        const roster = await listDevices();
-        setDevices(roster);
-        setRosterErr(null);
-      } catch (cause) {
-        setRosterErr(`Could not list devices: ${renderThrownChain({ cause })}`);
-      }
-    });
-  }, []);
-  useEffect(() => {
-    refreshDevices();
-    const t = setInterval(refreshDevices, 5000); // running daemon flips connected within seconds
-    return () => clearInterval(t);
-  }, [refreshDevices]);
+  const reloadDevices = roster.reload;
+  const devices = (lastValue(roster.resource) ?? []).filter((device) => !acknowledged.has(device.id));
+  const grants = lastValue(grantRoster.resource) ?? [];
 
-  // The grants themselves — which workspace may act on which device. Read
-  // beside the roster because revoking one is the answer to "who has reach
-  // into this machine", and that question is asked here, not per workspace.
-  const refreshGrants = useCallback((): void => {
-    startTransition(async () => {
-      try {
-        const rows = await listDeviceConsents();
-        setGrants(rows);
-      } catch (cause) {
-        setRosterErr(`Could not list device grants: ${renderThrownChain({ cause })}`);
-      }
-    });
-  }, []);
-  // Grants ride the SAME 5s cycle as the roster: revoking one changes both
-  // what the machine may do and who has reach, so one clock keeps them honest.
-  useEffect(() => {
-    refreshGrants();
-    const t = setInterval(refreshGrants, 5000);
-    return () => clearInterval(t);
-  }, [refreshGrants]);
-
-  // Deep-link target: the Environment tab's "Connect your PC" CTA points at
-  // /user/settings#devices.
-  useEffect(() => {
-    if (window.location.hash === "#devices") {
-      anchorRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-    }
-  }, []);
-
-  const issue = useCallback(async () => {
-    setIssuing(true);
-    setErr(null);
-    try { const r = await registerDevice(); setInstall(r.installCommand); refreshDevices(); }
-    catch (e) { setErr(`Could not register device: ${renderThrownChain({ cause: e })}`); }
-    finally { setIssuing(false); }
-  }, [refreshDevices]);
+  const [flow] = useState(() => new DeviceConnectFlow({
+    register: registerDevice,
+    // Nothing to close here: the machine is now a row in the list above.
+    onConnected: reloadDevices,
+  }));
 
   const revoke = useCallback(async (id: string, label: string) => {
     if (!confirm(`Revoke "${label}"? Agents lose access to this device immediately.`)) return;
@@ -385,8 +377,8 @@ function DevicesCard() {
     } catch (e) {
       setErr(`Could not revoke device: ${renderThrownChain({ cause: e })}`);
     }
-    refreshDevices();
-  }, [refreshDevices]);
+    reloadDevices();
+  }, [reloadDevices]);
 
   const acknowledgeIncident = useCallback(async (id: string) => {
     setErr(null);
@@ -397,88 +389,70 @@ function DevicesCard() {
         next.delete(id);
         return next;
       });
-      // The acknowledged revoked row is no longer owner-visible. Remove it
-      // immediately from the confirmed response, then reconcile the roster.
-      setDevices((current) => current?.filter((device) => device.id !== id) ?? null);
-      refreshDevices();
+      setAcknowledged((current) => new Set(current).add(id));
+      reloadDevices();
     } catch (e) {
       setErr(`Could not acknowledge the command warning: ${renderThrownChain({ cause: e })}`);
     }
-  }, [refreshDevices]);
+  }, [reloadDevices]);
 
+  const lapsing = lapsingDevices(devices);
   return (
-    <div ref={anchorRef} id="devices">
-      <Card title="Devices" icon={DesktopTowerIcon}>
-        <p className="text-xs p-text-2">
-          Link a computer to your account and give it a name. A workspace can run commands and read
-          files on it only after you grant that workspace access — once, revocably. The daemon opens
-          one outbound WebSocket; no inbound ports, runs as your user, never root.
-        </p>
+    <Card title="Devices" icon={DesktopTowerIcon}>
+      {/* What a link MEANS is stated once, by the connect panel below, in the
+          words `kinu connect` prints. This line is about the list. */}
+      <p className="text-xs p-text-2">
+        The machines linked to your account, and which of your workspaces holds a grant on each.
+        Revoking one takes effect immediately.
+      </p>
 
-        {devices && devices.length > 0 && (
-          <div className="rounded-md border p-border overflow-hidden text-xs">
-            {devices.map((d) => (
-              <DeviceRow
-                key={d.id}
-                device={d}
-                grants={grants?.filter((g) => g.deviceId === d.id && g.policy === "allow") ?? []}
-                onRenamed={refreshDevices}
-                onGrantsChanged={refreshGrants}
-                onError={setErr}
-                onRevoke={() => revoke(d.id, d.label)}
-                unstoppedCommands={unstoppedCounts.get(d.id)}
-                onAcknowledge={() => acknowledgeIncident(d.id)}
-              />
-            ))}
-          </div>
-        )}
-        {rosterErr && <div className="text-xs p-danger">{rosterErr}</div>}
-        {devices && devices.some((device) => device.revokedAt === null)
-          && !devices.some((device) => device.revokedAt === null && device.connected) && (
-          <p className="p-meta p-text-3">
-            Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
-          </p>
-        )}
-        {lapsingDevices(devices).length > 0 && (
-          <p className="p-meta p-text-3">
-            {lapsingDevices(devices).map((d) => d.label).join(", ")} {lapsingDevices(devices).length > 1 ? "links lapse" : "link lapses"} soon.
-            Connecting from {lapsingDevices(devices).length > 1 ? "those machines" : "that machine"} renews it automatically.
-          </p>
-        )}
-
-        {err && <div className="text-xs p-danger">{err}</div>}
-
-        {!install ? (
-          <button
-            onClick={issue}
-            disabled={issuing}
-            className="px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 disabled:opacity-50"
-          >{issuing ? "Generating…" : "Connect a device"}</button>
-        ) : (
-          <div className="space-y-2">
-            <p className="text-xs p-text-2">Paste this on the machine you want to connect. It installs the CLI, signs in, and starts the local daemon:</p>
-            <div className="rounded-md p-fill border p-border p-3 font-mono p-meta p-text break-all select-all leading-relaxed">
-              {install}
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <button
-                onClick={() => copy(install)}
-                className={`px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1 ${copyStatus === "failed" ? "p-danger" : "p-text-2"}`}
-              ><CopyIcon size={11} />{copyLabel(copyStatus)}</button>
-              <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
-            </div>
-            <p className="p-meta p-text-3 mt-1 flex items-center gap-1.5">
-              <WarningIcon size={11} /> Device secrets are written locally by <code className="font-mono">kinu connect</code>; they are not shown in this command.
-            </p>
-          </div>
-        )}
-
+      {devices.length > 0 && (
+        <div className="rounded-md border p-border overflow-hidden text-xs">
+          {devices.map((d) => (
+            <DeviceRow
+              key={d.id}
+              device={d}
+              grants={grants.filter((g) => g.deviceId === d.id && g.policy === "allow")}
+              onRenamed={reloadDevices}
+              onGrantsChanged={grantRoster.reload}
+              onError={setErr}
+              onRevoke={() => revoke(d.id, d.label)}
+              unstoppedCommands={unstoppedCounts.get(d.id)}
+              onAcknowledge={() => acknowledgeIncident(d.id)}
+            />
+          ))}
+        </div>
+      )}
+      {roster.resource.status === "error" && (
+        <LoadFailure what="your devices" message={roster.resource.message} onRetry={reloadDevices} />
+      )}
+      {grantRoster.resource.status === "error" && (
+        <LoadFailure what="the device grants" message={grantRoster.resource.message} onRetry={grantRoster.reload} />
+      )}
+      {devices.some((device) => device.revokedAt === null)
+        && !devices.some((device) => device.revokedAt === null && device.connected) && (
         <p className="p-meta p-text-3">
-          Each workspace's file-access tier on a device (consented folder vs full filesystem) is set
-          in that workspace's settings.
+          Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
         </p>
-      </Card>
-    </div>
+      )}
+      {lapsing.length > 0 && (
+        <p className="p-meta p-text-3">
+          {lapsing.map((d) => d.label).join(", ")} {lapsing.length > 1 ? "links lapse" : "link lapses"} soon.
+          Connecting from {lapsing.length > 1 ? "those machines" : "that machine"} renews it automatically.
+        </p>
+      )}
+
+      {err && <div className="text-xs p-danger">{err}</div>}
+
+      <div className="border-t p-border pt-4">
+        <ConnectDevicePanel flow={flow} devices={lastValue(roster.resource)} />
+      </div>
+
+      <p className="p-meta p-text-3">
+        Each workspace's file-access tier on a device (consented folder vs full filesystem) is set
+        in that workspace's settings.
+      </p>
+    </Card>
   );
 }
 

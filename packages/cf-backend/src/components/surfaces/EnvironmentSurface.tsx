@@ -17,16 +17,18 @@
  * Liveness renders here ONCE: each card's dot fuses the polled executor
  * status (exec plane) with the row's own live flag (file plane).
  *
- * Device registration/consent are settings, not work surfaces: registering or
- * revoking a PC lives in Account settings → Devices; the per-agent file-access
- * tier lives in Workspace settings. The offline PC card keeps only a connect
- * call-to-action pointing there.
+ * Device registration/consent are settings, not work surfaces: the roster, the
+ * revocations and the per-agent file-access tier live in Account settings and
+ * in Workspace settings. Linking a machine is neither — it is a thing the
+ * owner wants DONE, from here, without losing the surface they are on, so the
+ * offline PC card opens the shared connect panel in place
+ * (`components/ConnectDevicePanel`) rather than navigating to settings.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
-  CircleIcon, FolderOpenIcon, GearSixIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
+  CircleIcon, FolderOpenIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@/lib/protocol";
@@ -37,7 +39,8 @@ import {
 } from "@/lib/executors";
 import type { ExecutorOutput } from "@/hooks/use-kinu";
 import { TerminalPane } from "@/components/TerminalPane";
-import { listDevices, type UserDevice } from "@/lib/user-api";
+import type { UserDevice } from "@/lib/user-api";
+import { useDeviceRoster } from "@/hooks/use-device-roster";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
@@ -57,6 +60,9 @@ export interface EnvironmentSurfaceProps {
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   /** Jump to the Files tab at this composite-plane root ('/', '/pc', '/sandbox'). */
   onOpenFiles: (root: string) => void;
+  /** Open the connect panel over this surface. Owned by the work surface, so
+   *  the Files drive's offline row opens the same one. */
+  onConnectDevice: () => void;
 }
 
 /** Where this environment's files live on the composite plane, or null for an
@@ -78,7 +84,7 @@ function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReadi
 }
 
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
-  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles } = props;
+  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles, onConnectDevice } = props;
   const [selected, setSelected] = useState<string | null>(null); // mount name
   // The workspace this surface's `rpc` is bound to — the terminal socket is
   // addressed by name, and it is the same workspace the route params name.
@@ -133,6 +139,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
                 active={selectedName === m.name}
                 onSelect={() => setSelected(m.name)}
                 onOpenFiles={onOpenFiles}
+                onConnectDevice={onConnectDevice}
               />
             ))}
             {mounts.length === 0 && loaded !== null && <span className="text-xs p-text-3">No environments available.</span>}
@@ -146,7 +153,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
         <div className="flex-1 min-h-0" />
       ) : !selectedMount.live ? (
         <div className="flex-1 min-h-0">
-          <UnavailableMount mount={selectedMount} exec={selectedExec} />
+          <UnavailableMount mount={selectedMount} exec={selectedExec} onConnectDevice={onConnectDevice} />
         </div>
       ) : (
         <>
@@ -177,12 +184,13 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
 /* ── One environment, as a user reads it ─────────────────────────── */
 
-function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles }: {
+function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnectDevice }: {
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
   active: boolean;
   onSelect: () => void;
   onOpenFiles: (root: string) => void;
+  onConnectDevice: () => void;
 }) {
   const executor = mount.name;
   const status = statusOf(mount, exec);
@@ -232,10 +240,12 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles }: {
           ><TerminalIcon size={12} />Terminal</button>
         )}
         {!mount.live && executor === "laptop" && (
-          <Link
-            to="/user/settings#devices"
+          <button
+            data-env-connect
+            onClick={onConnectDevice}
             className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] p-accent p-fill hover:opacity-90"
-          ><PlugIcon size={12} />Connect</Link>
+            title="Link a machine to your account"
+          ><PlugIcon size={12} />Connect</button>
         )}
       </div>
     </div>
@@ -244,10 +254,14 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles }: {
 
 /* ── Unavailable environments ────────────────────────────────────── */
 
-function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
+function UnavailableMount({ mount, exec, onConnectDevice }: {
+  mount: MountInfo;
+  exec: ExecutorInfo | undefined;
+  onConnectDevice: () => void;
+}) {
   // `laptop`, not `pc`: rows are named by their EXECUTOR now, and the old
   // mount name left this branch — the whole connect call-to-action — dead.
-  if (mount.name === "laptop") return <PcConnectCta />;
+  if (mount.name === "laptop") return <PcConnectCta onConnectDevice={onConnectDevice} />;
   const docs = mount.name === "sandbox"
       ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use the Workspace shell.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
@@ -265,40 +279,45 @@ function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInf
   );
 }
 
-/** The laptop executor's connect call-to-action. Registration, revocation and
- *  consent live in Account settings → Devices — this only reads status to say
- *  the honest thing (daemon offline vs no device registered) and links there. */
-function PcConnectCta() {
-  const [devices, setDevices] = useState<UserDevice[] | null>(null);
+/** The laptop executor's connect call-to-action. It reads the roster to say
+ *  the honest thing — daemon offline versus no device registered — and opens
+ *  the connect panel here rather than sending the owner to another page. */
+function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
+  const { resource, reload } = useDeviceRoster();
+  const devices: UserDevice[] | null = lastValue(resource);
 
-  useEffect(() => {
-    listDevices().then(setDevices).catch(() => setDevices([]));
-  }, []);
-
-  if (devices === null) {
+  if (devices === null && resource.status === "loading") {
     return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
   }
 
-  const registered = devices.length > 0;
-  const labels = devices.map((d) => d.label).join(", ");
+  const live = (devices ?? []).filter((device) => device.revokedAt === null);
+  const registered = live.length > 0;
+  const labels = live.map((d) => d.label).join(", ");
   return (
     <div className="h-full flex items-center justify-center overflow-y-auto p-6">
-      <EmptyState
-        icon={<PlugIcon size={26} />}
-        title={registered ? "Device offline" : "Connect your PC"}
-        hint={registered
-          ? <>
-              {labels} {devices.length > 1 ? "are" : "is"} registered but the daemon is not running.
-              Restart it on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
-            </>
-          : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it, with your consent. One device serves all your agents."}
-      >
-        <Link to="/user/settings#devices"
-          className="mt-4 inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">
-          <GearSixIcon size={13} />
-          {registered ? "Manage devices in Account settings" : "Connect a device in Account settings"}
-        </Link>
-      </EmptyState>
+      <div className="max-w-md w-full space-y-3">
+        {resource.status === "error" && (
+          <LoadFailure what="your devices" message={resource.message} onRetry={reload} />
+        )}
+        <EmptyState
+          icon={<PlugIcon size={26} />}
+          title={registered ? "Device offline" : "Connect your PC"}
+          hint={registered
+            ? <>
+                {labels} {live.length > 1 ? "are" : "is"} registered but the daemon is not running.
+                Restart it on that machine with <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code>.
+              </>
+            : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it, with your consent. One device serves all your agents."}
+        >
+          <button
+            data-env-connect-cta
+            onClick={onConnectDevice}
+            className="mt-4 inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">
+            <PlugIcon size={13} />
+            {registered ? "Connect another machine" : "Connect a machine"}
+          </button>
+        </EmptyState>
+      </div>
     </div>
   );
 }

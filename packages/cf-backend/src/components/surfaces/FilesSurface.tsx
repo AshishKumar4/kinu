@@ -20,7 +20,7 @@ import {
   useCallback, useEffect, useMemo, useRef, useState,
   type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import {
   ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon, CheckIcon,
@@ -78,9 +78,12 @@ export interface FilesSurfaceProps {
   /** One-shot navigation intent from another surface (an Environment card's
    *  Files action). The nonce distinguishes two jumps to the same path. */
   jump?: { path: string; nonce: number } | null;
+  /** Open the connect panel over this surface — the same one the Environment
+   *  tab opens, so an offline device is linked without leaving the drive. */
+  onConnectDevice: () => void;
 }
 
-export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
+export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSurfaceProps) {
   const agentName = useParams().agentId ?? "";
   const [path, setPath] = useState("/");
   /** One failure line for row operations (rename/delete/download prep). */
@@ -464,7 +467,8 @@ export function FilesSurface({ rpc, executors, jump }: FilesSurfaceProps) {
                 </span>
                 <span className="p-text-4 truncate">— {m.reason ?? "not available"}</span>
                 {m.name === "laptop" && (
-                  <Link to="/user/settings#devices" className="p-accent hover:underline shrink-0">connect</Link>
+                  <button type="button" data-files-connect onClick={onConnectDevice}
+                    className="p-accent hover:underline shrink-0">connect</button>
                 )}
               </div>
             );

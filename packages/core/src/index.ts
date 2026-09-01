@@ -1331,6 +1331,7 @@ export {
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONSENT_TIMEOUT_MS,
   DEVICE_PROVISION_METHOD,
+  DEVICE_CONNECT_DISCLOSURE,
   parseConsentScope,
   mergeConsentScope,
   consentScopeCovers,

@@ -44,18 +44,11 @@ export function defaultDeviceName(): string {
 }
 
 /**
- * What linking this machine actually means, in the words a person needs before
- * they say yes. Stated by every connect surface BEFORE the daemon is installed:
- * the install is the moment an agent gains reach into this machine, and it must
- * never happen as a side effect of typing a command.
+ * What linking this machine means. The words live in `@kinu.run/core` because
+ * the web connect panel renders the same five sentences; this re-export keeps
+ * every CLI surface importing them from the module it already imports.
  */
-export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
-  'Connecting installs the Kinu daemon on this machine and links it to your account.',
-  'A workspace you grant access to can then run commands, read and write files here,',
-  'as you — not root. Access is per workspace: you approve each one once, and you can',
-  'revoke it any time under Account settings → Devices.',
-  'The daemon dials out over one WebSocket; it opens no inbound ports.',
-];
+export { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
 
 export interface DeviceAuth {
   origin: string;

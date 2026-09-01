@@ -1285,6 +1285,11 @@ describe('history and roster request generations at actual hook boundaries', () 
  * is held, not only after final settlement. Blind spot: the sourced 30-second
  * deadline is not slept through here; the explicit failure proves its visible
  * terminal state and the held requests prove siblings do not wait for it.
+ *
+ * The page is sectioned now, so the walk crosses one: the profile is read on
+ * Account and the three connection cards on Providers. That crossing is the
+ * second thing this proves — the reads belong to the PAGE, so a section switch
+ * neither re-reads a settled card nor releases a held one.
  */
 describe('independent settings and quality reads publish independently', () => {
   test('one account card fails and retries while ready and held siblings remain visible', async () => {
@@ -1292,13 +1297,26 @@ describe('independent settings and quality reads publish independently', () => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1000, height: 1200 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-settings-resource="your ChatGPT connection"][data-resource-state="error"]');
 
+      // No hash: the first section, and the rail says so.
+      expect(await page.$eval(
+        '[data-settings-section="account"]',
+        (entry) => entry.getAttribute('aria-current'),
+      )).toBe('true');
       expect(await page.$eval(
         '[data-settings-resource="your profile"]',
         (resource) => resource.getAttribute('data-resource-state'),
       )).toBe('ready');
       expect(await page.$eval('body', (body) => body.textContent ?? '')).toContain('owner@example.com');
+      // Scoped: the connection cards are not on this section at all.
+      expect(await page.$('[data-settings-resource="your ChatGPT connection"]')).toBeNull();
+
+      await page.click('[data-settings-section="providers"]');
+      await page.waitForSelector('[data-settings-resource="your ChatGPT connection"][data-resource-state="error"]');
+      expect(await page.$eval(
+        '[data-settings-section="providers"]',
+        (entry) => entry.getAttribute('aria-current'),
+      )).toBe('true');
       expect(await page.$eval(
         '[data-settings-resource="your AI gateways"]',
         (resource) => resource.getAttribute('data-resource-state'),
@@ -1320,6 +1338,11 @@ describe('independent settings and quality reads publish independently', () => {
         '[data-settings-resource="your AI gateways"][data-resource-state="ready"]',
         { timeout: 10_000 },
       );
+
+      // Back on Account, the profile is still ready: the section switch was a
+      // render, not a reload.
+      await page.click('[data-settings-section="account"]');
+      await page.waitForSelector('[data-settings-resource="your profile"][data-resource-state="ready"]');
       await page.close();
     });
   }, 240_000);
@@ -1355,13 +1378,22 @@ describe('independent settings and quality reads publish independently', () => {
  * and acknowledgement endpoint. Reload is the non-vacuity arm: the immediate
  * count is process-local, while the warning itself must return from listDevices
  * until the explicit DELETE succeeds.
+ *
+ * `&section=devices` is the deep link every work surface has always carried,
+ * `/user/settings#devices`, and the reload arm re-enters through it — so this
+ * also proves the deep link keeps working now that the hash picks a section
+ * rather than scrolling to one.
  */
 describe('a revoked device whose command may still run', () => {
   test('shows the count immediately, survives reload without reconnect controls, and disappears only after acknowledgement', async () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1000, height: 1200 });
-      await page.goto(`${origin}/gallery.html?frame=usersettingsstate`, { waitUntil: 'networkidle0' });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=devices`, { waitUntil: 'networkidle0' });
+      expect(await page.$eval(
+        '[data-settings-section="devices"]',
+        (entry) => entry.getAttribute('aria-current'),
+      )).toBe('true');
       await page.waitForSelector('[title="Revoke device"]');
       let dialogAccepted: Promise<void> | undefined;
       page.once('dialog', (dialog) => {
@@ -1388,6 +1420,109 @@ describe('a revoked device whose command may still run', () => {
         () => document.querySelector('[data-device-incident="dev-1"]') === null,
         { timeout: 10_000 },
       );
+      await page.close();
+    });
+  }, 240_000);
+});
+
+/**
+ * Connecting a machine from the surface that asked for it.
+ *
+ * The report: "when I want to connect my desktop from my Workspace → Env →
+ * connect, it takes me to the settings page instead of a modal or something."
+ * Both affordances were `<Link to="/user/settings#devices">`, and a link is
+ * invisible to every source-reading test in this repo — the component compiled,
+ * type-checked and navigated away.
+ *
+ * So the assertion is where the panel LANDS: the workspace surface is still
+ * behind it, the dialog is over it, and the surface is still there when the
+ * dialog closes itself. The command is read back off the page and compared to
+ * the string the server fixture handed over, because a client that rebuilt it
+ * from `location.origin` would render something that looks right.
+ */
+describe('linking a machine happens on the surface that asked for it', () => {
+  test('the Environment card opens the panel in place, and the arriving machine closes it', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1100, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
+
+      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
+      // In place: the Environment surface is still mounted behind the dialog,
+      // and the URL never moved.
+      expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
+      expect(new URL(page.url()).pathname).toBe('/gallery.html');
+      // The disclosure is on screen BEFORE anything is installed.
+      expect(await page.$eval('[role="dialog"]', (d) => d.textContent ?? ''))
+        .toContain('The daemon dials out over one WebSocket; it opens no inbound ports.');
+
+      await page.click('[role="dialog"] [data-connect-start]');
+      await page.waitForSelector('[data-connect-command]');
+      expect(await page.$eval('[data-connect-command]', (code) => code.textContent ?? '')).toBe(
+        "curl -fsSL 'https://kinu.run/install.sh' | KINU_PARENT_ACTIVATES=1 bash -s -- --no-setup --connect"
+        + ' && export PATH="${KINU_HOME:-$HOME/.kinu}/bin:$PATH"',
+      );
+      expect(await page.$('[data-connect-waiting]')).not.toBeNull();
+
+      // The roster poll finds the machine and the panel closes itself, leaving
+      // the surface the owner was working on.
+      await page.waitForFunction(
+        () => document.querySelector('[role="dialog"]') === null,
+        { timeout: 30_000 },
+      );
+      expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
+      // One registration got us here. The fixture counts its own POSTs, so a
+      // second one — a double click, a re-render, an effect that re-fired —
+      // shows up as a number rather than as a device row nobody notices.
+      expect(await page.evaluate(
+        () => document.documentElement.dataset.galleryRegistrations,
+      )).toBe('1');
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a machine that never dials in leaves the panel open and waiting', async () => {
+    // The non-vacuity arm for the close above: same flow, same clicks, and a
+    // roster whose row stays `connected: false`. A panel that closed on any
+    // roster tick would pass the first test and fail this one.
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1100, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=stall`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
+      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.waitForSelector('[role="dialog"] [data-connect-start]');
+      await page.click('[role="dialog"] [data-connect-start]');
+      await page.waitForSelector('[data-connect-waiting]');
+
+      // Wait for polls to have HAPPENED rather than for a clock: three roster
+      // reads after the registration is three chances to close wrongly.
+      const readsAtHandover = await page.evaluate(
+        () => Number(document.documentElement.dataset.galleryRosterReads ?? '0'),
+      );
+      await page.waitForFunction(
+        (base: number) => Number(document.documentElement.dataset.galleryRosterReads ?? '0') >= base + 3,
+        { timeout: 60_000 },
+        readsAtHandover,
+      );
+      expect(await page.$('[role="dialog"] [data-connect-waiting]')).not.toBeNull();
+      expect(await page.$('[data-connect-command]')).not.toBeNull();
+      await page.close();
+    });
+  }, 240_000);
+
+  test('the drive opens the same panel from its offline row', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1100, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=files&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-files-connect]');
+      await page.click('[data-files-connect]');
+      await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
+      // Still the drive underneath: the row it was opened from is right there.
+      expect(await page.$('[data-files-offline-mount]')).not.toBeNull();
       await page.close();
     });
   }, 240_000);

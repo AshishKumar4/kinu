@@ -47,7 +47,11 @@
  *                                  workspace tree with /pc and /sandbox as
  *                                  mounted folders), stateful, so rename and
  *                                  delete are provable; `&offline=laptop`
- *                                  photographs the disconnected-device row
+ *                                  photographs the disconnected-device row,
+ *                                  and `&connect=1` drives the connect panel
+ *                                  that row opens: register, the server's
+ *                                  command, the wait, and the close when the
+ *                                  machine reports in
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=settings → the per-agent Settings page
  *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
@@ -271,6 +275,9 @@ async function userSettingsFixture(path: string, method: string): Promise<Respon
     localStorage.setItem("gallery-device-incident", "acknowledged");
     return fixtureJson({ ok: true });
   }
+  if (path === "/api/user/devices" && method === "POST") {
+    return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
+  }
   if (path === "/api/user/devices") {
     const incident = localStorage.getItem("gallery-device-incident");
     if (incident === "acknowledged") return fixtureJson([]);
@@ -292,6 +299,52 @@ async function userSettingsFixture(path: string, method: string): Promise<Respon
     });
   }
   return fixtureJson({ error: `gallery has no settings fixture for ${path}` }, 404);
+}
+
+/* The connect flow, end to end.
+
+   `?frame=environment&offline=laptop&connect=1` — the account has no machines
+   until the panel registers one; the roster read after that POST carries the
+   machine, CONNECTED, which is the arrival the panel closes itself on.
+
+   `&connect=stall` is the same flow whose machine never dials in: the row
+   appears and stays `connected: false`. It is what makes the arm above
+   non-vacuous, because a panel that closed on any roster tick would pass the
+   first frame and fail this one. `galleryRosterReads` counts the reads so the
+   gate can wait for polls to have HAPPENED rather than for a clock.
+
+   The command is a string the SERVER hands over, so the fixture writes one the
+   client could not compose: the gate reads it back character for character. */
+const GALLERY_CONNECT_COMMAND =
+  "curl -fsSL 'https://kinu.run/install.sh' | KINU_PARENT_ACTIVATES=1 bash -s -- --no-setup --connect"
+  + ' && export PATH="${KINU_HOME:-$HOME/.kinu}/bin:$PATH"';
+const connectFixtureMode = new URLSearchParams(location.search).get("connect");
+const connectFixtureActive = connectFixtureMode !== null;
+let connectRegistrations = 0;
+let connectRosterReads = 0;
+
+function deviceConnectFixture(path: string, method: string): Response | null {
+  if (path === "/api/user/devices" && method === "POST") {
+    connectRegistrations += 1;
+    return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
+  }
+  if (path === "/api/user/devices" && method === "GET") {
+    connectRosterReads += 1;
+    // On the document rather than on `window`: a gate reading a global has to
+    // reach for it untyped, and `dataset` is a string map the browser already
+    // owns.
+    document.documentElement.dataset.galleryRosterReads = String(connectRosterReads);
+    document.documentElement.dataset.galleryRegistrations = String(connectRegistrations);
+    return fixtureJson(connectRegistrations === 0 ? [] : [{
+      id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
+      connected: connectFixtureMode !== "stall",
+      createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
+      lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
+      revokedAt: null, unstoppedAt: null,
+    }]);
+  }
+  if (path === "/api/user/devices/consents" && method === "GET") return fixtureJson([]);
+  return null;
 }
 const STUB = new Map(Object.entries(STUB_DATA));
 
@@ -321,6 +374,10 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
   if (frame === "usersettingsstate" && path.startsWith("/api/user/")) {
     return userSettingsFixture(path, method);
+  }
+  if (connectFixtureActive && path.startsWith("/api/user/devices")) {
+    const answer = deviceConnectFixture(path, method);
+    if (answer !== null) return Promise.resolve(answer);
   }
   if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
     return rosterAuthorityHold.promise;
@@ -5263,8 +5320,13 @@ async function mount() {
       </Routes>
     );
   }
+  // `&section=devices` is the deep link a work surface hands over, driven
+  // through the router rather than through `location.hash`: the page reads the
+  // hash off `useLocation`, so a MemoryRouter entry is the same input a real
+  // URL is.
   else if (frame === "usersettingsstate") {
-    entries = ["/user/settings"];
+    const section = new URLSearchParams(location.search).get("section");
+    entries = [section === null ? "/user/settings" : `/user/settings#${section}`];
     node = <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>;
   }
   else if (frame === "settings") {

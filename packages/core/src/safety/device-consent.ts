@@ -62,6 +62,24 @@ export const DEVICE_CONSENT_UNANSWERED =
  *  execution stays impossible until a daemon is actually connected. */
 export const DEVICE_PROVISION_METHOD = 'connect';
 
+/**
+ * What linking a machine means, in the words a person needs before they say
+ * yes. Every connect surface states it BEFORE the daemon is installed: the
+ * install is the moment an agent gains reach into that machine, and it must
+ * never happen as a side effect of typing a command or clicking a button.
+ *
+ * It lives here because the CLI prints it and the web connect panel renders
+ * it. Two copies of a consent disclosure is how the two of them start saying
+ * different things about the same grant.
+ */
+export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
+  'Connecting installs the Kinu daemon on this machine and links it to your account.',
+  'A workspace you grant access to can then run commands, read and write files here,',
+  'as you — not root. Access is per workspace: you approve each one once, and you can',
+  'revoke it any time under Account settings → Devices.',
+  'The daemon dials out over one WebSocket; it opens no inbound ports.',
+];
+
 /** Narrow a stored scope string; unknown values mean the base tier. */
 export function parseConsentScope(raw: string | null | undefined): DeviceConsentScope {
   return raw === DEVICE_CONSENT_SCOPE_FULL_FS ? DEVICE_CONSENT_SCOPE_FULL_FS : DEVICE_CONSENT_SCOPE;
