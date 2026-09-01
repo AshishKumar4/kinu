@@ -75,6 +75,12 @@ export interface ChatThread {
 
 const NO_IDS: ReadonlySet<string> = new Set();
 
+/** The default `steerRuns`, hoisted. A `= []` in the signature mints a fresh
+ *  array on every render, which is a changed dependency — so the thread memo
+ *  below could never hold for a caller that omitted the argument, and the
+ *  staging this whole file exists for would be undone by the parameter list. */
+const NO_STEER_RUNS: readonly InlineSteer[] = [];
+
 /**
  * @param live the pane's live message list, oldest first.
  * @param seeded whether the server has stated that list's contents at all. A
@@ -87,7 +93,7 @@ const NO_IDS: ReadonlySet<string> = new Set();
  */
 export function useChatThread(
   rpc: Rpc, live: readonly UIMessage[], seeded: boolean,
-  steerRuns: readonly InlineSteer[] = [],
+  steerRuns: readonly InlineSteer[] = NO_STEER_RUNS,
 ): ChatThread {
   const oldest = live[0]?.id;
   const history = usePagedScroll<ChatHistoryEntry>({
