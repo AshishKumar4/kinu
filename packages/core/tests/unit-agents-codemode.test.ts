@@ -447,8 +447,8 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     // HOST's object, found by the signal it carries and taken OUT of the input —
     // so a search called with it is answered by the dispatcher's own refusal and
     // never by "unknown field \"signal\"", which is what would happen the moment
-    // the bridge stopped recognising it. From there `runSwarmAction`'s
-    // readAbortSignal is what hands it to the run.
+    // the bridge stopped recognising it. From there `runSwarmAction` reads
+    // `abortSignal` off that bag and hands it to the run.
     const ns = namespaceOf(() => ({ fork: forkDeps() }));
     const controller = new AbortController();
     const result = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute(

@@ -131,7 +131,7 @@ import type { ResolvedVerifier } from './verifier-registry';
 import { PUBLISHING_CARRIES } from './objective';
 import type {
   MeasurementContext, MeasuredObjective, ObjectiveDirection, ObjectiveIdentity,
-  PublicationState, PublishingCarry,
+  PublishingCarry,
 } from './objective';
 import { isTreeAdvance } from './swarm';
 import { markSwarmNodeMerged } from './swarm-resume';
@@ -384,7 +384,6 @@ export async function runSwarm(
   let witnessVerifier: ResolvedVerifier | null = null;
   let ctx: MeasurementContext | null = null;
   let baseline: number | null = null;
-  let publication: PublicationState = { kind: 'open' };
   let identity: ObjectiveIdentity | null = null;
 
   if (measures) {
@@ -426,6 +425,34 @@ export async function runSwarm(
   if (!policy) {
     return unsupported(`advance:"${resolved.config.advance.kind}" has no scheduler in this runner.`);
   }
+  /**
+   * WHAT SELECTS THE NEXT PARENT, decided once here instead of re-derived per
+   * iteration — and the reason it is one value rather than two is the state it
+   * makes impossible.
+   *
+   * A pareto run selects on the DECLARED AXES of an instanced or vector
+   * objective, and those axes exist only where the measurement was prepared, so
+   * `advance:'pareto'` with nothing measured had no scheduler at all. The loop
+   * expressed that as `pareto === null ? null : select(...)` inside the branch it
+   * had already tested, which selects nothing on the first iteration and settles
+   * the run EMPTY: no candidates, no spend, and no sentence saying why. The tool
+   * surface cannot reach it (`swarmValidity` requires an instanced or vector
+   * objective for a frontier, and both score by `verify`), but this is also the
+   * in-process entry point, and an in-process caller got the silent version.
+   *
+   * Refused here, before the ledger row and before any node, in the vocabulary
+   * the rest of this function refuses in.
+   */
+  const scheduler = policy === 'pareto'
+    ? pareto === null ? null : { kind: 'pareto' as const, axes: pareto.axes }
+    : { kind: 'frontier' as const, policy };
+  if (scheduler === null) {
+    return unsupported('advance:"pareto" orders its frontier by the axes an instanced or vector '
+      + `objective declares, and this run resolved none — score:"${resolved.config.score.kind}" `
+      + 'measures nothing a front could be ordered by, so every selection would return no node '
+      + 'and the run would settle empty. Give it an instanced or vector `objective` with '
+      + 'score:"verify", or select with advance:"uct".');
+  }
 
   /**
    * THE SEARCH THIS CALL IS: the interrupted one it re-enters, or a new one.
@@ -461,8 +488,6 @@ export async function runSwarm(
   });
 
   const candidates: SwarmCandidate[] = [];
-  let best: SwarmCandidate | null = null;
-  let bestValue: number | null = null;
   let usage: Usage = {};
   /**
    * The direction `best` is chosen in — the objective's own where one was measured, and
@@ -477,15 +502,30 @@ export async function runSwarm(
   /** Per-candidate spend, for that candidate's own record. Keyed by node id because the
    *  settle barrier is past the loop that observed it. */
   const spentBy = new Map<string, number | null>();
-  /** Every ensemble size a candidate actually sampled, for the report's binding
-   *  realisation. Empty for a run that scored by anything other than a judge. */
-  const ensembles: number[] = [];
   const seeded = seedResumedSearch({ reentry, nodes, rankDirection, spentBy });
   candidates.push(...seeded.candidates);
-  ensembles.push(...seeded.ensembles);
-  publication = seeded.publication;
-  best = seeded.best;
-  bestValue = seeded.bestValue;
+  /**
+   * WHAT THE SCORING BARRIER MOVES — one object, because one function moves it.
+   *
+   * `scoreExpansion` owns the single ordered transition every candidate crosses
+   * and writes all four of these back through `state`. They were ALSO locals
+   * here, copied into a fresh object at every level and copied back out after
+   * it, so one piece of state had two spellings and every level had to remember
+   * to re-sync them — and three of the four were initialised to a value that
+   * was then overwritten unconditionally by the seed below.
+   *
+   * Seeded from the re-entry and not from nothing: a resumed search's best
+   * candidate, its publication seal and the ensembles it already realised are
+   * facts its first attempt established. Inferred rather than annotated, so the
+   * seed's own types are what this carries — the four fields `scoreExpansion`
+   * declares it needs, from the one function that establishes them.
+   */
+  const scoringState = {
+    publication: seeded.publication,
+    best: seeded.best,
+    bestValue: seeded.bestValue,
+    ensembles: [...seeded.ensembles],
+  };
   const { inheritedExpansions, inheritedTokens } = seeded;
   // THE EXPANSION BUDGET, in units of one child: `depth` waves of `branches`, DERIVED
   // from the two caps the call resolved because there is no third cap to read. `budget`
@@ -722,10 +762,10 @@ export async function runSwarm(
       : [...nodes.values()].find((node) => node.granted !== null);
     const selected = resumed
       ? { id: resumed.parentId }
-      : owed ?? (policy === 'pareto'
-        ? pareto === null ? null : selectParetoFrontierNode(nodes, maxDepth, pareto.axes)
+      : owed ?? (scheduler.kind === 'pareto'
+        ? selectParetoFrontierNode(nodes, maxDepth, scheduler.axes)
         : selectFrontierNode(sql, {
-          rootId, policy, maxDepth,
+          rootId, policy: scheduler.policy, maxDepth,
           explorationWeight: resolved.config.explorationWeight
             ?? DEFAULT_CONFIG.mcts.explorationWeight,
         }));
@@ -951,7 +991,6 @@ export async function runSwarm(
         atDepth: childDepth,
       });
     };
-    const scoringState = { publication, best, bestValue, ensembles };
     for await (const expansion of level()) {
       const siblings = expansion.aggregated.length > 0
         ? []
@@ -964,9 +1003,6 @@ export async function runSwarm(
       });
       if (scoringRefusal) return scoringRefusal;
     }
-    publication = scoringState.publication;
-    best = scoringState.best;
-    bestValue = scoringState.bestValue;
 
     // Retire what the tree has learned is not worth selecting. Its own visit gate
     // protects single-visit leaves, so on a flat run — where nothing is ever
@@ -1013,8 +1049,9 @@ export async function runSwarm(
   return settleRun({
     started, log, sql, resolved, rootId, maxDepth, branches, policy,
     paretoAxes: pareto?.axes ?? null, ctx, verifier, measured, baseline, identity,
-    publishing, archive, publication, candidates, best,
-    usage, judgeSamples, ensembles, spentBy, carriedIn, carriedBest, levelFanIn, reentry,
+    publishing, archive, publication: scoringState.publication, candidates, best: scoringState.best,
+    usage, judgeSamples, ensembles: scoringState.ensembles, spentBy, carriedIn, carriedBest,
+    levelFanIn, reentry,
     aborted, missionSpent, lost, remainingBudget: budget.remaining, expansionBudget,
     inheritedExpansions, inheritedTokens, ledgerEpoch, searchLedger, runProfile,
   });

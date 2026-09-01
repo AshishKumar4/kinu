@@ -41,7 +41,7 @@ import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
 import type { Refusal } from '../src/obs/error';
 import {
-  arbitrateBranch, resolveSwarm, swarmValidity,
+  arbitrateBranch, resolveSwarm, swarmValidity, JUDGE_MARGINALISATION_MIN,
   BRANCH_PROPOSAL_WIDTH, BRANCH_REFUSAL_POLICIES, SWARM_ADVANCES,
   type BranchProposal, type BranchRefusalPolicy, type ResolvedSwarm,
   type ResolvedSwarmCaps, type SwarmConfig, type SwarmResult,
@@ -1855,6 +1855,48 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     if ('reason' in result) return;
     expect(result.candidates[0]?.unmeasurable).toContain('omitted declared axis');
     expect(result.frontier).toEqual([]);
+  }, 60_000);
+
+  test("advance:'pareto' with nothing measured refuses instead of settling empty", async () => {
+    // THE IN-PROCESS ENTRY POINT, which is the one `regionRefusal` says it exists
+    // for. `swarmValidity` refuses this composition at the tool surface — a
+    // frontier needs an instanced or vector objective, and both of those score by
+    // `verify` — so only a caller that skips it can arrive here, and this test is
+    // that caller.
+    //
+    // What it used to get: `pareto` is prepared only for a MEASURING run, so the
+    // selection arm read `pareto === null ? null : select(...)` inside the branch
+    // it had already tested, returned no node on the first iteration, and the run
+    // settled with zero candidates, zero spend and no sentence anywhere in it
+    // saying the scheduler could not exist.
+    const call = resolveSwarm({
+      preset: 'custom',
+      label: 'pareto-unmeasured',
+      task: 'reach the front',
+      config: treeConfig({
+        advance: { kind: 'pareto' },
+        // Admitted at the marginalisation floor, so the judged arm is legal and the
+        // refusal below is about the missing FRONT rather than about the ensemble.
+        score: { kind: 'judge', samples: JUDGE_MARGINALISATION_MIN },
+        carry: { kind: 'none' },
+      }),
+      depth: 2,
+      branches: 2,
+    });
+    if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
+    // Non-vacuity for "in-process only": the tool surface's own gate refuses it.
+    expect(swarmValidity(call)?.error).toContain('advance:"pareto"');
+
+    const { rt } = createTestRuntime();
+    const result = await runSwarm(
+      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      call,
+    );
+    if (!('reason' in result)) throw new Error('an unmeasured pareto run must refuse, not settle');
+    expect(result.reason).toBe('unsupported');
+    expect(result.error).toContain('orders its frontier by the axes');
+    // And it refuses BEFORE spending: no node was expanded, so no row was written.
+    expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0).toBe(0);
   }, 60_000);
 });
 

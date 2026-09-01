@@ -309,10 +309,7 @@ export async function reconcileInterruptedForks(deps: {
   // call would reclaim a job out from under the executor the first call started.
   const offeredRoots = new Set(deps.journal.unfinishedRoots(startedAt));
   for (const root of deps.search?.runningSwarmRoots(startedAt) ?? []) offeredRoots.add(root);
-  const gateNeeded = deps.resume !== undefined || offeredRoots.size > 0;
-  const outcome: ResumeOutcome = gateNeeded
-    ? await resumeOutcome(deps.resume, [...offeredRoots])
-    : { kind: 'absent', claimed: new Set<string>() };
+  const outcome = await resumeOutcome(deps.resume, [...offeredRoots]);
 
   // A GATE THAT COULD NOT ANSWER PROTECTS EVERYTHING, and both halves of the sweep
   // stop here rather than each carrying its own spare-list: retiring on an unknown
@@ -321,7 +318,11 @@ export async function reconcileInterruptedForks(deps: {
 
   // THE LEDGER'S HALF of the same sweep: close every running swarm row the gate did
   // not claim.
-  if (deps.search && gateNeeded) {
+  // NOT ALSO GATED ON THERE BEING SOMETHING TO OFFER, which was a third spelling
+  // of one question: this read is the same population `runningSwarmRoots` above
+  // returns — `running`, `engine='swarm'`, created before this activation — so
+  // with nothing offered there is nothing here to close either.
+  if (deps.search) {
     const closed = deps.search.closeUnclaimed(outcome.claimed, startedAt);
     if (closed.length > 0) deps.logActivity?.('swarm_runs_closed', closed.join(', '));
   }

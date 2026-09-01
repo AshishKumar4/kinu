@@ -181,6 +181,29 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
     expect(journal.readTree('run-cf')[0]?.token_cache_read).toBe(8_704);
   });
 
+  test('one branch read on its own reports the same usage as the run projection', () => {
+    const db = new Database(':memory:');
+    initHeadsTables(makeExecRaw(db), makeSql(db));
+    const journal = new HeadJournal(makeSql(db));
+    journal.recordSplit('run-one', 'why', 1);
+    journal.insertSpawn(spawn('h-one', 'run-one'));
+    journal.recordReport(report('h-one', FULLY_REPORTED));
+
+    // TWO SCOPINGS OF ONE PROJECTION, held to it here rather than only claimed
+    // in the docstring. `readHeadView` named `token_input` and `token_output`
+    // alone, so a reader that opened ONE branch was told its provider had
+    // reported no cache reads, no reasoning tokens and no `neurons` — while the
+    // run projection beside it reported all seven off the same row. A column the
+    // query never asked for comes back `undefined`, which is exactly what a
+    // provider that reported nothing comes back as, so the surface that renders
+    // one branch's spend (`read-models/node-transcript.ts`) could not have told
+    // the two apart.
+    const fromRun = journal.readRun('run-one')?.heads.find((h) => h.id === 'h-one')?.usage;
+    expect(fromRun).toEqual({ ...FULLY_REPORTED });
+    expect(journal.readHeadView('h-one')?.usage).toEqual({ ...FULLY_REPORTED });
+    expect(journal.readHeadView('h-one')?.usage).toEqual(fromRun);
+  });
+
   test('an empty usage writes NULL and reads back as an absent field, a reported zero as 0', () => {
     const db = new Database(':memory:');
     initHeadsTables(makeExecRaw(db), makeSql(db));

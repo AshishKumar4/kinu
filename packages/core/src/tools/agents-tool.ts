@@ -907,7 +907,19 @@ function askInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVaria
   return variants;
 }
 
-/** Fields one action actually reads under the transports this actor wires. */
+/**
+ * Fields one action actually reads under the transports this actor wires.
+ *
+ * `hire` and `ask` are the two multi-variant actions, and theirs are DERIVED
+ * from their own variant tables rather than filtered a second time here. Which
+ * fields those two carry depends on which transports are wired — `scope` only
+ * beside `peers`, the temporary rung's `role` and `context_ref` only beside the
+ * port that runs one, a subordinate's `deliverable` only beside a roster — and
+ * that dependency was stated TWICE: once in the variants the JSON Schema and the
+ * codemode declaration project, and once as a filter here. Two spellings of one
+ * transport policy is how a field comes to be advertised in a variant whose
+ * handler cannot read it. The union of an action's variants IS what it reads.
+ */
 export function agentsActionFieldsFor(
   deps: AgentsToolDeps,
   action: AgentsToolAction,
@@ -917,21 +929,13 @@ export function agentsActionFieldsFor(
     case 'swarm':
       return deps.fork ? fields : [];
     case 'hire':
-      if (deps.team && deps.peers) {
-        return fields.filter(field =>
-          HIRE_SUBORDINATE_FIELDS.some(candidate => candidate === field)
-          || HIRE_WORKSPACE_FIELDS.some(candidate => candidate === field));
-      }
-      if (deps.team) return HIRE_SUBORDINATE_FIELDS;
-      if (deps.peers) return HIRE_WORKSPACE_FIELDS;
-      return [];
     case 'ask':
-      return fields.filter(field =>
-        field === 'agent'
-        || field === 'message'
-        || ((field === 'role' || field === 'context_ref') && deps.team?.temporary !== undefined)
-        || (field === 'topic' && deps.peers !== undefined)
-        || ((field === 'deliverable' || field === 'deadline_hint') && deps.team !== undefined));
+      // Each field once, in variant order — which is the order
+      // AGENTS_ACTION_FIELDS itself lists them in, existing target before
+      // temporary target, so the sentence a refusal prints is unchanged.
+      return [...new Set(
+        agentsActionInputVariantsFor(deps, action).flatMap((variant) => variant.fields),
+      )];
     case 'send':
       return fields.filter(field =>
         field === 'agent' || field === 'message' || (field === 'topic' && deps.peers !== undefined));
@@ -1271,10 +1275,6 @@ interface AgentsToolCallOptions {
   abortSignal?: AbortSignal;
 }
 
-function readAbortSignal(options: AgentsToolCallOptions | undefined): AbortSignal | undefined {
-  return options?.abortSignal;
-}
-
 // ── Dispatch helpers ────────────────────────────────────────────────────────
 
 /**
@@ -1522,65 +1522,85 @@ async function runSwarmAction(
   if (mission) {
     rt = { ...fork.rt, llm: mission.governor.govern(fork.rt.llm, mission.scope.labels) };
   }
-  const runDeps: SwarmRunDeps = { rt, model: fork.model, mode };
+  // Resolved BEFORE the bag, in this order, because each of these is a backend
+  // factory whose CALL is a real event — a host is built, a broadcast channel is
+  // looked up, a home provisioner is constructed — and the bag below then holds
+  // what they returned rather than deciding anything itself.
   const origin = fork.originContext?.();
-  if (origin !== undefined) {
-    Object.assign(runDeps, {
-      originContext: Object.freeze(structuredClone([...origin])),
-    });
-  }
-  // THE TIER'S OWN MODEL. Forwarded, never pre-resolved here: a re-drive's
-  // profile comes off the claimed ledger row INSIDE the runner, so the runner
-  // is the only place that can see both cases, and resolving one of them here
-  // would leave the other running today's model under yesterday's record.
-  if (fork.resolveModel) Object.assign(runDeps, { resolveModel: fork.resolveModel });
-  // THE SNAPSHOT. A first attempt carries the resolved precedence record down
-  // to the runner, which writes it into the run's own ledger row BEFORE any
-  // node expands — the moment a durable detach could happen — so a re-drive
-  // re-enters under the profile it started under rather than today's catalog.
-  if (delegated) Object.assign(runDeps, {
-    profile: { profile: delegated.resolved, sources: delegated.sources },
-  });
-  // THE SEARCH CHARGES ITS OWN CALLS. Wired here, an exhausted label stops the next
-  // level from opening and stops an agent swarm node between its steps, so a cap the
-  // caller set is enforced while the money is still there to save.
-  if (mission) Object.assign(runDeps, { mission: mission.scope });
-  const signal = readAbortSignal(toolOptions);
-  if (signal) Object.assign(runDeps, { signal });
+  const signal = toolOptions?.abortSignal;
   // Resolved here rather than at wiring time, so a backend that cannot build a
-  // host yet refuses where the refusal is reportable. Assigned only when there is
-  // one: an absent key is what runs the loop in this isolate.
+  // host yet refuses where the refusal is reportable. Absent is what runs the
+  // node's loop in this isolate.
   const host = fork.nodeHost?.();
-  if (host) Object.assign(runDeps, { host });
   // The transient frames an IN-ISOLATE node publishes. Only wired when this
   // isolate is also the one holding the socket, which is exactly the case a
   // hosted node's own facet-to-parent RPC covers instead.
-  const reportNodeDelta = host ? undefined : fork.reportNodeDelta?.();
-  if (reportNodeDelta) Object.assign(runDeps, { publishHeadStream: reportNodeDelta });
+  const publishHeadStream = host ? undefined : fork.reportNodeDelta?.();
   // The durable announcement, wired on BOTH transports: the journal a node's
   // rows land in is this isolate's whichever isolate ran the node, so this is
   // never the hosted case's business to replace.
   const announceHeadActivity = fork.announceHeadActivity?.();
-  if (announceHeadActivity) Object.assign(runDeps, { announceHeadActivity });
   // A host constructs the provisioner around its authoritative filesystem. It
   // may be an in-isolate SqliteVFS or the hosted Nimbus session; the node loop
   // sees the same async contract either way.
-  const provisionNodeHome = fork.provisionNodeHome?.();
-  if (provisionNodeHome) Object.assign(runDeps, { provisionHome: provisionNodeHome });
+  const provisionHome = fork.provisionNodeHome?.();
   // And the runtime the node's loop uses once it has that home. Wired only
   // beside the provisioner, because re-credentialing a runtime with no
   // credential to use is nothing.
-  const runtimeForNodeWorkspace = provisionNodeHome ? fork.runtimeForNodeWorkspace?.() : undefined;
-  if (runtimeForNodeWorkspace) Object.assign(runDeps, { runtimeForWorkspace: runtimeForNodeWorkspace });
-  // The *Inherited context* barrier: the backend's real compaction ladder, handed to the
-  // run so a fork parent past the threshold is rewritten once instead of inherited
-  // verbatim until the provider refuses. Absent stays absent — the seam's documented
-  // loud failure rather than a silent stub.
-  if (fork.compactShared) Object.assign(runDeps, { compactShared: fork.compactShared });
+  const runtimeForWorkspace = provisionHome ? fork.runtimeForNodeWorkspace?.() : undefined;
+  /**
+   * ONE TYPED LITERAL, for the reason `call` above gives about itself, and it
+   * applies harder here: every field is checked against `SwarmRunDeps`, where
+   * the thirteen `Object.assign` calls this replaces checked NOTHING — `assign`
+   * widens its target, so a misspelled key or a wrongly-typed value compiled
+   * clean and wired nothing at all, on the one bag whose absent keys decide
+   * where a node's loop runs, what watches it, and whether it is fenced.
+   *
+   * An `undefined` field IS an absent one on this bag: `exactOptionalPropertyTypes`
+   * is off, and every reader asks with `?.` or a truthiness test. So the thirteen
+   * presence branches become the values themselves.
+   */
+  const runDeps: SwarmRunDeps = {
+    rt,
+    model: fork.model,
+    mode,
+    // Frozen at dispatch so `context:'fork'` survives a background re-drive and a
+    // DO eviction carrying the conversation the caller actually had.
+    originContext: origin === undefined
+      ? undefined
+      : Object.freeze(structuredClone([...origin])),
+    // THE TIER'S OWN MODEL. Forwarded, never pre-resolved here: a re-drive's
+    // profile comes off the claimed ledger row INSIDE the runner, so the runner
+    // is the only place that can see both cases, and resolving one of them here
+    // would leave the other running today's model under yesterday's record.
+    resolveModel: fork.resolveModel,
+    // THE SNAPSHOT. A first attempt carries the resolved precedence record down
+    // to the runner, which writes it into the run's own ledger row BEFORE any
+    // node expands — the moment a durable detach could happen — so a re-drive
+    // re-enters under the profile it started under rather than today's catalog.
+    profile: delegated === undefined
+      ? undefined
+      : { profile: delegated.resolved, sources: delegated.sources },
+    // THE SEARCH CHARGES ITS OWN CALLS: an exhausted label stops the next level
+    // from opening and stops an agent swarm node between its steps, so a cap the
+    // caller set is enforced while the money is still there to save.
+    mission: mission?.scope,
+    signal,
+    host,
+    publishHeadStream,
+    announceHeadActivity,
+    provisionHome,
+    runtimeForWorkspace,
+    // The *Inherited context* barrier: the backend's real compaction ladder, handed
+    // to the run so a fork parent past the threshold is rewritten once instead of
+    // inherited verbatim until the provider refuses. Absent stays absent — the
+    // seam's documented loud failure rather than a silent stub.
+    compactShared: fork.compactShared,
+    // Only a re-drive re-enters an interrupted search; the flag was read at the top
+    // of this action, where it also decides where the profile comes from.
+    redrive,
+  };
   readSpawnStarted(toolOptions)?.();
-  // Only a re-drive re-enters an interrupted search; the flag was read at the
-  // top of this action, where it also decides where the profile comes from.
-  if (redrive) Object.assign(runDeps, { redrive: true });
   const result = await runSwarm(runDeps, resolved);
   if ('reason' in result) return result;
   // THE SPAWN, AND ONLY THE SPAWN. The tokens are already on the ledger: every model

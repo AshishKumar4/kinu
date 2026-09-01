@@ -545,31 +545,20 @@ export function readCarryIn(input: {
   readonly log: Logger;
 }): CarryIn {
   const { sql, identity, publishing, floor, preset, carryKind, metric, log } = input;
-  // CARRY-IN. What earlier runs of THIS objective, under THIS floor, already reached —
-  // read before anything is expanded, so the search starts from it rather than
-  // rediscovering it. This is the half that makes the store a store: a writer with no
-  // reader persists rows nothing ever starts from, which is the same per-invocation
-  // search with a table beside it.
-  //
-  // Gated on a PUBLISHING carry rather than run unconditionally. `carry` is the axis
-  // that says whether a run belongs to a cumulative sequence, and seeding a
-  // `carry:'none'` run out of the store would break that axis in the direction nobody
-  // is watching — the run would silently inherit a starting point its configuration
-  // says it has none of.
   const carriedIn = identity !== null && publishing !== null
-? recordsFor(sql, { identity, floor })
-: [];
+    ? recordsFor(sql, { identity, floor })
+    : [];
   // Best FIRST, by `recordsFor`'s own ordering in the objective's direction.
   const carriedBest = carriedIn[0] ?? null;
   if (carriedBest) {
-log.event('swarm.records_carried_in', {
-  preset,
-  carry: carryKind,
-  metric,
-  rows: carriedIn.length,
-  best: carriedBest.value,
-  displacements: carriedBest.displacements,
-});
+    log.event('swarm.records_carried_in', {
+      preset,
+      carry: carryKind,
+      metric,
+      rows: carriedIn.length,
+      best: carriedBest.value,
+      displacements: carriedBest.displacements,
+    });
   }
   return { carriedIn, carriedBest };
 }

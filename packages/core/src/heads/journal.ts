@@ -610,12 +610,6 @@ export class HeadJournal {
               ${Date.now()}, ${strategy})`;
   }
 
-  /** Recent runs for the Exploration surface, grouped by root_id. Grouping is
-   *  driven by head_journal (always present) so top-level splits — whose
-   *  synthetic root has no head row and whose heads all have parent_id NULL —
-   *  collapse into ONE run instead of N empty roots. head_runs supplies the
-   *  rationale label; head_steps the per-head trace; head_merge_results the
-   *  synthesis. */
   /**
    * The runs that still have a head in flight — the live fork roster the
    * dynamic context carries into every model step.
@@ -675,13 +669,6 @@ export class HeadJournal {
     return roots.map((row) => this.assembleRun(row.root_id, row.spawned_at));
   }
 
-  /**
-   * Running heads of BRANCH runs alone, as bare id/root pairs, oldest first,
-   * LIMIT-bounded — the activation sweep's read. The filter and the budget sit
-   * in the query because the sweep runs in the init gate: sealing a row moves
-   * it off `status = 'running'`, so the mutation is the cursor and a backlog
-   * deeper than one budget drains across wakes without a stored position.
-   */
   /** Whether ANY head is still unfinished — `running` OR `interrupted`, one
    *  LIMIT-1 read for the activation-time arm decision that must not
    *  materialize a run. `interrupted` counts because the resume gate re-offers
@@ -693,6 +680,13 @@ export class HeadJournal {
       WHERE status = 'running' OR status = 'interrupted' LIMIT 1`.length > 0;
   }
 
+  /**
+   * Running heads of BRANCH runs alone, as bare id/root pairs, oldest first,
+   * LIMIT-bounded — the activation sweep's read. The filter and the budget sit
+   * in the query because the sweep runs in the init gate: sealing a row moves
+   * it off `status = 'running'`, so the mutation is the cursor and a backlog
+   * deeper than one budget drains across wakes without a stored position.
+   */
   listRunningBranchHeads(
     prefix: string, limit: number, spawnedBefore: number,
   ): { id: HeadId; rootId: HeadId; task: string }[] {
@@ -704,6 +698,12 @@ export class HeadJournal {
       .map((row) => ({ id: row.id, rootId: row.root_id, task: row.task }));
   }
 
+  /** Recent runs for the Exploration surface, grouped by root_id. Grouping is
+   *  driven by head_journal (always present) so top-level splits — whose
+   *  synthetic root has no head row and whose heads all have parent_id NULL —
+   *  collapse into ONE run instead of N empty roots. head_runs supplies the
+   *  rationale label; head_steps the per-head trace; head_merge_results the
+   *  synthesis. */
   listRuns(limit: number): HeadRunView[] {
     const roots = this.sql<{ root_id: string; spawned_at: number }>`
       SELECT root_id, MIN(spawned_at) AS spawned_at FROM head_journal
@@ -729,11 +729,24 @@ export class HeadJournal {
    * neither can describe a head differently from the other. Neither loads the
    * trace — {@link readSteps} is its own read, taken by the one reader that
    * renders prose.
+   *
+   * EVERY USAGE COLUMN IS NAMED, and that is this projection's own defect
+   * closed rather than a detail of the query. {@link storedUsage} folds all
+   * seven, {@link HeadViewRow} declares all seven, and this SELECT named two —
+   * so a column the query never asked for came back `undefined`, which
+   * `storedUsage` cannot tell from a provider that reported nothing. The
+   * surface that reads one branch's spend (`read-models/node-transcript.ts`,
+   * whose `usage` says "absent fields mean the provider never reported that
+   * count") therefore showed every head as having no cache reads, no reasoning
+   * tokens and no `neurons` — the fractional figure Workers AI actually bills —
+   * while the run projection beside it reported all of them from the same rows.
    */
   readHeadView(headId: HeadId): HeadRunHeadView | null {
     const row = this.sql<HeadViewRow>`
       SELECT j.id, j.parent_id, j.depth, j.task, j.rationale, j.status, j.summary, j.error_message,
-             j.token_input, j.token_output, j.wall_clock_ms, j.spawned_at,
+             j.token_input, j.token_output, j.token_cache_read, j.token_cache_write,
+             j.token_cache_write_1h, j.token_reasoning, j.neurons,
+             j.wall_clock_ms, j.spawned_at,
              j.decisions_json, MAX(s.created_at) AS last_step_at
       FROM head_journal j LEFT JOIN head_steps s ON s.head_id = j.id
       WHERE j.id = ${headId}
