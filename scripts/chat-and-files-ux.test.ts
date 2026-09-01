@@ -123,6 +123,10 @@ interface Observed {
   readonly envCapabilityAbsences: number;
   /** An Environment card's Files action lands the Files surface. */
   readonly envFilesJumpLandsOnDrive: boolean;
+  /** The line terminal's rendered rows after one typed command and one pasted
+   *  two-line command. Rows, not a string: the defect was which row a
+   *  character lands on. */
+  readonly terminalRows: string[];
   /** Exploration's run-node rows on the mixed-status run, by node id. */
   readonly runNodes: Record<string, RunNode>;
   readonly toolActivity: {
@@ -218,6 +222,42 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
     }
     return measured;
   });
+}
+
+/**
+ * Paste into the terminal the way a browser does: a `paste` event on xterm's
+ * own textarea. xterm turns the newlines into CR before the pane ever sees
+ * them, so typing the text key by key would exercise a different path from the
+ * one that dropped every line after the first.
+ */
+async function pasteIntoTerminal(page: Page, text: string): Promise<void> {
+  await page.evaluate((pasted) => {
+    const textarea = document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea');
+    if (textarea === null) throw new Error('the terminal has no input to paste into');
+    textarea.focus();
+    const clipboardData = new DataTransfer();
+    clipboardData.setData('text/plain', pasted);
+    textarea.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+  }, text);
+}
+
+/**
+ * Wait for the terminal to have painted `text`, and tolerate exactly the
+ * timeout — this file's idiom for a wait whose outcome IS the measurement. A
+ * pane that drops a pasted line never paints its echo, and a collection that
+ * threw here would report an unnamed failure in place of the rows the terminal
+ * actually drew.
+ */
+async function terminalSettled(page: Page, text: string): Promise<void> {
+  try {
+    await page.waitForFunction(
+      (painted: string) => (document.querySelector('.xterm-rows')?.textContent ?? '').includes(painted),
+      { timeout: 20_000 },
+      text,
+    );
+  } catch (cause) {
+    if (!(cause instanceof TimeoutError)) throw cause;
+  }
 }
 
 async function run(): Promise<Observed> {
@@ -441,6 +481,26 @@ async function run(): Promise<Observed> {
     })));
     const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
     const envCapabilityAbsences = await env.$$eval('[data-capability-absences]', (els) => els.length);
+
+    // The line terminal, as the browser lays it out. Two commands: one typed,
+    // one pasted with a newline in it. What is read back is the rendered rows,
+    // because the whole defect class is which row a character lands on.
+    //
+    // The settle is TOLERANT of its own timeout, in this file's own idiom: a
+    // pane that drops the pasted line never paints `ran: three`, and a
+    // collection that threw there would report an unnamed failure instead of
+    // the rows the terminal actually drew.
+    await env.waitForSelector('.xterm-rows', { timeout: 20_000 });
+    await env.click('.xterm-screen');
+    await env.keyboard.type('one');
+    await env.keyboard.press('Enter');
+    await terminalSettled(env, 'ran: one');
+    await pasteIntoTerminal(env, 'two\nthree\n');
+    await terminalSettled(env, 'ran: three');
+    const terminalRows = await env.$$eval(
+      '.xterm-rows > div',
+      (rows) => rows.map((line) => (line.textContent ?? '').replace(/\u00a0/gu, ' ').trimEnd()).filter((line) => line !== ''),
+    );
     await env.click('[data-env-card="workspace"] [data-env-files]');
     // Tolerate exactly the timeout (the boolean under test); anything else is
     // a broken instrument, not a "did not land" — plan-review-ux.test.ts idiom.
@@ -468,6 +528,7 @@ async function run(): Promise<Observed> {
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
       envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
+      terminalRows,
       runNodes,
     };
   });
@@ -688,6 +749,26 @@ describe('the Environment tab, as a user reads it', () => {
 
   test("a card's Files action lands the drive", () => {
     expect(observed.envFilesJumpLandsOnDrive).toBe(true);
+  });
+
+  // Measured in the same browser against a live workspace executor before the
+  // fix (2026-09-01): `printf 'a\nb\nc\n'` drew `a`, ` b`, `  c` — one column
+  // further right per line, because a program's LF moves down without
+  // returning to column 0 and xterm writes what it is handed.
+  test('every line of a command output starts at column zero', () => {
+    expect(observed.terminalRows).toContain('ran: one');
+    expect(observed.terminalRows).toContain('ran: two');
+    expect(observed.terminalRows).toContain('ran: three');
+  });
+
+  // The same session: a pasted `echo first-line\necho second-line\n` ran the
+  // first line and dropped the second with no echo and no error.
+  test('a pasted two-line command runs whole, in one call', () => {
+    const echoed = observed.terminalRows.filter((line) => line.startsWith('ran: '));
+    expect(echoed).toEqual(['ran: one', 'ran: two', 'ran: three']);
+    // One call, so both pasted lines are echoed under one prompt and the
+    // second wears the continuation prompt rather than a new `$`.
+    expect(observed.terminalRows).toContain('> three');
   });
 });
 

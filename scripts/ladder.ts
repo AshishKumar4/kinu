@@ -973,7 +973,13 @@ export const LADDER: readonly Gate[] = [
       + 'block leaves the rail an entry that can never draw — plus the '
       + 'narrow-container scrim actually CLOSING the rail rather than dimming a '
       + 'document with no way back, and the action strip collapsing on a settled plan '
-      + 'instead of spending a margin on buttons nobody can press.',
+      + 'instead of spending a margin on buttons nobody can press. And the Environment '
+      + 'tab\'s LINE TERMINAL, which no gate read: a command output arrived as bare LF '
+      + 'and every row of an `ls -la` started where the row above it ended, while a '
+      + 'pasted two-line command ran its first line and dropped the second with no echo '
+      + 'and no error. Both are measured now by driving the real pane and reading the '
+      + 'rows a browser drew. The drive costs nothing measurable: 55.8s before and '
+      + '55.6s after for chat-and-files-ux alone, 2026-09-01.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '

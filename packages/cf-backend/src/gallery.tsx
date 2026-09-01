@@ -142,9 +142,9 @@ import {
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
-import type { ActivitySnapshot, BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
+import type { ActivitySnapshot, BackgroundJob, ExecutorCommandResult, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
-import { formatWorkspaceError, type AgentStatus, type WorkspaceErrors } from "@/hooks/use-kinu";
+import { formatWorkspaceError, type AgentStatus, type ExecutorOutput, type WorkspaceErrors } from "@/hooks/use-kinu";
 import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@/lib/executors";
 import type {
@@ -3961,6 +3961,25 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
     return stubRpc<T>(method, args);
   };
 
+  // The line terminal paints EXECUTOR OUTPUT, so a terminal with none proves
+  // only that it mounted. This executor echoes each line of the command it was
+  // given and ends each with LF, exactly as a program does — the byte the pane
+  // must convert to CR LF, and the one reading that shows whether a pasted
+  // multi-line command arrived as one call or lost every line after the first.
+  const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
+  const runCommand = async (name: string, command: string): Promise<ExecutorCommandResult> => {
+    const stdout = `${command.split("\n").map((line) => `ran: ${line}`).join("\n")}\n`;
+    setExecutorOutputs((prev) => {
+      const written = prev.get(name) ?? [];
+      return new Map(prev).set(name, [...written, {
+        id: `terminal-${name}-${String(written.length)}`, command,
+        stdout, stdout_len: stdout.length, stderr: "", stderr_len: 0,
+        exit_code: 0, created_at: NOW,
+      }]);
+    });
+    return { stdout, exitCode: 0 };
+  };
+
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className={`${width} h-screen border-x p-border`}>
@@ -3983,8 +4002,8 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
           surface={surface} onSurface={setSurface}
           pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} snapshot={{ status: "loading" }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
-          executors={executors} executorOutputs={new Map()}
-          onExecute={async () => ({})} lastActiveExecutor="workspace"
+          executors={executors} executorOutputs={executorOutputs}
+          onExecute={runCommand} lastActiveExecutor="workspace"
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={filesRpc}
         />
