@@ -1,11 +1,8 @@
 diff --git a/packages/core/src/context-window.ts b/packages/core/src/context-window.ts
 --- a/packages/core/src/context-window.ts
 +++ b/packages/core/src/context-window.ts
-@@ -11,6 +11,6 @@
-   [/^codex\/gpt-5\.3-codex-spark\b/i, 128_000],
-   [/^codex\/gpt-5\.3-codex\b/i, 272_000],
+@@ -13,3 +13,3 @@
    [/(^|\/)gpt-5\.5\b/i, 1_050_000],
 -  [/claude-(?:opus|sonnet)-4-[67]\b/i, 1_000_000],
 +  [/claude-(?:opus|sonnet)-4-6\b/i, 1_000_000],
    [/deepseek-v4-pro-0813/i, 1_048_576],
-   [/kimi-k3/i, 1_048_576],

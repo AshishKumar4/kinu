@@ -1,8 +1,10 @@
 diff --git a/packages/core/src/context-window.ts b/packages/core/src/context-window.ts
 --- a/packages/core/src/context-window.ts
 +++ b/packages/core/src/context-window.ts
-@@ -15,5 +15,5 @@
-   [/deepseek-v4-pro-0813/i, 1_048_576],
+@@ -16,7 +16,7 @@
+   // Per developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31):
+   // 1M-token context, same as its 5.2 sibling.
+   [/glm-5\.[23]/i, 1_048_576],
 -  [/kimi-k3/i, 1_048_576],
 -  [/kimi-k2/i, 262_144],
 +  [/kimi-k3/i, 262_144],
