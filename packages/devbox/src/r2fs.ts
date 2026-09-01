@@ -299,9 +299,10 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
    */
   const releaseMount = async (why: string): Promise<Error | undefined> => {
     const parked = await ports.parkSession();
+    // `undefined` = released; an Error = the refusal the caller sentences.
+    let refusal: Error | undefined;
     try {
       await ports.unmount();
-      return undefined;
     } catch (cause) {
       // A refusal that survives a parked session is a reference this strategy
       // cannot revoke: one of the container server's own children, or an
@@ -313,14 +314,16 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
           `${DEVBOX_WORKDIR} refused an ordinary unmount with the session parked at ${parked} `
           + `(${why}), so it was detached lazily (MNT_DETACH): ${describeThrown({ cause })}`,
         );
-        return undefined;
+      } else {
+        // NORMALISED HERE, at the boundary it crosses. A thrown value is
+        // whatever the thrower threw, and this one is about to become a
+        // `cause` that two callers attach to a sentence of their own — so it
+        // is made an `Error` once, here, rather than left as a value every
+        // caller has to re-narrow.
+        refusal = cause instanceof Error ? cause : new Error(describeThrown({ cause }));
       }
-      // NORMALISED HERE, at the boundary it crosses. A thrown value is whatever
-      // the thrower threw, and this one is about to become a `cause` that two
-      // callers attach to a sentence of their own — so it is made an `Error`
-      // once, here, rather than left as a value every caller has to re-narrow.
-      return cause instanceof Error ? cause : new Error(describeThrown({ cause }));
     }
+    return refusal;
   };
 
   const attach = async (): Promise<AttachOutcome> => {
