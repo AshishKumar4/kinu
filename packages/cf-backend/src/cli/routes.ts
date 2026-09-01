@@ -4,7 +4,7 @@ import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session
 import { publicHtmlHeaders } from '../lib/security-headers';
 import { approvalDocument, installDocument } from '../lib/public-pages';
 import {
-  CLI_SOURCE_TARBALL_PATH, CLI_SOURCE_TARBALL_SHA256_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
+  CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
 } from '../lib/deployed-assets';
 import { err, escapeHtml, json, safeJson } from '../lib/http';
 import { randomToken } from '../lib/crypto';
@@ -17,7 +17,7 @@ import {
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store';
 import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate';
 import { buildCliInstallCommand } from './install-command';
-import { bunResolutionShell } from './bun-runtime';
+import { bunResolutionShell, cliPlatformShell } from './bun-runtime';
 import { listAvailableModels } from '../user/available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { handleUserAIProxyRequest } from '../user/ai-proxy';
@@ -49,11 +49,11 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (url.pathname === '/downloads/kinu' && (method === 'GET' || method === 'HEAD')) {
     return cliShimResponse(url.origin, method === 'HEAD');
   }
-  if (url.pathname === CLI_SOURCE_TARBALL_PATH && (method === 'GET' || method === 'HEAD')) {
-    return cliDownloadAssetResponse(request, env, CLI_SOURCE_TARBALL_PATH, 'application/gzip', method === 'HEAD');
+  if (CLI_DIST_PATHS.includes(url.pathname) && (method === 'GET' || method === 'HEAD')) {
+    return cliDownloadAssetResponse(request, env, url.pathname, 'application/gzip', method === 'HEAD');
   }
-  if (url.pathname === CLI_SOURCE_TARBALL_SHA256_PATH && (method === 'GET' || method === 'HEAD')) {
-    return cliDownloadAssetResponse(request, env, CLI_SOURCE_TARBALL_SHA256_PATH, 'text/plain; charset=utf-8', method === 'HEAD');
+  if (CLI_DIST_PATHS.some((path) => `${path}.sha256` === url.pathname) && (method === 'GET' || method === 'HEAD')) {
+    return cliDownloadAssetResponse(request, env, url.pathname, 'text/plain; charset=utf-8', method === 'HEAD');
   }
   if (url.pathname === CLI_VERSION_PATH && (method === 'GET' || method === 'HEAD')) {
     return cliDownloadAssetResponse(request, env, CLI_VERSION_PATH, 'application/json; charset=utf-8', method === 'HEAD');
@@ -535,7 +535,6 @@ KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
 KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
 BIN_DIR="$KINU_HOME/bin"
 BIN_PATH="$BIN_DIR/kinu"
-PARENT_ACTIVATES="\${KINU_PARENT_ACTIVATES:-0}"
 NEEDS_PARENT_ACTIVATION=0
 YES=0
 NO_SETUP=0
@@ -663,12 +662,15 @@ run_connect_if_requested() {
   fi
 }
 
-prepare_cli_source() {
-  say "Preparing Kinu CLI..."
+# The launcher is on disk by now. Running it once with the refresh set is what
+# fetches the build, so the download has exactly one implementation and
+# "kinu update" takes the same one.
+download_cli() {
   # </dev/null: under curl|bash our stdin is the unread remainder of this
   # script — a child that reads stdin would consume it mid-execution.
-  help="$(KINU_HOME="$KINU_HOME" KINU_REFRESH_SOURCE=1 "$BIN_PATH" --help </dev/null)" || die "Kinu CLI source setup failed."
-  printf '%s\\n' "$help" | grep -Eq '^[[:space:]]+setup[[:space:]]' \
+  help="$(KINU_HOME="$KINU_HOME" KINU_ORIGIN="$KINU_ORIGIN" KINU_REFRESH_CLI=1 "$BIN_PATH" --help </dev/null)" \\
+    || die "Kinu CLI download failed."
+  printf '%s\\n' "$help" | grep -Eq '^[[:space:]]+setup[[:space:]]' \\
     || die "Downloaded Kinu CLI is missing setup. Retry after the deployment has finished."
 }
 
@@ -679,11 +681,11 @@ provide_bun
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-say "Installing Kinu CLI..."
+say "Downloading Kinu CLI..."
 curl -fsSL "$KINU_ORIGIN/downloads/kinu" -o "$tmp/kinu"
 chmod 755 "$tmp/kinu"
 mv "$tmp/kinu" "$BIN_PATH"
-prepare_cli_source
+download_cli
 
 if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
   ln -sfn "$BIN_PATH" /usr/local/bin/kinu
@@ -720,11 +722,6 @@ case ":$PATH:" in
     export PATH="$BIN_DIR:$PATH"
     ;;
 esac
-if [ "$NEEDS_PARENT_ACTIVATION" = "1" ] && [ "$PARENT_ACTIVATES" != "1" ]; then
-  say "To use kinu in this shell now, run:"
-  say "  export PATH=\\"$BIN_DIR:\\$PATH\\""
-fi
-
 say "Kinu installed."
 run_setup_if_requested
 run_connect_if_requested
@@ -735,6 +732,15 @@ if [ "$NO_SETUP" = "1" ] && [ "$CONNECT" != "1" ]; then
   say "  kinu create"
 else
   say "Kinu CLI is ready."
+fi
+
+# The profile line above serves every LATER shell. This one shell already read
+# its profile, so it needs the export said out loud — last, where the user is
+# still looking. The installer runs in its own process and cannot do it for them.
+if [ "$NEEDS_PARENT_ACTIVATION" = "1" ]; then
+  say ""
+  say "To use kinu in this shell now, run:"
+  say "  export PATH=\\"$BIN_DIR:\\$PATH\\""
 fi
 `;
   return new Response(head ? null : script, {
@@ -782,12 +788,12 @@ function cliShimResponse(origin: string, head = false): Response {
 set -euo pipefail
 
 KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
-SOURCE_ROOT="$KINU_HOME/source"
-SRC_DIR="$SOURCE_ROOT/current"
-TARBALL_URL="\${KINU_SOURCE_TARBALL:-${origin}${CLI_SOURCE_TARBALL_PATH}}"
-# Pinned checksum override; when unset, the published <tarball>.sha256 asset
-# is fetched and verification is mandatory.
-TARBALL_SHA256="\${KINU_SOURCE_SHA256:-}"
+KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
+CLI_ROOT="$KINU_HOME/cli"
+CLI_DIR="$CLI_ROOT/current"
+
+${cliPlatformShell()}
+RUNTIME_URL="\${KINU_ORIGIN}${CLI_RUNTIME_PATH}"
 
 ${bunResolutionShell()}
 
@@ -796,36 +802,44 @@ die() {
   exit 1
 }
 
-verify_tarball() {
-  file="$1"
-  expected="$TARBALL_SHA256"
-  if [ -z "$expected" ]; then
-    expected="$(curl -fsSL "$TARBALL_URL.sha256" | awk '{print $1}')" \
-      || die "Could not download the source checksum from $TARBALL_URL.sha256."
-  fi
-  [ -n "$expected" ] || die "Source checksum is empty."
+# Each download is verified against the checksum published beside it. An
+# incomplete deploy answers a download path with the SPA shell, and unpacking
+# an HTML page as a tarball is how an install fails without saying why.
+fetch_verified() {
+  url="$1"
+  into="$2"
+  curl -fsSL "$url" -o "$into" || die "Could not download $url."
+  expected="$(curl -fsSL "$url.sha256" | awk '{print $1}')" \
+    || die "Could not download the checksum from $url.sha256."
+  [ -n "$expected" ] || die "The checksum published for $url is empty."
   if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$file" | awk '{print $1}')"
+    actual="$(sha256sum "$into" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    actual="$(shasum -a 256 "$into" | awk '{print $1}')"
   else
-    die "sha256sum or shasum is required to verify the Kinu source download."
+    die "sha256sum or shasum is required to verify the Kinu download."
   fi
-  [ "$actual" = "$expected" ] || die "Source checksum mismatch."
+  [ "$actual" = "$expected" ] || die "Checksum mismatch for $url."
 }
 
-refresh_source() {
-  mkdir -p "$SOURCE_ROOT"
+# The published artifacts are the CLI, already built. Unpacking them IS the
+# install: there is no dependency graph to resolve on this machine, so no
+# package manager, no registry and no postinstall script runs here.
+#
+# Both unpack over one staging tree and move into place once, so an interrupted
+# download leaves the installed CLI as it was rather than half replaced.
+refresh_cli() {
+  mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
-  curl -fsSL "$TARBALL_URL" -o "$tmp/kinu.tar.gz"
-  verify_tarball "$tmp/kinu.tar.gz"
+  fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz"
+  fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz"
   mkdir -p "$tmp/extract"
-  tar -xzf "$tmp/kinu.tar.gz" -C "$tmp/extract"
-  extracted="$(find "$tmp/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-  [ -n "$extracted" ] || die "Source archive did not contain a project directory."
-  rm -rf "$SRC_DIR"
-  mv "$extracted" "$SRC_DIR"
+  tar -xzf "$tmp/cli.tar.gz" -C "$tmp/extract"
+  tar -xzf "$tmp/runtime.tar.gz" -C "$tmp/extract"
+  [ -f "$tmp/extract/kinu/cli.js" ] || die "The Kinu build archive carries no cli.js."
+  rm -rf "$CLI_DIR"
+  mv "$tmp/extract/kinu" "$CLI_DIR"
 }
 
 kinu_resolve_bun || {
@@ -839,18 +853,15 @@ PATH="\${KINU_BUN%/*}:$PATH"
 export PATH
 
 case "\${1:-}" in
-  update|upgrade) KINU_REFRESH_SOURCE=1 ;;
+  update|upgrade) KINU_REFRESH_CLI=1 ;;
 esac
 
-if [ "\${KINU_REFRESH_SOURCE:-0}" = "1" ] || [ ! -f "$SRC_DIR/packages/cli/bin/cli.ts" ]; then
-  refresh_source
+if [ "\${KINU_REFRESH_CLI:-0}" = "1" ] || [ ! -f "$CLI_DIR/cli.js" ]; then
+  refresh_cli
 fi
 
-cd "$SRC_DIR"
-if [ ! -d node_modules ]; then
-  "$KINU_BUN" install --frozen-lockfile
-fi
-exec "$KINU_BUN" run packages/cli/bin/cli.ts "$@"
+cd "$CLI_DIR"
+exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"
 `;
   return new Response(head ? null : script, {
     headers: {

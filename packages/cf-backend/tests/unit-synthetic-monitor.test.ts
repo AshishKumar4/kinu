@@ -17,16 +17,22 @@ import * as v from 'valibot';
 import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox';
 import { recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
 import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '../src/monitor/probes';
+import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
 import { sqlExec } from './helpers/user-do';
 
 // ── A site to probe ──────────────────────────────────────────────
 
 const SHA = 'c0ffee1234567890';
-const TARBALL = new TextEncoder().encode('pretend this is the CLI source archive');
 const SPA_SHELL = '<!doctype html><html><body><div id="root"></div></body></html>';
 
-async function tarballSha(): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', TARBALL);
+/** Distinct bytes per artifact, so a probe that checks one and calls the rest
+ *  green cannot pass by accident. */
+function artifactBytes(path: string) {
+  return new TextEncoder().encode(`pretend this is ${path}`);
+}
+
+async function artifactSha(path: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', artifactBytes(path));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -36,15 +42,17 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
     const path = new URL(new Request(input).url).pathname;
     const override = broken[path];
     if (override) return override();
+    if (CLI_DIST_PATHS.includes(path)) return new Response(artifactBytes(path));
+    for (const artifact of CLI_DIST_PATHS) {
+      if (path === `${artifact}.sha256`) {
+        return new Response(`${await artifactSha(artifact)}  ${artifact.split('/').pop() ?? ''}\n`);
+      }
+    }
     switch (path) {
       case '/api/health':
         return Response.json({ ok: true, sha: SHA, version: '0.1.0' });
       case '/downloads/kinu-version.json':
         return Response.json({ version: '0.1.0', sha: SHA, builtAt: '2026-08-07T00:00:00Z' });
-      case '/downloads/kinu-source.tar.gz':
-        return new Response(TARBALL);
-      case '/downloads/kinu-source.tar.gz.sha256':
-        return new Response(`${await tarballSha()}  kinu-source.tar.gz\n`);
       case '/login':
         return new Response(
           '<html><title>Sign in to Kinu</title><a class="provider" href="/auth/github/start">Continue</a></html>',
@@ -78,17 +86,28 @@ describe('synthetic probes', () => {
   });
 
   test('the SPA shell impersonating a checksum is caught', async () => {
-    const outcomes = await probe({ '/downloads/kinu-source.tar.gz.sha256': spaFallback });
+    const outcomes = await probe({ [`${CLI_DIST_PATHS[0]}.sha256`]: spaFallback });
     expect(outcome(outcomes, 'downloads').ok).toBe(false);
     expect(outcome(outcomes, 'downloads').detail).toContain('not a sha256 line');
   });
 
   test('a tarball that does not match its checksum is caught', async () => {
     const outcomes = await probe({
-      '/downloads/kinu-source.tar.gz': () => new Response(new TextEncoder().encode('a different build')),
+      [CLI_DIST_PATHS[0] ?? '']: () => new Response(new TextEncoder().encode('a different build')),
     });
     expect(outcome(outcomes, 'downloads').ok).toBe(false);
     expect(outcome(outcomes, 'downloads').detail).toContain('install and update are both refusing');
+  });
+
+  // One platform's artifact going missing bricks that platform and nothing
+  // else, so a probe that reads only the first would call the outage green.
+  test('any single missing platform artifact is caught, not just the first', async () => {
+    expect(CLI_DIST_PATHS.length).toBeGreaterThan(1);
+    for (const path of CLI_DIST_PATHS) {
+      const outcomes = await probe({ [path]: spaFallback });
+      expect(outcome(outcomes, 'downloads').ok, `${path} went unchecked`).toBe(false);
+      expect(outcome(outcomes, 'downloads').detail).toContain(path);
+    }
   });
 
   test('health answering HTML instead of JSON is caught', async () => {

@@ -12,9 +12,9 @@
  *   health    — the API answers, and says WHICH build is live (cross-checked
  *               against the build the download assets advertise, so a
  *               half-shipped deploy is one probe away, not one user report).
- *   downloads — the source tarball and its `.sha256` are the real files and
- *               agree with each other. This is the exact check the installer
- *               makes before it will install anything.
+ *   downloads — every published CLI artifact and its `.sha256` are the real
+ *               files and agree with each other. This is the exact check the
+ *               installer makes before it will install anything.
  *   login     — the sign-in page renders with at least one working provider
  *               link. An OAuth config that fell out locks everyone out.
  *
@@ -23,6 +23,7 @@
  * a re-read of an open incident look like news.
  */
 
+import { CLI_DIST_PATHS } from '../lib/deployed-assets';
 import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -57,8 +58,6 @@ export interface ProbeDeps {
 
 const TIMEOUT_MS = 10_000;
 
-const SOURCE_ARCHIVE = '/downloads/kinu-source.tar.gz';
-const SOURCE_CHECKSUM = '/downloads/kinu-source.tar.gz.sha256';
 const VERSION_MANIFEST = '/downloads/kinu-version.json';
 
 export async function runSyntheticProbes(deps: ProbeDeps): Promise<ProbeOutcome[]> {
@@ -145,32 +144,39 @@ async function shippedBuild(deps: ProbeDeps): Promise<string> {
   return stamp;
 }
 
+/** Every artifact an install downloads, checked the way the launcher checks
+ *  them. One platform's artifact going missing bricks that platform alone, and
+ *  a probe that only read one of them would call that green. They are read one
+ *  at a time: hashing holds the whole body, and four at once is four bodies. */
 async function probeDownloads(deps: ProbeDeps): Promise<ProbeOutcome> {
   const fail = (detail: string): ProbeOutcome => ({ probe: 'downloads', ok: false, detail });
-  let archive: Response;
-  let checksum: Response;
-  try {
-    [archive, checksum] = await Promise.all([get(deps, SOURCE_ARCHIVE), get(deps, SOURCE_CHECKSUM)]);
-  } catch (err) {
-    return fail(`the CLI source download did not answer: ${renderThrownChain({ cause: err })}`);
-  }
-  if (archive.status !== 200) return fail(`GET ${SOURCE_ARCHIVE} returned HTTP ${archive.status}`);
-  if (checksum.status !== 200) return fail(`GET ${SOURCE_CHECKSUM} returned HTTP ${checksum.status}`);
+  for (const path of CLI_DIST_PATHS) {
+    const checksumPath = `${path}.sha256`;
+    let archive: Response;
+    let checksum: Response;
+    try {
+      [archive, checksum] = await Promise.all([get(deps, path), get(deps, checksumPath)]);
+    } catch (err) {
+      return fail(`the CLI download ${path} did not answer: ${renderThrownChain({ cause: err })}`);
+    }
+    if (archive.status !== 200) return fail(`GET ${path} returned HTTP ${archive.status}`);
+    if (checksum.status !== 200) return fail(`GET ${checksumPath} returned HTTP ${checksum.status}`);
 
-  const declared = (await checksum.text()).trim().split(/\s+/)[0] ?? '';
-  if (!/^[0-9a-f]{64}$/.test(declared)) {
-    return fail(
-      `${SOURCE_CHECKSUM} is not a sha256 line — the SPA shell is being served in place of the checksum`,
-    );
+    const declared = (await checksum.text()).trim().split(/\s+/)[0] ?? '';
+    if (!/^[0-9a-f]{64}$/.test(declared)) {
+      return fail(
+        `${checksumPath} is not a sha256 line — the SPA shell is being served in place of the checksum`,
+      );
+    }
+    const actual = await sha256Hex(await archive.arrayBuffer());
+    if (actual !== declared) {
+      return fail(
+        `${path} hashes to ${actual} but ${checksumPath} declares ${declared}`
+        + ' — install and update are both refusing this download',
+      );
+    }
   }
-  const actual = await sha256Hex(await archive.arrayBuffer());
-  if (actual !== declared) {
-    return fail(
-      `${SOURCE_ARCHIVE} hashes to ${actual} but ${SOURCE_CHECKSUM} declares ${declared}`
-      + ' — install and update are both refusing this download',
-    );
-  }
-  return { probe: 'downloads', ok: true, detail: `sha256 ${actual}` };
+  return { probe: 'downloads', ok: true, detail: `${CLI_DIST_PATHS.length} artifacts match their checksums` };
 }
 
 async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {

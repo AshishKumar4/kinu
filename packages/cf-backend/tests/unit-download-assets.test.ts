@@ -16,6 +16,7 @@ import * as v from 'valibot';
 import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/core';
 import { handleCliRequest } from '../src/cli/routes';
 import { handleHealthRequest } from '../src/health-route';
+import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
 
 const ORIGIN = 'https://kinu.example.com';
 const SPA_SHELL = '<!doctype html>\n<html lang="en"><head><title>Kinu</title></head><body></body></html>';
@@ -72,8 +73,10 @@ function envWithAssets(files: ReadonlyMap<string, PublishedAsset>): Env {
 }
 
 const PUBLISHED = new Map<string, PublishedAsset>([
-  ['/downloads/kinu-source.tar.gz', { body: 'TARBALL-BYTES', contentType: 'application/gzip' }],
-  ['/downloads/kinu-source.tar.gz.sha256', { body: 'deadbeef  kinu-source.tar.gz\n', contentType: 'text/plain' }],
+  ...CLI_DIST_PATHS.flatMap((path): [string, PublishedAsset][] => [
+    [path, { body: `TARBALL-BYTES ${path}`, contentType: 'application/gzip' }],
+    [`${path}.sha256`, { body: `deadbeef  ${path.split('/').pop() ?? ''}\n`, contentType: 'text/plain' }],
+  ]),
   ['/downloads/kinu-version.json', { body: JSON.stringify(STAMP), contentType: 'application/json' }],
 ]);
 

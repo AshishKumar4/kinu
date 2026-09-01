@@ -143,7 +143,7 @@ fi
 KINU_VERSION=""
 # The one directory wrangler publishes as static assets (see header).
 KINU_ASSETS_DIR="$KINU_ROOT/packages/cf-backend/dist/client"
-# build-cli-source-archive.sh stamps this sha into the archive, the published
+# build-cli-dist.sh stamps this sha into the built CLI, the published
 # version.json, and therefore /api/health's build stamp.
 KINU_SHA="$(git -C "$KINU_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 
@@ -583,15 +583,19 @@ else
   bunx vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
 fi
 
-echo "Building CLI source archive"
-bash "$KINU_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI source archive build failed${NC}"; exit 1; }
+echo "Building the CLI distribution"
+bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { echo -e "${RED}CLI distribution build failed${NC}"; exit 1; }
 
-# Neither environment may ship without the three CLI download assets sitting in
-# the directory wrangler publishes. A deploy missing them bricks every fresh
-# install and update.
-for asset in kinu-source.tar.gz kinu-source.tar.gz.sha256 kinu-version.json; do
-  if [ ! -s "$KINU_ASSETS_DIR/downloads/$asset" ]; then
-    echo -e "${RED}❌ Missing build output: $KINU_ASSETS_DIR/downloads/$asset${NC}"
+# Neither environment may ship without every CLI download asset sitting in the
+# directory wrangler publishes. A deploy missing one bricks every fresh install
+# and update on the platform it belongs to.
+KINU_CLI_ARTIFACTS=(kinu-runtime-cpython.tar.gz)
+for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+  KINU_CLI_ARTIFACTS+=("kinu-cli-$platform.tar.gz")
+done
+for file in kinu-version.json "${KINU_CLI_ARTIFACTS[@]}" "${KINU_CLI_ARTIFACTS[@]/%/.sha256}"; do
+  if [ ! -s "$KINU_ASSETS_DIR/downloads/$file" ]; then
+    echo -e "${RED}❌ Missing build output: $KINU_ASSETS_DIR/downloads/$file${NC}"
     exit 1
   fi
 done
@@ -708,53 +712,48 @@ else
 fi
 
 CLI_SHIM=$(curl -s --max-time 15 "${KINU_URL}downloads/kinu" 2>/dev/null)
-if echo "$CLI_SHIM" | grep -q 'downloads/kinu-source.tar.gz' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
-  echo -e "${GREEN}✅ Kinu CLI shim uses deployed source archive${NC}"
+if echo "$CLI_SHIM" | grep -q 'downloads/kinu-cli-' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
+  echo -e "${GREEN}✅ Kinu CLI launcher uses the deployed build artifacts${NC}"
 else
-  echo -e "${RED}❌ Kinu CLI shim is not using the deployed source archive${NC}"
+  echo -e "${RED}❌ Kinu CLI launcher is not using the deployed build artifacts${NC}"
   SMOKE_FAIL=1
 fi
 
-CLI_ARCHIVE_TMP="$(mktemp -t kinu-cli-source.XXXXXX.tar.gz)"
-CLI_ARCHIVE_LIST="$(mktemp -t kinu-cli-source.XXXXXX.list)"
-CLI_ARCHIVE_OK=0
-for attempt in 1 2 3 4 5 6; do
-  if curl -fsSL --max-time 30 "${KINU_URL}downloads/kinu-source.tar.gz" -o "$CLI_ARCHIVE_TMP" \
-    && tar -tzf "$CLI_ARCHIVE_TMP" > "$CLI_ARCHIVE_LIST" \
-    && grep -Fq 'kinu/packages/cli/src/commands/setup.ts' "$CLI_ARCHIVE_LIST"; then
-    CLI_ARCHIVE_OK=1
-    break
+# Every artifact the launcher can ask for, downloaded and hashed the way the
+# launcher does it. A platform whose artifact never published installs nothing,
+# and a checksum that disagrees makes install and update both refuse.
+CLI_ARTIFACT_TMP="$(mktemp -t kinu-cli-artifact.XXXXXX.tar.gz)"
+CLI_ARTIFACT_LIST="$(mktemp -t kinu-cli-artifact.XXXXXX.list)"
+for artifact in "${KINU_CLI_ARTIFACTS[@]}"; do
+  case "$artifact" in
+    kinu-runtime-cpython.tar.gz) MEMBER='kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json' ;;
+    *) MEMBER='kinu/cli.js' ;;
+  esac
+  CLI_ARTIFACT_OK=0
+  for attempt in 1 2 3 4 5 6; do
+    if curl -fsSL --max-time 60 "${KINU_URL}downloads/$artifact" -o "$CLI_ARTIFACT_TMP" \
+      && tar -tzf "$CLI_ARTIFACT_TMP" > "$CLI_ARTIFACT_LIST" \
+      && grep -Fq "$MEMBER" "$CLI_ARTIFACT_LIST"; then
+      CLI_ARTIFACT_OK=1
+      break
+    fi
+    [ "$attempt" = "6" ] || sleep 5
+  done
+  if [ "$CLI_ARTIFACT_OK" != "1" ]; then
+    echo -e "${RED}❌ $artifact is missing, unreadable, or carries no $MEMBER${NC}"
+    SMOKE_FAIL=1
+    continue
   fi
-  [ "$attempt" = "6" ] || sleep 5
-done
-if [ "$CLI_ARCHIVE_OK" = "1" ]; then
-  echo -e "${GREEN}✅ Kinu CLI source archive is downloadable${NC}"
-  # The CLI shim verifies this checksum by default — a stale/missing .sha256
-  # bricks installs and updates, so the deploy gate checks it too.
-  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/kinu-source.tar.gz.sha256" 2>/dev/null | awk '{print $1}')"
-  ACTUAL_SHA="$(sha256sum "$CLI_ARCHIVE_TMP" | awk '{print $1}')"
+  PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/$artifact.sha256" 2>/dev/null | awk '{print $1}')"
+  ACTUAL_SHA="$(sha256sum "$CLI_ARTIFACT_TMP" | awk '{print $1}')"
   if [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
-    echo -e "${GREEN}✅ Kinu CLI source checksum matches the published .sha256${NC}"
+    echo -e "${GREEN}✅ $artifact downloads and matches its published .sha256${NC}"
   else
-    echo -e "${RED}❌ Published source checksum is missing or does not match the archive${NC}"
+    echo -e "${RED}❌ $artifact checksum is missing or does not match the download${NC}"
     SMOKE_FAIL=1
   fi
-  # An archive that downloads and unpacks can still be un-installable. The
-  # distribution pins its own `[install] linker`, because Bun 1.3.0/1.3.1
-  # default a workspace to the isolated linker and this monorepo shares its
-  # runtime dependencies through the root manifest — without the pin a fresh
-  # machine installs cleanly and then dies on launch with `Cannot find module`.
-  if grep -Fq 'kinu/bunfig.toml' "$CLI_ARCHIVE_LIST"; then
-    echo -e "${GREEN}✅ Kinu CLI source archive pins its install linker${NC}"
-  else
-    echo -e "${RED}❌ Published source archive ships no bunfig.toml — installs depend on the user's Bun default${NC}"
-    SMOKE_FAIL=1
-  fi
-else
-  echo -e "${RED}❌ Kinu CLI source archive is missing or invalid${NC}"
-  SMOKE_FAIL=1
-fi
-rm -f "$CLI_ARCHIVE_TMP" "$CLI_ARCHIVE_LIST"
+done
+rm -f "$CLI_ARTIFACT_TMP" "$CLI_ARTIFACT_LIST"
 
 if [ "$SMOKE_FAIL" -ne 0 ]; then
   echo ""

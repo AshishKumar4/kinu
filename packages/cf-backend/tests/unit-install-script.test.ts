@@ -25,6 +25,7 @@ import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { KINU_BUN_VERSION, bunResolutionShell, bunVersionKey } from '../src/cli/bun-runtime';
+import { CLI_DIST_PLATFORMS } from '../src/lib/deployed-assets';
 
 const ORIGIN = 'https://kinu.example.com';
 const tempDirs: string[] = [];
@@ -94,23 +95,33 @@ function bunStub(version: string, logPath: string): string {
   ].join('\n');
 }
 
-/** A source archive shaped like the published one — one top-level directory
- *  carrying packages/cli/bin/cli.ts — plus the sha256 sidecar the launcher
- *  verifies against. */
-function makeSourceTarball(home: string): void {
+/** The two archives shaped like the published ones: a platform artifact
+ *  carrying `kinu/cli.js`, and the shared CPython runtime that unpacks into
+ *  the same tree. Each gets the sha256 sidecar the launcher verifies. */
+function makeDistTarballs(home: string): void {
   const stage = join(home, 'stage');
-  mkdirSync(join(stage, 'kinu/packages/cli/bin'), { recursive: true });
-  writeFileSync(join(stage, 'kinu/packages/cli/bin/cli.ts'), '#!/usr/bin/env bun\n');
-  const tarball = join(home, 'source.tar.gz');
-  const tar = spawnSync('tar', ['-czf', tarball, '-C', stage, 'kinu'], { encoding: 'utf8' });
-  if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
-  const digest = createHash('sha256').update(readFileSync(tarball)).digest('hex');
-  writeFileSync(join(home, 'source.tar.gz.sha256'), `${digest}  kinu-source.tar.gz\n`);
+  mkdirSync(join(stage, 'kinu'), { recursive: true });
+  writeFileSync(join(stage, 'kinu/cli.js'), 'process.stdout.write("stub\\n");\n');
+  mkdirSync(join(stage, 'runtime/kinu/node_modules/@nimbus-sh/runtime-cpython'), { recursive: true });
+  writeFileSync(
+    join(stage, 'runtime/kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json'),
+    '{"name":"cpython","files":[]}\n',
+  );
+  for (const [name, from, member] of [
+    ['cli.tar.gz', stage, 'kinu'],
+    ['runtime.tar.gz', join(stage, 'runtime'), 'kinu'],
+  ] as const) {
+    const tarball = join(home, name);
+    const tar = spawnSync('tar', ['-czf', tarball, '-C', from, member], { encoding: 'utf8' });
+    if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
+    const digest = createHash('sha256').update(readFileSync(tarball)).digest('hex');
+    writeFileSync(`${tarball}.sha256`, `${digest}  ${name}\n`);
+  }
 }
 
 /** A sandbox HOME plus stub curl/bun/ln so the script runs without network
  *  or system side effects. The stub curl "downloads" the launcher, the Bun
- *  installer, and the source archive. */
+ *  installer, and the two published build artifacts. */
 function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
   const ambientBun = options.ambientBun === undefined ? KINU_BUN_VERSION : options.ambientBun;
   const home = mkdtempSync(join(tmpdir(), 'kinu-install-test-'));
@@ -123,6 +134,7 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
     '#!/bin/sh',
     'if [ "$1" = "--help" ]; then printf "  setup   connect your account\\n"; exit 0; fi',
     'if [ "$1" = "setup" ]; then echo "STUB-SETUP-RAN"; exit 0; fi',
+    'if [ "$1" = "connect" ]; then echo "STUB-CONNECT-RAN $*"; exit 0; fi',
     'exit 0',
   ].join('\n');
   writeFileSync(join(home, 'stub-shim.sh'), `${stubShim}\n`);
@@ -146,7 +158,7 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
   ].join('\n');
   writeFileSync(join(home, 'bun-installer.sh'), `${bunInstaller}\n`);
 
-  makeSourceTarball(home);
+  makeDistTarballs(home);
 
   const curl = [
     '#!/usr/bin/env bash',
@@ -162,10 +174,14 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
     'done',
     'case "$url" in',
     `  *bun.sh/install*) cat "${home}/bun-installer.sh"; exit 0 ;;`,
-    `  *kinu-source.tar.gz.sha256) cat "${home}/source.tar.gz.sha256"; exit 0 ;;`,
-    '  *kinu-source.tar.gz)',
+    `  *kinu-runtime-cpython.tar.gz.sha256) cat "${home}/runtime.tar.gz.sha256"; exit 0 ;;`,
+    '  *kinu-runtime-cpython.tar.gz)',
     '    [ -n "$out" ] || exit 1',
-    `    cat "${home}/source.tar.gz" > "$out"; exit 0 ;;`,
+    `    cat "${home}/runtime.tar.gz" > "$out"; exit 0 ;;`,
+    `  *kinu-cli-*.tar.gz.sha256) cat "${home}/cli.tar.gz.sha256"; exit 0 ;;`,
+    '  *kinu-cli-*.tar.gz)',
+    '    [ -n "$out" ] || exit 1',
+    `    cat "${home}/cli.tar.gz" > "$out"; exit 0 ;;`,
     'esac',
     `if [ -n "$out" ]; then cat "${home}/launcher" > "$out"; exit 0; fi`,
     'cat "$HOME/install.sh"',
@@ -248,29 +264,80 @@ describe('install.sh terminal handling', () => {
     expect(result.exitCode).toBe(0);
   }, 30_000);
 
-  test('the canonical install command activates kinu in its invoking shell', async () => {
+  // The command handed to a user is one pipeline. It used to carry a
+  // `KINU_PARENT_ACTIVATES=1` prefix and an `&& export PATH=…` tail, which is
+  // how the calling shell got `kinu` — and which is why the string on the site
+  // was three commands wide. The script owns that concern now: it says the
+  // export line out loud, and that line is what the user runs.
+  test('the canonical install command is one pipeline, and the script says how to activate it', async () => {
     const script = await installScript();
     const { home, stubBin } = makeSandbox();
     writeFileSync(join(home, 'install.sh'), script);
     const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
+    expect(install).toBe(`curl -fsSL '${ORIGIN}/install.sh' | bash -s -- --no-setup`);
+    expect(install).not.toContain('KINU_PARENT_ACTIVATES');
+    expect(install).not.toContain('export PATH');
+
+    const binDir = join(home, '.kinu/bin');
     const run = spawnSync('bash', ['-c', [
       install,
-      'printf "ACTIVE=%s\\n" "$(command -v kinu)"',
-      'kinu --help',
+      'printf "BEFORE=%s\\n" "$(command -v kinu)"',
     ].join('\n')], {
       encoding: 'utf8',
       timeout: 30_000,
-      env: {
-        HOME: home,
-        KINU_HOME: join(home, '.kinu'),
-        PATH: `${stubBin}:/usr/bin:/bin`,
-        SHELL: '/bin/bash',
-      },
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
     });
 
     expect(run.status, run.stderr).toBe(0);
-    expect(run.stdout).toContain(`ACTIVE=${join(home, '.kinu/bin/kinu')}`);
-    expect(run.stdout).toContain('setup   connect your account');
+    // The installer runs in its own process, so the calling shell cannot see
+    // kinu yet. That is exactly when the hint has to appear.
+    expect(run.stdout).toContain('BEFORE=\n');
+    expect(run.stdout).toContain('To use kinu in this shell now, run:');
+    const hint = run.stdout.split('\n').map((line) => line.trim())
+      .find((line) => line.startsWith('export PATH='));
+    expect(hint).toBe(`export PATH="${binDir}:$PATH"`);
+
+    // The hint is not decoration: running it is what activates the CLI.
+    const activated = spawnSync('bash', ['-c', [hint ?? '', 'command -v kinu', 'kinu --help'].join('\n')], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
+    });
+    expect(activated.status, activated.stderr).toBe(0);
+    expect(activated.stdout).toContain(join(home, '.kinu/bin/kinu'));
+    expect(activated.stdout).toContain('setup   connect your account');
+  }, 40_000);
+
+  test('nothing in the served installer reads KINU_PARENT_ACTIVATES', async () => {
+    const script = await installScript();
+    expect(script).not.toContain('KINU_PARENT_ACTIVATES');
+    expect(script).not.toContain('PARENT_ACTIVATES');
+    // The branch it used to gate still exists, and is now unconditional.
+    expect(script).toContain('if [ "$NEEDS_PARENT_ACTIVATION" = "1" ]; then');
+  });
+
+  // What the web UI hands a user registering a device. The connect flow runs
+  // inside the installer, so one paste installs the CLI and pairs the machine.
+  test('--connect pairs the machine from inside the installer, before the PATH hint', async () => {
+    const script = await installScript();
+    const { home, stubBin } = makeSandbox();
+    const install = buildCliInstallCommand({
+      origin: ORIGIN, setup: false, connect: true, label: "Ashish's Mac",
+    });
+    expect(install).toContain("--connect --label 'Ashish'\\''s Mac'");
+    writeFileSync(join(home, 'install.sh'), script);
+    const run = spawnSync('bash', ['-c', install], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
+    });
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("STUB-CONNECT-RAN connect --label Ashish's Mac");
+    expect(run.stdout).not.toContain('STUB-SETUP-RAN');
+    // The hint is last: a user reads it after the flow it belongs to finishes.
+    expect(run.stdout.indexOf('STUB-CONNECT-RAN'))
+      .toBeLessThan(run.stdout.indexOf('To use kinu in this shell now'));
   }, 40_000);
 
   test('interactive steps gate on actually opening /dev/tty and restore the terminal on failure', async () => {
@@ -334,6 +401,78 @@ describe('install.sh terminal handling', () => {
 });
 
 /**
+ * The install used to be a source checkout plus `bun install --frozen-lockfile`
+ * of the whole monorepo. Measured cold on 2026-09-01: 13.35 s of a 16.08 s
+ * install, 950 packages, 105,648 files, 1.9 GB of the user's disk, and the
+ * workerd postinstall shelling out to `npm install` for a binary. The CLI is
+ * built at deploy time now, so the user's machine resolves nothing.
+ */
+describe('the CLI installs as a prebuilt artifact', () => {
+  test('the launcher unpacks published builds and runs no package manager', async () => {
+    const launcher = await launcherScript();
+    expect(launcher).toContain('/downloads/kinu-cli-${KINU_OS}-${KINU_ARCH}.tar.gz');
+    expect(launcher).toContain('RUNTIME_URL="${KINU_ORIGIN}/downloads/kinu-runtime-cpython.tar.gz"');
+    expect(launcher).toContain(`KINU_ORIGIN="\${KINU_ORIGIN:-${ORIGIN}}"`);
+    // The whole point: nothing on the user's machine resolves a dependency.
+    expect(launcher).not.toContain('bun install');
+    expect(launcher).not.toContain('--frozen-lockfile');
+    expect(launcher).not.toContain('node_modules');
+    // Both downloads land in one staging tree and move once, so an interrupted
+    // update cannot leave half an install behind.
+    expect(launcher).toContain('mv "$tmp/extract/kinu" "$CLI_DIR"');
+    expect(launcher.split('rm -rf "$CLI_DIR"').length - 1).toBe(1);
+  });
+
+  test('every platform the launcher can name has a published artifact', async () => {
+    const launcher = await launcherScript();
+    // `uname` answers on the left, artifact names on the right. A pair the
+    // launcher accepts but the deploy never publishes is a 404 body unpacked
+    // as a tarball, so the two sets are held equal here.
+    const named = new Set<string>();
+    for (const [unameS, os] of [['Darwin', 'darwin'], ['Linux', 'linux']] as const) {
+      expect(launcher).toContain(`${unameS}) KINU_OS=${os} ;;`);
+      for (const arch of ['arm64', 'x64']) named.add(`${os}-${arch}`);
+    }
+    expect(launcher).toContain('arm64|aarch64) KINU_ARCH=arm64 ;;');
+    expect(launcher).toContain('x86_64|amd64) KINU_ARCH=x64 ;;');
+    expect([...named].sort()).toEqual([...CLI_DIST_PLATFORMS].sort());
+    // An unsupported pair stops rather than downloading a page.
+    expect(launcher).toContain('Kinu supports macOS and Linux.');
+    expect(launcher).toContain('Kinu supports arm64 and x86_64.');
+  });
+
+  test('every download is checksum-verified, with no way to skip it', async () => {
+    const launcher = await launcherScript();
+    expect(launcher).toContain('fetch_verified "$TARBALL_URL"');
+    expect(launcher).toContain('fetch_verified "$RUNTIME_URL"');
+    expect(launcher).toContain('[ "$actual" = "$expected" ] || die "Checksum mismatch for $url."');
+    // The pin override is gone: verification against the published .sha256 is
+    // the only path, so no environment variable can turn it off.
+    expect(launcher).not.toContain('KINU_SOURCE_SHA256');
+    expect(launcher).not.toContain('KINU_CLI_SHA256');
+  });
+
+  test('a fresh install downloads a build and never runs an installer on the machine', async () => {
+    const script = await installScript();
+    const launcher = await launcherScript();
+    const { home, stubBin } = makeSandbox({ ambientBun: null, launcher });
+    const result = await runHeadlessInstall(script, home, stubBin);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.output).toContain('Downloading Kinu CLI...');
+    expect(result.output).not.toContain('Preparing Kinu CLI...');
+    expect(result.exitCode).toBe(0);
+    // Both artifacts unpacked into the one installed tree.
+    expect(existsSync(join(home, '.kinu/cli/current/cli.js'))).toBe(true);
+    expect(existsSync(
+      join(home, '.kinu/cli/current/node_modules/@nimbus-sh/runtime-cpython/manifest.json'),
+    )).toBe(true);
+    // The source checkout the old install left behind is not created at all.
+    expect(existsSync(join(home, '.kinu/source'))).toBe(false);
+  }, 40_000);
+});
+
+/**
  * The reported transition, in one file: the installer says "Kinu CLI is ready."
  * and the next `kinu` says "Bun is required." It happened because the two
  * scripts resolved Bun independently — the installer through a PATH it exported
@@ -362,7 +501,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     // The launcher never installs a runtime, and it runs exactly one — the Bun
     // it just resolved. The CLI imports bun:sqlite; there is no Node path.
     expect(launcher).not.toContain('bun.sh/install');
-    expect(launcher).toContain('exec "$KINU_BUN" run packages/cli/bin/cli.ts "$@"');
+    expect(launcher).toContain('exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"');
   });
 
   /**

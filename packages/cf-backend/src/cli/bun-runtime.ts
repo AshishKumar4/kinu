@@ -100,3 +100,27 @@ kinu_resolve_bun() {
 }
 `;
 }
+
+/**
+ * Which prebuilt CLI artifact this machine takes, as shell. Requires
+ * `$KINU_ORIGIN` to be set already and leaves the download URL in
+ * `$TARBALL_URL`.
+ *
+ * The names it produces are `CLI_DIST_PLATFORMS` in lib/deployed-assets.ts,
+ * and `tests/unit-install-script.test.ts` asserts the two sets are equal. A
+ * `uname` pair with no published artifact stops here and says so, because the
+ * alternative is a 404 body unpacked as a tarball.
+ */
+export function cliPlatformShell(): string {
+  return `case "$(uname -s)" in
+  Darwin) KINU_OS=darwin ;;
+  Linux) KINU_OS=linux ;;
+  *) echo "Kinu supports macOS and Linux. This is $(uname -s)." >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) KINU_ARCH=arm64 ;;
+  x86_64|amd64) KINU_ARCH=x64 ;;
+  *) echo "Kinu supports arm64 and x86_64. This is $(uname -m)." >&2; exit 1 ;;
+esac
+TARBALL_URL="\${KINU_ORIGIN}/downloads/kinu-cli-\${KINU_OS}-\${KINU_ARCH}.tar.gz"`;
+}

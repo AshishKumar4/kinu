@@ -340,8 +340,6 @@ Classification is narrow: 429 and 529 always count; a 503 counts only when statu
 | `KINU_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
 | `KINU_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |
 | `KINU_MODEL` | CLI shell env | Override local agent model |
-| `KINU_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override (`cli/routes.ts:957`) |
-| `KINU_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
 | Per-call timeout tuning | CLI shell env / wrangler env var | None exposed, and none exists to expose. There is no per-call silence window and no per-turn step or time bound. What ends a call is the provider answering, failing definitively, or the caller cancelling; what ends a turn is the model finishing without tool calls, the mission budget, or an abort. The SDK transport retry is pinned at `PROVIDER_SDK_RETRIES = 2` (`core/src/providers/rate-limit-retry.ts`). |
 
 `SANDBOX_TRANSPORT` is the one `vars` entry `Env` does not declare. Read it from `wrangler.jsonc`, not the type.
@@ -364,7 +362,7 @@ Classification is narrow: 429 and 529 always count; a 503 counts only when statu
 | `NIMBUS_RUNTIME_CACHE` | R2 bucket | `nimbus-runtime-cache`, the artifact store a hosted workspace installs its toolchain from. Absent means a hosted `python3`, `ruby` or `clang` exits 127 |
 | `FEEDBACK_BUCKET` | R2 bucket | `kinu-feedback`, and `kinu-feedback-staging` in staging. Feedback screenshot bytes. A PNG is megabytes, so it never enters a Durable Object row or an analytics blob; the control-plane row carries the object key only |
 | `AGENT_METRICS`, `FEEDBACK_MARKERS`, `CONTROL_PLANE_OPS` | Analytics Engine | Fleet metrics, feedback markers, and admin operations. Staging writes `*_staging` datasets, so its panels cannot answer with production's numbers |
-| `ASSETS` | Static assets | `dist/client` SPA bundle + CLI source archive downloads |
+| `ASSETS` | Static assets | `dist/client` SPA bundle + prebuilt CLI downloads |
 
 Two agent classes bind nowhere: `ExplorationAgent` (MCTS branches and heads) and `SubordinateAgent` exist only as facets of `OrchestratorAgent` via the agents SDK's sub-agent mechanism. `ExplorationAgent` still appears in the DO migration list; class registration and binding are separate things.
 
@@ -385,9 +383,9 @@ Environments differ in four values: route, wrangler `--env` flag, infrastructure
 Dirty checkout refused first, so the `/api/health` build SHA always identifies the published bytes. Then environment preflight, Wrangler auth check, and `bun install --frozen-lockfile` when there is no root `node_modules`.
 
 1. **Required pre-deploy gates.** Every required gate is an unconditional `run_required_gate` line in `scripts/deploy.sh`, which is the full roster. Preflight runs alone first. Source gates run concurrently, then `gate:hammer` and `gate:infra` each run alone, in that order. `flush_gates` runs up to `nproc / 4` concurrently — each gate is a Bun process with up to four workers, so one outer gate per four hardware threads keeps the aggregate at the machine's thread count. Each gate's verdict is its child's exit status, read with `wait -n -p`: a gate killed by the OOM killer settles as 128+signal and one past the 480s deadline as 124, so a gate that never reports cannot hold the wave open. Coverage: `bun run check`; the deploy contract tests the exact roster and ordering.
-2. **Build.** `vite build`, then `scripts/build-cli-source-archive.sh` (tarball, `.sha256`, `kinu-version.json`); fails if any of the three misses `dist/client/downloads/`.
+2. **Build.** `vite build`, then `scripts/build-cli-dist.sh` (four platform artifacts, the shared CPython runtime, a `.sha256` for each, and `kinu-version.json`); fails if any output misses `dist/client/downloads/`.
 3. **Deploy.** `npx wrangler deploy --tag <sha> --message "kinu <env> <sha>"`, so the published Worker version carries the build sha as a version annotation: Workers Logs tags an invocation with a version id and nothing else, and `npx wrangler versions list` prints the pair. Verifies the `KinuSandbox` binding appears in output and the assets directory reported is the one downloads were staged into.
-4. **Smoke test.** HTTP 200 plus app content on the production URL; `/api/health` stamp equals the deployed commit; `/downloads/kinu-version.json` parses; the CLI shim points at the deployed archive; archive downloads with expected files; `.sha256` matches. Stamp checks retry with backoff: edge rollout takes about two minutes, and a stamp that never converges is the real failure.
+4. **Smoke test.** HTTP 200 plus app content on the production URL; `/api/health` stamp equals the deployed commit; `/downloads/kinu-version.json` parses; the CLI launcher points at the deployed artifacts; every artifact downloads, unpacks, and matches its published `.sha256`. Stamp checks retry with backoff: edge rollout takes about two minutes, and a stamp that never converges is the real failure.
 5. **Summary.** URL, Version ID, build sha.
 
 ### Build budget
@@ -409,7 +407,7 @@ Step 2 asserts downloads exist in `dist/client/downloads/`, step 3 asserts wrang
 
 ### Build stamp
 
-`scripts/build-cli-source-archive.sh` stamps short HEAD sha into the CLI version (`0.1.0+<sha>`) and writes `dist/client/downloads/kinu-version.json` (`{version, sha, builtAt}`) from that stamped `package.json`. The Worker reads it via `ASSETS` and reports `build` on `GET /api/health`: one unauthenticated GET answers both "which commit is live?" and "did the asset half land?". No stamp means `ok: false`, since a deployment without one has broken download endpoints. Dirty worktree prints a warning; the stamp then describes bytes that did not ship.
+`scripts/build-cli-dist.sh` stamps short HEAD sha into the CLI version (`0.2.0+<sha>`) and writes `dist/client/downloads/kinu-version.json` (`{version, sha, builtAt}`) from that stamped `package.json`. The bundler inlines the stamp, so the program reports the same string the manifest advertises. The Worker reads the manifest via `ASSETS` and reports `build` on `GET /api/health`: one unauthenticated GET answers both "which commit is live?" and "did the asset half land?". No stamp means `ok: false`, since a deployment without one has broken download endpoints. Dirty worktree prints a warning; the stamp then describes bytes that did not ship.
 
 ### Environment variables
 
@@ -453,7 +451,7 @@ Compares `git rev-parse --short HEAD` against `build.sha` from the health endpoi
 | Probe | Passes when |
 |-------|-------------|
 | `health` | `/api/health` returns `ok:true` JSON with a build identifier that matches the one `/downloads/kinu-version.json` advertises |
-| `downloads` | `/downloads/kinu-source.tar.gz` hashes to exactly what `…​.sha256` declares. This is the check the installer itself makes |
+| `downloads` | Every published CLI artifact hashes to exactly what its `.sha256` declares. This is the check the installer itself makes |
 | `login` | `/login` renders the sign-in page with at least one provider link |
 
 One email per incident: open with one alert, silent while persisting, one recovery notice on close. Delivery rides `EmailOutbox`, so a failed send re-drives with the same Message-ID rather than duplicating or vanishing. Unset `OPS_ALERT_EMAIL` (as in staging) records incidents silently. Staging has no cron trigger: its providers and mail route are absent by design, and probing would report a site missing on purpose.
@@ -472,8 +470,8 @@ Then confirm it took, the way the deploy gate does: stamp names the rolled-back 
 
 ```bash
 curl -s https://kinu.run/api/health | jq '.ok, .build'
-curl -fsSL https://kinu.run/downloads/kinu-source.tar.gz -o /tmp/p.tgz
-curl -fsSL https://kinu.run/downloads/kinu-source.tar.gz.sha256
+curl -fsSL https://kinu.run/downloads/kinu-cli-linux-x64.tar.gz -o /tmp/p.tgz
+curl -fsSL https://kinu.run/downloads/kinu-cli-linux-x64.tar.gz.sha256
 sha256sum /tmp/p.tgz
 ```
 

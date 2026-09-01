@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -951,146 +952,130 @@ describe("one deploy path", () => {
   });
 });
 
-describe("CLI source archive", () => {
-  test("contains every patch declared by its packaged manifest", () => {
-    const directory = mkdtempSync(join(tmpdir(), "kinu-cli-archive-test-"));
+/**
+ * The CLI is built at deploy time and published as artifacts. Before that it
+ * shipped as a source archive every user had to `bun install`: measured cold
+ * on 2026-09-01, that was 13.35 s of a 16.08 s install, 950 packages and
+ * 1.9 GB of their disk. What replaces it must be built, executable, within
+ * Cloudflare's per-file asset limit, and complete — a missing platform is a
+ * platform that installs nothing.
+ */
+describe("CLI distribution artifacts", () => {
+  const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"] as const;
+  const CPYTHON = "kinu-runtime-cpython.tar.gz";
+  // Cloudflare's static-asset limit, per file, on both plans.
+  const MAX_ASSET_BYTES = 25 * 1024 * 1024;
+
+  function buildDist(): string {
+    const directory = mkdtempSync(join(tmpdir(), "kinu-cli-dist-test-"));
     temporaryDirectories.push(directory);
-    const archive = join(directory, "kinu-source.tar.gz");
-    const decoder = new TextDecoder();
     const build = Bun.spawnSync(
-      ["bash", join(REPO_ROOT, "scripts", "build-cli-source-archive.sh"), archive],
+      ["bash", join(REPO_ROOT, "scripts", "build-cli-dist.sh"), directory],
       { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
     );
-    expect(build.exitCode, decoder.decode(build.stderr)).toBe(0);
+    expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
+    return directory;
+  }
 
-    const manifestResult = Bun.spawnSync(
-      ["tar", "-xOzf", archive, "kinu/package.json"],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    expect(manifestResult.exitCode, decoder.decode(manifestResult.stderr)).toBe(0);
-    const manifest = v.parse(
-      v.object({
-        patchedDependencies: v.optional(v.record(v.string(), v.string())),
-        scripts: v.optional(v.record(v.string(), v.string())),
-      }),
-      JSON.parse(decoder.decode(manifestResult.stdout)),
-    );
-    const patchPaths = Object.values(manifest.patchedDependencies ?? {});
-    expect(patchPaths.length, "the fixture stopped exercising archive patches").toBeGreaterThan(0);
-    expect(manifest.scripts?.prepare, "distribution archive retained the development prepare hook").toBeUndefined();
+  function members(archive: string): Set<string> {
+    const decoder = new TextDecoder();
+    const listing = Bun.spawnSync(["tar", "-tzf", archive], { stdout: "pipe", stderr: "pipe" });
+    expect(listing.exitCode, decoder.decode(listing.stderr)).toBe(0);
+    return new Set(decoder.decode(listing.stdout).trim().split("\n"));
+  }
 
-    const listingResult = Bun.spawnSync(
-      ["tar", "-tzf", archive],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    expect(listingResult.exitCode, decoder.decode(listingResult.stderr)).toBe(0);
-    const members = new Set(decoder.decode(listingResult.stdout).trim().split("\n"));
-    const lockResult = Bun.spawnSync(
-      ["tar", "-xOzf", archive, "kinu/bun.lock"],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    expect(lockResult.exitCode, decoder.decode(lockResult.stderr)).toBe(0);
+  test("publishes one artifact per platform, plus the runtime they share", () => {
+    const directory = buildDist();
 
-    const extracted = join(directory, "extracted");
-    mkdirSync(extracted);
-    const unpack = Bun.spawnSync(
-      ["tar", "-xzf", archive, "-C", extracted],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
-    const sourceRoot = join(extracted, "kinu");
-    const install = Bun.spawnSync(
-      [process.execPath, "install", "--frozen-lockfile"],
-      { cwd: sourceRoot, stdout: "pipe", stderr: "pipe" },
-    );
-    expect(install.exitCode, decoder.decode(install.stderr)).toBe(0);
-    const launch = Bun.spawnSync(
-      [process.execPath, "packages/cli/bin/cli.ts", "--version"],
-      { cwd: sourceRoot, env: freshHome(directory), stdout: "pipe", stderr: "pipe" },
-    );
-    expect(launch.exitCode, launchFailure(launch)).toBe(0);
-    expect(decoder.decode(launch.stdout)).toMatch(/^0\.2\.0\+/);
-    const lock = decoder.decode(lockResult.stdout);
-
-    for (const patchPath of patchPaths) {
-      expect(members.has(`kinu/${patchPath}`), `archive omitted ${patchPath}`).toBe(true);
-      expect(lock, `archive lock stopped naming ${patchPath}`).toContain(patchPath);
+    for (const platform of PLATFORMS) {
+      const artifact = join(directory, `kinu-cli-${platform}.tar.gz`);
+      expect(existsSync(artifact), `no artifact for ${platform}`).toBe(true);
+      const entries = members(artifact);
+      expect(entries.has("kinu/cli.js"), `${platform} artifact carries no cli.js`).toBe(true);
+      // The native library is the whole reason this artifact is per platform.
+      expect(
+        [...entries].some((entry) => entry.startsWith(`kinu/node_modules/@opentui/core-${platform}/`)),
+        `${platform} artifact carries no @opentui/core-${platform}`,
+      ).toBe(true);
+      // Every other platform's native library stays out of it.
+      for (const other of PLATFORMS) {
+        if (other === platform) continue;
+        expect(
+          [...entries].some((entry) => entry.includes(`@opentui/core-${other}/`)),
+          `${platform} artifact also ships ${other}`,
+        ).toBe(false);
+      }
+      // The CPython blobs are 13.71 MiB gzipped and identical on every
+      // platform. Four copies is 41 MiB of duplicate assets.
+      expect(
+        [...entries].some((entry) => entry.includes("runtime-cpython")),
+        `${platform} artifact duplicates the shared CPython runtime`,
+      ).toBe(false);
     }
-  }, 120_000);
 
-  // The install this asserts is the one a stranger runs, and its outcome must not
-  // depend on which Bun they happen to have. It did: Bun 1.3.0 and 1.3.1 default a
-  // WORKSPACE to the isolated linker, 1.3.1 predates the `configVersion` field that
-  // records this project's hoisted intent, and the archive shipped no bunfig — so a
-  // fresh macOS install resolved isolated, `packages/core` saw only its declared
-  // dependencies, and `kinu --version` died with
-  // `Cannot find module '@ai-sdk/provider-utils'`. The test above could not catch it,
-  // because it inherits the RUNNER's default rather than stating the distribution's.
-  //
-  // `configVersion: 1` is Bun's own switch for "default this workspace to isolated",
-  // so rewriting it reproduces the 1.3.1 default on any current Bun. The install runs
-  // with no linker flag: a flag would override the shipped bunfig and test nothing.
-  test("installs and launches on a Bun that defaults a workspace to isolated", () => {
-    const directory = mkdtempSync(join(tmpdir(), "kinu-cli-linker-test-"));
-    temporaryDirectories.push(directory);
+    const runtime = join(directory, CPYTHON);
+    expect(existsSync(runtime)).toBe(true);
+    expect(members(runtime).has("kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json")).toBe(true);
+  }, 300_000);
+
+  test("every artifact carries a matching checksum and fits the asset limit", () => {
+    const directory = buildDist();
+    for (const name of [...PLATFORMS.map((p) => `kinu-cli-${p}.tar.gz`), CPYTHON]) {
+      const artifact = join(directory, name);
+      const bytes = readFileSync(artifact);
+      expect(bytes.byteLength, `${name} is over Cloudflare's per-file asset limit`)
+        .toBeLessThanOrEqual(MAX_ASSET_BYTES);
+      const declared = readFileSync(`${artifact}.sha256`, "utf8").trim().split(/\s+/)[0];
+      expect(declared, `${name} has no published checksum`).toMatch(/^[0-9a-f]{64}$/);
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe(declared);
+    }
+  }, 300_000);
+
+  // The install this asserts is the one a stranger runs: unpack both archives
+  // over one directory and launch. Nothing resolves a dependency here, so the
+  // failure the old source archive kept having — a fresh machine installing
+  // cleanly and then dying on `Cannot find module` — has no path left.
+  test("the unpacked artifacts launch and report the build's stamped version", () => {
+    const directory = buildDist();
     const decoder = new TextDecoder();
-    const archive = join(directory, "kinu-source.tar.gz");
-    const build = Bun.spawnSync(
-      ["bash", join(REPO_ROOT, "scripts", "build-cli-source-archive.sh"), archive],
-      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+    const host = `${process.platform}-${process.arch}`;
+    const installed = join(directory, "installed");
+    mkdirSync(installed);
+    for (const name of [`kinu-cli-${host}.tar.gz`, CPYTHON]) {
+      const unpack = Bun.spawnSync(["tar", "-xzf", join(directory, name), "-C", installed], {
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
+    }
+    const root = join(installed, "kinu");
+
+    const stamp = v.parse(
+      v.object({ version: v.string(), sha: v.string(), builtAt: v.string() }),
+      JSON.parse(readFileSync(join(directory, "kinu-version.json"), "utf8")),
     );
-    expect(build.exitCode, decoder.decode(build.stderr)).toBe(0);
+    expect(stamp.version).toMatch(/^0\.2\.0\+/);
 
-    const extracted = join(directory, "extracted");
-    mkdirSync(extracted);
-    const unpack = Bun.spawnSync(
-      ["tar", "-xzf", archive, "-C", extracted],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
-    const sourceRoot = join(extracted, "kinu");
-
-    // The pin is the repository's own line, not a second copy of the decision.
-    const repositoryLinker = /^\s*linker\s*=\s*"([^"]+)"/m
-      .exec(readFileSync(join(REPO_ROOT, "bunfig.toml"), "utf8"))?.[1];
-    expect(repositoryLinker, "the repository stopped declaring an [install] linker").toBeDefined();
-    const shipped = readFileSync(join(sourceRoot, "bunfig.toml"), "utf8");
-    expect(shipped, "the distribution bunfig drifted from the repository's linker")
-      .toContain(`linker = "${repositoryLinker ?? ""}"`);
-    // Shipping the repository's bunfig verbatim exits `bun install` 1 outright:
-    // it names ./scripts/security-scanner.ts, which the distribution omits.
-    expect(shipped, "the distribution bunfig names a scanner it does not ship")
-      .not.toContain("scanner");
-
-    const lockPath = join(sourceRoot, "bun.lock");
-    const lock = readFileSync(lockPath, "utf8");
-    expect(lock, "bun.lock stopped carrying configVersion").toMatch(/"configVersion": \d+/);
-    writeFileSync(lockPath, lock.replace(/"configVersion": \d+/, '"configVersion": 1'));
-
-    const install = Bun.spawnSync(
-      [process.execPath, "install", "--frozen-lockfile"],
-      { cwd: sourceRoot, stdout: "pipe", stderr: "pipe" },
-    );
-    expect(install.exitCode, decoder.decode(install.stderr)).toBe(0);
-    expect(
-      existsSync(join(sourceRoot, "node_modules", ".bun")),
-      "the distribution installed isolated: the shipped linker pin was not honoured",
-    ).toBe(false);
-
-    const launched = freshHome(directory);
-    const version = Bun.spawnSync(
-      [process.execPath, "packages/cli/bin/cli.ts", "--version"],
-      { cwd: sourceRoot, env: launched, stdout: "pipe", stderr: "pipe" },
-    );
+    const version = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--version"], {
+      cwd: root, env: freshHome(directory), stdout: "pipe", stderr: "pipe",
+    });
     expect(version.exitCode, launchFailure(version)).toBe(0);
-    expect(decoder.decode(version.stdout)).toMatch(/^0\.2\.0\+/);
+    // The stamp the assets advertise is the stamp the program reports. Two
+    // stamping sites is how `kinu update` learns to chase a version nothing has.
+    expect(decoder.decode(version.stdout).trim()).toBe(stamp.version);
 
     // What install.sh itself greps for before calling the install good.
-    const help = Bun.spawnSync(
-      [process.execPath, "packages/cli/bin/cli.ts", "--help"],
-      { cwd: sourceRoot, env: launched, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-    );
+    const help = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--help"], {
+      cwd: root, env: freshHome(directory), stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
     expect(help.exitCode, launchFailure(help)).toBe(0);
     expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
+  }, 300_000);
+
+  // The build must not leave the tree it stamped for the bundle behind.
+  test("the version stamp does not survive into the working tree", () => {
+    const manifest = join(REPO_ROOT, "packages", "cli", "package.json");
+    const before = readFileSync(manifest, "utf8");
+    buildDist();
+    expect(readFileSync(manifest, "utf8")).toBe(before);
   }, 300_000);
 });

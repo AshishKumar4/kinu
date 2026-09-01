@@ -62,7 +62,7 @@ export async function doctorCommand(): Promise<void> {
   console.log(`${DIM('Command:')} ${existsSync(installed) ? OK(installed) : WARN(`missing ${installed}`)}`);
   console.log(`${DIM('Origin:')} ${origin}`);
   console.log(`${DIM('PATH:')} ${(process.env.PATH ?? '').split(':').includes(BIN_DIR) ? OK('configured') : WARN(`${BIN_DIR} not in PATH`)}`);
-  console.log(`${DIM('Source cache:')} ${join(AGENT_HOME, 'source')}`);
+  console.log(`${DIM('Build cache:')} ${join(AGENT_HOME, 'cli', 'current')}`);
   console.log(`${DIM('Current entry:')} ${process.argv[1] ? dirname(process.argv[1]) : '(unknown)'}`);
 
   const served = await fetchServedVersion(origin);

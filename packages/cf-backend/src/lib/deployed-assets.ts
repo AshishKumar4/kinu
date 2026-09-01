@@ -10,10 +10,21 @@
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
-/** CLI source archive + its checksum + the served build stamp. Written into
- *  `dist/client/downloads/` by scripts/build-cli-source-archive.sh. */
-export const CLI_SOURCE_TARBALL_PATH = '/downloads/kinu-source.tar.gz';
-export const CLI_SOURCE_TARBALL_SHA256_PATH = `${CLI_SOURCE_TARBALL_PATH}.sha256`;
+/** The platforms the CLI distribution is built for. The launcher's `uname`
+ *  maps onto these exactly: Darwin/Linux and arm64/x86_64. */
+export const CLI_DIST_PLATFORMS = [
+  'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64',
+] as const;
+
+/** One prebuilt CLI artifact per platform, the CPython runtime they all share,
+ *  and the served build stamp. Written into `dist/client/downloads/` by
+ *  scripts/build-cli-dist.sh. Every artifact carries a sibling `.sha256` the
+ *  launcher verifies before it unpacks anything. */
+export const CLI_RUNTIME_PATH = '/downloads/kinu-runtime-cpython.tar.gz';
+export const CLI_DIST_PATHS: string[] = [
+  ...CLI_DIST_PLATFORMS.map((platform) => `/downloads/kinu-cli-${platform}.tar.gz`),
+  CLI_RUNTIME_PATH,
+];
 export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 
 /** Identity of the build that produced the deployed asset bundle. */

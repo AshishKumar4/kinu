@@ -6,13 +6,32 @@ All notable changes to Kinu are recorded here. The format follows
 
 The version that matters to a user is `packages/cli/package.json`. It is what
 `kinu --version`, `kinu doctor` and the served `kinu-version.json`
-report. `scripts/build-cli-source-archive.sh` appends `+<sha>` build metadata at
+report. `scripts/build-cli-dist.sh` appends `+<sha>` build metadata at
 deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 `0.2.0` part.
 
 ## [Unreleased]
 
 ### Added
+
+- **The CLI installs as a prebuilt build, not a source checkout.** `install.sh`
+  now downloads Bun (when the machine has none), one artifact for the machine's
+  platform, and the CPython runtime every platform shares. Nothing else. The
+  install used to fetch the whole monorepo as source and run
+  `bun install --frozen-lockfile` on it: measured cold on 2026-09-01 on a
+  12900K, that was 13.35 s of a 16.08 s install, 950 packages, 105,648 files,
+  1.9 GB of disk, and a `workerd` postinstall that shells out to
+  `npm install` for a binary. The same install now takes 2.44 s and 144 MB
+  across 46 files, and no package manager, registry or postinstall script runs
+  on the machine at all. `scripts/build-cli-dist.sh` does the resolving once,
+  at deploy time, and refuses to publish a file over Cloudflare's 25 MiB
+  per-file asset limit.
+- **One install command, and it is a single pipeline.**
+  `curl -fsSL 'https://kinu.run/install.sh' | bash`. The
+  `KINU_PARENT_ACTIVATES=1` prefix and the `&& export PATH=…` tail are gone;
+  the script prints the exact export line once, at the end, when the calling
+  shell cannot see `kinu` yet. The landing page and the device-registration
+  API now build that string from the same function.
 
 - **The overlay-cas runner can say where a run went: `--profile stderr`.** One
   `[profile]` line per phase carrying the wall time, the store's own counter
