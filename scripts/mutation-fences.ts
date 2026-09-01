@@ -152,10 +152,9 @@ export const FENCES: readonly Fence[] = [
     snippet: `    if (!this.#owns(generation)) {
       const settled = await this.ctx.storage.get<string>(BOOT_ID_KEY);
       if (settled !== undefined && settled !== bootId) {
-        bootId = settled;
-        await this.#rawExec(\`printf %s \${bootId} > \${BOOT_ID_PATH}\`);
+        await this.#rawExec(\`printf %s \${settled} > \${BOOT_ID_PATH}\`);
       }
-      return bootId;
+      return;
     }
     await this.ctx.storage.put(BOOT_ID_KEY, bootId);`,
     mutation: `    await this.ctx.storage.put(BOOT_ID_KEY, bootId);`,
