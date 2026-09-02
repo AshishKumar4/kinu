@@ -269,7 +269,10 @@ describe('an unconditional write publishes with a rename', () => {
     }
     expect([...(rail.files.get(TARGET) ?? [])]).toEqual([...big]);
     expect([...rail.files.keys()]).toEqual([TARGET]);
-  });
+  // Measured 4.4 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 });
 
 describe('a publication that never happens leaves the previous file', () => {

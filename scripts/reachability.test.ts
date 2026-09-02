@@ -130,7 +130,10 @@ describe('reachability gate, against the real tree', () => {
     // this gate pass forever, which is how `unit-layergate.test.ts` came to
     // check an empty set.
     expect(findUnreachable(SOURCES).declared.length).toBeGreaterThan(80);
-  });
+  // Measured 2.7 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   // Two whole-tree analyses per case, each 2.1 s on a box at load 67 (measured
   // 2026-09-02 under the push tier; bun's default 5 s read red there and green

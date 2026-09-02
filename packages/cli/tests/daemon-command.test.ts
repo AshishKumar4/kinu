@@ -152,7 +152,10 @@ describe('kinu daemon stop', () => {
     const again = runDaemon(home, 'stop');
     expect(again.exitCode).toBe(0);
     expect(again.stdout).toContain('not running');
-  });
+  // Measured 2.9 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 });
 
 describe('a daemon-hosted agent resolves the same profile authority as an interactive one', () => {

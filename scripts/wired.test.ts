@@ -400,7 +400,10 @@ describe('over the live tree', () => {
     ];
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.filter((finding) => !inScope(finding.file))).toEqual([]);
-  });
+  // Measured 8.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 35_000);
 
   test('no finding is also reported reached', () => {
     const findings = findUnreached(graph, reach, readTests(), read);

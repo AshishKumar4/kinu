@@ -274,5 +274,8 @@ export function readCredential(read: () => string): string | null {
     const counts = census(auditCorpus(sources));
     const total = DROP_CLASSES.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0);
     expect(total).toBeGreaterThan(20);
-  });
+  // Measured 3.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 });

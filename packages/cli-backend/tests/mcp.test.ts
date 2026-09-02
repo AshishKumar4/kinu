@@ -83,7 +83,10 @@ describe('connectMcpServers', () => {
     } finally {
       await conn.close();
     }
-  });
+  // Measured 2.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('a tool call gets the full call budget, not the startup budget', async () => {
     // The 5s startup timeout used to apply to tool calls too, so any MCP tool

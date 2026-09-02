@@ -189,7 +189,10 @@ describe("files route — PUT", () => {
     expect(response.status).toBe(200);
     expect(v.parse(OkReplySchema, await response.json())).toEqual({ ok: true });
     expect([...harness.files.get("/home/user/blob.bin")!]).toEqual([...whole]);
-  });
+  // Measured 5.7 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 25_000);
 
   test("an exact multiple of the chunk size is the boundary case and works", async () => {
     const harness = makeAgent();
@@ -382,7 +385,10 @@ describe("files route — GET", () => {
     const response = await route(new Request(URL_), harness);
     expect(response.status).toBe(200);
     expect([...await collect(response)]).toEqual([...whole]);
-  });
+  // Measured 4.2 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 
   test("a second GET of the same path reads the modified file", async () => {
     const harness = makeAgent();

@@ -163,7 +163,10 @@ describe('kinu label', () => {
     expect(parsed.accuracy.sensitivity.mean).toBeLessThan(0.95);
     expect(parsed.accuracy.specificity.mean).toBeGreaterThan(0.9);
     expect(parsed.segments).toHaveLength(2);
-  });
+  // Measured 4.2 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 
   test('alignment prints the corrected block beside the raw rate', () => {
     const { home, truth } = seedWorkspace('demo');
@@ -183,7 +186,10 @@ describe('kinu label', () => {
     expect(after.stdout).toContain('Sensitivity:');
     expect(after.stdout).toContain('Corrected correction rate:');
     expect(after.stdout).not.toContain('uncalibrated');
-  });
+  // Measured 4.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 
   test('a second export never re-asks a turn already answered', () => {
     const { home, truth } = seedWorkspace('demo');
@@ -200,7 +206,10 @@ describe('kinu label', () => {
     const answered = new Set(ids(first));
     expect(ids(second)).toHaveLength(30);
     expect(ids(second).some((id) => answered.has(id))).toBe(false);
-  });
+  // Measured 3.9 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 
   test('a file with a problem in it stores nothing', () => {
     const { home } = seedWorkspace('demo');
@@ -215,7 +224,10 @@ describe('kinu label', () => {
     expect(ingested.stdout).toContain('nothing was stored');
     expect(ingested.stdout).toContain('is not a verdict');
     expect(runCli(home, ['label', 'report', 'demo']).stdout).toContain('uncalibrated');
-  });
+  // Measured 3.3 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('an untouched file is not an error, it is just nothing yet', () => {
     const { home } = seedWorkspace('demo');
@@ -225,7 +237,10 @@ describe('kinu label', () => {
     const ingested = runCli(home, ['label', 'ingest', 'demo', file]);
     expect(ingested.exitCode).toBe(0);
     expect(ingested.stdout).toContain('no verdicts');
-  });
+  // Measured 2.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('the panel refuses before there is anything to score it against', () => {
     const { home, truth } = seedWorkspace('demo');
@@ -249,12 +264,18 @@ describe('kinu label', () => {
     expect(alone.exitCode).toBe(0);
     expect(alone.stdout).toContain('two models from different vendors');
     expect(runCli(home, ['label', 'report', 'demo']).stdout).toContain('Judge panel');
-  });
+  // Measured 5.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 25_000);
 
   test('unknown actions and missing arguments say what to type', () => {
     const { home } = seedWorkspace('demo');
     expect(runCli(home, ['label', 'summarise', 'demo']).stdout)
       .toContain('use export, ingest, ensemble, report, mine, or score');
     expect(runCli(home, ['label', 'ingest', 'demo']).stdout).toContain('kinu label ingest <agent> <file>');
-  });
+  // Measured 3.3 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 });

@@ -416,7 +416,10 @@ describe('CLI TUI layout', () => {
       root.render(<box />);
       renderer.destroy();
     }
-  });
+  // Measured 2.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('slash command hints render as a palette without numeric hotkeys', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
@@ -1031,7 +1034,10 @@ describe('CLI TUI layout', () => {
     } finally {
       rmSync(kinuHome, { recursive: true, force: true });
     }
-  });
+  // Measured 3.4 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 });
 
 async function renderOverlayFrame(showOverlay: boolean) {
@@ -1196,7 +1202,10 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
     } finally {
       rmSync(compact.home, { recursive: true, force: true });
     }
-  });
+  // Measured 2.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', () => {
     const project = realpathSync(mkdtempSync(resolve(tmpdir(), 'kinu-home-project-')));

@@ -408,7 +408,10 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(existsSync(join(dir, 'scratch.txt'))).toBe(false);
     expect(await parent.storage.vfs.exists('scratch.txt')).toBe(false);
     headDb.close();
-  });
+  // Measured 2.7 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('the head run tool reaches the real host with runtime=laptop', async () => {
     const dir = scratchDir('head-runtime-cwd');

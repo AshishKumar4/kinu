@@ -105,7 +105,10 @@ describe('kinu export / import', () => {
     if (!blob) throw new Error('restored logo missing');
     expect(Array.from(new Uint8Array(blob.data)).slice(0, 4)).toEqual([0, 1, 2, 3]);
     db.close();
-  });
+  // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('a cloud workspace exports over the paged RPC and imports locally', async () => {
     const cloudDir = scratch('kinu-export-cloud-db-');
@@ -174,7 +177,10 @@ describe('kinu export / import', () => {
     } finally {
       await server.stop(true);
     }
-  });
+  // Measured 4.2 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 
   test('a database file from an older export still restores', async () => {
     const home = scratch('kinu-export-legacy-');
@@ -207,7 +213,10 @@ describe('kinu export / import', () => {
     expect(imported.exitCode).toBe(1);
     expect(imported.stderr).toContain('incomplete');
     expect(() => restoredDb(home, 'half')).toThrow();
-  });
+  // Measured 3.8 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 });
 
 function mkdirp(home: string, name: string): string {

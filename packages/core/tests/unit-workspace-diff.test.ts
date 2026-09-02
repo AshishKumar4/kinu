@@ -314,5 +314,8 @@ describe('workspace diff lifecycle', () => {
     expect(first.files.map((file) => file.path)).toEqual(['tracked.txt', 'untracked file.txt']);
     expect(second.files).toEqual(first.files);
     expect(after.equals(before)).toBe(true);
-  });
+  // Measured 3.1 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 });

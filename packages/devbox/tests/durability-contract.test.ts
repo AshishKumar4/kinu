@@ -519,5 +519,8 @@ describe('an overlay-cas attach, in the readiness dimensions this contract decla
     // And the fixed dimensions did not move.
     expect(busy.work.mounts).toBe(idle.work.mounts);
     expect(busy.outcome.kind).toBe('attached');
-  });
+  // Measured 3.2 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 });

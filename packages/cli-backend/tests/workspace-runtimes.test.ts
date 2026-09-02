@@ -92,7 +92,10 @@ describe('workspace runtime provisioning', () => {
     // The npm implementation is Nimbus's own and writes into this filesystem.
     expect(await workspace.shell.exec('npm init -y')).toMatchObject({ exitCode: 0 });
     expect(await workspace.vfs.exists('package.json')).toBe(true);
-  });
+  // Measured 8.8 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 40_000);
 
   test('nothing is installed until a provisioned command is invoked', async () => {
     const workspace = open(dbPath());

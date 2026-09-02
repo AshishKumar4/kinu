@@ -1345,5 +1345,8 @@ describe('the spawned-CLI driver roots its child outside the repository', () => 
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
-  });
+  // Measured 4.1 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 20_000);
 });

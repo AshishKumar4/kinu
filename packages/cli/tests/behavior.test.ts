@@ -253,7 +253,10 @@ describe("CLI behavior", () => {
     expect(stdout).toContain("OpenAI");
     expect(stdout).not.toContain("sk-secret");
     expect(stdout).not.toContain("codex-refresh-token");
-  });
+  // Measured 2.9 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test("no-arg CLI keeps a non-interactive help fallback", () => {
     const proc = runCli([]);

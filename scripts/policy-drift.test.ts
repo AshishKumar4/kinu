@@ -116,7 +116,10 @@ export const a = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   test('the real pair is silent in the tree as it stands', () => {
     const drifts = findDrift(readSources()).drifts;
     expect(drifts.filter((d) => d.key.includes('ATTACHMENT'))).toEqual([]);
-  });
+  // Measured 3.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test('and the exculpating signal is load-bearing: same values, no reference, reported', () => {
     // Same two declarations at the SAME value with the cross-reference comment

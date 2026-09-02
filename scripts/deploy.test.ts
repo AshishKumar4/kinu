@@ -540,7 +540,10 @@ describe("deploy gate", () => {
     expect(normal.infraPhase).toBe("full");
     expect([...normal.events].sort()).toEqual([...bootstrap.events].sort());
     expect(normal.stdout).not.toContain("BOOTSTRAP");
-  });
+  // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test("an ambient phase variable cannot relax a deploy nobody bootstrapped", () => {
     // The bypass this design refuses. The phase travels in the environment
@@ -558,7 +561,10 @@ describe("deploy gate", () => {
       environment: "staging", option: "--bootstrap", ambientPhase: "post-deploy",
     });
     expect(asked.infraPhase).toBe("bootstrap");
-  });
+  // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
+  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
+  // on a finite run, stated with its measurement, not a detector.
+  }, 15_000);
 
   test("an unknown option deploys nothing", () => {
     // Refused rather than ignored. A silently-dropped `--bootstrp` would fail the
