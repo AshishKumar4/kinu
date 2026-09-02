@@ -1,0 +1,1405 @@
+{
+  "measured": "d86cd6672: 827 test files, 765 runnable suites, 11169 tests, 34 runners, 62 non-public product members",
+  "entries": [
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-device-consent.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-email-ingress.test.ts :: a message over the byte ceiling is dropped without resolving an agent :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-feedback-png.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-fiber-lane-carriers.test.ts :: (file scope) :: declared mirror",
+      "count": 2
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-fiber-lane-carriers.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-last-event-id.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-public-shell.test.ts :: (file scope) :: mirrored constant",
+      "count": 2
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: the HTTP dispatcher consumes THIS table — no second scope policy anywhere :: declared mirror",
+      "count": 2
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-session-recovery.test.ts :: (file scope) :: mirrored constant",
+      "count": 2
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/unit-transport-security.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cf-backend/tests/workerd/worker.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cli-backend/tests/local-session.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cli-backend/tests/local-session.test.ts :: an errored turn purges its unclaimed takes instead of claiming them :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cli/tests/cloud-agent-client.test.ts :: send transmits only the new user message and streams the reply :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cli/tests/composer-layout.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cli/tests/composer-wrap.test.tsx :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/cli/tests/project-refs.test.ts :: a new display name leaves the database, the placement and the identity alone :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/contract-cache-markers.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/fixtures/template-flags/violations.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/integration-fork-pipeline.test.ts :: payload round-trips across the RPC boundary (structured clone) and replays into the fork DB :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/integration-fork-pipeline.test.ts :: repeating a completed delivery converges on exactly one copied history :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-agent-session-files.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-conversation-store.test.ts :: a pane clear refuses a stale mirror fork point :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-core-adapter-seams.test.ts :: (file scope) :: declared mirror",
+      "count": 3
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-craft-executor.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-events-hub-subordinate.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-mission-budget-seams.test.ts :: a TOOLLESS node charges its one call too, so removing the lump under-charges nothing :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-run-events.test.ts :: step_finish is the turn loop; every other producer names itself :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-subordinates.test.ts :: (file scope) :: declared mirror",
+      "count": 2
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-terminal-transition-conformance.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-turn-authorship.test.ts :: the projection reads text and provenance out of one stored row :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-usage.test.ts :: an unreported cache write is ABSENT, not the zero the SDK fabricates :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/core/tests/unit-workspace-spend.test.ts :: the stored payload really carries the fields the aggregate reads :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/decisions.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/decisions.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/lifecycle-generation.test.ts :: a caller does not JOIN a superseded attempt, it starts the new generation's :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/restore-in-gate.test.ts :: the ordering is not an accident of the fake: an operation issued after the gate still queues behind nothing :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/snapshot-chain.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: scripts/bench.test.ts :: (file scope) :: declared mirror",
+      "count": 2
+    },
+    {
+      "key": "mirror :: scripts/client-error-ux.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
+      "key": "mirror :: scripts/test-census.test.ts :: (file scope) :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: scripts/test-census.test.ts :: RED: the author s own declaration of the mirror :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: tests/evals/harness.ts :: (file scope) :: mirrored body",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-actor-facet-substrate.test.ts :: the parent facet gate admits only active, registered subordinate facets :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-additional-agent-naming.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a beyond-budget FIBER backlog also arms the wake, and the wake drains it :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a beyond-budget stale backlog drains across maintenance wakes, not the gate :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a live branch head spawned after activation survives every tick :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a live run-event start after activation is not terminalized by the tick :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a live swarm ledger row created after activation survives the tick :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a subordinate activation arms the same wake, and the inherited tick serves it :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: an unfinished pass re-arms in the FUTURE, at a pace that grows per lap :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-device-turn-stop.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: a lease whose turn never answered is left open for the sweep to re-ask :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: an empty answer does not count as a reply :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: an unfinished transition with nothing to resume stops being re-offered :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: the answer already in the transcript is dispatched and the lease closes :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: the hook classifies and arms; the replay happens off the gate :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a branch head still executing keeps the row owed until it reports :: harness bridge to a non-public member",
+      "count": 13
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a branch settled LIVE and then replayed writes one take set :: harness bridge to a non-public member",
+      "count": 5
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a branch settled twice writes one take set :: harness bridge to a non-public member",
+      "count": 5
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a branch whose head failed settles as a stated refusal, not silence :: harness bridge to a non-public member",
+      "count": 6
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a claimed sequence that never finishes stays legible as unfinished :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a completed turn retains its terminal disposition so a duplicate callback is done :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a cut around the turn recording leaves exactly one owed review :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a cut at the first effect still leaves every later effect owed :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a cut on either side of the recording leaves exactly one of every append :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a cut optimisation pass is abandoned, not re-run :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a fact update whose tombstone fails leaves no half-applied prefix :: harness bridge to a non-public member",
+      "count": 6
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a keyed effect cut after its side effect is replayed and the sequence closes :: harness bridge to a non-public member",
+      "count": 5
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a live sequence keeps a wake, pushed past the busy window :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a message the conversion cannot read costs that effect and no others :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a review re-run after a refusal grades the turn once :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a settled response with nothing else running releases them :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: a turn with no durable identity is unclaimed rather than invented :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an announcing effect cut after its side effect is replayed, never doubled :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an effect no activation can finish stays owed rather than being abandoned :: harness bridge to a non-public member",
+      "count": 5
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an effect this build does not implement is blocked by name, never skipped :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: an undelivered retry stays owed and replays with the same identity :: harness bridge to a non-public member",
+      "count": 6
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: cold recovery keeps the claims of a continuation it has not replayed yet :: harness bridge to a non-public member",
+      "count": 5
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: cold recovery releases them when no response survived the isolate :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: each response of one durable turn settles its own sequence :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: each steer branch is claimed under its own key :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: one turn always makes the same sampling decision :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: only a completed build turn declares a shadow trial :: harness bridge to a non-public member",
+      "count": 5
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: re-entering an unfinished sequence says so, and a released one reads as fresh :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: the outer transition does not settle while any effect is still owed :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: the settling response is not mistaken for another one still running :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: the tick marker says entered, not armed :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-dynamic-context-planes.test.ts :: a deferred shell approval is parked on the user in the block :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-dynamic-context-planes.test.ts :: a hired subordinate renders as a delegate ahead of any search roster :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-ensemble-operations.test.ts :: the title call runs the TINY tier and files a start/end pair under fast :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: a review that had already landed is NOT re-run, so recovery cannot double it :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: a running detached job counts, because it may hold the container :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: a settled job does not :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: a settled job's wake is delivered DETACHED, not awaited by the hook :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: an unreachable subordinate counts, because unknown is not idle :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the advisor review runs DETACHED and still lands exactly one note :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the evolution lane leaves a durable row and hands the re-entry to a carrier :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the recovery hands the re-drive to a carrier and terminalizes the old fiber :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the scan releases the row it recovered, and the carrier retires its own :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-facet-reconciliation.test.ts :: every terminal head loses its facet; only the executing ones keep theirs :: harness bridge to a non-public member",
+      "count": 7
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-files-route-authority.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-ingress-forgery.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: is titled by nothing on activation — the init gate reaches no model :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: is titled by the mount call, from SOUL.md, under the fast source :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: never holds the mount payload behind the naming call :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-legacy-workspace-title.test.ts :: pays for one check per activation, however many times it is opened :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: a claimed owner with no capability token yet asks nothing, and reports nothing :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: a completed build turn warms :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: a failed warm is contained — nothing reaches the settled turn :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: a PLAN turn warms, though it opens no improvement lane :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: an aborted turn warms — the next turn still needs its connections :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: an actor with no owner asks nothing :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: one settle asks the one UserDO authority exactly once, with this actor’s caller :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: the next settle retries — a failure needs no record to be retryable :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mid-turn-steer.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mid-turn-steer.test.ts :: recovers the active durable turn id after a reset before a device sweep :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-mid-turn-steer.test.ts :: restores a reset-lost steer from SQL before the resumed turn reaches its next step :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: a truncated answer owes one continuation, keyed on the response it continues :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: a turn that absorbed the continuation mid-step owes no second one :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: a turn that finished on its own owes no continuation :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: a branch the activation sealed is dropped, not still drawn as running :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: a landed steer and a reported branch leave no chips behind :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: a redial mid-turn is told the queued steer and the running branch :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a cold replay is answered from the first attempt row :: harness bridge to a non-public member",
+      "count": 5
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a completed build turn earns its review :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a completed PLAN turn feeds no lane :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: a FAILED build turn feeds no lane :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: an ABORTED build turn feeds no lane :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: an unscoped rollout still claims against the live turn :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the scope is the claim identity, not whatever turn is ambient :: harness bridge to a non-public member",
+      "count": 4
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-user-authority-races.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/core/tests/unit-background-tools.test.ts :: BACKGROUNDABLE_TOOLS declares the completion axis: agents=spawn, run/execute_tools=result :: bracket reach to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/core/tests/unit-exec-detach-ceiling.test.ts :: (file scope) :: bracket reach to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/core/tests/unit-exec-detach-ceiling.test.ts :: the shell and the code lane both ride the window, on every surface :: bracket reach to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/core/tests/unit-exec-detach-ceiling.test.ts :: the training run detaches, settles, and enqueues the wake carrying its result :: bracket reach to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: (file scope) :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: arming rounds up, ignores already-due rows, and does so in ONE place :: expect(<source text>).toContain",
+      "count": 4
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: the stale sweep runs before the SDK reads due rows, spares recurring rows, and exempts the Kinu wake :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-alarm-chain-contract.test.ts :: the stale sweep runs before the SDK reads due rows, spares recurring rows, and exempts the Kinu wake :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: catches the on-connect terminal-error replay frame in the raw onMessage handler :: between() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: catches the on-connect terminal-error replay frame in the raw onMessage handler :: expect(<source text>).toContain",
+      "count": 4
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: clears the error on the next send and on workspace switch; exposes retry + clear + state :: between() over source text",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: clears the error on the next send and on workspace switch; exposes retry + clear + state :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-combobox-clear-affordance.test.ts :: (file scope) :: reads a source file",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-combobox-clear-affordance.test.ts :: only a clearable picker keeps the clear button :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-device-grants.test.ts :: no /api/user route forwards an arbitrary method to deviceRpc :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-device-grants.test.ts :: no /api/user route forwards an arbitrary method to deviceRpc :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a head reports every step back to the parent journal :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a head reports every step back to the parent journal :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a hosted node reports its steps to the same journal :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a hosted node reports its steps to the same journal :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: the parent journal is written in exactly one place :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: the parent journal is written in exactly one place :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-facet-grant-inheritance.test.ts :: every root method the facet policy calls is on the RPC surface :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-facet-grant-inheritance.test.ts :: the root/facet split is decided by the container-ownership test :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: a branch opens inside its RUN, beside the canvas, never over it :: expect(<source text>).not.toContain",
+      "count": 6
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: a branch opens inside its RUN, beside the canvas, never over it :: expect(<source text>).toContain",
+      "count": 8
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: a branch opens inside its RUN, beside the canvas, never over it :: expect(<source text>).toMatch",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: a branch opens inside its RUN, beside the canvas, never over it :: reads a source file",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: the canvas and the full-page explorer read the resources they claim to :: expect(<source text>).not.toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: the canvas and the full-page explorer read the resources they claim to :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-head-delta.test.ts :: (file scope) :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: the descriptor read is not where establishment lives :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: the descriptor read is not where establishment lives :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: the descriptor read is not where establishment lives :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: (file scope) :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: login-time discovery auto-selects a sole gateway :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: login-time discovery auto-selects a sole gateway :: expect(<source text>).toMatch",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential :: expect(<source text>).toContain",
+      "count": 3
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-my-gateway.test.ts :: the derived cloudflare.ai-gateway view rides the stored cloudflare.oauth credential :: expect(<source text>).toMatch",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-nimbus-patched-artifacts.test.ts :: the installed core and worker preserve the owner-only file boundary :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-nimbus-patched-artifacts.test.ts :: the installed core and worker preserve the owner-only file boundary :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-preview-ports.test.ts :: the hook rejects stale overlapping refresh completions :: expect(<source text>).toContain",
+      "count": 3
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-preview-ports.test.ts :: the hook rejects stale overlapping refresh completions :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-public-shell.test.ts :: (file scope) :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-public-shell.test.ts :: both faces lead with the shipped webfonts in both stylesheets :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-public-shell.test.ts :: Newsreader stays in the React bundle rather than the standalone shell :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: (file scope) :: reads a source file",
+      "count": 3
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: every actor inherits the seam, so a subordinate runs the scaffold it evolves :: expect(<source text>).not.toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: every actor inherits the seam, so a subordinate runs the scaffold it evolves :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-think-inference-seam-contract.test.ts :: the override is declared and routes through the shared transform :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: activation classifies owed deliveries; only the durable wake dispatches :: expect(<source text>).not.toContain",
+      "count": 4
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: activation classifies owed deliveries; only the durable wake dispatches :: expect(<source text>).toContain",
+      "count": 6
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: activation classifies owed deliveries; only the durable wake dispatches :: memberBody() over source text",
+      "count": 3
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects :: expect(<source text>).not.toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects :: expect(<source text>).toContain",
+      "count": 4
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the head runtime constructor receives this actor's operation sink :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the head runtime constructor receives this actor's operation sink :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-workers-ai-auth.test.ts :: UserDO refreshes expiring Cloudflare credentials and persists the rotation :: expect(<source text>).toContain",
+      "count": 6
+    },
+    {
+      "key": "source_text :: packages/cf-backend/tests/unit-workers-ai-auth.test.ts :: UserDO refreshes expiring Cloudflare credentials and persists the rotation :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/cli/tests/device-connect.test.ts :: desktop.ts keeps zero duplicated daemon/registration logic :: expect(<source text>).not.toContain",
+      "count": 5
+    },
+    {
+      "key": "source_text :: packages/cli/tests/device-connect.test.ts :: desktop.ts keeps zero duplicated daemon/registration logic :: expect(<source text>).toContain",
+      "count": 2
+    },
+    {
+      "key": "source_text :: packages/cli/tests/device-connect.test.ts :: desktop.ts keeps zero duplicated daemon/registration logic :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/r2fs.test.ts :: the recorded defaults and the pinned version cannot move apart :: expect(<source text>).toContain",
+      "count": 3
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/r2fs.test.ts :: the recorded defaults and the pinned version cannot move apart :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/resource-lane.test.ts :: (file scope) :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/resource-lane.test.ts :: no SDK result interface is copied into this package :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/devbox/tests/resource-lane.test.ts :: the base declaration is the source of both arms :: expect(<source text>).toContain",
+      "count": 3
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: braces inside strings, template interpolations and comments do not unbalance it :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: braces inside strings, template interpolations and comments do not unbalance it :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: braces inside strings, template interpolations and comments do not unbalance it :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: extracts a method body without naming whatever follows it :: expect(<source text>).toBe",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: extracts a method body without naming whatever follows it :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: finds the closing anchor after the opening one, not before it :: between() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: finds the closing anchor after the opening one, not before it :: expect(<source text>).toBe",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: handles nesting, so an inner block does not close the member early :: expect(<source text>).not.toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: handles nesting, so an inner block does not close the member early :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: handles nesting, so an inner block does not close the member early :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: returns the offset when present :: anchor() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: returns the offset when present :: expect(<source text>).toBe",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: spans from one anchor to the next :: between() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: spans from one anchor to the next :: expect(<source text>).toBe",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws — never -1 — naming the file and the needle :: anchor() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws — never -1 — naming the file and the needle :: expect(<source text>).toThrow",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws on a missing declaration rather than slicing to EOF :: expect(<source text>).toThrow",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws on a missing declaration rather than slicing to EOF :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws when the closing anchor is missing, instead of running to EOF :: between() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws when the closing anchor is missing, instead of running to EOF :: expect(<source text>).toThrow",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws when the member never closes :: expect(<source text>).toThrow",
+      "count": 1
+    },
+    {
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws when the member never closes :: memberBody() over source text",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/ladder.test.ts :: the installer writes a RELATIVE hooks path :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/platform-catalog.test.ts :: the exempt file would otherwise be the largest violator, so the matcher still bites there :: expect(<source text>).toBeGreaterThan",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/platform-catalog.test.ts :: the exempt file would otherwise be the largest violator, so the matcher still bites there :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-analytics-plane.test.ts :: every shipped schema fits inside the platform limits, through the guard itself :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-analytics-plane.test.ts :: nothing in the query builders reads an environment or a binding :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-analytics-plane.test.ts :: the digest is stable, distinguishing, and empty for an absent identifier :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-auth-security.test.ts :: a multi-account token records every account and selects the first :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-combobox-clear-affordance.test.ts :: the stylesheet still has a rule to hide it :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-egress-vault.test.ts :: a secret sealed for one binding cannot be opened as another :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-fork-runs-revalidation.test.ts :: the answer is sorted and deduplicated, so it can be a memo key :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-head-delta.test.ts :: step ids are per step, so the trace is stable while it grows :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-live-refresh.test.ts :: an initial failure and a refresh failure are different claims about the same reason :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-swarm-tree-model.test.ts :: radius grows with visits and stays inside its bracket :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-swarm-tree-model.test.ts :: visits beyond the maximum cannot blow the scale out :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-user-mcp.test.ts :: a bigger window admits more of the same catalog :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/unit-work-journal.test.ts :: keys are stable across re-reads, so a poll does not re-key and re-animate the feed :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/workerd/instruction-digest.test.ts :: one changed byte changes the digest, so a rewrite demotes here too :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cf-backend/tests/workerd/instruction-digest.test.ts :: the digest is stable across calls, so an approval keeps matching :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cli-backend/tests/agents-md.test.ts :: editing an approved file changes what the resolver is asked about :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cli-backend/tests/opencode-provider.test.ts :: createModel throws on invalid model id (no slash) :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/src/skills/skills.test.ts :: accepts kebab-case :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/src/skills/skills.test.ts :: render order is name order, so the same active set is byte-identical however it was activated :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/integration-mcts.test.ts :: cost guard does NOT refuse a search the catalog prices at nothing :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: a single-byte change in the arguments changes the digest :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the command changes (argument swap) :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the environment/approval type changes :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: changes when the patch changes (artifact swap) :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: is deterministic and order-independent over object keys :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: null command and null patch are bound distinctly (not conflated) :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: stable for identical deploy identity :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-longhorizon.test.ts :: a different seed generates a different corpus and different answers :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-longhorizon.test.ts :: encode/decode is lossless and order-stable :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-longhorizon.test.ts :: the same spec generates byte-identical files :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the budget changes — two envelopes are not comparable :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the corpus manifest changes :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the repeat count changes — pass^3 is not pass^1 :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: is stable for identical config :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: runOrder is deterministic per seed and varies across tasks :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-split.test.ts :: is deterministic and depends on the salt :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-split.test.ts :: is order-independent but content-sensitive :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-stats.test.ts :: rejects out-of-range probabilities :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-cache-breakpoints.test.ts :: empty tool set is a no-op :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-cache-breakpoints.test.ts :: retention 'short' is the default and is byte-identical to no opinion :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-calibration.test.ts :: is deterministic, and an empty ledger draws nothing :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-consolidation.test.ts :: skips tools with fewer than 2 uses :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-deferred-turn-review.test.ts :: a deferred review lands the SAME outcome row an inline review would :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-diversity.test.ts :: the first six branches read exactly as they always did :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-ema.test.ts :: missing crafted_tools table is a fault, not an empty toolbox :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-eval.test.ts :: throws on schema-invalid case :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different bodies → different keys :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different time buckets → different keys :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different webhook_id → different keys even for same body :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: repeated topics from the same sender still admit (distinct outbox ids) :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: same body within same 5-min bucket → same key :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-subordinate.test.ts :: a report is keyed by the sending sequence; an assignment down is not keyed :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-trust.test.ts :: forbidden combo throws :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-trust.test.ts :: is commutative :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-exploration-records.test.ts :: a different INSTRUMENT is a different objective, so nothing is pooled across it :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-exploration-records.test.ts :: identical is 0, disjoint is 1, and it is symmetric :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-fork.test.ts :: 15. assistant_messages copy is skipped when the source has no such table :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-generate-json.test.ts :: throws on schema mismatch so the caller can fall back :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-instruction-skill-policy.test.ts :: changing only allowed-tools after review demotes the skill :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-instruction-trust.test.ts :: binds the exact bytes — one character apart is a different digest :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-instruction-trust.test.ts :: whitespace is content — an invisible edit still demotes :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-judge-model.test.ts :: resellers report the vendor they resell, not their own id :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-judge-model.test.ts :: two routes to the same build are the same family :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-mcts-progress.test.ts :: a call with no sink runs identically — the option is optional :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-mission-budget-seams.test.ts :: a mission with room left runs the pipeline unchanged :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-mission-budget.test.ts :: cacheWrite1h is a subset of cacheWrite and is never charged twice :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-pathology.test.ts :: it is a pure function — same rows, same clusters, input untouched :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-ppi.test.ts :: is reproducible from its seed and reports nothing without labels :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-profile-catalog.test.ts :: is insertion-order independent :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-profile-catalog.test.ts :: moves when content moves :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-profile-catalog.test.ts :: the builtin catalog validates, pins the platform default model, and digests stably :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-prompt.test.ts :: Auto (the build work mode) adds nothing at all, byte for byte :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-release.test.ts :: a github binding refuses %s :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-swarm-preset-resolution.test.ts :: all six resolve, and none of them resolves into a refusal :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-swarm-unit-axis.test.ts :: a bare axis string is not a unit — the tag IS the value :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-swarm-unit-axis.test.ts :: the removed spellings are UNREPRESENTABLE, not merely refused :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-tool-call-id.test.ts :: the same native id in two responses cannot produce the same key :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-tool-call-id.test.ts :: two calls in one response never collide :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-tools.test.ts :: each tool carries description + inputSchema :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-turn-lifecycle.test.ts :: a recorder failure never throws into the turn :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: an execution verdict never reaches a user verdict's poles :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-turn-outcomes.test.ts :: outcomeQuality ties to the explicit-feedback constants :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: is deterministic and byte-sensitive :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: nothing in the block is clock-derived: the same state fingerprints identically :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: two consecutive builds with unchanged state are byte-identical :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/core/tests/unit-volatile-context.test.ts :: without overflow, activation order still renders byte-identically :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/capture-capabilities.test.ts :: the report schema is strict about shape and closed about ids :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/capture-model.test.ts :: hashes sparse content by logical runs without allocating its apparent size :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/durability-contract.test.ts :: operation phase rejects redundant and impossible state :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/durability-contract.test.ts :: wire counters and digests refuse unsafe representations :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/journal-daemon-native-openat2.test.ts :: creates all ancestry fd-relatively and never follows a swapped symlink :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/journal-daemon.test.ts :: refuses a journal manifest that omits POSIX metadata :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/merkle-pack.test.ts :: the root is identical under any input order permutation :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/overlay-cas.test.ts :: the same bytes produce the same hash, so a rename can reuse them :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/devbox/tests/snapshot-chain.test.ts :: the extraction options and the direct command are one policy :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/test-utils/tests/agent-evals.test.ts :: a trigger outside the producer picklist THROWS rather than vanishing :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/test-utils/tests/eval-identity.test.ts :: two calls do not collide, so a suite can run twice :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/bench-devbox-decision.test.ts :: prices class A and class B at the published rates :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/bench-r2-workspace.test.ts :: the plan is a pure function of the run id :: expected side computed by the code under test",
+      "count": 2
+    },
+    {
+      "key": "tautology_suspect :: scripts/bench.test.ts :: accepts a throwaway root elsewhere :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/bench.test.ts :: refuses an unknown suite :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/bench.test.ts :: regenerating a task at a different size changes the manifest :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/capture-probe.test.ts :: garbage probe output is rejected loudly, not parsed hopefully :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/chat-and-files-ux.test.ts :: it measures something — every addressed row is on the page :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/gates.test.ts :: a lock that is not a list of strings is rejected, not ignored :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/infra.test.ts :: the confirmation names the worker and the environment :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/payload-transport.test.ts :: validates embedded shared UploadIntent contracts rather than a copied shape :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/release-config.test.ts :: a job that holds a secret is bound to a GitHub environment :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: scripts/silent-drop.test.ts :: the ratchet key survives an edit above the site :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: tests/evals-artifact-contract.test.ts :: the degenerate run still emits its diagnostic harness record :: weak-only test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: tests/evolution-proof.test.ts :: (file scope) :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: tests/evolution-proof.test.ts :: the plaintext encodes back to the ciphertext, and Atbash is its own inverse :: expected side computed by the code under test",
+      "count": 2
+    }
+  ]
+}
