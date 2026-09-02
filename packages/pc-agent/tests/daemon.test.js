@@ -252,6 +252,18 @@ describe('daemon exec output bound', () => {
 });
 
 describe('daemon device path confinement', () => {
+  /** The frame a hub with the Sandbox switch on sends: the consented
+   *  directories ride the sandbox block, which is the SAME policy object the
+   *  kernel is built from, rather than a per-call `root` only the file methods
+   *  ever read. */
+  function scoped(roots) {
+    return {
+      tier: 'sandboxed',
+      agentHome: path.join(DEVICE_HOME, 'agents', 'ws-1', 'home'),
+      roots,
+    };
+  }
+
   test('dot-dot and symlink paths cannot escape the consented root', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-root-'));
     const project = path.join(root, 'project');
@@ -264,42 +276,83 @@ describe('daemon device path confinement', () => {
       handle({
         id: 'traversal',
         method: 'readFile',
-        params: [path.join(project, '..', 'outside.txt'), { root: project }],
+        sandbox: scoped([project]),
+        params: [path.join(project, '..', 'outside.txt')],
       }, ws, {});
       handle({
         id: 'symlink',
         method: 'readFile',
-        params: [path.join(project, 'link'), { root: project }],
+        sandbox: scoped([project]),
+        params: [path.join(project, 'link')],
       }, ws, {});
 
-      expect((await ws.response('traversal')).error).toContain('resolves outside');
-      expect((await ws.response('symlink')).error).toContain('resolves outside');
+      // NEITHER serves the owner's byte. This fixture's temp root happens to
+      // sit under the real home, so both paths land in the home the agent's own
+      // is mounted over — which is the property, not an accident: `~/anything`
+      // inside the sandbox is the AGENT's anything, so the file methods answer
+      // about the same directory the shell sees and the owner's file is simply
+      // not there.
+      expect((await ws.response('traversal')).result).not.toBe('secret');
+      expect((await ws.response('symlink')).result).not.toBe('secret');
+      expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
+
+      // A path outside the home is readable — the whole disk is, in the
+      // sandbox — and refuses a write, which is what the kernel does to the
+      // shell for the same path.
+      handle({ id: 'read-system', method: 'readFile', sandbox: scoped([project]), params: ['/etc/hostname'] }, ws, {});
+      expect((await ws.response('read-system')).error).toBeUndefined();
+      handle({
+        id: 'write-system',
+        method: 'writeFile',
+        sandbox: scoped([project]),
+        params: ['/usr/local/kinu-planted.txt', 'x'],
+      }, ws, {});
+      expect((await ws.response('write-system')).error).toContain('read-only in this device');
+      expect(fs.existsSync('/usr/local/kinu-planted.txt')).toBe(false);
+
+      // And a symlink is judged by where it LANDS: one pointing into Kinu's own
+      // directory is refused however it is spelled.
+      // The bait must point at a file that EXISTS: a dangling link cannot be
+      // followed, so the read would fail on the link rather than reach the
+      // fence, and the test would pass while proving nothing.
+      const bait = path.join(project, 'kinu-link');
+      const baited = path.join(DEVICE_HOME, 'baited-device.json');
+      fs.writeFileSync(baited, '{"token":"machine-secret"}', { mode: 0o600 });
+      fs.symlinkSync(baited, bait);
+      handle({ id: 'kinu-link', method: 'readFile', sandbox: scoped([project]), params: [bait] }, ws, {});
+      expect((await ws.response('kinu-link')).error).toContain("inside Kinu's own directory");
+      expect((await ws.response('kinu-link')).result).toBeUndefined();
+      expect(fs.readFileSync(baited, 'utf8')).toContain('machine-secret');
+      fs.rmSync(baited, { force: true });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   test('scoped native mutations stay inside the resolved root', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-root-'));
+    // Under /tmp rather than TMPDIR: this suite's TMPDIR is inside the real
+    // home, which the agent home is mounted over, and a consented directory
+    // the owner names is a directory they can still see.
+    const root = fs.mkdtempSync(path.join('/tmp', 'kinu-daemon-root-'));
     const project = path.join(root, 'project');
     fs.mkdirSync(project);
     const ws = fakeWs();
     try {
       const dir = path.join(project, 'nested');
       const file = path.join(dir, 'data.txt');
-      handle({ id: 'mkdir', method: 'mkdirPath', params: [dir, { root: project, recursive: true }] }, ws, {});
+      handle({ id: 'mkdir', method: 'mkdirPath', sandbox: scoped([project]), params: [dir, { recursive: true }] }, ws, {});
       expect((await ws.response('mkdir')).result).toEqual({ success: true });
-      handle({ id: 'write', method: 'writeFile', params: [file, 'ok', { root: project }] }, ws, {});
+      handle({ id: 'write', method: 'writeFile', sandbox: scoped([project]), params: [file, 'ok', {}] }, ws, {});
       expect((await ws.response('write')).result).toEqual({ success: true });
-      handle({ id: 'stat', method: 'statPath', params: [file, { root: project }] }, ws, {});
+      handle({ id: 'stat', method: 'statPath', sandbox: scoped([project]), params: [file] }, ws, {});
       expect((await ws.response('stat')).result).toMatchObject({ size: 2, isDir: false });
-      handle({ id: 'unlink', method: 'unlinkPath', params: [file, { root: project }] }, ws, {});
+      handle({ id: 'unlink', method: 'unlinkPath', sandbox: scoped([project]), params: [file] }, ws, {});
       expect((await ws.response('unlink')).result).toEqual({ success: true });
       const target = path.join(project, 'target.txt');
       const link = path.join(project, 'target-link');
       fs.writeFileSync(target, 'keep');
       fs.symlinkSync(target, link);
-      handle({ id: 'unlink-link', method: 'unlinkPath', params: [link, { root: project }] }, ws, {});
+      handle({ id: 'unlink-link', method: 'unlinkPath', sandbox: scoped([project]), params: [link] }, ws, {});
       expect((await ws.response('unlink-link')).result).toEqual({ success: true });
       expect(fs.existsSync(target)).toBe(true);
       expect(fs.existsSync(link)).toBe(false);

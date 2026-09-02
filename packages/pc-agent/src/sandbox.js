@@ -159,6 +159,34 @@ function trimPath(value) {
   return resolved.length > 1 ? resolved.replace(/\/+$/, '') : resolved;
 }
 
+/**
+ * The path a syscall will actually REACH: symlinks followed where the target
+ * exists, and composed onto the nearest existing ancestor where it does not.
+ *
+ * Decided on the destination rather than the spelling, because a symlink in a
+ * writable directory pointing into Kinu's own is a read of Kinu's own, and
+ * every file method here follows links.
+ */
+function realTarget(requested) {
+  const resolved = trimPath(requested);
+  const followable = (err) => err && err.code !== 'ENOENT' && err.code !== 'EACCES' && err.code !== 'ELOOP';
+  try {
+    return fs.realpathSync(resolved);
+  } catch (err) {
+    if (followable(err)) throw err;
+  }
+  let parent = path.dirname(resolved);
+  while (parent !== path.dirname(parent)) {
+    try {
+      return path.join(fs.realpathSync(parent), path.relative(parent, resolved));
+    } catch (err) {
+      if (followable(err)) throw err;
+      parent = path.dirname(parent);
+    }
+  }
+  return resolved;
+}
+
 /** The paths that exist, resolved through symlinks, each one once and in the
  *  order given. */
 function dedupeExisting(paths) {
@@ -229,7 +257,7 @@ function viewFor(options) {
    * sees — on Linux the two are the same path string inside the namespace.
    */
   const classify = (requested) => {
-    const target = trimPath(requested);
+    const target = realTarget(requested);
     // The agent's OWN home is decided first, because it lives under Kinu's
     // directory (~/.kinu/agents/<workspace>/home) so that uninstall has one
     // path to remove. Fencing ~/.kinu first made the agent's home invisible to
@@ -302,6 +330,17 @@ function viewFor(options) {
       return resolved;
     },
     /**
+     * The DIRECTORY ENTRY, authorized without following its last component.
+     * `unlink` removes the name, not what it points at — native semantics —
+     * so resolving the link first would delete the target instead, which is a
+     * path the caller never named.
+     */
+    resolveEntryPath(requested, mode) {
+      const resolved = trimPath(requested);
+      const parent = this.resolvePath(path.dirname(resolved), mode);
+      return path.join(parent, path.basename(resolved));
+    },
+    /**
      * The one answer a file method needs: the path to touch, or a throw that
      * names why. `mode` is 'read' or 'write'; a read-only path answers a read
      * and refuses a write, which is exactly what the kernel does to the shell.
@@ -340,11 +379,18 @@ function rawViewFor(options) {
     deviceHome,
     roots: [],
     classify(requested) {
-      const target = trimPath(requested);
+      const target = realTarget(requested);
       if (within(deviceHome, target)) {
         return { access: VIEW_INVISIBLE, path: target, why: 'inside Kinu\'s own directory, which the tunnel never serves' };
       }
       return { access: VIEW_WRITABLE, path: target };
+    },
+    resolveEntryPath(requested, mode) {
+      const resolved = trimPath(requested);
+      // Authorizes the parent, returns the NAME: raw returns paths as
+      // requested, so the entry is the requested spelling of it.
+      this.resolvePath(path.dirname(resolved), mode);
+      return requested;
     },
     resolvePath(requested, mode) {
       const decision = this.classify(requested);

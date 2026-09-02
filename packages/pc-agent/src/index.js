@@ -627,84 +627,6 @@ function whichAll(names) {
   const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
   return probeNames(names).filter((name) => onPath(dirs, name));
 }
-function withinDeviceRoot(realRoot, target) {
-  const relative = path.relative(realRoot, target);
-  return relative === ''
-    || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
-}
-
-/** Kinu's own directory is never served through the tunnel, whatever root a
- *  call carries. It holds device.json (this machine's long-lived token),
- *  config.json (the owner's interactive CLI bearer) and the in-flight command
- *  store. A base-tier root that contained it — a home directory, say — or a
- *  full-tier call, which carries no root at all, would otherwise read the
- *  credentials that grant the tier: base escalates to full by opening
- *  config.json, and full clones the machine by opening device.json. So the
- *  fence sits below every file method and is not a root the caller can choose.
- *
- *  Resolved through realpath first, so a symlink pointing into it is refused
- *  by where it LANDS rather than by how it is spelled. */
-function refuseDeviceHome(requested, target) {
-  let realHome = DEVICE_HOME;
-  try {
-    realHome = fs.realpathSync(DEVICE_HOME);
-  } catch (err) {
-    // A directory that does not exist holds nothing, so its literal path is
-    // already the right fence. Anything else — EACCES, ELOOP — is this
-    // daemon's own breakage, and swallowing it would silently WIDEN what the
-    // tunnel serves, so it surfaces.
-    if (!err || err.code !== 'ENOENT') throw err;
-  }
-  if (withinDeviceRoot(realHome, target)) {
-    throw new Error(`device path '${requested}' is inside Kinu's own directory, which the tunnel never serves`);
-  }
-}
-
-/** The path a file method will actually touch: symlinks followed where the
- *  target exists, and composed onto the nearest existing ancestor where it
- *  does not. */
-function resolveDevicePath(requested, allowMissing) {
-  if (fs.existsSync(requested)) return fs.realpathSync(requested);
-  if (!allowMissing) throw new Error(`device path does not exist: ${requested}`);
-  let parent = path.dirname(path.resolve(requested));
-  while (!fs.existsSync(parent)) {
-    const next = path.dirname(parent);
-    if (next === parent) throw new Error(`device path has no existing parent: ${requested}`);
-    parent = next;
-  }
-  const realParent = fs.realpathSync(parent);
-  return path.resolve(realParent, path.relative(parent, path.resolve(requested)));
-}
-
-function confinedDevicePath(requested, root, allowMissing = false) {
-  // A rootless call is the full tier, which resolves only to be fenced: a
-  // missing path still reaches the syscall and reports its own ENOENT.
-  const target = resolveDevicePath(requested, root ? allowMissing : true);
-  refuseDeviceHome(requested, target);
-  if (!root) return requested;
-  const realRoot = fs.realpathSync(root);
-  if (!withinDeviceRoot(realRoot, target)) {
-    throw new Error(`device path '${requested}' resolves outside the consented directory '${root}'`);
-  }
-  return target;
-}
-
-/** Authorize the directory entry, not its symlink target. Reads follow a
- * symlink only when its target stays inside the root; unlink removes the named
- * entry itself, which is native unlink semantics and cannot touch the target. */
-function confinedDeviceEntry(requested, root) {
-  const requestedAbsolute = path.resolve(requested);
-  const realParent = fs.realpathSync(path.dirname(requestedAbsolute));
-  const target = path.join(realParent, path.basename(requestedAbsolute));
-  refuseDeviceHome(requested, target);
-  if (!root) return requested;
-  const realRoot = fs.realpathSync(root);
-  if (!withinDeviceRoot(realRoot, realParent)) {
-    throw new Error(`device path '${requested}' resolves outside the consented directory '${root}'`);
-  }
-  return target;
-}
-
 
 // ── In-flight commands ─────────────────────────────────────────────────
 //
@@ -1406,6 +1328,46 @@ function planFromFrame(msg, command) {
   });
 }
 
+/**
+ * The view this FRAME's file methods are confined to.
+ *
+ * A file frame carries the same `sandbox` block an exec frame does, so both
+ * enforcers read one policy: the kernel for the shell, this view for the file
+ * methods. A frame with no block is raw — exactly as an exec frame with no
+ * block is — which keeps a hub that has not been told about the switch working
+ * and keeps ~/.kinu refused either way.
+ */
+function viewFromFrame(msg) {
+  const requested = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
+  if (requested.tier !== 'sandboxed') {
+    return sandbox.rawViewFor({ platform: os.platform(), deviceHome: DEVICE_HOME });
+  }
+  // NO capability check here, deliberately. A machine that cannot sandbox is
+  // `files_only`, and that state exists so its file methods keep working: this
+  // enforcer is JavaScript in the daemon and needs no kernel to be correct.
+  // Only `exec` refuses, because only `exec` needs the kernel.
+  const agentHome = path.resolve(parseString(requested.agentHome, 'device sandbox options must name an agent home'));
+  if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
+    throw new Error(`device sandbox agent home must sit under ${AGENT_ROOT}`);
+  }
+  return sandbox.viewFor({
+    platform: os.platform(),
+    home: os.homedir(),
+    agentHome,
+    agentTmp: path.join(path.dirname(agentHome), 'tmp'),
+    deviceHome: DEVICE_HOME,
+    roots: Array.isArray(requested.roots)
+      ? requested.roots.map((root) => path.resolve(parseString(root, 'device sandbox roots must be paths')))
+      : [],
+  });
+}
+
+/** One file method's path, through the frame's view. `mode` is what the method
+ *  does to the path, and the view refuses exactly what the kernel would. */
+function confinedDeviceViewPath(msg, requested, mode) {
+  return viewFromFrame(msg).resolvePath(parseString(requested, 'device paths must be strings'), mode);
+}
+
 function handle(msg, ws, ctx) {
   const { id, method, params } = msg;
   const checkpoints = ctx && ctx.checkpoints;
@@ -1458,15 +1420,15 @@ function handle(msg, ws, ctx) {
       );
     } else if (method === 'readFile') {
       const options = params[1] || {};
-      const confined = confinedDevicePath(params[0], options.root);
+      const confined = confinedDeviceViewPath(msg, params[0], 'read');
       if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
       else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
     } else if (method === 'readRange') {
-      const offset = params[1], length = params[2], options = params[3] || {};
+      const offset = params[1], length = params[2];
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
         return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
       }
-      const file = fs.openSync(confinedDevicePath(params[0], options.root), 'r');
+      const file = fs.openSync(confinedDeviceViewPath(msg, params[0], 'read'), 'r');
       try {
         const bytes = Buffer.allocUnsafe(length);
         const read = fs.readSync(file, bytes, 0, length, offset);
@@ -1474,7 +1436,7 @@ function handle(msg, ws, ctx) {
       } finally { fs.closeSync(file); }
     } else if (method === 'writeFile') {
       const options = params[2] || {};
-      const confined = confinedDevicePath(params[0], options.root, true);
+      const confined = confinedDeviceViewPath(msg, params[0], 'write');
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
         checkpoints.ensure(hint, hint.dir || checkpoints.workdirForPath(confined));
@@ -1483,29 +1445,35 @@ function handle(msg, ws, ctx) {
       fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
       rpc(ws, id, { success: true });
     } else if (method === 'listFiles') {
-      const options = params[1] || {};
-      const confined = confinedDevicePath(params[0] || os.homedir(), options.root);
+      // The home DEFAULTS to the agent's when the frame carries one, which is
+      // the directory the model is told `~` is, not the owner's.
+      const frame = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
+      const requested = params[0] ?? (frame.tier === 'sandboxed'
+        ? parseString(frame.agentHome, 'device sandbox options must name an agent home')
+        : os.homedir());
+      const confined = confinedDeviceViewPath(msg, requested, 'read');
       const entries = fs.readdirSync(confined, { withFileTypes: true });
       rpc(ws, id, entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' })));
     } else if (method === 'statPath') {
-      const options = params[1] || {};
-      const confined = confinedDevicePath(params[0], options.root, true);
+      const confined = confinedDeviceViewPath(msg, params[0], 'read');
       if (!fs.existsSync(confined)) return rpc(ws, id, null);
       const stat = fs.statSync(confined);
       rpc(ws, id, { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDirectory() });
     } else if (method === 'unlinkPath') {
-      const options = params[1] || {};
-      fs.unlinkSync(confinedDeviceEntry(params[0], options.root));
+      // The ENTRY, not its target: unlink removes the name the caller gave,
+      // and following the link would delete a path they never named.
+      fs.unlinkSync(viewFromFrame(msg).resolveEntryPath(
+        parseString(params[0], 'device paths must be strings'), 'write',
+      ));
       rpc(ws, id, { success: true });
     } else if (method === 'mkdirPath') {
       const options = params[1] || {};
-      fs.mkdirSync(confinedDevicePath(params[0], options.root, true), {
+      fs.mkdirSync(confinedDeviceViewPath(msg, params[0], 'write'), {
         recursive: options.recursive === true,
       });
       rpc(ws, id, { success: true });
     } else if (method === 'exists') {
-      const options = params[1] || {};
-      const confined = confinedDevicePath(params[0], options.root, true);
+      const confined = confinedDeviceViewPath(msg, params[0], 'read');
       rpc(ws, id, fs.existsSync(confined));
     } else if (method === 'listPorts') {
       rpc(ws, id, listListeningPorts());
