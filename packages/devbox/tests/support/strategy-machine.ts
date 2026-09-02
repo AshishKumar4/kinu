@@ -2697,7 +2697,9 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     readonly files = new Map<string, string>();
     readonly processes = new Map<string, CandidateRunnerProcess>();
     readonly processActions = new Map<string, string>();
-    readonly actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
+    /** Starts on THIS container. A replacement is a new container, so both
+     *  reset with it; an isolate reset leaves both, which is what 6.9 counts. */
+    actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
     daemonStarts = 0;
     /** The journal daemon's own WAL model: one line per admitted write, plus
      *  the lines a full disk made it cancel before their effect. */
@@ -2775,6 +2777,8 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       this.files.clear();
       this.processes.clear();
       this.processActions.clear();
+      this.actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
+      this.daemonStarts = 0;
       this.#restoreWindow = null;
       this.#finalizeGate = new OneShotGate();
       this.#storage = this.#build();

@@ -29,18 +29,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "attach:after-store-mount: 4 mounts across both isolates, an uninterrupted wake makes 3; attach:after-layer-mount: 5 mounts across both isolates, an uninterrupted wake makes 3",
   },
   {
-    arm: 'bounded-layers',
-    cell: '6.9',
-    since: '2026-09-02',
-    reason: "attach:after-restore-process: 3 daemon starts, 2 restores",
-  },
-  {
-    arm: 'merkle-pack',
-    cell: '6.9',
-    since: '2026-09-02',
-    reason: "attach:after-restore-process: 3 daemon starts, 2 restores",
-  },
-  {
     arm: 'snapshot-chain',
     cell: '6.10',
     since: '2026-09-02',
@@ -48,18 +36,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
   },
   {
     arm: 'r2fs',
-    cell: '6.10',
-    since: '2026-09-02',
-    reason: "the late finalize reported committed",
-  },
-  {
-    arm: 'bounded-layers',
-    cell: '6.10',
-    since: '2026-09-02',
-    reason: "the late finalize reported committed",
-  },
-  {
-    arm: 'merkle-pack',
     cell: '6.10',
     since: '2026-09-02',
     reason: "the late finalize reported committed",
@@ -159,18 +135,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     cell: '6.17',
     since: '2026-09-02',
     reason: "2 boots reported committed (A,B); the loser recorded no failure; both dirty sets were merged: {\"a.txt\":\"written by boot A\",\"b.txt\":\"written by boot B\",\"notes.txt\":\"generation one\",\"src.txt\":\"export const one = 1;\"}",
-  },
-  {
-    arm: 'bounded-layers',
-    cell: '6.17',
-    since: '2026-09-02',
-    reason: "2 boots reported committed (A,B); the loser recorded no failure",
-  },
-  {
-    arm: 'merkle-pack',
-    cell: '6.17',
-    since: '2026-09-02',
-    reason: "2 boots reported committed (A,B); the loser recorded no failure",
   },
   {
     arm: 'snapshot-chain',

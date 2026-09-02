@@ -671,6 +671,21 @@ describe('candidate durable control', () => {
     expect(harness.store.record.head).toBeNull();
   });
 
+  test('a replaced boot whose finalize arrives after the re-drive published is refused stale, never handed the head', async () => {
+    const harness = new ControlHarness();
+    const staleDraft = await harness.stage(await harness.begin());
+    const winner = await harness.finalize(await harness.stage(await harness.begin('tick', 'boot-2')));
+    const head = winner.head?.rootEnvelopeId;
+    expect(head).toMatch(/^[0-9a-f]{64}$/);
+
+    // The operation is `published` and the head is the new boot's. The old
+    // boot's draft names the same operation, an epoch the re-drive fenced and
+    // a parent the head has moved past: it lost, and the answer says so.
+    await expect(harness.finalize(staleDraft)).rejects.toBeInstanceOf(StaleParentRefused);
+    expect(harness.store.record.head?.rootEnvelopeId).toBe(head);
+    expect(harness.durableOperation()).toMatchObject({ phase: 'published', resultRootId: head });
+  });
+
   test('a reset at sealed publishes the same result root on the next begin', async () => {
     const harness = new ControlHarness();
     const draft = await harness.stage(await harness.begin());

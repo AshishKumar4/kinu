@@ -462,6 +462,13 @@ function controlPlane(input: {
 /**
  * Seal and publish a staged draft against the begun operation. Replaying the
  * same draft is idempotent; a draft naming any other operation is refused.
+ *
+ * THE DRAFT BINDS THE OPERATION IN EVERY PHASE, not only while it transfers.
+ * A re-drive bumps the epoch and the attempt, so the draft an earlier boot
+ * staged stops binding the operation the moment a new boot takes it over —
+ * and it stays unbound after that boot publishes. Answering such a draft with
+ * the published control told the replaced boot its bytes were the head when
+ * the head was the other boot's; it is answered as the loser it is.
  */
 export async function finalizeCandidateOperation(input: {
   readonly draft: CandidatePublicationDraft;
@@ -472,11 +479,23 @@ export async function finalizeCandidateOperation(input: {
 }): Promise<CandidateControlStateV1> {
   const control = await input.store.read();
   const active = control.operation;
+  const draft = input.draft;
   if (active === null) throw new CandidateOperationRefused('candidate finalization has no begun operation');
-  if (input.draft.operationId !== active.operationId) {
+  if (draft.operationId !== active.operationId) {
     throw new CandidateOperationRefused(
-      `candidate draft ${input.draft.operationId} is not active operation ${active.operationId}`,
+      `candidate draft ${draft.operationId} is not active operation ${active.operationId}`,
     );
+  }
+  if (
+    draft.capturedCut.captureId !== active.operationId
+    || draft.capturedCut.epoch !== active.epoch
+    || draft.capturedCut.baseRevision !== active.baseRevision
+    || draft.expectedParentRootId !== active.expectedParent
+    || ('attemptId' in active && draft.attemptId !== active.attemptId)
+  ) {
+    const head = control.head?.rootEnvelopeId ?? null;
+    if (head !== draft.expectedParentRootId) throw new StaleParentRefused(draft.expectedParentRootId, head);
+    throw new CandidateOperationRefused('candidate draft does not bind the begun control operation');
   }
   if (active.phase === 'published') return control;
   if (active.phase === 'failed') {
@@ -489,16 +508,6 @@ export async function finalizeCandidateOperation(input: {
   }
   if (active.phase === 'intent') {
     throw new CandidateOperationRefused(`candidate operation ${active.operationId} never began a transfer`);
-  }
-  const draft = input.draft;
-  if (
-    draft.attemptId !== active.attemptId
-    || draft.capturedCut.captureId !== active.operationId
-    || draft.capturedCut.epoch !== active.epoch
-    || draft.capturedCut.baseRevision !== active.baseRevision
-    || draft.expectedParentRootId !== active.expectedParent
-  ) {
-    throw new CandidateOperationRefused('candidate draft does not bind the begun control operation');
   }
   try {
     await finalizeCandidatePayload(draft, {
