@@ -50,9 +50,21 @@ const DaemonFrameSchema = v.object({
 /** The daemon members these tests drive. `inFlight` is the command registry a
  *  cancellation resolves ids against; a dropped socket calls into it directly,
  *  which is how the disconnect case is exercised without a real WebSocket. */
+/** One sweep's terminations, parsed where they arrive: each names its request
+ *  and carries the promise that settles when that command's kill is confirmed.
+ *  `terminated` stays unparsed here and is parsed once awaited, because a
+ *  pending promise carries no shape to check yet. */
+const SweepSchema = v.array(v.object({ requestId: v.string(), terminated: v.unknown() }));
+const ConfirmedCancellationSchema = v.object({ requestId: v.string(), cancelled: v.string() });
+
 const PcAgentModuleSchema = v.object({
   handle: v.function(),
-  inFlight: v.object({ size: v.function(), terminateUnanswered: v.function() }),
+  inFlight: v.object({
+    size: v.function(),
+    /** Returns one promise per command it terminated; each resolves with the
+     *  confirmed outcome and rejects when the kill is unproven. */
+    terminateUnanswered: v.function(),
+  }),
   createInFlight: v.function(),
   INFLIGHT_ROOT: v.string(),
   CANCEL_METHOD: v.string(),
@@ -62,6 +74,11 @@ const PcAgentModuleSchema = v.object({
   supervisionSupported: v.function(),
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
+});
+/** The registry surface the unregistered-window test drives, which is the
+ *  same `createInFlight` the daemon builds its own from. */
+const SupervisorRegistrySchema2 = v.object({
+  terminateUnanswered: v.function(),
 });
 const SupervisorRegistrySchema = v.object({
   reconcile: v.function(),
@@ -386,6 +403,29 @@ describe('pc-agent command cancellation', () => {
     expect(ws.of('..')[0].error).toContain('request id');
   });
 
+
+  test('a sweep reaches a command the registry has not registered yet', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-unregistered-'));
+    const waiting = commandWithDescendant(dir, 'unregistered');
+    // Built over the root while it is still empty, so it holds no entry for
+    // the request below. That is the live window: the supervisor publishes
+    // its state before `register` runs, and a socket dropping in between
+    // used to leave the command running with nothing left to name it.
+    const detached = v.parse(SupervisorRegistrySchema2, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
+    const ws = recorder();
+    handle({ id: rpcId(260), method: 'exec', params: [waiting.command] }, ws.socket);
+    const abandoned = await waiting.pidOf();
+    expect(alive(abandoned)).toBe(true);
+    await supervisorState(rpcId(260));
+
+    const swept = v.parse(SweepSchema, detached.terminateUnanswered());
+    const mine = swept.find((entry) => entry.requestId === rpcId(260));
+    expect(mine).toBeDefined();
+    expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
+      .toEqual({ requestId: rpcId(260), cancelled: 'terminated' });
+    rmSync(dir, { recursive: true, force: true });
+  }, 30_000);
+
   test('a dropped socket terminates a command that still has no terminal result', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'pc-agent-disconnect-'));
     const waiting = commandWithDescendant(dir, 'waiting');
@@ -393,9 +433,29 @@ describe('pc-agent command cancellation', () => {
     handle({ id: rpcId(250), method: 'exec', params: [waiting.command] }, ws.socket);
     const abandoned = await waiting.pidOf();
     expect(alive(abandoned)).toBe(true);
+    // The supervisor has published its state, which is the fact the daemon
+    // reconciles from: a socket that drops before this names no command yet.
+    await supervisorState(rpcId(250));
 
-    pcAgent.inFlight.terminateUnanswered();
-    expect(await gone(abandoned)).toBe(true);
+    // Asserted at the moment the daemon GUARANTEES the fact, not on a
+    // deadline. `terminateUnanswered` returns its terminations; each resolves
+    // only once the supervisor has published a terminal result AND the daemon
+    // has confirmed the owned process group holds no live process, and it
+    // REJECTS when either is unproven. So this settles exactly when the kill
+    // has landed.
+    //
+    // Polling `kill(pid, 0)` could not assert the same thing twice over: it
+    // reads "not yet" and "never" as the same value, and it stays true for a
+    // corpse nobody has reaped, which is a state the daemon's own confirmation
+    // deliberately ignores.
+    // Selected by request id: a sweep terminates every abandoned command at
+    // once, and this suite shares one in-flight root, so a positional pick
+    // would assert about whichever command happened to be first.
+    const swept = v.parse(SweepSchema, pcAgent.inFlight.terminateUnanswered());
+    const mine = swept.find((entry) => entry.requestId === rpcId(250));
+    expect(mine).toBeDefined();
+    expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
+      .toEqual({ requestId: rpcId(250), cancelled: 'terminated' });
   }, 30_000);
 });
 

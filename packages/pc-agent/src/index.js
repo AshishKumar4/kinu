@@ -1203,15 +1203,42 @@ function createInFlight(root = INFLIGHT_ROOT) {
     return { requestId, acknowledged: true };
   }
 
+  /**
+   * Terminate every command that can no longer report to anyone, and RETURN
+   * the terminations, each NAMING its request.
+   *
+   * The daemon itself does not await them — a dropped socket is not a request
+   * anyone is waiting on — but the outcome has to be observable by something
+   * other than a log line. Each promise resolves only once `cancel` has the
+   * supervisor's terminal result AND has confirmed the owned process group
+   * holds no live process, so that resolution is the exact moment the kill has
+   * landed. Without it the only way to ask was to poll the process table on a
+   * deadline, which answers "not yet" and "never" with the same value.
+   */
   function terminateUnanswered() {
+    // Reconciled FIRST, because the in-memory registry is not the whole truth:
+    // a command whose supervisor has published its state but which
+    // `register` has not reached yet is absent from `entries`, so a socket
+    // that dropped in that window left the command running with nothing left
+    // to name or stop it. `reconcile` reads the request directories, which is
+    // where the durable truth is, and is idempotent.
+    reconcile();
+    const terminations = [];
     for (const [requestId, entry] of entries) {
       if (fs.existsSync(path.join(entry.dir, 'result'))) continue;
       /** @param {unknown} error */
       function reportTerminationFailure(error) {
         log('Could not terminate abandoned command', requestId, error);
       }
-      cancel(requestId).catch(reportTerminationFailure);
+      const terminated = cancel(requestId);
+      // The daemon's own report, so an ignored return value still surfaces.
+      terminated.catch(reportTerminationFailure);
+      // Named, because a sweep terminates every abandoned command at once and
+      // a caller asking about one of them must not have to guess which
+      // position it took.
+      terminations.push({ requestId, terminated });
     }
+    return terminations;
   }
 
   reconcile();
