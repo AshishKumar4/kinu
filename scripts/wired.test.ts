@@ -309,6 +309,16 @@ describe('entrypoint discovery', () => {
     ]))).toEqual(new Set(KINDS));
   });
 
+  test('an import.meta.main process root reaches the runtime imports it executes', () => {
+    const runner = `
+      import { provisionHome } from './strategy/provisioner';
+      if (import.meta.main) process.stdout.write(provisionHome());`;
+
+    expect(census(fixture(SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`), [
+      [`${BASE}runner.ts`, runner],
+    ]))).not.toContain(PROVISION_HOME);
+  });
+
   test('a `run` property that is not a built tool is not a tool handler', () => {
     // `run` and `file` are ordinary property names. Keying on the name alone
     // found 164 builtin-tool entrypoints on this tree over a surface of 8, and

@@ -420,7 +420,10 @@ export type EntrypointKind =
    *  `src/gallery.tsx` as an entry because no tool can see it; this detector
    *  finds both of this repository's bundles from the mount call itself. */
   | 'browser-bundle'
-  /** A shebang: the OS executes this file directly. */
+  /** A shebang or `import.meta.main`: the OS/runtime executes this file
+   *  directly. Both are process roots; requiring a shebang missed Bun scripts
+   *  such as the devbox candidate runner, whose imports are shipped runtime
+   *  calls rather than test-only references. */
   | 'process-entry';
 
 export interface Entrypoint {
@@ -595,6 +598,18 @@ export function findEntrypoints(
 
     walk(tree, (node) => {
       const { raw } = node;
+
+      // Bun's direct-execution guard. These files need no shebang when the
+      // caller invokes `bun path/to/file.ts`, and their imports are production
+      // reachability. Without this root, candidate-runner.ts imported
+      // isHoleExtent while the gate reported that export as test-only.
+      if (raw.type === 'MemberExpression' && !raw.computed
+        && raw.object.type === 'MetaProperty' && raw.object.meta.name === 'import'
+        && raw.object.property.name === 'meta' && raw.property.type === 'Identifier'
+        && raw.property.name === 'main') {
+        add(node, 'process-entry', 'import.meta.main');
+        return;
+      }
 
       // `createRoot(document.getElementById('root')!).render(<App />)` — the one
       // call that puts a component tree on a page.
