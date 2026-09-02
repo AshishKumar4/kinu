@@ -567,6 +567,18 @@ function foreignRooted(
  * without a list of hook names, which would be the hand-kept thing this gate
  * exists to refuse.
  */
+function importMetaMainNode(tree: SyntaxNode): SyntaxNode | undefined {
+  let found: SyntaxNode | undefined;
+  walk(tree, (node) => {
+    const { raw } = node;
+    if (raw.type === 'MemberExpression' && !raw.computed
+      && raw.object.type === 'MetaProperty' && raw.object.meta.name === 'import'
+      && raw.object.property.name === 'meta' && raw.property.type === 'Identifier'
+      && raw.property.name === 'main') found = node;
+  });
+  return found;
+}
+
 export function findEntrypoints(
   reachers: ReadonlyMap<string, string>,
   modules: ReadonlyMap<string, Module>,
@@ -589,6 +601,11 @@ export function findEntrypoints(
       found.push({ file, line: 1, kind: 'process-entry', at: 'shebang', symbol: undefined });
     }
 
+    const directProcessRoot = importMetaMainNode(tree);
+    if (directProcessRoot !== undefined) {
+      add(directProcessRoot, 'process-entry', 'import.meta.main');
+    }
+
     for (const rpc of declaredRpcs(file, text)) {
       found.push({
         file, line: rpc.line, kind: 'callable-rpc', at: `${rpc.owner}.${rpc.method}`,
@@ -603,14 +620,6 @@ export function findEntrypoints(
       // caller invokes `bun path/to/file.ts`, and their imports are production
       // reachability. Without this root, candidate-runner.ts imported
       // isHoleExtent while the gate reported that export as test-only.
-      if (raw.type === 'MemberExpression' && !raw.computed
-        && raw.object.type === 'MetaProperty' && raw.object.meta.name === 'import'
-        && raw.object.property.name === 'meta' && raw.property.type === 'Identifier'
-        && raw.property.name === 'main') {
-        add(node, 'process-entry', 'import.meta.main');
-        return;
-      }
-
       // `createRoot(document.getElementById('root')!).render(<App />)` — the one
       // call that puts a component tree on a page.
       if (raw.type === 'CallExpression' && raw.callee.type === 'Identifier'

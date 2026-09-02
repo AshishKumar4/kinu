@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-02",
-  "files": 1946,
-  "functions": 50219,
+  "files": 1950,
+  "functions": 50349,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -199,10 +199,6 @@
     },
     {
       "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
-      "complexity": 39
-    },
-    {
-      "key": "packages/devbox/src/candidates/bounded-layers.ts#build",
       "complexity": 39
     },
     {
