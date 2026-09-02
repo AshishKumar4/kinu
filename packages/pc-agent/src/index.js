@@ -34,6 +34,20 @@ const TOKEN_ROTATION = 'ROTATE';
  *  socket — and not the indefinite window a copy of device.json could spend.
  *  Pinned against core's DEVICE_TOKEN_ROTATION_ACK in the device-hub test. */
 const TOKEN_ROTATION_ACK = 'ROTATE_ACK';
+/** The hub's close code for a token it will not accept again, and the message
+ *  the ticket exchange raises for the same refusal over HTTP. Both mean the
+ *  same thing: this machine's credential is dead and no amount of retrying
+ *  brings it back, so the daemon stops LOUDLY instead of dialling forever. */
+const CREDENTIALS_REJECTED_CLOSE = 4401;
+const CREDENTIALS_REJECTED = 'device credentials were rejected; re-run: kinu connect';
+const REJECTED_EXIT = 4;
+/** The hub answers this text frame with `pong` (its socket auto-response), so
+ *  a half-open socket — the case a TCP-level close never reports — is found in
+ *  40 s rather than at the next command the owner is waiting for. */
+const PING_FRAME = 'ping';
+const PONG_FRAME = 'pong';
+const PING_INTERVAL_MS = 30_000;
+const PONG_DEADLINE_MS = 10_000;
 
 const { KINU_INFLIGHT_ROOT } = process.env;
 
@@ -1617,7 +1631,7 @@ async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
   if (!res.ok || ticket.length === 0) {
     const detail = serviceError || `HTTP ${res.status}`;
     if (res.status === 401 || res.status === 403) {
-      throw new Error('device credentials were rejected; re-run: kinu connect', { cause: new Error(detail) });
+      throw new Error(CREDENTIALS_REJECTED, { cause: new Error(detail) });
     }
     throw new Error(`ticket exchange failed: HTTP ${res.status}`, { cause: new Error(detail) });
   }
@@ -1628,10 +1642,25 @@ async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
 }
 
 function startConnectLoop(opts) {
-  const { getTicket, dial, logger = log, secret = () => '', schedule = setTimeout, onClose } = opts;
+  const {
+    getTicket, dial, logger = log, secret = () => '', schedule = setTimeout, onClose,
+    onRejected = () => {}, cancel = clearTimeout,
+  } = opts;
   let backoff = 1000;
   let stopped = false;
   let currentTicket = '';
+
+  /**
+   * The one outcome retrying cannot fix. A rejected credential means the hub
+   * has this machine's token superseded or revoked, so the loop stops and says
+   * which command relinks it — a daemon that kept dialling would fill the log
+   * with a failure the owner never reads and never act on it.
+   */
+  function stopRejected(detail) {
+    stopped = true;
+    logger(`${CREDENTIALS_REJECTED} (${detail})`);
+    onRejected();
+  }
 
   function retry() {
     if (stopped) return;
@@ -1645,6 +1674,9 @@ function startConnectLoop(opts) {
     try {
       ticket = await getTicket();
     } catch (err) {
+      if (err instanceof Error && err.message === CREDENTIALS_REJECTED) {
+        return stopRejected('the ticket exchange refused this device token');
+      }
       logger('Ticket exchange failed:', connectFailureMessage(err, [secret()]));
       retry();
       return;
@@ -1659,11 +1691,47 @@ function startConnectLoop(opts) {
       retry();
       return;
     }
+    // A half-open socket answers no close event, so the daemon asks. The hub
+    // replies from its socket auto-response, which costs it no wake.
+    let pingTimer;
+    let pongTimer;
+    const stopKeepalive = () => {
+      if (pingTimer !== undefined) cancel(pingTimer);
+      if (pongTimer !== undefined) cancel(pongTimer);
+      pingTimer = undefined;
+      pongTimer = undefined;
+    };
+    const beat = () => {
+      if (stopped) return;
+      try {
+        ws.send(PING_FRAME);
+      } catch (err) {
+        logger('Keepalive could not be sent:', connectFailureMessage(err, [secret(), currentTicket]));
+        return;
+      }
+      pongTimer = schedule(() => {
+        logger('No keepalive answer within', PONG_DEADLINE_MS, 'ms; closing this socket and redialling');
+        stopKeepalive();
+        ws.close();
+      }, PONG_DEADLINE_MS);
+      pingTimer = schedule(beat, PING_INTERVAL_MS);
+    };
+    ws.addEventListener('message', (ev) => {
+      if (String(ev.data) !== PONG_FRAME) return;
+      if (pongTimer !== undefined) cancel(pongTimer);
+      pongTimer = undefined;
+    });
     ws.addEventListener('open', () => {
       backoff = 1000;
+      pingTimer = schedule(beat, PING_INTERVAL_MS);
     });
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', (event) => {
+      stopKeepalive();
       if (stopped) return;
+      if (event && event.code === CREDENTIALS_REJECTED_CLOSE) {
+        if (onClose) onClose();
+        return stopRejected(`the hub closed this socket with ${CREDENTIALS_REJECTED_CLOSE}`);
+      }
       if (onClose) onClose();
       logger('Disconnected, reconnecting in', backoff, 'ms');
       retry();
@@ -1895,6 +1963,9 @@ function main() {
 
   startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
+    // A dead credential is not a transient failure, so the process exits
+    // non-zero and the log says which command relinks the machine.
+    onRejected: () => { process.exitCode = REJECTED_EXIT; },
     secret: () => cfg.token,
     onClose: () => {
       // The commands still waiting to answer can no longer report to anyone,
@@ -1936,6 +2007,9 @@ function main() {
         const payload = ev.data instanceof ArrayBuffer
           ? new TextDecoder().decode(ev.data)
           : String(ev.data);
+        // Before the parse: the keepalive answer is a bare word, not JSON, so
+        // reading it afterwards would log a parse failure every 30 seconds.
+        if (payload === PONG_FRAME) return;
         let msg;
         try {
           msg = JSON.parse(payload);

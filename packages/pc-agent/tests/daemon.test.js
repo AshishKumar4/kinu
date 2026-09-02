@@ -227,6 +227,122 @@ describe('daemon startup hardening', () => {
     expect(dialed).toEqual([first, second]);
   });
 
+  /** The fake socket the loop tests drive, with the listener map they share. */
+  function fakeSocket() {
+    const listeners = new Map();
+    return {
+      sent: [],
+      closed: 0,
+      readyState: 1,
+      send(data) { this.sent.push(data); },
+      close() { this.closed += 1; this.emit('close', { code: 1000 }); },
+      addEventListener(type, listener) {
+        const callbacks = listeners.get(type) ?? [];
+        callbacks.push(listener);
+        listeners.set(type, callbacks);
+      },
+      emit(type, event = {}) {
+        for (const listener of listeners.get(type) ?? []) listener(event);
+      },
+    };
+  }
+
+  // A rejected credential is the one outcome retrying cannot fix. The daemon
+  // used to dial forever on it, filling the log with a failure nobody reads.
+  test('a refused device token stops the loop loudly instead of dialling forever', async () => {
+    const scheduled = [];
+    const logs = [];
+    let rejected = 0;
+    const loop = startConnectLoop({
+      getTicket: async () => { throw new Error('device credentials were rejected; re-run: kinu connect'); },
+      dial() { throw new Error('must not dial after a refusal'); },
+      logger(...parts) { logs.push(parts.join(' ')); },
+      schedule(next) { scheduled.push(next); },
+      onRejected() { rejected += 1; },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    loop.stop();
+
+    expect(rejected).toBe(1);
+    // Nothing queued: the absence of a retry IS the fix.
+    expect(scheduled).toEqual([]);
+    expect(logs.join('\n')).toContain('re-run: kinu connect');
+  });
+
+  test('the hub closing with 4401 stops the loop the same way', async () => {
+    const scheduled = [];
+    const logs = [];
+    let rejected = 0;
+    const socket = fakeSocket();
+    const loop = startConnectLoop({
+      getTicket: async () => 'pct_' + 'a'.repeat(32),
+      dial: () => socket,
+      logger(...parts) { logs.push(parts.join(' ')); },
+      schedule(next) { scheduled.push(next); },
+      onRejected() { rejected += 1; },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.emit('close', { code: 4401 });
+    loop.stop();
+
+    expect(rejected).toBe(1);
+    expect(scheduled).toEqual([]);
+    expect(logs.join('\n')).toContain('4401');
+
+    // An ordinary close still redials, or a dropped socket would end the daemon.
+    const second = fakeSocket();
+    const ordinary = startConnectLoop({
+      getTicket: async () => 'pct_' + 'b'.repeat(32),
+      dial: () => second,
+      logger() {},
+      schedule(next) { scheduled.push(next); },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    second.emit('close', { code: 1000 });
+    ordinary.stop();
+    expect(scheduled).toHaveLength(1);
+  });
+
+  // A half-open socket answers no close event, so the daemon asks. Without
+  // this, a dead tunnel is discovered by the owner at the next command.
+  test('an unanswered keepalive closes the socket and redials', async () => {
+    const scheduled = [];
+    const cancelled = [];
+    const socket = fakeSocket();
+    const loop = startConnectLoop({
+      getTicket: async () => 'pct_' + 'c'.repeat(32),
+      dial: () => socket,
+      logger() {},
+      schedule(next) { scheduled.push(next); return scheduled.length; },
+      cancel(handle) { cancelled.push(handle); },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    socket.emit('open');
+
+    // The open event queues the first beat; running it pings and arms both
+    // the pong deadline and the next beat.
+    expect(scheduled).toHaveLength(1);
+    scheduled[0]();
+    expect(socket.sent).toEqual(['ping']);
+    expect(scheduled).toHaveLength(3);
+
+    // The answer arrives: the deadline is cancelled and the socket survives.
+    socket.emit('message', { data: 'pong' });
+    expect(cancelled).toContain(2);
+    expect(socket.closed).toBe(0);
+
+    // The next beat goes unanswered, and the deadline closes the socket.
+    scheduled[2]();
+    expect(socket.sent).toEqual(['ping', 'ping']);
+    scheduled[3]();
+    expect(socket.closed).toBe(1);
+    loop.stop();
+  });
+
   test('does not claim command supervision on unsupported platforms', () => {
     expect(supervisionSupported('linux')).toBe(true);
     expect(supervisionSupported('darwin')).toBe(true);
