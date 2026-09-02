@@ -19,6 +19,7 @@ import {
   archiveSizeCommand,
   baseObjectKey,
   chainBackupOptions,
+  chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
   isOverlayMounted,
@@ -36,20 +37,71 @@ import {
   type SnapshotChainPorts,
 } from '../src/snapshot-chain';
 
-/** Mirrors of the strategy's private layer vocabulary; drift fails these
- *  tests, which is the point. */
-const deltaLayerMountPoint = (chainId: string): string => ['/var/tmp/devbox', 'lower-delta', chainId].join('/');
-const deltaLayerServed = (procMounts: string, chainId: string): boolean =>
-  procMounts.split('\n').some((line) => line.split(' ')[1] === deltaLayerMountPoint(chainId));
-const LAYER_VISIBILITY_PROBES = 20;
-/** The two mount points the strategy owns: the read-only subtree an attach
- *  serves its layers from, and the writable one a publication moves an archive
- *  through. Mirrored for the same reason as the layer paths above — the host is
- *  handed them as arguments, so nothing outside the strategy declares them. */
-const CHAIN_STORE_MOUNT = '/backups';
-/** This box's chain root, mirrored from the strategy's own derivation: every key
- *  a test spells lives under it, and the one mount covers it. */
-const STORE_ROOT = 'boxes/box-under-test/backups';
+/**
+ * THE STRATEGY'S PATHS ARE OBSERVED, NEVER RESTATED.
+ *
+ * This block used to hold the mirrors of the strategy's private layer
+ * vocabulary — the delta layer's mount point, a reimplementation of its
+ * `/proc/mounts` probe, the visibility-probe ceiling, and the store mount
+ * point — under a comment saying "drift fails these tests, which is the
+ * point". It is not the point. A mirror agrees with the module by
+ * construction. Both sides read the test's copy, so the only thing it can
+ * catch is the strategy MOVING a path, and the thing it cannot catch is the
+ * strategy looking somewhere other than where it mounted — which is the defect
+ * that costs a workspace.
+ *
+ * Every path is now read off a call the strategy really made. The host is
+ * handed each mount point as an ARGUMENT — `mountStore(at)`,
+ * `squashfuse <archive> <point>`, `fuse-overlayfs -o lowerdir=…` — so the
+ * fake receives the strategy's own choice and the assertions read it back.
+ * What the cases then assert are its PROPERTIES: inside the box's own runtime
+ * directory, scoped by the chain generation, read through the one mount, and
+ * the same path the strategy later reads `/proc/mounts` for.
+ */
+
+/** This box's chain root, DERIVED through the strategy's own exported helper
+ *  rather than spelled: every key a test names lives under it, and the one
+ *  mount covers it. `boxes/box-under-test` is this suite's box prefix, which
+ *  is a fixture identity rather than a value the strategy owns. */
+const STORE_ROOT = chainStoreRoot('boxes/box-under-test');
+
+/** The store mount point the strategy chose, read off its own
+ *  `mountStore:<at>` call. One mount per binding per container life now, so
+ *  there is no read/write split to model — the registry state the last mount
+ *  held is what a reattach releases and a fresh mount replaces. */
+function storeMountOf(calls: readonly string[]): string {
+  const at = calls
+    .filter((call) => call.startsWith('mountStore:'))
+    .map((call) => call.split(':')[1])[0];
+  if (at === undefined) {
+    throw new Error(`the strategy mounted no store; calls: ${calls.join(', ')}`);
+  }
+  return at;
+}
+
+/** One layer mount the strategy made: where in the call sequence it happened,
+ *  the archive path it read, and the point it chose. */
+interface LayerMount {
+  readonly index: number;
+  readonly archive: string;
+  readonly point: string;
+}
+
+/** The layer mount the strategy made for `objectKey`, read off its own
+ *  `mountLayer:<archive>:<point>` call: where in the sequence it happened, the
+ *  archive path it read THROUGH the store mount, and the point it chose. */
+function layerMountOf(calls: readonly string[], objectKey: string): LayerMount {
+  const archiveName = objectKey.split('/').at(-1)!;
+  const index = calls.findIndex((call) => {
+    const parts = call.split(':');
+    return parts[0] === 'mountLayer' && parts[1]?.endsWith(`/${archiveName}`) === true;
+  });
+  if (index === -1) {
+    throw new Error(`no layer was mounted for ${objectKey}; calls: ${calls.join(', ')}`);
+  }
+  const parts = calls[index]!.split(':');
+  return { index, archive: parts[1]!, point: parts[2]! };
+}
 
 import {
   ATTACH_OUTCOME_KINDS,
@@ -189,7 +241,7 @@ function excludePatternsOf(command: string): readonly string[] {
 function shellLabel(
   command: string,
   mounts: string,
-  missingPaths: readonly string[],
+  absent: (path: string) => boolean,
   freeBytes: number,
   upperMark: string,
   stagedSize: string,
@@ -204,18 +256,20 @@ function shellLabel(
   if (exists !== undefined) {
     return {
       call: `pathExists:${exists}`,
-      stdout: missingPaths.includes(exists) ? 'no' : 'yes',
+      stdout: absent(exists) ? 'no' : 'yes',
     };
   }
-  // The BOUNDED visibility probe: one command that asks the store mount for one
-  // layer up to `LAYER_VISIBILITY_PROBES` times and, when it never appears,
-  // reports what the subtree does hold. A path this test declares missing is
-  // missing however many times it is asked.
+  // The BOUNDED visibility probe: ONE command that asks the store mount for one
+  // layer a bounded number of times and, when it never appears, reports what the
+  // subtree does hold. The bound lives inside the command the strategy composed,
+  // so this fake never has to know it — the case that asserts the refusal reads
+  // it off the command instead. A path a case declares absent stays absent
+  // however many times it is asked.
   if (command.includes('printf ready')) {
     const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
     return {
       call: `awaitLayer:${awaited}`,
-      stdout: missingPaths.includes(awaited) ? 'missing data.sqsh delta.sqsh' : 'ready',
+      stdout: absent(awaited) ? 'missing data.sqsh delta.sqsh' : 'ready',
     };
   }
   // Releasing every delta layer this container serves, whichever generation
@@ -289,7 +343,10 @@ interface ContainerMounts {
 function harness(overrides: {
   state?: ChainState | null;
   mounts?: string | (() => string);
-  missingPaths?: readonly string[];
+  /** Which container paths this case says are NOT there, asked per path rather
+   *  than listed — so a case can say "the store subtree exposes nothing"
+   *  without knowing where the strategy mounted the store. */
+  absent?: (path: string) => boolean;
   generations?: string[];
   entriesAfterExtract?: number;
   running?: boolean;
@@ -499,7 +556,7 @@ function harness(overrides: {
         ? mounts()
         : `${mounts()}\ns3fs ${table.mounted.at} fuse.s3fs rw,nosuid,nodev,relatime 0 0\n`;
       const label = shellLabel(
-        command, procMounts(), overrides.missingPaths ?? [],
+        command, procMounts(), overrides.absent ?? (() => false),
         overrides.freeBytes ?? Number.MAX_SAFE_INTEGER,
         liveMark,
         overrides.stagedReport ?? `0 ${DELTA_BYTES}`,
@@ -737,6 +794,69 @@ async function checkpointOf(record: Harness, kind: CheckpointKind): Promise<Chec
   return outcome;
 }
 
+/** The mount points one production attach chose for one generation. */
+interface Chosen {
+  readonly chainId: string;
+  /** Where it mounted the box's chain root — the one mount. */
+  readonly store: string;
+  /** Where it mounted the base layer, and the generation's own delta layer. */
+  readonly base: string;
+  readonly delta: string;
+}
+
+/**
+ * Run one production attach and read back the paths it chose.
+ *
+ * OBSERVED BEFORE THE CASES THAT NEED THEM. A case that composes a
+ * `/proc/mounts` line has to know the layer path BEFORE it can run its own
+ * scenario, and restating that path is what made this file's mirrors: the test
+ * and the strategy then both read the test's copy. An attach that already ran
+ * answers the same question with the strategy's own choice.
+ *
+ * `snapshotChainStorage(...).attach()` directly rather than `attachOf`, so an
+ * observation does not pad the outcome-kind denominator at the end of this
+ * file.
+ */
+async function observeAttach(chainId: string): Promise<Chosen> {
+  const calls: string[] = [];
+  const record = harness({
+    state: chainState({ base: { id: chainId, bytes: BASE_BYTES }, delta: { bytes: DELTA_BYTES } }),
+    mounts: mountsAfterAttach(calls),
+    calls,
+  });
+  const outcome = await snapshotChainStorage(record.ports).attach();
+  if (outcome.kind !== 'attached') {
+    throw new Error(`observing ${chainId}: the attach answered ${outcome.kind}`);
+  }
+  return {
+    chainId,
+    store: storeMountOf(calls),
+    base: layerMountOf(calls, baseObjectKey(STORE_ROOT, chainId)).point,
+    delta: layerMountOf(calls, deltaObjectKey(STORE_ROOT, chainId)).point,
+  };
+}
+
+/**
+ * TWO generations, because one cannot show that a path is scoped by
+ * generation. The collapse rule turns on the layer belonging to THIS
+ * generation and not another, and two observations can tell those apart where
+ * a mirror on both sides never could.
+ */
+const CHOSEN = await observeAttach(CHAIN_ID);
+const CHOSEN_FALLBACK = await observeAttach(FALLBACK_ID);
+
+/** Mounts that hold the composed shape a wake leaves: an overlay over the base
+ *  and the generation's own delta layer, at the paths the strategy CHOSE for
+ *  that generation. */
+function composedMounts(chosen: Chosen): string {
+  return [
+    'sysfs /sys sysfs rw,relatime 0 0',
+    `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+    `${baseObjectKey(STORE_ROOT, chosen.chainId)} ${chosen.base} fuse.squashfuse ro 0 0`,
+    `${deltaObjectKey(STORE_ROOT, chosen.chainId)} ${chosen.delta} fuse.squashfuse ro 0 0`,
+  ].join('\n');
+}
+
 // ── attach ──────────────────────────────────────────────────────────────────
 
 describe('attach — the mount must be observed to have landed', () => {
@@ -790,15 +910,16 @@ describe('attach — the mount must be observed to have landed', () => {
       // from mount points it is handed; a mounted overlay therefore proves the
       // whole composition landed, which is what the `already-attached` early
       // return assumes.
-      const base = record.calls.indexOf(`mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh:${LOWER_BASE}`);
-      const delta = record.calls.indexOf(
-        `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
-      );
+      const store = storeMountOf(record.calls);
+      const base = layerMountOf(record.calls, baseObjectKey(STORE_ROOT, CHAIN_ID));
+      const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
       const mounted = record.calls.indexOf(`overlayAttach:${DEVBOX_WORKDIR}:2`);
-      expect(base).toBeGreaterThan(-1);
-      expect(delta).toBeGreaterThan(-1);
-      expect(mounted).toBeGreaterThan(delta);
-      expect(mounted).toBeGreaterThan(base);
+      // Both archives were read THROUGH the store mount this attach made, which
+      // is what makes them lazy reads rather than downloads.
+      expect(base.archive.startsWith(`${store}/`)).toBe(true);
+      expect(delta.archive.startsWith(`${store}/`)).toBe(true);
+      expect(mounted).toBeGreaterThan(delta.index);
+      expect(mounted).toBeGreaterThan(base.index);
       // The delta layer is NOT released after the overlay: it is one of its
       // lowers now, and releasing it would empty the merged view of everything
       // the changed set holds.
@@ -827,7 +948,8 @@ describe('attach — the mount must be observed to have landed', () => {
       const composed = raw.find(command => command.includes('fuse-overlayfs -o lowerdir='));
       expect(composed).toBeDefined();
       expect(composed).toContain(
-        `lowerdir='${deltaLayerMountPoint(CHAIN_ID)}':'${LOWER_BASE}'`,
+        `lowerdir='${layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID)).point}':`
+        + `'${layerMountOf(record.calls, baseObjectKey(STORE_ROOT, CHAIN_ID)).point}'`,
       );
     });
 
@@ -861,9 +983,11 @@ describe('attach — the mount must be observed to have landed', () => {
       expect((await attachOf(record)).kind).toBe('attached');
       // Adopted means COMPOSED: the orphan delta becomes a layer under the fresh
       // upper, exactly like a referenced one.
-      expect(record.calls).toContain(
-        `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
-      );
+      // The delta became a LAYER: its archive is read through the store mount this
+      // attach made, and its point is scoped by the generation it belongs to.
+      const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
+      expect(delta.archive.startsWith(`${storeMountOf(record.calls)}/`)).toBe(true);
+      expect(delta.point).toContain(CHAIN_ID);
       expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
     });
 
@@ -1053,7 +1177,7 @@ describe('attach — the mount must be observed to have landed', () => {
     const record = harness({
       state: chainState(),
       mounts: mountsAfterAttach(calls, MOUNTED_NO_UPPER),
-      missingPaths: [UPPER],
+      absent: (path) => path === UPPER,
       calls,
     });
     await expect(attachOf(record)).rejects.toThrow(/upper directory .* does not exist/);
@@ -1069,12 +1193,15 @@ describe('attach — the mount must be observed to have landed', () => {
       const calls: string[] = [];
       const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
       expect((await attachOf(record)).kind).toBe('attached');
-      expect(record.calls).toContain(`unmountStore:${CHAIN_STORE_MOUNT}`);
+      // The path is the one this attach mounted, read back from its own call, so
+      // the release cannot be checked against a path the strategy never used.
+      const store = storeMountOf(record.calls);
+      expect(record.calls).toContain(`unmountStore:${store}`);
       // And the store path is never released by path, which would bypass the
       // registry.
-      expect(record.calls).not.toContain(`unmountPath:${CHAIN_STORE_MOUNT}`);
+      expect(record.calls).not.toContain(`unmountPath:${store}`);
       // A stale claim from a previous generation is cleared BEFORE the mount.
-      expect(record.calls.indexOf(`unmountStore:${CHAIN_STORE_MOUNT}`))
+      expect(record.calls.indexOf(`unmountStore:${store}`))
         .toBeLessThan(record.calls.findIndex(call => call.startsWith('mountStore:')));
     });
 
@@ -1190,9 +1317,11 @@ describe('a wake whose upper already holds this delta', () => {
     });
 
     expect((await attachOf(record)).kind).toBe('attached');
-    expect(record.calls).toContain(
-      `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
-    );
+    // The delta became a LAYER: its archive is read through the store mount this
+    // attach made, and its point is scoped by the generation it belongs to.
+    const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
+    expect(delta.archive.startsWith(`${storeMountOf(record.calls)}/`)).toBe(true);
+    expect(delta.point).toContain(CHAIN_ID);
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
   });
 });
@@ -1227,9 +1356,11 @@ describe('a wake whose container instance changed', () => {
     expect(record.calls.filter(call => call.startsWith('seedUpper'))).toEqual([]);
     // What replaced it: the delta mounted at its own generation's layer path,
     // and an overlay composed over two lowers.
-    expect(record.calls).toContain(
-      `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
-    );
+    // The delta became a LAYER: its archive is read through the store mount this
+    // attach made, and its point is scoped by the generation it belongs to.
+    const delta = layerMountOf(record.calls, deltaObjectKey(STORE_ROOT, CHAIN_ID));
+    expect(delta.archive.startsWith(`${storeMountOf(record.calls)}/`)).toBe(true);
+    expect(delta.point).toContain(CHAIN_ID);
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
     expect(outcome.detail).toContain('base+delta layered');
   });
@@ -1248,21 +1379,46 @@ describe('a wake whose container instance changed', () => {
   });
 
   test('the layer path names its own generation, so a later commit can see it', async () => {
-    const calls: string[] = [];
-    const record = harness({ state: chainState(), mounts: mountsAfterAttach(calls), calls });
+    // OBSERVED, AND ASSERTED AS PROPERTIES. This case used to build a
+    // `/proc/mounts` line from a test-local copy of the strategy's layer path
+    // and hand it to a test-local copy of the strategy's own probe — both sides
+    // reading the test's copy, so nothing the strategy did could turn it red.
+    //
+    // The paths are now the ones a real attach mounted at, and what they have to
+    // satisfy is: inside the box's own runtime directory, so nothing a caller
+    // writes can reach them, and scoped by the generation, so two generations
+    // cannot share one mount point.
+    expect(CHOSEN.delta.startsWith(`${DEVBOX_RUNTIME_DIR}/`)).toBe(true);
+    expect(CHOSEN.delta).toContain(CHAIN_ID);
+    expect(CHOSEN_FALLBACK.delta).toContain(FALLBACK_ID);
+    expect(CHOSEN_FALLBACK.delta).not.toBe(CHOSEN.delta);
 
-    await attachOf(record);
-
-    const mounts = [
-      'sysfs /sys sysfs rw,relatime 0 0',
-      `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw 0 0`,
-      `${deltaObjectKey(STORE_ROOT, CHAIN_ID)} ${deltaLayerMountPoint(CHAIN_ID)} fuse.squashfuse ro 0 0`,
-    ].join(`\n`);
-    expect(deltaLayerServed(mounts, CHAIN_ID)).toBe(true);
-    // A DIFFERENT generation's layer is not this generation's changed set, and
-    // reading it as one is what would make every commit after a collapse
+    // AND THE COMMIT LOOKS THERE, which is the half a restatement on both sides
+    // could never reach:
+    // a commit reads `/proc/mounts` for its own generation's layer, so composing
+    // the mount line from the path the ATTACH chose proves the two halves of the
+    // strategy agree. Both directions — this generation's layer collapses the
+    // chain, another generation's does not — because reading a foreign layer as
+    // this one's changed set is what would make every commit after a collapse
     // collapse again.
-    expect(deltaLayerServed(mounts, FALLBACK_ID)).toBe(false);
+    const own = harness({
+      state: chainState({ at: 1 }),
+      mounts: composedMounts(CHOSEN),
+      now: 10 * INTERVAL_MS,
+      upperMark: 'written-since-the-wake',
+    });
+    expect((await checkpointOf(own, 'tick')).kind).toBe('committed');
+    expect(own.state?.base.id).not.toBe(CHAIN_ID);
+
+    const foreign = harness({
+      state: chainState({ at: 1 }),
+      mounts: composedMounts(CHOSEN_FALLBACK),
+      now: 10 * INTERVAL_MS,
+      upperMark: 'written-since-the-wake',
+    });
+    expect((await checkpointOf(foreign, 'tick')).kind).toBe('committed');
+    expect(foreign.state?.base.id).toBe(CHAIN_ID);
+    expect(foreign.state?.delta).toBeDefined();
   });
 });
 
@@ -1281,21 +1437,11 @@ describe('a wake whose container instance changed', () => {
 // expresses both, and archiving it is an operation this file already had.
 
 describe('a commit whose upper is not the whole changed set collapses the chain', () => {
-  /** Mounts that hold the composed shape a wake leaves: an overlay over the
-   *  base and the generation's own delta layer. */
-  function composedMounts(chainId = CHAIN_ID): string {
-    return [
-      'sysfs /sys sysfs rw,relatime 0 0',
-      `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
-      `${baseObjectKey(STORE_ROOT, chainId)} ${LOWER_BASE} fuse.squashfuse ro 0 0`,
-      `${deltaObjectKey(STORE_ROOT, chainId)} ${deltaLayerMountPoint(chainId)} fuse.squashfuse ro 0 0`,
-    ].join('\n');
-  }
 
   test('archives the merged view as a fresh base instead of the upper as a delta', async () => {
     const record = harness({
       state: chainState({ at: 1 }),
-      mounts: composedMounts(),
+      mounts: composedMounts(CHOSEN),
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
@@ -1321,7 +1467,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
   test('collapses ONCE: the next commit is an ordinary delta again', async () => {
     const record = harness({
       state: chainState({ at: 1 }),
-      mounts: composedMounts(),
+      mounts: composedMounts(CHOSEN),
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
@@ -1351,7 +1497,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     // of a changed set nothing else holds.
     const record = harness({
       state: chainState({ delta: undefined, at: 1 }),
-      mounts: composedMounts(),
+      mounts: composedMounts(CHOSEN),
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
@@ -1372,7 +1518,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     // cannot hide a change.
     const record = harness({
       state: chainState({ at: 1 }),
-      mounts: composedMounts(),
+      mounts: composedMounts(CHOSEN),
       now: 10 * INTERVAL_MS,
       upperMark: 'the-empty-upper',
       entriesAfterExtract: 0,
@@ -1418,15 +1564,39 @@ describe('an attach that cannot see or cannot release says so', () => {
       const record = harness({
         state: chainState(),
         mounts: NOT_MOUNTED,
-        missingPaths: [`${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh`],
+        absent: () => true,
       });
+      const raw: string[] = [];
+      const inner = record.ports.exec;
+      record.ports.exec = async (command) => {
+        raw.push(command);
+        return await inner(command);
+      };
 
       const refusal = attachOf(record);
+      // The attach has to RUN before its commands can be read back off the fake.
+      await expect(refusal).rejects.toThrow(/does not expose /);
 
-      await expect(refusal).rejects.toThrow(new RegExp(
-        `does not expose ${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh `
-        + `after ${String(LAYER_VISIBILITY_PROBES)} probes`,
-      ));
+      // THE PATH AND THE COUNT both come off the command the strategy composed,
+      // never off a number restated here. The probe names the store mount it
+      // lists and the path it waits for, and its own bound is what the refusal
+      // repeats — so the message cannot disagree with the wait that produced it.
+      const probe = raw.find((command) => command.includes('printf ready'));
+      expect(probe).toBeDefined();
+      const listed = /ls -1A '(?<path>[^']+)'/.exec(probe ?? '')?.groups?.path ?? '';
+      const awaited = /test -e '(?<path>[^']+)'/.exec(probe ?? '')?.groups?.path ?? '';
+      const bound = Number(/seq 1 (?<n>\d+)/.exec(probe ?? '')?.groups?.n ?? 0);
+      expect(listed).not.toBe('');
+      expect(awaited).not.toBe('');
+      expect(bound).toBeGreaterThan(0);
+      await expect(refusal).rejects.toThrow(
+        `does not expose ${awaited} after ${String(bound)} probes`,
+      );
+      // THE PACE LIVES IN ONE COMMAND. The loop is a single shell statement, so
+      // the count of probe COMMANDS the fake received is exactly one, whatever
+      // the bound inside it — the pacing that made the deployed probe kill the
+      // session stays where it was put.
+      expect(raw.filter((command) => command.includes('printf ready'))).toHaveLength(1);
       // WHAT THE SUBTREE DOES HOLD travels with the refusal: an operator reading
       // it can tell "the mount is empty" from "the mount holds another
       // generation's archives" without a second deployment.
@@ -1939,7 +2109,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // writable for one publication, and the SDK refuses one binding mounted
       // twice under different settings: measured live, the second checkpoint
       // after a wake (runs e2e20260902032038, e2e20260902032318).
-      expect(record.calls).toContain(`mountStore:${CHAIN_STORE_MOUNT}`);
+      expect(record.calls).toContain(`mountStore:${storeMountOf(record.calls)}`);
       // The archive went in through that mount, under the key the record names.
       expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
       expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
@@ -1960,7 +2130,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
-      const mounted = record.calls.indexOf(`mountStore:${CHAIN_STORE_MOUNT}`);
+      const mounted = record.calls.indexOf(`mountStore:${storeMountOf(record.calls)}`);
       const flushed = record.calls.indexOf(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
       const read = record.calls.indexOf(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
       const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
@@ -1977,15 +2147,16 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // parent for a key nothing lives under yet, and `dd` then refuses with
       // `No such file or directory` — measured live on the first checkpoint of a
       // fresh box, run e2e20260902083130.
+      const store = storeMountOf(record.calls);
       const command = publishCommand({
         archivePath: '/stage/layer.sqsh',
-        mountedPath: `${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh`,
+        mountedPath: `${store}/${CHAIN_ID}/data.sqsh`,
       });
-      expect(command).toStartWith(`mkdir -p '${CHAIN_STORE_MOUNT}/${CHAIN_ID}';`);
+      expect(command).toStartWith(`mkdir -p '${store}/${CHAIN_ID}';`);
       expect(command.indexOf('mkdir -p')).toBeLessThan(command.indexOf('dd if='));
       // AND THE MOUNT IS STILL HELD: no unmount of the store path anywhere in
       // the commit, because the attach's layers are reading through it.
-      expect(record.calls).not.toContain(`unmountStore:${CHAIN_STORE_MOUNT}`);
+      expect(record.calls).not.toContain(`unmountStore:${store}`);
     });
 
   test('a writable mount is released even when the publication fails', async () => {
@@ -2089,10 +2260,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // rule — a second mount with a different setting or prefix is refused
       // with the SDK's own sentence — so these assertions are the reader's view
       // of a constraint the fake would have failed on.
-      for (const mount of mounts) {
-        const at = mount.split(':')[1]!;
-        expect(at).toBe(CHAIN_STORE_MOUNT);
-      }
+      // THE ONE MOUNT POINT, read off the calls rather than restated: every
+      // mount either role made names the same path.
+      const at = [...new Set(mounts.map((mount) => mount.split(':')[1]!))];
+      expect(at).toHaveLength(1);
       // And a wake that re-attaches releases the store mount first, so a new
       // generation's subtree can take its place at the one mount point.
       const againCalls: string[] = [];
@@ -2102,7 +2273,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         calls: againCalls,
       });
       expect((await attachOf(attachedAgain)).kind).toBe('attached');
-      expect(attachedAgain.calls.indexOf(`unmountStore:${CHAIN_STORE_MOUNT}`))
+      expect(attachedAgain.calls.indexOf(`unmountStore:${storeMountOf(attachedAgain.calls)}`))
         .toBeLessThan(attachedAgain.calls.findIndex(call => call.startsWith('mountStore:')));
     });
 
@@ -2550,8 +2721,11 @@ describe('attachChain resets only its OWN directories', () => {
 
     const resets = raw.filter(command => command.startsWith('rm -rf'));
     expect(resets.length).toBeGreaterThan(0);
+    // Against the path this attach really mounted — read back from its own
+    // call — rather than a path restated beside the strategy.
+    const store = storeMountOf(record.calls);
     for (const command of resets) {
-      expect(command).not.toContain(CHAIN_STORE_MOUNT);
+      expect(command).not.toContain(store);
     }
   });
 
@@ -2957,11 +3131,10 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // point, in the one setting — across the checkpoint that wrote a base, the
       // attach that read it back, and the checkpoint that wrote a delta after
       // the wake.
-      for (const call of [...firstCalls, ...wakeCalls, ...secondCalls]) {
-        if (!call.startsWith('mountStore:')) continue;
-        const at = call.split(':')[1]!;
-        expect(at).toBe(CHAIN_STORE_MOUNT);
-      }
+      const one = [...new Set([...firstCalls, ...wakeCalls, ...secondCalls]
+        .filter(call => call.startsWith('mountStore:'))
+        .map(call => call.split(':')[1]!))];
+      expect(one).toHaveLength(1);
       // Both publications landed, and the wake's attach proved the first one.
       expect(second.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
     });
@@ -2993,15 +3166,17 @@ describe('the binding has ONE mount for the container\'s life', () => {
       const foldCalls: string[] = [];
       const fold = harness({
         state: woken.state,
-        // The composed shape the wake left: an overlay over the base and this
-        // generation's own delta layer, which is what makes the upper less than
-        // the whole changed set and forces the collapse.
-        mounts: [
-          'sysfs /sys sysfs rw,relatime 0 0',
-          `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
-          `${baseObjectKey(STORE_ROOT, CHAIN_ID)} ${LOWER_BASE} fuse.squashfuse ro 0 0`,
-          `${deltaObjectKey(STORE_ROOT, CHAIN_ID)} ${deltaLayerMountPoint(CHAIN_ID)} fuse.squashfuse ro 0 0`,
-        ].join('\n'),
+        // The composed shape the wake left, at the paths THAT attach chose —
+        // read back from its own calls rather than restated here, so the fold
+        // cannot be handed a mount line the strategy disagrees with. The layer
+        // paths are what make the upper less than the whole changed set and
+        // force the collapse.
+        mounts: composedMounts({
+          chainId: CHAIN_ID,
+          store: storeMountOf(wakeCalls),
+          base: layerMountOf(wakeCalls, baseObjectKey(STORE_ROOT, CHAIN_ID)).point,
+          delta: layerMountOf(wakeCalls, deltaObjectKey(STORE_ROOT, CHAIN_ID)).point,
+        }),
         calls: foldCalls,
         registry, mountsTable: container,
         upperMark: 'written-since-the-wake',
@@ -3044,7 +3219,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
         registry,
       });
       expect((await attachOf(second)).kind).toBe('attached');
-      expect(secondCalls.indexOf(`unmountStore:${CHAIN_STORE_MOUNT}`))
+      expect(secondCalls.indexOf(`unmountStore:${storeMountOf(secondCalls)}`))
         .toBeLessThan(secondCalls.findIndex(call => call.startsWith('mountStore:')));
     });
 });
@@ -3212,10 +3387,12 @@ describe('a restore that refuses the newest generation recovers from the older o
       // store subtree was never even mounted.
       // ONE mount, whichever generation it ends up serving: the recovery
       // mounts the box's root once and reads the fallback's layers through it.
+      // The path is the strategy's own choice, read back off its call.
+      const store = storeMountOf(record.calls);
       expect(record.calls.filter(call => call.startsWith('mountStore:')))
-        .toEqual([`mountStore:${CHAIN_STORE_MOUNT}`]);
+        .toEqual([`mountStore:${store}`]);
       // And what it READ is the fallback's objects, never the refused one's.
-      expect(record.calls).toContain(`awaitLayer:${CHAIN_STORE_MOUNT}/${FALLBACK_ID}/data.sqsh`);
+      expect(record.calls).toContain(`awaitLayer:${store}/${FALLBACK_ID}/data.sqsh`);
       // PROMOTED BEFORE SERVED: a crash after the mount must never leave the box
       // running on these bytes under a record that still names what it refused,
       // because the next checkpoint would write a delta into a generation whose

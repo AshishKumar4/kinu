@@ -68,6 +68,27 @@
  * Today's population cannot be fixed by this commit, and a warning nobody has to
  * clear is how the population got here. Debt on the green path is debt somebody
  * reads.
+ *
+ * ## The one rule this gate and `test-census.ts` share
+ *
+ * Stated in both headers in the same words. A constant a test needs is EITHER a
+ * public contract — exported from the module that owns it AND read by
+ * production, which is exactly what this gate accepts as reachable — OR it is
+ * unnecessary, because the test can observe the behaviour instead. There is no
+ * third option, and the two shapes that pretend to be one are a TEST-ONLY
+ * EXPORT and a TEST-SIDE MIRROR: the first makes the module's surface bigger
+ * for no production reader, which this gate reports as
+ * reached-by-tests-only; the second restates the value beside the module, which
+ * the census reports as a mirror. They are the same defect seen from two sides,
+ * and neither is the fix for the other. The fix is to assert what the code
+ * DOES: a value the module hands out, a path it names in a command, a count it
+ * puts in its own message.
+ *
+ * So an export added to satisfy a test is this gate's finding, not its remedy.
+ * `test-census.ts --ratchet` holds the other side of the same boundary, which is
+ * why the sentence above is duplicated rather than cross-referenced: a reader
+ * arriving at either tool with a red line has to be told the whole rule, and a
+ * pointer to the other file is the thing nobody follows.
  */
 
 import * as v from 'valibot';

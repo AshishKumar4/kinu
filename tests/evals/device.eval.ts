@@ -88,7 +88,24 @@ const ROUNDTRIP_MARKER = 'KINU_DEVICE_ROUNDTRIP_OK';
  *  device to appear connected — rather than a number invented here, so the two
  *  directions of the same state change are held to one bound. */
 const SETTLE_DEADLINE_MS = DEVICE_CONNECT_DEADLINE_MS;
-const SETTLE_POLL_MS = 1_000;
+
+/**
+ * How many times the deployment's view is read inside that bound.
+ *
+ * A COUNT, NOT A SECOND DURATION, and that is the whole of the difference. This
+ * was `const SETTLE_POLL_MS = 1_000`, which restated `device-connect.ts`'s
+ * private `CONNECT_POLL_MS` — the same millisecond figure written on both sides
+ * of a module boundary with nothing exported between them, so neither side
+ * could ever learn that the other had changed.
+ *
+ * The product owns exactly ONE figure this arm is entitled to, its connect
+ * deadline, and that one is imported. How finely the arm samples inside that
+ * deadline is the arm's own business and belongs to no contract, so it is
+ * spelled as a sample count and the interval is derived from the bound. Nothing
+ * here is asserted: the assertion is that the deployment's view SETTLED, which
+ * is a fact about the deployment rather than about a wait.
+ */
+const SETTLE_PROBES = 20;
 
 /**
  * WHERE THIS RUN GOES, and what a missing half means.
@@ -151,11 +168,12 @@ interface DeviceCaseState {
  *  correctness deadline. */
 async function settles(check: () => Promise<boolean>): Promise<boolean> {
   const deadline = Date.now() + SETTLE_DEADLINE_MS;
+  const between = Math.floor(SETTLE_DEADLINE_MS / SETTLE_PROBES);
   for (;;) {
     if (await check()) return true;
     if (Date.now() >= deadline) return false;
     const tick = Promise.withResolvers<void>();
-    setTimeout(tick.resolve, SETTLE_POLL_MS);
+    setTimeout(tick.resolve, between);
     await tick.promise;
   }
 }

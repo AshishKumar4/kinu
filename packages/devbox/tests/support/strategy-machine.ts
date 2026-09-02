@@ -141,15 +141,10 @@ import {
   type DevboxStrategyName,
 } from '../../src/storage';
 
-/** The box this machine stands for, and the chain root its keys live under —
- *  derived, never spelled, so the mirror cannot drift from the strategy. */
+/** The box this machine stands for, and the chain root its keys live under.
+ *  DERIVED through the strategy's own exported helper, never spelled here, so
+ *  there is no second copy of the layout to drift from. */
 const STORE_ROOT = chainStoreRoot('boxes/conformance-box');
-
-/** A mirror of the strategy's own read mount point, which it does not export:
- *  the host is handed the path as an argument, so this file states the one the
- *  container would really see. Drift fails the whole chain arm — the fake would
- *  materialise objects where the strategy is not looking. */
-const CHAIN_STORE_MOUNT = '/backups';
 
 // ── deaths ──────────────────────────────────────────────────────────────────
 
@@ -726,10 +721,28 @@ function chainExec(
 
     // The BOUNDED visibility probe: one command that asks the store mount for a
     // layer and, when it never appears, reports what the subtree holds.
+    //
+    // WHICH SUBTREE IS OBSERVED, NOT RESTATED. This arm used to carry the
+    // strategy's private mount point — `const CHAIN_STORE_MOUNT = '/backups'`
+    // — so the fake and the strategy agreed by construction, and a strategy
+    // that moved its mount would have been served from the old path forever.
+    // The probe command itself lists the subtree it is waiting on, so the path
+    // is read off the command the container really received.
+    //
+    // AND THE MISSING BRANCH IS NOT COVERED HERE, which the deleted comment
+    // claimed for itself and could not deliver:
+    // measured 2026-09-02 by throwing inside it, no case in
+    // `strategy-conformance.test.ts` or `candidate-attach.test.ts` reaches it,
+    // because every layer this battery mounts materialises. The refusal that
+    // report becomes is asserted in `snapshot-chain.test.ts` — "a store subtree
+    // that never exposes the base refuses by count, naming what it holds" —
+    // against that suite's own container, and that is where its red direction
+    // is proven.
     if (command.includes('printf ready')) {
       const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
       if (disk.readFile(awaited) !== undefined) return ok('ready');
-      return ok(`missing ${disk.entries(CHAIN_STORE_MOUNT).join(' ')}`);
+      const listed = /ls -1A '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
+      return ok(`missing ${disk.entries(listed).join(' ')}`);
     }
     // Releasing every delta layer this container serves, whichever generation
     // mounted it.

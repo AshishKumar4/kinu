@@ -362,22 +362,6 @@ export const LADDER: readonly Gate[] = [
   },
 
   {
-    run: 'bun run gate:complexity',
-    tier: 'push',
-    // 2.2 s measured 2026-09-01: one oxc-parser walk over 1,907 parseable
-    // files and 48,052 functions, joined once against the lock.
-    seconds: 3,
-    catches: 'a new function arriving at the 99.9th-percentile budget line (39), any '
-      + 'function exceeding the measured tree ceiling (126), a locked resident gaining a '
-      + 'branch, and a stale lock row whose function was simplified or deleted — the '
-      + 'cleanup is recorded rather than silently absorbed.',
-    blind: 'complexity that never branches: a 300-line straight-line function scores 1, '
-      + 'and cognitive load carried by data shape, nesting depth or naming is not counted '
-      + 'at all. The worst twenty print by name on every run so the reader can judge what '
-      + 'the number cannot.',
-  },
-
-  {
     run: 'bun run gate:dead-code',
     tier: 'push',
     // 7.0 s measured 2026-09-01: two knip runs dominate, the dependency census
@@ -439,10 +423,62 @@ export const LADDER: readonly Gate[] = [
       + 'output is invisible exactly when somebody is deciding how far to trust the tree.',
   },
   {
+    run: 'bun scripts/test-census.ts --ratchet',
+    // PUSH, beside `gate:wired` and `gate:dead-code`, for their reason: it is a
+    // WHOLE-TREE census — 835 test files parsed, plus every product module a
+    // test imports — and a test cannot become coupled to an implementation
+    // between a commit and the push that follows it.
+    //
+    // NOT COMMIT, and the arithmetic decides it rather than taste. The commit
+    // tier declares 14.99s against a budget of 15 asserted in
+    // `ladder.test.ts`, so its headroom is 0.01s and no row of any cost fits
+    // there. The original intent for this gate was the commit tier on the
+    // precedent of `bun scripts/schema-drift.ts` at 0.5s; that precedent does
+    // not carry, because schema-drift walls half a second and this walls
+    // several.
+    //
+    // MEASURED, AND CALIBRATED, because this box is not the box the rest of
+    // this file's figures came from. Six readings on a 24-thread box under load
+    // ~70, taken in one window and interleaved so the load is common to all of
+    // them: this gate 13.25/16.09/11.94s, `gate:complexity` 8.29/8.00/8.78s
+    // against its declared 1.8s, `gate:wired` 8.66/7.70/9.34s against its
+    // declared 3.6s. Scaling the median 13.25s by each neighbour's own ratio
+    // gives 2.9s and 5.5s, and the LARGER is declared: a budget may only ever
+    // be made stricter by a reading nobody can reproduce on the reference box.
+    tier: 'push',
+    seconds: 5.5,
+    catches: 'a NEW coupled test, by the five axes a test review judges on — an assertion '
+      + "over the implementation's TEXT, a constant restating a module's own, a matcher that "
+      + 'cannot fail on the defect its title names, a reach into a member production declares '
+      + 'non-public, and a mock of an internal module. Keyed by category, file, TEST TITLE and '
+      + 'finding shape rather than by line, so moving a test does not read as a new one and '
+      + 'renaming one does. It also refuses a STALE key, so a coupling that was repaired is '
+      + 'recorded as repaired rather than left in the lock as budget for the next one.',
+    blind: 'everything in its own `BLIND_SPOTS` list, printed on the GREEN path: a mirror by '
+      + 'DERIVATION rather than by a shared named literal, a path or asserted string built by '
+      + 'concatenation, a table-driven suite counted as one test, a tautology through a stored '
+      + 'value, and a test asserting over an installed dependency\'s shipped text — resolution '
+      + 'runs against the enumeration and `node_modules` is not tracked. It also cannot tell a '
+      + 'SHAPE GATE from a coupled test: whether a source-text assertion guards a rule no '
+      + 'behavioural test can express is a judgement, so the reach is reported and the ruling '
+      + 'left to the reviewer.',
+  },
+  {
     run: 'bun run gate:complexity',
     // PUSH, beside the other whole-tree censuses: 1.8s measured 2026-09-01 on
     // the 24-thread box for 1,906 files and 48,048 functions, and a function
     // cannot become complex between a commit and the push that follows it.
+    //
+    // ONE ROW, and it was two. A second entry for this same `run` string sat
+    // earlier in this array declaring 3s over 1,907 files and 48,052 functions
+    // — the same command measured at a different commit, so the ladder ran
+    // `gate:complexity` TWICE per push and counted 4.8s for it in the tier's
+    // declared sum. Both readings are kept here because the deletion of one is
+    // a decision rather than a tidy-up: 2.2s over 1,907/48,052 and 1.8s over
+    // 1,906/48,048, both 2026-09-01. The row that survives is the one whose
+    // blind spots and oxlint cross-check are written out. A third reading,
+    // 8.29/8.00/8.78s, is this same gate on a 24-thread box under load ~70 —
+    // recorded because the census row below is calibrated against it.
     tier: 'push',
     seconds: 1.8,
     catches: 'a new function at the hard end of this codebase, arriving unnamed. The budget is '
@@ -516,11 +552,15 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
-    // config adds 1.44s (2026-08-27).
-    seconds: 13,
+    // config adds 1.44s (2026-08-27). The census's own suite joins it here and
+    // walls 10.85s alone on a 24-thread box under load ~70, against
+    // `gate:complexity` walling 8.29s there for its declared 1.8s — the same
+    // calibration the census gate row states, giving about 2.4s on the box the
+    // rest of these figures came from.
+    seconds: 15.4,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
       + 'genuinely different body — and, for scratch-ownership, the three shapes that '
