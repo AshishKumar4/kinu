@@ -104,7 +104,7 @@ export const KNOWN_RED: readonly KnownRed[] = [
     arm: 'bounded-layers',
     cell: '6.13',
     since: '2026-09-02',
-    reason: "the 100000-file commit did not commit: failed — the candidate runner command carries no --result",
+    reason: "RestoreWork.totalRemoteOps is 200006 for 1e5 files and 2006 for 1e3 (the commit, the wake and the exact tree pass since the control snapshot moved off argv; what remains is one object per file on restore plus a HEAD per closure object at attach, the lane-4 lazy-restore property)",
   },
   {
     arm: 'merkle-pack',

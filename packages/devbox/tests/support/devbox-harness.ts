@@ -97,12 +97,15 @@ export type LiveProcess = FakeProcessRow & {
 
 /**
  * One candidate runner start, as the container sees it: the argv the box
- * composed, split back into words. `action` and `resultPath` are the two the
- * fake itself has to read; a runner reads the rest with {@link runnerOption}.
+ * composed, split back into words, and the control snapshot the box wrote to
+ * the `--control` path before starting it. `action` and `resultPath` are the
+ * two the fake itself has to read; a runner reads the rest with
+ * {@link runnerOption}.
  */
 export interface RunnerInvocation {
   readonly action: string;
   readonly resultPath: string | undefined;
+  readonly control: string | undefined;
   readonly argv: readonly string[];
 }
 
@@ -741,8 +744,10 @@ export class FakeSandbox {
     // completed before start replied") and the only deterministic one: the
     // first exit poll finds a settled row, and the reply is at its path.
     const resultPath = runnerOption(argv, 'result');
+    const controlPath = runnerOption(argv, 'control');
     try {
-      const reply = await this.runner({ action, resultPath, argv });
+      const control = controlPath === undefined ? undefined : this.files.get(controlPath);
+      const reply = await this.runner({ action, resultPath, control, argv });
       if (resultPath !== undefined) this.files.set(resultPath, reply);
       this.processes.set(id, { ...row, status: 'completed', exitCode: 0 });
     } catch (cause) {

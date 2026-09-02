@@ -3421,7 +3421,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       format: strategy,
       runnerPath,
       mountStore: async () => {
-        await this.#rawExec(`mkdir -p '${CANDIDATE_STORE_MOUNT}'`, DEVBOX_RUNTIME_DIR);
+        // The runner slots' directory too: a fresh container's first runner
+        // start reads its control file from there before anything else runs.
+        await this.#rawExec(`mkdir -p '${CANDIDATE_STORE_MOUNT}' '${CANDIDATE_RUNNER_RESULT_DIR}'`, DEVBOX_RUNTIME_DIR);
         const before = await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR);
         if (findMount(before.stdout, CANDIDATE_STORE_MOUNT) !== undefined) {
           await this.unmountBucket(CANDIDATE_STORE_MOUNT);
@@ -3617,6 +3619,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         const paths = candidateCheckpointRunnerPaths();
         const process = await super.getProcess(paths.processId);
         return process !== null && isProcessLive(process.status) ? process : null;
+      },
+      writeRunnerControl: async (path, content) => {
+        await super.writeFile(path, content);
       },
       startRunnerProcess: async (command, processId) => await super.startProcess(command, {
         cwd: DEVBOX_RUNTIME_DIR,

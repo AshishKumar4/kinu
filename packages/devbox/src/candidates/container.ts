@@ -130,6 +130,8 @@ export interface CandidateContainerPorts {
   readonly waitForRunnerExit: (processId: string) => Promise<{ readonly exitCode: number }>;
   /** The live checkpoint that still owns the journal, if one is resumable. */
   readonly activeCheckpoint: () => Promise<CandidateRunnerProcess | null>;
+  /** Writes the control snapshot the next runner start reads; see `CandidateRunnerPaths`. */
+  readonly writeRunnerControl: (path: string, content: string) => Promise<void>;
   readonly startRunnerProcess: (
     command: string,
     processId: string,
@@ -158,17 +160,34 @@ const CheckpointReplySchema = v.union([
     draft: CandidatePublicationDraftSchema,
   }),
 ]);
-/** The fixed SDK process/result slot for the one active checkpoint control record. */
+/**
+ * One runner slot: the SDK process id and the two files the handshake moves
+ * through. The host writes the control snapshot to `controlPath` before the
+ * start and reads the reply from `resultPath` after the exit. Both directions
+ * are files, because the snapshot carries the head's closure, and the closure
+ * of a 700-file bounded-layers tree is 161,936 bytes as base64, above the
+ * 131,072-byte cap Linux puts on ONE argv string (measured 2026-09-02:
+ * `posix_spawn` refuses a 131,072-byte argument with E2BIG and accepts
+ * 131,071). On argv, every seed after the first publish of a `small-create-1k`
+ * tree was refused before the runner ran.
+ */
 export interface CandidateRunnerPaths {
   readonly processId: string;
+  readonly controlPath: string;
   readonly resultPath: string;
 }
 
-export function candidateCheckpointRunnerPaths(): CandidateRunnerPaths {
+function runnerSlot(key: string): CandidateRunnerPaths {
   return {
-    processId: 'candidate-runner-checkpoint',
-    resultPath: `${CANDIDATE_RUNNER_RESULT_DIR}/checkpoint.json`,
+    processId: `candidate-runner-${key}`,
+    controlPath: `${CANDIDATE_RUNNER_RESULT_DIR}/${key}.control.json`,
+    resultPath: `${CANDIDATE_RUNNER_RESULT_DIR}/${key}.json`,
   };
+}
+
+/** The fixed slot of the one active checkpoint control record. */
+export function candidateCheckpointRunnerPaths(): CandidateRunnerPaths {
+  return runnerSlot('checkpoint');
 }
 async function runnerPaths(
   action: 'checkpoint' | 'restore' | 'seed',
@@ -184,18 +203,13 @@ async function runnerPaths(
   }
   const identity = `${action}:${control.head?.pointer.rootEnvelopeId ?? 'empty'}:${bootId ?? 'missing-boot'}`;
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity)));
-  const key = Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
-  return {
-    processId: `candidate-runner-${key}`,
-    resultPath: `${CANDIDATE_RUNNER_RESULT_DIR}/${key}.json`,
-  };
+  return runnerSlot(Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join(''));
 }
 
 function runnerCommand(
   ports: CandidateContainerPorts,
   action: 'checkpoint' | 'restore' | 'seed',
-  control: CandidateRunControlV1,
-  resultPath: string,
+  paths: CandidateRunnerPaths,
 ): string {
   const parts = [
     'bun', ports.runnerPath,
@@ -205,8 +219,8 @@ function runnerCommand(
     '--journal-socket', CANDIDATE_JOURNAL_SOCKET,
     '--store', CANDIDATE_STORE_MOUNT,
     '--box', ports.boxId(),
-    '--control-state', btoa(JSON.stringify(v.parse(CandidateRunControlV1Schema, control))),
-    '--result', resultPath,
+    '--control', paths.controlPath,
+    '--result', paths.resultPath,
   ];
   return parts.map((part) => `'${part.replaceAll("'", "'\\''")}'`).join(' ');
 }
@@ -220,12 +234,14 @@ async function invokeRunner<Reply>(
   existing?: CandidateRunnerProcess,
 ): Promise<Reply> {
   const paths = await runnerPaths(action, control, bootId);
-  const retained = existing
+  let process = existing
     ?? (action === 'checkpoint'
       ? await ports.activeCheckpoint()
       : await ports.getRunnerProcess(paths.processId));
-  const process = retained
-    ?? await ports.startRunnerProcess(runnerCommand(ports, action, control, paths.resultPath), paths.processId);
+  if (process === null) {
+    await ports.writeRunnerControl(paths.controlPath, JSON.stringify(v.parse(CandidateRunControlV1Schema, control)));
+    process = await ports.startRunnerProcess(runnerCommand(ports, action, paths), paths.processId);
+  }
   const exited = await ports.waitForRunnerExit(process.id);
   if (exited.exitCode !== 0) {
     const logs = await process.getLogs();

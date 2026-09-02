@@ -871,6 +871,7 @@ describe('the candidate container seam answers its own failure', () => {
       getRunnerProcess: async () => null,
       waitForRunnerExit: absent('waitForRunnerExit'),
       activeCheckpoint: async () => null,
+      writeRunnerControl: async () => absent('writeRunnerControl')(),
       startRunnerProcess: async () => absent('startRunnerProcess')(),
       readRunnerResult: async () => absent('readRunnerResult')(),
       boxId: () => 'box-b',

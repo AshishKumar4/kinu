@@ -134,9 +134,8 @@ export class PublishingRunner {
 
   async answer(invocation: RunnerInvocation): Promise<string> {
     this.invocations.push(invocation);
-    const encoded = runnerOption(invocation.argv, 'control-state');
-    if (encoded === undefined) throw new Error('the runner was started without a control snapshot');
-    const control = v.parse(CandidateRunControlV1Schema, JSON.parse(atob(encoded)));
+    if (invocation.control === undefined) throw new Error('the runner was started without a control snapshot');
+    const control = v.parse(CandidateRunControlV1Schema, JSON.parse(invocation.control));
     if (invocation.action === 'restore') {
       return JSON.stringify({ ok: true, rootId: control.head?.pointer.rootEnvelopeId ?? null });
     }
@@ -268,11 +267,11 @@ export function candidateBox(format: CandidateContainerFormat): CandidateBoxHarn
     format === 'merkle-pack' ? MERKLE_PACK_FORMAT : BOUNDED_LAYERS_FORMAT,
   );
   stand.container.runner = async (invocation) => await runner.answer(invocation);
+  // Workload writes only: the box writes runner control files through the
+  // same SDK boundary, and those are not mutations of the journaled tree.
   stand.container.fileWritten = async (path, content) => {
-    const relative = path.startsWith(`${DEVBOX_WORKDIR}/`)
-      ? path.slice(DEVBOX_WORKDIR.length + 1)
-      : path;
-    await runner.write(relative, content);
+    if (!path.startsWith(`${DEVBOX_WORKDIR}/`)) return;
+    await runner.write(path.slice(DEVBOX_WORKDIR.length + 1), content);
   };
   return { ...stand, bucket, runner, paths };
 }

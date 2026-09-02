@@ -241,6 +241,7 @@ function runnerFake(options: RunnerFakeOptions = {}) {
   let runnerWaits = 0;
   const resultPaths: string[] = [];
   const runnerResults = new Map<string, string>();
+  const runnerControls = new Map<string, string>();
   let mounts = 0;
   let stops = 0;
   let journals = 0;
@@ -338,6 +339,9 @@ function runnerFake(options: RunnerFakeOptions = {}) {
       await waitGate;
       return { exitCode: options.exitCodes?.[exits++] ?? options.exitCode ?? 0 };
     },
+    writeRunnerControl: async (path, content) => {
+      runnerControls.set(path, content);
+    },
     startRunnerProcess: async (command, processId) => {
       starts.push({ command, processId });
       const resultPath = /'--result' '([^']+)'/.exec(command)?.[1];
@@ -360,6 +364,7 @@ function runnerFake(options: RunnerFakeOptions = {}) {
     starts,
     runnerWaits: () => runnerWaits,
     resultPaths,
+    controls: runnerControls,
     waitStarted,
     releaseWait: resolveWait,
     mounts: () => mounts,
@@ -563,9 +568,10 @@ describe('candidate supervised runner', () => {
       expect(fake.restores()).toBe(1);
       expect(fake.starts).toHaveLength(1);
       expect(fake.starts[0]?.command).toContain("'--action' 'seed'");
-      const encoded = /'--control-state' '([^']+)'/.exec(fake.starts[0]?.command ?? '')?.[1];
-      if (encoded === undefined) throw new Error('candidate repair omitted its control snapshot');
-      expect(JSON.parse(atob(encoded)).head.pointer.rootEnvelopeId).toBe(root);
+      const controlPath = /'--control' '([^']+)'/.exec(fake.starts[0]?.command ?? '')?.[1];
+      const written = controlPath === undefined ? undefined : fake.controls.get(controlPath);
+      if (written === undefined) throw new Error('candidate repair omitted its control snapshot');
+      expect(JSON.parse(written).head.pointer.rootEnvelopeId).toBe(root);
     } finally {
       await rm(join(place.workspace, '..'), { recursive: true, force: true });
     }
@@ -889,23 +895,37 @@ describe('candidate container runner', () => {
     }
   });
 
-  test('the container entry point atomically writes its restore reply', async () => {
+  test('the container entry point restores a 1000-file head whose control snapshot is above the argv cap', async () => {
     const place = paths('cli');
     try {
       await mkdir(place.workspace, { recursive: true });
       const host = new Host('box-cli', place.store);
       const journal = new MutationLog();
-      await journal.perform({
-        op: 'write', path: 'notes.txt', content: { kind: 'dense', bytes: enc.encode('cli') },
-      });
+      // The bench's `small-create-1k` shape: one object per file, so the head's
+      // closure alone is 1,002 refs. On argv that snapshot was refused by the
+      // kernel with E2BIG (one argv string is capped at 131,072 bytes), which
+      // is the size a deployed bounded-layers box reached at its first publish
+      // and the reason it never restored a non-empty tree.
+      await journal.perform({ op: 'mkdir', path: 'k' });
+      for (let index = 0; index < 1000; index += 1) {
+        await journal.perform({
+          op: 'write', path: `k/f${String(index).padStart(4, '0')}.txt`, content: { kind: 'dense', bytes: enc.encode(`file ${index}`) },
+        });
+      }
       const published = await checkpoint(host, 'bounded-layers', place, journal, 'cli');
       const publishedRoot = published.finalized.head?.rootEnvelopeId;
       await rm(place.workspace, { recursive: true, force: true });
 
-      const encodeControl = (control: CandidateRunControlV1): string =>
-        Buffer.from(JSON.stringify(control), 'utf8').toString('base64');
-      const resultPath = join(place.workspace, '..', 'runner-result.json');
-      const argv = (action: string, control: string) => [
+      const slot = join(place.workspace, '..', 'runner-slot');
+      await mkdir(slot, { recursive: true });
+      const controlPath = join(slot, 'control.json');
+      const resultPath = join(slot, 'result.json');
+      const writeControl = async (control: CandidateRunControlV1): Promise<string> => {
+        const snapshot = JSON.stringify(control);
+        await writeFile(controlPath, snapshot);
+        return snapshot;
+      };
+      const argv = (action: string) => [
         'bun', RUNNER,
         '--action', action,
         '--format', 'bounded-layers',
@@ -913,27 +933,22 @@ describe('candidate container runner', () => {
         '--store', place.store,
         '--box', 'box-cli',
         '--journal-socket', join(place.journal, 'control.sock'),
-        '--control-state', control,
+        '--control', controlPath,
         '--result', resultPath,
       ];
-      const restore = Bun.spawn({
-        cmd: argv('restore', encodeControl(await host.restoreControl())),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
+      const snapshot = await writeControl(await host.restoreControl());
+      expect(Buffer.from(snapshot, 'utf8').toString('base64').length).toBeGreaterThanOrEqual(131_072);
+      const restore = Bun.spawn({ cmd: argv('restore'), stdout: 'pipe', stderr: 'pipe' });
       expect(await restore.exited).toBe(0);
       expect(await new Response(restore.stdout).text()).toBe('');
       expect(JSON.parse(await readFile(resultPath, 'utf8'))).toEqual({ ok: true, rootId: publishedRoot });
-      expect(await readFile(join(place.workspace, 'notes.txt'), 'utf8')).toBe('cli');
+      expect(await readFile(join(place.workspace, 'k', 'f0000.txt'), 'utf8')).toBe('file 0');
+      expect(await readFile(join(place.workspace, 'k', 'f0999.txt'), 'utf8')).toBe('file 999');
 
       // No daemon answers this container, so the checkpoint refuses instead of
       // inventing a capture, and its incomplete result never becomes visible.
-      const checkpointRun = Bun.spawn({
-        cmd: argv('checkpoint', encodeControl(await host.begin())),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
+      await writeControl(await host.begin());
+      const checkpointRun = Bun.spawn({ cmd: argv('checkpoint'), stdout: 'pipe', stderr: 'pipe' });
       expect(await checkpointRun.exited).toBe(1);
       expect(await new Response(checkpointRun.stdout).text()).toBe('');
       expect(await new Response(checkpointRun.stderr).text()).toContain('candidate capture unavailable');

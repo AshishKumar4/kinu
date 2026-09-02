@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { closeSync, constants as FS, createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -691,7 +691,7 @@ interface CandidateRunnerCliOptions {
   readonly resultPath: string;
 }
 
-function parseCli(argv: readonly string[]): CandidateRunnerCliOptions {
+async function parseCli(argv: readonly string[]): Promise<CandidateRunnerCliOptions> {
   const value = (key: string): string => {
     const index = argv.indexOf(key);
     if (index === -1 || argv[index + 1] === undefined) throw new Error(`missing ${key}`);
@@ -713,7 +713,7 @@ function parseCli(argv: readonly string[]): CandidateRunnerCliOptions {
       store: value('--store'),
       boxId: value('--box'),
       journalSocket: value('--journal-socket'),
-      control: JSON.parse(Buffer.from(value('--control-state'), 'base64').toString('utf8')),
+      control: JSON.parse(await readFile(value('--control'), 'utf8')),
     },
     resultPath: value('--result'),
   };
@@ -721,7 +721,7 @@ function parseCli(argv: readonly string[]): CandidateRunnerCliOptions {
 
 if (import.meta.main) {
   try {
-    const cli = parseCli(process.argv.slice(2));
+    const cli = await parseCli(process.argv.slice(2));
     await atomicWrite(cli.resultPath, new TextEncoder().encode(JSON.stringify(await runCandidate(cli.options))));
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);

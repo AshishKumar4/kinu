@@ -2663,7 +2663,9 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     journal = false;
     storeMounted = false;
     bootId = `boot-${++bootSequence}`;
-    readonly results = new Map<string, string>();
+    /** The runner slots on this container's disk: control snapshots the box
+     *  wrote and the replies the runner left, by path. */
+    readonly files = new Map<string, string>();
     readonly processes = new Map<string, CandidateRunnerProcess>();
     readonly processActions = new Map<string, string>();
     readonly actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
@@ -2741,7 +2743,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       this.journal = false;
       this.storeMounted = false;
       this.bootId = `boot-${++bootSequence}`;
-      this.results.clear();
+      this.files.clear();
       this.processes.clear();
       this.processActions.clear();
       this.#restoreWindow = null;
@@ -3109,7 +3111,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         },
         clearControl: async () => await controlStore.clear(),
         clearRunnerAttempt: async (resultPath) => {
-          this.results.delete(resultPath);
+          this.files.delete(resultPath);
           for (const [id, process] of this.processes) {
             if (process.id.includes('checkpoint')) {
               this.processes.delete(id);
@@ -3118,7 +3120,7 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
           }
           deaths.at(awaitPointSeam('cleanup-resource'));
         },
-        clearRunnerResults: async () => { this.results.clear(); },
+        clearRunnerResults: async () => { this.files.clear(); },
         startJournal: async () => {
           if (this.disk.dead) throw new ContainerDied('startJournal on a dead container');
           if (this.disk.stopped) throw new ContainerStopped('startJournal');
@@ -3136,13 +3138,24 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
           return { exitCode: 0 };
         },
         activeCheckpoint: async () => null,
+        writeRunnerControl: async (path, content) => {
+          if (this.disk.dead) throw new ContainerDied('writeRunnerControl on a dead container');
+          if (this.disk.stopped) throw new ContainerStopped('writeRunnerControl');
+          this.files.set(path, content);
+        },
         startRunnerProcess: async (command, processId) => {
           if (this.disk.dead) throw new ContainerDied('startRunnerProcess on a dead container');
           if (this.disk.stopped) throw new ContainerStopped('startRunnerProcess');
+          if (command.length >= MAX_ARG_STRLEN) {
+            throw new Error(`E2BIG: argument list too long (${command.length} bytes)`);
+          }
           const argv = tokenize(command);
           const action = valueOf(argv, '--action');
           const resultPath = valueOf(argv, '--result');
-          const run: CandidateRunControlV1 = JSON.parse(atob(valueOf(argv, '--control-state')));
+          const controlPath = valueOf(argv, '--control');
+          const control = this.files.get(controlPath);
+          if (control === undefined) throw new Error(`no candidate runner control at ${controlPath}`);
+          const run: CandidateRunControlV1 = JSON.parse(control);
           if (action === 'restore') this.actionStarts.restore += 1;
           else if (action === 'checkpoint') this.actionStarts.checkpoint += 1;
           else this.actionStarts.seed += 1;
@@ -3158,11 +3171,11 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
             : action === 'restore'
               ? await this.#runRestore(run)
               : JSON.stringify({ ok: true });
-          this.results.set(resultPath, printed);
+          this.files.set(resultPath, printed);
           return process;
         },
         readRunnerResult: async (path) => {
-          const held = this.results.get(path);
+          const held = this.files.get(path);
           if (held === undefined) throw new Error(`no candidate runner result at ${path}`);
           return held;
         },
@@ -3233,6 +3246,15 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     refusedCells: HARNESS_OWNED_CELLS,
   };
 }
+/**
+ * Linux caps ONE argv string at 128 KiB (`MAX_ARG_STRLEN`), and the SDK hands
+ * a command to the container's shell as one string. Measured 2026-09-02 on
+ * this box: `posix_spawn` accepts a 131,071-byte argument and refuses
+ * 131,072 with E2BIG. The control snapshot of a 700-file bounded-layers head
+ * is 161,936 bytes as base64, which is why it travels as a file.
+ */
+const MAX_ARG_STRLEN = 131_072;
+
 function tokenize(command: string): readonly string[] {
   return [...command.matchAll(/'((?:[^']|'\\'')*)'/g)].map(
     match => match[1]!.replaceAll("'\\''", "'"),
