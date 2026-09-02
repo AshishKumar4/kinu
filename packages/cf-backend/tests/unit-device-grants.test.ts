@@ -1060,7 +1060,8 @@ describe('a copied device.json goes stale', () => {
   }
 
   /** A second claimant arriving while the device's socket is still live: the
-   *  thief's case, and a duplicate daemon's. Returns the refusal status. */
+   *  thief's case, and a duplicate daemon's. The newcomer wins the slot;
+   *  returns the upgrade status. */
   async function claimAgainstLiveSocket(harness: TestUserDO, token: string): Promise<number> {
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
     if (!issued.ok || !issued.ticket) return 0;
@@ -1199,7 +1200,7 @@ describe('a copied device.json goes stale', () => {
     harness.close();
   });
 
-  test('a second claimant is refused while the machine is connected, and recorded', async () => {
+  test('a second claimant takes the slot and is recorded where the owner reads it', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
 
@@ -1209,18 +1210,17 @@ describe('a copied device.json goes stale', () => {
     });
     const incumbent = harness.acceptedSockets.at(-1);
 
-    // A second claimant arrives while that socket is live. The machine already
-    // connected keeps its slot: displacing it is what handed the loser a fresh
-    // grace and started the alternation.
-    expect(await claimAgainstLiveSocket(harness, rotated ?? '')).toBe(409);
+    // A second claimant arrives while that socket is live and TAKES the slot: a
+    // real machine redialling must not be locked out by a socket the hub has
+    // not noticed closing. What stops the alternation this used to start is the
+    // one-shot grace above, not a refusal here.
+    expect(await claimAgainstLiveSocket(harness, rotated ?? '')).toBe(101);
 
-    // Refused, and the owner is told where they read the device.
+    // Recorded where the owner reads the device, and the incumbent is closed.
     const [row] = await harness.userDO.listDevices(await testOwner());
     expect(row.replacedAt).not.toBeNull();
     expect(row.connected).toBe(true);
-    // The incumbent is untouched: same socket, no rotation pushed at it, and
-    // no second socket accepted.
-    expect(harness.acceptedSockets.at(-1)).toBe(incumbent);
+    expect(harness.acceptedSockets.at(-1)).not.toBe(incumbent);
     expect((incumbent?.sent ?? []).filter((raw) => raw.includes(DEVICE_TOKEN_ROTATION))).toHaveLength(1);
     await harness.joinFibers();
     harness.close();

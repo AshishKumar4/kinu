@@ -1778,12 +1778,11 @@ export class UserDO extends Agent<Env> {
    *  `device.json` can be made stale. The new secret rides the socket that was
    *  just authenticated — it never appears in a URL or a log line.
    *
-   *  THE MACHINE ALREADY CONNECTED KEEPS ITS SLOT. Displacing the incumbent and
-   *  rotating for the newcomer is what made a copied `device.json` perpetual:
-   *  every displacement handed the loser a fresh grace to reconnect on, so two
-   *  claimants alternated every second forever and both always held a valid
-   *  token. A newcomer is refused and RECORDED instead. One refusal on the
-   *  device row is a signal the owner can read; a log full of reconnects is not.
+   *  A second socket taking the slot is never silent: the owner reads it on
+   *  the device row. The newcomer wins the slot — a real machine redialling
+   *  must not be locked out by a socket the hub has not yet noticed closing —
+   *  and what stops the alternation a displacement used to start is the
+   *  one-shot grace in {@link rotateDeviceToken}, not a refusal here.
    */
   private async acceptDeviceSocket(request: Request, url: URL): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -1795,8 +1794,6 @@ export class UserDO extends Agent<Env> {
 
     if (this._devices.isConnected(verified.deviceId)) {
       this.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, Date.now(), verified.deviceId);
-      diagnostics.event('device.second_claimant_refused', { device: verified.deviceId });
-      return new Response('this device already holds a live connection', { status: 409 });
     }
 
     const pair = new WebSocketPair();
