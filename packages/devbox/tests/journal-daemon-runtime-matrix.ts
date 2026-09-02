@@ -482,6 +482,20 @@ async function posixAndFence(): Promise<void> {
       adopt(checks, forked, 'fork');
 
       await writeFile(join(space.mount, 'after-cut.txt'), 'after the cut');
+      /* Read HERE, and not after the next fence, because here is the only
+       * moment the daemon guarantees these records exist. A mutation's INTENT
+       * and RESULT are both appended and fdatasynced before the write returns
+       * (journal-daemon.c:342-364), and a fence DELETES the drained prefix that
+       * carries them: run_fence calls compact_journal (journal-daemon.c:1396),
+       * which replaces the whole WAL with [BASE?, FENCE] whenever it has reached
+       * WAL_COMPACT_BYTES (journal-daemon.c:61, :1308). Whether the second fence
+       * crosses that bound is wall-clock, not contract: the mapping loop keeps
+       * journaling a round every 20 ms while this scenario verifies six
+       * megabytes of sealed extents, so a loaded box reaches the bound and an
+       * idle one does not. Read after the fence, this was 11-23 KiB of WAL and
+       * green alone, and records=0 under the push tier. */
+      const marker = parseJournal(await readFile(space.journal))
+        .filter((record) => record.path === '/after-cut.txt');
       /* Journaled truncation inside an open, snapshotted before the next fence
        * can compact the records that name it. */
       adopt(checks, await runProbe(['truncate-open', join(space.mount, 'truncated.bin')]), 'truncate');
@@ -562,7 +576,16 @@ async function posixAndFence(): Promise<void> {
         before >= 1 && after >= 1 && rounds.every((event) => event.failures === 0),
         `before=${before} during=${during} after=${after}`);
 
+      /* Which shape the journal checks below are reading, printed on the green
+       * path because the two are not the same measurement: a fence that has
+       * reached WAL_COMPACT_BYTES replaces the drained prefix with
+       * [BASE?, FENCE] (journal-daemon.c:1305-1372), a fence below it keeps
+       * every record. Alone this scenario arrives with 11-23 KiB and never sees
+       * the compacted shape, so the bytes say which case ran rather than
+       * leaving a reader to assume the one they have in mind. */
+      facts.journalBytesBefore = (await stats(space)).journalBytes;
       const second = await fence(space);
+      facts.journalBytesAfter = (await stats(space)).journalBytes;
       const sealedSecond = await verifyManifest(second);
       facts.secondFence = { cut: second.cut, generation: second.generation, entries: sealedSecond.manifest.entries.length };
       assert(checks, 'generation-advances-per-fence',
@@ -576,10 +599,15 @@ async function posixAndFence(): Promise<void> {
        * carries the fence, BASE when compaction replaced the records it covers. */
       const published = records.filter((record) => record.kind === 'FENCE' || record.kind === 'BASE');
       const beyond = records.filter((record) => record.sequence > second.cut);
-      const marker = records.filter((record) => record.path === '/after-cut.txt');
       assert(checks, 'cut-covers-the-drained-prefix',
         beyond.length === 0 && published.at(-1)?.sequence === second.cut,
-        `beyond=${beyond.length} lastPublished=${published.at(-1)?.sequence ?? -1} cut=${second.cut}`);
+        `beyond=${beyond.length} lastPublished=${published.at(-1)?.sequence ?? -1} cut=${second.cut} ` +
+        `journal=${records.length}`);
+      /* Sequencing at the write, and deliberately nothing about the journal
+       * after a fence: those records are exactly what compaction deletes, so no
+       * check can hold them past a fence. The two above are the ones that hold
+       * in both shapes, and `post-cut-work-lands-in-the-next-fence` is what
+       * carries the marker across the fence now. */
       assert(checks, 'marker-is-sequenced-after-the-first-cut',
         marker.length >= 2 && marker.every((record) => record.sequence > first.cut),
         `records=${marker.length} cut=${first.cut}`);
@@ -812,7 +840,17 @@ async function shutdownRaces(): Promise<void> {
       /* The mount is torn down under this on purpose, so a refused write is the
        * evidence the teardown reached live work, not a failure. The loop reports
        * the round it got to and the errno the kernel gave, and the check reads
-       * both: traffic that never ran would leave the shutdown racing nothing. */
+       * both: traffic that never ran would leave the shutdown racing nothing.
+       *
+       * A ROUND ONLY COUNTS IF THE DAEMON SERVED IT. The mountpoint goes back to
+       * being a plain writable directory the moment the daemon detaches the
+       * session (journal-daemon.c:1486-1495), so a write arriving after that
+       * succeeds against nothing at all — this cell has reported rounds=464 with
+       * no refusal, 463 of them into a bare directory. A mount can only go away,
+       * never come back, so a mount table that still names it AFTER the write is
+       * the proof the write went through the daemon. */
+      let landed!: () => void;
+      const firstRound = new Promise<void>((resolve) => { landed = resolve; });
       const traffic = (async (): Promise<{ rounds: number; refusal: string }> => {
         let rounds = 0;
         while (serving) {
@@ -822,29 +860,54 @@ async function shutdownRaces(): Promise<void> {
               join(space.mount, `busy-${rounds % 4}.txt`),
               `round ${rounds}`,
             );
+            if (!mountedPaths().includes(space.mount)) refusal = 'the mount went away under the write';
           } catch (cause) {
             const parsed = v.safeParse(ErrnoFailureSchema, cause);
             refusal = parsed.success
               ? parsed.output.code ?? parsed.output.message ?? String(cause)
               : String(cause);
           }
-          if (refusal.length > 0) return { rounds, refusal };
+          if (refusal.length > 0) {
+            landed();
+            return { rounds, refusal };
+          }
           rounds++;
+          landed();
         }
         return { rounds, refusal: '' };
       })();
       try {
         await writeFile(join(space.mount, 'settled.txt'), 'the mount serves');
+        /* The teardown has to overlap live work, and only the loop can say when
+         * it is live. Asking for the shutdown right after `settled.txt` did not:
+         * the loop's first write was still in flight, the kernel aborted it with
+         * ECONNABORTED, and the cell failed with rounds=0 on a loaded box. So
+         * wait for the loop's first LANDED round — a fact the daemon guarantees
+         * once its write returns — and note that by the time this resumes the
+         * loop has already issued the next write the teardown will race. */
+        await firstRound;
         if (entry === 'fence-stop') await fence(space);
         const exit = entry === 'sigterm' ? await terminateDaemon(daemon) : await stopDaemon(daemon);
         raced[entry] = exit;
         serving = false;
         const load = await traffic;
         const report = await raceReport(space);
+        /* A shutdown may refuse new work; it may never lose work it accepted.
+         * The daemon wrote the last acknowledged round through to the tree before
+         * it replied (journal-daemon.c:570-576), so it is still there once the
+         * process is gone, and nothing can have rewritten that name since: the
+         * only write after it is the one the teardown refused, four names along.
+         * This replaces the old `rounds > 0`, which asked whether a round had
+         * landed BEFORE the shutdown was asked for - a race, not a fact. */
+        const acknowledged = load.rounds - 1;
+        const kept = acknowledged >= 0 ? join(space.root, `busy-${acknowledged % 4}.txt`) : '';
+        const survived = kept !== '' && existsSync(kept) ? await readFile(kept, 'utf8') : '';
         assert(checks, `${entry}-races-nothing`,
-          exit.code === 0 && exit.unmounted && exit.ms < EXIT_LIMIT_MS && load.rounds > 0 &&
+          exit.code === 0 && exit.unmounted && exit.ms < EXIT_LIMIT_MS &&
+          survived === `round ${acknowledged}` &&
           report.announced && report.races.length === 0,
           `code=${exit.code} unmounted=${exit.unmounted} ms=${exit.ms} rounds=${load.rounds} ` +
+          `kept=${survived.length > 0 ? survived : 'NOTHING, the teardown raced no landed round'} ` +
           `stopped=${load.refusal.length > 0 ? load.refusal : 'with the mount still serving'} ` +
           `detector=${report.announced ? 'live' : 'ABSENT, this cell measured an uninstrumented daemon'} ` +
           `races=${report.races.length > 0 ? report.races : 'none'}`);
