@@ -24,24 +24,6 @@ export interface KnownRed {
 export const KNOWN_RED: readonly KnownRed[] = [
   {
     arm: 'snapshot-chain',
-    cell: '6.9',
-    since: '2026-09-02',
-    reason: "attach:after-store-mount: 4 mounts across both isolates, an uninterrupted wake makes 3; attach:after-layer-mount: 5 mounts across both isolates, an uninterrupted wake makes 3",
-  },
-  {
-    arm: 'snapshot-chain',
-    cell: '6.10',
-    since: '2026-09-02',
-    reason: "the late finalize reported committed; the wake served {\"extra.txt\":\"added by the second commit\",\"notes.txt\":\"generation two\",\"src.txt\":\"export const one = 1;\"}, the new boot published {\"notes.txt\":\"generation one\",\"src.txt\":\"export const one = 1;\",\"third.txt\":\"written by the third generation\"} (before the wake: {\"extra.txt\":\"added by the second commit\",\"notes.txt\":\"generation two\",\"src.txt\":\"expor…",
-  },
-  {
-    arm: 'r2fs',
-    cell: '6.10',
-    since: '2026-09-02',
-    reason: "the late finalize reported committed",
-  },
-  {
-    arm: 'snapshot-chain',
     cell: '6.12',
     since: '2026-09-02',
     reason: "bytesStaged 823296 > 2k + 4c for k=4 KiB; nodesRewritten 206 > p(d+2) = 3; seal.bytesStaged: n gives 823296, 10n gives 8196096; seal.bytesChunked: n gives 823296, 10n gives 8196096; seal.nodesRewritten: n gives 206, 10n gives 2034; publish.bytesPut: n gives 1133987, 10n gives 11288974",
@@ -123,12 +105,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     cell: '6.15',
     since: '2026-09-02',
     reason: "bytesPut 4539046 > 4 × 64 dirty pages × 16384 = 4194304",
-  },
-  {
-    arm: 'r2fs',
-    cell: '6.17',
-    since: '2026-09-02',
-    reason: "2 boots reported committed (A,B); the loser recorded no failure; both dirty sets were merged: {\"a.txt\":\"written by boot A\",\"b.txt\":\"written by boot B\",\"notes.txt\":\"generation one\",\"src.txt\":\"export const one = 1;\"}",
   },
   {
     arm: 'snapshot-chain',

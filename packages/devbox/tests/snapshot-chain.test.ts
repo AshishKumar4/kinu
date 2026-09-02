@@ -339,6 +339,8 @@ interface SdkMountRegistry {
  *  a stop and a wake — two isolates, one container — see the same lines. */
 interface ContainerMounts {
   mounted?: { readonly at: string; readonly prefix: string };
+  /** The instance these mounts belong to; a new answer is a replacement. */
+  generation?: string | undefined;
 }
 
 function harness(overrides: {
@@ -590,8 +592,11 @@ function harness(overrides: {
       return Promise.resolve({ stdout: label.stdout, stderr: '', exitCode: 0 });
     },
     containerGeneration: async () => {
-      if (generations.length > 1) return generations.shift();
-      return generations[0];
+      const next = generations.length > 1 ? generations.shift() : generations[0];
+      // A replacement is a new container, whose mount table is blank.
+      if (next !== table.generation && table.generation !== undefined) table.mounted = undefined;
+      table.generation = next;
+      return next;
     },
     storeRoot: () => STORE_ROOT,
     mountStore: (at) => {
@@ -2189,9 +2194,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       });
       expect(command).toStartWith(`mkdir -p '${store}/${CHAIN_ID}';`);
       expect(command.indexOf('mkdir -p')).toBeLessThan(command.indexOf('dd if='));
-      // AND THE MOUNT IS STILL HELD: no unmount of the store path anywhere in
-      // the commit, because the attach's layers are reading through it.
-      expect(record.calls).not.toContain(`unmountStore:${store}`);
+      // AND THE MOUNT IS STILL HELD: nothing releases the store path once it
+      // is taken, because the attach's layers are reading through it. A release
+      // BEFORE the mount is the registry entry a replaced container left.
+      expect(record.calls.lastIndexOf(`unmountStore:${store}`)).toBeLessThan(mounted);
     });
 
   test('a writable mount is released even when the publication fails', async () => {

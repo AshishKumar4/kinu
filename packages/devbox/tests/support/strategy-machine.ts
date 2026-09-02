@@ -1747,6 +1747,7 @@ function r2fsArm(): ConformanceArm {
   const prefix = 'boxes/box-conformance';
   const prefixWithSlash = `${prefix}/`;
   const largeSparseRefusal = 's3fs stores an object body; it has no sparse-hole wire format and a 1 GiB hole would become 1 GiB';
+  const oneWriter = 'ONE WRITER. Two containers mounted on one prefix will lose each other\'s writes, and nothing in this file arbitrates between them. A devbox owns its prefix.';
 
   const objectMeta = (entry: NodeEntry) => ({
     'kinu-kind': entry.kind,
@@ -2024,7 +2025,12 @@ function r2fsArm(): ConformanceArm {
     },
     refusedCells: {
       ...HARNESS_OWNED_CELLS,
+      // The r2fs.ts header's own sentence. A property of the mount, not of a
+      // checkpoint: s3fs uploads on close, so a fence at the checkpoint would
+      // pass here and merge in production.
+      '6.10': { reason: oneWriter },
       '6.14': { reason: largeSparseRefusal },
+      '6.17': { reason: oneWriter },
     },
   };
 }

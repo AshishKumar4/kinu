@@ -868,20 +868,14 @@ export interface SnapshotChainPorts {
    */
   mountStore(at: string): Promise<void>;
   /**
-   * Release the mount at `at` THROUGH THE SDK, not through the kernel.
+   * Release the mount at `at` THROUGH THE SDK, not through the kernel: a raw
+   * `fusermount3` leaves the SDK's registry claiming the path forever, so
+   * every later mount there is refused (a deployed chain that could be
+   * written and never attached again). Called only on a bare path, to drop
+   * the entry a replaced container's mount left — see `mountStoreOnce`.
    *
-   * The SDK keeps its own registry of the bucket mounts it made and refuses a
-   * mount whose path it still believes is in use. Releasing one with a raw
-   * `fusermount3` unmounts the filesystem and leaves that registry claiming the
-   * path forever, so the NEXT attach is refused for a mount that no longer
-   * exists. Deployed symptom: a chain that could be written and then never
-   * attached again, with every operation refused because the attach failed.
-   *
-   * A RELEASE IS NOT A FLUSH, and a publication must not rely on it as one: a
-   * lazy unmount returns as soon as the mount leaves the namespace, so bytes
-   * still held by s3fs would be lost while the record already named them. See
-   * {@link chainShell}'s `publishArchive`, which flushes and CHECKS the flush
-   * before anything here runs.
+   * A RELEASE IS NOT A FLUSH: a lazy unmount returns as the mount leaves the
+   * namespace, so `publishArchive` flushes and CHECKS the flush first.
    */
   unmountStore(at: string): Promise<void>;
   /**
@@ -1364,10 +1358,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * describes — genuinely unsound, refuse.
    *
    * A delta is REPLACED by an atomic PUT on every checkpoint, and this file's
-   * header already states what a mismatch there means: "a crash between the PUT
-   * and the state write leaves a complete delta the record does not yet
-   * mention, and an attach adopts it — the PUT was all-or-nothing and squashfs
-   * verifies its own superblock, so the mount is the validator."
+   * header states what a mismatch there means: a crash-window delta, adopted.
    *
    * That adoption was unreachable. The probe refused on the byte count before
    * the mount could validate anything, and `fail()` then re-wrote the state
@@ -1391,9 +1382,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * identical length under the key the record already describes, and no count
    * can tell them apart. That is refused, and because the record retains a
    * fallback generation the refusal is a recovery rather than a dead end.
-   *
-   * The base is judged as it always was: immutable, so any disagreement of any
-   * kind means the object is not the one the record describes.
    */
   const probe = async (
     mode: ChainMode,
@@ -1488,43 +1476,38 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   /**
-   * Take the chain's store mount, or report the one already standing.
+   * Take the chain's store mount, or adopt the one already standing.
    *
-   * THE CONTAINER IS THE AUTHORITY, because the SDK holds TWO registries and
-   * only one of them can be asked a question: its binding registry admits a
-   * second mount at the same prefix and setting, but its PATH registry refuses a
-   * second mount at one path UNCONDITIONALLY (`activeMounts.has(mountPath)`,
-   * sandbox-CPj2jsbz.js:8369 — measured live as `Mount path "/backups" is
-   * already in use by bucket "BACKUP_BUCKET"`, run e2e20260902060426). There is
-   * no API to read either, and the in-memory one resets when the isolate does,
-   * so the strategy cannot remember across checkpoints. `/proc/mounts` can be
-   * asked, and it names exactly the fact that matters: is anything mounted at
-   * the path. One `cat` the attach already needed anyway (line
-   * `readMounts` for the overlay), and the answer is true across DO evictions
-   * because the mount lives in the container, not the isolate.
+   * THE CONTAINER IS THE AUTHORITY. The SDK's PATH registry refuses a second
+   * mount at one path unconditionally (`activeMounts.has(mountPath)`, measured
+   * live as `Mount path "/backups" is already in use`, run e2e20260902060426),
+   * it cannot be read, and it resets with the isolate; `/proc/mounts` names
+   * the one fact that matters and is true across Durable Object resets,
+   * because the mount lives in the container. A standing mount is ADOPTED, so a
+   * reset mid-attach costs no second mount. Only a bare path releases the entry
+   * the registry may still hold for a replaced container's mount, then mounts.
    *
-   * True answers "already standing, nothing was mounted". A mount made by this
-   * call is a NEW one on a container that had nothing at the path.
+   * Answers the `/proc/mounts` it found the store standing in, so the caller
+   * can ask the same reading about the layers, or undefined after a new mount.
    */
-  const mountStoreOnce = async (): Promise<boolean> => {
-    if (findMount(await shell.readMounts(), CHAIN_STORE_MOUNT) !== undefined) return true;
+  const mountStoreOnce = async (): Promise<string | undefined> => {
+    const mounts = await shell.readMounts();
+    if (findMount(mounts, CHAIN_STORE_MOUNT) !== undefined) return mounts;
+    await ports.unmountStore(CHAIN_STORE_MOUNT);
     await ports.mountStore(CHAIN_STORE_MOUNT);
-    return false;
+    return undefined;
   };
 
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const containerGeneration = await ports.containerGeneration?.();
-    // Release any mount the SDK still believes it holds at this path before
-    // asking for a new one. A previous container generation's entry survives in
-    // that registry, and it refuses the mount rather than replacing it.
-    await ports.unmountStore(CHAIN_STORE_MOUNT);
     // A chain whose layers EXIST cannot be served by extraction, so a mount
     // failure here fails the start rather than degrading. Degrading would hand
     // the caller an empty tree and report success. The thrown reason travels as
     // it came: the platform's own words are the diagnosis, and this code has no
     // better one.
+    let standing: string | undefined;
     try {
-      await mountStoreOnce();
+      standing = await mountStoreOnce();
     } catch (error) {
       throw new Error(
         `chain ${generation.base.id} is stored as lazy layers and its store subtree could not `
@@ -1595,8 +1578,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       && (await shell.pathExists(upperDir));
     const composing = haveDelta && !held;
 
+    // A base layer an earlier attach on this container mounted from THIS
+    // archive is adopted along with the store mount it reads through: a
+    // generation's base is written once, so the standing layer is the one this
+    // attach would mount, and a Durable Object reset mid-attach re-mounts nothing.
+    const baseHeld = standing !== undefined && findMount(standing, lowerBase)?.source === mountedBase;
+
     await shell.unmountPath(DEVBOX_WORKDIR);
-    await shell.unmountPath(lowerBase);
+    if (!baseHeld) await shell.unmountPath(lowerBase);
     // EVERY delta layer, not one path: the mount points are named after the
     // generations that made them, and a re-driven attach on a live container can
     // find one this attempt did not mount.
@@ -1616,38 +1605,27 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // AN UPPER THAT HOLDS THIS DELTA IS THE ONE EXCEPTION. Emptying it would
     // throw away the delta AND every change made since the publication that
     // stamped it, then buy both back over the network.
-    await shell.resetDirs(held
-      ? [lowerBase, lowerDeltaRoot, workDir]
-      : [lowerBase, lowerDeltaRoot, upperDir, workDir]);
-    try {
-      await shell.mountLayer(baseObjectKey(root, generation.base.id), lowerBase);
-    } catch (error) {
-      await layerFailed('base', { cause: error });
+    await shell.resetDirs([
+      ...(baseHeld ? [] : [lowerBase]), lowerDeltaRoot, ...(held ? [] : [upperDir]), workDir,
+    ]);
+    if (!baseHeld) {
+      try {
+        await shell.mountLayer(baseObjectKey(root, generation.base.id), lowerBase);
+      } catch (error) {
+        await layerFailed('base', { cause: error });
+      }
     }
 
-    // THE DELTA IS A LAYER, NOT A COPY.
-    //
-    // MEASURED COST THIS REMOVES. The copy that used to be here read the whole
-    // cumulative delta through squashfuse over the mounted store — the only full
-    // read of an archive anywhere on this path — and it ran on every attach a
-    // replaced container made. On the deployed benchmark the ladder leaves tens
-    // of megabytes, and a wake spent its entire 300 s attach budget inside that
-    // copy. Mounting the archive instead costs one `squashfuse` call whatever it
-    // holds, and the bytes arrive when something reads them, which is the
-    // promise the rest of this file already makes.
-    //
-    // A LAYER CARRIES EVERYTHING THE COPY CARRIED. `cp -a` was preserving
-    // whiteout device nodes and symlinks; a mount preserves them because they
-    // are simply what the archive holds, and fuse-overlayfs resolves a `0/0`
-    // character device or an opaque directory in any layer it is given, not only
-    // in the upper. The composition is therefore the same merged view, without
-    // the pass over every byte.
-    //
-    // MOUNTED BEFORE THE OVERLAY, like the base: the overlay takes its lowers as
-    // parameters, so both have to exist before the mount that composes them, and
-    // a mounted overlay then proves the whole composition landed. That is what
-    // the `already-attached` early return assumes, and it needs no durable
-    // marker — idempotence is still asked of the container, not stored.
+    // THE DELTA IS A LAYER, NOT A COPY. The copy that used to be here read the
+    // whole cumulative delta through squashfuse on every attach a replaced
+    // container made, and one deployed wake spent its entire 300 s attach
+    // budget inside it. A mount costs one `squashfuse` call whatever it holds,
+    // the bytes arrive when something reads them, and fuse-overlayfs resolves
+    // the archive's whiteouts and opaque directories in any layer it is given,
+    // so the composition is the same merged view without the pass over every
+    // byte. Mounted before the overlay, like the base: the overlay takes its
+    // lowers as parameters, and a mounted overlay then proves the whole
+    // composition landed, which is what the `already-attached` return relies on.
     const deltaLayer = deltaLayerMountPoint(generation.base.id);
     if (composing) {
       try {
@@ -1655,7 +1633,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       } catch (error) {
         await layerFailed('delta', { cause: error });
       }
-
     }
     // NEWEST LOWER FIRST. fuse-overlayfs resolves `lowerdir` left to right, so
     // the delta must precede the base: it holds the newer version of every path

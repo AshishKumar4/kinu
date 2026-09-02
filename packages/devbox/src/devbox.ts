@@ -3685,14 +3685,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         try {
           await this.unmountBucket(at);
         } catch (error) {
-          // Not mounted is the ordinary case on a fresh container, and the SDK
-          // says so by throwing. Anything else is worth knowing about but must
-          // not fail an attach that has not started yet.
-          //
-          // A PUBLICATION DOES NOT RELY ON THIS TO FLUSH. The archive is fsynced
-          // by the command that wrote it, and the store is asked what it holds
-          // afterwards, so a release that could not report itself cannot cost
-          // bytes the record already names.
+          // Not mounted is the ordinary case on a bare path, and the SDK says so
+          // by throwing. Anything else is worth knowing about but must not fail
+          // the mount that follows; `SnapshotChainPorts.unmountStore` states why
+          // no publication relies on this release to flush.
           console.log(`[devbox] store mount at ${at} was not released: ${describe({ cause: error })}`);
         }
       },
