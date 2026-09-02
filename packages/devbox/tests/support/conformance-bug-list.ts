@@ -23,18 +23,6 @@ export interface KnownRed {
 /** Recorded from the matrix on origin/main 6d19d50e7 with this battery, 2026-09-02. */
 export const KNOWN_RED: readonly KnownRed[] = [
   {
-    arm: 'bounded-layers',
-    cell: '6.5',
-    since: '2026-09-02',
-    reason: "complete-mark: reported committed through the fault; mount-root: reported committed through the fault; cleanup-resource: reported committed through the fault",
-  },
-  {
-    arm: 'merkle-pack',
-    cell: '6.5',
-    since: '2026-09-02',
-    reason: "complete-mark: reported committed through the fault; mount-root: reported committed through the fault; cleanup-resource: reported committed through the fault",
-  },
-  {
     arm: 'snapshot-chain',
     cell: '6.9',
     since: '2026-09-02',

@@ -56,11 +56,12 @@ import {
   type TreeProperty,
 } from './support/tree-model';
 import { type NodeEntry } from '../src/capture/model';
-import { DURABILITY_AWAIT_POINTS } from '../src/durability/contracts';
+import { DURABILITY_AWAIT_POINTS, type DurabilityAwaitPoint } from '../src/durability/contracts';
 import { describeThrown } from '../src/lifecycle';
 import {
   ATTACH_OUTCOME_KINDS,
   parseDevboxStrategyName,
+  type CheckpointKind,
   type CheckpointOutcome,
   type DevboxStrategyName,
 } from '../src/storage';
@@ -557,6 +558,34 @@ async function commitTree(arm: ConformanceArm, entries: readonly NodeEntry[], wh
   expectCommitted(await arm.storage().checkpoint('quiesce'), what);
 }
 
+/**
+ * Which rule a faulted await point answers to, by where its durable effect
+ * sits relative to the head pointer advance. Before the CAS nothing is
+ * durable, so a commit through the fault may never report `committed`. At
+ * or after the CAS the head is durable, so `committed` is the truth and the
+ * obligation is convergence: one head, exact wake. Attach-path points are
+ * reached by a wake, never by a commit, and are faulted there. Every register
+ * member is named, so a point added to the contract fails to compile here.
+ */
+const AWAIT_POINT_GROUPS = {
+  'issue-payload-grant': 'pre-cas',
+  'create-multipart': 'pre-cas',
+  'upload-multipart-part': 'pre-cas',
+  'complete-multipart': 'pre-cas',
+  'verify-upload': 'pre-cas',
+  'upload-root': 'pre-cas',
+  'publish-head': 'pre-cas',
+  'create-pin': 'post-cas',
+  'renew-pin': 'post-cas',
+  'release-pin': 'post-cas',
+  'read-mark-page': 'post-cas',
+  'complete-mark': 'post-cas',
+  'retire-object': 'post-cas',
+  'delete-retired-object': 'post-cas',
+  'mount-root': 'attach',
+  'cleanup-resource': 'post-cas',
+} satisfies Record<DurabilityAwaitPoint, 'pre-cas' | 'post-cas' | 'attach'>;
+
 const CELLS: readonly Cell[] = [
   {
     id: '6.5',
@@ -575,17 +604,41 @@ const CELLS: readonly Cell[] = [
           if (fresh.awaitVisits(point) !== 0) problems.push(`${point}: declared unreached, visited ${fresh.awaitVisits(point)} times`);
           continue;
         }
+        const group = AWAIT_POINT_GROUPS[point];
+        if (group === 'attach') {
+          // An attach-path point is reached by a WAKE, never by a commit: the
+          // fault is armed on the replacement's attach. The faulted attach may
+          // refuse or report; the next attach on the same replacement converges.
+          expectCommitted(await commit(fresh, NEW), `the commit before the ${point} wake fault`);
+          fresh.replaceContainer();
+          fresh.faultAt(point);
+          const faulted = await thrownBy(async () => { await fresh.storage().attach(); });
+          if (faulted !== null && !(faulted instanceof Error)) problems.push(`${point}: non-Error thrown`);
+          if (fresh.awaitVisits(point) === 0) problems.push(`${point}: declared used, never visited by the wake`);
+          const again = await thrownBy(async () => {
+            const woken = await fresh.storage().attach();
+            if (woken.kind === 'empty') problems.push(`${point}: the attach after the fault answered empty`);
+          });
+          if (again !== null) problems.push(`${point}: the attach after the fault refused: ${describeThrown({ cause: again })}`);
+          if (canonical(tree(fresh)) !== canonical(MERGED)) problems.push(`${point}: the attach after the fault served ${canonical(tree(fresh))}`);
+          continue;
+        }
         fresh.faultAt(point);
         const thrown = await thrownBy(async () => {
           const outcome = await commit(fresh, NEW);
-          if (outcome.kind === 'committed') problems.push(`${point}: reported committed through the fault`);
+          // BEFORE THE POINTER ADVANCE nothing is durable, so `committed` is a
+          // lie. AT OR AFTER IT the head is durable and `committed` is the
+          // truth, told off the record; what such a fault may never do is
+          // leave the operation unrecoverable.
+          if (group === 'pre-cas' && outcome.kind === 'committed') problems.push(`${point}: reported committed through the fault`);
         });
         if (thrown !== null && !(thrown instanceof Error)) problems.push(`${point}: non-Error thrown`);
         if (fresh.awaitVisits(point) === 0) problems.push(`${point}: declared used, never visited`);
         const woken = await wake(fresh);
         if (woken.kind !== 'attached') problems.push(`${point}: wake answered ${woken.kind}`);
         const served = canonical(tree(fresh));
-        if (served !== canonical(OLD) && served !== canonical(MERGED)) problems.push(`${point}: wake served a blend or a blank`);
+        if (group === 'pre-cas' && served !== canonical(OLD) && served !== canonical(MERGED)) problems.push(`${point}: wake served a blend or a blank`);
+        if (group === 'post-cas' && served !== canonical(MERGED)) problems.push(`${point}: the head was durable and the wake served ${served}`);
         const redriven = await fresh.storage().checkpoint('quiesce');
         if (redriven.kind === 'failed') problems.push(`${point}: the re-drive failed: ${redriven.reason}`);
         const heads = await fresh.committedHeads();
@@ -971,7 +1024,101 @@ function blankWakeArm(): ConformanceArm {
   return broken;
 }
 
+/** Run a cell that opens fresh arms by name against ONE broken arm: every
+ *  open answers the broken arm for the cell's duration. */
+async function runCellOn(cell: Cell, broken: ConformanceArm): Promise<Outcome> {
+  const open = CONFORMANCE_ARMS[broken.name];
+  Object.defineProperty(CONFORMANCE_ARMS, broken.name, { value: () => broken, configurable: true });
+  try {
+    return await runCell(cell, broken);
+  } finally {
+    Object.defineProperty(CONFORMANCE_ARMS, broken.name, { value: open, configurable: true });
+  }
+}
+
 describe('red direction — every new cell fails against a deliberately broken arm', () => {
+  test('6.5 fails when a pre-CAS fault is reported as committed', async () => {
+    // The lie: a commit that lost its payload upload claims committed. The
+    // broken arm reports the outcome of the fault-free base commit again.
+    const cell = CELLS.find((row) => row.id === '6.5')!;
+    const arm = CONFORMANCE_ARMS['merkle-pack']();
+    const broken: ConformanceArm = Object.create(arm);
+    Object.defineProperty(broken, 'storage', {
+      value: () => {
+        const raw = arm.storage();
+        return {
+          ...raw,
+          checkpoint: async (kind: CheckpointKind) => {
+            const outcome = await raw.checkpoint(kind);
+            if (outcome.kind !== 'failed') return outcome;
+            return { kind: 'committed' as const, reason: 'lied', bytes: 0, movedBytes: 0 };
+          },
+        };
+      },
+    });
+    Object.defineProperty(broken, 'name', { value: 'merkle-pack' });
+    const outcome = await runCellOn(cell, broken);
+    expect(outcome.kind).toBe('fail');
+    expect(outcome.kind === 'fail' ? outcome.reason : '').toContain('reported committed through the fault');
+  });
+
+  test('6.5 fails when a post-CAS fault loses the durable head', async () => {
+    const cell = CELLS.find((row) => row.id === '6.5')!;
+    const arm = CONFORMANCE_ARMS['merkle-pack']();
+    const broken: ConformanceArm = Object.create(arm);
+    // After the head is durable a completion-mark fault must still serve the
+    // new generation; a wake that serves the old one lost a committed head.
+    Object.defineProperty(broken, 'replaceContainer', {
+      value: () => {
+        for (const key of arm.durable.list('boxes/box-conformance/')) {
+          if (key.includes('envelope') && arm.durable.head(key) !== null && arm.durable.list('boxes/box-conformance/').filter((k) => k.includes('envelope')).length > 1) {
+            arm.durable.delete(key);
+            break;
+          }
+        }
+        arm.replaceContainer();
+      },
+    });
+    const outcome = await runCellOn(cell, broken);
+    expect(outcome.kind).toBe('fail');
+  });
+
+  test('6.5 fails when a wake never recovers from an attach-path fault', async () => {
+    const cell = CELLS.find((row) => row.id === '6.5')!;
+    const arm = CONFORMANCE_ARMS['merkle-pack']();
+    const broken: ConformanceArm = Object.create(arm);
+    // Poisoned from the mount-root fault until the next point is armed: the
+    // wake after that fault never comes back, and only that wake.
+    let poisoned = false;
+    Object.defineProperty(broken, 'faultAt', {
+      value: (point: DurabilityAwaitPoint) => {
+        poisoned = point === 'mount-root';
+        arm.faultAt(point);
+      },
+    });
+    Object.defineProperty(broken, 'storage', {
+      value: () => {
+        const raw = arm.storage();
+        return {
+          ...raw,
+          attach: async () => {
+            // The faulted attach itself refuses through the armed seam; the NEXT
+            // attach on the same replacement is the one that must converge, and
+            // this arm's never does. Poison covers exactly that second attach.
+            if (poisoned && arm.deaths.armed === null && arm.awaitVisits('mount-root') > 0) {
+              poisoned = false;
+              throw new Error('the mount never comes back');
+            }
+            return await raw.attach();
+          },
+        };
+      },
+    });
+    const outcome = await runCellOn(cell, broken);
+    expect(outcome.kind).toBe('fail');
+    expect(outcome.kind === 'fail' ? outcome.reason : '').toContain('mount-root');
+  });
+
   test('6.11 fails when the wake serves a blank tree', async () => {
     const cell = CELLS.find((row) => row.id === '6.11')!;
     const outcome = await runCell(cell, blankWakeArm());
