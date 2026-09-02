@@ -132,6 +132,9 @@ describe('reachability gate, against the real tree', () => {
     expect(findUnreachable(SOURCES).declared.length).toBeGreaterThan(80);
   });
 
+  // Two whole-tree analyses per case, each 2.1 s on a box at load 67 (measured
+  // 2026-09-02 under the push tier; bun's default 5 s read red there and green
+  // alone). A bound on a finite run, stated with its measurement.
   test.each(Object.entries(WIRES))('cutting %s\u2019s only caller makes it unreachable', (rpc, wire) => {
     const key = `${ORCHESTRATOR}#OrchestratorAgent.${rpc}`;
     expect(findUnreachable(SOURCES).unreachable.map(keyOf)).not.toContain(key);
@@ -139,5 +142,5 @@ describe('reachability gate, against the real tree', () => {
     const cut = new Map(SOURCES);
     expect(cut.delete(wire)).toBe(true);
     expect(findUnreachable(cut).unreachable.map(keyOf)).toContain(key);
-  });
+  }, 30_000);
 });
