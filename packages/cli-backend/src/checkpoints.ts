@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { promises as fs, existsSync, statSync } from 'node:fs';
+import { promises as fs, existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir, devNull, tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { kinuHome } from './home';
@@ -28,7 +28,7 @@ import {
   type CheckpointAvailability, type CheckpointTurnMeta, type FileCheckpoints,
   type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, type FileRestoreResult,
 } from '@kinu.run/core';
-import { classify, tolerateAsync } from '@kinu.run/core/obs';
+import { classify, tolerate, tolerateAsync } from '@kinu.run/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
@@ -377,8 +377,18 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
         candidate = dirname(abs);
       }
       const home = resolve(homedir());
+      // The walk stops at the temp directory: a scratch directory is never a
+      // project root, so a marker AT it is no project and nothing above it is
+      // probed. Both spellings bound it — `resolve` normalizes `..` and never
+      // follows a symlink, so the real path is compared too. Unbounded, one
+      // stray `pyproject.toml` there claimed every host write beneath it:
+      // 24,483 ms for one `laptop.writeFile` (scripts/preflight.ts refuses it).
+      const temp = resolve(tmpdir());
+      const realTemp = tolerate(() => realpathSync(temp), 'enoent') ?? temp;
       let probe = candidate;
       while (probe !== dirname(probe) && probe !== home) {
+        const real = tolerate(() => realpathSync(probe), 'enoent') ?? probe;
+        if (probe === temp || real === realTemp) break;
         if (PROJECT_MARKERS.some((marker) => existsSync(join(probe, marker)))) return probe;
         probe = dirname(probe);
       }
