@@ -380,8 +380,18 @@ describe('daemon device path confinement', () => {
     };
   }
 
-  test('dot-dot and symlink paths cannot escape the consented root', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-root-'));
+  test('dot-dot and symlink paths outside the consented root are read-only, never writable', async () => {
+    // The fixture sits under /tmp BY NAME, not os.tmpdir(): TMPDIR follows the
+    // tier that runs the suite and has pointed inside the owner's home, where
+    // the same paths translate into the agent home and read the agent's own
+    // (absent) file instead. Outside the home, what these paths reach is the
+    // read-only disk the sandbox shows the shell. (The home swap itself is a
+    // property of the policy object and is pinned with an explicit home in
+    // sandbox.test.js; the daemon under test reads the real home, which no
+    // unit test may touch.) Each path is judged by where it LANDS: a `..`
+    // spelling and a symlink both resolve to the same file, and neither
+    // spelling can write it.
+    const root = fs.mkdtempSync('/tmp/kinu-daemon-root-');
     const project = path.join(root, 'project');
     const outside = path.join(root, 'outside.txt');
     fs.mkdirSync(project);
@@ -401,15 +411,23 @@ describe('daemon device path confinement', () => {
         sandbox: scoped([project]),
         params: [path.join(project, 'link')],
       }, ws, {});
+      handle({
+        id: 'traversal-write',
+        method: 'writeFile',
+        sandbox: scoped([project]),
+        params: [path.join(project, '..', 'outside.txt'), 'planted'],
+      }, ws, {});
+      handle({
+        id: 'symlink-write',
+        method: 'writeFile',
+        sandbox: scoped([project]),
+        params: [path.join(project, 'link'), 'planted'],
+      }, ws, {});
 
-      // NEITHER serves the owner's byte. This fixture's temp root happens to
-      // sit under the real home, so both paths land in the home the agent's own
-      // is mounted over — which is the property, not an accident: `~/anything`
-      // inside the sandbox is the AGENT's anything, so the file methods answer
-      // about the same directory the shell sees and the owner's file is simply
-      // not there.
-      expect((await ws.response('traversal')).result).not.toBe('secret');
-      expect((await ws.response('symlink')).result).not.toBe('secret');
+      expect((await ws.response('traversal')).result).toBe('secret');
+      expect((await ws.response('symlink')).result).toBe('secret');
+      expect((await ws.response('traversal-write')).error).toContain('read-only in this device');
+      expect((await ws.response('symlink-write')).error).toContain('read-only in this device');
       expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
 
       // A path outside the home is readable — the whole disk is, in the
