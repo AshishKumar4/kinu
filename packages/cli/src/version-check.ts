@@ -3,8 +3,8 @@
  * `kinu doctor`, and the once-a-day startup notice.
  *
  * The served build publishes its version at /downloads/kinu-version.json,
- * written by scripts/build-cli-source-archive.sh from the same stamped
- * packages/cli/package.json the source archive ships. That stamp is the only
+ * written by scripts/build-cli-dist.sh from the same stamped
+ * packages/cli/package.json the built CLI carries. That stamp is the only
  * version source; nothing here invents one.
  *
  * Every entry point is fail-soft: a version check must never slow down, block,
@@ -13,7 +13,7 @@
 import { VERSION } from './display';
 import { loadConfigFile, updateConfigFile, type KinuConfig } from './config';
 import * as v from 'valibot';
-import { classify, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
+import { classify, classifyErrorCode, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 
 export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 const FETCH_TIMEOUT_MS = 1_500;
@@ -126,8 +126,16 @@ export async function runStartupUpdateCheck(opts: {
     if (notice) opts.log(notice);
     return notice;
   } catch (error) {
-    // A startup notice must never break the CLI, but a check that can NEVER succeed — an
-    // unwritable config, a malformed origin — has to say so instead of skipping every run.
+    // Expected probe conditions stay silent: the check is throttled to once a
+    // day, so an aborted, timed-out or unreachable probe says nothing until
+    // the next window opens — a user mid-command saw "Update check failed: The
+    // operation was aborted." for exactly this path. The classification is the
+    // same map every other seam reads: AbortError is `cancelled`, and it
+    // cannot carry a `doing` frame. A check that can NEVER succeed — an
+    // unwritable config, a malformed origin — still has to say so instead of
+    // skipping every run.
+    const code = classifyErrorCode({ cause: error });
+    if (code === 'cancelled' || code === 'timeout' || code === 'unavailable') return null;
     opts.log(`Update check failed: ${renderThrownChain({ cause: error })}`);
     return null;
   }

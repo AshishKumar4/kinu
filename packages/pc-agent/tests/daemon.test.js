@@ -9,6 +9,7 @@ const { afterAll, describe, expect, spyOn, test } = require('bun:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { tolerate } = require('@kinu.run/core/obs');
 
 /**
  * The daemon reads its config and in-flight root once at module load. Set both
@@ -561,5 +562,193 @@ describe('daemon toolchain probe', () => {
 
     // `{present: []}` here would tell the hub this machine has no toolchain.
     expect((await ws.response(1)).error).toMatch(/array of binary names/);
+  });
+});
+
+// ── The daemon as a process, under its one runtime ─────────────────────
+//
+// The suites above exercise handle() in this process. This one runs the REAL
+// daemon as a child — spawned with process.execPath (Bun) the same way
+// device-connect's daemonRuntime does — against a local fake hub speaking the
+// /pc/connect-ticket + /pc/connect upgrade protocol. It proves the daemon's
+// CommonJS source, node: builtins, child_process supervision, fs.watch
+// in-flight waits and the global WebSocket all work under Bun, by running
+// them: HELLO on connect, ROTATE persistence, an exec round-trip, execCancel,
+// a file op, and reconnect after the socket drops.
+
+describe('daemon process under Bun against a local hub', () => {
+  const DAEMON_PATH = path.join(__dirname, '..', 'src', 'index.js');
+
+  function makeConfig(root, origin) {
+    const config = { user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin };
+    const configPath = path.join(root, 'device.json');
+    fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+    return { config, configPath };
+  }
+
+  /**
+   * A local hub: ticket exchange over HTTP, the connect upgrade over
+   * WebSocket, and one captured frame stream with a JSON-frame reply helper.
+   * The daemon treats it exactly as it treats production — no test hooks
+   * inside the daemon.
+   */
+  function startFakeHub() {
+    const frames = [];
+    const sockets = [];
+    const hub = Bun.serve({
+      port: 0,
+      fetch(req, server) {
+        const url = new URL(req.url);
+        if (url.pathname === '/pc/connect-ticket') {
+          return Response.json({ ticket: `pct_${'b'.repeat(32)}`, expiresAt: Date.now() + 60_000 });
+        }
+        if (url.pathname === '/pc/connect') {
+          if (server.upgrade(req)) return;
+          return new Response('upgrade failed', { status: 400 });
+        }
+        return new Response('not found', { status: 404 });
+      },
+      websocket: {
+        open(socket) { sockets.push(socket); },
+        message(socket, message) {
+          const frame = JSON.parse(String(message));
+          frames.push(frame);
+          if (frame.type === 'HELLO') {
+            // Echo the runtime the daemon is actually running on, so the
+            // assertion reads what ran, not what was spawned.
+            socket.send(JSON.stringify({ type: 'ping', runtime: process.versions.bun ? 'bun' : 'node' }));
+          }
+        },
+      },
+    });
+    return {
+      origin: `http://localhost:${hub.port}`,
+      frames,
+      socket() { return sockets[sockets.length - 1]; },
+      close() { return hub.stop(true); },
+    };
+  }
+
+  /** Spawn the daemon as a real child process, the runtime device-connect uses. */
+  function spawnDaemon(root) {
+    const logPath = path.join(root, 'pc-agent.log');
+    const logFd = fs.openSync(logPath, 'a');
+    const child = Bun.spawn({
+      cmd: [process.execPath, DAEMON_PATH],
+      env: { ...process.env, KINU_HOME: root, KINU_INFLIGHT_ROOT: path.join(root, 'inflight') },
+      // Stdio to the log FILE, never pipes: bun's runner exits when the last
+      // open handle closes, and a piped child holds its pipe open for as long
+      // as it lives. The log is read from the file, so nothing needs the pipe.
+      stdout: logFd,
+      stderr: logFd,
+      stdin: 'ignore',
+    });
+    fs.closeSync(logFd);
+    return { child, logPath };
+  }
+
+  /** Poll the hub's frame list until a predicate holds, or fail with why. */
+  async function untilHub(predicate, timeoutMs = 10_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const found = predicate();
+      if (found) return found;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return null;
+  }
+
+  test('HELLO on connect, rotation, exec, cancel, file op, and reconnect — all under Bun', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-e2e-'));
+    try {
+      const hub = startFakeHub();
+      try {
+        // The daemon reads its origin from device.json, so the config lands
+        // after the hub exists and names the hub's real port.
+        makeConfig(root, hub.origin);
+        const { child, logPath } = spawnDaemon(root);
+        try {
+          // HELLO arrives with the runtime identity only a real Bun carries.
+          const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
+          expect(hello).toBeDefined();
+          expect(hello.user).toBe('user-1');
+          expect(hello.pid).toBeGreaterThan(0);
+          const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+          expect(daemonLog()).toContain('Connected');
+
+          // ROTATE: the hub rotates the long-lived token; the daemon persists it.
+          const rotated = `pdt_${'c'.repeat(32)}`;
+          hub.socket().send(JSON.stringify({ type: 'ROTATE', token: rotated }));
+          await untilHub(() => JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token === rotated);
+          expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
+          expect(daemonLog()).toContain('Device token rotated');
+
+          const reply = async (id, timeoutMs = 15_000) => {
+            const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
+            if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
+            return frame;
+          };
+
+          // exec round-trip through the real supervisor under Bun. The result
+          // frame is then ACKED — the supervisor publishes its ack FIFO before
+          // the result and exits only once the cloud confirms receipt, so an
+          // un-acked exec leaves a detached grandchild holding this runner's
+          // process table open after the test ends.
+          hub.socket().send(JSON.stringify({ id: 'rpc-e2eexec00A-1', method: 'exec', params: ['echo hello-from-daemon'] }));
+          const execResult = await reply('rpc-e2eexec00A-1');
+          expect(execResult.result.exitCode).toBe(0);
+          expect(execResult.result.stdout).toContain('hello-from-daemon');
+          hub.socket().send(JSON.stringify({ id: 'rpc-e2eack00A-1', method: 'execAck', params: ['rpc-e2eexec00A-1', 1] }));
+          await reply('rpc-e2eack00A-1');
+
+          // execCancel: a command that outlives its cancellation window.
+          hub.socket().send(JSON.stringify({ id: 'rpc-e2ecancelf-1', method: 'exec', params: ['sleep 30'] }));
+          await untilHub(() => fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1', 'state')));
+          hub.socket().send(JSON.stringify({ id: 'rpc-e2ecanclX-1', method: 'execCancel', params: ['rpc-e2ecancelf-1', 1] }));
+          const cancelResult = await reply('rpc-e2ecanclX-1');
+          expect(cancelResult.result).toEqual({ requestId: 'rpc-e2ecancelf-1', cancelled: 'terminated' });
+          // A cancelled command's request directory is removed by the cancel
+          // itself; nothing waits on an ack. Confirm the tree is gone so the
+          // teardown below cannot race a live supervisor.
+          await untilHub(() => !fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1')));
+
+          // file op: an absolute path inside the daemon's own home.
+          hub.socket().send(JSON.stringify({ id: 'rpc-e2efile0-1', method: 'writeFile', params: [path.join(root, 'note.txt'), 'bun wrote this'] }));
+          const writeResult = await reply('rpc-e2efile0-1');
+          expect(writeResult.result).toEqual({ success: true });
+          expect(fs.readFileSync(path.join(root, 'note.txt'), 'utf-8')).toBe('bun wrote this');
+
+          // Reconnect after a socket drop: the hub closes; the daemon redials.
+          hub.socket().close();
+          const hello2 = await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1]);
+          expect(hello2).toBeDefined();
+        } finally {
+          // Teardown owns three things the runner's exit depends on: the
+          // daemon child (SIGTERM, then reaped through .exited), the in-flight
+          // root (any supervisor the test failed to ack dies with its process
+          // group — killing by -pid on the child's group is not possible here
+          // because Bun.spawn above is not detached, so each supervisor's own
+          // directory is checked and removed), and the hub.
+          child.kill('SIGTERM');
+          await child.exited;
+          const inflight = path.join(root, 'inflight');
+          if (fs.existsSync(inflight)) {
+            for (const entry of fs.readdirSync(inflight)) {
+              const state = path.join(inflight, entry, 'state');
+              if (!fs.existsSync(state)) continue;
+              const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
+              // ESRCH is the supervisor already being gone; that is the
+              // teardown's goal, so nothing rethrows past it.
+              if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+            }
+          }
+        }
+      } finally {
+        await hub.close();
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

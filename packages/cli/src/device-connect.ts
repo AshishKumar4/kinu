@@ -395,8 +395,8 @@ function verifyDaemonDownload(temporary: string, checksum: string | null): void 
     throw new KinuError('io', 'the downloaded device daemon failed integrity verification');
   }
   try {
-    // Compiles but never evaluates the downloaded code. Node strips a shebang
-    // before executing a script; Function does not, so strip it here too.
+    // Compiles but never evaluates the downloaded code. The runtime strips a
+    // shebang before executing a script; Function does not, so strip it here too.
     new Function(source.replace(/^#![^\n]*(?:\n|$)/, ''));
   } catch (cause) {
     throw new KinuError('io', 'the downloaded device daemon failed integrity verification', { cause });

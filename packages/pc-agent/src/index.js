@@ -1,6 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Kinu PC agent — reverse-WebSocket daemon.
-// Node 18+. No external deps (uses global fetch + WebSocket polyfill via ws fallback).
+// Runs under the Kinu CLI's bundled Bun (global fetch + global WebSocket). No external deps.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -1529,18 +1529,16 @@ function main() {
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
   const ctx = { checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }) };
 
-  let WS;
-  // `ws` is optional — Node 22+ and Bun have a global WebSocket. A `ws` that
-  // is present but fails to load is not that case and must not pass as absent.
-  try { WS = require('ws'); }
-  catch (err) {
-    if (!err || (err.code !== 'MODULE_NOT_FOUND' && err.code !== 'ERR_MODULE_NOT_FOUND')) throw err;
+  // The daemon's one WebSocket: the runtime's global. Kinu launches this
+  // daemon only under its own Bun, whose WebSocket is the implementation the
+  // whole connect protocol is exercised against — there is no `ws` fallback,
+  // because a fallback is a second implementation that never runs in CI and
+  // failed first in the field. A runtime without the global cannot run the
+  // daemon, and says so.
+  if (!(globalThis.WebSocket instanceof Function)) {
+    throw new Error('this daemon requires a runtime with a global WebSocket; run it with the Kinu CLI (its bundled Bun)');
   }
-  const NativeWebSocket = globalThis.WebSocket;
-  if (!WS && !(NativeWebSocket instanceof Function)) {
-    throw new Error('no WebSocket implementation is available; install Node 22+ or the ws package');
-  }
-  const mkWs = (url) => WS ? new WS(url) : new NativeWebSocket(url);
+  const mkWs = (url) => new globalThis.WebSocket(url);
 
   startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
