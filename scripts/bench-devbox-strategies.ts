@@ -715,55 +715,6 @@ export const INCUMBENT = 'snapshot-chain' as const satisfies Strategy;
  *  `STRATEGIES`, so an arm added above competes without this line being
  *  edited — a stale copy here is how `r2fs` came to be uncomparable. */
 export const CHALLENGERS: readonly Strategy[] = STRATEGIES.filter((arm) => arm !== INCUMBENT);
-
-/**
- * THE DECISIVE SCOPE, frozen 2026-09-01 by the programme review.
- *
- * Three decisive runs in a row died on ONE arm's defect and voided every other
- * arm's numbers with it: 08-25 (overlay-cas ran defective), 08-31 (the
- * bounded-layers container deleted mid-run, the chain's poll loop unbounded),
- * 09-01 (the chain's wake reported as a 3 x 180,000 ms harness deadline). A
- * multi-arm run's chance of settling is the product of its arms'. So a
- * DECISIVE run measures the incumbent against the one challenger with a live
- * lifecycle to its name, and the report states, verbatim from
- * {@link RETIRED_FROM_DECISION}, why the others are not in it. Their code
- * stays selectable and they still compete in an ordinary run (`--arms`
- * without `--decisive`); only the decision is closed to them, on evidence.
- */
-export const DECISIVE_ARMS: readonly Strategy[] = ['snapshot-chain', 'merkle-pack'];
-
-/** The arms the decision is closed to — every strategy that is not in the scope. */
-export type RetiredArm = Exclude<Strategy, 'snapshot-chain' | 'merkle-pack'>;
-
-/** One rejection paragraph per retired arm, each citing what it rests on. */
-export const RETIRED_FROM_DECISION = {
-  'overlay-cas': 'retired from measurement on 07adfd8e2: a 400,997 ms cold tick on 922,624 B, '
-    + '97.9% of it in 131 PUT + 128 HEAD through s3fs write-temp-rename',
-  'r2fs': 'retired as a default candidate on its own header: durable only on close, an open file at '
-    + 'stop is lost, rename is copy+delete, one writer — and no live lifecycle numbers in eight days',
-  'bounded-layers': 'frozen: its only live proof is an EMPTY cold attach (2,922 ms, "no published head"); '
-    + 'fixed-size chunks against the memo\'s CDC recommendation; a second codec on merkle-pack\'s '
-    + 'publication seam that doubles bench time',
-} as const satisfies Record<RetiredArm, string>;
-
-function isRetiredArm(arm: Strategy): arm is RetiredArm {
-  return Object.hasOwn(RETIRED_FROM_DECISION, arm);
-}
-
-/** The scope paragraph the decisive report opens with, and one rejection line
- *  per retired arm — the same words the parser refuses a retired arm with. */
-function decisiveScopeLines(): string[] {
-  const lines = [
-    `Scope, frozen 2026-09-01: ${DECISIVE_ARMS.join(' and ')}. Three multi-arm decisive runs each `
-    + 'died on one arm\'s defect and voided the rest, so the decision measures the incumbent against '
-    + 'the one challenger with a live lifecycle. Not measured here, and why:',
-    '',
-  ];
-  for (const [arm, reason] of Object.entries(RETIRED_FROM_DECISION)) {
-    lines.push(`- \`${arm}\`: ${reason}.`);
-  }
-  return lines;
-}
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 
 interface FrozenControlArtifact {
@@ -4413,8 +4364,6 @@ function render(
   if (ticks.length > 0) {
     out.push('#### The decisive experiment');
     out.push('');
-    out.push(...decisiveScopeLines());
-    out.push('');
     out.push(
       'Three workloads, chosen because each makes PENDING CHANGE and CHANGED SET diverge, '
       + 'with a checkpoint between every segment. The measurement is the TICK; the workload only '
@@ -5411,14 +5360,12 @@ const HELP = `Usage: bun scripts/bench-devbox-strategies.ts [options]
 
 Options:
   --arms <strategy,...>             Measure named strategies. Defaults to every arm:
-                                    ${STRATEGIES.join(', ')} — or, with --decisive,
-                                    to the frozen scope: ${DECISIVE_ARMS.join(', ')}.
+                                    ${STRATEGIES.join(', ')}.
   --control <strategy>=<path>       Add frozen historical context for one strategy,
                                     from a previous run's artifact. Any of:
                                     ${STRATEGIES.join(', ')}.
   --plan                            Print the execution plan without deploying.
-  --decisive                        Run decisive workloads over the frozen two-arm scope;
-                                    a retired arm is refused with its reason.
+  --decisive                        Run decisive workloads.
   --keep                            Retain external resources for inspection.
   --out <path>                      Write the result artifact.
   --help                            Show this help.
@@ -5459,9 +5406,7 @@ export function parseOptions(argv: readonly string[]): Options {
     index += 1;
   }
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-  const decisive = argv.includes('--decisive');
-  const defaultArms = decisive ? DECISIVE_ARMS : STRATEGIES;
-  const requestedArms = value('arms', defaultArms.join(',')).split(',').map((raw): Strategy => {
+  const requestedArms = value('arms', STRATEGIES.join(',')).split(',').map((raw): Strategy => {
     const arm = STRATEGIES.find((strategy) => strategy === raw.trim());
     if (arm === undefined) {
       throw new Error(`--arms names "${raw.trim()}"; known arms: ${STRATEGIES.join(', ')}`);
@@ -5472,26 +5417,14 @@ export function parseOptions(argv: readonly string[]): Options {
   if (duplicate !== undefined) {
     throw new Error(`--arms repeats "${duplicate}"; each requested arm must appear exactly once`);
   }
-  // NO PRIVILEGED SUBSET in an ordinary run: `--candidates-only` used to
-  // select {bounded-layers, merkle-pack} behind the operator's back; every arm
-  // competes, so a subset is named outright with `--arms` or it is all of
-  // them. A DECISIVE run is the frozen two-arm scope, and a retired arm named
-  // into it is refused with the reason the report would print.
-  if (decisive) {
-    for (const arm of requestedArms) {
-      if (isRetiredArm(arm)) {
-        throw new Error(
-          `--decisive measures ${DECISIVE_ARMS.join(' and ')}; "${arm}" is ${RETIRED_FROM_DECISION[arm]}. `
-          + 'Run without --decisive to measure it.',
-        );
-      }
-    }
-  }
+  // NO PRIVILEGED SUBSET. `--candidates-only` used to select
+  // {bounded-layers, merkle-pack} behind the operator's back; every arm now
+  // competes, so a subset is named outright with `--arms` or it is all of them.
   return {
     runId,
     seed: Number.parseInt(value('seed', '20260824'), 10),
     budgetMs: Number.parseInt(value('budget-ms', '8000'), 10),
-    decisive,
+    decisive: argv.includes('--decisive'),
     verifyOnly: argv.includes('--verify-only'),
     plan: argv.includes('--plan'),
     keep: argv.includes('--keep'),

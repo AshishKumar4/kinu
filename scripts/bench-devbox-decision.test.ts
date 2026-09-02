@@ -27,7 +27,6 @@ import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
 import { scratchDir } from '@kinu.run/test-utils';
 import {
-  DECISIVE_ARMS, RETIRED_FROM_DECISION,
   addressArmRequest,
   armLogTail,
   underArmLog,
@@ -1861,27 +1860,6 @@ describe('arm selection and frozen historical context', () => {
       { strategy: 'r2fs', verifyPassed: false },
       { strategy: 'bounded-layers', verifyPassed: true },
     ],
-  });
-
-  test('a decisive run is the frozen two-arm scope, and a retired arm is refused with its reason', () => {
-    // Frozen 2026-09-01: three multi-arm decisive runs each died on one arm's
-    // defect. The ordinary run keeps every arm selectable; only the DECISION
-    // is closed to the retired three, and it says why in the same words the
-    // report prints.
-    expect(parseOptions(['--decisive']).arms).toEqual([...DECISIVE_ARMS]);
-    expect(DECISIVE_ARMS).toEqual(['snapshot-chain', 'merkle-pack']);
-    expect(parseOptions(['--decisive', '--arms', 'merkle-pack']).arms).toEqual(['merkle-pack']);
-    const retiredArms = STRATEGIES.filter((arm) => !DECISIVE_ARMS.includes(arm));
-    expect(retiredArms).toEqual(['r2fs', 'overlay-cas', 'bounded-layers']);
-    for (const retired of retiredArms) {
-      // Every strategy outside the scope carries a rejection paragraph — a new
-      // arm cannot appear without joining one side or the other.
-      expect(Object.hasOwn(RETIRED_FROM_DECISION, retired)).toBe(true);
-      expect(() => parseOptions(['--decisive', '--arms', `snapshot-chain,${retired}`]))
-        .toThrow(`--decisive measures snapshot-chain and merkle-pack; "${retired}" is `);
-      // Selectable still: the code is not gone, the decision is.
-      expect(parseOptions(['--arms', retired]).arms).toEqual([retired]);
-    }
   });
 
   test('every arm runs by default, a subset is named outright, and controls are strategy-qualified', () => {
