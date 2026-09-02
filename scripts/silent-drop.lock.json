@@ -8,7 +8,6 @@
   "logged_default/wire packages/cf-backend/src/orchestrator.ts#completeEventBatch",
   "logged_default/wire packages/cf-backend/src/orchestrator.ts#hasGrant",
   "logged_default/wire packages/cf-backend/src/pages/SupervisePage.tsx#setStatus",
-  "logged_default/wire packages/cf-backend/src/runtime.ts#hasFullFilesystem",
   "logged_default/wire packages/cf-backend/src/runtime.ts#listOwnerEgressVault",
   "logged_default/wire packages/cf-backend/src/user/device-hub.ts#probeToolchain",
   "logged_default/wire packages/cf-backend/src/user/user-do.ts#openMcpHeaders",

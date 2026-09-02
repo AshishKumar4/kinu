@@ -672,6 +672,12 @@ export function createCFRuntime(
   // and needs no tunnel. Everything else reads the connected device's row: the
   // daemon reported both paths on HELLO, so neither is computed here and
   // neither costs a command on the user's machine.
+  //
+  // A hub read that FAILS is rethrown with its cause, never answered as
+  // "no directory" or "sandbox on": every consumer is a file operation that
+  // fails closed either way, and only the rethrow tells the model the truth —
+  // the device DID name a directory, and the hub could not be asked. A null
+  // scope would have it advise the owner to reconnect a machine that is fine.
   const deviceScope = async (
     field: 'consentedRoot' | 'deviceHome',
   ): Promise<string | null> => {
@@ -679,16 +685,12 @@ export function createCFRuntime(
     if (!hub) return null;
     try {
       return (await hub.deviceRuntimeStatus(await userCallerFor(actor)))[field] ?? null;
-    } catch (error) {
-      // Fail CLOSED, and say so: a null scope refuses scoped file access
-      // rather than widening it to the home directory, which is the escalation
-      // this whole seam exists to remove.
-      diagnostics.failure('device.scope_unreadable', toKinuError({
+    } catch (cause) {
+      throw toKinuError({
         doing: "reading the device's consented directory",
-        cause: error,
+        cause,
         otherwise: 'unavailable',
-      }), { workspace: actor.workspaceName });
-      return null;
+      });
     }
   };
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
@@ -699,17 +701,12 @@ export function createCFRuntime(
       if (!hub) return false;
       try {
         return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName)).unconfined;
-      } catch (error) {
-        // Fail CLOSED: an unverifiable answer must narrow the executor to the
-        // consented directory, never widen it. Recorded rather than discarded —
-        // `false` alone cannot distinguish "the sandbox is on" from "the hub
-        // could not be reached", and only one of those is a fault.
-        diagnostics.failure('device.file_view_unverifiable', toKinuError({
+      } catch (cause) {
+        throw toKinuError({
           doing: "reading the device's file-view scope",
-          cause: error,
+          cause,
           otherwise: 'unavailable',
-        }), { workspace: actor.workspaceName });
-        return false;
+        });
       }
     },
   }));
