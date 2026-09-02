@@ -750,5 +750,10 @@ describe('daemon process under Bun against a local hub', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
+  // A finite sequence, with its own waits: every `untilHub` fails by name
+  // within its 10-15 s. The outer bound is their sum, not a detector — the
+  // sequence spawns three Bun processes and the daemon's 1 s reconnect
+  // backoff sits inside it, and it measured 11.9-12.0 s on a box at load
+  // 64 (three runs, 2026-09-02), where bun's default 5 s read red.
+  }, 60_000);
 });
