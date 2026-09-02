@@ -681,12 +681,17 @@ describe('daemon process under Bun against a local hub', () => {
           const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
           expect(daemonLog()).toContain('Connected');
 
-          // ROTATE: the hub rotates the long-lived token; the daemon persists it.
+          // ROTATE: the hub rotates the long-lived token; the daemon persists
+          // it and ACKNOWLEDGES. The hub holds the superseded token valid until
+          // that frame, so this is what ends its grace.
           const rotated = `pdt_${'c'.repeat(32)}`;
           hub.socket().send(JSON.stringify({ type: 'ROTATE', token: rotated }));
           await untilHub(() => JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token === rotated);
           expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
           expect(daemonLog()).toContain('Device token rotated');
+          // `untilHub` answers null on timeout, and `toBeDefined` accepts null — so
+          // the absent direction has to be spelled as "not null" to be able to fail.
+          expect(await untilHub(() => hub.frames.find((f) => f.type === 'ROTATE_ACK'))).not.toBeNull();
 
           const reply = async (id, timeoutMs = 15_000) => {
             const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
@@ -869,6 +874,31 @@ describe('daemon process under Bun against a local hub', () => {
     });
   }, 60_000);
 
+  // F3. Acknowledgement is what ends the hub's grace on the superseded token,
+  // so a rotation this daemon could NOT store must not be acknowledged: the
+  // secret still on its disk is the only one it has, and the hub has to keep
+  // honouring it or the machine is locked out.
+  test('a rotation it could not store is not acknowledged', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    await withDaemon(undefined, async ({ hub, root, daemonLog }) => {
+      // The store is the directory, so making it unwritable is what makes the
+      // atomic rename fail — the same way a full or read-only disk would.
+      fs.chmodSync(root, 0o500);
+      try {
+        hub.socket().send(JSON.stringify({ type: 'ROTATE', token: `pdt_${'d'.repeat(32)}` }));
+        await untilHub(() => daemonLog().includes('Device token rotation failed:'));
+        expect(daemonLog()).toContain('Device token rotation failed:');
+        // The old secret is still the one on disk, and nothing told the hub
+        // otherwise.
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token)
+          .toBe(`pdt_${'a'.repeat(32)}`);
+        expect(hub.frames.filter((frame) => frame.type === 'ROTATE_ACK')).toEqual([]);
+      } finally {
+        fs.chmodSync(root, 0o700);
+      }
+    });
+  }, 60_000);
+
   // F8. The daemon inherits the shell that ran `kinu connect`. Before this,
   // every command inherited that whole environment, so one `env` turned a
   // shell grant into the owner's CLI bearer, their PAT and their SSH agent.
@@ -927,7 +957,7 @@ describe('daemon process under Bun against a local hub', () => {
         makeConfig(root, hub.origin);
         const first = spawnDaemon(root);
         const firstLog = () => fs.readFileSync(first.logPath, 'utf-8');
-        expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).toBeDefined();
+        expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
         hub.socket().send(JSON.stringify({ id: requestId, method: 'exec', params: ['printf orphan-check'] }));
         const done = await untilHub(() => hub.frames.find((f) => f.id === requestId));
         if (!done) throw new Error(`no exec reply: log says ${firstLog()}`);
@@ -948,7 +978,7 @@ describe('daemon process under Bun against a local hub', () => {
         // instead of the supervisor, which is the same leak one process along.
         const second = spawnDaemon(root);
         try {
-          expect(await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1])).toBeDefined();
+          expect(await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1])).not.toBeNull();
           hub.socket().send(JSON.stringify({ id: 'rpc-orphanack-1', method: 'execAck', params: [requestId, 1] }));
           const acked = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-orphanack-1'), 15_000);
           if (!acked) throw new Error(`no ack reply: log says ${fs.readFileSync(second.logPath, 'utf-8')}`);

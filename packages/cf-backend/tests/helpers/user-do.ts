@@ -103,8 +103,12 @@ export interface TestUserDO {
    *  belongs to — the id `registerDevice` just minted. */
   attachDevice(deviceId: string | null): void;
   /** Sockets the UserDO accepted through its own upgrade path, with what it
-   *  wrote to each — how a test reads the rotation frame the hub pushes. */
-  acceptedSockets: Array<{ sent: string[] }>;
+   *  wrote to each — how a test reads the rotation frame the hub pushes.
+   *  `drop` closes one from the far end, which is what makes a redial
+   *  legitimate: the hub refuses a second claimant while a socket is live.
+   *  `ws` is the socket itself, for driving a daemon-sent frame through
+   *  `webSocketMessage` the way the runtime delivers one. */
+  acceptedSockets: Array<{ sent: string[]; drop(): void; ws: WebSocket }>;
   /** Join device responder fibers before inspecting asynchronous effects. */
   joinFibers(): Promise<void>;
   close(): void;
@@ -201,7 +205,7 @@ interface TestUserEnvironment {
  * be current. The registry is process-wide for the same reason, and each
  * harness reads only the slice accepted after its own construction.
  */
-const ACCEPTED_SOCKETS: Array<{ sent: string[] }> = [];
+const ACCEPTED_SOCKETS: Array<{ sent: string[]; drop(): void; ws: WebSocket }> = [];
 
 function installRecordingSocketPair(): void {
   Object.defineProperty(globalThis, 'WebSocketPair', {
@@ -213,7 +217,6 @@ function installRecordingSocketPair(): void {
       constructor() {
         const sent: string[] = [];
         let attachment: JsonValue = null;
-        ACCEPTED_SOCKETS.push({ sent });
         const server = {
           readyState: 1,
           send: (data: string) => { sent.push(data); },
@@ -221,6 +224,12 @@ function installRecordingSocketPair(): void {
           serializeAttachment: (value: JsonValue) => { attachment = value; },
           deserializeAttachment: () => attachment,
         };
+        // Delegates every member to `server`, so `drop` below is visible
+        // through it. Same construction as the fixture socket further down:
+        // the UserDO reads a device socket only through send, close,
+        // readyState and the two attachment members.
+        const ws: WebSocket = Object.create(server);
+        ACCEPTED_SOCKETS.push({ sent, drop: () => { server.readyState = 3; }, ws });
         this[0] = { readyState: 1 };
         this[1] = server;
       }

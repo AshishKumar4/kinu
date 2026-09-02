@@ -59,6 +59,15 @@ const USER_DEVICES_ADDED_COLUMNS = {
   unstopped_at: 'INTEGER',
 } as const;
 
+// A ticket bought with the CURRENT device token is the one accept that may
+// leave a grace behind. Nullable because SQLite cannot ADD a NOT NULL column
+// without a default, and a default would claim something about tickets written
+// before this column: a null reads as "not proved current", which is the
+// fail-closed answer.
+const DEVICE_CONNECT_TICKET_ADDED_COLUMNS = {
+  token_was_current: 'INTEGER',
+} as const;
+
 const USER_CONFIG_ADDED_COLUMNS = {
   version: 'INTEGER NOT NULL DEFAULT 0',
 } as const;
@@ -420,13 +429,21 @@ export function initUserTables(sql: SqlExec): void {
   // long-lived device tokens out of request URLs and edge logs.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_connect_tickets (
-      ticket_hash TEXT PRIMARY KEY,
-      device_id   TEXT NOT NULL,
-      created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      expires_at  INTEGER NOT NULL,
-      used_at     INTEGER
+      ticket_hash       TEXT PRIMARY KEY,
+      device_id         TEXT NOT NULL,
+      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      expires_at        INTEGER NOT NULL,
+      used_at           INTEGER,
+      -- Whether the token exchanged for this ticket was the device's CURRENT
+      -- secret rather than the one-shot grace. The accept reads it to decide
+      -- whether its rotation may leave a grace behind: a machine recovering ON
+      -- the grace shares that secret with whoever else holds a copy of
+      -- device.json, so re-granting one there is what let two claimants
+      -- alternate forever.
+      token_was_current INTEGER
     )
   `);
+  reconcileSqlExecColumns(sql, 'device_connect_tickets', DEVICE_CONNECT_TICKET_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at, used_at)`);
 
   // Short-lived, single-use WebSocket tickets for CLI clients connecting to

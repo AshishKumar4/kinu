@@ -110,10 +110,22 @@ export const NO_DEVICE_CONNECTED = 'no device connected';
  * Rotation rides the socket rather than an HTTP response because this is the
  * one moment the machine has just proved possession of the current secret, and
  * a secret in a URL is a secret in a log. The daemon persists it over its own
- * `device.json`; the previous secret is honoured once more so a rotation lost
- * with the socket cannot brick the machine.
+ * `device.json` and answers {@link DEVICE_TOKEN_ROTATION_ACK}.
  */
 export const DEVICE_TOKEN_ROTATION = 'ROTATE';
+
+/**
+ * The daemon's answer once the rotated token is on its disk:
+ * `{ type: 'ROTATE_ACK' }`. The hub drops the superseded hash on this frame.
+ *
+ * Acknowledgement, not first use, is what ends the grace. The grace exists for
+ * exactly one failure — a rotation lost with the socket, which would otherwise
+ * brick the machine — and that failure is over the moment the machine says it
+ * wrote the new secret. Ending it on "the next call that presents the current
+ * token" instead left the superseded hash valid for however long the machine
+ * stayed quiet, and a second holder of the old `device.json` could spend it.
+ */
+export const DEVICE_TOKEN_ROTATION_ACK = 'ROTATE_ACK';
 
 /** Both the hub's "no socket" rejection and the tunnel's "socket dropped"
  *  rejection mean the same thing to callers: the device is not connected. */

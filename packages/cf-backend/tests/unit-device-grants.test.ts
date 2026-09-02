@@ -30,7 +30,8 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import { DeviceSocketHub } from '../src/user/device-hub';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED, DEVICE_PROVISION_METHOD, DEVICE_TOKEN_ROTATION,
+  DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED, DEVICE_PROVISION_METHOD,
+  DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
@@ -1029,17 +1030,22 @@ describe('asking for a machine when there is none', () => {
 /**
  * A stolen `device.json` used to be an indefinite credential: the token never
  * changed and its window slid forward on every use, so a copy stayed valid for
- * as long as the thief kept connecting. These pin the three properties that
- * make it a race instead.
+ * as long as the thief kept connecting. Rotation made it a race — and then the
+ * race would not END, because a displaced claimant was handed a fresh grace to
+ * reconnect on. These pin the properties that make it terminate.
  */
 describe('a copied device.json goes stale', () => {
   /** The daemon's own connect handshake, as `pc-handler` drives it: exchange the
    *  stored token for a ticket, then upgrade with that ticket. Answers the
-   *  rotated token the hub pushes down the accepted socket. */
+   *  rotated token the hub pushes down the accepted socket.
+   *
+   *  The incumbent socket is dropped first, because that is the only state in
+   *  which a redial is a redial: the hub refuses a newcomer while a socket for
+   *  the device is live (`claimAgainstLiveSocket` below is that case). */
   async function connectDaemon(harness: TestUserDO, token: string): Promise<string | null> {
+    harness.acceptedSockets.at(-1)?.drop();
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
     if (!issued.ok || !issued.ticket) return null;
-    const sent: string[] = [];
     const response = await harness.userDO.fetch(new Request(
       `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
       { headers: { Upgrade: 'websocket', 'cf-connecting-ip': '203.0.113.7', 'user-agent': 'kinu-daemon/1' } },
@@ -1047,11 +1053,37 @@ describe('a copied device.json goes stale', () => {
     expect(response.status).toBe(101);
     // The rotation frame rides the socket the hub just accepted.
     const socket = harness.acceptedSockets.at(-1);
-    for (const frame of socket?.sent ?? []) sent.push(frame);
-    const rotation = sent
+    const rotation = (socket?.sent ?? [])
       .map((raw) => v.safeParse(v.object({ type: v.string(), token: v.string() }), JSON.parse(raw)))
       .find((parsed) => parsed.success && parsed.output.type === DEVICE_TOKEN_ROTATION);
     return rotation?.success ? rotation.output.token : null;
+  }
+
+  /** A second claimant arriving while the device's socket is still live: the
+   *  thief's case, and a duplicate daemon's. Returns the refusal status. */
+  async function claimAgainstLiveSocket(harness: TestUserDO, token: string): Promise<number> {
+    const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
+    if (!issued.ok || !issued.ticket) return 0;
+    const response = await harness.userDO.fetch(new Request(
+      `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
+      { headers: { Upgrade: 'websocket', 'cf-connecting-ip': '198.51.100.9', 'user-agent': 'thief/1' } },
+    ));
+    return response.status;
+  }
+
+  /** The daemon's side of the rotation handshake: it persisted the new secret
+   *  and says so, which is what ends the grace on the superseded one. */
+  async function acknowledgeRotation(harness: TestUserDO): Promise<void> {
+    const socket = harness.acceptedSockets.at(-1);
+    if (!socket) throw new Error('no accepted device socket to acknowledge on');
+    await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_TOKEN_ROTATION_ACK }));
+  }
+
+  function graceHash(harness: TestUserDO, deviceId: string): string | null {
+    return v.parse(
+      v.array(v.object({ prev_token_hash: v.nullable(v.string()) })),
+      harness.sql.exec(`SELECT prev_token_hash FROM user_devices WHERE id = ?`, deviceId).toArray(),
+    )[0].prev_token_hash;
   }
 
   test('the token rotates on every accepted connect, and the old copy dies', async () => {
@@ -1062,8 +1094,9 @@ describe('a copied device.json goes stale', () => {
     expect(second).toBeTruthy();
     expect(second).not.toBe(first);
 
-    // The real daemon persisted the rotation and reconnects with it. That USE
-    // is what ends the grace on the superseded secret.
+    // The real daemon persisted the rotation and reconnects with it. Either
+    // half of the handshake ends the grace; the reconnect is the half that
+    // survives a daemon too old to acknowledge.
     const third = await connectDaemon(harness, second ?? '');
     expect(third).toBeTruthy();
 
@@ -1072,7 +1105,7 @@ describe('a copied device.json goes stale', () => {
     expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toEqual({ ok: false });
     // And the device itself is unharmed: its current secret works.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), third ?? ''))
-      .toEqual({ ok: true, deviceId });
+      .toEqual({ ok: true, deviceId, current: true });
     await harness.joinFibers();
     harness.close();
   });
@@ -1084,8 +1117,58 @@ describe('a copied device.json goes stale', () => {
     // The hub rotated, but the daemon never saw the frame (socket died first),
     // so it redials with the secret it still has on disk.
     await connectDaemon(harness, first);
+    // `current: false` is the point: the machine is recovering ON the grace,
+    // which is the one accept that may not leave another behind.
     expect(await harness.userDO.verifyDeviceToken(await testOwner(), first))
-      .toEqual({ ok: true, deviceId });
+      .toEqual({ ok: true, deviceId, current: false });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('acknowledging the rotation ends the grace, without waiting for a next call', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+
+    const second = await connectDaemon(harness, first);
+    // Until the machine says the new secret landed, the old one still opens a
+    // socket — that grace is the whole reason a lost frame is survivable.
+    expect(graceHash(harness, deviceId)).not.toBeNull();
+
+    await acknowledgeRotation(harness);
+
+    // The machine has it on disk, so the copy the thief holds is now nothing.
+    expect(graceHash(harness, deviceId)).toBeNull();
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), first)).toEqual({ ok: false });
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), second ?? ''))
+      .toEqual({ ok: true, deviceId, current: true });
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('the grace is one-shot, so two claimants cannot alternate on it forever', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token: stolen } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+
+    // The thief connects first with the copied file, and does NOT acknowledge:
+    // a hostile daemon has no reason to end its own grace.
+    const thief = await connectDaemon(harness, stolen);
+    expect(thief).toBeTruthy();
+
+    // The real machine is displaced, redials with the secret on its disk, and
+    // spends the grace. Before this fix that accept minted a FRESH grace over
+    // the thief's token, so each side's reconnect re-armed the other's and the
+    // pair alternated every second indefinitely, both always holding a live
+    // token.
+    const real = await connectDaemon(harness, stolen);
+    expect(real).toBeTruthy();
+    expect(real).not.toBe(thief);
+
+    // The thief's rotated token is neither current nor grace: the chain ends.
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), thief ?? '')).toEqual({ ok: false });
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), thief ?? ''))
+      .toEqual({ ok: false });
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), real ?? ''))
+      .toEqual({ ok: true, deviceId, current: true });
     await harness.joinFibers();
     harness.close();
   });
@@ -1105,7 +1188,8 @@ describe('a copied device.json goes stale', () => {
     const anchor = Date.now() + 400 * 24 * 60 * 60 * 1000;
     harness.sql.exec(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, anchor, deviceId);
 
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: true, deviceId });
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
+      .toEqual({ ok: true, deviceId, current: true });
     expect(expiry()).toBe(anchor);
 
     // An elapsed window is refused, however recently the token was used.
@@ -1115,7 +1199,7 @@ describe('a copied device.json goes stale', () => {
     harness.close();
   });
 
-  test('a second claimant on one device is recorded where the owner reads it', async () => {
+  test('a second claimant is refused while the machine is connected, and recorded', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
 
@@ -1123,11 +1207,21 @@ describe('a copied device.json goes stale', () => {
     expect((await harness.userDO.listDevices(await testOwner()))[0]).toMatchObject({
       id: deviceId, lastIp: '203.0.113.7', lastAgent: 'kinu-daemon/1', replacedAt: null,
     });
+    const incumbent = harness.acceptedSockets.at(-1);
 
-    // A second socket for the same device — a redial, or somebody with a copy.
-    await connectDaemon(harness, rotated ?? '');
+    // A second claimant arrives while that socket is live. The machine already
+    // connected keeps its slot: displacing it is what handed the loser a fresh
+    // grace and started the alternation.
+    expect(await claimAgainstLiveSocket(harness, rotated ?? '')).toBe(409);
+
+    // Refused, and the owner is told where they read the device.
     const [row] = await harness.userDO.listDevices(await testOwner());
     expect(row.replacedAt).not.toBeNull();
+    expect(row.connected).toBe(true);
+    // The incumbent is untouched: same socket, no rotation pushed at it, and
+    // no second socket accepted.
+    expect(harness.acceptedSockets.at(-1)).toBe(incumbent);
+    expect((incumbent?.sent ?? []).filter((raw) => raw.includes(DEVICE_TOKEN_ROTATION))).toHaveLength(1);
     await harness.joinFibers();
     harness.close();
   });

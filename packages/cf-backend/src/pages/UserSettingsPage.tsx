@@ -588,8 +588,9 @@ function DeviceRow({
         {device.lastIp && <span>Last connected from <code className="font-mono">{device.lastIp}</code></span>}
         {device.replacedAt !== null && (
           <span className="p-danger">
-            Another connection took this device's place on {new Date(device.replacedAt).toLocaleString()} —
-            if that was not you, revoke it and run <code className="font-mono">kinu connect</code> again.
+            Another connection tried to take this device's slot on {new Date(device.replacedAt).toLocaleString()} and
+            was refused — this machine kept its connection. If that was not you, revoke this device and run{' '}
+            <code className="font-mono">kinu connect</code> again.
           </span>
         )}
       </div>

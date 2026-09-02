@@ -15,6 +15,12 @@ const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
  *  DEVICE_TOKEN_ROTATION in cf-backend's device-hub test: this daemon ships as
  *  one dependency-free file and cannot import the constant. */
 const TOKEN_ROTATION = 'ROTATE';
+/** This daemon's answer once the rotated token is on disk. The hub keeps the
+ *  superseded token valid until this frame arrives and drops it then, so the
+ *  grace covers exactly the failure it exists for — a rotation lost with its
+ *  socket — and not the indefinite window a copy of device.json could spend.
+ *  Pinned against core's DEVICE_TOKEN_ROTATION_ACK in the device-hub test. */
+const TOKEN_ROTATION_ACK = 'ROTATE_ACK';
 
 const { KINU_INFLIGHT_ROOT } = process.env;
 
@@ -1666,7 +1672,16 @@ function main() {
         // The hub rotates this machine's long-lived token on every accepted
         // connect. Rename a complete same-directory file before changing memory:
         // a crash leaves either the old valid JSON or the complete new JSON.
-        if (handleTokenRotation(cfg, msg)) return;
+        if (handleTokenRotation(cfg, msg)) {
+          // `persistRotatedToken` assigns cfg.token only after the rename
+          // lands, so this comparison is "the new secret is on disk" and
+          // nothing weaker. The hub mints a fresh secret per rotation, so it
+          // can never equal the one already held. Acknowledging is what ends
+          // the grace on the superseded token: a rotation this daemon failed
+          // to persist must keep it, or the machine is locked out.
+          if (cfg.token === msg.token) ws.send(JSON.stringify({ type: TOKEN_ROTATION_ACK }));
+          return;
+        }
         try {
           handle(msg, ws, ctx);
         } catch (err) {

@@ -127,7 +127,8 @@ import { recordReleaseTransition } from '../analytics/record';
 import { openAnalyticsWindow } from '../analytics/writer';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
-  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD, DEVICE_TOKEN_ROTATION,
+  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
+  DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
   consentScopeCovers, deviceConsentScopeForMethod, mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
@@ -270,6 +271,7 @@ const DeviceHelloSchema = v.object({
   os: v.optional(v.string()),
   hostname: v.optional(v.string()),
 });
+const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_TOKEN_ROTATION_ACK) });
 const LooseObjectSchema = v.looseObject({});
 const NullableStringArraySchema = v.nullable(v.array(v.string()));
 const NullableStringRecordSchema = v.nullable(v.record(v.string(), v.string()));
@@ -1774,7 +1776,15 @@ export class UserDO extends Agent<Env> {
    *  same reason it exists: this is the one moment the real machine has proved
    *  possession of the current secret, so it is the only moment a copy of
    *  `device.json` can be made stale. The new secret rides the socket that was
-   *  just authenticated — it never appears in a URL or a log line. */
+   *  just authenticated — it never appears in a URL or a log line.
+   *
+   *  THE MACHINE ALREADY CONNECTED KEEPS ITS SLOT. Displacing the incumbent and
+   *  rotating for the newcomer is what made a copied `device.json` perpetual:
+   *  every displacement handed the loser a fresh grace to reconnect on, so two
+   *  claimants alternated every second forever and both always held a valid
+   *  token. A newcomer is refused and RECORDED instead. One refusal on the
+   *  device row is a signal the owner can read; a log full of reconnects is not.
+   */
   private async acceptDeviceSocket(request: Request, url: URL): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 });
@@ -1783,13 +1793,14 @@ export class UserDO extends Agent<Env> {
     const verified = ticket ? await this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket) : { ok: false as const };
     if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
 
-    const pair = new WebSocketPair();
-    const [client, server] = [pair[0], pair[1]];
-    // A second socket taking the slot is never silent: the owner reads it on
-    // the device row, and it is the signal a stolen device.json produces.
     if (this._devices.isConnected(verified.deviceId)) {
       this.sqlx(`UPDATE user_devices SET replaced_at = ? WHERE id = ?`, Date.now(), verified.deviceId);
+      diagnostics.event('device.second_claimant_refused', { device: verified.deviceId });
+      return new Response('this device already holds a live connection', { status: 409 });
     }
+
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
     this._devices.accept(verified.deviceId, server);
     const now = Date.now();
     this.sqlx(
@@ -1799,24 +1810,46 @@ export class UserDO extends Agent<Env> {
       (request.headers.get('user-agent') ?? '').slice(0, 200) || null,
       verified.deviceId,
     );
-    server.send(JSON.stringify({ type: DEVICE_TOKEN_ROTATION, token: await this.rotateDeviceToken(verified.deviceId) }));
+    server.send(JSON.stringify({
+      type: DEVICE_TOKEN_ROTATION,
+      token: await this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true),
+    }));
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
     return new Response(null, init);
   }
 
-  /** Mint this device's next long-lived token, keeping the superseded hash as
-   *  a one-use grace: a rotation message lost with the socket must not brick
-   *  the machine, and the grace ends the moment the new token is first used
-   *  (see {@link verifyDeviceToken}). The absolute window restarts here, so a
-   *  machine that keeps connecting never lapses and a copy that stops
-   *  rotating expires on a wall clock. */
-  private async rotateDeviceToken(deviceId: string): Promise<string> {
+  /**
+   * Mint this device's next long-lived token.
+   *
+   * `keepGrace` is the whole of the grace policy. The superseded hash is held
+   * only when the machine reached this accept with the CURRENT secret, so the
+   * one failure the grace exists for — a rotation lost with its socket — is
+   * survivable, and the machine ends it by acknowledging
+   * ({@link DEVICE_TOKEN_ROTATION_ACK}).
+   *
+   * A machine that reached this accept ON the grace gets none. It shares that
+   * secret with anyone else holding a copy of `device.json`, so the superseded
+   * hash it would leave behind is the OTHER claimant's live token: that is
+   * precisely what let two claimants alternate forever, each one's reconnect
+   * re-arming the other's. Withholding it ends the exchange at the first
+   * hand-over, at the cost of one honest failure — two rotation frames lost in
+   * a row now needs `kinu connect` again, and says so.
+   *
+   * The absolute window restarts here either way, so a machine that keeps
+   * connecting never lapses and a copy that stops rotating expires on a wall
+   * clock.
+   */
+  private async rotateDeviceToken(deviceId: string, keepGrace: boolean): Promise<string> {
     const token = `pdt_${randomToken(32)}`;
+    // One statement: SQLite evaluates the right-hand sides against the row as
+    // it stands, so `token_hash` here is the secret being superseded.
     this.sqlx(
       `UPDATE user_devices
-          SET prev_token_hash = token_hash, token_hash = ?, expires_at = ?
+          SET prev_token_hash = CASE WHEN ? THEN token_hash ELSE NULL END,
+              token_hash = ?,
+              expires_at = ?
         WHERE id = ?`,
-      await sha256Hex(token), Date.now() + DEVICE_TOKEN_TTL_MS, deviceId,
+      keepGrace ? 1 : 0, await sha256Hex(token), Date.now() + DEVICE_TOKEN_TTL_MS, deviceId,
     );
     return token;
   }
@@ -1841,6 +1874,15 @@ export class UserDO extends Agent<Env> {
     if (hello.success) {
       this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
         hello.output.os ?? null, hello.output.hostname ?? null, Date.now(), deviceId);
+      return;
+    }
+    const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+    if (acknowledged.success) {
+      // The machine says the new secret is on its disk, so the superseded one
+      // has no remaining purpose. Every second it stays valid is a second a
+      // copy of the old `device.json` could spend it.
+      this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`,
+        Date.now(), deviceId);
       return;
     }
     this._devices.handleMessage(deviceId, data);
@@ -1902,14 +1944,24 @@ export class UserDO extends Agent<Env> {
    * real machine renews by ROTATING on every accept.
    *
    * The superseded secret is accepted once more, so a rotation message lost
-   * with its socket does not brick the machine; presenting the CURRENT token
-   * proves the rotation landed and clears the grace, which is what makes the
-   * old copy dead rather than merely older.
+   * with its socket does not brick the machine. THAT GRACE IS ONE-SHOT, from
+   * both ends: any successful verification clears it, and the accept that rode
+   * it may not mint another (see {@link acceptDeviceSocket}). Clearing only on
+   * the CURRENT hash, and re-granting a grace on every accept, is what made a
+   * copied `device.json` perpetual — each accept handed the OTHER holder a
+   * fresh grace to reconnect on, so two claimants alternated indefinitely and
+   * both always held a live token. One shot means the exchange terminates: the
+   * loser's token is neither current nor grace, and its next connect is
+   * refused and recorded on the device row.
+   *
+   * `current` says which of the two matched. It travels on the ticket rather
+   * than being re-derived at the accept, because by then the hash the machine
+   * proved is gone.
    *
    * Rows written before the window existed carry a null `expires_at` and are
    * stamped on their next rotation rather than being locked out.
    */
-  async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string }> {
+  async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string; current?: boolean }> {
     await this.requireTier(caller, 'device.manage');
     if (!/^pdt_[A-Za-z0-9_-]{32,}$/.test(token)) return { ok: false };
     const tokenHash = await sha256Hex(token);
@@ -1922,8 +1974,8 @@ export class UserDO extends Agent<Env> {
     )[0];
     if (!row) return { ok: false };
     if (row.expires_at !== null && row.expires_at <= Date.now()) return { ok: false };
-    if (row.current) this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL WHERE id = ?`, row.id);
-    return { ok: true, deviceId: row.id };
+    this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL WHERE id = ?`, row.id);
+    return { ok: true, deviceId: row.id, current: row.current === 1 };
   }
 
   /** Exchange the daemon's local long-lived token for a one-minute WebSocket
@@ -1937,24 +1989,29 @@ export class UserDO extends Agent<Env> {
     const ticket = `pct_${randomToken(32)}`;
     const expiresAt = now + DEVICE_CONNECT_TICKET_TTL_MS;
     this.sqlx(
-      `INSERT INTO device_connect_tickets (ticket_hash, device_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO device_connect_tickets
+         (ticket_hash, device_id, created_at, expires_at, token_was_current)
+       VALUES (?, ?, ?, ?, ?)`,
       await sha256Hex(ticket),
       verified.deviceId,
       now,
       expiresAt,
+      verified.current === true ? 1 : 0,
     );
     return { ok: true, ticket, expiresAt };
   }
 
   /** Consume a short-lived WebSocket connect ticket. */
-  async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string }> {
+  async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string; tokenWasCurrent?: boolean }> {
     await this.requireTier(caller, 'device.manage');
     if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) return { ok: false };
     const now = Date.now();
     this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
     const ticketHash = await sha256Hex(ticket);
-    const row = this.sqlx<{ device_id: string; expires_at: number; used_at: number | null }>(
-      `SELECT device_id, expires_at, used_at
+    const row = this.sqlx<{
+      device_id: string; expires_at: number; used_at: number | null; token_was_current: number | null;
+    }>(
+      `SELECT device_id, expires_at, used_at, token_was_current
          FROM device_connect_tickets
         WHERE ticket_hash = ? LIMIT 1`,
       ticketHash,
@@ -1964,7 +2021,10 @@ export class UserDO extends Agent<Env> {
     const active = this.sqlx<{ id: string }>(
       `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, row.device_id,
     )[0];
-    return active ? { ok: true, deviceId: row.device_id } : { ok: false };
+    if (!active) return { ok: false };
+    // A null column is a ticket written before it existed: read as "not proved
+    // current", which withholds the grace rather than granting one on a guess.
+    return { ok: true, deviceId: row.device_id, tokenWasCurrent: row.token_was_current === 1 };
   }
 
   private deviceLabel(deviceId: string): string {

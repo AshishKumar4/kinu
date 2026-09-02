@@ -8,7 +8,8 @@ import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do'
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  DEVICE_TOOLCHAIN_TTL_MS, DEVICE_UNKNOWN_METHOD, TOOLCHAIN_PROBE_BINARIES,
+  DEVICE_TOOLCHAIN_TTL_MS, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
+  DEVICE_UNKNOWN_METHOD, TOOLCHAIN_PROBE_BINARIES,
   type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -223,11 +224,15 @@ describe('DeviceSocketHub toolchain probe', () => {
     expect(ws.sent).toHaveLength(1);
   });
 
-  test("the daemon's unknown-method reply is still the words core matches on", () => {
-    // The daemon ships as one dependency-free file and cannot import the
-    // constant, so the coupling is pinned here rather than left to drift.
+  test('the daemon speaks the frame types core names, since it cannot import them', () => {
+    // The daemon ships as one dependency-free file and cannot import these
+    // constants, so every literal it mirrors is pinned here rather than left
+    // to drift. Its own comments claimed this pin for the rotation pair while
+    // only the unknown-method reply was actually checked.
     const daemon = readFileSync(join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'index.js'), 'utf8');
     expect(daemon).toContain(`'${DEVICE_UNKNOWN_METHOD}: ' + method`);
+    expect(daemon).toContain(`const TOKEN_ROTATION = '${DEVICE_TOKEN_ROTATION}'`);
+    expect(daemon).toContain(`const TOKEN_ROTATION_ACK = '${DEVICE_TOKEN_ROTATION_ACK}'`);
   });
 
   test('a transient failure leaves the question open for the next turn', async () => {
@@ -332,7 +337,8 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
     // it, which is exactly the credential a copy should not be.
     const anchor = Date.now() + day;
     ageDevice(harness, deviceId, anchor);
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: true, deviceId });
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
+      .toEqual({ ok: true, deviceId, current: true });
     expect(storedExpiry(harness, deviceId)).toBe(anchor);
     harness.close();
   });
@@ -354,7 +360,8 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
 
     // A null window is "never measured", not "expired": the row keeps working
     // and gets its absolute window stamped the next time the daemon connects.
-    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: true, deviceId });
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token))
+      .toEqual({ ok: true, deviceId, current: true });
     expect(storedExpiry(harness, deviceId)).toBeNull();
     harness.close();
   });
