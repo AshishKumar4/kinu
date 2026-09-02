@@ -129,7 +129,13 @@ export interface ChatAppOpts {
     setReasoningEffort(effort: 'low' | 'medium' | 'high'): Promise<{ effort: 'low' | 'medium' | 'high' }>;
   };
   tui?: TuiRuntimeOptions;
+  /** The hub as this host first read it. */
   hubData?: TuiHubData;
+  /** How this host re-reads the hub when the open conversation changes. The
+   *  CLI's own reader is the default; it asks the profile authority, which for
+   *  a signed-in machine is a network read. A host that supplies `hubData`
+   *  supplies this too, or its surface reaches past it on the first switch. */
+  readHub?: (client: AgentClient) => Promise<TuiHubData>;
 }
 
 type ActiveSurface =
@@ -177,6 +183,7 @@ function ChatScene({
   onNewAgent,
   profileMutations: suppliedProfileMutations,
   hubData,
+  readHub,
 }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
   const sceneWidth = useSceneWidth();
@@ -636,7 +643,7 @@ function ChatScene({
     let settled = false;
     task = (async () => {
       try {
-        const fresh = await loadHubData(client, client.agentName);
+        const fresh = await (readHub ?? loadHubData)(client);
         if (!abort.signal.aborted) setHub({ identity, data: fresh });
       } catch (cause) {
         diagnostics.failure(
@@ -652,7 +659,7 @@ function ChatScene({
     hubRefreshTaskRef.current = task;
     if (settled && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
     return () => { abort.abort(); };
-  }, [client, hub]);
+  }, [client, hub, readHub]);
 
   // The hub's agent rows, live: the current virtual workspace's members from
   // the same roster the navigator reads, with the open agent's role/tier from
@@ -1353,7 +1360,13 @@ function ChatScene({
     }
     if (actionId === 'hub.agents' || actionId === 'hub.roles' || actionId === 'hub.tiers'
       || actionId === 'tier.quick') {
-      if (hub === null) return;
+      // The key opens the hub even while its read is still in flight. Dropping
+      // it instead made a workspace switch swallow the next Alt+A outright:
+      // the switch clears the hub, the re-read is asynchronous (the profile
+      // authority is a network read on a signed-in machine), and a key that
+      // lands in that window left the surface closed with nothing said. The
+      // overlay paints as soon as the read answers; the composer hint carries
+      // the open surface meanwhile.
       key.preventDefault();
       const view: TuiHubView = actionId === 'hub.agents'
         ? 'agents'
@@ -1675,7 +1688,10 @@ function welcomeMessage(agentName: string): DisplayMessage {
   return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
 }
 
-async function loadHubData(client: AgentClient, workspace: string): Promise<TuiHubData> {
+/** The CLI's own hub reader, and the default one: the workspace the client has
+ *  open, read through the profile authority. */
+async function loadHubData(client: AgentClient): Promise<TuiHubData> {
+  const workspace = client.agentName;
   const [envelope, status] = await Promise.all([loadActiveProfile(), client.status()]);
   const roles = effectiveRoleCatalog(envelope.catalog);
   const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : DEFAULT_ROLE_ID;
@@ -1698,9 +1714,10 @@ async function loadHubData(client: AgentClient, workspace: string): Promise<TuiH
   };
 }
 
+
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   requireInteractiveTerminal();
-  const hubData = opts.hubData ?? await loadHubData(opts.client, opts.client.agentName);
+  const hubData = opts.hubData ?? await loadHubData(opts.client);
   const renderOptions: ChatAppOpts = { ...opts, hubData };
   const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
   // The renderer asks the terminal for its background (OSC 11) as it sets

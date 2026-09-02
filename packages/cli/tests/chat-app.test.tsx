@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
 import type { AgentModelMenu } from '../src/model-catalog';
@@ -431,5 +431,76 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('alpha back with its own draft', () => screen.frame().includes('half a thought for alpha'));
     expect(screen.frame()).not.toContain('beta draft');
+  });
+
+  // One process mounts many chat surfaces, one after another. Rendering an
+  // empty box over a mounted app does not take it down: `createRoot().render()`
+  // builds a NEW container each call, so the app stays mounted, keeps its
+  // client subscription, and goes on committing into renderables that the
+  // renderer is about to free — `EditorView is destroyed` inside React's commit,
+  // a later surface that never receives its own async result, and a segfault
+  // once the freed memory is touched again.
+  test('a torn-down chat surface releases its client, and the next one lands its async work', async () => {
+    const first = fakeClient({ name: 'first' });
+    const firstScreen = await mountChat(first.client, { hubData: HUB_FIXTURE });
+    await firstScreen.mockInput.typeText('a draft the composer is still holding');
+    expect(first.listenerCount()).toBe(1);
+    cleanupChats();
+    // Gone, not painted over: the effect cleanup released the client.
+    expect(first.listenerCount()).toBe(0);
+
+    const second = fakeClient({ name: 'second' });
+    const peer = fakeClient({ name: 'agent-9' });
+    const cwd = process.cwd();
+    let created = 0;
+    const reported: unknown[] = [];
+    const consoleError = spyOn(console, 'error').mockImplementation((...args: unknown[]) => { reported.push(args[0]); });
+    try {
+      const screen = await mountChat(second.client, {
+        hubData: HUB_FIXTURE,
+        listWorkspaces: () => [
+          { name: 'second', label: 'Second', mode: 'local', cwd, workspaceId: 'shop' },
+          ...(created > 0 ? [{ name: 'agent-9', label: '', mode: 'local' as const, cwd, workspaceId: 'shop' }] : []),
+        ],
+        onWorkspaceSelect: async () => peer.client,
+        onNewAgent: async () => {
+          created += 1;
+          return { name: 'agent-9', displayName: '', kind: 'local-peer' };
+        },
+      });
+      screen.mockInput.pressKey('a', { meta: true });
+      await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+      screen.mockInput.pressKey('n');
+      await screen.waitFor('the created peer conversation', () => screen.frame().includes('Connected to agent-9'));
+      expect(created).toBe(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+    // The dead surface reported nothing into the live one's run.
+    expect(reported).toEqual([]);
+  });
+
+  // A workspace switch clears the hub and re-reads it, and that read is
+  // asynchronous — the CLI's own reader asks the profile authority, which is a
+  // network read on a signed-in machine. A key pressed inside that window used
+  // to be dropped on the floor: the surface stayed closed, nothing was said,
+  // and no later frame could recover it, because only another keypress could.
+  test('the hub key pressed while its read is in flight still opens the hub', async () => {
+    const client = fakeClient({ name: 'slowhub' });
+    const read = Promise.withResolvers<void>();
+    const readHub = async () => {
+      await read.promise;
+      return HUB_FIXTURE;
+    };
+    const screen = await mountChat(client.client, { readHub });
+    // The read has not answered, so there is no hub yet.
+    expect(screen.frame()).not.toContain('Agent Hub');
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the hub surface to own the composer hint', () => screen.frame().includes('Agents ›'));
+    expect(screen.frame()).not.toContain('Agent Hub');
+    read.resolve();
+    await screen.waitFor('the hub the key asked for', () => screen.frame().includes('Agent Hub'));
+    // The row is the open conversation, relabelled live from its own status.
+    expect(screen.frame()).toContain('slowhub · main');
   });
 });
