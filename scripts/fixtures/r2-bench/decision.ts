@@ -1,5 +1,5 @@
 /**
- * The decision rule, and the pricing that makes a tick comparable to a dollar.
+ * The decision rule over measured ticks.
  *
  * Kept separate from the driver because it is arithmetic over recorded rows and
  * nothing else: it takes measured ticks and returns a verdict, so it can be
@@ -9,12 +9,12 @@
  * rather than to confirm it.
  */
 
-/** R2 published pricing, developers.cloudflare.com/r2/pricing. Class A is the
- *  write class (PUT, LIST, multipart part upload and completion); Class B is the
- *  read class (GET, HEAD). Deletes are billed at nothing and still counted, so
- *  small-file churn stays visible. */
-export const R2_CLASS_A_USD_PER_MILLION = 4.5;
-export const R2_CLASS_B_USD_PER_MILLION = 0.36;
+/**
+ * The two R2 operation classes. Class A is the write class (PUT, LIST, multipart
+ * part upload and completion); Class B is the read class (GET, HEAD). The names
+ * describe the KIND of API operation, never a price: deletes are counted here
+ * too, so small-file churn stays visible.
+ */
 
 export interface TickRecord {
   /** Which workload produced it: `npm`, `npm-excluded`, `git` or `sqlite`. */
@@ -28,8 +28,8 @@ export interface TickRecord {
    * thing a dispersion claim can rest on: `--repetitions 2` measures every
    * workload twice per arm, and a reader who cannot separate the two passes
    * cannot tell a stable arm from one whose second pass was twice as slow. The
-   * totals below deliberately pool them — pricing is per workload — so this
-   * field is what makes the pooling checkable.
+   * totals below deliberately pool them, so this field is what makes the pooling
+   * checkable.
    */
   readonly repetition: number;
   /** Segment name from the workload program, so a tick is attributable. */
@@ -78,12 +78,12 @@ export interface WorkloadTotals {
   /** Sum over ticks that COULD answer. Meaningless without `unanswerable`. */
   readonly bytesPut: number;
   /** How many ticks could not answer. A total drawn from 3 of 5 ticks is not the
-   *  workload's cost, and printing it without this number would imply it was. */
+   *  workload's whole movement, and printing it without this number would imply
+   *  it was. */
   readonly unanswerable: number;
   /** False when NO tick could answer, so the renderer prints "not measurable"
    *  rather than a byte total — a sum of absences is 0, and 0 is a claim. */
   readonly movedReported: boolean;
-  readonly usd: number;
 }
 
 
@@ -96,10 +96,6 @@ const percentile = (sorted: readonly number[], q: number): number => {
   return sorted[Math.min(sorted.length, Math.max(1, rank)) - 1]!;
 };
 
-export function priceOps(classA: number, classB: number): number {
-  return (classA / 1_000_000) * R2_CLASS_A_USD_PER_MILLION
-    + (classB / 1_000_000) * R2_CLASS_B_USD_PER_MILLION;
-}
 
 /**
  * Did the op counter actually see this workload's work?
@@ -113,8 +109,8 @@ export function priceOps(classA: number, classB: number): number {
  * every workload. The mechanism is that the tally batches per isolate and only
  * pushes at a threshold, while the explicit flush drains whichever isolate serves
  * the flush — so a Durable-Object-side checkpoint under that threshold tallies
- * where nothing reads it. Priced at face value that would have published $0.00
- * as the cost of half a gigabyte, which is a plausible wrong number and
+ * where nothing reads it. Read at face value that would have published zero
+ * class-A operations for half a gigabyte, which is a plausible wrong number and
  * therefore worse than an absent one.
  */
 export function opsAreBlind(ticks: readonly TickRecord[], workload: string): boolean {
@@ -144,7 +140,6 @@ export function totalsFor(ticks: readonly TickRecord[], workload: string): Workl
     bytesPut: mine.reduce((acc, tick) => acc + (tick.bytesPut ?? 0), 0),
     unanswerable: mine.filter((tick) => tick.bytesPut === null).length,
     movedReported: mine.some((tick) => tick.bytesPut !== null),
-    usd: priceOps(classA, classB),
   };
 }
 
@@ -215,13 +210,13 @@ export function decide(
   if (git >= 10 && npm >= 3) {
     return {
       kind: 'o-p-wins',
-      detail: `${measured} — clears the 10x/3x bar, so tick cost tracks pending change and ${candidateArm} becomes default`,
+      detail: `${measured} — clears the 10x/3x bar, so tick time tracks pending change and ${candidateArm} becomes default`,
     };
   }
   if (git < 3 && npm < 3) {
     return {
       kind: 'chain-stays',
-      detail: `${measured} — below 3x on both, so O(c) tick cost is not the bottleneck and ${chainArm} stays default`,
+      detail: `${measured} — below 3x on both, so O(c) tick time is not the bottleneck and ${chainArm} stays default`,
     };
   }
   return {

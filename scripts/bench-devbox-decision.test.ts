@@ -18,7 +18,7 @@ import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, decide, opsAreBlind, priceOps,
+  decide, opsAreBlind,
   sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import { refusalText } from './fixtures/storage-matrix/admission';
@@ -63,6 +63,7 @@ import {
   resetArmLogs,
   runArm,
   runArmsInFlight,
+  render,
   renderFrozenControls,
   orphanTeardownExecutor,
   plannedTeardownManifest,
@@ -1554,6 +1555,22 @@ describe('the lifecycle-proof gate at the rule', () => {
   });
 });
 
+/**
+ * Money language, as one pattern the report contract is held to.
+ *
+ * THE RULING THIS ENFORCES, and the reason it is a fixture rather than a
+ * habit: this benchmark incurs no cost and money is not a decision criterion,
+ * so a dollar figure in a user-facing artifact is a claim the experiment never
+ * measured. The words the strip removed are exactly the ones that can come
+ * back by copy-paste — a `usd` total, a `$` cell, a "priced at" sentence — so
+ * the pattern names them and the two tests below scan the WHOLE rendered
+ * artifact rather than one column.
+ *
+ * `class A`/`class B` are deliberately NOT in it: they name the KIND of R2 API
+ * operation, and the counts stay because the experiment measures them.
+ */
+const MONEY_LANGUAGE = /\$|usd|price|pricing|priced|cost|billing|billed|dollar/i;
+
 describe('the recommendation ranks every measured arm', () => {
   const ADMITTED = { admitted: true, gates: [] };
   /** One arm with the fields `recommend` reads and nothing else. */
@@ -1578,7 +1595,7 @@ describe('the recommendation ranks every measured arm', () => {
     notes: [],
   });
 
-  test('every arm appears in the ranking, ordered by decisive tick cost', () => {
+  test('every arm appears in the ranking, ordered by decisive tick time', () => {
     // THE FILTER THIS REPLACES. `recommend` scored on metadata latency and named
     // one best and one worst, over arms `devboxArmEvidence` had already narrowed
     // to {bounded-layers, merkle-pack}. All five are ranked now, and `r2fs` —
@@ -1603,7 +1620,7 @@ describe('the recommendation ranks every measured arm', () => {
     expect(report).toContain(`\`${INCUMBENT}\` (incumbent)`);
   });
 
-  test('an observed witness is priced beside the arm, never used to drop it', () => {
+  test('an observed witness is named beside the arm, never used to drop it', () => {
     const report = recommend([
       rankArm('snapshot-chain', { git: 1200, npm: 400 }),
       rankArm('r2fs', { git: 20, npm: 20 }, ['open-write-loss', 'non-atomic-rename']),
@@ -1616,8 +1633,8 @@ describe('the recommendation ranks every measured arm', () => {
     expect(report).toContain('preregistered defect(s) this run OBSERVED');
   });
 
-  test('costing least does not displace the incumbent without clearing the bar', () => {
-    // 2x on git and 1.3x on npm: cheaper, nowhere near the preregistered
+  test('ranking first does not displace the incumbent without clearing the bar', () => {
+    // 2x on git and 1.3x on npm: faster, nowhere near the preregistered
     // 10x/3x bar. The ranking and the decision rule must not disagree.
     const report = recommend([
       rankArm('snapshot-chain', { git: 200, npm: 130 }),
@@ -1625,7 +1642,7 @@ describe('the recommendation ranks every measured arm', () => {
     ], ADMITTED);
 
     expect(report).toContain('`snapshot-chain` STAYS DEFAULT');
-    expect(report).toContain('`merkle-pack` costs 1.6x less decisive tick time');
+    expect(report).toContain('`merkle-pack` has 1.6x lower decisive tick time');
     expect(report).not.toContain('DEFAULT TO `merkle-pack`');
   });
 
@@ -1635,7 +1652,7 @@ describe('the recommendation ranks every measured arm', () => {
       rankArm('merkle-pack', { git: 300, npm: 300 }),
     ], ADMITTED);
 
-    expect(report).toContain('`bounded-layers` COSTS LEAST HERE');
+    expect(report).toContain('`bounded-layers` RAN FASTEST HERE');
     expect(report).toContain(`the incumbent \`${INCUMBENT}\` is not in the ranking`);
     expect(report).not.toContain('DEFAULT TO');
   });
@@ -1649,6 +1666,130 @@ describe('the recommendation ranks every measured arm', () => {
 
     expect(report).toContain('unranked: no ticks on npm');
     expect(report).toContain('`overlay-cas`');
+  });
+
+  test('the recommendation carries no money language', () => {
+    // MONEY IS NOT A DECISION CRITERION for this benchmark, which incurs no
+    // cost at all, so the recommendation ranks on measured time and
+    // names observed defects — never a rate, a total or a currency.
+    const report = recommend([
+      rankArm('snapshot-chain', { git: 1200, npm: 400 }),
+      rankArm('r2fs', { git: 900, npm: 380 }, ['open-write-loss']),
+    ], ADMITTED);
+
+    expect(report).not.toMatch(MONEY_LANGUAGE);
+    // And what it must still say: the ranked quantity and the defect column.
+    expect(report).toContain('Σ decisive tick ms');
+    expect(report).toContain('observed defects');
+    expect(report).toContain('`open-write-loss`');
+  });
+});
+
+describe('the rendered report carries no money', () => {
+  /** One complete arm with decisive ticks, so the decisive table renders. */
+  const reportArm = (strategy: Strategy): ArmResult => ({
+    strategy,
+    box: `box-${strategy}`,
+    verifyPassed: true,
+    verifyChecks: [{ name: 'the wake attached durable bytes', pass: true, detail: 'attached' }],
+    attachColdMs: 4_200, attachColdKind: 'attached', attachColdBootId: `cold-${strategy}`,
+    attachWarmMs: 90, attachWarmKind: 'attached',
+    wakeBootId: `wake-${strategy}`, attachWarmBootId: `wake-${strategy}`,
+    checkpoints: [{ changeKiB: 64, kind: 'quiesce', ms: 120, bytes: 65_536, outcome: 'committed' }],
+    stopMs: 310, wakeMs: 5_100, wakeKind: 'attached',
+    phases: [],
+    decisiveTicks: [
+      tick(strategy, 'git', 1_200, { classA: 94, classB: 40, bytesPut: 244_143_360 }),
+      tick(strategy, 'npm', 400, { classA: 112, classB: 22, bytesPut: 244_143_360 }),
+      tick(strategy, 'sqlite', 900, { classA: 494, classB: 28, bytesPut: 1_199_570_944 }),
+    ],
+    quiescesBeforeDecisive: 3, decisiveQuiesces: 0,
+    generationBeforeLadder: null, generationAfterLadder: null,
+    treeBytes: { sqlite: 162_308_680 },
+    ops: { calls: { put: 27 }, classA: 912, classB: 145, classFree: 1, total: 1_058 },
+    teardown: null,
+    witnessChecks: [{ name: 'mutable-delta', observed: true, detail: 'one key, rewritten in place' }],
+    notes: [],
+  });
+
+  const reportMeta = {
+    date: '2026-09-02',
+    run: 'kinu-devbox-bench-20260902',
+    worker: 'kinu-devbox-bench-20260902-snapshot-chain',
+    bucket: 'kinu-devbox-bench-20260902-snapshot-chain',
+    image: SANDBOX_IMAGE,
+    seed: '20260824',
+    'loop budget ms': '8000',
+    'deciding repetitions': '2',
+  };
+
+  test('every section of the artifact is free of rates, totals and currency', () => {
+    // THE ARTIFACT IS THE USER-FACING SURFACE, so the scan is over the WHOLE of
+    // it — header, decisive table, decision rule, sqlite finding, lifecycle,
+    // ladder, operations and the recommendation — rather than over the one
+    // column the USD cell used to sit in. Red before the strip: the decisive
+    // table's header carried `USD`, its rows `$0.000437`, and the intro
+    // sentence quoted R2's published rates.
+    const report = render(
+      [reportArm('snapshot-chain'), reportArm('merkle-pack')],
+      reportMeta,
+      { admitted: true, gates: [] },
+    );
+
+    expect(report).not.toMatch(MONEY_LANGUAGE);
+    expect(report).not.toContain('| USD |');
+  });
+
+  test('a REFUSED run says why with no money in the refusal either', () => {
+    // The refusal path is the report a failed run actually publishes, and it
+    // renders the admission reasons — so G7's own words are part of the
+    // artifact. `unpriced` was one of them until this strip.
+    const report = render(
+      [reportArm('snapshot-chain')],
+      reportMeta,
+      devboxAdmission({
+        arms: [{ ...reportArm('snapshot-chain'), ops: null }],
+        requested: ['snapshot-chain'],
+        repetitions: 2,
+        meta: reportMeta,
+        identity: {
+          commit: '', dirtyDigest: 'clean', workerVersion: '', startedAt: '', finishedAt: '',
+          image: SANDBOX_IMAGE, imageSha256: SANDBOX_IMAGE_DIGEST,
+          dockerfileSha256: '', candidateRunnerSha256: '', overlayRunnerSha256: '',
+          journalDaemonSha256: '',
+        },
+        token: 'devbox-test-token',
+        cleanup: {
+          attempted: true, kept: false, workerAbsent: false, runtimeAbsent: false,
+          bucketAndMultipartEmpty: false, boxDurableStateEmpty: false, countersReconciled: false,
+          replayIdempotent: false, localSecretsProcessesAbsent: false, multipartResidue: 1,
+          errors: ['cleanup verification failed'],
+        },
+      }),
+    );
+
+    expect(report).toContain('G7');
+    expect(report).toContain('operations are unaccounted');
+    expect(report).not.toMatch(MONEY_LANGUAGE);
+  });
+
+  test('and it still carries the operation classes, bytes moved and latency', () => {
+    // The strip removes money, NOT measurement: `class A`/`class B` name the
+    // kind of R2 API operation, and those counts plus bytes moved and tick
+    // time are what the decision reads.
+    const report = render(
+      [reportArm('snapshot-chain')],
+      reportMeta,
+      { admitted: true, gates: [] },
+    );
+
+    expect(report).toContain('| class A | class B | MiB moved |');
+    expect(report).toContain('Σ tick ms');
+    expect(report).toContain('#### R2 operations and teardown');
+    expect(report).toContain('| arm | class A | class B | free | total | teardown |');
+    // The tallies themselves survive, so nothing was dropped with the column.
+    expect(report).toContain('912');
+    expect(report).toContain('145');
   });
 });
 
@@ -1669,7 +1810,7 @@ describe('detecting a blind op counter', () => {
   });
 
   test('any counted class clears it, including the free one', () => {
-    // Deletes are billed at nothing but prove the counter is watching, so a
+    // A delete is the free class and still proves the counter is watching, so a
     // delete-only tick is measured rather than blind.
     expect(opsAreBlind([
       tick('a', 'git', 100, { bytesPut: 1024, classFree: 3 }),
@@ -1681,19 +1822,16 @@ describe('detecting a blind op counter', () => {
   });
 });
 
-describe('pricing and totals', () => {
-  test('prices class A and class B at the published rates', () => {
-    expect(priceOps(1_000_000, 0)).toBeCloseTo(R2_CLASS_A_USD_PER_MILLION, 10);
-    expect(priceOps(0, 1_000_000)).toBeCloseTo(R2_CLASS_B_USD_PER_MILLION, 10);
-    // Class A is the expensive one by an order of magnitude, which is why a
-    // write-amplifying strategy loses on cost before it loses on latency.
-    expect(priceOps(1_000_000, 0)).toBeGreaterThan(priceOps(0, 1_000_000) * 10);
-  });
-
-  test('free operations are counted and priced at nothing', () => {
+describe('operation totals', () => {
+  test('free operations are counted, and counting them is the whole of it', () => {
+    // MONEY IS NOT A DECISION CRITERION HERE, so there is nothing to price:
+    // the free class is counted because small-file churn has to stay visible
+    // in the operation columns, not because a rate applies to it.
     const totals = totalsFor([tick('a', 'git', 10, { classFree: 500 })], 'git');
     expect(totals.classFree).toBe(500);
-    expect(totals.usd).toBe(0);
+    expect(totals.classA).toBe(0);
+    expect(totals.classB).toBe(0);
+    expect(Object.keys(totals)).not.toContain('usd');
   });
 
   test('percentiles are nearest-rank, so p95 is always a measured value', () => {

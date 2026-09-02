@@ -56,7 +56,7 @@ import { AwsClient } from 'aws4fetch';
 import { summarize, type Summary } from './fixtures/r2-bench/stats';
 import { parseProbeRun, type ProbeRun } from './fixtures/r2-bench/report';
 import {
-  R2_CLASS_A_USD_PER_MILLION, R2_CLASS_B_USD_PER_MILLION, RULE_WORKLOADS, decide, opsAreBlind,
+  RULE_WORKLOADS, decide, opsAreBlind,
   sqliteFinding, totalsFor, type DecisionVerdict, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import {
@@ -395,8 +395,8 @@ function fixtureClasses(arms: readonly Strategy[]): readonly string[] {
  * `/teardown` purge — which empties the WHOLE bucket, `prefix: ''`,
  * `whole: true` — so the first arm to finish would drain the store out from
  * under every arm still measuring. Two arms sharing a Worker would share its
- * `BenchOpCounter`, whose tally one arm's `/ops/reset` zeroes, so the priced
- * operation column of a concurrent sibling would be whatever was left after
+ * `BenchOpCounter`, whose tally one arm's `/ops/reset` zeroes, so the operation
+ * column of a concurrent sibling would be whatever was left after
  * somebody else's reset. One Worker and one bucket per arm removes both, and
  * leaves teardown able to delete one arm's complete deployed set on its own.
  */
@@ -2600,7 +2600,8 @@ export interface ArmResult {
   wakeMs: number | null;
   wakeKind: string;
   phases: ProbeRun[];
-  /** Per-checkpoint rows from the decisive experiment, priced against R2. */
+  /** Per-checkpoint rows from the decisive experiment, with their R2 operation
+   *  classes. */
   decisiveTicks: TickRecord[];
   /**
    * Quiesces this arm took, split by whether they fell before or inside the
@@ -2842,8 +2843,8 @@ async function runDecisive(
 //
 // WHERE THEY RUN, AND WHY IT MATTERS. After the arm's own `/ops` tally is read.
 // A cell writes files and takes checkpoints of its own, and an arm's operation
-// count is a priced column: cells inside the measured window would bill this
-// arm for operations the comparison is not about. The one exception is the
+// count is a measured column: cells inside the measured window would inflate
+// this arm's count with operations the comparison is not about. The one
 // r2fs open-write holder, which must exist BEFORE the recycle it survives.
 
 /** One preregistered witness cell's result. `observed` is the DEFECT showing
@@ -2888,8 +2889,8 @@ export interface WitnessCheck {
  *   `POSIX-gap` — "there is no flush-to-store primitive": `sync` reaches s3fs
  *     and s3fs uploads on close, so a synced file is not yet durable.
  *
- * A witness is a MEASURED COST, never an eligibility filter. An arm carrying
- * one of these defects still competes and can still win: the defect is priced
+ * A witness is a MEASURED DEFECT, never an eligibility filter. An arm carrying
+ * one of these defects still competes and can still win: the defect is named
  * beside its numbers and the reader weighs it. What the preregistration buys
  * is drift detection — a predicted defect that stops reproducing means the
  * instrument, the arm, or the prediction changed, and the run is refused until
@@ -2906,7 +2907,7 @@ export interface WitnessCheck {
  * delta 244,723,712 B present, the marker NOT in the fresh upper, a seed stamp
  * naming the generation — the reading a SERVED delta produces, recorded as
  * witness drift and refusing the run under G2. The surviving code still holds a
- * cost worth pricing, so the witness names that one: serve-not-copy, and the
+ * defect worth naming, so the witness names that one: serve-not-copy, and the
  * collapse the serve forces.
  */
 const PREREGISTERED_WITNESSES = {
@@ -4048,8 +4049,8 @@ async function measureArm(
   // An arm with preregistered defects is here to prove the instrument can still
   // SEE them; G2 refuses a run whose arm produced none of the ones it promised.
   // The cells write their own files and take their own checkpoints, so they run
-  // past the priced window on purpose: an arm billed for its witness cells
-  // would report a cost the comparison is not about.
+  // past the measured window on purpose: an arm whose count included its witness
+  // cells would report operations the comparison is not about.
   //
   // DERIVED from the preregistration, never a second copy of its membership.
   // The hardcoded `snapshot-chain || r2fs || overlay-cas` this replaces was the
@@ -4581,7 +4582,7 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
   return out.join('\n');
 }
 
-function render(
+export function render(
   arms: readonly ArmResult[],
   meta: RunMeta,
   admission: AdmissionVerdict,
@@ -4621,9 +4622,7 @@ function render(
     out.push(
       'Three workloads, chosen because each makes PENDING CHANGE and CHANGED SET diverge, '
       + 'with a checkpoint between every segment. The measurement is the TICK; the workload only '
-      + 'exists to put a known amount of pending change in front of one. Priced at R2 published '
-      + `rates: $${R2_CLASS_A_USD_PER_MILLION.toFixed(2)}/M class A, `
-      + `$${R2_CLASS_B_USD_PER_MILLION.toFixed(2)}/M class B.`,
+      + 'exists to put a known amount of pending change in front of one.',
     );
     out.push('');
     out.push(
@@ -4666,15 +4665,15 @@ function render(
     out.push('');
     out.push(
       'The ladder\'s quiesces DO precede the window, so a rebase there changes the base the '
-      + 'decisive ticks are measured against. That is a state difference rather than a tick-cost '
+      + 'decisive ticks are measured against. That is a state difference rather than a tick-time '
       + 'confound, and the column above says whether it happened instead of leaving it as a '
       + 'possibility: a rebase writes a fresh base id and drops the delta, so the generation '
       + 'before and after the ladder answers it outright. The ladder\'s FIRST quiesce cannot '
       + 'rebase, because it creates the base and there is no delta to outgrow it.',
     );
     out.push('');
-    out.push('| arm | workload | ticks | Σ tick ms | p50 | p95 | class A | class B | MiB moved | USD |');
-    out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    out.push('| arm | workload | ticks | Σ tick ms | p50 | p95 | class A | class B | MiB moved |');
+    out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
     for (const arm of arms) {
       for (const spec of DECISIVE_WORKLOADS) {
         const totals = totalsFor(arm.decisiveTicks, spec.id);
@@ -4682,7 +4681,6 @@ function render(
         const blind = opsAreBlind(arm.decisiveTicks, spec.id);
         const opsCell = blind ? 'unmeasured' : String(totals.classA);
         const bCell = blind ? 'unmeasured' : String(totals.classB);
-        const usdCell = blind ? 'unmeasured' : `$${totals.usd.toFixed(6)}`;
         const movedCell = !totals.movedReported
           ? 'not measurable'
           : totals.unanswerable > 0
@@ -4691,7 +4689,7 @@ function render(
         out.push(
           `| \`${arm.strategy}\` | ${spec.id} | ${totals.ticks} | ${Math.round(totals.sumWallMs)} `
           + `| ${Math.round(totals.p50WallMs)} | ${Math.round(totals.p95WallMs)} | ${opsCell} `
-          + `| ${bCell} | ${movedCell} | ${usdCell} |`,
+          + `| ${bCell} | ${movedCell} |`,
         );
       }
     }
@@ -4726,7 +4724,7 @@ function render(
       out.push(
         `ratio(w) = Σ ticks(\`${INCUMBENT}\`, w) / Σ ticks(challenger, w), taken once per challenger this `
         + 'run measured. ratio(git) ≥ 10 AND ratio(npm) ≥ 3 ⇒ that challenger\'s O(p) shape wins outright. '
-        + `Both < 3 ⇒ O(c) tick cost is not the bottleneck and \`${INCUMBENT}\` holds against it. `
+        + `Both < 3 ⇒ O(c) tick time is not the bottleneck and \`${INCUMBENT}\` holds against it. `
         + 'Between them the rule is deliberately undecided, and says so.',
       );
       out.push('');
@@ -4770,8 +4768,8 @@ function render(
     out.push(
       'A 64 MiB database rewritten in place through real SQLite. This decides whether '
       + 'extent-level in-place tracking is ever worth building, NOT which strategy is default. '
-      + 'File-granularity re-shipping the whole database per tick is recorded here as a cost, '
-      + 'never treated as disqualifying.',
+      + 'File-granularity re-shipping the whole database per tick is recorded here as a '
+      + 'measurement, never treated as disqualifying.',
     );
     out.push('');
     for (const arm of arms) {
@@ -4877,12 +4875,12 @@ function render(
  * measurement. Every arm that clears the one gate applying to all of them, the
  * lifecycle proof, is ranked here, on the workloads the decision rule reads.
  *
- * A PREREGISTERED DEFECT IS A COST, NOT A FILTER. An arm's observed witnesses
- * are priced in the last column and named beside the winner; they never remove
- * it from the table. `r2fs` losing on POSIX semantics is a fact a reader weighs
- * against its numbers, not a reason to withhold the numbers.
+ * A PREREGISTERED DEFECT IS A MEASURED FINDING, NOT A FILTER. An arm's observed
+ * witnesses are named in the last column and beside the winner; they never
+ * remove it from the table. `r2fs` losing on POSIX semantics is a fact a reader
+ * weighs against its numbers, not a reason to withhold the numbers.
  *
- * DISPLACEMENT STILL NEEDS THE BAR. Ranking says which arm cost least; it does
+ * DISPLACEMENT STILL NEEDS THE BAR. Ranking says which arm ran fastest; it does
  * not license changing the default. `INCUMBENT` keeps it unless a challenger
  * clears the preregistered 10x/3x bar `decide` applies, so the ranking and the
  * decision rule cannot disagree about what ships.
@@ -4899,8 +4897,8 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
     ? ''
     : ` Its wake was NOT verified (attach.kind '${arm.wakeKind}'), so the restore half of this `
       + 'recommendation rests on the checkpoint ladder rather than on an observed cold start.';
-  const costCell = (costs: readonly string[]): string =>
-    costs.length === 0 ? 'none preregistered' : costs.map((name) => `\`${name}\``).join(', ');
+  const witnessCell = (witnesses: readonly string[]): string =>
+    witnesses.length === 0 ? 'none preregistered' : witnesses.map((name) => `\`${name}\``).join(', ');
 
   const scored = proven.map((arm) => {
     const totals = RULE_WORKLOADS.map((workload) => totalsFor(arm.decisiveTicks, workload));
@@ -4909,7 +4907,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
       unmeasured: RULE_WORKLOADS.filter((_, index) => totals[index]!.ticks === 0),
       decisiveMs: totals.reduce((sum, row) => sum + row.sumWallMs, 0),
       statMs: metricSummary(arm, DECIDING_METRIC)?.p50 ?? null,
-      costs: arm.witnessChecks.filter((witness) => witness.observed).map((witness) => witness.name),
+      witnesses: arm.witnessChecks.filter((witness) => witness.observed).map((witness) => witness.name),
     };
   });
   const rankable = scored
@@ -4920,20 +4918,20 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
     `RANKED ON THE DECISIVE WORKLOADS (${RULE_WORKLOADS.join(' + ')}), over every arm that completed the `
     + 'lifecycle proof, under the same gate. No arm is excluded by what kind of strategy it is.',
     '',
-    '| rank | arm | Σ decisive tick ms | `' + DECIDING_METRIC + '` p50 (ms) | measured costs |',
+    '| rank | arm | Σ decisive tick ms | `' + DECIDING_METRIC + '` p50 (ms) | observed defects |',
     '| --- | --- | --- | --- | --- |',
   ];
   rankable.forEach((row, index) => {
     const name = `\`${row.arm.strategy}\`${row.arm.strategy === INCUMBENT ? ' (incumbent)' : ''}`;
     out.push(
       `| ${index + 1} | ${name} | ${Math.round(row.decisiveMs)} `
-      + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${costCell(row.costs)} |`,
+      + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${witnessCell(row.witnesses)} |`,
     );
   });
   for (const row of scored.filter((candidate) => candidate.unmeasured.length > 0)) {
     out.push(
       `| — | \`${row.arm.strategy}\` | unranked: no ticks on ${row.unmeasured.join(', ')} `
-      + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${costCell(row.costs)} |`,
+      + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${witnessCell(row.witnesses)} |`,
     );
   }
   out.push('');
@@ -4949,15 +4947,15 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
   const incumbent = rankable.find((row) => row.arm.strategy === INCUMBENT);
   if (incumbent === undefined) {
     out.push(
-      `\`${best.arm.strategy}\` COSTS LEAST HERE, but the incumbent \`${INCUMBENT}\` is not in the ranking, so `
+      `\`${best.arm.strategy}\` RAN FASTEST HERE, but the incumbent \`${INCUMBENT}\` is not in the ranking, so `
       + 'nothing in this run says whether it displaces the deployed default. Re-run with the incumbent among '
-      + `the arms before treating this order as a change of default.${wakeNote(best.arm)}`,
+      + `the arms before treating this order as a change of default.${wakeNote(best.arm)}`
     );
     return out.join('\n');
   }
   if (best.arm.strategy === INCUMBENT) {
     out.push(
-      `\`${INCUMBENT}\` STAYS DEFAULT. It is the incumbent and it also costs least on the decisive workloads, `
+      `\`${INCUMBENT}\` STAYS DEFAULT. It is the incumbent and it also ranks first on the decisive workloads, `
       + 'so no challenger displaces it on this run.',
     );
     return out.join('\n');
@@ -4966,17 +4964,17 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
   const verdict = decide(proven.flatMap((arm) => arm.decisiveTicks), INCUMBENT, best.arm.strategy);
   const ratio = incumbent.decisiveMs / best.decisiveMs;
   out.push(verdict.kind === 'o-p-wins'
-    ? `DEFAULT TO \`${best.arm.strategy}\`. It costs ${ratio.toFixed(1)}x less decisive tick time than the `
+    ? `DEFAULT TO \`${best.arm.strategy}\`. Its decisive tick time is ${ratio.toFixed(1)}x below the `
       + `incumbent \`${INCUMBENT}\` and it clears the preregistered bar — ${verdict.detail}.${wakeNote(best.arm)}`
-    : `\`${INCUMBENT}\` STAYS DEFAULT. \`${best.arm.strategy}\` costs ${ratio.toFixed(1)}x less decisive tick `
+    : `\`${INCUMBENT}\` STAYS DEFAULT. \`${best.arm.strategy}\` has ${ratio.toFixed(1)}x lower decisive tick `
       + 'time, but the default changes only when a challenger clears the preregistered bar, and this one does '
       + `not — ${verdict.kind === 'inconclusive' ? verdict.reason : verdict.detail}.`);
-  if (best.costs.length > 0) {
+  if (best.witnesses.length > 0) {
     out.push('');
     out.push(
-      `\`${best.arm.strategy}\` carries ${best.costs.length} preregistered defect(s) this run OBSERVED: `
-      + `${costCell(best.costs)}. Those are a cost of adopting it, not a reason it was kept out of the `
-      + 'ranking; the witness rows above say what each one did.',
+      `\`${best.arm.strategy}\` carries ${best.witnesses.length} preregistered defect(s) this run OBSERVED: `
+      + `${witnessCell(best.witnesses)}. Those are a property of adopting it, not a reason it was kept out of `
+      + 'the ranking; the witness rows above say what each one did.',
     );
   }
   return out.join('\n');
@@ -4990,7 +4988,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
  *  made G2 refuse those arms a place in the ranking no matter what they
  *  measured — the taxonomy decided the outcome before the run started. A
  *  strategy's preregistered defects are carried below as observed witnesses and
- *  priced by `recommend`; they are costs, not eligibility.
+ *  named by `recommend`; they are findings, not eligibility.
  *
  *  The witnesses are preregistered in `PREREGISTERED_WITNESSES` and OBSERVED by
  *  the cells `runControlWitnessCells` runs; this only carries what those cells
@@ -5465,7 +5463,7 @@ function devboxRequirements(input: DevboxAdmissionInput) {
     // A TALLY PER ARM. `accounting` is one summed row, so an arm without a
     // tally disappears into a total that still adds up.
     if (arm.ops === null) {
-      g7.push(`arm \`${strategy}\` recorded no \`/ops\` tally, so its operations are unpriced`);
+      g7.push(`arm \`${strategy}\` recorded no \`/ops\` tally, so its operations are unaccounted`);
     } else if (arm.ops.total === undefined) {
       g7.push(`arm \`${strategy}\` reported a tally carrying no total`);
     }
