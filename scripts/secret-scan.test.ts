@@ -217,12 +217,16 @@ describe('reachable history', () => {
     expect(reachability.objects.some((object) => object.oid === REMOVED_CREDENTIAL_BLOB)).toBe(false);
   });
 
+  // A finite pass over the whole reachable history — 305 refs, 52,320 objects,
+  // 22,937 blobs scanned — which the push tier measured at 32.4 s on a box at
+  // load 68 (2026-09-02), where the previous 30 s bound read red in the pre-push
+  // hook and green alone. A bound on a finite run, stated with its measurement.
   test('the checked-in history has only its reviewed exact adjudications', async () => {
     const result = await scanHistory();
     expect(result.findings).toEqual([]);
     expect(result.adjudicated).toBeGreaterThan(0);
     expect(result.stats.objects).toBeGreaterThan(0);
-  }, 30_000);
+  }, 120_000);
 });
 
 test('the current scanner source has no detector-shaped literal of its own', () => {
