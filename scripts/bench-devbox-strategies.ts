@@ -46,7 +46,7 @@ import {
   copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   WRANGLER_FAILED, armSignalTeardown, containerAppIds, delay, deleteContainerApps,
   describeThrown, publishTeardown, runTeardownOnce, runWrangler,
@@ -2800,12 +2800,22 @@ export interface WitnessCheck {
  *
  * Every name is a defect its own strategy's header states in prose:
  *
- *   `cumulative-delta-seed` — "after an attach that had a delta, the delta's
- *     contents are copied into the fresh upper", so an attach costs O(cumulative
- *     change) whatever the change since the last one was.
  *   `mutable-delta` — "a single DELTA object that each checkpoint replaces
  *     atomically": the durable archive is a mutable object rewritten in place,
  *     not an immutable generation.
+ *   `delta-layer-collapse` — a wake with a delta SERVES that delta as a lower
+ *     layer, so the cumulative changed set is spread across two layers and the
+ *     next checkpoint pays for a full merged archive to get back to a shape
+ *     whose upper is its changed set. Both halves are stated by
+ *     `packages/devbox/src/snapshot-chain.ts` and read from it rather than from
+ *     memory: the attach empties the upper and mounts the delta at
+ *     `deltaLayerMountPoint(<generation>)` under `lowerDeltaRoot`
+ *     (`/var/tmp/devbox/lower-delta/<generation>`), newest lower first
+ *     ("THE DELTA IS A LAYER, NOT A COPY", `attachChainOnce`); and `checkpoint`
+ *     reads that mount back through `deltaLayerServed` and passes `layered` as
+ *     `commitChain`'s `rebasing`, which mints a fresh generation id and records
+ *     `delta: undefined` ("COLLAPSE RATHER THAN APPEND while a delta is served
+ *     as a layer").
  *   `unbounded-pending-replay` — "replay the journal entries newer than the
  *     folded cursor": recovery is O(pending change) with no bound on pending,
  *     which is the `unbounded` restore class this arm CLAIMS.
@@ -2824,9 +2834,23 @@ export interface WitnessCheck {
  * is drift detection — a predicted defect that stops reproducing means the
  * instrument, the arm, or the prediction changed, and the run is refused until
  * somebody says which.
+ *
+ * WHY `delta-layer-collapse` REPLACED `cumulative-delta-seed`, and why the
+ * witness was re-pointed rather than retired. The old name preregistered the
+ * SEEDING COPY — "after an attach that had a delta, the delta's contents are
+ * copied into the fresh upper" — and the wake fix deleted that copy: no live
+ * path in `snapshot-chain.ts` writes a delta's bytes into the upper any more,
+ * and the only thing that can leave a delta IN an upper is the upper the
+ * publication itself archived (`held`, proven by the seed stamp), which is a
+ * survival rather than a copy. Run 20260902154130 measured the consequence:
+ * delta 244,723,712 B present, the marker NOT in the fresh upper, a seed stamp
+ * naming the generation — the reading a SERVED delta produces, recorded as
+ * witness drift and refusing the run under G2. The surviving code still holds a
+ * cost worth pricing, so the witness names that one: serve-not-copy, and the
+ * collapse the serve forces.
  */
 const PREREGISTERED_WITNESSES = {
-  'snapshot-chain': ['cumulative-delta-seed', 'mutable-delta'],
+  'snapshot-chain': ['mutable-delta', 'delta-layer-collapse'],
   'overlay-cas': ['unbounded-pending-replay', 'O(u)-scan'],
   r2fs: ['open-write-loss', 'non-atomic-rename', 'POSIX-gap'],
   'bounded-layers': [],
@@ -2842,19 +2866,31 @@ const PREREGISTERED_WITNESSES = {
  * holding the measurement.
  */
 export interface ControlWitnessFacts {
-  readonly cumulativeDeltaSeed?: {
-    /** Bytes the store holds for the cumulative delta the wake had to serve. */
-    readonly deltaBytes: number;
-    /** Whether the pre-stop marker's bytes are IN the upper after the wake,
-     *  which they can only be because the attach copied the delta into it: the
-     *  delta layer is unmounted once the seed finishes. */
-    readonly markerInUpper: boolean;
-    /** The container's own seed stamp, which names the delta a completed copy
-     *  read (`<chain>:<bytes>:<upload version>`). */
-    readonly seedStamp: string;
-    /** The chain generation that stamp must name for the seed to be this
-     *  delta's rather than an older one's. */
+  readonly deltaLayerCollapse?: {
+    /** The generation the wake had to serve. */
     readonly chainId: string;
+    /** Bytes the store holds for that generation's delta. A wake with no delta
+     *  proves nothing about how a delta is served. */
+    readonly deltaBytes: number;
+    /** What the wake's own attach reported, in the strategy's words:
+     *  `base+delta layered` is the served shape, `base+delta already in this
+     *  upper` is a container that came back with the upper its own publication
+     *  archived, and that wake never had to serve the delta at all. */
+    readonly attachDetail: string;
+    /** Is the delta mounted as a lower layer under the overlay — the fact
+     *  `deltaLayerServed` reads and the collapse below keys off? */
+    readonly deltaLayerMounted: boolean;
+    /** The marker this cell committed INTO the delta, read back through the
+     *  merged work directory after the wake. */
+    readonly markerInMergedView: boolean;
+    /** The same marker looked for in the FRESH upper. A serve leaves it in the
+     *  delta layer; the copy this witness used to preregister put it here. */
+    readonly markerInUpper: boolean;
+    /** The generation the record names after the next checkpoint. A collapse
+     *  archives the merged view as a fresh base under a NEW id. */
+    readonly collapsedChainId: string;
+    /** Whether that record still names a delta. A collapse records none. */
+    readonly collapsedNamesDelta: boolean;
   };
   readonly mutableDelta?: {
     readonly key: string;
@@ -2916,16 +2952,36 @@ export function controlWitnessChecks(
 ): WitnessCheck[] {
   return PREREGISTERED_WITNESSES[strategy].map((name): WitnessCheck => {
     switch (name) {
-      case 'cumulative-delta-seed': {
-        const cell = facts.cumulativeDeltaSeed;
+      case 'delta-layer-collapse': {
+        const cell = facts.deltaLayerCollapse;
         if (cell === undefined) return absentCell(name);
-        const stamped = cell.seedStamp.startsWith(`${cell.chainId}:`);
+        // SERVED, NOT COPIED. The delta's bytes reach the merged view through a
+        // layer of their own, so the marker committed into that delta is
+        // readable at the work directory and absent from the writable layer the
+        // attach just emptied. A copy — the behaviour this witness used to
+        // preregister — puts the same marker in the upper and mounts no layer.
+        const served = cell.deltaBytes > 0
+          && cell.deltaLayerMounted
+          && cell.markerInMergedView
+          && !cell.markerInUpper;
+        // AND THE SERVE IS WHAT FORCES THE COLLAPSE: a fresh generation id, and
+        // a record that names no delta. Same id, or a delta still named, is an
+        // ordinary append — which is what a copied delta produces.
+        const collapsed = cell.collapsedChainId.length > 0
+          && cell.collapsedChainId !== cell.chainId
+          && !cell.collapsedNamesDelta;
         return {
           name,
-          observed: cell.deltaBytes > 0 && cell.markerInUpper && stamped,
-          detail: `delta ${cell.deltaBytes}B; the upper ${cell.markerInUpper ? 'holds' : 'does NOT hold'} `
-            + `the pre-stop marker; seed stamp ${cell.seedStamp || '(none)'} `
-            + `${stamped ? 'names' : 'does NOT name'} generation ${cell.chainId}`,
+          observed: served && collapsed,
+          detail: `delta ${cell.deltaBytes}B, `
+            + `${cell.deltaLayerMounted ? 'mounted as a lower layer' : 'NOT mounted as a layer'}; `
+            + `the merged view ${cell.markerInMergedView ? 'holds' : 'does NOT hold'} the marker and `
+            + `the fresh upper ${cell.markerInUpper ? 'HOLDS it, so the attach copied the delta' : 'does not, so the delta is served'}`
+            + ` (attach: ${cell.attachDetail || '(none)'}); the next checkpoint `
+            + `${collapsed
+              ? `collapsed onto fresh base ${cell.collapsedChainId} naming no delta`
+              : `did NOT collapse: the record names generation ${cell.collapsedChainId || '(none)'}`
+                + ` ${cell.collapsedNamesDelta ? 'and still names a delta' : 'and no delta'}`}`,
         };
       }
       case 'mutable-delta': {
@@ -3029,12 +3085,18 @@ function absentCell(name: string): WitnessCheck {
 }
 
 /** Paths the cells read INSIDE the container. Each is the constant its own
- *  strategy publishes (`CHAIN_UPPER_DIR` and `CHAIN_SEED_STAMP_PATH` in
- *  `packages/devbox/src`), restated here for the same reason the lifecycle
- *  checks above restate `/var/tmp/devbox/upper`: this driver reads a deployed
- *  container over HTTP and imports nothing from the box it measures. */
+ *  strategy publishes (`DEVBOX_WORKDIR` and `DEVBOX_RUNTIME_DIR` in
+ *  `packages/devbox/src/storage.ts`; `upperDir` and `lowerDeltaRoot` in
+ *  `packages/devbox/src/snapshot-chain.ts`), restated here for the same reason
+ *  the lifecycle checks above restate `/var/tmp/devbox/upper`: this driver
+ *  reads a deployed container over HTTP and imports nothing from the box it
+ *  measures. */
+const DEVBOX_WORK_DIR = '/workspace';
 const CHAIN_UPPER_DIR = '/var/tmp/devbox/upper';
-const CHAIN_SEED_STAMP = '/var/tmp/devbox/upper.seed-stamp';
+/** One directory per served generation, named after it: `deltaLayerMountPoint`
+ *  is `${lowerDeltaRoot}/<generation>`, and its presence in `/proc/mounts` is
+ *  the same fact `deltaLayerServed` reads to decide the collapse. */
+const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
 
 /** Entry counts the two scan cells run at, and pending sizes the two replay
  *  cells leave. Small enough to cost seconds, far enough apart that a cost
@@ -3188,9 +3250,8 @@ async function runControlWitnessCells(
   box: string,
   strategy: Strategy,
   input: {
-    /** The marker file the arm wrote before its stop, relative to the work
-     *  directory, and the holder the pre-stop hook left behind. */
-    readonly markerFile: string;
+    /** The holder the pre-stop hook left behind, for the two r2fs cells that
+     *  are about a handle held open across a container's death. */
     readonly openWrite: OpenWriteHolder | null;
   },
 ): Promise<{ facts: ControlWitnessFacts; notes: string[] }> {
@@ -3209,22 +3270,10 @@ async function runControlWitnessCells(
     await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
 
   if (strategy === 'snapshot-chain') {
-    await cell('cumulative-delta-seed', async () => {
-      const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
-      const chainId = state.state?.chain?.base?.id ?? '';
-      if (chainId.length === 0) throw new Error('/state reported no chain generation');
-      const delta = await headKey(`${state.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
-      const inUpper = await execInBox(
-        fixture, box, `test -f ${CHAIN_UPPER_DIR}/${input.markerFile} && echo yes || echo no`,
-      );
-      const stamp = await execInBox(fixture, box, `cat ${CHAIN_SEED_STAMP} 2>/dev/null || true`);
-      facts.cumulativeDeltaSeed = {
-        deltaBytes: delta.exists === true ? delta.size ?? 0 : 0,
-        markerInUpper: (inUpper.stdout ?? '').trim() === 'yes',
-        seedStamp: (stamp.stdout ?? '').trim(),
-        chainId,
-      };
-    });
+    // MUTABLE-DELTA FIRST, and the order is load-bearing: the collapse cell
+    // below drops this arm's measured trees and recycles the box, so running it
+    // first would leave this cell comparing two heads of a generation that had
+    // just been superseded.
     await cell('mutable-delta', async () => {
       const before = await deltaAfterOneChange(fixture, box, 'a');
       const after = await deltaAfterOneChange(fixture, box, 'b');
@@ -3240,6 +3289,85 @@ async function runControlWitnessCells(
         etagAfter: after.etag,
         bytesBefore: before.bytes,
         bytesAfter: after.bytes,
+      };
+    });
+    // THE WAKE THIS CELL NEEDS IS ITS OWN.
+    //
+    // The claim is about a wake WITH A DELTA, and the arm's own recycle cannot
+    // witness it: that wake ran before the workload phases, and by the time the
+    // cells run the record has moved on several generations. So the cell commits
+    // a marker INTO a delta, recycles the box, and reads both halves back.
+    //
+    // THE MEASURED TREES GO FIRST, which is what keeps the cell cheap AND keeps
+    // its premise true. Every number this arm produced is already settled to its
+    // own artifact. Dropping the trees leaves a delta of whiteouts plus one
+    // marker, so the stop's own quiesce cannot rebase — `shouldRebase` asks
+    // `delta > base` — and the collapse below archives a merged view of
+    // kilobytes instead of the gigabyte the decisive workloads leave.
+    await cell('delta-layer-collapse', async () => {
+      const marker = `delta-layer-${crypto.randomUUID()}`;
+      const markerFile = 'witness-delta-layer.txt';
+      const harness = basename(HARNESS);
+      await execInBox(
+        fixture,
+        box,
+        `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
+        + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
+      );
+      await delay(MIN_CHECKPOINT_INTERVAL_MS);
+      // A TICK, NOT A QUIESCE: a quiesce over the delta the decisive window
+      // left would rebase, and the wake would then have a bare base to attach
+      // and nothing to serve as a layer.
+      const seeded = await checkpointOperation(
+        fixture, box, 'tick', 'delta-layer-collapse marker commit',
+      );
+      if (seeded.outcome?.kind !== 'committed') {
+        throw new Error(
+          `the marker commit did not publish a delta to serve: `
+          + `${seeded.outcome?.kind ?? 'unknown'}${seeded.outcome?.reason === undefined ? '' : ` (${seeded.outcome.reason})`}`,
+        );
+      }
+      const stopped = await stopOperation(fixture, box, 'delta-layer-collapse stop');
+      if (stopped.ok !== true) {
+        throw new Error(`the box did not stop: ${stopped.error ?? 'the stop did not confirm'}`);
+      }
+      const woke = await startupOperation(
+        fixture, box, '/wake', 'delta-layer-collapse wake', ['attached'],
+      );
+      // THE SERVED GENERATION IS THE ONE THE RECORD NAMES AFTER THE WAKE, never
+      // the one named before it: an attach that fell back to its retained
+      // fallback serves a different generation, and reading the pre-stop id
+      // would describe a generation nothing is mounted from.
+      const served = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+      const chainId = served.state?.chain?.base?.id ?? '';
+      if (chainId.length === 0) throw new Error('/state reported no chain generation after the wake');
+      const delta = await headKey(`${served.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
+      const mounts = await execInBox(fixture, box, 'cat /proc/mounts');
+      const inMergedView = await execInBox(
+        fixture, box, `test -f ${DEVBOX_WORK_DIR}/${markerFile} && echo yes || echo no`,
+      );
+      const inUpper = await execInBox(
+        fixture, box, `test -f ${CHAIN_UPPER_DIR}/${markerFile} && echo yes || echo no`,
+      );
+      // THE NEXT CHECKPOINT, with something to say: a box that woke and wrote
+      // nothing is skipped with `nothing has been written since the attach`, so
+      // the collapse would never be reached.
+      await execInBox(
+        fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-collapse.txt && sync`,
+      );
+      await delay(MIN_CHECKPOINT_INTERVAL_MS);
+      await checkpointOperation(fixture, box, 'tick', 'delta-layer-collapse next checkpoint');
+      const collapsed = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+      const collapsedChain = collapsed.state?.chain;
+      facts.deltaLayerCollapse = {
+        chainId,
+        deltaBytes: delta.exists === true ? delta.size ?? 0 : 0,
+        attachDetail: woke.attach.detail,
+        deltaLayerMounted: mountAt(mounts.stdout ?? '', `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null,
+        markerInMergedView: (inMergedView.stdout ?? '').trim() === 'yes',
+        markerInUpper: (inUpper.stdout ?? '').trim() === 'yes',
+        collapsedChainId: collapsedChain?.base?.id ?? '',
+        collapsedNamesDelta: collapsedChain?.delta !== undefined && collapsedChain?.delta !== null,
       };
     });
   }
@@ -3826,7 +3954,7 @@ async function measureArm(
   // fourth arm given a witness would have silently never run its cells.
   if (PREREGISTERED_WITNESSES[strategy].length > 0) {
     log('witness cells');
-    const witnessed = await runControlWitnessCells(fixture, box, strategy, { markerFile, openWrite });
+    const witnessed = await runControlWitnessCells(fixture, box, strategy, { openWrite });
     result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts);
     notes.push(...witnessed.notes);
     const unobserved = result.witnessChecks.filter((witness) => !witness.observed);

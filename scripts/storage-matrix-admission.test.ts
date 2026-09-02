@@ -33,11 +33,15 @@ const deciding: MeasuredCell = { id: cell, values: [100, 105], wallMs: 1_000 };
  * reads the groups its own witnesses name.
  */
 const WITNESSED_FACTS: ControlWitnessFacts = {
-  cumulativeDeltaSeed: {
-    deltaBytes: 71_303_168,
-    markerInUpper: true,
-    seedStamp: 'chain-7:71303168:v4',
+  deltaLayerCollapse: {
     chainId: 'chain-7',
+    deltaBytes: 71_303_168,
+    attachDetail: 'chain chain-7 142606336B base+delta layered',
+    deltaLayerMounted: true,
+    markerInMergedView: true,
+    markerInUpper: false,
+    collapsedChainId: 'chain-8',
+    collapsedNamesDelta: false,
   },
   mutableDelta: {
     key: 'backups/chain-7/delta.sqsh',

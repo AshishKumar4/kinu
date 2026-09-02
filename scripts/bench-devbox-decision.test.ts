@@ -1140,10 +1140,23 @@ describe('the arms are measured in flight together', () => {
   }, 20_000);
 });
 
-/** Facts in which every control's documented defect DID show up. */
+/** Facts in which every control's documented defect DID show up.
+ *
+ *  `deltaLayerCollapse` is the SERVED shape: the delta reaches the merged view
+ *  through a lower layer of its own, the fresh upper never holds it, and the
+ *  next checkpoint collapses onto a new generation naming no delta.
+ *  {@link COPIED_INTO_THE_UPPER} models the behaviour the wake fix removed, so
+ *  the witness has to tell the two apart rather than accepting either. */
 const WITNESSED: ControlWitnessFacts = {
-  cumulativeDeltaSeed: {
-    deltaBytes: 71_303_168, markerInUpper: true, seedStamp: 'chain-7:71303168:v4', chainId: 'chain-7',
+  deltaLayerCollapse: {
+    chainId: 'chain-7',
+    deltaBytes: 71_303_168,
+    attachDetail: 'chain chain-7 142606336B base+delta layered',
+    deltaLayerMounted: true,
+    markerInMergedView: true,
+    markerInUpper: false,
+    collapsedChainId: 'chain-8',
+    collapsedNamesDelta: false,
   },
   mutableDelta: {
     key: 'backups/chain-7/delta.sqsh', etagBefore: 'e1', etagAfter: 'e2',
@@ -1156,13 +1169,39 @@ const WITNESSED: ControlWitnessFacts = {
   posixGap: { syncedKeyPresent: false, key: 'boxes/probe/witness-open-write.bin' },
 };
 
+/**
+ * The OLD copy behaviour, as a fake: `cumulative-delta-seed` preregistered
+ * exactly this reading, and the wake fix deleted the copy that produced it.
+ *
+ * A copying attach reads the delta end to end into the fresh upper, so the
+ * marker committed into that delta lands in the upper, no layer of its own is
+ * ever mounted, and the changed set is whole again — so the next checkpoint
+ * appends an ordinary delta inside the SAME generation instead of collapsing.
+ * Every one of those four facts is the opposite of {@link WITNESSED}, which is
+ * what makes the witness a copy-versus-serve discriminator rather than a
+ * statement that something happened.
+ */
+const COPIED_INTO_THE_UPPER: ControlWitnessFacts = {
+  ...WITNESSED,
+  deltaLayerCollapse: {
+    chainId: 'chain-7',
+    deltaBytes: 71_303_168,
+    attachDetail: 'chain chain-7 142606336B base+delta seeded into the upper',
+    deltaLayerMounted: false,
+    markerInMergedView: true,
+    markerInUpper: true,
+    collapsedChainId: 'chain-7',
+    collapsedNamesDelta: true,
+  },
+};
+
 const witnessNames = (checks: readonly { name: string; observed: boolean }[]): string[] =>
   checks.filter((check) => check.observed).map((check) => check.name);
 
 describe('the preregistered witness cells', () => {
   test('every preregistered witness is answered, by name and in order', () => {
     expect(controlWitnessChecks('snapshot-chain', WITNESSED).map((check) => check.name))
-      .toEqual(['cumulative-delta-seed', 'mutable-delta']);
+      .toEqual(['mutable-delta', 'delta-layer-collapse']);
     expect(controlWitnessChecks('overlay-cas', WITNESSED).map((check) => check.name))
       .toEqual(['unbounded-pending-replay', 'O(u)-scan']);
     expect(controlWitnessChecks('r2fs', WITNESSED).map((check) => check.name))
@@ -1176,7 +1215,7 @@ describe('the preregistered witness cells', () => {
 
   test('facts in which the defects showed up observe every witness', () => {
     expect(witnessNames(controlWitnessChecks('snapshot-chain', WITNESSED)))
-      .toEqual(['cumulative-delta-seed', 'mutable-delta']);
+      .toEqual(['mutable-delta', 'delta-layer-collapse']);
     expect(witnessNames(controlWitnessChecks('overlay-cas', WITNESSED)))
       .toEqual(['unbounded-pending-replay', 'O(u)-scan']);
     expect(witnessNames(controlWitnessChecks('r2fs', WITNESSED)))
@@ -1189,25 +1228,48 @@ describe('the preregistered witness cells', () => {
     expect(checks.every((check) => check.detail.includes('produced no observation'))).toBe(true);
   });
 
-  test('a delta the attach no longer copies is drift, not a pass', () => {
-    const [seed] = controlWitnessChecks('snapshot-chain', {
-      ...WITNESSED,
-      cumulativeDeltaSeed: { ...WITNESSED.cumulativeDeltaSeed!, markerInUpper: false },
-    });
-    expect(seed?.observed).toBe(false);
-    expect(seed?.detail).toContain('does NOT hold');
+  test('a delta COPIED into the fresh upper is the old behaviour, and refuses as drift', () => {
+    const [, collapse] = controlWitnessChecks('snapshot-chain', COPIED_INTO_THE_UPPER);
+    expect(collapse?.name).toBe('delta-layer-collapse');
+    expect(collapse?.observed).toBe(false);
+    // Both halves of the copy are named, so a reader sees WHICH behaviour ran.
+    expect(collapse?.detail).toContain('NOT mounted as a layer');
+    expect(collapse?.detail).toContain('the attach copied the delta');
+    expect(collapse?.detail).toContain('did NOT collapse');
+
+    // And the SERVED facts observe it, so the two directions are discriminated
+    // by this witness rather than by which fields happen to be populated.
+    const [, served] = controlWitnessChecks('snapshot-chain', WITNESSED);
+    expect(served?.observed).toBe(true);
+    expect(served?.detail).toContain('mounted as a lower layer');
+    expect(served?.detail).toContain('the delta is served');
+    expect(served?.detail).toContain('collapsed onto fresh base chain-8 naming no delta');
   });
 
-  test('a seed stamp naming an older generation does not witness THIS delta', () => {
-    const [seed] = controlWitnessChecks('snapshot-chain', {
+  test('a served delta whose next checkpoint appends instead of collapsing is drift', () => {
+    const [, collapse] = controlWitnessChecks('snapshot-chain', {
       ...WITNESSED,
-      cumulativeDeltaSeed: { ...WITNESSED.cumulativeDeltaSeed!, seedStamp: 'chain-6:71303168:v3' },
+      deltaLayerCollapse: {
+        ...WITNESSED.deltaLayerCollapse!,
+        collapsedChainId: 'chain-7',
+        collapsedNamesDelta: true,
+      },
     });
-    expect(seed?.observed).toBe(false);
+    expect(collapse?.observed).toBe(false);
+    expect(collapse?.detail).toContain('and still names a delta');
+  });
+
+  test('a wake with no delta to serve witnesses nothing', () => {
+    const [, collapse] = controlWitnessChecks('snapshot-chain', {
+      ...WITNESSED,
+      deltaLayerCollapse: { ...WITNESSED.deltaLayerCollapse!, deltaBytes: 0, deltaLayerMounted: false },
+    });
+    expect(collapse?.observed).toBe(false);
+    expect(collapse?.detail).toContain('delta 0B');
   });
 
   test('one key holding the same bytes twice is no longer a mutable delta', () => {
-    const [, mutable] = controlWitnessChecks('snapshot-chain', {
+    const [mutable] = controlWitnessChecks('snapshot-chain', {
       ...WITNESSED,
       mutableDelta: { ...WITNESSED.mutableDelta!, etagAfter: 'e1' },
     });
