@@ -16,7 +16,6 @@ import {
   blobKey,
   coalesce,
   digestBytes,
-  emptyCounters,
   foldJournalIntoTree,
   journalKey,
   JournalBatchSchema,
@@ -27,11 +26,11 @@ import {
   sha256Hex,
   stageBlobs,
   sweepOrphanBlobs,
-  type CasStore,
+  treeDirKey,
   type FileEntry,
   type JournalEntry,
-  type StoreCounters,
 } from '../src/cas';
+import { PendingJournalState } from '../src/cas/pending-state';
 import {
   CAS_RUNNER_PATH,
   CAS_STORE_MOUNT,
@@ -44,6 +43,7 @@ import {
   type OverlayCasState,
 } from '../src/overlay-cas';
 import type { OverlayRunnerReceipt } from '../src/cas/overlay-runner';
+import { MemoryCasStore } from './support/cas-cost-probe';
 import {
   ATTACH_OUTCOME_KINDS,
   CHECKPOINT_OUTCOME_KINDS,
@@ -54,80 +54,6 @@ import {
   type CheckpointOutcome,
 } from '../src/storage';
 
-// ── in-memory store ─────────────────────────────────────────────────────────
-
-class MemoryStore implements CasStore {
-  readonly counters: StoreCounters = emptyCounters();
-  readonly objects = new Map<string, Uint8Array>();
-  /** Every mutating call, in order. The crash-ordering assertions read this:
-   *  an end-state check cannot tell a safe order from an unsafe one. */
-  readonly writes: string[] = [];
-  requireBlobGetsInsideStream = false;
-  private insidePutStream = false;
-
-  async put(key: string, bytes: Uint8Array): Promise<void> {
-    this.counters.putCalls += 1;
-    this.counters.bytesPut += bytes.byteLength;
-    this.writes.push(`put:${key}`);
-    this.objects.set(key, bytes);
-  }
-
-  async putStream(
-    key: string,
-    stream: ReadableStream<Uint8Array>,
-    size: number,
-  ): Promise<void> {
-    const reader = stream.getReader();
-    const parts: Uint8Array[] = [];
-    let total = 0;
-    this.insidePutStream = true;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        parts.push(value);
-        total += value.byteLength;
-      }
-    } finally {
-      this.insidePutStream = false;
-    }
-    expect(total).toBe(size);
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const part of parts) {
-      bytes.set(part, offset);
-      offset += part.byteLength;
-    }
-    await this.put(key, bytes);
-  }
-  async get(key: string): Promise<Uint8Array | null> {
-    if (this.requireBlobGetsInsideStream && key.startsWith('blobs/') && !this.insidePutStream) {
-      throw new Error(`eager blob read outside putStream: ${key}`);
-    }
-    const value = this.objects.get(key);
-    this.counters.getCalls += 1;
-    if (value === undefined) return null;
-    this.counters.bytesGot += value.byteLength;
-    return value;
-  }
-
-  async head(key: string): Promise<{ size: number } | null> {
-    this.counters.headCalls += 1;
-    const value = this.objects.get(key);
-    return value === undefined ? null : { size: value.byteLength };
-  }
-
-  async delete(key: string): Promise<void> {
-    this.counters.deleteCalls += 1;
-    this.writes.push(`delete:${key}`);
-    this.objects.delete(key);
-  }
-
-  async list(prefix: string): Promise<string[]> {
-    this.counters.listCalls += 1;
-    return [...this.objects.keys()].filter(key => key.startsWith(prefix)).sort();
-  }
-}
 
 function fileBytes(text: string): Uint8Array {
   return new TextEncoder().encode(text);
@@ -161,7 +87,7 @@ function readerFor(contents: ReadonlyMap<string, Uint8Array>) {
 /** Every file entry in every journal BATCH object must have all of its blobs.
  *  Returns how many entries it checked, so a caller can assert it really
  *  looked at something. */
-async function assertNoDanglingJournal(store: MemoryStore): Promise<number> {
+async function assertNoDanglingJournal(store: MemoryCasStore): Promise<number> {
   const keys = await store.list('journal/');
   let checked = 0;
   for (const key of keys) {
@@ -210,7 +136,7 @@ describe('coalesce — latest state per path, sequence order', () => {
 
 describe('crash ordering — blob before journal, journal before fold, fold before cursor', () => {
   test('a crash after blobs land but before the journal entry leaves no dangling entry', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const bytes = fileBytes('hello');
     const entry = fileEntry(1, 'a.txt', 'hello');
     const contents = new Map([['a.txt', bytes]]);
@@ -221,24 +147,54 @@ describe('crash ordering — blob before journal, journal before fold, fold befo
     expect(await assertNoDanglingJournal(store)).toBe(0);
   });
 
-  test('resuming after that crash redoes one batch and re-uploads nothing', async () => {
-    const store = new MemoryStore();
+  test('resuming after that crash redoes one batch: the same bytes, the same key, no probe first', async () => {
+    // The redo is bounded by the batch and paid in PUTs, never in questions. A
+    // blob that landed before the crash is not named by any journal object, so
+    // the resume cannot know it is there — and asking the store per blob was a
+    // HEAD for every NEW blob on every tick, answered "absent" every time
+    // (128 HEAD beside 131 PUT, probe ocs09011400). Content addressing makes
+    // the re-PUT idempotent, so the store holds one blob under one key and
+    // the trace holds exactly two store calls for it: PUT, PUT.
+    const store = new MemoryCasStore();
     const bytes = fileBytes('hello');
     const entry = fileEntry(1, 'a.txt', 'hello');
     const contents = new Map([['a.txt', bytes]]);
     await stageBlobs({ store, entries: [entry], readChunk: readerFor(contents) });
-    const putsBefore = store.counters.putCalls;
     const again = await stageBlobs({ store, entries: [entry], readChunk: readerFor(contents) });
+    expect(again.uploaded).toBe(1);
+    expect(again.skipped).toBe(0);
+    expect(store.writes).toEqual([`put:${blobKey(entry.hash)}`, `put:${blobKey(entry.hash)}`]);
+    expect(store.objects.size).toBe(1);
+  });
+
+  test('a blob the journal already names is skipped with no store call at all', async () => {
+    // The other half of the rule: what IS known is known from the journal and
+    // the manifest, which the runner has already read, so dedup costs nothing
+    // on the wire. `known` is built the way the runner builds it.
+    const store = new MemoryCasStore();
+    const bytes = fileBytes('hello');
+    const entry = fileEntry(1, 'a.txt', 'hello');
+    const contents = new Map([['a.txt', bytes]]);
+    await stageBlobs({
+      store, entries: [entry], readChunk: readerFor(contents),
+      commitBatch: async batch => { await appendJournalBatch(store, batch); },
+    });
+    const pending = new PendingJournalState();
+    await pending.load(store);
+    const callsBefore = { ...store.counters };
+    const again = await stageBlobs({
+      store, entries: [fileEntry(2, 'a.txt', 'hello')], readChunk: readerFor(contents), known: pending.blobHashes(),
+    });
     expect(again.uploaded).toBe(0);
     expect(again.skipped).toBe(1);
-    expect(store.counters.putCalls).toBe(putsBefore);
+    expect(store.counters).toEqual(callsBefore);
   });
 
   test('each batch commits only after ITS OWN blobs are durable', async () => {
     // The bound on a crash. With one commit at the end, a crash mid-upload
     // loses the whole change set; per batch, it loses one batch. The assertion
     // is that at every commit, every blob named so far is already in the store.
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const entries: JournalEntry[] = [];
     const contents = new Map<string, Uint8Array>();
     for (let i = 0; i < 5; i += 1) {
@@ -271,7 +227,7 @@ describe('crash ordering — blob before journal, journal before fold, fold befo
   });
 
   test('a stale file stops staging, so later batches are never committed', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const good = fileEntry(1, 'good.txt', 'aaaa');
     const stale = fileEntry(2, 'stale.txt', 'original');
     const never = fileEntry(3, 'never.txt', 'cccc');
@@ -301,7 +257,7 @@ describe('crash ordering — blob before journal, journal before fold, fold befo
     // digest can — so this test fails if the content check is ever dropped.
     // Storing these bytes under the journalled hash would corrupt the CAS
     // permanently rather than costing a retry.
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const entry = fileEntry(1, 'a.txt', 'original');
     const contents = new Map([['a.txt', fileBytes('OVERWRIT')]]);
     expect(fileBytes('OVERWRIT').byteLength).toBe(fileBytes('original').byteLength);
@@ -318,7 +274,7 @@ describe('crash ordering — blob before journal, journal before fold, fold befo
     // changed-path COUNT rather than to the bytes that changed, which is the
     // efficiency this strategy exists to deliver. Found by the Lean model
     // before it was found here.
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const entries: JournalEntry[] = [];
     const contents = new Map<string, Uint8Array>();
     for (let i = 0; i < 40; i += 1) {
@@ -343,7 +299,7 @@ describe('crash ordering — blob before journal, journal before fold, fold befo
   });
 
   test('fold writes tree and manifest before the cursor advances', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const entry = fileEntry(1, 'a.txt', 'body');
     await stageBlobs({ store, entries: [entry],
       readChunk: readerFor(new Map([['a.txt', fileBytes('body')]])) });
@@ -371,7 +327,7 @@ describe('crash ordering — blob before journal, journal before fold, fold befo
   });
 
   test('fold only consumes journal objects that already exist', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const folded = await foldJournalIntoTree(store);
     expect(folded.foldedEntries).toBe(0);
     expect(await readFoldedSeq(store)).toBe(0);
@@ -379,8 +335,8 @@ describe('crash ordering — blob before journal, journal before fold, fold befo
 });
 
 describe('rename — delete plus create, blob reuse', () => {
-  test('a rename moves no content, because the blobs already exist', async () => {
-    const store = new MemoryStore();
+  test('a rename moves no content, because the journal already names the blobs', async () => {
+    const store = new MemoryCasStore();
     const bytes = fileBytes('same-bytes');
     const created = fileEntry(1, 'old.txt', 'same-bytes');
     await stageBlobs({ store, entries: [created], readChunk: readerFor(new Map([['old.txt', bytes]])) });
@@ -389,19 +345,57 @@ describe('rename — delete plus create, blob reuse', () => {
     const renamed = fileEntry(3, 'new.txt', 'same-bytes');
     const gone: JournalEntry = { kind: 'delete', seq: 2, path: 'old.txt' };
     const work = coalesce([gone, renamed]);
+    const pending = new PendingJournalState();
+    await pending.load(store);
     const putsBefore = store.counters.putCalls;
-    const staged = await stageBlobs({ store, entries: work, readChunk: readerFor(new Map([['new.txt', bytes]])) });
+    const staged = await stageBlobs({
+      store, entries: work, readChunk: readerFor(new Map([['new.txt', bytes]])), known: pending.blobHashes(),
+    });
     expect(staged.uploaded).toBe(0);
     expect(staged.dedupHits).toBe(1);
     expect(staged.staged.map(e => e.kind)).toEqual(['delete', 'file']);
     expect(store.counters.putCalls).toBe(putsBefore);
   });
+});
 
+describe('fold — a directory is a tree object, so the lower serves it after a wake', () => {
+  const dir = (seq: number, path: string, mode = 0o750): JournalEntry =>
+    ({ kind: 'dir', seq, path, mode, mtimeMs: 1_700_000_000_000, opaque: false });
+
+  test('an empty directory and its mode survive the fold as `tree/<path>/`', async () => {
+    // RED BEFORE 2026-09-02: the fold recorded a directory in the manifest and
+    // wrote nothing to `tree/`, so the lower only knew a directory as the
+    // prefix of its files — a default mode for one that had files, nothing at
+    // all for one that had none (cell 6.13).
+    const store = new MemoryCasStore();
+    await appendJournalBatch(store, [dir(1, 'empty'), dir(2, 'empty/nested', 0o700)]);
+    const folded = await foldJournalIntoTree(store);
+    expect(folded.treeWrites).toBe(2);
+    expect(store.objects.get(treeDirKey('empty'))).toEqual(new Uint8Array(0));
+    expect(store.meta.get(treeDirKey('empty'))).toMatchObject({ mode: 0o40750, mtimeMs: 1_700_000_000_000 });
+    expect(store.meta.get(treeDirKey('empty/nested'))?.mode).toBe(0o40700);
+  });
+
+  test('deleting a directory removes its object and everything under it, deepest first', async () => {
+    const store = new MemoryCasStore();
+    const file = fileEntry(2, 'd/a.txt', 'body');
+    await stageBlobs({ store, entries: [file], readChunk: readerFor(new Map([['d/a.txt', fileBytes('body')]])) });
+    await appendJournalBatch(store, [dir(1, 'd'), file]);
+    await foldJournalIntoTree(store);
+    expect(store.objects.has(treeDirKey('d'))).toBe(true);
+
+    await appendJournalBatch(store, [{ kind: 'delete', seq: 3, path: 'd' }]);
+    store.writes.length = 0;
+    const folded = await foldJournalIntoTree(store);
+    expect(folded.treeDeletes).toBe(2);
+    expect(store.writes.slice(0, 2)).toEqual(['delete:tree/d/a.txt', `delete:${treeDirKey('d')}`]);
+    expect([...store.objects.keys()].filter(key => key.startsWith('tree/'))).toEqual([]);
+  });
 });
 
 describe('replay — O(pending), never the tree', () => {
   test('after a fold, replay returns no pending entries', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const entry = fileEntry(1, 'a.txt', 'body');
     await stageBlobs({ store, entries: [entry],
       readChunk: readerFor(new Map([['a.txt', fileBytes('body')]])) });
@@ -415,7 +409,7 @@ describe('replay — O(pending), never the tree', () => {
   });
 
   test('only entries newer than the folded cursor are replayed', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const first = fileEntry(1, 'a.txt', 'one');
     const second = fileEntry(2, 'b.txt', 'two');
     await stageBlobs({
@@ -438,7 +432,7 @@ describe('replay — O(pending), never the tree', () => {
   });
 
   test('replay returns a lazy stream before it reads one blob', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const entry = fileEntry(1, 'lazy.txt', 'streamed');
     await stageBlobs({
       store,
@@ -462,7 +456,7 @@ describe('replay — O(pending), never the tree', () => {
   });
 
   test('a delete entry replays as a whiteout instruction, not as tree bytes', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const gone: JournalEntry = { kind: 'delete', seq: 1, path: 'gone.txt' };
     await appendJournalBatch(store, [gone]);
     const replayed = await replayPending(store);
@@ -569,6 +563,9 @@ function receipt(
 function harness(overrides: {
   running?: boolean;
   mounted?: boolean;
+  /** Whether the store mount is already standing on this container, as it is
+   *  after an isolate reset that landed between the mount and the overlay. */
+  storeMounted?: boolean;
   /** Whether the mount call makes the work directory read as an overlay. */
   overlayLands?: boolean;
   mountOverlayFails?: boolean;
@@ -588,6 +585,7 @@ function harness(overrides: {
   const calls: string[] = [];
   const logs: string[] = [];
   let mounted = overrides.mounted ?? false;
+  let storeMounted = overrides.storeMounted ?? false;
   let state = overrides.state ?? null;
   let writes = 0;
   let residue = [...overrides.workdirResidue ?? []];
@@ -596,9 +594,15 @@ function harness(overrides: {
     containerRunning: () => overrides.running ?? true,
     mountStore: async () => {
       calls.push('mountStore');
+      storeMounted = true;
     },
     unmountStore: async () => {
       calls.push('unmountStore');
+      storeMounted = false;
+    },
+    storeMounted: async () => {
+      calls.push('storeMounted');
+      return storeMounted;
     },
     mountOverlay: async () => {
       calls.push('mountOverlay');
@@ -734,10 +738,11 @@ describe('attach — replay first, mount last, receipt believed only when it par
     const record = harness({ objects: 1_000_000, bytes: 9_000_000_000 });
     const outcome = await attachOf(record);
     expect(record.calls).not.toContain('inventory');
-    // And the fixed control work is all of it: release the stale store mount,
-    // mount the store, one runner invocation, mount the overlay, confirm.
+    // And the fixed control work is all of it: see whether the store is
+    // mounted, release the stale mount, mount the store, one runner
+    // invocation, mount the overlay, confirm.
     expect(record.calls).toEqual([
-      'overlayMounted', 'unmountStore', 'mountStore', 'invokeRunner:restore',
+      'overlayMounted', 'storeMounted', 'unmountStore', 'mountStore', 'invokeRunner:restore',
       'salvageWorkdirResidue', 'mountOverlay', 'overlayMounted',
     ]);
     // A million objects and an empty journal is a FRESH classification now,
@@ -767,6 +772,21 @@ describe('attach — replay first, mount last, receipt believed only when it par
     const record = harness();
     await attachOf(record);
     expect(record.calls.indexOf('unmountStore')).toBeLessThan(record.calls.indexOf('mountStore'));
+  });
+
+  test('A STORE MOUNT STILL STANDING IS ADOPTED, and the replay still runs', async () => {
+    // The isolate reset that lands between the store mount and the overlay
+    // (cell 6.9). The container keeps its mount and the SDK registry does not,
+    // so releasing it fails and mounting over it is refused; the attach that
+    // comes back has to take the mount as it finds it. The replay is
+    // idempotent and runs, because nothing proves it finished.
+    const record = harness({ storeMounted: true });
+    const outcome = await attachOf(record);
+    expect(record.calls).toEqual([
+      'overlayMounted', 'storeMounted', 'invokeRunner:restore',
+      'salvageWorkdirResidue', 'mountOverlay', 'overlayMounted',
+    ]);
+    expect(outcome.kind).toBe('empty');
   });
 
   test('an already-mounted work directory is neither remounted nor replayed again', async () => {
@@ -1304,7 +1324,7 @@ describe('denominator', () => {
 
 /** A store whose LISTING names a key its GET cannot serve. That combination is
  *  the one the reap-after-cursor rule makes impossible, so it must refuse. */
-class HollowStore extends MemoryStore {
+class HollowStore extends MemoryCasStore {
   override async get(key: string): Promise<Uint8Array | null> {
     if (key.startsWith('journal/')) return null;
     return await super.get(key);
@@ -1319,7 +1339,7 @@ describe('stored rows are parsed, never cast', () => {
       `nul\0path`, 'x'.repeat(4_096), `dir/${'x'.repeat(256)}`,
     ];
     for (const path of paths) {
-      const store = new MemoryStore();
+      const store = new MemoryCasStore();
       await store.put(journalKey(1), new TextEncoder().encode(`${JSON.stringify({
         version: CAS_FORMAT_VERSION,
         entries: [{
@@ -1336,19 +1356,19 @@ describe('stored rows are parsed, never cast', () => {
   });
 
   test('a journal batch that is valid JSON but the wrong shape refuses, naming the key', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     await store.put(journalKey(1), new TextEncoder().encode('{"notABatch":true}\n'));
     await expect(listJournalAfter(store, 0)).rejects.toThrow(/journal\/000000000001\.json/);
   });
 
   test('refuses an unversioned journal batch instead of guessing its old entry format', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     await store.put(journalKey(1), new TextEncoder().encode('[]\n'));
     await expect(listJournalAfter(store, 0)).rejects.toThrow(/does not match its schema/);
   });
 
   test('a journal entry whose hash is truncated refuses rather than naming a short blob', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const bad = {
       version: CAS_FORMAT_VERSION,
       entries: [{
@@ -1361,7 +1381,7 @@ describe('stored rows are parsed, never cast', () => {
   });
 
   test('a chunk of ZERO bytes refuses, because it would name a blob holding nothing', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const bad = {
       version: CAS_FORMAT_VERSION,
       entries: [{
@@ -1376,7 +1396,7 @@ describe('stored rows are parsed, never cast', () => {
   test('a zero-byte FILE is accepted, because an empty file is ordinary', async () => {
     // The bound that deliberately differs from the chunk above. Same field
     // name, different referent: a file may be empty, a chunk may not.
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const empty = {
       version: CAS_FORMAT_VERSION,
       entries: [{
@@ -1392,13 +1412,13 @@ describe('stored rows are parsed, never cast', () => {
     // Defaulting to 0 would re-fold the whole store from the beginning AND make
     // every already-folded path look pending, which is the mass-tombstone path
     // reached through the cursor instead of through the scan.
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     await store.put('cursor.json', new TextEncoder().encode('{"foldedSeq":"soon"}\n'));
     await expect(readFoldedSeq(store)).rejects.toThrow(/cursor\.json/);
   });
 
   test('an ABSENT cursor still reads as zero, because a fresh store has folded nothing', async () => {
-    expect(await readFoldedSeq(new MemoryStore())).toBe(0);
+    expect(await readFoldedSeq(new MemoryCasStore())).toBe(0);
   });
 
   test('a listed journal object whose bytes are gone refuses, because it cannot have been reaped', async () => {
@@ -1412,7 +1432,7 @@ describe('stored rows are parsed, never cast', () => {
 
 describe('the off-hot-path orphan blob sweep', () => {
   test('superseded versions go; manifest-reachable and pending blobs stay', async () => {
-    const store = new MemoryStore();
+    const store = new MemoryCasStore();
     const v1 = fileEntry(1, 'doc.txt', 'version-one');
     const v2 = fileEntry(2, 'doc.txt', 'version-two!');
     const contents = new Map([

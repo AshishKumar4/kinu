@@ -41,6 +41,7 @@ export {
   encodeJson,
   journalKey,
   seqFromJournalKey,
+  treeDirKey,
   treeKey,
   type CasPutMeta,
   type CasStore,

@@ -29,12 +29,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "attach:after-store-mount: 4 mounts across both isolates, an uninterrupted wake makes 3; attach:after-layer-mount: 5 mounts across both isolates, an uninterrupted wake makes 3",
   },
   {
-    arm: 'overlay-cas',
-    cell: '6.9',
-    since: '2026-09-02',
-    reason: "attach:after-store-mount: 2 mounts across both isolates, an uninterrupted wake makes 1; attach:after-restore: 2 mounts across both isolates, an uninterrupted wake makes 1",
-  },
-  {
     arm: 'bounded-layers',
     cell: '6.9',
     since: '2026-09-02',
@@ -93,12 +87,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     cell: '6.12',
     since: '2026-09-02',
     reason: "bytesStaged 823296 > 2k + 4c for k=4 KiB; nodesRewritten 207 > p(d+2) = 3; objectsPut 5 > ceil(k/P)+2 = 3; seal.bytesStaged: n gives 823296, 10n gives 8196096; seal.bytesChunked: n gives 823296, 10n gives 8196096; seal.nodesRewritten: n gives 207, 10n gives 2035; publish.bytesPut: n gives 123700, 10n gives 1143382; restore.totalRemoteOps: n gives 503, 10n gives 4839",
-  },
-  {
-    arm: 'overlay-cas',
-    cell: '6.13',
-    since: '2026-09-02',
-    reason: "overlay-cas 1000 files after the wake: 17 mismatches: paths@d000: absent after restore; paths@d000/d000: absent after restore; paths@d000/d001: absent after restore; paths@d000/d002: absent after restore; paths@d000/d003: absent after restore; paths@d000/d004: absent after restore; paths@d000/d005: absent after restore; paths@d000/d006: absent after restore; paths@d000/d007: absent after restore; …",
   },
   {
     arm: 'bounded-layers',

@@ -7,6 +7,8 @@
  *   journal/<12-seq>.json ONE BATCH of changed-path entries, keyed by the
  *                         batch's last seq; bytes never inline
  *   tree/<path>           materialized files: this prefix is the read-only lower
+ *   tree/<path>/          a directory: empty, and the trailing slash is what the
+ *                         lower lists as one
  *   meta/manifest.jsonl   POSIX metadata for the tree, kept out of the mount
  *   cursor.json           the seq through which the tree has been folded
  *
@@ -204,7 +206,6 @@ export const CursorSchema = v.strictObject({
 export interface StoreCounters {
   putCalls: number;
   getCalls: number;
-  headCalls: number;
   deleteCalls: number;
   listCalls: number;
   bytesPut: number;
@@ -215,7 +216,6 @@ export function emptyCounters(): StoreCounters {
   return {
     putCalls: 0,
     getCalls: 0,
-    headCalls: 0,
     deleteCalls: 0,
     listCalls: 0,
     bytesPut: 0,
@@ -227,7 +227,6 @@ export function counterDelta(before: StoreCounters, after: StoreCounters): Store
   return {
     putCalls: after.putCalls - before.putCalls,
     getCalls: after.getCalls - before.getCalls,
-    headCalls: after.headCalls - before.headCalls,
     deleteCalls: after.deleteCalls - before.deleteCalls,
     listCalls: after.listCalls - before.listCalls,
     bytesPut: after.bytesPut - before.bytesPut,
@@ -246,7 +245,10 @@ export interface CasPutMeta {
 
 /**
  * The object-store seam the CAS helpers talk to. Relative keys, never a box
- * prefix: the adapter prepends `boxes/<id>/`. A PUT is complete or absent.
+ * prefix: the adapter prepends `boxes/<id>/`. A PUT is complete or absent, and
+ * it is ONE store operation: no probe before it and no rename after it. A blob
+ * is content-addressed, so a redo after a crash re-PUTs the same bytes under
+ * the same key rather than asking first whether they are there.
  */
 export interface CasStore {
   readonly counters: StoreCounters;
@@ -258,7 +260,6 @@ export interface CasStore {
     meta?: CasPutMeta,
   ): Promise<void>;
   get(key: string): Promise<Uint8Array | null>;
-  head(key: string): Promise<{ size: number } | null>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<string[]>;
 }
@@ -287,6 +288,13 @@ export function seqFromJournalKey(key: string): number | null {
 
 export function treeKey(path: string): string {
   return `${PREFIX_TREE}${path}`;
+}
+
+/** A directory in the tree is an EMPTY object whose key ends in `/`: the one
+ *  shape s3fs serves as a directory when it mounts `tree/` as the lower, so a
+ *  folded directory survives a wake even when nothing is under it. */
+export function treeDirKey(path: string): string {
+  return `${PREFIX_TREE}${path}/`;
 }
 
 /**

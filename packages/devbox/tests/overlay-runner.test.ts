@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { lstat, link, mkdtemp, mkdir, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, mkdir, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  FileCasStore,
+  HttpCasStore,
   nextScanCache,
-    runOverlayRunner,
+  runOverlayRunner,
+  type OverlayRunnerReceipt,
 } from '../src/cas/overlay-runner';
 import {
   KEY_CURSOR,
@@ -16,32 +17,45 @@ import {
   PREFIX_JOURNAL,
   PREFIX_TREE,
   blobKey,
+  digestBytes,
   readFoldedSeq,
+  stageBlobs,
+  treeDirKey,
+  type CasStore,
+  type FileEntry,
 } from '../src/cas';
 import type { UpperSignature } from '../src/cas/state';
 import {
+  EgressFake,
   FIXED_ATTACH_TRACE,
+  MemoryCasStore,
   WatchedCasStore,
   isPayloadKey,
   treeHeavyStore,
 } from './support/cas-cost-probe';
 
-async function fixture(name: string): Promise<{ upper: string; store: string; root: string }> {
+/** An upper on disk, which the runner walks with real syscalls, and the store
+ *  in memory, which is the seam every runner test asserts through. */
+async function fixture(name: string): Promise<{ upper: string; store: MemoryCasStore; root: string }> {
   const root = await mkdtemp(join(tmpdir(), `overlay-runner-${name}-`));
   const upper = join(root, 'upper');
-  const store = join(root, 'store');
-  await Promise.all([mkdir(upper), mkdir(store)]);
-  return { root, upper, store };
+  await mkdir(upper);
+  return { root, upper, store: new MemoryCasStore() };
 }
 
 /** The scan cache the runner keeps beside the bytes, by path. */
-async function scanCache(store: string): Promise<Record<string, UpperSignature>> {
-  return JSON.parse(await readFile(join(store, 'scan.json'), 'utf8')).signatures;
+async function scanCache(store: CasStore): Promise<Record<string, UpperSignature>> {
+  const bytes = await store.get('scan.json');
+  if (bytes === null) throw new Error('no scan cache in the store');
+  return JSON.parse(new TextDecoder().decode(bytes)).signatures;
 }
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
+
+const text = (bytes: Uint8Array | null | undefined): string | undefined =>
+  bytes === undefined || bytes === null ? undefined : new TextDecoder().decode(bytes);
 
 describe('the stale bystander rule — an unjournalled path stays detectable', () => {
   const signature = (mtimeMs: number, hash: string): UpperSignature =>
@@ -99,77 +113,86 @@ describe('the stale bystander rule — an unjournalled path stays detectable', (
   });
 });
 
-describe('FileCasStore', () => {
-  test('keeps exact CAS keys, metadata and stream counters on a mounted prefix', async () => {
-    const paths = await fixture('store');
-    try {
-      const store = new FileCasStore(paths.store);
-      await store.put('tree/bin/run', new TextEncoder().encode('run'), { mode: 0o100755, mtimeMs: 1_700_000_000_000 });
-      const bytes = await store.get('tree/bin/run');
-      if (bytes === null) throw new Error('blob missing after put');
-      expect(new TextDecoder().decode(bytes)).toBe('run');
-      expect(await store.list('tree/')).toEqual(['tree/bin/run']);
-      expect((await lstat(join(paths.store, 'tree/bin/run'))).mode & 0o777).toBe(0o755);
-      expect(store.counters).toMatchObject({ putCalls: 1, getCalls: 1, listCalls: 1, bytesPut: 3, bytesGot: 3 });
-    } finally {
-      await rm(paths.root, { recursive: true, force: true });
-    }
+// ── the store, on the wire ──────────────────────────────────────────────────
+//
+// The runner stores through the SDK's egress endpoint, so these tests speak
+// HTTP to an in-process fake of it and assert on the REQUESTS: which method,
+// which path, how many. The deployed defect was on the wire — a 922 KB tick
+// spent 97.9% of 400 s on 131 PUT + 128 HEAD through s3fs's write-temp-rename
+// path (probe ocs09011400, 2026-09-01) — so the wire is where the bill is read.
+
+describe('HttpCasStore', () => {
+  const stream = (...parts: string[]): ReadableStream<Uint8Array> => new ReadableStream({
+    start(controller) {
+      for (const part of parts) controller.enqueue(new TextEncoder().encode(part));
+      controller.close();
+    },
   });
 
-  test('streams a blob without converting the stream to a string', async () => {
-    const paths = await fixture('stream');
+  test('ONE PUT PER STAGED BLOB, receipt verified, no HEAD, no temp object, no rename', async () => {
+    // The assignment's count. Three new files through the shipped `stageBlobs`
+    // over the wire: exactly three requests, every one a PUT of the blob's own
+    // key, answered by the store's receipt — and nothing else. Before
+    // 2026-09-02 the same staging asked HEAD per blob first (three 404s here),
+    // and the mount-backed store behind it wrote a `.tmp-<uuid>` and renamed.
+    const egress = new EgressFake();
     try {
-      const store = new FileCasStore(paths.store);
-      await store.putStream('blobs/ab/blob', new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('one'));
-          controller.enqueue(new TextEncoder().encode('two'));
-          controller.close();
-        },
-      }), 6);
-      const blob = await store.get('blobs/ab/blob');
-      if (blob === null) throw new Error('blob missing after putStream');
-      expect(new TextDecoder().decode(blob)).toBe('onetwo');
-      expect(store.counters.bytesPut).toBe(6);
-    } finally {
-      await rm(paths.root, { recursive: true, force: true });
-    }
-  });
-
-  /** Everything under the blob's own directory, so a leaked `.tmp-<uuid>` is
-   *  visible rather than inferred from the key being absent. */
-  async function blobDir(store: string): Promise<readonly string[]> {
-    return await readdir(join(store, 'blobs/ab'));
-  }
-
-  test('a drained stream is released, not left locked', async () => {
-    // The reader is taken from the caller's stream, so the caller gets it back:
-    // a lock this method kept would make the stream unusable to anything else
-    // and hide a leak behind a successful put.
-    const paths = await fixture('release');
-    try {
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('done'));
-          controller.close();
-        },
+      const store = new HttpCasStore(egress.url);
+      const bodies = new Map(['alpha', 'beta', 'gamma'].map(name => [`${name}.txt`, new TextEncoder().encode(`${name} body`)]));
+      const entries: FileEntry[] = [...bodies].map(([path, bytes], at) => {
+        const digest = digestBytes(bytes);
+        return { kind: 'file', seq: at + 1, path, mode: 0o644, mtimeMs: 0, size: digest.size, hash: digest.hash, parts: digest.parts };
       });
-      await new FileCasStore(paths.store).putStream('blobs/ab/blob', stream, 4);
-      expect(stream.locked).toBe(false);
+      const staged = await stageBlobs({
+        store, entries, readChunk: async (entry, _index, size) => bodies.get(entry.path)?.subarray(0, size) ?? null,
+      });
+      expect(staged.uploaded).toBe(3);
+      expect(egress.requests).toEqual(entries.map(entry => `PUT /STORE/${blobKey(entry.hash)}`));
+      expect(egress.requests.some(row => row.startsWith('HEAD') || row.includes('.tmp-'))).toBe(false);
+      for (const entry of entries) expect(egress.objects.get(blobKey(entry.hash))?.bytes).toEqual(bodies.get(entry.path));
+      expect(store.counters).toMatchObject({ putCalls: 3, getCalls: 0, listCalls: 0, bytesPut: 29 });
     } finally {
-      await rm(paths.root, { recursive: true, force: true });
+      await egress.stop();
     }
   });
 
-  test('a stream that fails mid-flight leaves no blob and no temp file', async () => {
-    // The partial write is real: the first chunk reached the temp file before
-    // the producer died. The rename is what publishes, so nothing is corrupt —
-    // but a `.tmp-<uuid>` left under this box's prefix is bytes no key names and
-    // no orphan sweep can recognise, which makes the leak permanent.
-    const paths = await fixture('stream-fault');
+  test('a receipt that names other bytes refuses the put, and the counter does not bill it', async () => {
+    // THE RECEIPT IS CHECKED, not merely received. R2 answers a single-part PUT
+    // with the MD5 of the body; an ETag for different bytes is a store that did
+    // not keep what was sent, and a put that passed on the status alone would
+    // journal a blob the store does not hold.
+    const egress = new EgressFake();
     try {
-      const store = new FileCasStore(paths.store);
-      const stream = new ReadableStream<Uint8Array>({
+      const store = new HttpCasStore(egress.url);
+      egress.forgedEtag = 'd41d8cd98f00b204e9800998ecf8427e';
+      await expect(store.put('blobs/ab/blob', new TextEncoder().encode('bytes'))).rejects.toThrow(/did not confirm blobs\/ab\/blob/);
+      expect(store.counters).toMatchObject({ putCalls: 1, bytesPut: 0 });
+      await store.put('blobs/ab/blob', new TextEncoder().encode('bytes'));
+      expect(store.counters).toMatchObject({ putCalls: 2, bytesPut: 5 });
+    } finally {
+      await egress.stop();
+    }
+  });
+
+  test('a streamed object is one PUT whose receipt covers the streamed bytes', async () => {
+    const egress = new EgressFake();
+    try {
+      const store = new HttpCasStore(egress.url);
+      await store.putStream('tree/bin/run', stream('one', 'two'), 6, { mode: 0o100755, mtimeMs: 1_700_000_000_000 });
+      expect(egress.requests).toEqual(['PUT /STORE/tree/bin/run']);
+      expect(text(egress.objects.get('tree/bin/run')?.bytes)).toBe('onetwo');
+      expect(text(await store.get('tree/bin/run'))).toBe('onetwo');
+      expect(store.counters).toMatchObject({ putCalls: 1, getCalls: 1, bytesPut: 6, bytesGot: 6 });
+    } finally {
+      await egress.stop();
+    }
+  });
+
+  test('a stream that fails mid-flight publishes nothing and hands the stream back', async () => {
+    const egress = new EgressFake();
+    try {
+      const store = new HttpCasStore(egress.url);
+      const failing = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode('half'));
         },
@@ -177,40 +200,88 @@ describe('FileCasStore', () => {
           controller.error(new Error('the upper vanished mid-read'));
         },
       });
-
-      await expect(store.putStream('blobs/ab/blob', stream, 8))
-        .rejects.toThrow('the upper vanished mid-read');
-
-      expect(await store.get('blobs/ab/blob')).toBeNull();
-      expect(await blobDir(paths.store)).toEqual([]);
-      // And the reader was handed back, so the failure left nothing holding the
-      // caller's stream either.
-      expect(stream.locked).toBe(false);
+      await expect(store.putStream('blobs/ab/blob', failing, 8)).rejects.toThrow('the upper vanished mid-read');
+      expect(egress.objects.has('blobs/ab/blob')).toBe(false);
+      expect(failing.locked).toBe(false);
+      expect(store.counters.bytesPut).toBe(0);
     } finally {
-      await rm(paths.root, { recursive: true, force: true });
+      await egress.stop();
     }
   });
 
   test('a stream that disagrees with its declared size publishes nothing', async () => {
     // A size measured before the read is how a file still settling gets
-    // published as a complete blob. The check refuses, and it leaves the store
-    // exactly as it found it.
-    const paths = await fixture('stream-short');
+    // published as a complete object. The check refuses before the endpoint
+    // could, and it leaves the store exactly as it found it.
+    const egress = new EgressFake();
     try {
-      const store = new FileCasStore(paths.store);
-      await expect(store.putStream('blobs/ab/blob', new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('three'));
-          controller.close();
-        },
-      }), 9)).rejects.toThrow('streamed 5 bytes, expected 9');
-
-      expect(await store.get('blobs/ab/blob')).toBeNull();
-      expect(await blobDir(paths.store)).toEqual([]);
-      // A refused put moved no bytes, and the counter must not claim otherwise.
+      const store = new HttpCasStore(egress.url);
+      await expect(store.putStream('blobs/ab/blob', stream('three'), 9)).rejects.toThrow('streamed 5 bytes, expected 9');
+      expect(egress.objects.has('blobs/ab/blob')).toBe(false);
       expect(store.counters.bytesPut).toBe(0);
     } finally {
-      await rm(paths.root, { recursive: true, force: true });
+      await egress.stop();
+    }
+  });
+
+  test('a directory is an empty object under `tree/<path>/` typed as one', async () => {
+    // The shape s3fs lists as a directory when it serves `tree/` as the lower,
+    // and the one header the SDK's endpoint keeps on a PUT.
+    const egress = new EgressFake();
+    try {
+      const store = new HttpCasStore(egress.url);
+      await store.put(treeDirKey('a/b'), new Uint8Array(0), { mode: 0o40755 });
+      expect(egress.requests).toEqual(['PUT /STORE/tree/a/b/']);
+      expect(egress.objects.get('tree/a/b/')).toEqual({ bytes: new Uint8Array(0), contentType: 'application/x-directory' });
+      await store.put('tree/a/file', new TextEncoder().encode('f'), { mode: 0o100644 });
+      expect(egress.objects.get('tree/a/file')?.contentType).toBe('application/octet-stream');
+    } finally {
+      await egress.stop();
+    }
+  });
+
+  test('keys are spelled the way the mount spells them, and a listing pages through', async () => {
+    // s3fs percent-encodes everything outside the RFC 3986 unreserved set and
+    // the endpoint keeps the path as it arrives, so the lower can only find a
+    // `tree/` object the runner wrote under the same spelling. The listing
+    // comes back XML-escaped and paged; the store hands back plain keys.
+    const egress = new EgressFake(2);
+    try {
+      const store = new HttpCasStore(egress.url);
+      const odd = 'tree/dir one/we&b<c>"d\'(e)*f!.txt';
+      await store.put(odd, new TextEncoder().encode('x'));
+      expect(egress.requests).toEqual(['PUT /STORE/tree/dir%20one/we%26b%3Cc%3E%22d%27%28e%29%2Af%21.txt']);
+      for (const name of ['a', 'b', 'c']) await store.put(`tree/${name}`, new TextEncoder().encode(name));
+      egress.requests.length = 0;
+      expect(await store.list(PREFIX_TREE)).toEqual(['tree/a', 'tree/b', 'tree/c', odd]);
+      expect(egress.requests).toHaveLength(2);
+      expect(store.counters.listCalls).toBe(2);
+      expect(text(await store.get(odd))).toBe('x');
+      await store.delete(odd);
+      expect(await store.get(odd)).toBeNull();
+      expect(await store.list(PREFIX_TREE)).toEqual(['tree/a', 'tree/b', 'tree/c']);
+      await expect(store.get('tree/../cursor.json')).rejects.toThrow('refused unsafe key');
+    } finally {
+      await egress.stop();
+    }
+  });
+
+  test('a refusal from the endpoint is thrown with its status and its words', async () => {
+    // The one diagnosis a runner can give: an unmounted binding answers 403
+    // with a sentence, and that sentence has to reach the receipt's stderr.
+    const egress = new EgressFake();
+    try {
+      const store = new HttpCasStore(egress.url);
+      egress.refuseNext = { status: 403, words: 'Call mountBucket() with this bucket before accessing it.' };
+      await expect(store.get('cursor.json')).rejects.toThrow('GET cursor.json: HTTP 403 Call mountBucket()');
+      egress.refuseNext = { status: 500, words: 'binding not found' };
+      await expect(store.put('cursor.json', new Uint8Array(1))).rejects.toThrow(/HTTP 500.*binding not found/);
+      egress.refuseNext = { status: 403, words: 'read-only' };
+      await expect(store.delete('cursor.json')).rejects.toThrow('DELETE cursor.json: HTTP 403 read-only');
+      egress.refuseNext = { status: 403, words: 'not permitted' };
+      await expect(store.list(PREFIX_JOURNAL)).rejects.toThrow('LIST journal/: HTTP 403 not permitted');
+    } finally {
+      await egress.stop();
     }
   });
 });
@@ -220,15 +291,15 @@ describe('overlay CAS runner', () => {
     const paths = await fixture('fold');
     try {
       await writeFile(join(paths.upper, 'hello.txt'), 'hello');
-      const receipt = await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: new FileCasStore(paths.store) });
+      const receipt = await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: paths.store });
       // 5 content bytes plus the journal batch, the scan cache, the tree copy,
       // the manifest and the cursor — every object a fold writes, which is what
       // `movedBytes` now means. Asserted exactly below in its own suite.
       expect(receipt).toMatchObject({ operation: 'fold', entries: 1, foldedEntries: 1, foldedSeq: 1 });
       expect(receipt.movedBytes).toBeGreaterThan(5);
       expect((await scanCache(paths.store))['hello.txt']?.kind).toBe('file');
-      expect(await readFoldedSeq(new FileCasStore(paths.store))).toBe(1);
-      const blob = await readFile(join(paths.store, blobKey('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824')));
+      expect(await readFoldedSeq(paths.store)).toBe(1);
+      const blob = paths.store.objects.get(blobKey('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'));
       expect(new TextDecoder().decode(blob)).toBe('hello');
     } finally {
       await rm(paths.root, { recursive: true, force: true });
@@ -239,7 +310,7 @@ describe('overlay CAS runner', () => {
     const paths = await fixture('symlink');
     try {
       await symlink('../outside', join(paths.upper, 'link'));
-      const receipt = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      const receipt = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
       expect(receipt.entries).toBe(1);
       expect((await scanCache(paths.store)).link).toMatchObject({ kind: 'symlink', target: '../outside' });
     } finally {
@@ -251,7 +322,7 @@ describe('overlay CAS runner', () => {
     try {
       await writeFile(join(paths.upper, 'a.txt'), 'same inode');
       await link(join(paths.upper, 'a.txt'), join(paths.upper, 'b.txt'));
-      const receipt = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      const receipt = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
       expect(receipt.entries).toBe(2);
       const cached = await scanCache(paths.store);
       expect(cached['a.txt']?.inode).toBe(cached['b.txt']?.inode);
@@ -264,9 +335,9 @@ describe('overlay CAS runner', () => {
     const paths = await fixture('restore');
     try {
       await writeFile(join(paths.upper, 'pending.txt'), 'restore me');
-      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
       await rm(join(paths.upper, 'pending.txt'));
-      const receipt = await runOverlayRunner({ operation: 'restore', upper: paths.upper, store: new FileCasStore(paths.store) });
+      const receipt = await runOverlayRunner({ operation: 'restore', upper: paths.upper, store: paths.store });
       expect(receipt).toMatchObject({ operation: 'restore', entries: 1 });
       expect(await readFile(join(paths.upper, 'pending.txt'), 'utf8')).toBe('restore me');
     } finally {
@@ -289,11 +360,11 @@ describe('overlay CAS runner', () => {
       const stamp = new Date(1_700_000_000_000);
       await writeFile(file, 'aaaa');
       await utimes(file, stamp, stamp);
-      expect((await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) })).entries)
+      expect((await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store })).entries)
         .toBe(1);
       await writeFile(file, 'bbbb');
       await utimes(file, stamp, stamp);
-      const second = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      const second = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
       expect(second.entries).toBe(0);
       expect(second.movedBytes).toBe(0);
     } finally {
@@ -307,9 +378,9 @@ describe('overlay CAS runner', () => {
     const paths = await fixture('cache-refused');
     try {
       await writeFile(join(paths.upper, 'a.txt'), 'body');
-      await writeFile(join(paths.store, 'scan.json'), '{"version":1,"signatures":{"a.txt":"nonsense"}}\n');
+      await paths.store.put('scan.json', new TextEncoder().encode('{"version":1,"signatures":{"a.txt":"nonsense"}}\n'));
       const receipt = await runOverlayRunner({
-        operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store),
+        operation: 'checkpoint', upper: paths.upper, store: paths.store,
       });
       expect(receipt.entries).toBe(1);
       expect((await scanCache(paths.store))['a.txt']?.hash).toBe(sha256('body'));
@@ -327,15 +398,14 @@ describe('overlay CAS runner', () => {
     try {
       const file = join(paths.upper, 'doc.txt');
       await writeFile(file, 'version-one');
-      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
       await writeFile(file, 'version-two-longer');
-      const receipt = await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: new FileCasStore(paths.store) });
+      const receipt = await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: paths.store });
 
       expect(receipt.sweptBlobs).toBe(1);
-      await expect(readFile(join(paths.store, blobKey(sha256('version-one'))))).rejects.toThrow();
-      expect(await readFile(join(paths.store, blobKey(sha256('version-two-longer'))), 'utf8'))
-        .toBe('version-two-longer');
-      expect(await readFile(join(paths.store, 'tree/doc.txt'), 'utf8')).toBe('version-two-longer');
+      expect(paths.store.objects.has(blobKey(sha256('version-one')))).toBe(false);
+      expect(text(paths.store.objects.get(blobKey(sha256('version-two-longer'))))).toBe('version-two-longer');
+      expect(text(paths.store.objects.get('tree/doc.txt'))).toBe('version-two-longer');
     } finally {
       await rm(paths.root, { recursive: true, force: true });
     }
@@ -345,13 +415,13 @@ describe('overlay CAS runner', () => {
     const paths = await fixture('no-sweep');
     try {
       await writeFile(join(paths.upper, 'doc.txt'), 'one');
-      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
       await writeFile(join(paths.upper, 'doc.txt'), 'two-longer');
       const receipt = await runOverlayRunner({
-        operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store),
+        operation: 'checkpoint', upper: paths.upper, store: paths.store,
       });
       expect(receipt.sweptBlobs).toBe(0);
-      expect(await readFile(join(paths.store, blobKey(sha256('one'))), 'utf8')).toBe('one');
+      expect(text(paths.store.objects.get(blobKey(sha256('one'))))).toBe('one');
     } finally {
       await rm(paths.root, { recursive: true, force: true });
     }
@@ -373,11 +443,11 @@ describe('overlay CAS runner', () => {
 // platform premise, not something a test in this process can observe.
 
 /** One restore against a watched store, and everything it was asked for. */
-async function watchedRestore(paths: { upper: string; store: string }): Promise<{
-  readonly receipt: Awaited<ReturnType<typeof runOverlayRunner>>;
+async function watchedRestore(paths: { upper: string; store: CasStore }): Promise<{
+  readonly receipt: OverlayRunnerReceipt;
   readonly watched: WatchedCasStore;
 }> {
-  const watched = new WatchedCasStore(new FileCasStore(paths.store));
+  const watched = new WatchedCasStore(paths.store);
   const receipt = await runOverlayRunner({ operation: 'restore', upper: paths.upper, store: watched });
   return { receipt, watched };
 }
@@ -480,9 +550,9 @@ describe('attach cost — fixed when nothing is pending, whatever the tree holds
       const folded = 'x'.repeat(40_000);
       const pending = 'the only bytes a replay may read';
       await writeFile(join(paths.upper, 'folded.bin'), folded);
-      await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: paths.store });
       await writeFile(join(paths.upper, 'pending.txt'), pending);
-      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
 
       // The container is replaced: the upper is gone, the store is not.
       await rm(paths.upper, { recursive: true, force: true });
@@ -518,9 +588,9 @@ describe('attach cost — fixed when nothing is pending, whatever the tree holds
     try {
       const file = join(paths.upper, 'twice.txt');
       await writeFile(file, 'first version');
-      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
       await writeFile(file, 'second version!');
-      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
 
       await rm(paths.upper, { recursive: true, force: true });
       await mkdir(paths.upper);
@@ -549,7 +619,7 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
     const paths = await fixture('tick-bytes');
     try {
       await writeFile(join(paths.upper, 'hello.txt'), 'hello');
-      const watched = new WatchedCasStore(new FileCasStore(paths.store));
+      const watched = new WatchedCasStore(paths.store);
       const receipt = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: watched });
 
       expect(receipt.movedBytes).toBe(bytesWritten(watched));
@@ -574,12 +644,12 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
     try {
       const body = 'bytes that survive a rename';
       await writeFile(join(paths.upper, 'before.txt'), body);
-      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: paths.store });
 
       await rm(join(paths.upper, 'before.txt'));
       await writeFile(join(paths.upper, '.wh.before.txt'), '');
       await writeFile(join(paths.upper, 'after.txt'), body);
-      const watched = new WatchedCasStore(new FileCasStore(paths.store));
+      const watched = new WatchedCasStore(paths.store);
       const receipt = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: watched });
 
       expect(receipt.entries).toBe(2);
@@ -607,11 +677,11 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
         await utimes(file, stamp, stamp);
       }
       const first = await runOverlayRunner({
-        operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store),
+        operation: 'checkpoint', upper: paths.upper, store: paths.store,
       });
       expect(first.entries).toBe(40);
 
-      const watched = new WatchedCasStore(new FileCasStore(paths.store));
+      const watched = new WatchedCasStore(paths.store);
       const idle = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: watched });
 
       expect(idle.entries).toBe(0);
@@ -651,11 +721,11 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
         await mkdir(join(paths.upper, 'shadowed'));
         await writeFile(join(paths.upper, 'shadowed', '.wh..wh..opq'), '');
         const first = await runOverlayRunner({
-          operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store),
+          operation: 'checkpoint', upper: paths.upper, store: paths.store,
         });
         expect(first.entries).toBe(10);
 
-        const watched = new WatchedCasStore(new FileCasStore(paths.store));
+        const watched = new WatchedCasStore(paths.store);
         const idle = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: watched });
 
         expect(idle.entries).toBe(0);
@@ -684,12 +754,12 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
     try {
       await writeFile(join(paths.upper, 'kept.txt'), 'already journalled');
       const first = await runOverlayRunner({
-        operation: 'checkpoint', upper: paths.upper, store: new FileCasStore(paths.store),
+        operation: 'checkpoint', upper: paths.upper, store: paths.store,
       });
       expect(first.entries).toBe(1);
-      await rm(join(paths.store, 'scan.json'));
+      await paths.store.delete('scan.json');
 
-      const watched = new WatchedCasStore(new FileCasStore(paths.store));
+      const watched = new WatchedCasStore(paths.store);
       const again = await runOverlayRunner({ operation: 'checkpoint', upper: paths.upper, store: watched });
 
       expect(again.entries).toBe(0);
@@ -698,7 +768,7 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
       expect(again.movedBytes).toBeGreaterThan(0);
       // No second journal batch: the change was already recorded, and recording
       // it twice is what the pending-state filter exists to prevent.
-      expect(await readFoldedSeq(new FileCasStore(paths.store))).toBe(0);
+      expect(await readFoldedSeq(paths.store)).toBe(0);
       expect(Object.keys(await scanCache(paths.store))).toEqual(['kept.txt']);
       expect(watched.keys('put').filter(key => key.startsWith(PREFIX_JOURNAL))).toEqual([]);
     } finally {
@@ -711,7 +781,7 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
       const paths = await fixture('fold-bytes');
       try {
         await writeFile(join(paths.upper, 'doc.txt'), 'folded body');
-        const watched = new WatchedCasStore(new FileCasStore(paths.store));
+        const watched = new WatchedCasStore(paths.store);
         const receipt = await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: watched });
 
         expect(receipt).toMatchObject({ entries: 1, foldedEntries: 1, foldedSeq: 1 });
@@ -738,7 +808,7 @@ describe('the receipt’s byte figure is the bytes that were written', () => {
     const paths = await fixture('commit-order');
     try {
       await writeFile(join(paths.upper, 'ordered.txt'), 'ordered body');
-      const watched = new WatchedCasStore(new FileCasStore(paths.store));
+      const watched = new WatchedCasStore(paths.store);
       await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: watched });
 
       const trace = watched.trace();

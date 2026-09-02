@@ -27,10 +27,10 @@ import type {
   RestoreWork,
   RootEnvelopeV1,
 } from '../src/durability/contracts';
-import { FileCasStore, runOverlayRunner } from '../src/cas/overlay-runner';
+import { runOverlayRunner } from '../src/cas/overlay-runner';
 import { overlayCasStorage, type OverlayCasPorts } from '../src/overlay-cas';
 import type { AttachOutcome } from '../src/storage';
-import { WatchedCasStore, treeHeavyStore } from './support/cas-cost-probe';
+import { MemoryCasStore, WatchedCasStore, treeHeavyStore } from './support/cas-cost-probe';
 
 const SHA = 'a'.repeat(64);
 const object = { key: 'v1/boxes/box/attempts/op/try/data-a', byteLength: '12', sha256: SHA };
@@ -366,19 +366,19 @@ async function measureAttach(
   const root = await mkdtemp(join(tmpdir(), 'overlay-attach-work-'));
   try {
     const upper = join(root, 'upper');
-    const store = join(root, 'store');
-    await Promise.all([mkdir(upper), mkdir(store)]);
+    await mkdir(upper);
+    const store = new MemoryCasStore();
     await treeHeavyStore(store, objects, foldedSeq);
     // Journalled through the real checkpoint, so what the attach replays is a
     // journal this release wrote rather than a fixture's idea of one.
     if (pending.length > 0) {
       for (const [name, body] of pending) await writeFile(join(upper, name), body);
-      await runOverlayRunner({ operation: 'checkpoint', upper, store: new FileCasStore(store) });
+      await runOverlayRunner({ operation: 'checkpoint', upper, store });
       await rm(upper, { recursive: true, force: true });
       await mkdir(upper);
     }
 
-    const watched = new WatchedCasStore(new FileCasStore(store));
+    const watched = new WatchedCasStore(store);
     let mounted = false;
     let mounts = 0;
     let replayUnits = 0;
@@ -389,6 +389,7 @@ async function measureAttach(
         mounts += 1;
       },
       unmountStore: async () => {},
+      storeMounted: async () => false,
       mountOverlay: async () => {
         mounts += 1;
         mounted = true;

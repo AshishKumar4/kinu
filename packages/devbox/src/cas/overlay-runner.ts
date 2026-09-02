@@ -1,25 +1,10 @@
 import * as v from 'valibot';
 
 import { createHash } from 'node:crypto';
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readlink,
-  readdir,
-  rename,
-  rm,
-  stat,
-  symlink,
-  utimes,
-  writeFile,
-} from 'node:fs/promises';
-import { closeSync, constants as FS, createWriteStream } from 'node:fs';
+import { lstat, open, readlink, readdir } from 'node:fs/promises';
+import { closeSync, constants as FS } from 'node:fs';
 import type { Stats } from 'node:fs';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import { dirname, join, relative, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 import { BeneathError, BeneathRoot } from '../native-openat2';
 import { describeThrown } from '../lifecycle';
@@ -60,8 +45,8 @@ const ScanCacheSchema = v.strictObject({
  * WHERE A RUN SPENT ITSELF, when someone asks it to say.
  *
  * A phase's milliseconds do not name its cost. Every phase below is a straight
- * line of store calls over a FUSE mount whose per-call latency dwarfs anything
- * local, so a row carries the store's own counter delta beside the wall time:
+ * line of store calls whose per-call latency dwarfs anything local, so a row
+ * carries the store's own counter delta beside the wall time:
  * a minute spent on two thousand metadata round trips and a minute spent moving
  * a gigabyte are the same number and different defects, and only the counters
  * tell them apart. `detail` carries whatever else that phase counted — paths
@@ -191,100 +176,62 @@ export function nextScanCache(
   return { signatures: next, changed };
 }
 
-function safeKey(key: string): string {
-  if (key.length === 0 || key.startsWith('/') || key.split('/').some(part => part === '' || part === '.' || part === '..')) {
+/**
+ * A key as the SDK's egress endpoint stores it. Every segment is
+ * percent-encoded the way s3fs encodes an object path (RFC 3986 unreserved
+ * characters only), because the endpoint keeps the path as it arrives and the
+ * lower mount looks `tree/` objects up by that spelling. A trailing `/` is a
+ * directory, never an empty segment.
+ */
+function encodedKey(key: string): string {
+  const parts = (key.endsWith('/') ? key.slice(0, -1) : key).split('/');
+  if (key.length === 0 || parts.some(part => part === '' || part === '.' || part === '..')) {
     throw new Error(`CAS store refused unsafe key: ${key}`);
   }
-  return key;
+  return key.split('/')
+    .map(part => encodeURIComponent(part).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`))
+    .join('/');
 }
 
-function modeBits(mode: number): number {
-  return mode & 0o7777;
+/** The four entities `escapeXML` in the endpoint's listing produces, `&amp;`
+ *  last so an escaped ampersand is not decoded twice. */
+function unescapeXml(text: string): string {
+  return text.replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
 }
 
 /**
- * A web `ReadableStream` as a Node async iterable, one chunk at a time.
+ * The store, over the SDK's egress endpoint for a mounted R2 binding:
+ * `http://r2.internal/<binding>/<key>`, path-style, no credential. Mounting the
+ * binding with `mountBucket` is what registers the host for interception and
+ * what makes every key here land under the mount's prefix; the s3fs mount
+ * itself is only the overlay's read-only lower from then on.
  *
- * `Readable.fromWeb` cannot take this stream, and the reason is a real one
- * rather than a types quirk to paper over: this file is compiled by TWO
- * programs — this package's own, and `packages/cf-backend`, which imports the
- * strategy — and they disagree about which `ReadableStream` a port declares.
- * Under cf-backend it is the Workers one, which has no `blob`/`text`/`bytes`/
- * `json`, and `fromWeb` requires node's own web stream type that does
- * (`TS2739` at the call site). A cast would assert a structural claim that is
- * false in one of the two programs. Reading through `getReader`, which both
- * spell identically, makes no claim at all.
+ * ONE REQUEST PER STORE CALL, and a PUT is complete when its receipt says so.
+ * The endpoint answers a PUT with R2's own ETag, which for a single-part
+ * upload is the MD5 of the body, so a PUT is verified against the bytes this
+ * process sent and not against a status alone. Nothing here writes a temp
+ * object and renames it: through the mount that rename was a server-side
+ * COPY plus a DELETE per object, and it was 97.9% of a 400 s tick (probe
+ * ocs09011400, 2026-09-01).
  *
- * IT STAYS A STREAM. One chunk is in flight at a time and nothing accumulates,
- * which is the whole reason this path exists: the blobs it writes are as large
- * as the files a workload produced.
- *
- * THE READER IS ALWAYS RELEASED, AND AN ABANDONED PRODUCER IS TOLD. A consumer
- * that stops early — a full disk, a broken pipe, `pipeline` destroying the
- * Readable after a write error — reaches this `finally` through the generator's
- * own `return`, so the producer is cancelled instead of waiting on a reader
- * nobody will read again.
+ * WHAT THE ENDPOINT KEEPS. `handlePutObject` forwards Content-Type and drops
+ * every `x-amz-meta-*` header (SDK 0.12.8, `sandbox-CPj2jsbz.js`). The mode
+ * and mtime are still sent, as s3fs spells them, because they are the object's
+ * POSIX facts and a conforming S3 store keeps them; on this platform the type
+ * survives and the mode does not, which is the fidelity the arm declares.
  */
-async function* webStreamChunks(stream: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
-  const reader = stream.getReader();
-  let drained = false;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        drained = true;
-        return;
-      }
-      if (value !== undefined) yield value;
-    }
-  } finally {
-    // Nothing to cancel on a stream that ended by itself. On one this consumer
-    // walked away from, cancel is the only thing that releases the producer —
-    // and its own rejection must not replace the failure already in flight.
-    if (!drained) {
-      try {
-        await reader.cancel();
-      } catch (cause) {
-        // RECORDED, NOT RETHROWN. The caller's error is the answer, so this one
-        console.error(
-          '[devbox] a reader this consumer walked away from did not cancel: '
-          + describeThrown({ cause }),
-        );
-      }
-    }
-    reader.releaseLock();
-  }
-}
-
-/** A CAS store backed by the container's RW R2 mount.
- *
- * It retains the object key layout and counter semantics of the R2 adapter.
- * chmod/mtime are deliberately applied after the atomic rename so s3fs can
- * translate them into the metadata read by the lower mount. */
-export class FileCasStore implements CasStore {
+export class HttpCasStore implements CasStore {
   readonly counters: StoreCounters = emptyCounters();
 
-  constructor(readonly root: string) {}
-
-  #path(key: string): string {
-    return join(this.root, safeKey(key));
-  }
+  constructor(private readonly base: string) {}
 
   async put(key: string, bytes: Uint8Array, meta?: CasPutMeta): Promise<void> {
     this.counters.putCalls += 1;
+    const response = await fetch(`${this.base}/${encodedKey(key)}`, {
+      method: 'PUT', headers: putHeaders(key, bytes.byteLength, meta), body: bodyOf(bytes),
+    });
+    await verifyReceipt(key, response, createHash('md5').update(bytes).digest('hex'));
     this.counters.bytesPut += bytes.byteLength;
-    const path = this.#path(key);
-    await mkdir(dirname(path), { recursive: true });
-    if (meta?.symlink === true) {
-      const temporary = `${path}.tmp-${crypto.randomUUID()}`;
-      await symlink(new TextDecoder().decode(bytes), temporary);
-      await rename(temporary, path);
-      return;
-    }
-    const temporary = `${path}.tmp-${crypto.randomUUID()}`;
-    await writeFile(temporary, bytes);
-    await rename(temporary, path);
-    await this.#applyMeta(path, meta);
   }
 
   async putStream(
@@ -293,105 +240,113 @@ export class FileCasStore implements CasStore {
     size: number,
     meta?: CasPutMeta,
   ): Promise<void> {
-    if (meta?.symlink === true) {
-      const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
-      if (bytes.byteLength !== size) throw new Error(`${key} streamed ${bytes.byteLength} bytes, expected ${size}`);
-      await this.put(key, bytes, meta);
-      return;
-    }
+    // THE SIZE IS THE ORACLE. The caller measured these bytes before the
+    // stream was read, and a short read is how a file still settling gets
+    // published as a complete object. The digest rides along so the receipt
+    // is checked against what actually went over the wire.
+    const digest = createHash('md5');
+    let landed = 0;
+    const counted = stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        landed += chunk.byteLength;
+        digest.update(chunk);
+        controller.enqueue(chunk);
+      },
+      flush(controller) {
+        // Content-Length already bounds what the wire accepts; a SHORT stream
+        // is the case only this side can refuse before a partial body is
+        // answered as an object.
+        if (landed !== size) controller.error(new Error(`${key} streamed ${landed} bytes, expected ${size}`));
+      },
+    }));
     this.counters.putCalls += 1;
-    const path = this.#path(key);
-    await mkdir(dirname(path), { recursive: true });
-    const temporary = `${path}.tmp-${crypto.randomUUID()}`;
-    let landed: number;
-    try {
-      await pipeline(Readable.from(webStreamChunks(stream)), createWriteStream(temporary));
-      landed = Number((await stat(temporary)).size);
-      // THE SIZE IS THE ORACLE. The caller measured these bytes before the
-      // stream was read, and a short read is how a file still settling gets
-      // published as a complete blob.
-      if (landed !== size) throw new Error(`${key} streamed ${landed} bytes, expected ${size}`);
-    } catch (error) {
-      // NO PARTIAL FILE OUTLIVES A FAILED PUT, and the rename below is why: it
-      // is what publishes, so a temp left behind corrupts nothing — it is bytes
-      // under this box's prefix that no key names, and a `.tmp-<uuid>` name is
-      // one no sweep can recognise, so the leak would be permanent. The stream
-      // failing mid-flight and the size disagreeing are one exit for that
-      // reason.
-      try {
-        await rm(temporary, { force: true });
-      } catch (cause) {
-        // RECORDED, NOT RETHROWN. The put's own error is the answer. This one
-        // says a `.tmp-<uuid>` file no key names was left under the prefix, and
-        // no sweep can recognise that name, so the leak is permanent and silence
-        // about it is the worst outcome.
-        console.error(
-          `[devbox] a failed put left ${temporary} behind: `
-          + describeThrown({ cause }),
-        );
-      }
-      throw error;
-    }
-    await rename(temporary, path);
-    await this.#applyMeta(path, meta);
-    this.counters.bytesPut += landed;
+    const response = await fetch(`${this.base}/${encodedKey(key)}`, {
+      method: 'PUT', headers: putHeaders(key, size, meta), body: counted,
+    });
+    await verifyReceipt(key, response, digest.digest('hex'));
+    this.counters.bytesPut += size;
   }
 
   async get(key: string): Promise<Uint8Array | null> {
     this.counters.getCalls += 1;
-    try {
-      const file = Bun.file(this.#path(key));
-      if (!(await file.exists())) return null;
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      this.counters.bytesGot += bytes.byteLength;
-      return bytes;
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
-      throw error;
+    const response = await fetch(`${this.base}/${encodedKey(key)}`);
+    if (response.status === 404) {
+      await response.arrayBuffer();
+      return null;
     }
-  }
-
-  async head(key: string): Promise<{ size: number } | null> {
-    this.counters.headCalls += 1;
-    try {
-      return { size: Number((await lstat(this.#path(key))).size) };
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
-      throw error;
-    }
+    if (response.status !== 200) throw await refused('GET', key, response);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    this.counters.bytesGot += bytes.byteLength;
+    return bytes;
   }
 
   async delete(key: string): Promise<void> {
     this.counters.deleteCalls += 1;
-    await rm(this.#path(key), { force: true, recursive: true });
+    const response = await fetch(`${this.base}/${encodedKey(key)}`, { method: 'DELETE' });
+    if (!response.ok) throw await refused('DELETE', key, response);
+    await response.arrayBuffer();
   }
 
+  /** Every key under `prefix`, one request per page of at most 1000. */
   async list(prefix: string): Promise<string[]> {
-    this.counters.listCalls += 1;
-    const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
-    const base = join(this.root, safeKey(normalized));
-    try {
-      const found: string[] = [];
-      for await (const entry of walk(base)) {
-        if ((await lstat(entry)).isDirectory()) continue;
-        const key = relative(this.root, entry).split(sep).join('/');
-        if (key.startsWith(prefix)) found.push(key);
+    const keys: string[] = [];
+    let token: string | undefined;
+    do {
+      this.counters.listCalls += 1;
+      const query = new URLSearchParams({ 'list-type': '2', prefix, 'max-keys': '1000' });
+      if (token !== undefined) query.set('continuation-token', token);
+      const response = await fetch(`${this.base}/?${query.toString()}`);
+      if (response.status !== 200) throw await refused('LIST', prefix, response);
+      const page = await response.text();
+      for (const match of page.matchAll(/<Key>([^<]*)<\/Key>/g)) {
+        keys.push(decodeURIComponent(unescapeXml(match[1] ?? '')));
       }
-      return found.sort();
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
-      throw error;
-    }
+      const next = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(page)?.[1];
+      token = next === undefined ? undefined : unescapeXml(next);
+    } while (token !== undefined);
+    return keys.sort();
   }
+}
 
-  async #applyMeta(path: string, meta?: CasPutMeta): Promise<void> {
-    if (meta === undefined) return;
-    await chmod(path, modeBits(meta.mode));
-    if (meta.mtimeMs !== undefined) {
-      const time = new Date(meta.mtimeMs);
-      await utimes(path, time, time);
-    }
+function putHeaders(key: string, size: number, meta: CasPutMeta | undefined): Headers {
+  const headers = new Headers({
+    'content-length': String(size),
+    'content-type': key.endsWith('/') ? 'application/x-directory' : 'application/octet-stream',
+  });
+  if (meta !== undefined) {
+    headers.set('x-amz-meta-mode', String(meta.mode));
+    if (meta.mtimeMs !== undefined) headers.set('x-amz-meta-mtime', (meta.mtimeMs / 1000).toFixed(3));
   }
+  return headers;
+}
+
+/** The same bytes, no copy, as a view over their own `ArrayBuffer`: the type a
+ *  request body takes under the Workers program that also compiles this file.
+ *  Nothing here ever hands a shared buffer to a request, so that is refused
+ *  rather than sliced. */
+function bodyOf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const { buffer } = bytes;
+  if (!(buffer instanceof ArrayBuffer)) throw new Error('a shared buffer cannot be a request body');
+  return new Uint8Array(buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+/** A PUT is confirmed by a 200 whose ETag is the MD5 of the body sent. */
+async function verifyReceipt(key: string, response: Response, md5: string): Promise<void> {
+  const etag = response.headers.get('etag')?.replace(/^"|"$/g, '');
+  if (response.status === 200 && etag === md5) {
+    await response.arrayBuffer();
+    return;
+  }
+  const words = (await response.text()).trim().slice(0, 200);
+  throw new Error(
+    `the store did not confirm ${key}: HTTP ${response.status}, ETag ${etag ?? 'absent'} for a body of `
+    + `MD5 ${md5}${words.length > 0 ? ` (${words})` : ''}`,
+  );
+}
+
+async function refused(verb: string, key: string, response: Response): Promise<Error> {
+  const words = (await response.text()).trim().slice(0, 200);
+  return new Error(`${verb} ${key}: HTTP ${response.status}${words.length > 0 ? ` ${words}` : ''}`);
 }
 
 async function* walk(root: string): AsyncGenerator<string> {
@@ -615,14 +570,14 @@ async function materializePending(
  * One run: what to do, the upper to do it against, and the OPEN store to do it
  * through.
  *
- * `store` is an open `CasStore` rather than the `--store` path, because
+ * `store` is an open `CasStore` rather than the `--store` endpoint, because
  * `movedBytes` below is defined as a delta on its counters. A caller holding
  * the instance can read the whole bill — which keys were fetched, how many
  * listings were paid for, what was written — and check the receipt against it.
- * A runner that opened its own store from a path would make that claim
+ * A runner that opened its own store from an endpoint would make that claim
  * unobservable from outside the process, which is how the attach cost went
  * unmeasured long enough to grow a prefix inventory. `cliRequest` is the one
- * place a path becomes a store.
+ * place an endpoint becomes a store.
  */
 export type OverlayRunnerRequest = {
   readonly operation: 'checkpoint' | 'fold' | 'restore';
@@ -664,7 +619,7 @@ export type OverlayRunnerReceipt = {
   readonly foldedSeq: number;
 };
 
-/** Run the CAS mutation beside the mounted R2 prefix; the DO receives only the receipt. */
+/** Run the CAS mutation beside the mounted prefix; the DO receives only the receipt. */
 export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<OverlayRunnerReceipt> {
   const { operation, upper, store, profile } = request;
   const phase = profiler(store, profile);
@@ -774,8 +729,8 @@ export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<O
   };
 }
 
-/** The CLI's argv, with `--store PATH` opened into the store the run measures
- *  itself against. This is the one place a path becomes a store.
+/** The CLI's argv, with `--store URL` opened into the store the run measures
+ *  itself against. This is the one place an endpoint becomes a store.
  *
  *  `--profile stderr` asks for the phase breakdown. It goes to STDERR because
  *  stdout carries the receipt and exactly one line of it, and a diagnostic that
@@ -786,7 +741,7 @@ function cliRequest(argv: readonly string[]): OverlayRunnerRequest {
     const key = argv[at];
     const value = argv[at + 1];
     if (key === undefined || value === undefined || !key.startsWith('--')) {
-      throw new Error('usage: overlay-cas-runner --operation checkpoint|fold --upper PATH --store PATH');
+      throw new Error('usage: overlay-cas-runner --operation checkpoint|fold|restore --upper PATH --store URL');
     }
     values.set(key.slice(2), value);
   }
@@ -795,9 +750,9 @@ function cliRequest(argv: readonly string[]): OverlayRunnerRequest {
   const store = values.get('store');
   if ((operation !== 'checkpoint' && operation !== 'fold' && operation !== 'restore')
     || upper === undefined || store === undefined) {
-    throw new Error('usage: overlay-cas-runner --operation checkpoint|fold|restore --upper PATH --store PATH');
+    throw new Error('usage: overlay-cas-runner --operation checkpoint|fold|restore --upper PATH --store URL');
   }
-  const request: OverlayRunnerRequest = { operation, upper, store: new FileCasStore(store) };
+  const request: OverlayRunnerRequest = { operation, upper, store: new HttpCasStore(store) };
   if (values.get('profile') !== 'stderr') return request;
   return {
     ...request,

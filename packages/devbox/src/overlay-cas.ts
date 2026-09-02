@@ -103,32 +103,27 @@
  * 24 — s3fs serializes. A perfect pool leaves the floor at ~1,020 ms per
  * publication.
  *
- * WHY THAT FLOOR IS THE STRATEGY AND NOT AN IMPLEMENTATION. Every changed file
- * must be published TWICE through this mount: once as a chunk blob, because the
- * store is content-addressed, and once as a `tree/` object, because `tree/` is
- * the fuse-overlayfs read-only LOWER and s3fs can only serve it as real objects
- * carrying real POSIX mode and mtime. So the floor is 2 × 1,020 ms per changed
- * file even with concurrency saturated:
+ * WHY THAT FLOOR WAS THE MOUNT AND NOT THE ALGORITHM. Every changed file is
+ * published TWICE: once as a chunk blob, because the store is content-addressed,
+ * and once as a `tree/` object, because `tree/` is the fuse-overlayfs read-only
+ * LOWER and s3fs can only serve it as real objects. Through the mount each of
+ * those was a write-temp-then-rename — an upload on close, a server-side COPY
+ * and a DELETE — plus a HEAD per new blob asking whether bytes nobody had
+ * written were there. So the floor was 2 × 1,020 ms per changed file even with
+ * concurrency saturated:
  *
  *   128 files (this suite's 1 MB tree)  ≥   261 s  vs an 83,000 ms ceiling
  *   2,525 files (its 30 MiB npm tree)   ≥ 86 min
  *
- * Three point one times over the suite's own ceiling in the BEST case, and
- * 11.4× over it as implemented. Neither exit from that floor leaves the
- * strategy intact. Publish the changed set as one archive instead of per-file
- * objects and there is no lower to mount — that is snapshot-chain and
- * merkle-pack. Write `tree/` through the R2 binding instead of the mount and
- * the payload crosses the Durable Object isolate, which is the one thing the
- * paragraph above this measurement exists to forbid. Either way what remains is
- * not a content-addressed overlay.
- *
- * So the headline at the top of this file is TRUE AND INSUFFICIENT. Attach
- * really is O(pending change) with no payload byte, the tick's class-A cost
- * really is blobs plus batches rather than a PUT per path, and the scan really
- * is bounded by the change. The strategy is eliminated on the term none of
- * those describe: what it costs to put a changed file into R2 through a FUSE
- * mount, times the number of changed files. It is kept in the tree as a
- * measured arm, not as a candidate default.
+ * SINCE 2026-09-02 THE RUNNER DOES NOT WRITE THROUGH THE MOUNT. It stores
+ * through the SDK's egress endpoint the mount rides (`casStoreUrl`): one PUT
+ * per object with the store's own receipt, no temp object, no rename, no HEAD
+ * per blob, and the payload crosses the container's proxy exactly as the
+ * mount's own uploads did — never the Durable Object isolate. The algorithm is
+ * unchanged: two objects per changed file, one journal object per batch, a
+ * fold per quiesce. Every row above describes the mount path and stands as
+ * the labelled record of it; nothing has measured this path yet, and the
+ * verdict on the arm belongs to the run that does.
  *
  * REPRODUCE IT: `--profile stderr` on the runner prints one `[profile]` line
  * per phase — wall time, the store counter delta, and what that phase counted.
@@ -154,15 +149,26 @@ import type { OverlayRunnerReceipt } from './cas/overlay-runner';
 /**
  * Where this box's whole prefix is mounted read-write inside the container.
  *
- * ONE mount, not two. It is the runner's `--store`, and the folded `tree/`
- * under it is the overlay's lower, so the bytes a fold writes and the bytes the
- * lower serves are the same objects reached through the same mount. Credentials
- * never leave the Durable Object.
+ * ONE mount, and the runner does not write through it. The folded `tree/`
+ * under it is the overlay's lower, and mounting the binding is what registers
+ * the SDK's egress endpoint the runner stores through ({@link casStoreUrl}),
+ * so the objects a fold writes and the objects the lower serves are the same
+ * objects reached two ways. Credentials never leave the Durable Object.
  */
 export const CAS_STORE_MOUNT = `${DEVBOX_RUNTIME_DIR}/cas-store`;
 
 /** The materialized tree inside that mount: the overlay's read-only lower. */
 export const CAS_TREE_MOUNT = `${CAS_STORE_MOUNT}/tree`;
+
+/**
+ * The runner's `--store`: the SDK's egress endpoint for the mounted binding,
+ * `http://r2.internal/<binding>`. The endpoint puts every key under the
+ * mount's own prefix, so the runner's relative keys land exactly where the
+ * lower reads them. Valid only while {@link CAS_STORE_MOUNT} is mounted.
+ */
+export function casStoreUrl(binding: string): string {
+  return `http://r2.internal/${binding}`;
+}
 
 /** The overlay upper. The runner scans it and replays into it; nothing else
  *  writes there. Only `/workspace` is supplied by the image — this path is ours
@@ -196,6 +202,9 @@ export interface OverlayCasPorts {
    */
   mountStore(): Promise<void>;
   unmountStore(): Promise<void>;
+  /** Is this box's prefix mounted at {@link CAS_STORE_MOUNT} on THIS container
+   *  right now? Read from `/proc/mounts`, like {@link overlayMounted}. */
+  storeMounted(): Promise<boolean>;
   /** Lay fuse-overlayfs over {@link CAS_TREE_MOUNT} and {@link CAS_UPPER_DIR}
    *  at the work directory. Throws with the container's own words when the
    *  mount is refused. */
@@ -364,11 +373,18 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
       ports.log(`${DEVBOX_WORKDIR} already attached — attach skipped`);
       return { kind: 'already-attached', detail: 'overlay-cas overlay already mounted' };
     }
-    // A mount left by a previous container generation is released first. The
-    // host swallows "not mounted", which is the ordinary case on a fresh spot
-    // container, and reports anything else.
-    await ports.unmountStore();
-    await ports.mountStore();
+    // A store mount still standing on this container is ADOPTED, not remade:
+    // an isolate reset after the mount — or after the replay, before the
+    // overlay — comes back to a container whose mount is up and whose SDK
+    // registry is blank, so releasing it fails and mounting over it is refused
+    // (cell 6.9). Only a fresh container has nothing at the path, and there a
+    // mount left by a previous container generation is released first: the
+    // host swallows "not mounted", the ordinary case, and reports anything
+    // else. The replay is idempotent, so it runs either way.
+    if (!await ports.storeMounted()) {
+      await ports.unmountStore();
+      await ports.mountStore();
+    }
     const restored = await runner('restore');
     // AFTER THE REPLAY, BEFORE THE MOUNT. Anything in the bare work directory
     // was written while no overlay existed — a container replaced under an

@@ -28,6 +28,7 @@ import {
   blobKey,
   decodeJson,
   encodeJson,
+  treeDirKey,
   treeKey,
   type CasStore,
   type FileEntry,
@@ -41,6 +42,9 @@ import {
 const S_IFREG = 32_768;
 /** `S_IFLNK`. The object body is the raw target. */
 const S_IFLNK = 40_960;
+/** `S_IFDIR`. The object is empty; its key ends in `/`. */
+const S_IFDIR = 16_384;
+const EMPTY = new Uint8Array(0);
 
 export interface StageBlobsResult {
   readonly uploaded: number;
@@ -70,6 +74,12 @@ export interface StageBlobsOptions {
 /**
  * Stage chunk blobs, in batches, and commit each batch once its bytes are
  * durable.
+ *
+ * A chunk the manifest or the pending journal already names is skipped with no
+ * store call; every other chunk is ONE PUT. Nothing asks the store first: a
+ * HEAD per new blob answered "absent" for every one of them on the deployed
+ * arm (128 HEAD beside 131 PUT, 2026-09-01), and a blob that did land before a
+ * crash costs one idempotent re-PUT on the redo instead.
  *
  * A file whose bytes no longer match the digest the journal recorded is STALE:
  * staging stops there rather than writing a journal object naming blobs that
@@ -124,7 +134,7 @@ async function uploadChunks(
     part.kind === 'data');
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index]!;
-    if (known.has(chunk.hash) || (await store.head(blobKey(chunk.hash))) !== null) {
+    if (known.has(chunk.hash)) {
       known.add(chunk.hash);
       skipped += 1;
       continue;
@@ -239,20 +249,28 @@ export async function foldJournalIntoTree(store: CasStore): Promise<FoldResult> 
       }
       case 'dir': {
         if (entry.opaque) {
-          for (const path of deepestFirst(manifest, `${entry.path}/`, false)) {
-            await store.delete(treeKey(path));
-            manifest.delete(path);
+          for (const held of deepestFirst(manifest, `${entry.path}/`, false)) {
+            await store.delete(held.kind === 'dir' ? treeDirKey(held.path) : treeKey(held.path));
+            manifest.delete(held.path);
             treeDeletes += 1;
           }
         }
+        // WRITTEN, not implied. A directory the lower only knew as the prefix
+        // of its files came back from a wake with a default mode, and an empty
+        // one did not come back at all (cell 6.13, 2026-09-02).
+        await store.put(treeDirKey(entry.path), EMPTY, {
+          mode: S_IFDIR | (entry.mode & 0o7777),
+          mtimeMs: entry.mtimeMs,
+        });
         manifest.set(entry.path, entry);
+        treeWrites += 1;
         break;
       }
       case 'delete': {
         let removedForEntry = 0;
-        for (const path of deepestFirst(manifest, `${entry.path}/`, true)) {
-          await store.delete(treeKey(path));
-          manifest.delete(path);
+        for (const held of deepestFirst(manifest, `${entry.path}/`, true)) {
+          await store.delete(held.kind === 'dir' ? treeDirKey(held.path) : treeKey(held.path));
+          manifest.delete(held.path);
           treeDeletes += 1;
           removedForEntry += 1;
         }
@@ -420,15 +438,17 @@ export async function sweepOrphanBlobs(store: CasStore): Promise<{
   return { listed: listed.length, deleted: orphans.length, deletedKeys: orphans };
 }
 
+/** Manifest entries under `prefix`, deepest first, so a subtree is deleted
+ *  children before parents. */
 function deepestFirst(
   manifest: ReadonlyMap<string, PresentEntry>,
   prefix: string,
   includeSelf: boolean,
-): string[] {
+): PresentEntry[] {
   const self = prefix.slice(0, -1);
-  return [...manifest.keys()]
-    .filter(path => path.startsWith(prefix) || (includeSelf && path === self))
-    .sort((a, b) => b.split('/').length - a.split('/').length || (a < b ? 1 : -1));
+  return [...manifest.values()]
+    .filter(held => held.path.startsWith(prefix) || (includeSelf && held.path === self))
+    .sort((a, b) => b.path.split('/').length - a.path.split('/').length || (a.path < b.path ? 1 : -1));
 }
 
 export async function readManifest(store: CasStore): Promise<Map<string, PresentEntry>> {

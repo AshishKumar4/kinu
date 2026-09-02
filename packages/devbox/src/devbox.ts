@@ -110,6 +110,7 @@ import {
   CAS_TREE_MOUNT,
   CAS_UPPER_DIR,
   CAS_WORK_DIR,
+  casStoreUrl,
   normalizeOverlayCasState,
   overlayCasStorage,
   type OverlayCasPorts,
@@ -3252,9 +3253,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           prefix: `/${prefix}`, readOnly: false,
         });
         // The overlay's lower has to exist before fuse-overlayfs is handed it,
-        // and on a fresh prefix nothing has folded yet. Created THROUGH the
-        // mount, so the directory the runner writes `tree/` into and the one
-        // the lower serves are the same object.
+        // and on a fresh prefix nothing has folded yet.
         const lower = await this.#rawExec(`mkdir -p '${CAS_TREE_MOUNT}'`);
         if (lower.exitCode !== 0) {
           throw new Error(
@@ -3268,12 +3267,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           await this.unmountBucket(CAS_STORE_MOUNT);
         } catch (error) {
           // Not mounted is the ordinary case on a fresh container, and the SDK
-          // says so by throwing. Released THROUGH the SDK, never a raw
-          // fusermount3: the SDK keeps its own registry of the mounts it made
-          // and a kernel-level release leaves it claiming the path forever.
+          // says so by throwing. Released THROUGH the SDK: see the port's doc.
           console.log(`[devbox] cas store mount was not released: ${describe({ cause: error })}`);
         }
       },
+      storeMounted: async () => findMount(
+        (await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR)).stdout, CAS_STORE_MOUNT,
+      )?.fstype.includes('s3fs') === true,
       mountOverlay: async () => {
         const mounted = await this.#rawExec(
           `/usr/bin/fuse-overlayfs -o lowerdir='${CAS_TREE_MOUNT}'`
@@ -3332,7 +3332,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         isOverlayMounted((await this.#rawExec('cat /proc/mounts')).stdout, DEVBOX_WORKDIR),
       invokeRunner: async (operation) => await this.#rawExec(
         `bun '${CAS_RUNNER_PATH}' --operation '${operation}' --upper '${CAS_UPPER_DIR}' `
-        + `--store '${CAS_STORE_MOUNT}'`,
+        + `--store '${casStoreUrl(store.binding)}'`,
       ),
       inventory: async () => await prefixInventory(store.bucket, `${prefix}/`),
       clearPrefix: async () => {

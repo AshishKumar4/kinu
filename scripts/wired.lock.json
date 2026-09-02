@@ -665,7 +665,7 @@
   "packages/devbox/src/capture/stable-scan.ts#stableScan (unreached-export)",
   "packages/devbox/src/capture/view.ts#logView (unreached-export)",
   "packages/devbox/src/cas/hash.ts#digestBytes (unreached-export)",
-  "packages/devbox/src/cas/overlay-runner.ts#FileCasStore (unreached-export)",
+  "packages/devbox/src/cas/overlay-runner.ts#HttpCasStore (unreached-export)",
   "packages/devbox/src/cas/overlay-runner.ts#nextScanCache (unreached-export)",
   "packages/devbox/src/cas/overlay-runner.ts#runOverlayRunner (unreached-export)",
   "packages/devbox/src/cas/sync.ts#StageBlobsOptions.batchSize (unsupplied-field)",

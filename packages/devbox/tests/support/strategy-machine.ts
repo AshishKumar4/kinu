@@ -75,6 +75,7 @@ import {
   type StoreCounters,
 } from '../../src/cas';
 import { sha256Hex } from '../../src/cas/hash';
+import { byApplyOrder } from '../../src/cas/pending-state';
 import {
   build as buildBoundedLayers,
   isHoleExtent,
@@ -2067,12 +2068,6 @@ class DurableCasStore implements CasStore {
     return bytes;
   }
 
-  async head(key: string): Promise<{ size: number } | null> {
-    this.counters.headCalls += 1;
-    const held = this.durable.head(`${this.prefix}${key}`);
-    return held === null ? null : { size: held.size };
-  }
-
   async delete(key: string): Promise<void> {
     this.counters.deleteCalls += 1;
     this.durable.delete(`${this.prefix}${key}`);
@@ -2154,9 +2149,13 @@ function overlayCasArm(): ConformanceArm {
           container.whiteouts.add(entry.path);
           continue;
         }
-        // The current runner restores every non-file kind too. This machine
-        // keeps the byte workload here and declares the richer fidelity cell
-        // refused below; text durability still crosses the shipped stream.
+        // Every kind the shipped `materializePending` restores, less the ones
+        // the fidelity refusal below declares. A directory is made with the
+        // mode the journal carries, before the files under it.
+        if (entry.kind === 'dir') {
+          container.tree.plant([{ path: entry.path, kind: 'dir', mode: entry.mode, ino: 0 }]);
+          continue;
+        }
         if (entry.kind !== 'file') continue;
         const bytes = await drain(fileChunkStream(cas, entry));
         container.upper.set(entry.path, bytes);
@@ -2171,17 +2170,35 @@ function overlayCasArm(): ConformanceArm {
       });
     }
 
+    // The authority the shipped `PendingJournalState` holds: the folded
+    // manifest plus the pending journal, per path — and every chunk hash
+    // either names, which is what makes a blob known without asking the store.
     const manifest = await readManifest(cas);
     const foldedSeq = await readFoldedSeq(cas);
     const journalled = coalesce(await listJournalAfter(cas, foldedSeq));
     const known = new Map<string, string>();
-    for (const [path, entry] of manifest) if (entry.kind === 'file') known.set(path, entry.hash);
-    for (const entry of journalled) {
-      if (entry.kind === 'file') known.set(entry.path, entry.hash);
-      if (entry.kind === 'delete') known.delete(entry.path);
+    const knownDirs = new Map<string, number>();
+    const knownHashes = new Set<string>();
+    for (const entry of [...manifest.values(), ...journalled]) {
+      if (entry.kind === 'file') {
+        known.set(entry.path, entry.hash);
+        for (const part of entry.parts) if (part.kind === 'data') knownHashes.add(part.hash);
+      }
+      if (entry.kind === 'dir') knownDirs.set(entry.path, entry.mode);
+      if (entry.kind === 'delete') {
+        known.delete(entry.path);
+        knownDirs.delete(entry.path);
+      }
     }
+    // What `scanUpper` emits: a directory the first time it is seen or when
+    // its mode changed, a file whose bytes changed, a tombstone per whiteout.
     const fresh: NewJournalEntry[] = [];
-    for (const [path, bytes] of [...container.upper].sort(([a], [b]) => a < b ? -1 : 1)) {
+    for (const entry of container.tree.snapshot()) {
+      if (entry.kind === 'dir' && knownDirs.get(entry.path) !== entry.mode) {
+        fresh.push({ kind: 'dir', path: entry.path, mode: entry.mode, mtimeMs: 0, opaque: false });
+      }
+    }
+    for (const [path, bytes] of container.upper) {
       const digest = digestBytes(bytes);
       if (known.get(path) === digest.hash) continue;
       fresh.push({
@@ -2194,13 +2211,15 @@ function overlayCasArm(): ConformanceArm {
         parts: digest.parts,
       });
     }
-    for (const path of [...container.whiteouts].sort()) {
-      if (known.has(path)) fresh.push({ kind: 'delete', path });
+    for (const path of container.whiteouts) {
+      if (known.has(path) || knownDirs.has(path)) fresh.push({ kind: 'delete', path });
     }
+    fresh.sort(byApplyOrder);
     const nextSeq = (journalled.at(-1)?.seq ?? foldedSeq) + 1;
     const staged = await stageBlobs({
       store: cas,
       entries: stampEntries(fresh, nextSeq),
+      known: knownHashes,
       readChunk: async (entry, index, size) => {
         const held = container.upper.get(entry.path);
         if (held === undefined) return null;
@@ -2277,6 +2296,7 @@ function overlayCasArm(): ConformanceArm {
         container.disk.unmount(CAS_STORE_MOUNT);
         container.storeMounted = false;
       },
+      storeMounted: async () => container.storeMounted && !container.disk.dead && !container.disk.stopped,
       mountOverlay: async () => {
         if (container.disk.dead) throw new ContainerDied('mountOverlay on a dead container');
         container.overlay = true;
@@ -2351,7 +2371,9 @@ function overlayCasArm(): ConformanceArm {
       const found = new Set<string>(container.upper.keys());
       if (container.overlay) {
         for (const key of durable.list(`${prefix}/${PREFIX_TREE}`)) {
-          found.add(key.slice(`${prefix}/${PREFIX_TREE}`.length));
+          // A key ending in `/` is a directory object, which the text view
+          // neither lists nor reads.
+          if (!key.endsWith('/')) found.add(key.slice(`${prefix}/${PREFIX_TREE}`.length));
         }
       }
       for (const path of container.whiteouts) found.delete(path);
@@ -2382,10 +2404,17 @@ function overlayCasArm(): ConformanceArm {
       const treePrefix = `${prefix}/${PREFIX_TREE}`;
       for (const [key, held] of durable.objects) {
         if (!key.startsWith(treePrefix)) continue;
-        const path = key.slice(treePrefix.length);
         const mtimeNs = String(BigInt(held.meta.mtimeMs ?? '0') * 1_000_000n);
         const mode = Number(held.meta.mode ?? 0) & 0o7777;
         const metadata = { uid: 0, gid: 0, atimeNs: mtimeNs, mtimeNs, ctimeNs: mtimeNs, xattrs: {} };
+        // The lower as s3fs serves it: an object whose key ends in `/` is a
+        // directory, a symlink is marked, everything else is a file.
+        if (key.endsWith('/')) {
+          const path = key.slice(treePrefix.length, -1);
+          merged.set(path, { path, kind: 'dir', mode, ino: ino++, metadata });
+          continue;
+        }
+        const path = key.slice(treePrefix.length);
         merged.set(path, held.meta.symlink === 'true'
           ? { path, kind: 'symlink', mode, ino: ino++, metadata, target: decoder.decode(held.bytes) }
           : { path, kind: 'file', mode, ino: ino++, metadata, content: { kind: 'dense', bytes: held.bytes } });
