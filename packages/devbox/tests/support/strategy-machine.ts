@@ -789,7 +789,10 @@ function chainExec(
     // container reads its own staged archive and writes it onto the store
     // mount; `conv=fsync` is the flush, so the upload's success is this
     // command's exit code. Nothing is handed to the isolate.
-    const published = /^dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
+    // The copy, whatever precedes it: the publication creates the generation's
+    // directory on the mount in the same command, because s3fs shows no parent
+    // for a key nothing lives under yet.
+    const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
       .exec(command)?.groups;
     if (published !== undefined) {
       const landed = publish(published.archive!, published.mounted!);

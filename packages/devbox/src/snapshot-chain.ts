@@ -2527,7 +2527,16 @@ export function archiveCommand(input: {
  * ordinary container memory.
  */
 export function publishCommand(input: { archivePath: string; mountedPath: string }): string {
-  return `dd if=${shellPath(input.archivePath)} of=${shellPath(input.mountedPath)} `
+  // THE GENERATION'S DIRECTORY FIRST, in the same command. The mount covers the
+  // BOX's chain root, so an archive's target is `<mount>/<generation>/<name>` —
+  // and s3fs shows no parent for a key nothing lives under yet, so `dd` refuses
+  // with `failed to open …: No such file or directory`. Measured live, run
+  // e2e20260902083130, on the first checkpoint of a fresh box. `mkdir -p` on an
+  // s3fs mount writes the directory marker the copy then opens through, and it
+  // is idempotent for every later generation.
+  const parent = input.mountedPath.slice(0, input.mountedPath.lastIndexOf('/'));
+  return `mkdir -p ${shellPath(parent)}; `
+    + `dd if=${shellPath(input.archivePath)} of=${shellPath(input.mountedPath)} `
     + 'bs=4M conv=fsync; '
     + `rc=$?; printf '%s %s' "$rc" `
     + `"$(stat -c %s ${shellPath(input.mountedPath)} 2>/dev/null || echo 0)"`;

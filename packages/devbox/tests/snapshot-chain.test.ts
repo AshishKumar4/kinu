@@ -483,7 +483,11 @@ function harness(overrides: {
       // THE PUBLICATION IS A COMMAND, which is the whole change: the archive
       // moves because the container was told to copy it onto a mount, not
       // because a port handed bytes to the isolate.
-      const published = /^dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
+      // THE COPY, whatever precedes it in the same command: the publication
+      // creates the generation's directory on the mount first (s3fs shows no
+      // parent for a key nothing lives under yet), so the matcher reads the `dd`
+      // rather than the start of the line.
+      const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
         .exec(command)?.groups;
       if (published !== undefined) return Promise.resolve(publish(published.mounted!));
       // THE CONTAINER'S OWN VIEW: the strategy's `mountStoreOnce` reads
@@ -1968,6 +1972,17 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(read).toBeLessThan(wrote);
       // The flush is IN the command, not a separate hope.
       expect(publishCommand({ archivePath: 'a', mountedPath: 'b' })).toContain('conv=fsync');
+      // AND SO IS THE GENERATION'S DIRECTORY. The mount covers the box's chain
+      // root, so the target is `<mount>/<generation>/<name>`; s3fs shows no
+      // parent for a key nothing lives under yet, and `dd` then refuses with
+      // `No such file or directory` — measured live on the first checkpoint of a
+      // fresh box, run e2e20260902083130.
+      const command = publishCommand({
+        archivePath: '/stage/layer.sqsh',
+        mountedPath: `${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh`,
+      });
+      expect(command).toStartWith(`mkdir -p '${CHAIN_STORE_MOUNT}/${CHAIN_ID}';`);
+      expect(command.indexOf('mkdir -p')).toBeLessThan(command.indexOf('dd if='));
       // AND THE MOUNT IS STILL HELD: no unmount of the store path anywhere in
       // the commit, because the attach's layers are reading through it.
       expect(record.calls).not.toContain(`unmountStore:${CHAIN_STORE_MOUNT}`);
