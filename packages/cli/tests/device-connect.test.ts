@@ -1,10 +1,13 @@
 // Behavior tests for the device-connect module: the once-per-invocation
 // prompt latch with a cached device answer, the persisted don't-ask-again
 // config key, the session-daemon lifecycle (spawned tied to the CLI, killed
-// on exit, no-op next to a persistent daemon), connectDevice against a stub
+// on exit, no-op next to a running daemon), connectDevice against a stub
 // cloud origin, and the desktop command staying a thin shell over the module.
+// The daemon installed here is the one inside this CLI. The stub origin still
+// answers the retired /pc/daemon.js route, with poison, so a connect that
+// fetches executable bytes shows up as poison on disk.
 // Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
@@ -14,6 +17,7 @@ import { tolerate } from '@kinu.run/core/obs';
 import type { CloudDevice } from '../src/cloud-api';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
+import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];
@@ -43,26 +47,35 @@ interface StubCloud {
 
 interface StubCloudOptions {
   devices?: () => CloudDevice[];
-  /** Body appended to a protocol-shaped daemon source. */
-  daemonScript?: string;
-  /** Raw source for integrity-refusal cases. */
-  rawDaemonScript?: string;
-  daemonChecksum?: string;
-  daemonDownloadGate?: { release: Promise<void>; onArrival?: () => void };
+  /** Holds every registration until the test releases it. */
+  registerGate?: { release: Promise<void>; onArrival?: () => void };
   registrationFailure?: { status: number; error: string };
   /** The registration body, so a test can assert the NAME the CLI sent. */
   onRegister?: (body: { label?: string }) => void;
 }
 
-/** Minimal cloud origin: device register/list plus /pc/daemon.js. */
+/** The file the poisoned daemon writes if it ever runs. */
+const POISON_MARKER = 'poisoned-daemon-ran';
+
+/**
+ * What a compromised origin serves at /pc/daemon.js. It parses and carries the
+ * three strings the retired marker check looked for, so a CLI that downloads
+ * its daemon installs this and runs it as the user.
+ */
+const POISON_DAEMON = [
+  '// /pc/connect-ticket',
+  "const cancel = 'execCancel';",
+  "const rotate = 'ROTATE';",
+  "const fs = require('node:fs');",
+  "const path = require('node:path');",
+  `fs.writeFileSync(path.join(process.env.KINU_HOME, '${POISON_MARKER}'), 'ran');`,
+  'setInterval(() => {}, 1000);',
+].join('\n');
+
+/** Minimal cloud origin: device register/list, plus the retired daemon route
+ *  serving poison so any fetch of it is visible in the installed bytes. */
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0 };
-  const daemonSource = opts.rawDaemonScript ?? [
-    '// /pc/connect-ticket',
-    "const daemonCancelProtocol = 'execCancel';",
-    "const daemonRotationProtocol = 'ROTATE';",
-    opts.daemonScript ?? 'setInterval(() => {}, 1000);',
-  ].join('\n');
   const server = Bun.serve({
     port: 0,
     async fetch(req: Request): Promise<Response> {
@@ -71,6 +84,10 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
         hits.register += 1;
         const body = v.safeParse(v.object({ label: v.optional(v.string()) }), await req.json());
         opts.onRegister?.(body.success ? body.output : {});
+        if (opts.registerGate) {
+          opts.registerGate.onArrival?.();
+          await opts.registerGate.release;
+        }
         if (opts.registrationFailure) {
           return Response.json({ error: opts.registrationFailure.error }, { status: opts.registrationFailure.status });
         }
@@ -87,13 +104,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
       }
       if (url.pathname === '/pc/daemon.js') {
         hits.daemonScript += 1;
-        if (opts.daemonDownloadGate) {
-          opts.daemonDownloadGate.onArrival?.();
-          await opts.daemonDownloadGate.release;
-        }
-        const headers = new Headers({ 'content-type': 'text/javascript' });
-        if (opts.daemonChecksum !== undefined) headers.set('x-kinu-daemon-sha256', opts.daemonChecksum);
-        return new Response(daemonSource, { headers });
+        return new Response(POISON_DAEMON, { headers: { 'content-type': 'text/javascript' } });
       }
       return new Response('not found', { status: 404 });
     },
@@ -113,7 +124,9 @@ async function runScript(home: string, script: string, environment: Record<strin
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
-    env: { ...process.env, ...environment, KINU_HOME: home },
+    // The daemon started here is the real one: fence its in-flight root inside
+    // the test home so a run never reads or prunes the developer's own.
+    env: { ...process.env, KINU_INFLIGHT_ROOT: join(home, 'inflight'), ...environment, KINU_HOME: home },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -161,6 +174,54 @@ async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> 
     await Bun.sleep(25);
   }
   return false;
+}
+
+/** The pid in the machine's daemon pidfile, which the daemon claims itself. */
+async function waitForDaemonPid(home: string, timeoutMs = 10_000): Promise<number> {
+  const pidfile = join(home, 'pc-agent.pid');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(pidfile)) {
+      const pid = Number(readFileSync(pidfile, 'utf-8').trim());
+      if (Number.isInteger(pid) && pid > 0) return pid;
+    }
+    await Bun.sleep(25);
+  }
+  throw new Error(`no daemon claimed ${pidfile} within ${timeoutMs}ms`);
+}
+
+/** Every live process running the installed daemon at `script`. */
+function liveDaemons(script: string): number[] {
+  const found = Bun.spawnSync({ cmd: ['pgrep', '-f', script] });
+  return new TextDecoder().decode(found.stdout).split('\n').filter(Boolean).map(Number);
+}
+
+const DAEMON_PROBE_SCHEMA = v.object({
+  result: v.object({ kind: v.string(), deviceId: v.string() }),
+  runtime: v.string(),
+  command: v.string(),
+});
+
+/**
+ * Connect, then report the live daemon's own command line. `ps` is addressed by
+ * absolute path because these runs replace PATH to control which runtimes the
+ * CLI can see.
+ */
+function daemonRuntimeProbe(origin: string): string {
+  const ps = Bun.which('ps') ?? '/bin/ps';
+  return `
+    import { execFileSync } from 'node:child_process';
+    import { connectDevice, daemonStatus } from './packages/cli/src/device-connect.ts';
+    const result = await connectDevice({ origin: ${JSON.stringify(origin)}, token: 'ptc_test' }, { session: true });
+    let pid = daemonStatus().daemonPid;
+    for (let attempt = 0; pid === null && attempt < 100; attempt += 1) {
+      await Bun.sleep(50);
+      pid = daemonStatus().daemonPid;
+    }
+    const command = execFileSync(${JSON.stringify(ps)}, ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }).trim();
+    console.log(JSON.stringify({ result, runtime: process.execPath, command }));
+    process.exit(0);
+  `;
 }
 
 describe('device-connect prompt policy', () => {
@@ -221,53 +282,53 @@ describe('device-connect prompt policy', () => {
 });
 
 describe('device-connect daemon lifecycle', () => {
-  test('connectDevice session mode installs, verifies, and kills the daemon with the CLI', async () => {
-    // The fake daemon records its pid, then idles until SIGTERM.
-    const daemonScript = `
-      const fs = require('node:fs');
-      const path = require('node:path');
-      fs.writeFileSync(path.join(process.env.KINU_HOME, 'fake-daemon.pid'), String(process.pid));
-      setInterval(() => {}, 1000);
-    `;
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)], daemonScript });
+  test('connectDevice session mode installs the shipped daemon and kills it with the CLI', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const out = await runScript(home, `
       import { connectDevice, daemonStatus } from './packages/cli/src/device-connect.ts';
       const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
-      console.log(JSON.stringify({ result, status: daemonStatus() }));
+      // The daemon claims the machine's pidfile itself, in its own process, so
+      // this waits for that claim rather than assuming it already landed.
+      let status = daemonStatus();
+      for (let attempt = 0; status.daemonPid === null && attempt < 100; attempt += 1) {
+        await Bun.sleep(50);
+        status = daemonStatus();
+      }
+      console.log(JSON.stringify({ result, status }));
       process.exit(0);
     `);
 
     const { result, status } = v.parse(v.object({
       result: v.object({ kind: v.string(), deviceId: v.string() }),
-      status: v.object({ sessionActive: v.boolean(), persistentPid: v.nullable(v.number()) }),
+      status: v.object({ sessionActive: v.boolean(), daemonPid: v.nullable(v.number()) }),
     }), JSON.parse(out.trim()));
     expect(result).toEqual({ kind: 'connected', deviceId: 'dev_1' });
     expect(status.sessionActive).toBe(true);
-    expect(status.persistentPid).toBeNull(); // session mode never writes a pidfile
-    expect(existsSync(join(home, 'pc-agent.pid'))).toBe(false);
+    expect(status.daemonPid ?? 0).toBeGreaterThan(0); // the daemon holds the machine lock
 
-    // The daemon files came from the stub, not a reimplementation.
+    // The install came out of this CLI, and the origin was asked for nothing
+    // executable.
     expect(stub.hits.register).toBe(1);
-    expect(stub.hits.daemonScript).toBe(1);
+    expect(stub.hits.daemonScript).toBe(0);
+    // `root` is the directory the connect ran in, which runScript sets to the
+    // repository root: the daemon carries it to the hub as the consented tree.
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
-    expect(deviceConfig).toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin });
+    expect(deviceConfig).toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
 
     // The CLI process exited — its exit hook must have killed the session daemon.
-    const daemonPid = Number(readFileSync(join(home, 'fake-daemon.pid'), 'utf-8').trim());
-    expect(daemonPid).toBeGreaterThan(0);
-    expect(await waitForPidExit(daemonPid)).toBe(true);
-  });
+    expect(await waitForPidExit(status.daemonPid ?? 0)).toBe(true);
+  }, 20_000);
 
-  test('session mode is a no-op while a persistent daemon is running', async () => {
+  test('session mode is a no-op while a daemon is already running', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-    // A live "persistent daemon": a sleeper owned by the test, via the pidfile.
+    // A live daemon owner: a sleeper owned by the test, via the pidfile.
     const sleeper = Bun.spawn({ cmd: ['sleep', '30'] });
     sleepers.push(sleeper);
     writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
@@ -282,7 +343,7 @@ describe('device-connect daemon lifecycle', () => {
       result: v.object({ kind: v.string(), connected: v.boolean() }),
     }), JSON.parse(out.trim()));
     expect(result).toEqual({ kind: 'already-running', connected: false });
-    // No takeover: nothing registered, downloaded, or killed.
+    // No takeover: nothing registered, installed, or killed.
     expect(stub.hits.register).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
     expect(sleeper.killed).toBe(false);
@@ -291,40 +352,54 @@ describe('device-connect daemon lifecycle', () => {
 });
 
 describe('device-connect install hardening', () => {
-  test('refuses a checksum mismatch before replacing a complete prior install', async () => {
-    const stub = startStubCloud({
-      devices: () => [connectedDevice(true)],
-      daemonChecksum: '0'.repeat(64),
-    });
+  test('installs the daemon inside this CLI and fetches no executable bytes', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    const oldScript = '// retained daemon\n';
-    const oldConfig = '{"user":"old","token":"old-token","origin":"https://old.example"}\n';
-    writeFileSync(join(home, 'pc-agent.js'), oldScript, { mode: 0o700 });
-    writeFileSync(join(home, 'device.json'), oldConfig, { mode: 0o600 });
 
-    const failure = await scriptFailure(home, `
+    const out = await runScript(home, `
       import { connectDevice } from './packages/cli/src/device-connect.ts';
-      try {
-        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
-      } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
-      }
+      console.log(JSON.stringify(
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true }),
+      ));
+      process.exit(0);
     `);
 
-    expect(failure).toContain('checksum verification');
-    expect(failure).not.toContain('device-token');
-    expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(oldScript);
-    expect(readFileSync(join(home, 'device.json'), 'utf-8')).toBe(oldConfig);
+    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    // The origin serves poison at the retired route. Nothing asked for it, the
+    // bytes on disk are this CLI's own, and the poison never ran.
+    expect(stub.hits.daemonScript).toBe(0);
+    expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
+    expect(existsSync(join(home, POISON_MARKER))).toBe(false);
+  }, 20_000);
+
+  test('a tampered daemon on disk is replaced by the bytes this CLI ships', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    writeFileSync(join(home, 'pc-agent.js'), '// tampered daemon\n', { mode: 0o700 });
+    writeFileSync(join(home, 'device.json'), '{"user":"old","token":"old-token","origin":"https://old.example"}\n', { mode: 0o600 });
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      console.log(JSON.stringify(
+        await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true }),
+      ));
+      process.exit(0);
+    `);
+
+    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
+    expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8')))
+      .toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
+    expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
-  });
+  }, 20_000);
 
-  test('rejects a structurally invalid daemon before publishing either install file', async () => {
-    const stub = startStubCloud({
-      devices: () => [connectedDevice(true)],
-      rawDaemonScript: '<html>upstream gateway error</html>',
-    });
+  test('publishes neither install file when the daemon cannot be replaced', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    // A directory where the daemon file belongs: the replacement cannot land,
+    // so the config that would activate it is never published either.
+    mkdirSync(join(home, 'pc-agent.js'));
 
     const failure = await scriptFailure(home, `
       import { connectDevice } from './packages/cli/src/device-connect.ts';
@@ -336,14 +411,13 @@ describe('device-connect install hardening', () => {
       }
     `);
 
-    expect(failure).toContain('integrity verification');
+    expect(failure).toContain('installing the device daemon');
     expect(failure).not.toContain('device-token');
-    expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
     expect(existsSync(join(home, 'device.json'))).toBe(false);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
-  });
+  }, 20_000);
 
-  test('classifies a duplicate device name without downloading or installing anything', async () => {
+  test('classifies a duplicate device name without installing anything', async () => {
     const stub = startStubCloud({
       registrationFailure: { status: 409, error: 'device name already exists' },
     });
@@ -384,45 +458,27 @@ describe('device-connect install hardening', () => {
     expect(stub.hits.daemonScript).toBe(0);
   });
 
-  test('uses the running Bun when Node is absent from PATH', async () => {
-    const daemonScript = `
-      const fs = require('node:fs');
-      const path = require('node:path');
-      fs.writeFileSync(path.join(process.env.KINU_HOME, 'bun-daemon.pid'), String(process.pid));
-      fs.writeFileSync(path.join(process.env.KINU_HOME, 'bun-daemon.runtime'), process.versions.bun ? 'bun' : 'node');
-      setInterval(() => {}, 1000);
-    `;
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)], daemonScript });
+  test('starts the daemon on the running Bun when Node is absent from PATH', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     const pathWithoutNode = mkdtempSync(join(tmpdir(), 'kinu-no-node-'));
     tempDirs.push(pathWithoutNode);
 
-    const out = await runScript(home, `
-      import { connectDevice } from './packages/cli/src/device-connect.ts';
-      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
-      console.log(JSON.stringify(result));
-      process.exit(0);
-    `, { PATH: pathWithoutNode });
+    const out = await runScript(home, daemonRuntimeProbe(stub.origin), { PATH: pathWithoutNode });
 
-    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
-    const daemonPid = Number(readFileSync(join(home, 'bun-daemon.pid'), 'utf-8').trim());
-    expect(daemonPid).toBeGreaterThan(0);
-    expect(readFileSync(join(home, 'bun-daemon.runtime'), 'utf-8')).toBe('bun');
-    deviceDaemonPids.push(daemonPid);
-  });
+    const { result, runtime, command } = v.parse(DAEMON_PROBE_SCHEMA, JSON.parse(out.trim()));
+    expect(result).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    // The live daemon process is the CLI's own Bun running the installed file.
+    expect(command).toContain(runtime);
+    expect(command).toContain(join(home, 'pc-agent.js'));
+  }, 20_000);
 
   test('runs the daemon on the CLI Bun even when a WebSocket-less node sits on PATH', async () => {
     // The Mac defect: a PATH node that answers --version but has no global
     // WebSocket won daemonRuntime's probe and killed the daemon at startup.
     // The daemon's runtime is the Bun running this CLI — a PATH node is never
     // consulted, and this test's stub records every invocation to prove it.
-    const daemonScript = `
-      const fs = require('node:fs');
-      const path = require('node:path');
-      fs.writeFileSync(path.join(process.env.KINU_HOME, 'stub-proof.runtime'), process.versions.bun ? 'bun' : 'node');
-      setInterval(() => {}, 1000);
-    `;
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)], daemonScript });
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     const stubDir = mkdtempSync(join(tmpdir(), 'kinu-stub-node-'));
     tempDirs.push(stubDir);
@@ -436,23 +492,18 @@ describe('device-connect install hardening', () => {
       '',
     ].join('\n'), { mode: 0o755 });
 
-    const out = await runScript(home, `
-      import { connectDevice } from './packages/cli/src/device-connect.ts';
-      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
-      console.log(JSON.stringify(result));
-      process.exit(0);
-    `, { PATH: stubDir });
+    const out = await runScript(home, daemonRuntimeProbe(stub.origin), { PATH: stubDir });
 
-    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    const { result, runtime, command } = v.parse(DAEMON_PROBE_SCHEMA, JSON.parse(out.trim()));
+    expect(result).toEqual({ kind: 'connected', deviceId: 'dev_1' });
     // The stub node answered --version and was still never chosen.
     const calls = existsSync(`${join(stubDir, 'node')}.calls`)
       ? readFileSync(`${join(stubDir, 'node')}.calls`, 'utf-8')
       : '';
     expect(calls).toBe('');
-    expect(readFileSync(join(home, 'stub-proof.runtime'), 'utf-8')).toBe('bun');
-    const pidFile = join(home, 'pc-agent.pid');
-    expect(existsSync(pidFile)).toBe(false); // session mode: no pidfile
-  });
+    expect(command).toContain(runtime);
+    expect(command).toContain(join(home, 'pc-agent.js'));
+  }, 20_000);
 
   test('reports a device-log permission failure without exposing the device token', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -475,12 +526,13 @@ describe('device-connect install hardening', () => {
     expect(failure).not.toContain('device-token');
   });
 
-  test('fails fast when a verified but stale daemon exits at startup', async () => {
-    const stub = startStubCloud({
-      devices: () => [connectedDevice(true)],
-      daemonScript: 'process.exit(17);',
-    });
+  test('fails fast when the daemon exits at startup', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    // A file where the daemon's in-flight root belongs. The daemon cannot read
+    // its own request registry and dies before it reaches the connect loop.
+    const inflight = join(home, 'inflight-is-a-file');
+    writeFileSync(inflight, 'not a directory\n', { mode: 0o600 });
 
     const failure = await scriptFailure(home, `
       import { connectDevice } from './packages/cli/src/device-connect.ts';
@@ -490,10 +542,10 @@ describe('device-connect install hardening', () => {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
       }
-    `);
+    `, { KINU_INFLIGHT_ROOT: inflight });
 
     expect(failure).toContain('exited before it could connect');
-  });
+  }, 20_000);
 
   test('never signals an unrelated live process named by a stale pidfile', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -519,24 +571,17 @@ describe('device-connect install hardening', () => {
     deviceDaemonPids.push(daemonPid);
   });
 
-  test('concurrent installs leave one daemon owner and no partial files', async () => {
+  test('concurrent connects leave one daemon owner and no partial files', async () => {
     const release = Promise.withResolvers<void>();
-    const bothDownloadsArrived = Promise.withResolvers<void>();
+    const bothRegistered = Promise.withResolvers<void>();
     let arrivals = 0;
-    const daemonScript = `
-      const fs = require('node:fs');
-      const path = require('node:path');
-      fs.appendFileSync(path.join(process.env.KINU_HOME, 'concurrent-daemon.pids'), String(process.pid) + '\\n');
-      setInterval(() => {}, 1000);
-    `;
     const stub = startStubCloud({
       devices: () => [connectedDevice(true)],
-      daemonScript,
-      daemonDownloadGate: {
+      registerGate: {
         release: release.promise,
         onArrival() {
           arrivals += 1;
-          if (arrivals === 2) bothDownloadsArrived.resolve();
+          if (arrivals === 2) bothRegistered.resolve();
         },
       },
     });
@@ -547,27 +592,84 @@ describe('device-connect install hardening', () => {
       console.log(JSON.stringify(result));
     `;
     const outcomes = Promise.allSettled([runScript(home, program), runScript(home, program)]);
-    await bothDownloadsArrived.promise;
+    await bothRegistered.promise;
     release.resolve();
 
     const settled = await outcomes;
     expect(settled.some((outcome) => outcome.status === 'fulfilled')).toBe(true);
-    const started = [...new Set(
-      readFileSync(join(home, 'concurrent-daemon.pids'), 'utf-8')
-        .trim()
-        .split('\n')
-        .filter(Boolean)
-        .map(Number),
-    )];
-    const live = started.filter((pid) => tolerate(() => {
-      process.kill(pid, 0);
-      return true;
-    }, 'esrch') === true);
+    const live = liveDaemons(join(home, 'pc-agent.js'));
     expect(live).toHaveLength(1);
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(live[0]);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
     deviceDaemonPids.push(...live);
-  });
+  }, 30_000);
+});
+
+describe('device daemon single-instance lock', () => {
+  /** The installed machine state a daemon needs, without starting one. */
+  function installedMachine(origin: string): string {
+    const home = makeHome({ origin, accessToken: 'ptc_test' });
+    writeFileSync(join(home, 'pc-agent.js'), DAEMON_SOURCE, { mode: 0o700 });
+    writeFileSync(
+      join(home, 'device.json'),
+      `${JSON.stringify({ user: 'user_1', token: 'device-token', origin })}\n`,
+      { mode: 0o600 },
+    );
+    return home;
+  }
+
+  /** The daemon as anything but the CLI starts it: the installed file, run. */
+  function startDaemon(home: string) {
+    const proc = Bun.spawn({
+      cmd: [process.execPath, join(home, 'pc-agent.js')],
+      cwd: newProjectDir(),
+      env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight') },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    if (proc.pid) deviceDaemonPids.push(proc.pid);
+    let output = '';
+    const drained = (async () => {
+      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
+    })();
+    return {
+      proc,
+      drained,
+      output: () => output,
+      // Another process writes these lines; there is no event to await, so the
+      // wait polls the buffer the reader above fills.
+      async waitFor(text: string, timeoutMs = 10_000): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        while (!output.includes(text)) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
+          await Bun.sleep(25);
+        }
+      },
+    };
+  }
+
+  test('a second daemon on the same KINU_HOME exits instead of connecting', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = installedMachine(stub.origin);
+
+    const owner = startDaemon(home);
+    await owner.waitFor('Ticket exchange'); // the owner's connect loop is running
+
+    const second = startDaemon(home);
+    const exited = await Promise.race([
+      second.proc.exited,
+      // Bounds a daemon that never exits, which is the defect this pins.
+      Bun.sleep(5_000).then(() => 'still running' as const),
+    ]);
+    await Promise.race([second.drained, Bun.sleep(100)]);
+
+    expect(second.output()).toContain('already running');
+    expect(second.output()).not.toContain('Ticket exchange');
+    expect(exited).toBe(3);
+    // The owner keeps the machine, and the pidfile still names it.
+    expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(owner.proc.pid);
+    expect(owner.proc.killed).toBe(false);
+  }, 30_000);
 });
 
 describe('classic cloud chat connect prompt', () => {
@@ -594,6 +696,7 @@ describe('classic cloud chat connect prompt', () => {
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
     const command = [
       `KINU_HOME=${quote(home)}`,
+      `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
       quote(process.execPath),
       quote(cliBin),
       'chat',
@@ -633,15 +736,8 @@ describe('classic cloud chat connect prompt', () => {
   test('interactive open offers c/s/n/d and session connect goes end to end', async () => {
     // Devices connect only after the daemon is registered and started.
     let registered = false;
-    const daemonScript = `
-      const fs = require('node:fs');
-      const path = require('node:path');
-      fs.writeFileSync(path.join(process.env.KINU_HOME, 'fake-daemon.pid'), String(process.pid));
-      setInterval(() => {}, 1000);
-    `;
     const stub = startStubCloud({
       devices: () => (registered ? [connectedDevice(true)] : []),
-      daemonScript,
       onRegister: () => { registered = true; },
     });
     const home = makeHome(cloudAgentConfig(stub.origin));
@@ -651,16 +747,17 @@ describe('classic cloud chat connect prompt', () => {
     await chat.waitFor("[c] connect & keep connected · [s] this session only · [n] not now · [d] don't ask again");
     await chat.send('s');
     await chat.waitFor('Connected for this session.');
+    // The daemon claims the machine's pidfile itself, whoever started it.
+    const daemonPid = await waitForDaemonPid(home);
     await chat.send('/exit');
     await chat.proc.exited;
     await chat.drained;
 
     expect(stub.hits.register).toBe(1);
-    expect(stub.hits.daemonScript).toBe(1);
-    expect(existsSync(join(home, 'pc-agent.pid'))).toBe(false); // session, not persistent
+    expect(stub.hits.daemonScript).toBe(0);
+    expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
 
     // The CLI exited; its exit hook must have killed the session daemon.
-    const daemonPid = Number(readFileSync(join(home, 'fake-daemon.pid'), 'utf-8').trim());
     expect(await waitForPidExit(daemonPid)).toBe(true);
   }, 20_000);
 
@@ -695,6 +792,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
     const command = [
       `KINU_HOME=${quote(home)}`,
+      `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
       quote(process.execPath),
       quote(cliBin),
       'connect',
@@ -731,19 +829,11 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     };
   }
 
-  const IDLE_DAEMON = `
-    const fs = require('node:fs');
-    const path = require('node:path');
-    fs.writeFileSync(path.join(process.env.KINU_HOME, 'fake-daemon.pid'), String(process.pid));
-    setInterval(() => {}, 1000);
-  `;
-
   test('it states what access it grants, registers under the name given, and links', async () => {
     let registered = false;
     let label: string | undefined;
     const stub = startStubCloud({
       devices: () => (registered ? [connectedDevice(true)] : []),
-      daemonScript: IDLE_DAEMON,
       onRegister: (body) => { registered = true; label = body?.label; },
     });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
@@ -754,7 +844,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     await connect.waitFor('revoke it any time under Account settings');
     await connect.waitFor('Name this device');
     expect(stub.hits.register).toBe(0);
-    expect(stub.hits.daemonScript).toBe(0);
+    expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
 
     await connect.send('studio tower');
     await connect.waitFor('Link this machine as "studio tower" and start the daemon?');
@@ -767,16 +857,17 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
 
     expect(connect.output()).toContain('studio tower');
     expect(stub.hits.register).toBe(1);
+    expect(stub.hits.daemonScript).toBe(0);
     expect(label).toBe('studio tower');
     expect(existsSync(join(home, 'device.json'))).toBe(true);
 
-    const daemonPid = Number(readFileSync(join(home, 'fake-daemon.pid'), 'utf-8').trim());
+    const daemonPid = await waitForDaemonPid(home);
     process.kill(daemonPid, 'SIGTERM');
     expect(await waitForPidExit(daemonPid)).toBe(true);
   }, 30_000);
 
   test('answering no installs nothing at all', async () => {
-    const stub = startStubCloud({ devices: () => [], daemonScript: IDLE_DAEMON });
+    const stub = startStubCloud({ devices: () => [] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const connect = spawnConnectInPty(home);
@@ -790,6 +881,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     expect(connect.output()).toContain('Nothing was installed');
     expect(stub.hits.register).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
+    expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
     expect(existsSync(join(home, 'device.json'))).toBe(false);
     expect(existsSync(join(home, 'pc-agent.pid'))).toBe(false);
   }, 30_000);

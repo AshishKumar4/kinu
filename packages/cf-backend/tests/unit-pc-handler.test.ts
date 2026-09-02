@@ -179,33 +179,30 @@ describe("/pc/connect upgrade", () => {
   });
 });
 
-describe("/pc/daemon.js", () => {
-  test("serves the daemon source with a lowercase-hex sha256 header over its exact bytes", async () => {
-    const userDO = makeUserDO();
-    const response = await handlePcRequest(new Request("https://kinu.test/pc/daemon.js"), makeEnv(userDO));
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
-    const body = await response.text();
-    expect(body.length).toBeGreaterThan(0);
-    const digest = response.headers.get("x-kinu-daemon-sha256");
-    expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    // Independent recomputation: the header must describe exactly these bytes.
-    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
-    const hex = Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
-    expect(digest).toBe(hex);
+describe("the removed daemon-download rails", () => {
+  // F7: the daemon travels inside the CLI release, so no route here serves
+  // executable bytes and no client can be steered by what this Worker returns.
+  test("/pc/daemon.js and /pc/install are 404, and neither wakes a Durable Object", async () => {
+    for (const url of ["https://kinu.test/pc/daemon.js", "https://kinu.test/pc/install"]) {
+      const userDO = makeUserDO();
+      const response = await handlePcRequest(new Request(url), makeEnv(userDO));
+      expect(response.status).toBe(404);
+      expect(response.headers.get("x-kinu-daemon-sha256")).toBeNull();
+      const body = await response.text();
+      expect(body).toBe("Not found");
+      expect(userDO.idNames).toEqual([]);
+    }
   });
 });
 
-describe("/pc/daemon.js digest red direction", () => {
-  test("an altered source changes the digest — equality against a wrong value must fail", async () => {
-    const userDO = makeUserDO();
-    const response = await handlePcRequest(new Request("https://kinu.test/pc/daemon.js"), makeEnv(userDO));
-    const body = await response.text();
-    const digest = response.headers.get("x-kinu-daemon-sha256")!;
-    // The header must NOT equal the digest of anything except the exact bytes:
-    // alter one byte of the source and the recomputed digest diverges.
-    const altered = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body + " "));
-    const alteredHex = Array.from(new Uint8Array(altered), (b) => b.toString(16).padStart(2, "0")).join("");
-    expect(digest).not.toBe(alteredHex);
+describe("no route answers with a script", () => {
+  test("every /pc path except the two tunnel rails is a 404 without a body to execute", async () => {
+    for (const path of ["/pc/daemon.js", "/pc/install", "/pc/agent.js", "/pc/"]) {
+      const userDO = makeUserDO();
+      const response = await handlePcRequest(new Request(`https://kinu.test${path}`), makeEnv(userDO));
+      expect(response.status).toBe(404);
+      expect(response.headers.get("content-type")).not.toBe("application/javascript; charset=utf-8");
+      expect(response.headers.get("content-type")).not.toBe("text/x-shellscript; charset=utf-8");
+    }
   });
 });

@@ -100,6 +100,7 @@
   "movable packages/cf-backend/src/monitor/probes.ts",
   "movable packages/cf-backend/src/node-home.ts",
   "movable packages/cf-backend/src/obs/facet-operations.ts",
+  "movable packages/cf-backend/src/pc-handler.ts",
   "movable packages/cf-backend/src/providers/ai-gateway.ts",
   "movable packages/cf-backend/src/providers/cloudflare-ai-fetch.ts",
   "movable packages/cf-backend/src/providers/direct-workers-ai-fetch.ts",

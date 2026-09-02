@@ -17,8 +17,8 @@
  *                  registered, so a 500 is attributed to the route rather than
  *                  to the daemon that had not started yet.
  *   connect        `connectDevice` — the CLI's one connect implementation —
- *                  registers this machine, installs the daemon it downloads
- *                  from `/pc/daemon.js`, starts it, and confirms it connected.
+ *                  registers this machine, installs the daemon the CLI ships,
+ *                  starts it, and confirms it connected.
  *   listed         the new device is in the list with `connected: true`.
  *   command        a fresh workspace runs `echo` ON THE MACHINE through
  *                  `executeInExecutor('laptop', …)`, the RPC the Env tab's

@@ -10,6 +10,14 @@ const { spawn, spawnSync, execFileSync } = require('node:child_process');
 
 const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
+/** One daemon owns a machine. This file names the process that owns it, and
+ *  the daemon claims it in its own process — the CLI is not the only thing
+ *  that can start this file. */
+const PID_PATH = path.join(DEVICE_HOME, 'pc-agent.pid');
+/** What this daemon exits with when another daemon already owns the machine.
+ *  Not a failure: the machine has its daemon and this process is the extra
+ *  one. `packages/cli/tests/device-connect.test.ts` pins the number. */
+const ALREADY_RUNNING_EXIT = 3;
 
 /** The hub's token-rotation frame type. Pinned against core's
  *  DEVICE_TOKEN_ROTATION in cf-backend's device-hub test: this daemon ships as
@@ -1447,8 +1455,16 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
   const user = parseString(cfg.user, expectation);
   const token = parseString(cfg.token, expectation);
   const origin = cfg.origin === undefined ? undefined : parseString(cfg.origin, expectation);
+  // The directory `kinu connect` ran in, parsed HERE with everything else so
+  // the dial site sends a domain value rather than branching on a
+  // representation. Absent on a config written before it existed, and absent
+  // is what the hub reads as "this device named no directory".
+  const root = cfg.root === undefined ? undefined : parseString(cfg.root, expectation);
   if (user.length === 0 || token.length === 0) throw new Error(expectation);
-  return origin === undefined ? { ...cfg, user, token } : { ...cfg, user, token, origin };
+  const config = { ...cfg, user, token };
+  if (origin !== undefined) config.origin = origin;
+  if (root !== undefined) config.root = root;
+  return config;
 }
 
 function redactConnectSecrets(value, secrets) {
@@ -1642,7 +1658,133 @@ function handleTokenRotation(
   return true;
 }
 
+// ── Machine lock ───────────────────────────────────────────────────────
+//
+// Two daemons on one machine share one device.json, so both connect with the
+// same credentials, both answer the hub, and each rotation invalidates the
+// other's token. The pidfile is the lock, and this daemon takes it in its own
+// process: the CLI is one starter of this file, never the only one.
+
+/** The pid the pidfile names, or null when it holds nothing usable. */
+function readPidfile(pidPath = PID_PATH) {
+  let text;
+  try {
+    text = fs.readFileSync(pidPath, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw new Error(`read the device daemon pidfile at ${pidPath}`, { cause: err });
+  }
+  const pid = Number(text.trim());
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+/** Whether `pid` is a live process. `kill(pid, 0)` reports absence as ESRCH
+ *  and presence under another user as EPERM, so only ESRCH is death. */
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if (err && err.code === 'ESRCH') return false;
+    if (err && err.code === 'EPERM') return true;
+    throw new Error(`check whether pid ${pid} is running`, { cause: err });
+  }
+}
+
+/**
+ * Whether `pid` runs this daemon file. A pid the operating system recycled for
+ * an unrelated program does not own this machine.
+ *
+ * The command line names this file by whatever spelling its starter used, so a
+ * bare `pc-agent.js` argument counts. That treats another home's daemon, if it
+ * ever inherited this pid, as the owner: refusing to start is recoverable with
+ * one `kinu connect`, while a second daemon beside the first is the defect this
+ * lock exists for.
+ */
+function processRunsThisDaemon(pid) {
+  const named = (args) => args.some((arg) => arg === __filename || path.basename(arg) === path.basename(__filename));
+  try {
+    if (process.platform === 'linux') {
+      return named(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0'));
+    }
+    if (process.platform === 'darwin') {
+      return named(execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim().split(/\s+/));
+    }
+    return false;
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'EPERM')) return false;
+    if (process.platform === 'darwin' && err && err.status === 1) return false;
+    throw new Error(`check whether pid ${pid} runs this daemon`, { cause: err });
+  }
+}
+
+/**
+ * Take the machine for this process, or report the daemon that already holds
+ * it. A pidfile naming this process is this process's own claim: the CLI
+ * writes it for the daemon it just started, and that is the same claim.
+ */
+function claimMachine(pidPath = PID_PATH) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let descriptor;
+    try {
+      descriptor = fs.openSync(pidPath, 'wx', 0o600);
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') {
+        throw new Error(`claim the device daemon pidfile at ${pidPath}`, { cause: err });
+      }
+      const holder = readPidfile(pidPath);
+      if (holder === process.pid) return { held: true, holder: process.pid };
+      if (holder !== null && processAlive(holder) && processRunsThisDaemon(holder)) {
+        return { held: false, holder };
+      }
+      fs.rmSync(pidPath, { force: true });
+      continue;
+    }
+    try {
+      fs.writeFileSync(descriptor, `${process.pid}\n`);
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    fs.chmodSync(pidPath, 0o600);
+    return { held: true, holder: process.pid };
+  }
+  return { held: false, holder: readPidfile(pidPath) };
+}
+
+/** Give the machine back, and only while this process still holds it. */
+function releaseMachine(pidPath = PID_PATH) {
+  let holder;
+  try {
+    holder = readPidfile(pidPath);
+  } catch (err) {
+    // Shutdown path: an unreadable pidfile is left for the next daemon's stale
+    // check, which is what recovers it, rather than thrown out of an exit hook.
+    log('Could not read the device pidfile while exiting:', err.message || err);
+    return;
+  }
+  if (holder !== process.pid) return;
+  try {
+    fs.rmSync(pidPath, { force: true });
+  } catch (err) {
+    log('Could not remove the device pidfile while exiting:', err.message || err);
+  }
+}
+
 function main() {
+  const claim = claimMachine();
+  if (!claim.held) {
+    log(`Another Kinu device daemon is already running on this machine (pid ${claim.holder}); this one is exiting.`);
+    process.exitCode = ALREADY_RUNNING_EXIT;
+    return;
+  }
+  process.on('exit', () => { releaseMachine(); });
+  // A signalled daemon terminates without running exit hooks, so the machine
+  // would stay claimed by a dead pid until the next daemon reaped it.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    process.on(signal, () => { process.exit(0); });
+  }
+
   const cfg = readDeviceConfig(CONFIG_PATH);
   const USER = cfg.user;
   const HTTP_ORIGIN = (cfg.origin || 'https://kinu.run').replace(/\/+$/, '');
@@ -1676,7 +1818,17 @@ function main() {
       const ws = mkWs(wsUrl);
       ws.addEventListener('open', () => {
         log('Connected');
-        ws.send(JSON.stringify({ type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
+        // `root` is the directory `kinu connect` ran in, recorded in
+        // device.json at link time: the hub scopes every base-tier file call
+        // to it, so the tier is one directory the owner named rather than a
+        // default the hub computed. `home` is what the file view opens at
+        // under the full tier, sent so the hub never runs a command on this
+        // machine to learn a path.
+        ws.send(JSON.stringify({
+          type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid,
+          root: cfg.root,
+          home: os.homedir(),
+        }));
       });
       ws.addEventListener('message', (ev) => {
         const payload = ev.data instanceof ArrayBuffer

@@ -1,14 +1,19 @@
 /**
  * Device connect — the single implementation behind every "link this PC"
  * surface (kinu connect/desktop, the chat connect prompts, /connect).
- * Registers the device, installs the daemon script downloaded from
- * /pc/daemon.js (the daemon is the only device-RPC implementation), starts it
- * either persistently (detached + pidfile) or for this CLI session only (a
- * child killed when the CLI exits), and verifies the device actually shows up
+ * Registers the device, installs the daemon this CLI ships (the daemon is the
+ * only device-RPC implementation, and its bytes travel inside the release, so
+ * connect fetches no executable code from anywhere), starts it either
+ * persistently (detached + pidfile) or for this CLI session only (a child
+ * killed when the CLI exits), and verifies the device actually shows up
  * connected on the server before claiming success.
+ *
+ * One daemon owns a machine. `~/.kinu/pc-agent.pid` names it, and the daemon
+ * claims that file in its own process too, so a daemon started by anything
+ * else exits instead of running beside this one.
  */
 
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +22,7 @@ import { classify, classifyErrorCode, KinuError, renderThrownChain, tolerate, to
 import { enforceOwnerOnly } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice } from './cloud-api';
+import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
@@ -25,8 +31,6 @@ export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 export const DEVICE_CONNECT_DEADLINE_MS = 20_000;
 const CONNECT_POLL_MS = 1_000;
 const DAEMON_EARLY_EXIT_GRACE_MS = 250;
-const DAEMON_CHECKSUM_HEADER = 'x-kinu-daemon-sha256';
-const DAEMON_PROTOCOL_MARKERS = ['/pc/connect-ticket', "'execCancel'", "'ROTATE'"];
 
 /** The name a machine has when nobody named it. */
 export const UNNAMED_DEVICE_NAME = 'Your PC';
@@ -76,16 +80,15 @@ export type ConnectDeviceResult =
   | { kind: 'already-running'; connected: boolean };
 
 export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {}): Promise<ConnectDeviceResult> {
-  if (opts.session && persistentDaemonPid() !== null) {
-    // The persistent daemon owns device.json and its credentials — leave it alone.
+  if (opts.session && runningDaemonPid() !== null) {
+    // The running daemon owns device.json and its credentials — leave it alone.
     const devices = await listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
     return { kind: 'already-running', connected: devices.some((device) => device.connected) };
   }
   assertDaemonPlatformSupported();
   const runtime = daemonRuntime();
   const device = await registerDeviceForConnect(auth, opts.label);
-  const download = await downloadDaemonScript(device.origin);
-  installDaemonFiles(download, device);
+  installDaemonFiles(device);
   const launch = startInstalledDaemon(opts.session === true, runtime);
   if (launch !== null) await waitForDaemonStart(launch);
   // Don't trust the spawn — the daemon must show up as connected on the
@@ -99,8 +102,8 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
 export interface DaemonStatus {
   deviceConfigPresent: boolean;
   logPresent: boolean;
-  /** Pid of a live persistent daemon, or null when none is running. */
-  persistentPid: number | null;
+  /** Pid of the live daemon that owns this machine, or null when none does. */
+  daemonPid: number | null;
   /** Whether this CLI process has a live session daemon child. */
   sessionActive: boolean;
 }
@@ -109,7 +112,7 @@ export function daemonStatus(): DaemonStatus {
   return {
     deviceConfigPresent: existsSync(DEVICE_CONFIG_PATH),
     logPresent: existsSync(DAEMON_LOG_PATH),
-    persistentPid: persistentDaemonPid(),
+    daemonPid: runningDaemonPid(),
     sessionActive: sessionDaemon !== null && sessionDaemon.exitCode === null && !sessionDaemon.killed,
   };
 }
@@ -199,10 +202,6 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
 let sessionDaemon: ChildProcess | null = null;
 let sessionCleanupInstalled = false;
 
-interface DaemonDownload {
-  source: string;
-  checksum: string | null;
-}
 
 interface DaemonLaunch {
   child: ChildProcess;
@@ -250,42 +249,8 @@ function redactSecrets(text: string, secrets: string[]): string {
   return redacted;
 }
 
-async function downloadDaemonScript(origin: string): Promise<DaemonDownload> {
-  const daemonUrl = `${origin.replace(/\/+$/, '')}/pc/daemon.js`;
-  let response: Response;
-  try {
-    response = await fetch(daemonUrl);
-  } catch (cause) {
-    throw toKinuError({
-      doing: `downloading the device daemon from ${daemonUrl}`,
-      cause,
-      otherwise: 'unavailable',
-    });
-  }
-  if (!response.ok) {
-    const code = response.status === 404
-      ? 'missing'
-      : response.status === 401 || response.status === 403
-        ? 'denied'
-        : 'unavailable';
-    throw new KinuError(code, `downloading the device daemon from ${daemonUrl} failed with HTTP ${response.status}`);
-  }
-  const checksum = response.headers.get(DAEMON_CHECKSUM_HEADER);
-  if (checksum !== null && !/^[0-9a-f]{64}$/i.test(checksum)) {
-    throw new KinuError('io', 'the device daemon download included an invalid integrity checksum');
-  }
-  try {
-    return { source: await response.text(), checksum: checksum?.toLowerCase() ?? null };
-  } catch (cause) {
-    throw toKinuError({
-      doing: `reading the device daemon download from ${daemonUrl}`,
-      cause,
-      otherwise: 'io',
-    });
-  }
-}
 
-function installDaemonFiles(download: DaemonDownload, device: { origin: string; userId: string; token: string }): void {
+function installDaemonFiles(device: { origin: string; userId: string; token: string }): void {
   try {
     ensureAgentHome();
   } catch (cause) {
@@ -300,12 +265,16 @@ function installDaemonFiles(download: DaemonDownload, device: { origin: string; 
     user: device.userId,
     token: device.token,
     origin: device.origin.replace(/\/+$/, ''),
+    // The directory `kinu connect` ran in is the directory the owner
+    // consented; the daemon sends it in HELLO and the hub scopes every
+    // base-tier file call to it.
+    root: process.cwd(),
   }, null, 2)}\n`;
   const scriptTemporary = stageInstallFile(
     SCRIPT_PATH,
-    download.source,
+    PC_AGENT_DAEMON_SOURCE,
     0o700,
-    (temporary) => verifyDaemonDownload(temporary, download.checksum),
+    (temporary) => verifyStagedDaemon(temporary),
   );
   let scriptPending: string | null = scriptTemporary;
   let configPending: string | null = null;
@@ -386,23 +355,14 @@ function stageInstallFile(
   }
 }
 
-function verifyDaemonDownload(temporary: string, checksum: string | null): void {
-  const source = readFileSync(temporary, 'utf-8');
-  if (checksum !== null && createHash('sha256').update(source, 'utf8').digest('hex') !== checksum) {
-    throw new KinuError('io', 'the downloaded device daemon failed checksum verification');
-  }
-  if (source.trim().length === 0) {
-    throw new KinuError('io', 'the downloaded device daemon failed integrity verification');
-  }
-  try {
-    // Compiles but never evaluates the downloaded code. The runtime strips a
-    // shebang before executing a script; Function does not, so strip it here too.
-    new Function(source.replace(/^#![^\n]*(?:\n|$)/, ''));
-  } catch (cause) {
-    throw new KinuError('io', 'the downloaded device daemon failed integrity verification', { cause });
-  }
-  if (!DAEMON_PROTOCOL_MARKERS.every((marker) => source.includes(marker))) {
-    throw new KinuError('io', 'the downloaded device daemon failed integrity verification');
+/**
+ * What landed on disk is the daemon this CLI carries, byte for byte. The
+ * question a client can answer about its own bytes is equality with them —
+ * a digest served beside a download only proves the download arrived whole.
+ */
+function verifyStagedDaemon(temporary: string): void {
+  if (readFileSync(temporary, 'utf-8') !== PC_AGENT_DAEMON_SOURCE) {
+    throw new KinuError('io', 'the staged device daemon does not match the daemon this CLI ships');
   }
 }
 
@@ -431,7 +391,7 @@ async function waitForDeviceConnected(auth: DeviceAuth, deviceId: string, onPoll
 }
 
 function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch | null {
-  if (session && persistentDaemonPid() !== null) return null;
+  if (session && runningDaemonPid() !== null) return null;
   assertDaemonPlatformSupported();
   try {
     ensureAgentHome();
@@ -444,7 +404,7 @@ function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch 
   }
   const executable = runtime ?? daemonRuntime();
   killSessionDaemon();
-  if (!session) stopPersistentDaemon();
+  if (!session) stopRunningDaemon();
 
   const launch = spawnDaemonChild(executable, session);
   if (session) {
@@ -454,7 +414,7 @@ function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch 
   }
   if (!launch.child.pid) return launch;
   try {
-    if (!claimPersistentDaemonPid(launch.child.pid)) {
+    if (!claimDaemonPid(launch.child.pid)) {
       throw new KinuError(
         'unavailable',
         'another device connect is already starting the daemon on this machine; retry in a moment',
@@ -528,7 +488,8 @@ function waitForDaemonStart(launch: DaemonLaunch): Promise<void> {
   return completion.promise;
 }
 
-function persistentDaemonPid(): number | null {
+/** The pid the pidfile names, whether or not that process still exists. */
+function recordedDaemonPid(): number | null {
   if (!existsSync(PID_PATH)) return null;
   let contents: string;
   try {
@@ -537,14 +498,23 @@ function persistentDaemonPid(): number | null {
     throw toKinuError({ doing: `reading the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
   }
   const pid = Number(contents.trim());
-  if (!Number.isInteger(pid) || pid <= 0) return null;
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+/** The pid of the daemon that owns this machine, or null when none runs. */
+function runningDaemonPid(): number | null {
+  const pid = recordedDaemonPid();
+  if (pid === null) return null;
   return processAlive(pid) ? pid : null;
 }
 
-function claimPersistentDaemonPid(pid: number): boolean {
+function claimDaemonPid(pid: number): boolean {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (writePidfile(pid)) return true;
-    if (persistentDaemonPid() !== null) return false;
+    // The daemon claims this same file at startup, so a pidfile that already
+    // names the process being claimed for is this claim, not a competing one.
+    if (recordedDaemonPid() === pid) return true;
+    if (runningDaemonPid() !== null) return false;
     try {
       rmSync(PID_PATH, { force: true });
     } catch (cause) {
@@ -585,8 +555,8 @@ function writePidfile(pid: number): boolean {
   }
 }
 
-function stopPersistentDaemon(): void {
-  const pid = persistentDaemonPid();
+function stopRunningDaemon(): void {
+  const pid = runningDaemonPid();
   if (pid && processIsInstalledDaemon(pid)) {
     try {
       tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');

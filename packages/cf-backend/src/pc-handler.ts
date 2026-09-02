@@ -2,8 +2,6 @@
  * Device tunnel — reverse-WebSocket from the user's laptop, at the USER level.
  *
  * Routes:
- *   GET  /pc/install                — daemon updater/starter for an existing local config
- *   GET  /pc/daemon.js              — the Node daemon binary (JS)
  *   POST /pc/connect-ticket         — exchange local device token for short-lived WS ticket
  *   WS   /pc/connect?user=U&ticket=T — daemon WS upgrade
  *
@@ -11,6 +9,10 @@
  * every one of that user's agents can then reach it. The daemon stores that
  * token locally, exchanges it over HTTPS for a one-minute ticket, then connects
  * the WebSocket with the ticket so long-lived secrets do not appear in URLs.
+ *
+ * This Worker serves the daemon to nobody. The daemon travels inside the CLI
+ * release and `kinu connect` writes it from there, so no code path here hands
+ * a machine bytes to execute, and a compromised deploy cannot reach one.
  *
  * The two authenticated rails (`/pc/connect-ticket`, `/pc/connect`) are the
  * only unauthenticated paths here that choose a Durable Object by name, so
@@ -20,10 +22,8 @@
  * rather than cryptographic route verification, and what that leaves open.
  */
 
-import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
 import { DEVICE_CONNECT_PATH } from "@kinu.run/core";
 import { json, readBounded } from "./lib/http";
-import { sha256Hex } from "./lib/crypto";
 import {
   ownerCaller,
   type OwnerCapabilityEnv,
@@ -34,7 +34,6 @@ import { ingressAdmitted, ingressDenied, peerIp } from "./lib/ingress-budget";
 import type { KvStore } from "./lib/kv";
 import * as v from "valibot";
 
-const DAEMON_JS_URL = "/pc/daemon.js";
 export interface PcUserStub {
   issueDeviceConnectTicket(
     caller: UserCaller,
@@ -91,12 +90,6 @@ export async function handlePcRequest<Id>(
   const url = new URL(request.url);
   const path = url.pathname;
 
-  if (path === "/pc/install") {
-    return installScriptResponse(url.origin);
-  }
-  if (path === "/pc/daemon.js") {
-    return daemonJsResponse();
-  }
   if (path === "/pc/connect-ticket") {
     return handlePcConnectTicket(request, env);
   }
@@ -106,70 +99,6 @@ export async function handlePcRequest<Id>(
   return new Response("Not found", { status: 404 });
 }
 
-function installScriptResponse(origin: string): Response {
-  // `kinu connect` writes ~/.kinu/device.json with the device token over
-  // an authenticated HTTPS API call. This script only updates/starts the daemon
-  // for users who already have that local config.
-  //
-  // The daemon starts on the same runtime the CLI itself requires: Kinu's own
-  // managed Bun at $KINU_HOME/runtime/bin/bun, then a compatible Bun already on
-  // PATH. A `node` on PATH is never consulted — the same PATH dependence that
-  // broke `kinu connect` on machines whose Node lacks a global WebSocket. The
-  // candidate must itself report a compatible version; presence is not
-  // compatibility.
-  const script = `#!/usr/bin/env bash
-set -eu
-KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
-KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
-
-DIR="$KINU_HOME"
-mkdir -p "$DIR"
-chmod 700 "$DIR"
-if [ ! -f "$DIR/device.json" ]; then
-  echo "No Kinu device config found at $DIR/device.json."
-  echo "Run: kinu auth --origin $KINU_ORIGIN && kinu connect"
-  exit 1
-fi
-echo "Downloading Kinu device daemon…"
-curl -fsSL "$KINU_ORIGIN${DAEMON_JS_URL}" -o "$DIR/pc-agent.js"
-chmod 600 "$DIR/device.json"
-
-KINU_BUN=""
-for candidate in "$DIR/runtime/bin/bun" "$(command -v bun 2>/dev/null || true)"; do
-  if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
-    KINU_BUN="$candidate"
-    break
-  fi
-done
-if [ -z "$KINU_BUN" ]; then
-  echo "Bun required. Re-run the Kinu install command, or install https://bun.sh then re-run."
-  exit 1
-fi
-echo "Starting daemon ($KINU_BUN)…"
-nohup "$KINU_BUN" "$DIR/pc-agent.js" > "$DIR/pc-agent.log" 2>&1 &
-echo "  PID=$! log=$DIR/pc-agent.log"
-echo "Kinu device connected. Check the Environment tab. It should flip to connected within a few seconds."
-`;
-  return new Response(script, {
-    status: 200,
-    headers: { "content-type": "text/x-shellscript; charset=utf-8" },
-  });
-}
-
-async function daemonJsResponse(): Promise<Response> {
-  // The daemon source is packages/pc-agent/src/index.js, bundled as a string
-  // at build time via vite's `?raw` import — one source of truth, no copies.
-  // The digest pins the exact bytes this route serves, so a client (or the
-  // install script's curl) can verify the download against this same Worker.
-  const digest = await sha256Hex(PC_AGENT_DAEMON_SOURCE);
-  return new Response(PC_AGENT_DAEMON_SOURCE, {
-    status: 200,
-    headers: {
-      "content-type": "application/javascript; charset=utf-8",
-      "x-kinu-daemon-sha256": digest,
-    },
-  });
-}
 const TICKET_BODY_SCHEMA = v.object({
   user: v.optional(v.string()),
   token: v.optional(v.string()),

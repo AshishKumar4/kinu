@@ -511,7 +511,15 @@ function resolveLocal(
     if (known.has(candidate)) return { kind: 'file', file: candidate };
   }
   const extension = base.slice(base.lastIndexOf('/') + 1).includes('.');
-  return extension && !isParseable(base) ? { kind: 'asset' } : { kind: 'missing' };
+  if (!extension) return { kind: 'missing' };
+  // A path that names a real file outside the governed source set is a
+  // dependency, not a missing module: `packages/pc-agent/src/index.js` is the
+  // CommonJS daemon, which `PRODUCT_SOURCE` (`.tsx?` only) never enumerates.
+  // `isParseable` alone answered "missing" for it, because a `.js` path parses,
+  // and the question here is whether this graph governs the file. It does not,
+  // so the importer cannot move into a shared package — which is what `asset`
+  // records. A specifier naming nothing on disk still throws.
+  return !isParseable(base) || existsSync(join(root, base)) ? { kind: 'asset' } : { kind: 'missing' };
 }
 
 interface Graph {

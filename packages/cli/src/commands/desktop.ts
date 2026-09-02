@@ -53,7 +53,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     const status = daemonStatus();
     console.log(`${DIM('Device config:')} ${status.deviceConfigPresent ? OK('present') : 'missing'} ${DIM(DEVICE_CONFIG_PATH)}`);
     console.log(`${DIM('Daemon log:')} ${status.logPresent ? OK('present') : 'missing'} ${DIM(DAEMON_LOG_PATH)}`);
-    console.log(`${DIM('Daemon process:')} ${status.persistentPid ? OK(`running (pid ${status.persistentPid})`) : 'not running'}`);
+    console.log(`${DIM('Daemon process:')} ${status.daemonPid ? OK(`running (pid ${status.daemonPid})`) : 'not running'}`);
     return;
   }
   if (sub === 'logs') {

@@ -6,7 +6,7 @@
  *      served, and every HTTPS response leaves pinned with HSTS.
  *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves an isolated
  *      Workspace or Sandbox preview and nothing else.
- *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
+ *   2. /pc/* — PC agent WebSocket tunnel (ticket exchange + upgrade only).
  *   2b. CLOUDFLARE ACCESS GATE — /control* and /api/control* only. A verified
  *       `Cf-Access-Jwt-Assertion` before every bypass below it: this Worker's own
  *       auth, the public path list, its assets, any binding and any Durable
