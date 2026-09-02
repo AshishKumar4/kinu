@@ -124,6 +124,10 @@
     "reason": "needs a live model: drives ONE turn through the same LocalAgentSession spine as `kinu exec` and asserts a real tool call plus a durable messages row. A mock model chooses no tools, so both assertions would be vacuous against one — 'does the agent reach for a tool' IS the measurement. Measured at 15.3s. Runs in the eval tier."
   },
   {
+    "key": "tests/live-smoke.test.ts › Live Smoke — one real turn per backend › deployed backend: the device registry answers the CLI bearer",
+    "reason": "needs the deployed Worker and the tier's CLI bearer: reads GET /api/cli/devices on the deployed origin and parses the thirteen fields listDevices declares with v.strictObject. It exists because that route answered 500 in production for weeks (`no such column: unstopped_at`, 2026-09-01) while every local suite built a fresh schema — only a deployed read against a UserDO that predates the columns can see it. Runs in the eval tier (evals:cloud) and after a staging deploy."
+  },
+  {
     "key": "tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger",
     "reason": "needs a live model: 34 full agent episodes — the eval corpus (17 tasks: 6 environment-handover cases, 4 tool-using seed cases, 7 hard tasks with machine-checkable ground truth) times 2 repetitions, each a real multi-turn session whose run_events ledger the eight behaviour scorers grade. Declared as one FAMILY rather than 34 keys because every case comes from one `it.for(CASES)` behind one `skipIf(TARGET === null)`, so no case can begin skipping alone, and the corpus's own size floor is asserted credential-free by `the corpus is large enough for significance to be reachable` in the same file. Runs in the eval tier: `bun run test:eval`.",
     "family": true
