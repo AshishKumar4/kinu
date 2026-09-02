@@ -111,4 +111,34 @@ describe('BeneathRoot', () => {
     fs.close();
     expect(() => fs.openRead('anything')).toThrow('BeneathRoot is closed');
   });
+
+  // THE PATH BYTES REACH THE KERNEL, EVERY CALL. A bounded restore creates a
+  // file, truncates it, awaits its bytes from the store and writes them; the
+  // third openat2 of `k/f0268.txt` once answered ENOENT because the kernel
+  // read `"\200\0357\313\270\3"`, a freelist link, at the address the path
+  // buffer had been freed from (strace, 2026-09-02). Measured on the unfixed
+  // code with a runner-sized heap: 1 ENOENT per 20,000 of these cycles, so
+  // 200,000 cycles miss the defect once in e^-10 runs. The heap is what makes
+  // the collector run mid-call; a bare loop measured 0 in 60,000.
+  test('a path just created opens for writing after an await, 200,000 times', async () => {
+    const { root, fs } = await rootFixture();
+    const heap = Array.from({ length: 1002 }, (_, index) => ({
+      key: `obj/${'a'.repeat(64)}${index}`, sha256: 'b'.repeat(64), doc: { path: `k/f${index}`, chunks: [{ hash: 'c'.repeat(64), size: 16 }] },
+    }));
+    const object = join(root, 'object.bin');
+    await Bun.write(object, 'file bytes');
+    try {
+      fs.mkdir('k');
+      for (let index = 0; index < 200_000; index += 1) {
+        const path = `k/f${String(index % 1000).padStart(4, '0')}.txt`;
+        closeSync(fs.createFile(path, undefined, 0o644));
+        fs.truncate(path, 10);
+        const bytes = new Uint8Array(await Bun.file(object).slice(0, 10).arrayBuffer());
+        expect(fs.writeRange(path, 0, bytes)).toBe(10);
+      }
+      expect(heap).toHaveLength(1002);
+    } finally {
+      fs.close();
+    }
+  }, 60_000);
 });

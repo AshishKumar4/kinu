@@ -80,7 +80,21 @@ const syscall = libc.symbols.syscall as Syscall;
 // arguments and a pointer result, exactly `ErrnoLocation`.
 const errnoLocation = libc.symbols.__errno_location as ErrnoLocation;
 
+/**
+ * The buffers the syscall in flight reads through raw addresses. `ptr()` hands
+ * out an address and keeps nothing alive; a local whose last use was that
+ * `ptr()` call is dead to the collector before the syscall runs, and the
+ * kernel then reads whatever the allocator put in the freed cell. Measured
+ * 2026-09-02 under `strace -f --seccomp-bpf -e trace=openat2 -s 256`: the
+ * restore of a 1,000-file tree passed `k/f0268.txt` and the kernel received
+ * `"\200\0357\313\270\3"`, a freelist link, answering ENOENT for a file the
+ * previous two openat2 calls had just created and truncated. Holding the
+ * buffers here, in module scope, keeps them reachable until `call` returns.
+ */
+let inFlight: readonly Uint8Array[] = [];
+
 function pointer(bytes: Uint8Array): bigint {
+  inFlight = [...inFlight, bytes];
   return BigInt(ptr(bytes));
 }
 
@@ -126,7 +140,12 @@ function checkedRange(offset: number, length: number): void {
 }
 
 function call(number: number, operation: string, path: string, a1: bigint, a2 = 0n, a3 = 0n, a4 = 0n, a5 = 0n): bigint {
-  const result = syscall(BigInt(number), a1, a2, a3, a4, a5, 0n);
+  let result: bigint;
+  try {
+    result = syscall(BigInt(number), a1, a2, a3, a4, a5, 0n);
+  } finally {
+    inFlight = [];
+  }
   if (result === -1n) throw new BeneathError(operation, path, errno());
   return result;
 }
