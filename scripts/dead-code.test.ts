@@ -279,6 +279,11 @@ function knipDependencies(): Set<string> {
 }
 
 describe('measured against knip', () => {
+  // knip's own pass over this tree takes 8.7 s wall on a loaded box (measured
+  // 2026-09-02 under the push tier's parallel suites); bun's default per-test
+  // bound is 5 s, and a bound below the tool's own duration made this test
+  // red under load and green alone. The ceiling below is a bound on a finite
+  // run, not a wait on a condition.
   test('the two agree on this tree, and the one difference is knip\'s entry-glob gap', () => {
     const knip = knipDependencies();
     const census = new Set(live.map((d) => `${d.manifest}#${d.name}`));
@@ -291,5 +296,5 @@ describe('measured against knip', () => {
     // globs stop at `scripts/*.ts!`, so it cannot see that import.
     expect(onlyKnip).toEqual(['package.json#vitest-evals']);
     expect(onlyCensus).toEqual([]);
-  });
+  }, 60_000);
 });
