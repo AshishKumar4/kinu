@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/execution/device-tunnel-executor.ts b/packages/core/src/execution/device-tunnel-executor.ts
-index 59755c11a..a9abfa68f 100644
 --- a/packages/core/src/execution/device-tunnel-executor.ts
 +++ b/packages/core/src/execution/device-tunnel-executor.ts
-@@ -552,7 +552,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
-   const guard = async (path: string, op: string): Promise<string | null> => {
-     if (await consent.hasFullFilesystem()) return null;
-     const root = await effectiveRoot();
--    if (!(path === root || root === '/' || path.startsWith(`${root}/`))) {
-+    if (!(path === root || root === '/' || path.startsWith(root))) {
+@@ -589,7 +589,7 @@
+     // No fallback: a device that named no directory throws above rather than
+     // widening to `/`. The daemon enforces the same view a second time, so
+     // this lexical check is the cheap first line, never the boundary.
+-    if (!(path === root || path.startsWith(`${root}/`))) {
++    if (!(path === root || path.startsWith(root))) {
        throw makeVfsError(
          'EACCES',
          `'${path}' is outside the consented device directory '${root}' — `
