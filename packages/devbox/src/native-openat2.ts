@@ -91,10 +91,10 @@ const errnoLocation = libc.symbols.__errno_location as ErrnoLocation;
  * previous two openat2 calls had just created and truncated. Holding the
  * buffers here, in module scope, keeps them reachable until `call` returns.
  */
-let inFlight: readonly Uint8Array[] = [];
+const inFlight: Uint8Array[] = [];
 
 function pointer(bytes: Uint8Array): bigint {
-  inFlight = [...inFlight, bytes];
+  inFlight.push(bytes);
   return BigInt(ptr(bytes));
 }
 
@@ -144,7 +144,7 @@ function call(number: number, operation: string, path: string, a1: bigint, a2 = 
   try {
     result = syscall(BigInt(number), a1, a2, a3, a4, a5, 0n);
   } finally {
-    inFlight = [];
+    inFlight.length = 0;
   }
   if (result === -1n) throw new BeneathError(operation, path, errno());
   return result;
