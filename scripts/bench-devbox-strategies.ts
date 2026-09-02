@@ -1183,6 +1183,51 @@ export function cleanupObservationProbes(deps: {
   };
 }
 
+/** The two S3 credentials cleanup verification reads a bucket through, and the
+ *  file a developer box keeps them in. Named here, and NEVER read here: the
+ *  values travel from the environment straight into `r2ResiduePlane`, and
+ *  nothing in this driver prints either one. */
+export const R2_CLEANUP_KEY_VARS = ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'] as const;
+export const R2_CLEANUP_KEY_FILE = '.dev.vars';
+
+/**
+ * Why this run must not start, or null when its cleanup can be verified.
+ *
+ * MEASURED DEFECT THIS REFUSES. Run 20260902154130 deployed two arms, measured
+ * one of them for thirteen minutes, and then could not verify its own cleanup:
+ * `bucketState` above throws for a bucket that still exists when no S3 keys are
+ * present, `checkCleanup` therefore produced no report, and `main` wrote C1–C7
+ * all false over a verification that never ran. One bucket was left behind and
+ * had to be drained by hand afterwards. The keys were absent from that run's
+ * environment the whole time, and nothing asked for them until the teardown.
+ *
+ * So a run that will verify its own cleanup asks BEFORE it creates anything. A
+ * `--keep` run deletes nothing and verifies nothing, and needs no keys.
+ *
+ * PRESENCE ONLY, and that is a property rather than a style: this takes two
+ * booleans, so it cannot read a credential and therefore cannot leak one into
+ * the refusal it writes.
+ */
+export function r2CleanupKeyRefusal(input: {
+  /** Will this run tear its resources down and verify that teardown? */
+  readonly verifiesCleanup: boolean;
+  readonly accessKeyIdPresent: boolean;
+  readonly secretAccessKeyPresent: boolean;
+}): string | null {
+  if (!input.verifiesCleanup) return null;
+  const absent = [
+    ...(input.accessKeyIdPresent ? [] : [R2_CLEANUP_KEY_VARS[0]]),
+    ...(input.secretAccessKeyPresent ? [] : [R2_CLEANUP_KEY_VARS[1]]),
+  ];
+  if (absent.length === 0) return null;
+  return `${absent.join(' and ')} ${absent.length === 1 ? 'is' : 'are'} absent, and this run `
+    + 'verifies its own cleanup: G8 reads every bucket through S3, so a bucket that still exists '
+    + 'has an unmeasurable multipart count and C1-C7 would be written false over a check that '
+    + `never ran. Export ${R2_CLEANUP_KEY_VARS.join(' and ')} — they live in ${R2_CLEANUP_KEY_FILE} `
+    + 'in the repository root — or pass --keep to retain every resource and verify nothing. '
+    + 'Nothing has been created.';
+}
+
 /** One deployed arm's addressable fixture: where it answers and what it
  *  accepts. Exported because the deployed lifecycle suite drives the same
  *  routes through these seams rather than opening a second HTTP client. */
@@ -5590,6 +5635,21 @@ async function main(): Promise<number> {
   if (!existsSync(join(BENCH_DIR, 'worker.ts'))) {
     throw new Error(`the devbox bench app is not present at ${BENCH_DIR}`);
   }
+  const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
+  const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+  // PREFLIGHT, AHEAD OF EVERY OTHER CHECK IN THIS FUNCTION. The cleanup keys
+  // are a LOCAL prerequisite: asking for them costs nothing, and asking after
+  // the deploy is what run 20260902154130 did — thirteen minutes of
+  // measurement, then a teardown that could not verify itself.
+  const keyRefusal = r2CleanupKeyRefusal({
+    verifiesCleanup: !options.keep,
+    accessKeyIdPresent: r2AccessKeyId !== undefined && r2AccessKeyId !== '',
+    secretAccessKeyPresent: r2SecretAccessKey !== undefined && r2SecretAccessKey !== '',
+  });
+  if (keyRefusal !== null) {
+    log(keyRefusal);
+    return 1;
+  }
   process.env.CLOUDFLARE_ACCOUNT_ID = BENCH_ACCOUNT_ID;
   if (wrangler(['whoami'], { allowFailure: true }).startsWith(WRANGLER_FAILED)) {
     log('wrangler is not authenticated; nothing can be deployed');
@@ -5603,9 +5663,6 @@ async function main(): Promise<number> {
   const revision = sourceRevision();
   const startedAt = new Date().toISOString();
 
-
-  const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
-  const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
   const residue = r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined
     ? r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId: r2AccessKeyId, secretAccessKey: r2SecretAccessKey })
     : null;

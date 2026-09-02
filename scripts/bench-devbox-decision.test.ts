@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -54,6 +54,8 @@ import {
   parseOptions,
   pollForAttach,
   postLiveTeardown,
+  r2CleanupKeyRefusal,
+  R2_CLEANUP_KEY_FILE,
   rankableTicks,
   readArmArtifact,
   refuseFailedArm,
@@ -2006,6 +2008,80 @@ describe('arm selection and frozen historical context', () => {
     // The flag that named a privileged subset is gone, not merely unused.
     expect(help.stdout.toString()).not.toContain('--candidates-only');
   });
+
+  test('a run that verifies its own cleanup refuses without the two S3 keys', () => {
+    // MEASURED: run 20260902154130 deployed, measured for thirteen minutes, and
+    // then could not verify its teardown — the keys were absent the whole time
+    // and nothing asked until the bucket probe threw. C1-C7 were written false
+    // over a check that never ran, and one bucket survived the run.
+    const refusal = r2CleanupKeyRefusal({
+      verifiesCleanup: true, accessKeyIdPresent: false, secretAccessKeyPresent: false,
+    });
+    expect(refusal).toContain('R2_ACCESS_KEY_ID');
+    expect(refusal).toContain('R2_SECRET_ACCESS_KEY');
+    // NAMED WHERE THEY LIVE, because "absent" is not an actionable refusal.
+    expect(refusal).toContain(R2_CLEANUP_KEY_FILE);
+    expect(refusal).toContain('Nothing has been created.');
+
+    // ONE MISSING KEY IS STILL A REFUSAL, and it names the one that is missing.
+    const halfArmed = r2CleanupKeyRefusal({
+      verifiesCleanup: true, accessKeyIdPresent: true, secretAccessKeyPresent: false,
+    });
+    expect(halfArmed).toContain('R2_SECRET_ACCESS_KEY is absent');
+
+    // AND THE TWO WAYS A RUN NEEDS NOTHING: both keys present, or a --keep run,
+    // which deletes nothing and therefore verifies nothing.
+    expect(r2CleanupKeyRefusal({
+      verifiesCleanup: true, accessKeyIdPresent: true, secretAccessKeyPresent: true,
+    })).toBeNull();
+    expect(r2CleanupKeyRefusal({
+      verifiesCleanup: false, accessKeyIdPresent: false, secretAccessKeyPresent: false,
+    })).toBeNull();
+  });
+
+  test('the keyless refusal lands before the driver creates anything', () => {
+    // The teardown manifest is the FIRST thing a run creates — before the
+    // config directory and long before a deploy — so its absence is the proof
+    // that this refusal preceded every resource.
+    const tree = dirname(dirname(new URL(import.meta.url).pathname));
+    const manifests = (): string[] => {
+      const dir = dirname(manifestPath(tree, 'probe'));
+      return existsSync(dir) ? readdirSync(dir).sort() : [];
+    };
+    const before = manifests();
+    // THE CHILD IS FENCED, because a regression in the refusal really does
+    // reach resource creation: measured 2026-09-02, the driver one commit
+    // earlier ran the recovery sweep and then `wrangler r2 bucket create` with
+    // no keys in its environment. So this child gets an unusable token and an
+    // empty wrangler config home, which stops it at the authentication gate —
+    // one line the assertions below tell apart from the refusal under test.
+    const scrubbed = ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'];
+    const env = {
+      ...Object.fromEntries(
+        Object.entries(process.env)
+          .filter(([name, value]) => value !== undefined && !scrubbed.includes(name))
+          .map(([name, value]) => [name, String(value)]),
+      ),
+      CLOUDFLARE_API_TOKEN: 'refused-by-this-test',
+      HOME: scratchDir('devbox-keyless'),
+      XDG_CONFIG_HOME: scratchDir('devbox-keyless-config'),
+    };
+
+    const run = Bun.spawnSync(
+      ['bun', 'scripts/bench-devbox-strategies.ts', '--arms', 'snapshot-chain'],
+      { stdout: 'pipe', stderr: 'pipe', env },
+    );
+
+    const stderr = run.stderr.toString();
+    expect(run.exitCode, stderr).toBe(1);
+    expect(stderr).toContain('R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are absent');
+    expect(stderr).toContain(R2_CLEANUP_KEY_FILE);
+    // It refused at the preflight, not at the authentication check behind it,
+    // and it swept nothing on the way out.
+    expect(stderr).not.toContain('wrangler is not authenticated');
+    expect(stderr).not.toContain('abandoned benchmark resources');
+    expect(manifests()).toEqual(before);
+  }, 30_000);
 
   test('selects exactly one named control from a multi-arm artifact and preserves provenance', () => {
     const parsed = parseFrozenControlArtifact(
