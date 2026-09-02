@@ -24,6 +24,7 @@
 // imported by every file that needs the class.
 import { mock } from 'bun:test';
 
+import { describeThrown } from '../../src/lifecycle';
 import type { StoredValue } from '../../src/storage';
 import { sessionShellRefusal } from './session-shell';
 
@@ -78,12 +79,48 @@ export function gate(): Gate {
 }
 
 /** What the container holds for one process. The SDK's own status vocabulary;
- *  `isProcessLive` in the class under test reads it. */
+ *  `isProcessLive` in the class under test reads it, and `waitForRunnerExit`
+ *  reads the exit code a settled row carries. */
 export interface FakeProcessRow {
   readonly id: string;
   readonly pid: number;
   readonly status: string;
   readonly command: string;
+  readonly exitCode?: number;
+}
+
+/** The row as the SDK hands it back from a start or a lookup: with its own
+ *  `getLogs`, which the box reads when a runner exits non-zero. */
+export type LiveProcess = FakeProcessRow & {
+  getLogs(): Promise<{ stdout: string; stderr: string }>;
+};
+
+/**
+ * One candidate runner start, as the container sees it: the argv the box
+ * composed, split back into words. `action` and `resultPath` are the two the
+ * fake itself has to read; a runner reads the rest with {@link runnerOption}.
+ */
+export interface RunnerInvocation {
+  readonly action: string;
+  readonly resultPath: string | undefined;
+  readonly argv: readonly string[];
+}
+
+/** The value after `--<name>` in a runner argv, or undefined when absent. */
+export function runnerOption(argv: readonly string[], name: string): string | undefined {
+  const index = argv.indexOf(`--${name}`);
+  return index === -1 ? undefined : argv[index + 1];
+}
+
+/** The words of a command the box composed from single-quoted parts: `'word'`
+ *  with `'\''` for a literal quote, which is the only quoting `runnerCommand`
+ *  and the journal daemon's argv produce. */
+function quotedWords(command: string): string[] {
+  const words: string[] = [];
+  for (const match of command.matchAll(/'((?:[^']|'\\'')*)'/g)) {
+    words.push((match[1] ?? '').replaceAll("'\\''", "'"));
+  }
+  return words;
 }
 
 export interface StartRecord {
@@ -171,9 +208,10 @@ export function fakeStorage(): FakeStorage {
   const gates: Record<string, Gate | undefined> = {};
   const faults: Record<string, Error | undefined> = {};
   // SAFETY: `DurableObjectStorage` declares the platform's whole storage API,
-  // of which the methods under test reach exactly these four; the rest is
-  // alarms, transactions and SQL, which no line of the class can call. Each
-  // operation here returns what the runtime contract says it returns.
+  // of which the methods under test reach exactly these five; the rest is
+  // alarms and SQL beyond the one statement modelled below, which no line of
+  // the class can call. Each operation here returns what the runtime contract
+  // says it returns.
   const handle = {
     get: async (key: string): Promise<StoredValue> => {
       const held = gates[key];
@@ -194,6 +232,35 @@ export function fakeStorage(): FakeStorage {
       return Promise.resolve();
     },
     delete: (key: string): Promise<boolean> => Promise.resolve(rows.delete(key)),
+    // THE CANDIDATE CONTROL ROW'S READ-MODIFY-WRITE. The runtime runs the
+    // closure against a transaction whose writes land together when it
+    // settles and not at all when it throws; a closure that refused (the head
+    // CAS naming a stale parent) must leave the row it read untouched. Buffered
+    // for that reason rather than written through: a fake that committed each
+    // put as it happened could not hold the atomicity the CAS rests on.
+    transaction: async <T>(
+      closure: (transaction: DurableObjectTransaction) => Promise<T>,
+    ): Promise<T> => {
+      const staged = new Map<string, StoredValue>();
+      const removed = new Set<string>();
+      const transaction: DurableObjectTransaction = Object.create({
+        get: async (key: string): Promise<StoredValue> =>
+          removed.has(key) ? undefined : staged.get(key) ?? rows.get(key),
+        put: async (key: string, value: StoredValue): Promise<void> => {
+          removed.delete(key);
+          staged.set(key, value);
+        },
+        delete: async (key: string): Promise<boolean> => {
+          staged.delete(key);
+          removed.add(key);
+          return rows.has(key);
+        },
+      });
+      const result = await closure(transaction);
+      for (const key of removed) rows.delete(key);
+      for (const [key, value] of staged) rows.set(key, value);
+      return result;
+    },
     // The DO's own SQLite, as the ONE statement the class issues sees it. A fake
     // that answered a statement it does not model would answer it wrongly, so
     // anything else refuses by name — see `session-shell.ts` for why.
@@ -355,6 +422,25 @@ export class FakeSandbox {
    *  daemon that starts and never serves, which is the only reason the
    *  readiness probe exists. */
   journalMounts = true;
+  /**
+   * THE CANDIDATE RUNNER, as the container runs it. The box starts `bun
+   * <runner> --action … --result <path>` as a supervised process, waits for
+   * the row to settle, and reads the reply from the result path; a test that
+   * sets this answers that process. Invoked from `startProcess` for every
+   * command carrying `--action`: the reply is written to {@link files} at the
+   * result path and the row settles `completed` with exit code 0; a throw
+   * settles it `failed` with exit code 1 and the message on stderr, which is
+   * what the box reads when a real runner dies. Unset, a runner start stays
+   * `running` for ever, which is the deployed shape of a runner nobody answers.
+   */
+  runner: ((invocation: RunnerInvocation) => Promise<string> | string) | undefined;
+  /** The container's files, as far as the box reads them: runner result paths
+   *  and workload files accepted through the SDK boundary. */
+  readonly files = new Map<string, string>();
+  /** A workload write the fake accepted. Candidate fixtures use this to hand
+   *  the same bytes to the runner's journal model; unset, the file write is
+   *  still kept in {@link files}. */
+  fileWritten: ((path: string, content: string) => Promise<void> | void) | undefined;
 
   /** Is a journal daemon process live? The fake's process table IS the
    *  container's, so this is the same fact the daemon's own supervisor reads
@@ -465,6 +551,18 @@ export class FakeSandbox {
       // asked about — the cache directory the r2fs attach read-back wants is
       // the one `mountBucket` created beside its mount.
       return { stdout: 'yes', stderr: '', exitCode: 0 };
+    }
+    // THE RUNNER RESULT'S RETIREMENT: `rm -f '<reply>'` after one attempt and
+    // `rm -rf '<dir>'` when the candidate is discarded. Answered against the
+    // file table the runner writes into, so a reply the box retired cannot be
+    // read again by the next attempt on the same fixed result path.
+    const removed = /^rm -r?f '([^']+)'$/.exec(command);
+    if (removed !== null) {
+      const target = removed[1] ?? '';
+      for (const path of this.files.keys()) {
+        if (path === target || path.startsWith(`${target}/`)) this.files.delete(path);
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
     }
     const probed = /127\.0\.0\.1:(\d+)/.exec(command);
     if (probed !== null) {
@@ -610,10 +708,16 @@ export class FakeSandbox {
     return { status: this.providerStatus, lastChange: 0 };
   }
 
+  /** A process as the SDK hands it back: the row plus its own `getLogs`, which
+   *  the box reads when a runner exits non-zero. */
+  #live(row: FakeProcessRow): LiveProcess {
+    return { ...row, getLogs: async () => await this.getProcessLogs(row.id) };
+  }
+
   async startProcess(
     command: string,
     options: { cwd?: string; processId?: string },
-  ): Promise<FakeProcessRow> {
+  ): Promise<LiveProcess> {
     this.starts.push({ command, cwd: options.cwd, processId: options.processId });
     const held = this.startGate;
     if (held !== undefined) {
@@ -629,7 +733,41 @@ export class FakeSandbox {
     };
     this.processes.set(id, row);
     if (fault !== undefined) throw fault.error;
-    return row;
+    const argv = quotedWords(command);
+    const action = runnerOption(argv, 'action');
+    if (action === undefined || this.runner === undefined) return this.#live(row);
+    // THE RUNNER ANSWERS BEFORE START REPLIES, which is one shape the real one
+    // has (candidate-runner.test.ts: "reads the result when the runner
+    // completed before start replied") and the only deterministic one: the
+    // first exit poll finds a settled row, and the reply is at its path.
+    const resultPath = runnerOption(argv, 'result');
+    try {
+      const reply = await this.runner({ action, resultPath, argv });
+      if (resultPath !== undefined) this.files.set(resultPath, reply);
+      this.processes.set(id, { ...row, status: 'completed', exitCode: 0 });
+    } catch (cause) {
+      this.processLogs.set(id, { stdout: '', stderr: describeThrown({ cause }) });
+      this.processes.set(id, { ...row, status: 'failed', exitCode: 1 });
+    }
+    return this.#live(row);
+  }
+
+  /** One file, as the SDK's `readFile` answers it: the content, or the SDK's
+   *  refusal for a path the container does not hold. */
+  async readFile(path: string): Promise<{ content: string }> {
+    const content = this.files.get(path);
+    if (content === undefined) throw new Error(`File not found: ${path}`);
+    return { content };
+  }
+
+  /** One file write through the SDK boundary. The tests drive text because
+   *  the candidate journal model's byte semantics live in its own suite; this
+   *  stand-in keeps the bytes at the path and tells an installed candidate
+   *  runner that a workload mutation occurred. */
+  async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
+    this.files.set(path, content);
+    await this.fileWritten?.(path, content);
+    return { success: true, path, timestamp: new Date().toISOString() };
   }
 
   /**
@@ -644,11 +782,12 @@ export class FakeSandbox {
    */
   readonly stopsContainerOnPoll = new Set<string>();
 
-  getProcess(id: string): Promise<FakeProcessRow | null> {
+  getProcess(id: string): Promise<LiveProcess | null> {
     const fault = this.getFaults.shift();
     if (fault !== undefined) return Promise.reject(fault);
     if (this.stopsContainerOnPoll.has(id)) this.running.running = false;
-    return Promise.resolve(this.processes.get(id) ?? null);
+    const row = this.processes.get(id);
+    return Promise.resolve(row === undefined ? null : this.#live(row));
   }
 
   listProcesses(): Promise<readonly FakeProcessRow[]> {
@@ -763,9 +902,20 @@ export class FakeSandbox {
 
   stops = 0;
 
+  /**
+   * A stop ends every process in the container and the process table with
+   * them: the SDK answers `getProcess` from the container's own server
+   * (`client.processes.getProcess`), which a stop takes down, so a wake finds
+   * no row for any runner or daemon the previous life started. What a stop
+   * does NOT take is the instance disk: the boot marker under `/tmp` and the
+   * runner's result files stay, which is the same-instance wake the platform
+   * can produce (`src/snapshot-chain.ts`, "the same-instance path") and the
+   * one the candidate repair is judged on.
+   */
   stop(): Promise<void> {
     this.stops += 1;
     this.running.running = false;
+    this.processes.clear();
     return Promise.resolve();
   }
 
@@ -845,7 +995,11 @@ type BoxState = ConstructorParameters<typeof Devbox>[0];
  *  ephemeral box — no store, nothing durable — really has. Named rather than
  *  `unknown`, because a boundary that admits anything admits an unparsed value
  *  too. */
-type TestEnv = Record<string, never>;
+export type TestEnv = Record<string, never>;
+
+/** The Durable Object id every test box carries, and therefore the box prefix
+ *  its strategy scopes the store to (`boxes/<id>`). */
+export const TEST_BOX_ID = 'devbox-under-test';
 
 /** One box, its container and its durable rows. */
 export interface Harness<Box> {
@@ -874,7 +1028,7 @@ export function harness<Box>(
   // reaches — and all three are provided here.
   const state = {
     storage: storage.handle,
-    id: { toString: () => 'devbox-under-test' },
+    id: { toString: () => TEST_BOX_ID },
     // The platform's critical section, as a stand-in that deliberately does NOT
     // provide the exclusion the real one does: the closure simply runs. That is
     // what lets a test park inside the section and prove the conditional write

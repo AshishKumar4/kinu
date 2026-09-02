@@ -26,6 +26,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { Devbox, harness } from './support/devbox-harness';
+import { candidateBox, candidateHead } from './support/candidate-box';
 import {
   CANDIDATE_JOURNAL_BINARY,
   CANDIDATE_JOURNAL_SOCKET,
@@ -166,5 +167,96 @@ describe('a candidate cold attach asks the container once per question', () => {
     expect(
       container.starts.filter((start) => start.command.includes(CANDIDATE_JOURNAL_BINARY)),
     ).toHaveLength(1);
+  });
+});
+
+describe('a wake on the same instance rewrites the attach row the driver reads', () => {
+  /**
+   * THE DEPLOYED FAILURE THIS HOLDS. Run 20260902154130, artifact
+   * `bench-artifacts/20260902154130/merkle-pack.json`: the merkle-pack arm
+   * cold-attached `empty` (`attachColdKind`), published three generations
+   * through its quiesces with the tick after each one skipped as "fenced the
+   * published manifest" (`checkpoints`), stopped in 6,625 ms, and its wake was
+   * refused by the driver with `wake restored empty, expected attached`
+   * (`verifyChecks[2]`, `notes[2]`).
+   *
+   * `empty` cannot have come from an attach: the candidate storage answers it
+   * only when the control row has no head (`container.ts` `attach`, and the
+   * runner's `rootId: null` only for `head === null`), and the row held a head
+   * the ticks had just fenced. It came from the DURABLE row the driver reads —
+   * `devbox:last-attach`, which `startupPollVerdict` returns the moment
+   * `restoration === 'attached'` — and that row was written by the cold attach
+   * alone. A wake on the instance the stop left behind still carries
+   * `/tmp/devbox-boot-id`, so `#hasAttachedContainer` is true, the drive takes
+   * the same-container repair instead of an attach, reaches `attached`, and
+   * leaves the cold `empty` row for the driver to read.
+   *
+   * THE ASSERTION IS ON THE DURABLE ROW, because that is what the driver
+   * reads, so a fix that only changes the in-memory phase cannot pass it.
+   */
+  test('stop then wake on the SAME instance rewrites lastAttach with kind attached and the next tick reaches the fence', async () => {
+    const { box, container, rows, runner } = candidateBox('merkle-pack');
+
+    // A fresh box: the cold attach answers `empty` and writes that down.
+    expect((await box.attachNow()).kind).toBe('empty');
+    expect(rows.get('devbox:last-attach')).toMatchObject({ kind: 'empty' });
+
+    // A write, then the ladder's quiesce: the runner hands the box a staged
+    // draft, the box publishes it, and the control row holds a head.
+    await box.writeFile('/workspace/ladder/c64.bin', 'sixty-four KiB of ladder bytes');
+    const published = await box.checkpointNow('quiesce');
+    expect(published.kind).toBe('committed');
+    const head = candidateHead(rows, 'merkle-pack');
+    if (head === null) throw new Error('the quiesce published no head');
+    expect(published.reason).toContain(head);
+
+    // The stop. Nothing was written since the publish, so the final quiesce
+    // fences the published manifest — the tick rows of the deployed ladder —
+    // and the container stops with its boot marker intact, which is what the
+    // platform leaves when it brings the same instance back.
+    expect((await box.quiesce()).kind).toBe('skipped');
+    expect(container.running.running).toBe(false);
+    expect(rows.get('devbox:boot-id')).toBe(container.bootId);
+
+    // The wake, as the driver's `/wake` drives it: the startup row is armed
+    // and the platform runs its callback.
+    const asked = container.execs.length;
+    const started = container.starts.length;
+    const answered = runner.invocations.length;
+    await box.kickStartup();
+    await box.devboxStartup();
+    const wakeAsks = container.execs.length - asked;
+
+    const state = await box.devboxState();
+    expect(state.restoration).toBe('attached');
+    // THE ROW THE DRIVER READS, rewritten by THIS wake: it names the head
+    // this generation serves, not what the cold attach found.
+    expect(state.lastAttach?.kind).toBe('attached');
+    expect(state.lastAttach?.detail).toContain(head);
+    // THE WAKE IS THE REPAIR, AND IT IS A COUNTABLE NUMBER OF ASKS. The tree
+    // never left the instance disk, so no restore runner ran: the container
+    // was asked to start the daemon the stop took down and to re-seed it with
+    // the head, and nothing else. Every exec, so a round trip added to this
+    // path has to be added here and justified: two boot-marker reads (the
+    // door's and the repair's own); three health probes of three execs each
+    // (before the repair, after the store remount, after the seed); the store
+    // remount's mkdir and its before/after mount reads; the daemon replacement's
+    // mount read, its mkdir and its one readiness ask; and the boot-marker
+    // re-check after the repair.
+    expect(runner.invocations.slice(answered).map((call) => call.action)).toEqual(['seed']);
+    expect(
+      container.starts.slice(started).filter((start) => start.command.includes(CANDIDATE_JOURNAL_BINARY)),
+    ).toHaveLength(1);
+    expect(wakeAsks).toBeLessThanOrEqual(18);
+    // And the daemon answers after the wake, so the next tick reaches the
+    // runner and its fence answers — the deployed release died instead of
+    // `no mutation journal answers`.
+    expect(container.journalRunning()).toBe(true);
+    const tick = await box.checkpointNow('tick');
+    expect(tick).toMatchObject({
+      kind: 'skipped',
+      reason: 'candidate merkle-pack tick fenced the published manifest',
+    });
+    expect(runner.invocations.at(-1)?.action).toBe('checkpoint');
   });
 });
