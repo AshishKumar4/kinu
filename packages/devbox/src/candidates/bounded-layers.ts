@@ -20,17 +20,18 @@
  * the derived GC closure — ready for `publishCandidate`. A crash anywhere
  * before the head CAS leaves the old root fully serving.
  *
- * Content is content-addressed in fixed-size chunks (`CHUNK_SIZE`, shared
- * with the CAS journal). An all-zero chunk has no object. Sparse runs retain
- * their order, including last-write-wins overlaps. Untouched spans compress
- * into arithmetic hole extents, so holes cost no stored bytes.
+ * Content is content-addressed in chunks of at most `CHUNK_SIZE` (shared
+ * with the CAS journal), cut on the CHUNK_SIZE grid so an unchanged aligned
+ * block keeps its digest across generations. Every all-zero span is one
+ * hole extent, exact to the byte: holes cost no stored bytes and a restore
+ * puts them back where they were. Sparse runs retain their order, including
+ * last-write-wins overlaps.
  *
  * Every byte this module reads crosses a validated, digest-bearing
  * `RangeReadIntent` through the shared `readCandidateRange` seam: a wrong
  * body never reaches a caller. Opened roots re-verify each layer document's
- * internal geometry — declared size equals the chunk span, chunk sizes fit
- * their offsets, hole digests equal the all-zero digest — before any path
- * resolves.
+ * internal geometry — declared size equals the chunk span, no stored chunk
+ * exceeds CHUNK_SIZE — before any path resolves.
  */
 
 import * as v from 'valibot';
@@ -47,10 +48,13 @@ import type {
   NodeEntry,
   NodeKind,
   PosixMetadata,
+  SealedContent,
   UpperPath,
 } from '../capture/model';
 import { ImmutableObjectRefSchema, RangeReadIntentSchema } from '../durability/contracts';
 import type { ImmutableObjectRef, RangeReadIntent } from '../durability/contracts';
+import { paintedSegments } from './merkle-pack/chunk';
+import type { LogicalLayout } from './merkle-pack/chunk';
 import {
   MemoryCandidateObjectSink,
   planCandidatePublication,
@@ -101,21 +105,18 @@ const PosixMetadataDocSchema = v.strictObject({
 });
 type PosixMetadataDoc = v.InferOutput<typeof PosixMetadataDocSchema>;
 
-/** One stored content chunk. `hole: true` marks one all-zero chunk that has
- * no object; repeated holes use {@link HoleExtentDoc} instead. */
+/** One stored content chunk: at most CHUNK_SIZE bytes behind one object. */
 const ChunkDocSchema = v.strictObject({
   hash: HashSchema,
   size: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-  hole: v.optional(v.literal(true)),
 });
 export type ChunkDoc = v.InferOutput<typeof ChunkDocSchema>;
 
-/** An arithmetic run of equal-sized all-zero chunks. A huge untouched file
- * therefore stores one extent rather than one entry per apparent chunk. */
+/** One all-zero span, exact to the byte, with no object behind it. A huge
+ * untouched file therefore stores one extent, whatever its size. */
 const HoleExtentDocSchema = v.strictObject({
   hole: v.literal(true),
   size: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-  count: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
 });
 export type HoleExtentDoc = v.InferOutput<typeof HoleExtentDocSchema>;
 export type ChunkPartDoc = ChunkDoc | HoleExtentDoc;
@@ -200,18 +201,6 @@ export function encodeCanonical(value: Canon): Uint8Array {
 
 // ── chunking ─────────────────────────────────────────────────────────────────
 
-const zeroHashMemo = new Map<number, string>();
-
-/** The digest of `size` zero bytes, memoized: every all-hole chunk of a size
- *  shares it, and none of them stores anything. */
-function zeroChunkHash(size: number): string {
-  let hash = zeroHashMemo.get(size);
-  if (hash === undefined) {
-    hash = sha256Hex(new Uint8Array(size));
-    zeroHashMemo.set(size, hash);
-  }
-  return hash;
-}
 interface Chunking {
   readonly chunks: readonly ChunkPartDoc[];
   readonly size: number;
@@ -223,34 +212,16 @@ interface ObjectStaging {
   readonly known: Set<string>;
 }
 
-function isHoleExtent(part: ChunkPartDoc): part is HoleExtentDoc {
-  return 'count' in part;
+export function isHoleExtent(part: ChunkPartDoc): part is HoleExtentDoc {
+  return 'hole' in part;
 }
 
-/** Append zero chunks compactly. The final short file chunk remains its own
- * extent because it has a different digest and geometry. */
-function appendHoles(parts: ChunkPartDoc[], size: number, count: number): void {
-  if (count === 0) return;
+/** Append `size` zero bytes, merged into the hole before them if there is one. */
+function appendHole(parts: ChunkPartDoc[], size: number): void {
+  if (size === 0) return;
   const previous = parts.at(-1);
-  if (previous !== undefined && isHoleExtent(previous) && previous.size === size) {
-    previous.count += count;
-    return;
-  }
-  parts.push({ hole: true, size, count });
-}
-
-/** Append the zero geometry for `[start, end)` chunk indexes without walking
- * each chunk. */
-function appendHoleIndexes(parts: ChunkPartDoc[], start: number, end: number, fileSize: number): void {
-  if (start >= end) return;
-  const total = Math.ceil(fileSize / CHUNK_SIZE);
-  const hasTail = fileSize % CHUNK_SIZE !== 0;
-  const fullEnd = hasTail ? total - 1 : total;
-  const fullCount = Math.max(0, Math.min(end, fullEnd) - start);
-  appendHoles(parts, CHUNK_SIZE, fullCount);
-  if (hasTail && start <= total - 1 && end > total - 1) {
-    appendHoles(parts, fileSize % CHUNK_SIZE, 1);
-  }
+  if (previous !== undefined && isHoleExtent(previous)) previous.size += size;
+  else parts.push({ hole: true, size });
 }
 
 /** Stage one nonzero chunk immediately. The builder retains only its metadata;
@@ -279,15 +250,31 @@ async function appendChunk(
       return;
     }
   }
-  appendHoles(parts, bytes.byteLength, 1);
+  appendHole(parts, bytes.byteLength);
+}
+
+/** A sealed file's layout from the extents the daemon's SEEK_HOLE walk left:
+ *  the gaps are its holes. Data segments carry no view; the capture reads them. */
+function sealedLayout(content: SealedContent): LogicalLayout {
+  const segments: LogicalLayout['segments'] = [];
+  let at = 0;
+  for (const extent of content.extents) {
+    if (extent.offset > at) segments.push({ zeros: true, start: at, end: extent.offset });
+    segments.push({ zeros: false, start: extent.offset, end: extent.offset + extent.length });
+    at = extent.offset + extent.length;
+  }
+  if (at < content.size) segments.push({ zeros: true, start: at, end: content.size });
+  return { segments, size: content.size };
 }
 
 /**
- * Split file content into fixed-size chunks and stage each nonzero chunk
- * immediately. No generation-wide payload map exists: peak builder payload
- * memory is one CHUNK_SIZE buffer plus metadata. Sparse runs paint each
- * touched chunk in original order, preserving last-write-wins overlaps;
- * untouched spans become arithmetic hole extents.
+ * Split file content into chunks and stage each nonzero chunk immediately.
+ * No generation-wide payload map exists: peak builder payload memory is one
+ * CHUNK_SIZE buffer plus metadata. Data spans are cut on the CHUNK_SIZE grid;
+ * every hole becomes one extent of its exact length, so the geometry a
+ * restore reproduces is the geometry that was captured. Sealed content is
+ * read through the capture; in-memory content through its painted layout,
+ * which already resolved last-write-wins overlaps.
  */
 async function chunkContent(
   capture: AuditedCapture,
@@ -296,74 +283,35 @@ async function chunkContent(
   staging: ObjectStaging,
 ): Promise<Chunking> {
   const chunks: ChunkPartDoc[] = [];
-
-  if (content.kind === 'dense') {
-    const bytes = content.bytes;
-    for (let off = 0; off < bytes.byteLength; off += CHUNK_SIZE) {
-      await appendChunk(chunks, bytes.subarray(off, Math.min(off + CHUNK_SIZE, bytes.byteLength)), staging);
-    }
-    return { chunks, size: bytes.byteLength };
-  }
-
-  if (content.kind === 'sealed') {
-    let nextIndex = 0;
-    let currentIndex = -1;
-    let current: Uint8Array | undefined;
-    const flush = async (): Promise<void> => {
-      if (current === undefined) return;
-      await appendChunk(chunks, current, staging);
-      nextIndex = currentIndex + 1;
-      current = undefined;
-    };
-    for (const extent of content.extents) {
-      let pos = extent.offset;
-      const end = extent.offset + extent.length;
-      while (pos < end) {
-        const index = Math.floor(pos / CHUNK_SIZE);
-        const chunkStart = index * CHUNK_SIZE;
-        if (index !== currentIndex) {
-          await flush();
-          appendHoleIndexes(chunks, nextIndex, index, content.size);
-          currentIndex = index;
-          current = new Uint8Array(Math.min(CHUNK_SIZE, content.size - chunkStart));
-        }
-        const take = Math.min(chunkStart + CHUNK_SIZE, end) - pos;
-        current!.set(await readCaptureRange(capture, entry, pos, take), pos - chunkStart);
-        pos += take;
+  const layout = content.kind === 'sealed' ? sealedLayout(content) : paintedSegments(content);
+  const bytesAt = async (offset: number, length: number): Promise<Uint8Array> => {
+    if (content.kind === 'sealed') return await readCaptureRange(capture, entry, offset, length);
+    const out = new Uint8Array(length);
+    for (const segment of layout.segments) {
+      const start = Math.max(offset, segment.start);
+      const end = Math.min(offset + length, segment.end);
+      if (!segment.zeros && start < end) {
+        out.set(segment.view!.subarray(start - segment.start, end - segment.start), start - offset);
       }
     }
-    await flush();
-    appendHoleIndexes(chunks, nextIndex, Math.ceil(content.size / CHUNK_SIZE), content.size);
-    return { chunks, size: content.size };
-  }
-
-  const { size } = content;
-  const touched = new Set<number>();
-  for (const run of content.runs) {
-    const end = run.offset + run.bytes.byteLength;
-    if (!Number.isSafeInteger(run.offset) || run.offset < 0 || !Number.isSafeInteger(end) || end > size) {
-      throw new Error(`sparse run ${run.offset}..${end} exceeds the file's declared size ${size}`);
+    return out;
+  };
+  let at = 0;
+  const chunkData = async (end: number): Promise<void> => {
+    while (at < end) {
+      const take = Math.min(end, (Math.floor(at / CHUNK_SIZE) + 1) * CHUNK_SIZE) - at;
+      await appendChunk(chunks, await bytesAt(at, take), staging);
+      at += take;
     }
-    for (let pos = run.offset; pos < end; pos = (Math.floor(pos / CHUNK_SIZE) + 1) * CHUNK_SIZE) {
-      touched.add(Math.floor(pos / CHUNK_SIZE));
-    }
+  };
+  for (const segment of layout.segments) {
+    if (!segment.zeros) continue;
+    await chunkData(segment.start);
+    appendHole(chunks, segment.end - segment.start);
+    at = segment.end;
   }
-
-  let nextIndex = 0;
-  for (const index of [...touched].sort((a, b) => a - b)) {
-    appendHoleIndexes(chunks, nextIndex, index, size);
-    const chunkStart = index * CHUNK_SIZE;
-    const buffer = new Uint8Array(Math.min(CHUNK_SIZE, size - chunkStart));
-    for (const run of content.runs) {
-      const start = Math.max(chunkStart, run.offset);
-      const end = Math.min(chunkStart + buffer.byteLength, run.offset + run.bytes.byteLength);
-      if (start < end) buffer.set(run.bytes.subarray(start - run.offset, end - run.offset), start - chunkStart);
-    }
-    await appendChunk(chunks, buffer, staging);
-    nextIndex = index + 1;
-  }
-  appendHoleIndexes(chunks, nextIndex, Math.ceil(size / CHUNK_SIZE), size);
-  return { chunks, size };
+  await chunkData(layout.size);
+  return { chunks, size: layout.size };
 }
 
 function copyMetadata(metadata: PosixMetadata | undefined): PosixMetadataDoc | undefined {
@@ -408,12 +356,9 @@ function sameChunks(a: readonly ChunkPartDoc[], b: readonly ChunkPartDoc[]): boo
   if (a.length !== b.length) return false;
   return a.every((part, index) => {
     const other = b[index];
-    if (other === undefined || isHoleExtent(part) !== isHoleExtent(other)) return false;
-    if (isHoleExtent(part) && isHoleExtent(other)) {
-      return part.size === other.size && part.count === other.count;
-    }
-    return !isHoleExtent(part) && !isHoleExtent(other)
-      && part.hash === other.hash && part.size === other.size && part.hole === other.hole;
+    if (other === undefined || part.size !== other.size) return false;
+    if (isHoleExtent(part)) return isHoleExtent(other);
+    return !isHoleExtent(other) && part.hash === other.hash;
   });
 }
 
@@ -541,7 +486,7 @@ export async function build(
   for (const doc of resolved.values()) {
     if (doc.kind !== 'file') continue;
     for (const part of doc.chunks) {
-      if (isHoleExtent(part) || part.hole === true) continue;
+      if (isHoleExtent(part)) continue;
       reachableByKey.set(objectKey(part.hash), {
         key: objectKey(part.hash), byteLength: String(part.size), sha256: part.hash,
       });
@@ -563,7 +508,7 @@ export async function build(
   for (const doc of resolved.values()) {
     if (doc.kind !== 'file') continue;
     for (const part of doc.chunks) {
-      if (!isHoleExtent(part) && part.hole !== true) chunkHashes.add(part.hash);
+      if (!isHoleExtent(part)) chunkHashes.add(part.hash);
     }
   }
   const view = new BoundedLayers(
@@ -642,30 +587,20 @@ export interface StatView {
   readonly size?: number;
   readonly target?: string;
 }
+/** A stored chunk above CHUNK_SIZE would make one bounded range read fetch an
+ *  object of any size the layer chose to declare; a span that disagrees with
+ *  the declared size would read short or past the end. Both refuse here. */
 function validateFileEntry(doc: Extract<EntryDoc, { kind: 'file' }>, where: string): void {
   let logicalBytes = 0;
-  let chunkCount = 0;
   for (const part of doc.chunks) {
-    const count = isHoleExtent(part) ? part.count : 1;
-    const remainingChunks = Math.ceil(doc.size / CHUNK_SIZE) - chunkCount;
-    if (count > remainingChunks) {
-      throw new Error(`${where}: ${doc.path} extent exceeds the file's declared chunk geometry`);
+    if (!isHoleExtent(part) && part.size > CHUNK_SIZE) {
+      throw new Error(`${where}: ${doc.path} chunk ${part.hash} is ${part.size} bytes, above the ${CHUNK_SIZE}-byte bound`);
     }
-    const spanStart = chunkCount * CHUNK_SIZE;
-    const expectedSize = Math.max(Math.min(CHUNK_SIZE, doc.size - spanStart), 0);
-    if (part.size !== expectedSize || (count > 1 && part.size !== CHUNK_SIZE)) {
-      throw new Error(`${where}: ${doc.path} chunk ${chunkCount} has invalid ${count}-chunk geometry`);
-    }
-    if (part.hole === true && !isHoleExtent(part) && part.hash !== zeroChunkHash(part.size)) {
-      throw new Error(`${where}: ${doc.path} chunk ${chunkCount} claims all-zero but carries another digest`);
-    }
-    logicalBytes += part.size * count;
-    chunkCount += count;
+    logicalBytes += part.size;
   }
-  const expectedCount = Math.ceil(doc.size / CHUNK_SIZE);
-  if (chunkCount !== expectedCount || logicalBytes !== doc.size) {
+  if (logicalBytes !== doc.size) {
     throw new Error(
-      `${where}: ${doc.path} declares size ${doc.size} but its ${chunkCount} chunk(s) hold ${logicalBytes}`,
+      `${where}: ${doc.path} declares size ${doc.size} but its ${doc.chunks.length} chunk(s) hold ${logicalBytes}`,
     );
   }
 }
@@ -762,7 +697,7 @@ export class BoundedLayers {
     for (const doc of this.resolved.values()) {
       if (doc.kind !== 'file') continue;
       for (const part of doc.chunks) {
-        if (isHoleExtent(part) || part.hole === true || refs.has(objectKey(part.hash))) continue;
+        if (isHoleExtent(part) || refs.has(objectKey(part.hash))) continue;
         refs.set(objectKey(part.hash), {
           key: objectKey(part.hash), byteLength: String(part.size), sha256: part.hash,
         });
@@ -830,11 +765,10 @@ export class BoundedLayers {
 
     let partStart = 0;
     for (const part of doc.chunks) {
-      const count = isHoleExtent(part) ? part.count : 1;
-      const partEnd = partStart + part.size * count;
+      const partEnd = partStart + part.size;
       const from = Math.max(start, partStart);
       const to = Math.min(end, partEnd);
-      if (from < to && !isHoleExtent(part) && part.hole !== true) {
+      if (from < to && !isHoleExtent(part)) {
         const ref: ImmutableObjectRef = {
           key: objectKey(part.hash), byteLength: String(part.size), sha256: part.hash,
         };
@@ -914,7 +848,7 @@ export async function open(
   for (const doc of resolved.values()) {
     if (doc.kind !== 'file') continue;
     for (const part of doc.chunks) {
-      if (!isHoleExtent(part) && part.hole !== true) chunks.add(part.hash);
+      if (!isHoleExtent(part)) chunks.add(part.hash);
     }
   }
 

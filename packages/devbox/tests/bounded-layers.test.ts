@@ -50,10 +50,11 @@ import {
   MAX_LAYER_DEPTH,
   build,
   encodeCanonical,
+  isHoleExtent,
   objectKey,
   open,
 } from '../src/candidates/bounded-layers';
-import type { BoundedLayers, BuiltLayers, EntryDoc } from '../src/candidates/bounded-layers';
+import type { BoundedLayers, BuiltLayers, Canon } from '../src/candidates/bounded-layers';
 import {
   MemoryCandidateObjectSink,
   StaleParentRefused,
@@ -524,7 +525,7 @@ describe('bounded layers', () => {
     expect(await view.readRange('big', size + 10, 100)).toHaveLength(0);
   });
 
-  test('a 1 TiB hole uses one arithmetic extent, not one chunk document per hole', async () => {
+  test('a 1 TiB hole uses one exact extent, not one chunk document per hole', async () => {
     const size = 1024 ** 4;
     const built = await build(audited(snap(sparseE('terabyte-hole', size, [])), 0));
     const layerObject = built.plan.dependencies.find((object) => object.ref.key === built.view.layers[0]?.key);
@@ -533,7 +534,7 @@ describe('bounded layers', () => {
     const layer = decodeJson(LayerDocSchema, 'terabyte base', layerBytes);
     const entry = layer.entries[0];
     if (entry === undefined || entry.kind !== 'file') throw new Error('missing terabyte file entry');
-    expect(entry.chunks).toEqual([{ hole: true, size: CHUNK_SIZE, count: size / CHUNK_SIZE }]);
+    expect(entry.chunks).toEqual([{ hole: true, size }]);
     expect(layerBytes.byteLength).toBeLessThan(1024);
     expect(planMovedBytes(built.plan)).toBeLessThan(3 * 1024);
   });
@@ -579,7 +580,7 @@ describe('bounded layers', () => {
     const layer = decodeJson(LayerDocSchema, 'sealed terabyte base', layerBytes);
     const file = layer.entries.find((candidate) => candidate.path === 'sealed/hole.bin');
     if (file === undefined || file.kind !== 'file') throw new Error('missing sealed hole entry');
-    expect(file.chunks).toEqual([{ hole: true, size: CHUNK_SIZE, count: size / CHUNK_SIZE }]);
+    expect(file.chunks).toEqual([{ hole: true, size }]);
     expect(layerBytes.byteLength).toBeLessThan(1024);
   });
 
@@ -814,7 +815,7 @@ describe('bounded layers', () => {
     const store = new MemStore();
 
     /** Wind a hand-made single-base root into the store, bypassing build. */
-    const plantCorrupt = (entry: EntryDoc): Uint8Array => {
+    const plantCorrupt = (entry: Canon): Uint8Array => {
       const layerBytes = encodeCanonical({ v: 1, t: 'base', entries: [entry], tombs: [] });
       const layerHash = sha256Hex(layerBytes);
       const layerRef = { key: objectKey(layerHash), byteLength: String(layerBytes.byteLength), sha256: layerHash };
@@ -829,27 +830,23 @@ describe('bounded layers', () => {
       kind: 'file', path: 'bad-size', mode: 0o644, ino: 1, size: 99,
       chunks: [{ hash: sha256Hex(good), size: good.byteLength }],
     });
-    // Geometry fires first here: an undersized non-final chunk IS the
-    // size disagreement. Either refusal names the corruption.
-    await expect(open(mismatched, store.reader, IDENTITY)).rejects.toThrow(/invalid|declares size/);
+    await expect(open(mismatched, store.reader, IDENTITY)).rejects.toThrow(/declares size 99 but its 1 chunk\(s\) hold 8/);
 
-    // A non-final chunk smaller than CHUNK_SIZE breaks geometry.
-    const shortChunk = new Uint8Array(CHUNK_SIZE - 1).fill(9);
+    // A stored chunk above CHUNK_SIZE would make one bounded read fetch an
+    // object of whatever size the layer declared.
+    const oversized = new Uint8Array(CHUNK_SIZE + 1).fill(9);
     const badGeometry = plantCorrupt({
-      kind: 'file', path: 'bad-geom', mode: 0o644, ino: 2, size: CHUNK_SIZE * 2,
-      chunks: [
-        { hash: sha256Hex(shortChunk), size: CHUNK_SIZE - 1 },
-        { hash: sha256Hex(shortChunk), size: CHUNK_SIZE - 1 },
-      ],
+      kind: 'file', path: 'bad-geom', mode: 0o644, ino: 2, size: CHUNK_SIZE + 1,
+      chunks: [{ hash: sha256Hex(oversized), size: CHUNK_SIZE + 1 }],
     });
-    await expect(open(badGeometry, store.reader, IDENTITY)).rejects.toThrow(/invalid/);
+    await expect(open(badGeometry, store.reader, IDENTITY)).rejects.toThrow(/above the 524288-byte bound/);
 
-    // A hole ref whose digest is not the all-zero digest refuses.
+    // A hole carries no digest; one that does is no shape the wire has.
     const badHole = plantCorrupt({
       kind: 'file', path: 'bad-hole', mode: 0o644, ino: 3, size: CHUNK_SIZE,
       chunks: [{ hash: sha256Hex(good), size: CHUNK_SIZE, hole: true }],
     });
-    await expect(open(badHole, store.reader, IDENTITY)).rejects.toThrow(/all-zero but carries another digest/);
+    await expect(open(badHole, store.reader, IDENTITY)).rejects.toThrow(/does not match its schema/);
   });
 
   test('open refuses a hash-valid root whose oldest layer is not the sole base', async () => {
@@ -1109,7 +1106,7 @@ describe('bounded layers', () => {
     const entry = chunkView.entryAt('g.bin');
     if (entry === undefined || entry.kind !== 'file') throw new Error('missing file entry');
     const chunkPart = entry.chunks[0];
-    if (chunkPart === undefined || 'count' in chunkPart) throw new Error('expected one stored chunk');
+    if (chunkPart === undefined || isHoleExtent(chunkPart)) throw new Error('expected one stored chunk');
     chunkStore.map.delete(objectKey(chunkPart.hash));
     await expect(chunkView.readRange('g.bin', 0, 13)).rejects.toThrow(objectKey(chunkPart.hash));
   });

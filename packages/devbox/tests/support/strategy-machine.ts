@@ -77,6 +77,7 @@ import {
 import { sha256Hex } from '../../src/cas/hash';
 import {
   build as buildBoundedLayers,
+  isHoleExtent,
   open as openBoundedLayers,
 } from '../../src/candidates/bounded-layers';
 import {
@@ -2913,19 +2914,14 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         if (content === undefined) {
           const doc = view.entryAt(path);
           if (doc?.kind !== 'file') throw new Error(`bounded layer has no file row for ${path}`);
-          const hasHole = doc.chunks.some((part) => 'count' in part || part.hole === true);
+          const hasHole = doc.chunks.some(isHoleExtent);
           if (!hasHole) {
             content = { kind: 'dense', bytes: await view.readRange(path, 0, doc.size) };
           } else {
             let offset = 0;
             const runs: Array<{ offset: number; bytes: Uint8Array }> = [];
             for (const part of doc.chunks) {
-              const count = 'count' in part ? part.count : 1;
-              if ('count' in part || part.hole === true) {
-                offset += part.size * count;
-                continue;
-              }
-              runs.push({ offset, bytes: await view.readRange(path, offset, part.size) });
+              if (!isHoleExtent(part)) runs.push({ offset, bytes: await view.readRange(path, offset, part.size) });
               offset += part.size;
             }
             content = { kind: 'sparse', size: doc.size, runs };

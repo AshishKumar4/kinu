@@ -71,12 +71,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "the late finalize reported committed",
   },
   {
-    arm: 'bounded-layers',
-    cell: '6.11',
-    since: '2026-09-02',
-    reason: "bounded-layers after the wake: 1 mismatches: sparse@src/sparse.img: holes [[0,524288],[528384,1048576]] became [[0,524288]]",
-  },
-  {
     arm: 'snapshot-chain',
     cell: '6.12',
     since: '2026-09-02',

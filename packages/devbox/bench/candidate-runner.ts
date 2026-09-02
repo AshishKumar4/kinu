@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { sha256Hex } from '../src/cas/hash';
 import * as v from 'valibot';
 import type { AuditedCapture } from '../src/capture/model';
-import { build as buildBounded, open as openBounded } from '../src/candidates/bounded-layers';
+import { build as buildBounded, isHoleExtent, open as openBounded } from '../src/candidates/bounded-layers';
 import { buildMerklePack, openMerklePack, parentFromPublishedParent } from '../src/candidates/merkle-pack';
 import type { MerklePackView } from '../src/candidates/merkle-pack';
 import { JournalDaemonClient, captureFromJournalFence } from '../src/capture/journal/client';
@@ -306,12 +306,11 @@ async function restoreBounded(options: CandidateRunOptions, head: StoredHead, st
         if (document === undefined || document.kind !== 'file') throw new Error(`published bounded file disappeared: ${path}`);
         let offset = 0;
         for (const part of document.chunks) {
-          const length = part.size * ('count' in part ? part.count : 1);
-          if (part.hole !== true) {
-            await restoreCandidateRange(root, path, offset, length, async (at, bytes) =>
+          if (!isHoleExtent(part)) {
+            await restoreCandidateRange(root, path, offset, part.size, async (at, bytes) =>
               await view.readRange(path, at, bytes));
           }
-          offset += length;
+          offset += part.size;
         }
         restoreMetadata(root, path, entry.metadata);
         inodes.set(entry.ino, path);
