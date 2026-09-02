@@ -27,7 +27,12 @@ const INK = {
 } as const;
 
 const BRAND = chalk.bold.hex(INK.sheen)('Kinu');
-const VERSION = cliPackage.version;
+/** The build stamp the dist build folds in at bundle time
+ *  (`bun build --define process.env.KINU_BUILD_STAMP`), so an installed copy
+ *  reports `0.2.0+<sha>` while package.json stays the one version source and
+ *  the source tree is never written. A source run carries no stamp. */
+const BUILD_STAMP = process.env.KINU_BUILD_STAMP;
+const VERSION = BUILD_STAMP === undefined ? cliPackage.version : `${cliPackage.version}+${BUILD_STAMP}`;
 const DIM = chalk.dim;
 const ACCENT = chalk.hex(INK.thread);
 const OK = chalk.hex(INK.success);

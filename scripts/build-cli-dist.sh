@@ -55,12 +55,9 @@ BUN="${BUN:-bun}"
 command -v "$BUN" >/dev/null 2>&1 || { echo "build-cli-dist: bun is required" >&2; exit 1; }
 
 MANIFEST="$ROOT/packages/cli/package.json"
-MANIFEST_BACKUP="$(mktemp -t kinu-cli-manifest.XXXXXX.json)"
-cp "$MANIFEST" "$MANIFEST_BACKUP"
 tmp="$(mktemp -d)"
 cleanup() {
-  cp "$MANIFEST_BACKUP" "$MANIFEST"
-  rm -rf "$tmp" "$MANIFEST_BACKUP"
+  rm -rf "$tmp"
 }
 trap cleanup EXIT INT TERM
 
@@ -68,17 +65,18 @@ mkdir -p "$OUT_DIR"
 
 # Stamp the build into the CLI version (semver build metadata) so installed
 # copies are distinguishable: "0.2.0+abc1234". package.json stays the single
-# version source. The bundler inlines it (src/display.ts imports the manifest),
-# so the stamp has to land before the build and is reverted by the trap after.
+# version source and is READ, never written: the stamp is a bundle-time
+# define (src/display.ts reads process.env.KINU_BUILD_STAMP), so the source tree stays
+# byte-identical while this runs. It used to write the stamp into the manifest
+# and restore it on exit, and the deploy's parallel gate queue read the stamped
+# file from the CLI suite while this script had it — a race that failed
+# staging on 2026-09-02.
 sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
-"$BUN" -e '
-  const [path, sha] = process.argv.slice(1);
-  const manifest = JSON.parse(require("fs").readFileSync(path, "utf8"));
-  manifest.version = `${manifest.version.split("+")[0]}+${sha}`;
-  require("fs").writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
-  process.stdout.write(manifest.version);
-' "$MANIFEST" "$sha" > "$tmp/version"
-version="$(cat "$tmp/version")"
+base_version="$("$BUN" -e '
+  const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(manifest.version.split("+")[0]);
+' "$MANIFEST")"
+version="$base_version+$sha"
 echo "build-cli-dist: building kinu $version"
 
 stage="$tmp/kinu"
@@ -86,6 +84,7 @@ mkdir -p "$stage"
 "$BUN" build "$ROOT/packages/cli/bin/cli.ts" \
   --target=bun \
   --outdir="$stage" \
+  --define "process.env.KINU_BUILD_STAMP=\"$sha\"" \
   --external '@nimbus-sh/runtime-bash' \
   --external '@nimbus-sh/runtime-cpython' \
   > "$tmp/build.log" || { cat "$tmp/build.log" >&2; echo "build-cli-dist: bun build failed" >&2; exit 1; }

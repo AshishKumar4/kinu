@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { statSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -991,6 +991,24 @@ describe("CLI distribution artifacts", () => {
     expect(listing.exitCode, decoder.decode(listing.stderr)).toBe(0);
     return new Set(decoder.decode(listing.stdout).trim().split("\n"));
   }
+
+  test("the build reads the CLI manifest and never writes it", () => {
+    // The deploy runs its gates six at a time, and this build is one of them:
+    // a stamp written into packages/cli/package.json and restored on exit was
+    // read mid-flight by the CLI suite's version test on 2026-09-02 (staging
+    // failed on `0.2.0+<sha>` against an imported `0.2.0`). The stamp is a
+    // bundle-time define now, so the manifest's bytes AND mtime survive a
+    // build — a restore-on-exit would keep the bytes and move the mtime.
+    const manifest = join(REPO_ROOT, "packages", "cli", "package.json");
+    const before = { bytes: readFileSync(manifest, "utf8"), mtimeMs: statSync(manifest).mtimeMs };
+    const directory = buildDist();
+    expect(readFileSync(manifest, "utf8")).toBe(before.bytes);
+    expect(statSync(manifest).mtimeMs).toBe(before.mtimeMs);
+    // And the stamp still lands where it belongs: in what ships.
+    const stamp = JSON.parse(readFileSync(join(directory, "kinu-version.json"), "utf8"));
+    const base = JSON.parse(before.bytes).version;
+    expect(stamp.version).toBe(`${base}+${stamp.sha}`);
+  }, 300_000);
 
   test("publishes one artifact per platform, plus the runtime they share", () => {
     const directory = buildDist();
