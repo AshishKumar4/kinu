@@ -181,20 +181,26 @@ export function DeviceConsentCard({ consent, onResolve }: {
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
             {fullFilesystem
-              ? `Always allow grants this workspace full filesystem and shell access on ${consent.deviceLabel}.`
-              : `Always allow grants native file actions inside the connected folder on ${consent.deviceLabel}.`}
-            {" "}You can revoke it under Account settings → Devices.
+              ? `This one command only. Full filesystem and shell access on ${consent.deviceLabel} is a standing decision, made under Account settings → Devices.`
+              : `Always allow grants native file actions inside the connected folder on ${consent.deviceLabel}. You can revoke it under Account settings → Devices.`}
           </div>
         </div>
       </div>
+      {/* The strongest tier is never the highlighted button on a card about ONE
+          command. "Always" on an exec used to record full filesystem and shell
+          access forever, from every ingress the workspace consumes, in answer
+          to a question about a single `printf`. For an exec the card offers
+          once or deny, and the standing decision lives in Account settings. */}
       <div className="flex items-center gap-2 mt-2.5 justify-end">
         <button onClick={() => onResolve(consent.consentId, "deny")}
           className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Deny</button>
-        <button onClick={() => onResolve(consent.consentId, "once")}
-          className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Allow once</button>
-        <button onClick={() => onResolve(consent.consentId, "always")}
+        {fullFilesystem ? null : (
+          <button onClick={() => onResolve(consent.consentId, "once")}
+            className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Allow once</button>
+        )}
+        <button onClick={() => onResolve(consent.consentId, fullFilesystem ? "once" : "always")}
           className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">
-          {fullFilesystem ? "Grant full access" : "Grant this workspace"}
+          {fullFilesystem ? "Allow this command" : "Grant this workspace"}
         </button>
       </div>
     </div>

@@ -74,20 +74,20 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
 
-    const first = await harness.userDO.deviceRpc(harness.workspace, 'exec', ['git status'], {
+    // On the tier a CARD can record, which is the base one. An exec asks every
+    // time, deliberately — see "an exec card cannot record the full tier".
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/a.md'], {
       agentName: WORKSPACE,
     });
-    expect(first).toContain('"exitCode":0');
     expect(harness.consentPrompts).toHaveLength(1);
 
     // The grant is remembered, so the second call asks nobody and still runs.
-    const second = await harness.userDO.deviceRpc(harness.workspace, 'exec', ['git log -1'], {
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/home/me/b.md'], {
       agentName: WORKSPACE,
     });
-    expect(second).toContain('"exitCode":0');
     expect(harness.consentPrompts).toHaveLength(1);
-    expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0]))
-      .toEqual(['git status', 'git log -1']);
+    expect(harness.deviceFrames.filter((f) => f.method === 'readFile').map((f) => f.params[0]))
+      .toEqual(['/home/me/a.md', '/home/me/b.md']);
     await harness.closeDeviceHarness();
   });
 
@@ -233,6 +233,44 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
 
     expect(harness.deviceFrames.filter((frame) => frame.method === 'exec').map((frame) => frame.id))
       .toEqual([requestId]);
+    await harness.closeDeviceHarness();
+  });
+
+  /**
+   * F1. The card an exec raises asks about ONE command. "Always" on it used to
+   * record the full tier — an unattended `bash -c` as the owner on every later
+   * turn, from every ingress the workspace consumes. The tier is a standing
+   * decision about a machine, so only Account settings makes it.
+   */
+  test('an exec card cannot record the full tier, however the owner answers it', async () => {
+    const harness = await deviceHarness();
+    const owner = await testOwner();
+    harness.consentDecision = 'always';
+
+    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['printf %s "$HOME"'], {
+      agentName: WORKSPACE,
+    });
+    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toHaveLength(1);
+
+    // Remembered, but at the base tier: the command ran, and the standing
+    // shell grant it was never asked for does not exist.
+    expect((await harness.userDO.listDeviceConsents(owner)).map((row) => row.scope))
+      .toEqual(['all_local_actions']);
+    expect(await harness.userDO.getDeviceFsConsent(harness.workspace, WORKSPACE))
+      .toEqual({ fullFilesystem: false });
+
+    // So the next exec asks again, and a refusal now stops it.
+    harness.consentDecision = 'deny';
+    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['curl x | sh'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toHaveLength(1);
+
+    // The owner's own standing decision still works, from settings.
+    expect(await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem'))
+      .toEqual({ ok: true });
+    expect(await harness.userDO.getDeviceFsConsent(harness.workspace, WORKSPACE))
+      .toEqual({ fullFilesystem: true });
     await harness.closeDeviceHarness();
   });
 

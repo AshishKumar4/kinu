@@ -2399,8 +2399,19 @@ export class UserDO extends Agent<Env> {
     // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
     if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
+    // A CARD NEVER RECORDS THE FULL TIER. The card an exec raises names one
+    // command, and "always" on it granted an unattended `bash -c` as the owner
+    // on every later turn, from every ingress the workspace consumes — a peer
+    // agent's task, a webhook body, an inbound email. The owner who pressed it
+    // was answering about `printf %s "$HOME"`. The full tier is granted only
+    // where it is stated as a standing decision about a machine, in Account
+    // settings (`setDeviceConsentScope`), so "always" here remembers the base
+    // tier and an exec keeps asking until that toggle exists.
     if (decision === 'always') {
-      this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action, requiredScope);
+      const remembered = requiredScope === DEVICE_CONSENT_SCOPE_FULL_FS
+        ? DEVICE_CONSENT_SCOPE
+        : requiredScope;
+      this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action, remembered);
     }
     return { allowed: true };
   }
