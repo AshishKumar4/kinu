@@ -7,9 +7,14 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
+const sandbox = require('./sandbox.js');
 
 const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
+/** The directory this daemon owns for agent homes. The HUB computes the home
+ *  for one (device, workspace) beneath it and sends it on the exec frame; the
+ *  daemon owns the PATH so an uninstall has one directory to remove. */
+const AGENT_ROOT = path.join(DEVICE_HOME, 'agents');
 /** One daemon owns a machine. This file names the process that owns it, and
  *  the daemon claims it in its own process — the CLI is not the only thing
  *  that can start this file. */
@@ -84,6 +89,10 @@ const EXEC_STREAM_MAX_BYTES = 512 * 1024;
 
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
+
+/** What `sandbox.probe()` answered at start. Read by HELLO and by the exec
+ *  frame's own refusal, so it is proved once rather than per command. */
+let SANDBOX_CAPABILITY = { status: sandbox.SANDBOX_STATUS.PROBE_FAILED, detail: 'the sandbox probe has not run yet' };
 
 function rpc(ws, id, result, error) {
   ws.send(JSON.stringify(error ? { id, error } : { id, result }));
@@ -1802,6 +1811,24 @@ function main() {
   }
   const mkWs = (url) => new globalThis.WebSocket(url);
 
+  // Probed once, by RUNNING the real sandbox shape: a check that only looked
+  // for the binary would report success on every machine whose AppArmor policy
+  // forbids the namespace. A machine that cannot sandbox still CONNECTS — its
+  // file methods work and the owner needs to read the reason — so a probe that
+  // cannot even run is recorded as a status, never raised.
+  try {
+    SANDBOX_CAPABILITY = sandbox.probe({ deviceHome: DEVICE_HOME });
+    fs.mkdirSync(AGENT_ROOT, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    SANDBOX_CAPABILITY = {
+      status: sandbox.SANDBOX_STATUS.PROBE_FAILED,
+      detail: `the sandbox probe could not run: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
+    log('Commands cannot be sandboxed on this machine:', SANDBOX_CAPABILITY.detail);
+  }
+
   startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
     secret: () => cfg.token,
@@ -1828,6 +1855,17 @@ function main() {
           type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid,
           root: cfg.root,
           home: os.homedir(),
+          // What this machine PROVED at startup, in the hub's words: the hub
+          // decides the tier and needs one term for what the machine can
+          // honour, so a machine that cannot sandbox is never silently given a
+          // raw shell. GPU nodes are enumerated per HELLO, because a driver
+          // loaded after this daemon started is still this machine's GPU.
+          sandbox: {
+            platform: os.platform(),
+            ...sandbox.helloCapability(SANDBOX_CAPABILITY),
+            gpu: sandbox.gpuNodes(),
+          },
+          agentRoot: AGENT_ROOT,
         }));
       });
       ws.addEventListener('message', (ev) => {

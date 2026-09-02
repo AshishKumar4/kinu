@@ -57,6 +57,11 @@ export const UNTYPECHECKED_TESTS = {
     runner: 'bun test packages/pc-agent/',
     reason: 'The package is plain JavaScript. `check` syntax-checks its source with node --check.',
   },
+  'packages/pc-agent/tests/sandbox.test.js': {
+    kind: 'JavaScript test',
+    runner: 'bun test packages/pc-agent/',
+    reason: 'The package is plain JavaScript. `check` syntax-checks its source with node --check.',
+  },
   'scripts/eval.test.ts': {
     kind: 'declared compiler debt',
     runner: 'bun test scripts/eval.test.ts',

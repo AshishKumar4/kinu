@@ -18,6 +18,7 @@ import type { CloudDevice } from '../src/cloud-api';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
+import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];
@@ -369,6 +370,10 @@ describe('device-connect install hardening', () => {
     // bytes on disk are this CLI's own, and the poison never ran.
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
+    // The daemon requires its sandbox policy as a SIBLING, so a release that
+    // shipped one without the other is a daemon that dies on its first
+    // require. Both bytes are this CLI's own.
+    expect(readFileSync(join(home, 'sandbox.js'), 'utf-8')).toBe(SANDBOX_SOURCE);
     expect(existsSync(join(home, POISON_MARKER))).toBe(false);
   }, 20_000);
 
@@ -610,6 +615,10 @@ describe('device daemon single-instance lock', () => {
   function installedMachine(origin: string): string {
     const home = makeHome({ origin, accessToken: 'ptc_test' });
     writeFileSync(join(home, 'pc-agent.js'), DAEMON_SOURCE, { mode: 0o700 });
+    // Both files, because the daemon requires its sandbox policy as a sibling:
+    // an installed machine with only one of them is a daemon that dies before
+    // it logs anything, which is what this fixture found.
+    writeFileSync(join(home, 'sandbox.js'), SANDBOX_SOURCE, { mode: 0o700 });
     writeFileSync(
       join(home, 'device.json'),
       `${JSON.stringify({ user: 'user_1', token: 'device-token', origin })}\n`,

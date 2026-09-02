@@ -23,9 +23,12 @@ import { enforceOwnerOnly } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice } from './cloud-api';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
+import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
+/** The daemon's sandbox policy, required by pc-agent.js as a sibling. */
+const SANDBOX_PATH = join(AGENT_HOME, 'sandbox.js');
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 export const DEVICE_CONNECT_DEADLINE_MS = 20_000;
@@ -276,7 +279,21 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     0o700,
     (temporary) => verifyStagedDaemon(temporary),
   );
+  // The daemon requires this beside itself, so it is not optional and it is
+  // not fetched: the sandbox policy ships in the same release as the code that
+  // reads it, or a released daemon dies on its first require.
+  const sandboxTemporary = stageInstallFile(
+    SANDBOX_PATH,
+    PC_AGENT_SANDBOX_SOURCE,
+    0o700,
+    (temporary) => {
+      if (readFileSync(temporary, 'utf-8') !== PC_AGENT_SANDBOX_SOURCE) {
+        throw new KinuError('io', 'the staged device sandbox policy does not match this release');
+      }
+    },
+  );
   let scriptPending: string | null = scriptTemporary;
+  let sandboxPending: string | null = sandboxTemporary;
   let configPending: string | null = null;
   try {
     const configTemporary = stageInstallFile(
@@ -294,6 +311,12 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     // The config activates the replacement on the next daemon start, so it
     // lands last. A crash can leave a newer script beside the old credentials,
     // never new credentials beside an unverified script.
+    // The policy lands BEFORE the daemon that requires it, for the same
+    // reason the config lands after: no ordering leaves a daemon on disk whose
+    // sibling is missing or older than it.
+    renameSync(sandboxTemporary, SANDBOX_PATH);
+    sandboxPending = null;
+    enforceOwnerOnly(SANDBOX_PATH, 0o700);
     renameSync(scriptTemporary, SCRIPT_PATH);
     scriptPending = null;
     enforceOwnerOnly(SCRIPT_PATH, 0o700);
@@ -303,7 +326,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     syncAgentDirectory();
   } catch (cause) {
     try {
-      for (const temporary of [scriptPending, configPending]) {
+      for (const temporary of [scriptPending, sandboxPending, configPending]) {
         if (temporary !== null) rmSync(temporary, { force: true });
       }
     } catch (cleanup) {

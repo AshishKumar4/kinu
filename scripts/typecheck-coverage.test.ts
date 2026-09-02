@@ -109,6 +109,7 @@ describe('this tree', () => {
     const programs = await programFiles();
     expect(Object.keys(UNTYPECHECKED_TESTS).sort()).toEqual([
       'packages/pc-agent/tests/daemon.test.js',
+      'packages/pc-agent/tests/sandbox.test.js',
       'scripts/eval.test.ts',
     ]);
     expect(UNTYPECHECKED_TESTS['packages/pc-agent/tests/daemon.test.js']).toMatchObject({
