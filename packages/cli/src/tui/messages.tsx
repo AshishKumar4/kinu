@@ -1,9 +1,12 @@
+import { BoxRenderable, CodeRenderable, type BoxOptions, type MarkdownOptions } from '@opentui/core';
+import { useCallback, useRef } from 'react';
+
 import { parseRefusal, TUI_MARKS } from '@kinu.run/core';
 
 import type { AgentClientStatus } from '../agent-client';
 import { clipText } from './format';
 import { StatusView } from './help-view';
-import { useTuiTheme } from './theme';
+import { useTuiTheme, type TuiThemeColors } from './theme';
 import { useSceneWidth } from './tui-shell';
 
 export interface DisplayMessage {
@@ -54,9 +57,59 @@ function UserMessage({ content, attachments, steered, branched }: { content: str
   );
 }
 
+type WellBoxStyle = Pick<BoxOptions, 'border' | 'borderStyle' | 'borderColor' | 'backgroundColor' | 'paddingLeft' | 'paddingRight'>;
+
+/**
+ * The dark well: the box a tool card sits on and the box a fenced code block
+ * sits in. One definition, so the two surfaces cannot drift apart.
+ */
+function wellBoxStyle(well: TuiThemeColors['well']): WellBoxStyle {
+  return {
+    border: true,
+    borderStyle: 'rounded',
+    borderColor: well.border,
+    backgroundColor: well.fill,
+    paddingLeft: 1,
+    paddingRight: 1,
+  };
+}
+
+/**
+ * A fenced block on the well. opentui gives a fenced block its own
+ * `CodeRenderable` built with the markdown renderable's ink and fill
+ * (`MarkdownRenderable.createCodeRenderable` passes `fg: this._fg`,
+ * `bg: this._bg`), so the `code` syntax style's fill never reaches the block
+ * and the code reads in prose ink. `renderNode`
+ * (`MarkdownOptions.renderNode`, @opentui/core/renderables/Markdown.d.ts:92)
+ * is that renderable's own block hook: it hands the default block back, and
+ * the well is the tool card's box around it, in the well's code ink.
+ *
+ * The hook reads the well from a ref, not from its own closure, because
+ * `MarkdownRenderable` takes `renderNode` once at construction and declares no
+ * setter for it. A theme change re-creates every block through this same
+ * callback (`refreshStyles` → `rerenderBlocks` → `updateBlocks(true)`), which
+ * must paint the theme in force at that moment.
+ */
+function useCodeWellRenderer(): NonNullable<MarkdownOptions['renderNode']> {
+  const { colors } = useTuiTheme();
+  const well = useRef(colors.well);
+  well.current = colors.well;
+  return useCallback((token, context) => {
+    if (token.type !== 'code') return null;
+    const code = context.defaultRender();
+    if (!(code instanceof CodeRenderable)) return code;
+    code.fg = well.current.code;
+    code.marginTop = 0;
+    const box = new BoxRenderable(code.ctx, { ...wellBoxStyle(well.current), width: '100%', flexDirection: 'column' });
+    box.add(code);
+    return box;
+  }, []);
+}
+
 /** Prose on the canvas, in the body register, as the web's `prose-chat`. */
 function AssistantMessage({ content, live }: { content: string; live?: boolean }) {
   const { colors, markdownSyntax } = useTuiTheme();
+  const renderCodeWell = useCodeWellRenderer();
   return (
     <box flexDirection="column" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <markdown
@@ -67,6 +120,7 @@ function AssistantMessage({ content, live }: { content: string; live?: boolean }
         tableOptions={{ style: 'grid', widthMode: 'content' }}
         content={live ? (content || ' ') : content}
         fg={colors.text.primary}
+        renderNode={renderCodeWell}
       />
       {live ? <text><span fg={colors.intent.accent}>▌</span></text> : null}
     </box>
@@ -97,17 +151,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
   return (
     <box
       flexDirection="column"
-      style={{
-        marginLeft: 2,
-        marginRight: 2,
-        marginBottom: 1,
-        border: true,
-        borderStyle: 'rounded',
-        borderColor: well.border,
-        backgroundColor: well.fill,
-        paddingLeft: 1,
-        paddingRight: 1,
-      }}
+      style={{ marginLeft: 2, marginRight: 2, marginBottom: 1, ...wellBoxStyle(well) }}
     >
       <box flexDirection="row" justifyContent="space-between">
         <text>

@@ -105,11 +105,15 @@ describe('TUI theme', () => {
           </box>
         </TuiThemeProvider>,
       );
-      for (let index = 0; index < 10; index += 1) {
+      // opentui paints markdown prose only after an async grammar load, so a
+      // frame count is not a settled frame: wait for the spans read below.
+      let spans = captureSpans().lines.flatMap((line) => line.spans);
+      for (let index = 0; index < 60; index += 1) {
         await renderOnce();
+        spans = captureSpans().lines.flatMap((line) => line.spans);
+        if (['USERTURN', 'ASSISTANTTURN', 'exec'].every((text) => spans.some((span) => span.text.includes(text)))) break;
         await Bun.sleep(20);
       }
-      const spans = captureSpans().lines.flatMap((line) => line.spans);
       const hex = (color: { toInts(): [number, number, number, number] }) => {
         const [red, green, blue] = color.toInts();
         return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();

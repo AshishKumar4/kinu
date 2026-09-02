@@ -730,19 +730,28 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
 
 /**
  * Assistant markdown in the web's registers: prose in `--c-text-2`, headings
- * and bold in ink, inline code as silk (`.p-code-inline`), code blocks as
- * silk on the well (`.p-code`), links as silk (`--text-color-kumo-link`),
- * quotes in the dim register.
+ * and bold in ink, inline code as silk (`.p-code-inline`), links as silk
+ * (`--text-color-kumo-link`), quotes in the dim register.
+ *
+ * A fenced block takes no colour from here. opentui gives each fenced block a
+ * renderable of its own and paints it in the markdown renderable's own ink, so
+ * the block's ground and ink come from the `well` roles, through the block
+ * hook in `messages.tsx`. One surface, one source.
+ *
+ * Measured against opentui 0.1.107 on 2026-09-01: this map resolves by
+ * tree-sitter capture name. The markdown grammar emits `markup.*`,
+ * `punctuation.*`, `conceal` and `label`, so the token names below reach
+ * nothing and prose takes the `fg` the renderable carries. The registers are
+ * the intent; naming real captures is the theme's own open work.
  */
 function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
-  const { border, text, intent, well } = theme.colors;
+  const { border, text, intent } = theme.colors;
   return SyntaxStyle.fromStyles({
     text: { fg: text.primary },
     paragraph: { fg: text.primary },
     heading: { fg: text.strong, bold: true },
     strong: { fg: text.strong, bold: true },
     emphasis: { fg: text.primary, italic: true },
-    code: { fg: well.code, bg: well.fill },
     codespan: { fg: intent.accentStrong },
     link: { fg: intent.accentStrong, underline: true },
     blockquote: { fg: text.muted, italic: true },
