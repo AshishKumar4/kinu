@@ -1,4 +1,8 @@
 node_modules/
+
+# Coverage output of `bun run coverage` (lcov, HTML, summary). Regenerated on
+# demand; a stale lcov committed beside the tree would read as measured.
+/coverage/
 packages/cf-backend/public/_assets
 dist/
 *.db

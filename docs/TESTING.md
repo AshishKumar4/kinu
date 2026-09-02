@@ -699,16 +699,89 @@ Extract pure URL, parsing, and policy code into an `agents`-free file for Bun;
 leave orchestration to integration/e2e. This is how cf-backend has 1,353 Bun
 passes over 134 files.
 
-## Running with coverage
+## Coverage
 
 ```bash
-bash scripts/test.sh --coverage
+bun run coverage              # every instrumented suite, merged lcov + HTML + summary
+bun run coverage:check        # the merged lcov as per-package JSON
+bun scripts/coverage.ts --merge-only   # re-merge and re-render, no suites re-run
 ```
 
-It reports per-file funcs % / lines % and finds gaps, not a target to game.
-Intentional low coverage: `core/tests/e2e/ai-gateway-llm.ts`,
-`test-utils/src/runtime.ts`, and DO/Worker paths covered by `test:workerd` and
-deploy smoke.
+`bun run coverage` runs each package's own bun suites as its own group, adds
+both workerd pools, writes `coverage/<group>/lcov.info` per group, merges to
+`coverage/lcov.info`, renders `coverage/html/index.html`, and prints a
+per-package table plus the 25 least-covered files. The suite list comes from
+`trackedTestFiles()` and `isBunDiscoverableSuite`, the same predicates
+`scripts/ladder.ts` credits a bun gate with, so a new package is measured
+without anyone editing a list.
+
+`bash scripts/test.sh --coverage` is NOT this. It runs four directories in one
+`bun test` and prints a text table to stdout. Measured 2026-09-01: 8,655 tests
+over 600 files, 339 s, `All files 79.97 % funcs / 81.46 % lines`, and no file
+written anywhere. agent-utils, compaction, devbox, test-utils, pc-agent, the
+scripts gates, root `tests/` and the workerd layer are absent from that number.
+Its table also carries ~20 rows for mutation-suite scratch copies under
+`$TMPDIR`, which drag the average; `bun run coverage` drops every record whose
+path leaves the repository.
+
+### The baseline, measured 2026-09-02
+
+One `bun run coverage` at `ffcdfab2d`, 12-core box under load ~98:
+**1,911.6 s wall**, 885 repository files in the merged lcov. Re-merging the
+same per-group lcov files with `--merge-only` takes **2.3 s**.
+
+| Package | lines | funcs | branches | files |
+|---|---|---|---|---|
+| agent-utils | 66.4 % | 81.9 % | — | 13 |
+| cf-backend | 62.1 % | 36.7 % | 4.5 % | 223 |
+| cli | 22.5 % | 5.0 % | — | 10 |
+| cli-backend | 68.5 % | 88.2 % | — | 31 |
+| compaction | 84.2 % | 95.1 % | — | 9 |
+| core | 75.9 % | 93.6 % | — | 423 |
+| devbox | 70.5 % | 42.5 % | 1.1 % | 48 |
+| pc-agent | 46.2 % | 76.1 % | — | 1 |
+| scripts | 65.1 % | 79.8 % | — | 87 |
+| test-utils | 84.9 % | 84.3 % | — | 28 |
+| tests | 56.6 % | 62.2 % | — | 12 |
+| **TOTAL** | **68.8 %** | **70.7 %** | **3.2 %** | **885** |
+
+Read the columns knowing what produces them. `bun test --coverage-reporter=lcov`
+(1.4.0) emits `DA` lines and `FNF`/`FNH` function totals, and **no branch data
+at all** — so a branch figure exists only for the two workerd groups, and the
+3.2 % total is over those alone, not over the repository.
+`@vitest/coverage-istanbul` emits the full line, function and branch set.
+
+The `cli` row is NOT cli's coverage. Its group crashed: `bun test --coverage`
+over cli's 62 suites dies with `panic(main thread): Segmentation fault`
+(reproduced twice, exit 139, Bun 1.4.0), so it wrote no lcov and those 10 files
+are only what other groups imported. The command prints that under
+`NO COVERAGE DATA` and records it in `coverage/summary.json` as
+`groupsWithoutCoverageData` rather than letting a transitive number pass for a
+measurement.
+
+### What is instrumented, and what is not
+
+| Runner | Coverage | How |
+|---|---|---|
+| bun suites, per package | yes, lines + functions | `bun test --coverage --coverage-reporter=lcov` |
+| `packages/cf-backend/tests/workerd` | yes, lines + functions + branches | `bunx vitest run` with `--coverage.provider=istanbul` |
+| `packages/devbox/tests/workerd` | yes, same | same |
+| anti-slop rule suites (29) | no | they run under raw `node` via `bun run test:anti-slop`; bun coverage cannot see a process it did not start |
+| python suites (5) | no | `unittest discover` in `bench/`; no JS coverage tool instruments Python |
+| vitest eval suites (6) | no | the eval tier calls a real model and is terminal; its credential-free halves are bun suites already counted |
+
+**workerd needs istanbul, and the pool says so.**
+`@cloudflare/vitest-pool-workers@0.22.0` rejects the v8 provider outright:
+"V8 native coverage requires `node:inspector` which is not functional in the
+Workers runtime." With `--coverage.provider=istanbul` both pools report
+normally. The pool's lcov paths are relative to each vite root, so the merge
+re-anchors them onto repository-relative paths.
+
+Intentional low coverage stays intentional: `core/tests/e2e/ai-gateway-llm.ts`,
+`test-utils/src/runtime.ts`, and the React surfaces under
+`cf-backend/src/components/`, which the two puppeteer UI gates drive instead.
+Coverage finds gaps here; it is not a target to game, and
+`bun run coverage:check` prints numbers without a threshold on purpose.
 
 ## Adding a new package
 
