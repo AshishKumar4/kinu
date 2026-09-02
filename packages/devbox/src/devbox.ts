@@ -3665,17 +3665,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       containerGeneration: async () => await this.#readBootId(),
       storeRoot: () => chainStoreRoot(this.#boxPrefix()),
       mountStore: async (at) => {
-        // ONE MOUNT, ONE SETTING, ONE PREFIX — and the prefix is the BOX's, not
-        // a generation's. The SDK admits a second mount of a binding only at the
-        // same path, prefix and setting, so a per-generation prefix could not
-        // survive a rebase: the new generation needs a different subtree while
-        // the old layers are still mounted as the live overlay's lowers and
-        // cannot be released. The box's own root absorbs every generation, and
-        // it is the same boundary every other strategy here scopes to.
-        //
-        // It carries no credential either: this is the SDK's R2-binding mount,
-        // where the container's s3fs is handed a dummy password file and a
-        // Worker entrypoint resolves the binding for the intercepted request.
+        // The BOX's prefix, writable, with no credential: `chainStoreRoot` and
+        // `SnapshotChainPorts.mountStore` state why.
         await this.mountBucket(store.binding, at, {
           prefix: `/${chainStoreRoot(this.#boxPrefix())}`,
           readOnly: false,
@@ -3716,24 +3707,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         }
       },
       objectFacts: async (key) => {
-        // ONE metadata read, and the ONLY thing this side learns about a layer:
-        // the archive itself moves container-side through the store mount, so a
-        // publication asks here for the record it must write.
-        //
-        // TWO IDENTITIES, because neither covers every object. `digest` is R2's
-        // own checksum and exists only where R2 was given one; nothing on this
-        // path gives it one — an s3fs upload carries no checksum header the
-        // egress handler forwards, and the Workers multipart API accepts none
-        // either — so a chain layer's digest is normally absent. `objectVersion`
-        // is R2's own name for the upload that wrote the object and is always
-        // there, which is what lets the chain refuse a same-length replacement
-        // of an archive that has no checksum to compare.
-        //
-        // When BOTH sides have a digest, the digest decides: equal content is
-        // sound even when a retry wrote it under R2's new version. Otherwise the
-        // store version decides. A same-length replacement is refused either
-        // way, the refusal recovers from the retained fallback generation, and
-        // an identity absent on either side is UNKNOWN rather than sound.
+        // ONE metadata read, the only thing this side learns about a layer.
+        // `digest` is R2's own checksum and exists only where R2 was given one;
+        // an s3fs upload carries no checksum header the egress handler
+        // forwards, and the Workers multipart API accepts none either, so a
+        // chain layer's digest is normally absent. `objectVersion` is always
+        // there. `layerIntegrityFailure` in `snapshot-chain.ts` states how the
+        // two are compared.
         const head = await store.bucket.head(key);
         if (head === null) return undefined;
         const sha256 = head.checksums.sha256;
