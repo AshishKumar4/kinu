@@ -3617,16 +3617,18 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
       exec: async (command) => await this.#rawExec(command),
       containerGeneration: async () => await this.#readBootId(),
-      mountStore: async (chainId, at, access) => {
-        // ONE PRIMITIVE, TWO ACCESSES, and the strategy names which it wants.
-        // The prefix is the generation's own subtree either way, so a writable
-        // mount can only ever create this chain's own layer names — and it
-        // carries no credential: this is the SDK's R2-binding mount, where the
-        // container's s3fs is handed a dummy password file and a Worker
-        // entrypoint resolves the binding for the intercepted request.
+      mountStore: async (chainId, at) => {
+        // ONE MOUNT, ONE SETTING, ONE PREFIX. The SDK admits a second mount of
+        // a binding only at the same prefix with the same setting, so there is
+        // no read access to offer: the prefix — this generation's own subtree —
+        // is the boundary, and a writable mount can only ever create this
+        // chain's own layer names. It carries no credential either: this is the
+        // SDK's R2-binding mount, where the container's s3fs is handed a dummy
+        // password file and a Worker entrypoint resolves the binding for the
+        // intercepted request.
         await this.mountBucket(store.binding, at, {
           prefix: `/backups/${assertChainId(chainId)}`,
-          readOnly: access === 'read',
+          readOnly: false,
         });
       },
       unmountStore: async (at) => {

@@ -937,21 +937,22 @@ function snapshotChainArm(): ConformanceArm {
         seedStamp = stamp;
       },
       exec,
-      mountStore: async (chainId, at, access) => {
+      mountStore: async (chainId, at) => {
         if (disk.dead) throw new ContainerDied('mountStore on a dead container');
-        // The SDK mounts the chain's own subtree at the path the strategy names,
-        // with the access it asked for. Every object under it appears as a file
-        // named by the last segment of its key.
+        // THE ONE MOUNT, ONE SETTING, held for the container's life. The SDK
+        // admits a second mount of a binding only at the same prefix with the
+        // same setting, so there is no read access to model: this is the same
+        // writable mount the attach reads through and the publication writes
+        // through. Every object under the subtree appears as a file named by the
+        // last segment of its key, and a flush through the mount lands under the
+        // chain's own prefix.
         disk.mount(at, {
           source: `r2:backups/${chainId}`,
           fstype: 'fuse.s3fs',
-          options: access === 'read' ? 'ro' : 'rw',
+          options: 'rw',
         });
-        if (access === 'read') {
-          for (const key of durable.list(`backups/${chainId}/`)) {
-            disk.writeFile(`${at}/${key.split('/').pop()!}`, mounted.get(key)!);
-          }
-          return;
+        for (const key of durable.list(`backups/${chainId}/`)) {
+          disk.writeFile(`${at}/${key.split('/').pop()!}`, mounted.get(key)!);
         }
         publishing = { at, prefix: `backups/${chainId}/` };
       },

@@ -107,14 +107,25 @@ import {
 } from './storage';
 
 /**
- * Where this chain's own object-store subtree is mounted READ-ONLY inside the
- * container during an attach. Scoped to exactly this chain's UUID prefix, so
- * the container can see its own layers and nothing else.
+ * Where this chain's own object-store subtree is mounted inside the container:
+ * ONE mount, one setting, held for the container's life. Scoped to exactly this
+ * chain's UUID prefix, so the container can see its own layers and nothing else.
  *
- * Read-only is defence rather than decoration: an attach runs `rm -rf` over its
- * own layout beside this path, and a read-write mount here would put the
- * chain's archives inside that blast radius. Publication mounts a SEPARATE
- * path — {@link CHAIN_PUBLISH_MOUNT} — for exactly that reason.
+ * THE PREFIX IS THE BOUNDARY, and read-only never was. This path used to be
+ * mounted read-only for an attach while a publication mounted the same binding
+ * writable somewhere else, and the SDK refuses one binding mounted twice under
+ * different settings (`@cloudflare/sandbox`, `dist/sandbox-CPj2jsbz.js:8058`).
+ * It only showed on the SECOND checkpoint after a wake, because that is the
+ * first moment both are held: measured live in runs e2e20260902032038 and
+ * e2e20260902032318, `R2 binding "BACKUP_BUCKET" is already mounted at /backups
+ * with a different readOnly setting`. The read mount could not be released
+ * either — squashfuse holds the layer files that live under it — so the release
+ * at the end of the attach was refused, its error swallowed, and the SDK's
+ * registry kept an entry no later publication could work around.
+ *
+ * So there is one mount and one access. What kept the archives out of the
+ * attach's `rm -rf` was never the mount flag: the reset lists its own layout
+ * paths and deliberately excludes this one (see `resetDirs` at the attach).
  *
  * PRIVATE, like every other path in this file's layout. The host is handed the
  * mount point it must use as an argument, so nothing outside this module has to
@@ -125,8 +136,9 @@ import {
 const CHAIN_STORE_MOUNT = '/backups';
 
 /**
- * Where this chain's subtree is mounted WRITABLE while one archive is
- * published, and the reason no payload byte reaches the Durable Object.
+ * WHY THE ARCHIVE GOES THROUGH THE MOUNT AT ALL, kept here because the mount is
+ * now one shared, writable, prefix-scoped mount and this is the measurement that
+ * bought it.
  *
  * THE MOUNT IS THE BYTE PATH. A staged archive used to leave the container as
  * base64 SSE frames, cross the owning isolate, and go back out to the store
@@ -146,12 +158,11 @@ const CHAIN_STORE_MOUNT = '/backups';
  * point elsewhere. That is the property a presigned URL would have cost, and
  * the measurement says it costs no throughput to keep.
  *
- * A SEPARATE PATH, and never mounted while the read mount is: the SDK refuses
- * one binding mounted twice under different access, and the read path's `rm -rf`
- * protections assume nothing can be written through it. Two paths make both
- * statements structural rather than remembered.
+ * ONE PATH, because two were unsatisfiable: the SDK admits a second mount of a
+ * binding only at the SAME prefix and the SAME setting, and the attach's mount
+ * cannot be released while squashfuse reads layer files through it. The archive
+ * is therefore written through the mount the attach already holds.
  */
-const CHAIN_PUBLISH_MOUNT = `${DEVBOX_RUNTIME_DIR}/publish`;
 
 class ContainerChangedDuringAttach extends Error {
   constructor() {
@@ -790,13 +801,13 @@ export interface SnapshotChainPorts {
   /** Ephemeral generation id, when the host can observe one. */
   containerGeneration?(): Promise<string | undefined>;
   /**
-   * Mount this chain's store subtree at `at`, for reading or for writing.
+   * Mount this chain's store subtree at `at`, writable.
    *
-   * ONE PORT FOR BOTH ROLES, because they are one SDK primitive asked for two
-   * accesses, and the strategy — not the host — owns which path carries which:
-   * {@link CHAIN_STORE_MOUNT} read-only for an attach, {@link CHAIN_PUBLISH_MOUNT}
-   * writable for one publication. A host that had to remember the pairing could
-   * get it wrong in one place only.
+   * ONE MOUNT, ONE SETTING, and the host has no choice to make: the SDK admits
+   * a second mount of one binding only at the same prefix with the same setting,
+   * so a read access and a write access are not two things this port can offer.
+   * Idempotent for that reason — asking again for the same chain is admitted and
+   * costs one SDK call.
    *
    * The subtree is scoped to this chain's own UUID prefix, so the container sees
    * its own generation and nothing else, and CREDENTIALS NEVER LEAVE THE
@@ -804,7 +815,7 @@ export interface SnapshotChainPorts {
    * requests are resolved against the binding by a Worker entrypoint. Writable
    * therefore hands the container no capability it can read or replay.
    */
-  mountStore(chainId: string, at: string, access: 'read' | 'write'): Promise<void>;
+  mountStore(chainId: string, at: string): Promise<void>;
   /**
    * Release the mount at `at` THROUGH THE SDK, not through the kernel.
    *
@@ -1428,7 +1439,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it came: the platform's own words are the diagnosis, and this code has no
     // better one.
     try {
-      await ports.mountStore(generation.base.id, CHAIN_STORE_MOUNT, 'read');
+      await ports.mountStore(generation.base.id, CHAIN_STORE_MOUNT);
     } catch (error) {
       throw new Error(
         `chain ${generation.base.id} is stored as lazy layers and its store subtree could not `
@@ -1566,7 +1577,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it names, and the whiteouts that hide what the base still has.
     await shell.overlayAttach(DEVBOX_WORKDIR, composing ? [deltaLayer, lowerBase] : [lowerBase]);
     await assertOverlayLanded(`chain ${generation.base.id}`);
-    await ports.unmountStore(CHAIN_STORE_MOUNT);
+    // THE STORE MOUNT STAYS. It cannot go: squashfuse reads each layer's archive
+    // through this mount for as long as the overlay serves the work directory,
+    // so `fusermount -u` here is refused EBUSY — and the release used to be
+    // attempted anyway, its refusal logged and swallowed, leaving the SDK's
+    // registry holding a read-only entry that every later publication was then
+    // refused against. One mount, held for the container's life, is what the
+    // publication writes through.
 
     const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
     // WHICH SHAPE THIS BOX IS IN, because the next commit's behaviour follows
@@ -1906,23 +1923,18 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const short = await shell.stagingShortfall(sourceDir, excludes);
     if (short !== null) throw new Error(short);
     await shell.makeSquashfs(sourceDir, archivePath, excludes);
-    await ports.mountStore(chainId, CHAIN_PUBLISH_MOUNT, 'write');
-    let published: number;
-    try {
-      published = await shell.publishArchive(
-        archivePath, mountedLayerPath(CHAIN_PUBLISH_MOUNT, key),
-      );
-    } finally {
-      // RELEASED WHETHER OR NOT IT WORKED. A writable mount left behind is
-      // refused by the SDK's own registry on the next publication — one binding
-      // cannot be mounted twice under different access — so a failure that kept
-      // the mount would turn one bad checkpoint into every later one.
-      await ports.unmountStore(CHAIN_PUBLISH_MOUNT);
-    }
+    // THROUGH THE MOUNT THE BOX ALREADY HOLDS, asked for again because a cold
+    // box has not attached anything yet. Idempotent: the same prefix and the
+    // same setting is what the SDK admits a second time, which is the whole
+    // reason there is only one setting.
+    await ports.mountStore(chainId, CHAIN_STORE_MOUNT);
+    const published = await shell.publishArchive(
+      archivePath, mountedLayerPath(CHAIN_STORE_MOUNT, key),
+    );
     const landed = await ports.objectFacts(key);
     if (landed === undefined) {
       throw new Error(
-        `the container published ${key} through ${CHAIN_PUBLISH_MOUNT} and the store holds no `
+        `the container published ${key} through ${CHAIN_STORE_MOUNT} and the store holds no `
         + 'such object, so nothing has been recorded.',
       );
     }
@@ -2076,11 +2088,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it could. A capability that reports itself present and then refuses is
     // exactly the shape that produced a silent no-op on a live container.
     //
-    // One mount and one unmount, once per box.
+    // One mount, once per box, and it is the same mount the publication below
+    // writes through — so the proof is the mount this checkpoint needs anyway.
     if (first) {
       try {
-        await ports.mountStore(chainId, CHAIN_STORE_MOUNT, 'read');
-        await ports.unmountStore(CHAIN_STORE_MOUNT);
+        await ports.mountStore(chainId, CHAIN_STORE_MOUNT);
       } catch (error) {
         // Where extraction is not permitted, a failed proof is a FAILED
         // CHECKPOINT carrying the platform's own reason. Converting it into

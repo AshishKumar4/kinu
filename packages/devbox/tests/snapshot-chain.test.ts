@@ -47,7 +47,6 @@ const LAYER_VISIBILITY_PROBES = 20;
  *  through. Mirrored for the same reason as the layer paths above — the host is
  *  handed them as arguments, so nothing outside the strategy declares them. */
 const CHAIN_STORE_MOUNT = '/backups';
-const CHAIN_PUBLISH_MOUNT = '/var/tmp/devbox/publish';
 
 import {
   ATTACH_OUTCOME_KINDS,
@@ -270,6 +269,13 @@ function shellLabel(
  * the world change as the code acts on it, which is what lets a postcondition
  * read the world rather than the intention.
  */
+/** The SDK's mount registry as a test holds it: one held entry for the one
+ *  binding, shared across the harnesses one test builds so two isolates on one
+ *  container see the same mount. */
+interface SdkMountRegistry {
+  held?: { readonly prefix: string; readonly readOnly: boolean };
+}
+
 function harness(overrides: {
   state?: ChainState | null;
   mounts?: string | (() => string);
@@ -325,6 +331,11 @@ function harness(overrides: {
   /** The seed stamp this container's disk already carries: which delta the upper
    *  beside it holds. A replaced container has none, which is the default. */
   seedStamp?: string;
+  /** The SDK's mount registry, SHARED across the harnesses one test builds so
+   *  two isolates on the same container see the one binding's one mount —
+   *  which is exactly what a stop and a wake are. Omitted means this harness
+   *  owns a private registry, which is a container nothing else has touched. */
+  registry?: SdkMountRegistry;
 } = {}): Harness {
   const generations = [...(overrides.generations ?? [])];
   const calls = overrides.calls ?? [];
@@ -345,11 +356,26 @@ function harness(overrides: {
   let deltaLayerDied = false;
   let liveMark = overrides.upperMark ?? '7:4096:1700000000';
   let writes = 0;
-  /** The generation whose subtree is mounted WRITABLE right now, and the prefix
-   *  a flush through it lands under. Undefined means nothing writable is
-   *  mounted, which is what the strategy's `finally` must leave behind. */
-  let publishing: { readonly at: string; readonly prefix: string } | undefined;
-
+  /** The generation whose subtree is mounted right now, and the prefix a flush
+   *  through it lands under. The ONE mount, one setting, held for the
+   *  container's life — the shape the SDK's own registry forces, because it
+   *  admits a second mount of a binding only at the same prefix with the same
+   *  setting. Undefined means nothing is mounted yet. */
+  let mounted: { readonly at: string; readonly prefix: string } | undefined;
+  /**
+   * The SDK's own registry: what it last mounted for the one binding.
+   *
+   * THE RULE THE DEPLOYED RUN DIED ON, stated as the fake's behaviour rather
+   * than as a comment: `@cloudflare/sandbox` admits a second mount of a binding
+   * only at the SAME prefix with the SAME setting, and it says so with
+   * `R2 binding "BACKUP_BUCKET" is already mounted at <path> with a different
+   * readOnly setting` (measured live, runs e2e20260902032038 and
+   * e2e20260902032318, on the second checkpoint after a wake). A fake without
+   * the rule cannot hold the one-mount design, because two settings look fine
+   * to it. SHARED when the caller says so, because the registry belongs to the
+   * SDK — one per container, whichever isolate asks.
+   */
+  const sdk: SdkMountRegistry = overrides.registry ?? {};
   /**
    * The container's publication, as the container performs it.
    *
@@ -359,7 +385,7 @@ function harness(overrides: {
    * watching a checkpoint that never published.
    */
   const publish = (mountedPath: string) => {
-    const mount = publishing;
+    const mount = mounted;
     if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
       // What a real container answers when the path is not on a mount: the
       // directory is not there to be written into.
@@ -479,20 +505,40 @@ function harness(overrides: {
       if (generations.length > 1) return generations.shift();
       return generations[0];
     },
-    mountStore: (chainId, at, access) => {
-      calls.push(`mountStore:${chainId}:${at}:${access}`);
+    mountStore: (chainId, at) => {
+      calls.push(`mountStore:${chainId}:${at}`);
       if (overrides.refuseStoreMount === true) {
         // The real local failure: the container has no FUSE device. Deliberately
         // NOT the interception wording, so the degrade cannot be passing because
         // it recognised one particular sentence.
         return Promise.reject(new Error('S3FS mount failed: fuse: device not found'));
       }
-      if (access === 'write') publishing = { at, prefix: `backups/${chainId}/` };
+      // THE SDK'S OWN REFUSAL, not a test's opinion: a second mount of this
+      // binding is admitted only at the same prefix with the same setting, which
+      // under the one-mount design is the SAME mount asked for again. Anything
+      // else is the shape that killed the deployed second checkpoint.
+      const prefix = `backups/${chainId}/`;
+      const held = sdk.held;
+      if (held !== undefined && (held.prefix !== prefix || held.readOnly !== false)) {
+        return Promise.reject(new Error(
+          `R2 binding "BACKUP_BUCKET" is already mounted at ${at} with a different `
+          + 'readOnly setting. Mount the same binding only once, or use the same readOnly '
+          + 'value for additional mounts.',
+        ));
+      }
+      sdk.held = { prefix, readOnly: false };
+      mounted = { at, prefix };
       return Promise.resolve();
     },
     unmountStore: (at) => {
       calls.push(`unmountStore:${at}`);
-      if (publishing?.at === at) publishing = undefined;
+      // THE PRODUCT PORT, not the SDK's raw call: the strategy's ports go
+      // through `#chainPorts.unmountStore`, which catches the SDK's
+      // "nothing is mounted here" refusal and survives it, so this fake answers
+      // the same way — resolved, with the mount and the registry entry gone
+      // when the path was the one being held.
+      if (mounted?.at === at) mounted = undefined;
+      sdk.held = undefined;
       return Promise.resolve();
     },
     objectFacts: (key) => {
@@ -1845,16 +1891,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
-      // The publication mount is the strategy's own path, mounted WRITABLE, and
-      // it is a different path from the read mount an attach uses: the SDK
-      // refuses one binding mounted twice under different access, and the read
-      // path's `rm -rf` protections assume nothing can be written through it.
-      expect(record.calls).toContain(
-        `mountStore:${CHAIN_ID}:${CHAIN_PUBLISH_MOUNT}:write`,
-      );
-      expect(record.calls).not.toContain(
-        `mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}:write`,
-      );
+      // ONE MOUNT, ONE SETTING, ONE MOUNT POINT: the chain's subtree, at
+      // /backups, held writable for the container's life — which is what the
+      // publication writes through. The old design mounted a second path
+      // writable for one publication, and the SDK refuses one binding mounted
+      // twice under different settings: measured live, the second checkpoint
+      // after a wake (runs e2e20260902032038, e2e20260902032318).
+      expect(record.calls).toContain(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}`);
       // The archive went in through that mount, under the key the record names.
       expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
       expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
@@ -1862,30 +1905,34 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.calls).toContain(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
     });
 
-  test('the publication mount is released after the flush, and before the record',
+  test('the flush happens through the held mount, before the record',
     async () => {
       // R2's own precondition, and the one way this step could lose committed
       // data: a release returns as soon as the mount leaves the namespace and
       // cannot flush, so bytes still held by s3fs would be gone while the record
       // already named them. The flush is therefore part of the copy command —
-      // `conv=fsync` — and the release happens after it, whatever it answered.
+      // `conv=fsync` — and the mount it flushes through is the one the box
+      // HOLDS, so there is no release window at all any more: the mount cannot
+      // be released while squashfuse reads layer files through it, which is why
+      // the one-mount design exists.
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
-      const mounted = record.calls.indexOf(`mountStore:${CHAIN_ID}:${CHAIN_PUBLISH_MOUNT}:write`);
+      const mounted = record.calls.indexOf(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}`);
       const flushed = record.calls.indexOf(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
-      const released = record.calls.indexOf(`unmountStore:${CHAIN_PUBLISH_MOUNT}`);
       const read = record.calls.indexOf(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
       const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
       expect(mounted).toBeGreaterThan(-1);
       expect(mounted).toBeLessThan(flushed);
-      expect(flushed).toBeLessThan(released);
-      // The store is asked what it holds only once the mount is gone, so the
+      expect(flushed).toBeLessThan(read);
+      // The store is asked what it holds only after the flush answered, so the
       // answer describes the object rather than a filesystem's view of it.
-      expect(released).toBeLessThan(read);
       expect(read).toBeLessThan(wrote);
       // The flush is IN the command, not a separate hope.
       expect(publishCommand({ archivePath: 'a', mountedPath: 'b' })).toContain('conv=fsync');
+      // AND THE MOUNT IS STILL HELD: no unmount of the store path anywhere in
+      // the commit, because the attach's layers are reading through it.
+      expect(record.calls).not.toContain(`unmountStore:${CHAIN_STORE_MOUNT}`);
     });
 
   test('a writable mount is released even when the publication fails', async () => {
@@ -1895,7 +1942,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     // one.
     const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });
     expect((await checkpointOf(record, 'tick')).kind).toBe('failed');
-    expect(record.calls).toContain(`unmountStore:${CHAIN_PUBLISH_MOUNT}`);
     // Nothing landed, and the record still describes what the box can attach.
     expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
     expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
@@ -1959,13 +2005,17 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
   });
 
-  test('the read mount is never writable, and the writable mount is never the read path',
+  test('ONE MOUNT: every mount of the binding is the chain subtree at /backups',
     async () => {
-      // One binding, two accesses, two paths — and the pairing is asserted rather
-      // than remembered. A read-write mount at the attach path would put the
-      // chain's own archives inside the blast radius of the `rm -rf` an attach
-      // runs over its layout; a read-only mount at the publication path could
-      // not publish at all.
+      // THE RULE THE SDK ITSELF ENFORCES, asserted rather than remembered: one
+      // binding admits one mount, at one prefix, in one setting, and the
+      // deployed consequence of violating it was the second checkpoint after a
+      // wake refusing with `R2 binding "BACKUP_BUCKET" is already mounted at
+      // /backups with a different readOnly setting` (runs e2e20260902032038 and
+      // e2e20260902032318). So both roles — the attach that reads its layers
+      // through it and the checkpoint that writes its archive through it — use
+      // the same mount, and what keeps the archives out of the attach's `rm -rf`
+      // is that the reset lists its own layout paths and excludes this one.
       const checkpointCalls: string[] = [];
       const committed = harness({
         state: chainState(), mounts: MOUNTED, calls: checkpointCalls,
@@ -1982,11 +2032,25 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const mounts = [...checkpointCalls, ...attachCalls]
         .filter(call => call.startsWith('mountStore:'));
       expect(mounts.length).toBeGreaterThan(0);
+      // THE ONE MOUNT POINT, in both roles. The fake's own registry holds the
+      // rule — a second mount with a different setting or prefix is refused
+      // with the SDK's own sentence — so these assertions are the reader's view
+      // of a constraint the fake would have failed on.
       for (const mount of mounts) {
-        const [, , at, access] = mount.split(':');
-        expect(at === CHAIN_STORE_MOUNT ? 'read' : 'write').toBe(access);
-        expect([CHAIN_STORE_MOUNT, CHAIN_PUBLISH_MOUNT]).toContain(at);
+        const at = mount.split(':')[2]!;
+        expect(at).toBe(CHAIN_STORE_MOUNT);
       }
+      // And a wake that re-attaches releases the store mount first, so a new
+      // generation's subtree can take its place at the one mount point.
+      const againCalls: string[] = [];
+      const attachedAgain = harness({
+        state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
+        mounts: mountsAfterAttach(againCalls),
+        calls: againCalls,
+      });
+      expect((await attachOf(attachedAgain)).kind).toBe('attached');
+      expect(attachedAgain.calls.indexOf(`unmountStore:${CHAIN_STORE_MOUNT}`))
+        .toBeLessThan(attachedAgain.calls.findIndex(call => call.startsWith('mountStore:')));
     });
 
   test('CRASH ORDERING: the state write lands before any cleanup', async () => {
@@ -2546,6 +2610,8 @@ describe('container replacement during chain attach', () => {
     });
 
     expect((await attachOf(record)).kind).toBe('attached');
+    // The attach asks for the mount again rather than assuming it survived
+    // the container, and the SDK admits the same prefix at the same setting.
     expect(record.calls.filter((call) => call.startsWith('mountStore:'))).toHaveLength(2);
   });
 });
@@ -2777,6 +2843,103 @@ function withFallback(over: StateLiteral = {}): ChainState {
   });
 }
 
+describe('the binding has ONE mount for the container\'s life', () => {
+  test('checkpoint -> stop -> wake-attach -> checkpoint commits, one mount, one setting',
+    async () => {
+      // THE DEPLOYED FAILURE, reproduced as a lifecycle rather than as an
+      // assertion. Runs e2e20260902032038 and e2e20260902032318 both died at
+      // their second checkpoint after a wake, with the SDK's own sentence:
+      // `R2 binding "BACKUP_BUCKET" is already mounted at /backups with a
+      // different readOnly setting`. The wake's attach had mounted the chain
+      // subtree READ-ONLY, could not release it — squashfuse reads each layer's
+      // archive through it — and left the SDK's registry holding the read-only
+      // entry; the publication then asked for the same binding WRITABLE and was
+      // refused.
+      //
+      // The registry below is SHARED across the three harnesses, because it
+      // belongs to the SDK: one per container, whichever isolate asks. Under
+      // the two-setting design this is exactly the sequence the live run took,
+      // and the second checkpoint fails with that same sentence; under the
+      // one-mount design every mount is the same prefix at the same setting,
+      // so it is admitted, and the commit lands.
+      const registry: SdkMountRegistry = {};
+      const firstCalls: string[] = [];
+      const first = harness({
+        state: chainState({ upperMark: 'stale', at: 1 }),
+        mounts: MOUNTED,
+        now: 10 * INTERVAL_MS,
+        calls: firstCalls,
+        registry,
+      });
+      expect((await checkpointOf(first, 'tick')).kind).toBe('committed');
+
+      // The stop, then the wake: a fresh isolate on the SAME container, so the
+      // registry still holds whatever the first checkpoint left. The wake's
+      // attach is the moment the old design's read mount is taken.
+      const wakeCalls: string[] = [];
+      const woken = harness({
+        state: first.state, mounts: mountsAfterAttach(wakeCalls), calls: wakeCalls,
+        registry,
+      });
+      woken.objects.set(baseObjectKey(CHAIN_ID), BASE_BYTES);
+      woken.objects.set(deltaObjectKey(CHAIN_ID), DELTA_BYTES);
+      expect((await attachOf(woken)).kind).toBe('attached');
+
+      // THE SECOND CHECKPOINT, and it commits. Under the two-setting design it
+      // is refused by the registry with the SDK's own sentence. Its upper is a
+      // DIFFERENT fingerprint from the one the first commit recorded, so there
+      // is a delta to publish rather than a skip.
+      const secondCalls: string[] = [];
+      const second = harness({
+        state: { ...first.state!, upperMark: 'stale-again', at: 1 },
+        mounts: MOUNTED,
+        calls: secondCalls,
+        registry,
+        upperMark: '8:4096:1700000000',
+        now: 20 * INTERVAL_MS,
+      });
+      expect((await checkpointOf(second, 'tick')).kind).toBe('committed');
+
+      // AND EVERY MOUNT IS THE ONE MOUNT: the chain's subtree, at the one mount
+      // point, in the one setting — across the checkpoint that wrote a base, the
+      // attach that read it back, and the checkpoint that wrote a delta after
+      // the wake.
+      for (const call of [...firstCalls, ...wakeCalls, ...secondCalls]) {
+        if (!call.startsWith('mountStore:')) continue;
+        const at = call.split(':')[2]!;
+        expect(at).toBe(CHAIN_STORE_MOUNT);
+      }
+      // Both publications landed, and the wake's attach proved the first one.
+      expect(second.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
+    });
+
+  test('a generation that changes releases the one mount before the next takes it',
+    async () => {
+      // The other half of one-mount: a NEW chain id needs a different prefix,
+      // and the SDK refuses a second mount of a binding at a different prefix.
+      // So the attach that changes generation releases the mount FIRST — the
+      // call is unconditional, on a path nothing holds, which the product port
+      // survives when there is nothing to release.
+      const registry: SdkMountRegistry = {};
+      const firstCalls: string[] = [];
+      const first = harness({
+        state: chainState(), mounts: mountsAfterAttach(firstCalls), calls: firstCalls,
+        registry,
+      });
+      expect((await attachOf(first)).kind).toBe('attached');
+      expect(registry.held).toEqual({ prefix: `backups/${CHAIN_ID}/`, readOnly: false });
+
+      const secondCalls: string[] = [];
+      const second = harness({
+        state: first.state, mounts: mountsAfterAttach(secondCalls), calls: secondCalls,
+        registry,
+      });
+      expect((await attachOf(second)).kind).toBe('attached');
+      expect(secondCalls.indexOf(`unmountStore:${CHAIN_STORE_MOUNT}`))
+        .toBeLessThan(secondCalls.findIndex(call => call.startsWith('mountStore:')));
+    });
+});
+
 describe('the generation lifecycle, against ONE box', () => {
   test('a publication retains, the next start proves, and only then does the old '
     + 'generation go', async () => {
@@ -2938,8 +3101,8 @@ describe('a restore that refuses the newest generation recovers from the older o
       expect(outcome.detail).toContain('recovered');
       // The FALLBACK's layers are what mounted, and the refused generation's
       // store subtree was never even mounted.
-      expect(record.calls).toContain(`mountStore:${FALLBACK_ID}:${CHAIN_STORE_MOUNT}:read`);
-      expect(record.calls).not.toContain(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}:read`);
+      expect(record.calls).toContain(`mountStore:${FALLBACK_ID}:${CHAIN_STORE_MOUNT}`);
+      expect(record.calls).not.toContain(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}`);
       // PROMOTED BEFORE SERVED: a crash after the mount must never leave the box
       // running on these bytes under a record that still names what it refused,
       // because the next checkpoint would write a delta into a generation whose
