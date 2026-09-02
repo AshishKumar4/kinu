@@ -254,7 +254,7 @@ const cases: Case[] = [
     make: () => nimbusSessionFiles(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
   { name: 'device file view', statMissing: 'null',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
-      consentedRoot: () => '/', hasFullFilesystem: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', hasFullFilesystem: async () => true,
     }), path: (s) => `/conf/${s}` },
 ];
 
@@ -409,7 +409,7 @@ describe('the global workspace namespace', () => {
 describe('device file view — the consented subtree is a boundary', () => {
   function scoped(root: string) {
     const calls: string[] = [];
-    const consent = { consentedRoot: () => root, hasFullFilesystem: async () => false };
+    const consent = { consentedRoot: async () => root, deviceHome: async () => root, hasFullFilesystem: async () => false };
     return { vfs: deviceFiles(deviceTransport(new MemFs(), calls), consent), calls };
   }
 
@@ -461,7 +461,11 @@ describe('device file view — bounded range reads', () => {
     all[512 * 1024] = 0x00;
     fs.write('/home/me/proj/large.bin', all);
     const calls: string[] = [];
-    const consent = { consentedRoot: () => '/home/me/proj', hasFullFilesystem: async () => false };
+    const consent = {
+      consentedRoot: async () => '/home/me/proj',
+      deviceHome: async () => '/home/me',
+      hasFullFilesystem: async () => false,
+    };
     const vfs = deviceFiles(deviceTransport(fs, calls), consent);
 
     const bytes = await vfs.readRange('/home/me/proj/large.bin', 0, 512 * 1024);

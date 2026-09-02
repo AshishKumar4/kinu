@@ -270,7 +270,20 @@ const DeviceHelloSchema = v.object({
   type: v.literal('HELLO'),
   os: v.optional(v.string()),
   hostname: v.optional(v.string()),
+  /** The directory `kinu connect` ran in — the base tier's whole reach — and
+   *  the machine's home. Absolute or ignored: a relative path names nothing
+   *  the hub can scope a call to. */
+  root: v.optional(v.string()),
+  home: v.optional(v.string()),
 });
+const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\/.+/));
+/** An absolute path, or null for anything else — an older daemon sends
+ *  nothing, and a relative path is not a scope. */
+function absolutePathOrNull(value: string | undefined): string | null {
+  const parsed = v.safeParse(AbsolutePathSchema, value);
+  if (!parsed.success) return null;
+  return parsed.output.length > 1 ? parsed.output.replace(/\/+$/, '') : parsed.output;
+}
 const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_TOKEN_ROTATION_ACK) });
 const LooseObjectSchema = v.looseObject({});
 const NullableStringArraySchema = v.nullable(v.array(v.string()));
@@ -1869,8 +1882,17 @@ export class UserDO extends Agent<Env> {
     // that is not JSON at all) is an RPC response.
     const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
     if (hello.success) {
-      this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
-        hello.output.os ?? null, hello.output.hostname ?? null, Date.now(), deviceId);
+      // COALESCE, not overwrite: a daemon too old to send these must not
+      // erase what a newer one already recorded for this machine.
+      this.sqlx(
+        `UPDATE user_devices
+            SET os = ?, hostname = ?, last_seen_at = ?,
+                consented_root = COALESCE(?, consented_root),
+                device_home = COALESCE(?, device_home)
+          WHERE id = ?`,
+        hello.output.os ?? null, hello.output.hostname ?? null, Date.now(),
+        absolutePathOrNull(hello.output.root), absolutePathOrNull(hello.output.home),
+        deviceId);
       return;
     }
     const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
@@ -2600,11 +2622,16 @@ export class UserDO extends Agent<Env> {
       const granted = workspace
         ? this.getDeviceConsentPolicy(workspace, deviceId)?.policy === 'allow'
         : undefined;
+      const scope = this.sqlx<{ consented_root: string | null; device_home: string | null }>(
+        `SELECT consented_root, device_home FROM user_devices WHERE id = ?`, deviceId,
+      )[0];
       const status: DeviceStatus = {
         connected: true,
         registered: true,
         toolchain: await this._devices.probeToolchain(deviceId, Date.now()),
         devices,
+        consentedRoot: scope?.consented_root ?? null,
+        deviceHome: scope?.device_home ?? null,
       };
       if (granted !== undefined) status.workspaceGranted = granted;
       return status;

@@ -662,11 +662,37 @@ export function createCFRuntime(
       })(),
     ]);
   })();
-  // The executor's file view scopes paths to the consented subtree (connect dir
-  // / home) unless the agent holds the full-filesystem consent tier on the hub.
-  // Action consent (ask-once-then-remember) still applies to every RPC beneath.
+  // The executor's file view scopes paths to the ONE directory the owner named
+  // at `kinu connect`, unless the agent holds the full-filesystem consent tier
+  // on the hub. Action consent (ask-once-then-remember) still applies to every
+  // RPC beneath.
+  //
+  // A CLI turn answers with its own cwd, which is the machine the CLI runs on
+  // and needs no tunnel. Everything else reads the connected device's row: the
+  // daemon reported both paths on HELLO, so neither is computed here and
+  // neither costs a command on the user's machine.
+  const deviceScope = async (
+    field: 'consentedRoot' | 'deviceHome',
+  ): Promise<string | null> => {
+    const hub = userDOStubFor(env, actor);
+    if (!hub) return null;
+    try {
+      return (await hub.deviceRuntimeStatus(await userCallerFor(actor)))[field] ?? null;
+    } catch (error) {
+      // Fail CLOSED, and say so: a null scope refuses base-tier file access
+      // rather than widening it to the home directory, which is the escalation
+      // this whole seam exists to remove.
+      diagnostics.failure('device.scope_unreadable', toKinuError({
+        doing: "reading the device's consented directory",
+        cause: error,
+        otherwise: 'unavailable',
+      }), { workspace: actor.workspaceName });
+      return null;
+    }
+  };
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
-    consentedRoot: cliCwdForDevice,
+    consentedRoot: async () => cliCwdForDevice() ?? await deviceScope('consentedRoot'),
+    deviceHome: async () => cliCwdForDevice() ?? await deviceScope('deviceHome'),
     hasFullFilesystem: async () => {
       const hub = userDOStubFor(env, actor);
       if (!hub) return false;

@@ -90,7 +90,8 @@ describe('createDeviceTunnelExecutor', () => {
   test('base consent cannot escape its subtree through native file tools', async () => {
     const t = transport(() => 'contents');
     const provider = createDeviceTunnelExecutor(t, {
-      consentedRoot: () => '/home/dev/project',
+      consentedRoot: async () => '/home/dev/project',
+      deviceHome: async () => '/home/dev',
       hasFullFilesystem: async () => false,
     });
 
@@ -111,6 +112,47 @@ describe('createDeviceTunnelExecutor', () => {
         root: '/home/dev/project',
       }],
     }]);
+  });
+
+  /**
+   * F2. The base tier used to default to `$HOME`, learned by running
+   * `printf %s "$HOME"` on the machine — an exec, which needs the FULL tier,
+   * so a base-tier workspace could not list a directory without first being
+   * pushed through a full-filesystem card. And `$HOME` holds
+   * `~/.kinu/config.json` (the owner's CLI bearer), `~/.ssh` and `~/.aws`, so
+   * "inside its connected folder" was the whole home and reading one file in
+   * it escalated the tier.
+   */
+  test('a device that named no directory has no base-tier reach, and asks for none', async () => {
+    const t = transport(() => 'contents');
+    const provider = createDeviceTunnelExecutor(t, {
+      consentedRoot: async () => null,
+      deviceHome: async () => '/home/dev',
+      hasFullFilesystem: async () => false,
+    });
+
+    // Every file tool refuses, and none of them asks the machine anything —
+    // no path probe, and above all no `exec`.
+    for (const answer of [
+      await provider.tools.readFile.execute('/home/dev/notes.md'),
+      await provider.tools.readdir.execute('/home/dev'),
+      await provider.tools.exists.execute('/home/dev/.kinu/config.json'),
+      await provider.tools.writeFile.execute('/home/dev/x', 'y'),
+    ]) {
+      expect(String(answer)).toContain('reported no consented directory');
+    }
+    expect(t.calls).toEqual([]);
+
+    // The full tier still opens somewhere, from the home the machine reported
+    // on HELLO rather than a command run on it.
+    const full = createDeviceTunnelExecutor(t, {
+      consentedRoot: async () => null,
+      deviceHome: async () => '/home/dev',
+      hasFullFilesystem: async () => true,
+    });
+    // `homeDir` is the provider's own answer, not the VFS's.
+    expect(await full.homeDir?.()).toBe('/home/dev');
+    expect(t.calls).toEqual([]);
   });
 
   test('the row carries the machine\'s own name and this agent\'s grant state', () => {

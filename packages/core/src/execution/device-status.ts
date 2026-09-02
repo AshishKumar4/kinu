@@ -97,6 +97,15 @@ export interface DeviceStatus {
    *  first call raises the consent card or just runs. Absent = unknown /
    *  no device / non-workspace caller. */
   workspaceGranted?: boolean;
+  /** The directory the owner named at `kinu connect`, which is the whole of
+   *  the base tier's reach. Null when the connected daemon predates the field:
+   *  the base tier then has no scope, which fails closed rather than falling
+   *  back to the home directory. */
+  consentedRoot?: string | null;
+  /** The machine's own home, as the machine reported it on HELLO. The file
+   *  view opens here under the full tier; carried so the hub never runs a
+   *  command on the machine to learn a path. */
+  deviceHome?: string | null;
 }
 
 /** What the turn context says about the user's PC. */

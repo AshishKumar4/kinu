@@ -57,6 +57,14 @@ const USER_DEVICES_ADDED_COLUMNS = {
   // Revocation found a command it could not confirm stopped. Owner-visible
   // fact; survives removal of the active in-flight row.
   unstopped_at: 'INTEGER',
+  // The directory `kinu connect` ran in, and the machine's home, both carried
+  // on HELLO. The base consent tier is scoped to `consented_root`, so it is
+  // one directory the owner NAMED rather than a default the hub computed; a
+  // row with none has no base-tier file access at all. `device_home` is what
+  // the file view opens at, and it exists so the hub never has to run a
+  // command on the machine to learn a path.
+  consented_root: 'TEXT',
+  device_home: 'TEXT',
 } as const;
 
 // A ticket bought with the CURRENT device token is the one accept that may
@@ -323,6 +331,8 @@ export function initUserTables(sql: SqlExec): void {
       last_ip         TEXT,
       last_agent      TEXT,
       replaced_at     INTEGER,
+      consented_root  TEXT,
+      device_home     TEXT,
       -- Revocation found a command it could not confirm stopped. This owner-
       -- visible fact survives removal of its active in-flight row; reconnection
       -- cannot clear it because a revoked device never reconnects.

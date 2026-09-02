@@ -193,7 +193,8 @@ describe('the workspace plane mount table', () => {
 			},
 		};
 		const view = deviceFiles(transport, {
-			consentedRoot: () => '/home/dev',
+			consentedRoot: async () => '/home/dev',
+			deviceHome: async () => '/home/dev',
 			hasFullFilesystem: async () => fullFilesystem,
 		});
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', view)]);

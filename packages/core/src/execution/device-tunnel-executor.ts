@@ -498,18 +498,31 @@ declare namespace laptop {
 /**
  * Consent boundary of the device file view. The view exposes the device's REAL
  * root — a faithful window, not a lossy rewrite — but by default only the
- * consented subtree (the device connect dir, falling back to the device home)
- * is reachable. Anything outside it needs the stronger 'full_filesystem' tier.
+ * directory the owner NAMED at `kinu connect` is reachable. Anything outside
+ * it needs the stronger 'full_filesystem' tier.
+ *
+ * There is deliberately no fallback. The base tier used to default to `$HOME`,
+ * which holds `~/.kinu/config.json` (the owner's CLI bearer), `~/.ssh` and
+ * `~/.aws` — so "inside its connected folder" was the whole home, and reading
+ * one file in it escalated the tier. A device that reported no root has no
+ * base-tier file access: the owner re-runs `kinu connect` in the directory
+ * they mean, which is the only party that can answer that question.
  */
 export interface DeviceFileConsent {
-  /** The consented subtree, or null to fall back to the device's home. */
-  consentedRoot(): string | null;
+  /** The directory the owner consented, or null when this device reported
+   *  none. Async because the answer lives on the device row, not in the
+   *  isolate. */
+  consentedRoot(): Promise<string | null>;
+  /** The machine's own home, as it reported on HELLO, or null. Where the file
+   *  view opens under the full tier — never a scope. */
+  deviceHome(): Promise<string | null>;
   /** Whether this agent holds the full-filesystem consent tier. */
   hasFullFilesystem(): Promise<boolean>;
 }
 
 const ALWAYS_CONSENTED: DeviceFileConsent = {
-  consentedRoot: () => '/',
+  consentedRoot: async () => '/',
+  deviceHome: async () => '/',
   hasFullFilesystem: async () => true,
 };
 
@@ -525,28 +538,33 @@ export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNative
  * Every call still crosses the hub's per-(agent, device) action-consent
  * chokepoint, and this view adds the path-scope layer on top.
  *
- * `homeDir` is the same directory the path-scope guard measures against — the
- * consented root, or `$HOME` asked of the device once and cached. The host
- * cannot derive it: `HELLO` carries user/os/hostname and no home, and mapping
- * platform to path would be a guess.
+ * `homeDir` is where the view opens: the consented root, or the machine's own
+ * home under the full tier. Both arrive on `HELLO` and sit on the device row,
+ * so this view never runs a command to learn a path — it used to `exec`
+ * `printf %s "$HOME"`, which is an exec, which needs the FULL tier, so a
+ * base-tier workspace could not list a directory without first being pushed
+ * through a full-filesystem consent card.
  */
 export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent): DeviceVFS {
-  const exec = async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
-    v.parse(DeviceExecResultSchema, await transport.rpc('exec', [command]));
-
-  let cachedHome: string | null = null;
+  const trimmed = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') : path);
   const effectiveRoot = async (): Promise<string> => {
-    const explicit = consent.consentedRoot();
-    if (explicit) return explicit.length > 1 ? explicit.replace(/\/+$/, '') : explicit;
-    if (cachedHome === null) {
-      const r = await exec('printf %s "$HOME"');
-      const home = r.exitCode === 0 ? r.stdout.trim() : '';
-      if (!home.startsWith('/')) {
-        throw makeVfsError('EACCES', 'cannot determine the consented device directory', '/');
-      }
-      cachedHome = home.length > 1 ? home.replace(/\/+$/, '') : home;
-    }
-    return cachedHome;
+    const explicit = await consent.consentedRoot();
+    if (explicit) return trimmed(explicit);
+    throw makeVfsError(
+      'EACCES',
+      'this device reported no consented directory, so the base tier reaches nothing on it — '
+      + 'run `kinu connect` on the machine, in the directory this workspace should see',
+      '/',
+    );
+  };
+  /** Where the view OPENS, which is not the same question as what it may
+   *  reach: the full tier has no root and still needs somewhere to start. */
+  const openingDir = async (): Promise<string> => {
+    const root = await consent.consentedRoot();
+    if (root) return trimmed(root);
+    const home = await consent.deviceHome();
+    if (home) return trimmed(home);
+    throw makeVfsError('EACCES', 'this device reported neither a consented directory nor a home', '/');
   };
 
   const guard = async (path: string, op: string): Promise<string | null> => {
@@ -582,7 +600,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   };
 
   return {
-    homeDir: effectiveRoot,
+    homeDir: openingDir,
     async readFile(path, opts) {
       const root = await guard(path, 'open');
       const raw = await transport.rpc('readFile', [path, { encoding: 'base64', root }]);
