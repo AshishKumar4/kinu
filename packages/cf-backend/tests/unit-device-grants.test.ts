@@ -234,6 +234,66 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
       .toEqual([requestId]);
     await harness.closeDeviceHarness();
   });
+
+  /**
+   * A grant is read BY NAME on every later call, so its lifetime has to be the
+   * lifetime of the thing it names. Two ways it used to outlive them, and both
+   * end as a standing full_filesystem nobody granted.
+   */
+  test('deleting a workspace deletes its device grants, so a same-name replacement inherits nothing', async () => {
+    const harness = await deviceHarness();
+    const owner = await testOwner();
+    await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem');
+    expect(await harness.userDO.getDeviceFsConsent(harness.workspace, WORKSPACE))
+      .toEqual({ fullFilesystem: true });
+
+    await harness.userDO.removeWorkspace(owner, WORKSPACE, '0'.repeat(32));
+    expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
+
+    // The owner recreates the name — a shared template makes this ordinary.
+    const rebuilt = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+    const replacement: UserCaller = { workspaceToken: rebuilt };
+    harness.consentDecision = 'deny';
+    await expect(harness.userDO.deviceRpc(replacement, 'exec', ['curl x | sh'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
+    // Asked, not remembered: the card is the proof the old row is gone.
+    expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
+    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
+    await harness.closeDeviceHarness();
+  });
+
+  test('revoking a device deletes its grants, so the owner audits live permissions only', async () => {
+    const harness = await deviceHarness();
+    const owner = await testOwner();
+    await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem');
+
+    expect(await harness.userDO.revokeDevice(owner, harness.deviceId))
+      .toEqual({ ok: true, unstoppedCommands: 0 });
+
+    expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
+    await harness.closeDeviceHarness();
+  });
+
+  test('a grant may only name a workspace this registry holds and a device that is live', async () => {
+    const harness = await deviceHarness();
+    const owner = await testOwner();
+
+    // A name no workspace has is the case that mattered: the row would sit
+    // there waiting for someone to create it.
+    expect(await harness.userDO.setDeviceConsentScope(owner, 'never-existed', harness.deviceId, 'full_filesystem'))
+      .toEqual({ ok: false });
+    expect(await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, 'dev-not-registered', 'full_filesystem'))
+      .toEqual({ ok: false });
+    expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
+
+    // Both real: the grant lands.
+    expect(await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem'))
+      .toEqual({ ok: true });
+    expect((await harness.userDO.listDeviceConsents(owner)).map((row) => row.agentName))
+      .toEqual([WORKSPACE]);
+    await harness.closeDeviceHarness();
+  });
 });
 
 describe('durable device request ownership', () => {

@@ -1122,6 +1122,12 @@ export class UserDO extends Agent<Env> {
   private async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     this.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
+    // The device grants go with the capability, in the same synchronous turn
+    // and for the same reason. A grant is read BY NAME on every later device
+    // call, so a row that outlived its workspace is a standing
+    // full_filesystem waiting for the next workspace created with that name -
+    // which a shared template makes ordinary rather than unlikely.
+    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ?`, name);
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent(ownerUserId);
@@ -2396,15 +2402,30 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
-  /** Grant or reduce an agent's consent tier on a device (workspace settings / CLI).
-   *  Granting full_filesystem also records the base 'allow' policy. */
+  /**
+   * Grant or reduce a workspace's consent tier on a device (Account settings →
+   * Devices, and the CLI's owner-authenticated route). Granting
+   * full_filesystem also records the base 'allow' policy.
+   *
+   * BOTH NAMES ARE CHECKED AGAINST THE REGISTRY, here rather than in the
+   * route. A grant is read by name on every later device call, so a row naming
+   * a workspace that does not exist is a grant waiting for one to be created
+   * with that name — which is exactly how a deleted workspace's
+   * full_filesystem used to be inherited by its replacement. Checking in the
+   * route instead would be a check-then-act across two RPCs, and this object
+   * serializes nothing across an await.
+   */
   async setDeviceConsentScope(caller: UserCaller, agentName: string, deviceId: string, scope: DeviceConsentScope): Promise<{ ok: boolean }> {
-    const resolved = await this.requireTier(caller, 'device.consent');
-    // Same rule as the two reads below it: a workspace caller's agent name is
-    // the proven one, never the claimed one. The owner's settings route grants
-    // on any of their workspaces and is unaffected.
-    const target = resolved.kind === 'workspace' ? resolved.workspace : agentName;
+    await this.requireTier(caller, 'device.consent');
     if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) {
+      return { ok: false };
+    }
+    // `workspaceMintable`, not `workspaceRegistered`: an archived workspace is
+    // reopenable and its grants are the owner's to set, while a name whose
+    // teardown has started is one this registry no longer holds. The device
+    // must be an unrevoked row for the same reason — a grant on a dead device
+    // id is a row the owner's roster shows and nothing can ever use.
+    if (!this.workspaceMintable(agentName) || !this.isActiveDevice(deviceId)) {
       return { ok: false };
     }
     // An explicit tier choice overrides the no-downgrade merge.
@@ -2413,7 +2434,7 @@ export class UserDO extends Agent<Env> {
        VALUES (?, ?, 'allow', ?, ?)
        ON CONFLICT(agent_name, device_id) DO UPDATE SET
          policy = 'allow', scope = excluded.scope, updated_at = excluded.updated_at`,
-      target, deviceId, scope, Date.now(),
+      agentName, deviceId, scope, Date.now(),
     );
     return { ok: true };
   }
@@ -2427,17 +2448,16 @@ export class UserDO extends Agent<Env> {
    *  START, so a command already running keeps running and still returns its
    *  result. `revokeDevice` is the authority that ENDS live commands. */
   async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
-    const resolved = await this.requireTier(caller, 'device.consent');
-    const target = resolved.kind === 'workspace' ? resolved.workspace : agentName;
-    if (!target || !deviceId) return { ok: false };
-    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, target, deviceId);
+    await this.requireTier(caller, 'device.consent');
+    if (!agentName || !deviceId) return { ok: false };
+    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
     return { ok: true };
   }
 
   /** The device file view's path-scope check: does this workspace hold the
    *  full-filesystem tier on the currently connected device? */
   async getDeviceFsConsent(caller: UserCaller, agentName: string): Promise<{ fullFilesystem: boolean }> {
-    const resolved = await this.requireTier(caller, 'device.consent');
+    const resolved = await this.requireTier(caller, 'device.consent.read_self');
     const deviceId = this._devices.connectedDeviceId();
     if (!deviceId) return { fullFilesystem: false };
     const policy = this.getDeviceConsentPolicy(
@@ -2645,6 +2665,11 @@ export class UserDO extends Agent<Env> {
     }
 
     this._inflight.deleteEveryRequestOf(deviceId);
+    // A revoked device can never be reached again, so its grants are dead
+    // rows the owner's roster still shows as live permissions. Deleted here
+    // rather than left: the roster is what the owner audits, and a list of
+    // grants on machines that no longer exist is what makes it unreadable.
+    this.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
     this._devices.close(deviceId, 'device revoked');
     return { ok: true, unstoppedCommands };
   }

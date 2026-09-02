@@ -49,6 +49,22 @@ export type WorkspaceTier = 'full' | 'shared';
 
 const TIER_RANK = { shared: 1, full: 2 } satisfies Record<WorkspaceTier, number>;
 
+/** What a capability requires of its caller.
+ *
+ *  A {@link WorkspaceTier} admits a workspace at that tier or above.
+ *  `owner_only` admits no workspace at all: the capability IS an account
+ *  authority, and a workspace capability token is never one, whatever tier the
+ *  workspace holds. Device registration and device consent are the two — a
+ *  workspace that could register a device would mint a device token and dial
+ *  its own daemon, and one that could write consent would grant itself the
+ *  owner's shell. Neither has ever had a workspace-tier caller; the matrix
+ *  said `full` only because nobody had written the call yet.
+ *
+ *  This is capability-level. A capability a workspace legitimately uses may
+ *  still hold an owner-only METHOD (the profile catalog inside `config`), and
+ *  that stays a check in the method. */
+export type CapabilityFloor = WorkspaceTier | 'owner_only';
+
 function isWorkspaceTier<Value>(value: Value): value is Value & WorkspaceTier {
   return v.is(v.picklist(['full', 'shared']), value);
 }
@@ -90,12 +106,21 @@ export const WORKSPACE_CAPABILITY_TIERS = {
   'mcp.manage': 'full',
   /** JSON-RPC onto the owner's physical machine. */
   'device.rpc': 'full',
-  /** Per-(agent, device) consent policy — read or write. Consent UI reachable
-   *  by the wrong human is a confused-deputy trap, so there is no ask-flow at
-   *  `shared` either. */
-  'device.consent': 'full',
-  /** Device registry + the daemon's own token/ticket exchange. */
-  'device.manage': 'full',
+  /** WRITING the per-(agent, device) consent policy, and reading the whole
+   *  account's roster of grants. Owner-only: a workspace that can write this
+   *  table grants itself `full_filesystem` on the owner's machine and skips the
+   *  card entirely, which is the confused-deputy trap the ask-flow exists to
+   *  prevent. Every caller is an owner-authenticated settings route. */
+  'device.consent': 'owner_only',
+  /** Asking whether THE CALLING workspace holds the full-filesystem tier on
+   *  the connected device. The device file view narrows itself with the
+   *  answer, so refusing it would widen the path scope rather than close it;
+   *  the answer is about the caller's own grant and grants nothing. */
+  'device.consent.read_self': 'full',
+  /** Device registry and the daemon's own token/ticket exchange. Owner-only:
+   *  `registerDevice` mints a device token, and a token is a daemon slot the
+   *  owner's commands can be routed to. */
+  'device.manage': 'owner_only',
   /** The owner's workspace roster — the peer roster is this list. Reading it
    *  leaks the owner's other workspace names. */
   'workspaces.read': 'full',
@@ -139,7 +164,7 @@ export const WORKSPACE_CAPABILITY_TIERS = {
   'auth_tokens.socket': 'shared',
   /** The Codex OAuth device flow. */
   'codex_auth': 'full',
-} as const satisfies Record<string, WorkspaceTier>;
+} as const satisfies Record<string, CapabilityFloor>;
 
 export type WorkspaceCapability = keyof typeof WORKSPACE_CAPABILITY_TIERS;
 
@@ -229,7 +254,8 @@ export type CapabilityDenialReason =
   | 'no_workspace_identity'
   | 'unrecognized_workspace'
   | 'no_tier_registered'
-  | 'tier_too_low';
+  | 'tier_too_low'
+  | 'owner_only';
 
 /**
  * Refuse a privileged call, and count it.
@@ -461,6 +487,12 @@ export async function requireTier<Caller>(
   const resolved = await resolveCaller(sql, env, caller, capability);
   if (resolved.kind === 'owner_session') return resolved;
   const minimum = WORKSPACE_CAPABILITY_TIERS[capability];
+  if (minimum === 'owner_only') {
+    denyCapability('owner_only', capability,
+      `"${capability}" is an account authority and is reachable only by the signed-in owner. `
+      + `Workspace "${resolved.workspace}" presented a workspace capability token, which never carries `
+      + 'owner authority whatever tier the workspace holds.');
+  }
   if (TIER_RANK[resolved.tier] < TIER_RANK[minimum]) {
     denyCapability('tier_too_low', capability,
       `"${capability}" is not available to a ${resolved.tier} workspace. `

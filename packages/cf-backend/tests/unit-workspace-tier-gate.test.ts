@@ -113,20 +113,13 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.rpc', name: 'cancelDeviceRequestsForBackgroundJob', run: (u, c) => u.cancelDeviceRequestsForBackgroundJob(c, 'job-1') },
   { capability: 'device.rpc', name: 'deviceRuntimeStatus', run: (u, c) => u.deviceRuntimeStatus(c) },
 
-  { capability: 'device.consent', name: 'getDeviceFsConsent', run: (u, c) => u.getDeviceFsConsent(c, WORKSPACE) },
-  { capability: 'device.consent', name: 'setDeviceConsentScope', run: (u, c) => u.setDeviceConsentScope(c, WORKSPACE, 'dev-1', 'all_local_actions') },
-  { capability: 'device.consent', name: 'listDeviceConsents', run: (u, c) => u.listDeviceConsents(c) },
-  { capability: 'device.consent', name: 'revokeDeviceConsent', run: (u, c) => u.revokeDeviceConsent(c, WORKSPACE, 'dev-1') },
+  // `device.consent.read_self` is the one device capability a workspace keeps:
+  // the file view narrows its own path scope with the answer, so refusing it
+  // would widen the scope rather than close it. Every other device method is
+  // an account authority and lives in OWNER_ONLY_CALLS below.
+  { capability: 'device.consent.read_self', name: 'getDeviceFsConsent', run: (u, c) => u.getDeviceFsConsent(c, WORKSPACE) },
 
-  { capability: 'device.manage', name: 'listDevices', run: (u, c) => u.listDevices(c) },
-  { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'laptop') },
-  { capability: 'device.manage', name: 'revokeDevice', run: (u, c) => u.revokeDevice(c, 'dev-1') },
-  { capability: 'device.manage', name: 'acknowledgeUnstoppedDevice', run: (u, c) => u.acknowledgeUnstoppedDevice(c, 'dev-1') },
   { capability: 'device.rpc', name: 'transferDeviceRequestToBackgroundJob', run: (u, c) => u.transferDeviceRequestToBackgroundJob(c, 'rpc-1', 'job-1') },
-  { capability: 'device.manage', name: 'renameDevice', run: (u, c) => u.renameDevice(c, 'dev-1', 'studio tower') },
-  { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
-  { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
-  { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
 
   { capability: 'workspaces.read', name: 'listWorkspaces', run: (u, c) => u.listWorkspaces(c) },
   { capability: 'workspaces.read', name: 'listActiveWorkspaces', run: (u, c) => u.listActiveWorkspaces(c) },
@@ -244,17 +237,51 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'codex_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
 ];
 
-const OWNER_ONLY_CALLS = [
-  { name: 'getProfileCatalog', run: (userDO: UserDOInstance, caller: UserCaller) => userDO.getProfileCatalog(caller) },
+interface OwnerOnlyCall {
+  name: string;
+  /** Present when the whole CAPABILITY is floored at `owner_only`, so this row
+   *  also carries that capability's coverage. Absent for an owner-only method
+   *  inside a capability workspaces do legitimately use. */
+  capability?: WorkspaceCapability;
+  run(userDO: UserDOInstance, caller: UserCaller): Promise<AsyncUserDOResult>;
+}
+
+/**
+ * Methods no workspace token reaches at any tier, and an owner session does.
+ *
+ * Two kinds sit here and the difference is where the rule is written. The
+ * profile catalog is an owner-only METHOD inside `config`, a capability
+ * workspaces do use, so the check is in the method. The device registry and
+ * device consent are owner-only CAPABILITIES: the matrix floors both at
+ * `owner_only` and refuses them before any method runs.
+ */
+const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
+  { name: 'getProfileCatalog', run: (userDO, caller) => userDO.getProfileCatalog(caller) },
   {
     name: 'putProfileCatalog',
-    run: (userDO: UserDOInstance, caller: UserCaller) => userDO.putProfileCatalog(
+    run: (userDO, caller) => userDO.putProfileCatalog(
       caller,
       decodeJsonValue({ value: BUILTIN_PROFILE_CATALOG }),
       0,
     ),
   },
-] as const;
+
+  // Writing a grant is granting the owner's machine away, and reading the
+  // roster hands over every other workspace's grants too.
+  { capability: 'device.consent', name: 'setDeviceConsentScope', run: (u, c) => u.setDeviceConsentScope(c, WORKSPACE, 'dev-1', 'all_local_actions') },
+  { capability: 'device.consent', name: 'listDeviceConsents', run: (u, c) => u.listDeviceConsents(c) },
+  { capability: 'device.consent', name: 'revokeDeviceConsent', run: (u, c) => u.revokeDeviceConsent(c, WORKSPACE, 'dev-1') },
+
+  // The registry and the daemon's own credential exchange.
+  { capability: 'device.manage', name: 'listDevices', run: (u, c) => u.listDevices(c) },
+  { capability: 'device.manage', name: 'registerDevice', run: (u, c) => u.registerDevice(c, 'laptop') },
+  { capability: 'device.manage', name: 'revokeDevice', run: (u, c) => u.revokeDevice(c, 'dev-1') },
+  { capability: 'device.manage', name: 'acknowledgeUnstoppedDevice', run: (u, c) => u.acknowledgeUnstoppedDevice(c, 'dev-1') },
+  { capability: 'device.manage', name: 'renameDevice', run: (u, c) => u.renameDevice(c, 'dev-1', 'studio tower') },
+  { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
+  { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
+  { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
+];
 
 /** Did the boundary refuse this call, as opposed to the call failing for its
  *  own reasons (no device connected, unknown change id, stubbed MCP client)? */
@@ -738,10 +765,26 @@ describe('no privileged UserDO method escapes the gate', () => {
   });
 
   test('every capability in the matrix has at least one call behind it', () => {
-    const covered = new Set(GATED_CALLS.map((c) => c.capability));
+    // A capability floored at `owner_only` is covered by the owner-only list,
+    // where its calls must be REFUSED for a workspace: a matrix entry with no
+    // call behind it in either list is policy nobody exercises.
+    const covered = new Set([
+      ...GATED_CALLS.map((c) => c.capability),
+      ...OWNER_ONLY_CALLS.flatMap((c) => c.capability === undefined ? [] : [c.capability]),
+    ]);
     const declared = Object.keys(WORKSPACE_CAPABILITY_TIERS).filter(
       (name): name is WorkspaceCapability => Object.hasOwn(WORKSPACE_CAPABILITY_TIERS, name),
     );
     expect(declared.filter((c) => !covered.has(c))).toEqual([]);
+  });
+
+  test('an owner-only capability admits no workspace and appears in no gated row', () => {
+    const ownerOnly = Object.entries(WORKSPACE_CAPABILITY_TIERS)
+      .filter(([, floor]) => floor === 'owner_only')
+      .map(([capability]) => capability);
+    expect(ownerOnly.sort()).toEqual(['device.consent', 'device.manage']);
+    // GATED_CALLS is the list a `full` workspace is expected to get THROUGH,
+    // so an owner-only capability appearing there would claim the opposite.
+    expect(GATED_CALLS.filter((c) => ownerOnly.includes(c.capability))).toEqual([]);
   });
 });

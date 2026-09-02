@@ -174,12 +174,19 @@ describe('requireTier fails closed', () => {
 });
 
 describe('the attenuation matrix', () => {
-  test('a full workspace reaches every capability', async () => {
+  test('a full workspace reaches every workspace capability, and no owner-only one', async () => {
     const { db, sql } = setup();
     const minted = await mintWorkspaceCapability(sql, 'workspace-a');
     for (const capability of CAPABILITIES) {
-      expect(await requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability))
-        .toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'full' });
+      const call = requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability);
+      if (WORKSPACE_CAPABILITY_TIERS[capability] === 'owner_only') {
+        // `owner_only` is a FLOOR, not a tier: `full` is the top workspace
+        // tier and is refused anyway, which is why the third value exists
+        // instead of a fourth rank above `full`.
+        await expect(call).rejects.toThrow(CapabilityDeniedError);
+      } else {
+        expect(await call).toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'full' });
+      }
     }
     db.close();
   });
