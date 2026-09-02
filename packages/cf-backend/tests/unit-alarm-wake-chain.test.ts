@@ -53,6 +53,36 @@ describe('the workspace keeps exactly one wake row', () => {
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual(['kinu-wake']);
   });
 
+  test('a row whose callback is no longer a method is dropped at any age and type', async () => {
+    // PRODUCTION, 2026-09-01: `wrangler tail` reported `Callback
+    // snapshotWorkspaceIfDue not found or is not a function` every few minutes.
+    // The framework's alarm loop logs that and CONTINUES without deleting the
+    // row, so the same row re-reports on every wake for as long as the object
+    // lives. No horizon reaches it either: a recurring row re-dates itself past
+    // any cutoff, and a fresh one is inside it. The method is what left — the
+    // snapshot machinery moved to another package — so nothing makes the row
+    // runnable again.
+    const { agent, db } = orchestratorHarness();
+    await agent.listSchedules();
+    const insert = db.prepare(
+      `INSERT INTO cf_agents_schedules (id, callback, payload, type, time) VALUES (?, ?, NULL, ?, ?)`,
+    );
+    const soonSec = Math.floor((Date.now() + 60_000) / 1000);
+    // Every combination the horizon rule cannot see: future, recurring, fresh.
+    insert.run('dead-future', 'snapshotWorkspaceIfDue', 'scheduled', soonSec);
+    insert.run('dead-cron', 'snapshotWorkspaceIfDue', 'cron', soonSec);
+    insert.run('dead-interval', 'snapshotWorkspaceIfDue', 'interval', soonSec);
+    // A live callback of the same age and type survives, so the sweep is reading
+    // the CLASS and not the clock.
+    insert.run('live-future', '_kinuTerminalRetryTick', 'scheduled', soonSec);
+
+    await agent.activateActor();
+
+    const rows = await agent.listSchedules();
+    expect(rows.filter((row) => row.callback === 'snapshotWorkspaceIfDue')).toEqual([]);
+    expect(rows.some((row) => row.id === 'live-future')).toBe(true);
+  });
+
   test('a beyond-budget stale backlog drains across maintenance wakes, not the gate', async () => {
     // The sweep carries a 4096-row budget because it runs in the init gate;
     // deletion is the cursor, and a truncated pass arms the maintenance tick

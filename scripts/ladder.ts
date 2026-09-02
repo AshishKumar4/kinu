@@ -495,11 +495,25 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun scripts/schema-drift.ts',
-    tier: 'push',
-    seconds: 2,
-    catches: 'a table or column the code writes and the schema does not declare — the '
-      + 'shape `code_language` shipped in, with no backfill.',
-    blind: 'a column that exists and is never written; that is dead-field territory.',
+    tier: 'commit',
+    // Measured 2026-09-01, three runs: 0.47/0.52/0.44s over 863 enumerated
+    // product files, 71 parsed, 118 tables. It was a PUSH gate at 2s while it
+    // asked git for each table's origin on every run; the genesis lock replaced
+    // those 118 pickaxe walks with one file read, and the parser is handed only
+    // the files carrying a statement it reads. Both counts are printed, so the
+    // corpus cannot shrink behind the number. The commit tier is where this
+    // belongs: the defect is written in the same hunk as the DDL.
+    seconds: 0.5,
+    catches: 'a column added to a shipped table with no reconciliation onto storage that '
+      + 'predates it. The shape `code_language` shipped in, and the shape that answered '
+      + 'GET /api/cli/devices with 500 in production on 2026-09-01 — `unstopped_at` on a '
+      + 'user_devices table created 2026-06-12, with staging 500ing on `last_ip` from an '
+      + 'older one. Also the excuse itself: the ONE allowlisted table has to prove its '
+      + 'runtime mover is still called, and called after the table exists.',
+    blind: 'a column that exists and is never written, and a column REMOVED from a DDL that '
+      + 'live storage still has — both dead-field territory. Column TYPES and CONSTRAINTS '
+      + 'too: ALTER TABLE cannot repair either, so neither is checked. The gate prints all '
+      + 'six of its blind spots on its own green path.',
   },
   {
     run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts',

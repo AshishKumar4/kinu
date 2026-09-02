@@ -42,6 +42,7 @@ import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import puppeteer, { type LaunchOptions, type Page } from 'puppeteer';
+import * as v from 'valibot';
 
 import { initWorkspaceSchema, type LLMProviderConfig } from '../packages/core/src/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
@@ -58,6 +59,26 @@ import {
   recordWorkspaceSpend, reportLiveModelSpend, scratchDir, UNCONFIGURED_LLM,
   workerSession,
 } from '@kinu.run/test-utils';
+
+/** One row of `GET /api/cli/devices`, exactly as `UserDO.listDevices` declares
+ *  it. `strictObject` because both directions matter: a field the route stopped
+ *  answering with is the schema defect this arm exists for, and a field nobody
+ *  declared is a route the contract no longer describes. */
+const DeployedDeviceSchema = v.strictObject({
+  id: v.string(),
+  label: v.string(),
+  os: v.nullable(v.string()),
+  hostname: v.nullable(v.string()),
+  connected: v.boolean(),
+  createdAt: v.number(),
+  lastSeenAt: v.nullable(v.number()),
+  expiresAt: v.nullable(v.number()),
+  lastIp: v.nullable(v.string()),
+  lastAgent: v.nullable(v.string()),
+  replacedAt: v.nullable(v.number()),
+  revokedAt: v.nullable(v.number()),
+  unstoppedAt: v.nullable(v.number()),
+});
 
 const TARGET = liveModelTarget('Live Smoke');
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
@@ -395,6 +416,43 @@ describe('Live Smoke — one real turn per backend', () => {
       await browser.close();
     }
   }, 600_000);
+
+  /**
+   * THE DEVICE REGISTRY READ, against the deployed Worker.
+   *
+   * This is the assertion whose absence let a 500 ship. `UserDO.listDevices`
+   * selects six columns added to `user_devices` after the table shipped, and a
+   * UserDO created before them answered `no such column: unstopped_at` — so
+   * `GET /api/cli/devices` returned 500 on kinu.run and, from an older table,
+   * on `last_ip` on staging. `kinu connect` reads this route to confirm the
+   * daemon arrived, so the machine connected and the CLI reported failure.
+   *
+   * It costs one HTTP request and no model call. Nothing about the ROWS is
+   * asserted — an account may own no device — but the route must answer 200 with
+   * an array, and any row it does return must carry every field the RPC
+   * declares, because a repaired schema that answers with a narrower row is the
+   * same defect one layer up.
+   */
+  hostedTest('deployed backend: the device registry answers the CLI bearer', async () => {
+    if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
+    const { origin, token } = workerSession(HOSTED.llm);
+
+    const response = await infraBoundary(
+      `reading GET ${origin}/api/cli/devices`,
+      () => fetch(`${origin}/api/cli/devices`, { headers: { authorization: `Bearer ${token}` } }),
+    );
+    const body = await response.text();
+    // The body in the message: a 500 here carries the SQLite error, which names
+    // the missing column and is the whole diagnosis.
+    expect(response.status, `GET /api/cli/devices answered ${String(response.status)}: ${body.slice(0, 300)}`)
+      .toBe(200);
+
+    // PARSED, not inspected: `v.strictObject` refuses a row with a field
+    // missing AND a row carrying one nobody declared, so the field set is
+    // checked in both directions by the parse itself.
+    const devices = v.parse(v.array(DeployedDeviceSchema), JSON.parse(body));
+    console.log(`    deployed devices: ${String(devices.length)} row(s)`);
+  }, 60_000);
 
   liveTest('cli backend: one real turn through the local session spine', async () => {
     const dbPath = join(TEST_DIR, 'smoke.db');

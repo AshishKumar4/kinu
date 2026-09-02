@@ -955,6 +955,20 @@ export class OrchestratorAgent extends ActorAgent {
     return branches || fibers || schedules;
   }
 
+  /**
+   * A callback name this class still carries a member for.
+   *
+   * The framework dispatches `this[row.callback]`, so a row naming nothing on
+   * this object is unrunnable by construction — no age makes it runnable and no
+   * deploy brings the method back, because the code in one isolate is one
+   * version. Membership rather than callability, because every arming call site
+   * names a METHOD (`Agent.schedule` types its callback as `keyof this`), so a
+   * same-named non-function property is not a row this class can produce.
+   */
+  private canDispatch(callback: string): boolean {
+    return callback in this;
+  }
+
   private sweepUnrunnableSchedules(): boolean {
     const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
     // The terminal retry is exempt for the same reason the Kinu timer is: it is a
@@ -968,7 +982,9 @@ export class OrchestratorAgent extends ActorAgent {
     // deleted (one synchronous frame, so nothing interleaves) because the
     // count decides truncation and must not depend on a driver's RETURNING
     // support.
-    const stale = this.ctx.storage.sql.exec(
+    const rowidOf = (row: Record<string, SqlStorageValue>): number =>
+      v.parse(v.object({ rowid: v.number() }), row).rowid;
+    const doomed = new Set(this.ctx.storage.sql.exec(
       `SELECT rowid FROM cf_agents_schedules
         WHERE type IN ('delayed', 'scheduled') AND time <= ?
           AND callback NOT IN (?, ?)
@@ -976,18 +992,49 @@ export class OrchestratorAgent extends ActorAgent {
       cutoffSec,
       KINU_TIMER_CALLBACK,
       TERMINAL_RETRY_CALLBACK,
-    ).toArray().map((row) => v.parse(v.object({ rowid: v.number() }), row).rowid);
-    if (stale.length > 0) {
+    ).toArray().map(rowidOf));
+
+    // THE SECOND CLASS, and it is not a matter of age or type. A row whose
+    // callback is no longer a method of this class cannot run at any date: the
+    // alarm loop logs `Callback <name> not found or is not a function` and moves
+    // on WITHOUT deleting the row, so it re-reports on every wake for as long as
+    // the object exists. Production carries exactly that shape — a snapshot
+    // callback armed by a class whose method moved to another package — and no
+    // horizon reaches it, because a `cron` or `interval` row re-dates itself
+    // past the cutoff on every pass.
+    //
+    // Asked as DISTINCT callbacks first, which is a handful of identifiers
+    // however many rows exist, so the dispatch check runs once per name rather
+    // than once per row.
+    const dead = this.ctx.storage.sql.exec(`SELECT DISTINCT callback FROM cf_agents_schedules`)
+      .toArray()
+      .map((row) => v.parse(v.object({ callback: v.string() }), row).callback)
+      .filter((callback) => !this.canDispatch(callback));
+    if (dead.length > 0 && doomed.size < SWEEP_MAX_ROWS) {
+      const placeholders = dead.map(() => '?').join(', ');
+      for (const rowid of this.ctx.storage.sql.exec(
+        `SELECT rowid FROM cf_agents_schedules
+          WHERE callback IN (${placeholders})
+          LIMIT ${SWEEP_MAX_ROWS - doomed.size}`,
+        ...dead,
+      ).toArray().map(rowidOf)) doomed.add(rowid);
+    }
+
+    const rowids = [...doomed];
+    if (rowids.length > 0) {
       this.ctx.storage.sql.exec(
-        `DELETE FROM cf_agents_schedules WHERE rowid IN (${stale.map(() => '?').join(', ')})`,
-        ...stale,
+        `DELETE FROM cf_agents_schedules WHERE rowid IN (${rowids.map(() => '?').join(', ')})`,
+        ...rowids,
       );
     }
-    const dropped = stale.length;
+    const dropped = rowids.length;
     if (dropped > 0) {
       diagnostics.event('schedule.stale_rows_dropped', {
         dropped,
         horizonMs: STALE_SCHEDULE_HORIZON_MS,
+        // Identifiers from this repository's own code, and the whole diagnosis
+        // when a row outlives its method.
+        unrunnableCallbacks: dead.join(','),
       });
     }
     return dropped >= SWEEP_MAX_ROWS;

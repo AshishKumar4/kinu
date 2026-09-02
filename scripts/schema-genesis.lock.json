@@ -1,0 +1,1028 @@
+{
+  "active_durable_turn@packages/cf-backend/src/actor-agent.ts": [
+    "id",
+    "turn_id"
+  ],
+  "activity_log@packages/core/src/identity/schema.ts": [
+    "id",
+    "event",
+    "detail",
+    "elapsed_ms",
+    "created_at"
+  ],
+  "agent_config@packages/core/src/config/store.ts": [
+    "key",
+    "value"
+  ],
+  "agent_facts@packages/core/src/memory/facts.ts": [
+    "key",
+    "value_json",
+    "confidence",
+    "source",
+    "last_observed_at"
+  ],
+  "agent_log@packages/core/src/events/hub/schema.ts": [
+    "id",
+    "kind",
+    "turn_id",
+    "step_idx",
+    "parent_id",
+    "trace_id",
+    "ingress",
+    "variant",
+    "trust",
+    "priority",
+    "payload_visibility",
+    "payload",
+    "received_at",
+    "schema_version",
+    "dedupe_key"
+  ],
+  "agent_tasks@packages/core/src/tasks/store.ts": [
+    "id",
+    "seq",
+    "parent_id",
+    "title",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "agent_views@packages/core/src/views/store.ts": [
+    "slug",
+    "version",
+    "title",
+    "subtitle",
+    "written_at",
+    "status"
+  ],
+  "alternate_takes@packages/core/src/mcts/takes.ts": [
+    "id",
+    "turn_id",
+    "session_id",
+    "task",
+    "source",
+    "winner_node_id",
+    "chosen_node_id",
+    "candidates",
+    "created_at",
+    "picked_at"
+  ],
+  "assistant_messages@packages/core/src/identity/fork.ts": [
+    "id",
+    "session_id",
+    "parent_id",
+    "role",
+    "content",
+    "created_at"
+  ],
+  "background_jobs@packages/core/src/jobs/store.ts": [
+    "id",
+    "kind",
+    "label",
+    "status",
+    "result",
+    "error",
+    "input_json",
+    "created_at",
+    "settled_at"
+  ],
+  "cli_agent_connect_tickets@packages/cf-backend/src/user/schema.ts": [
+    "ticket_hash",
+    "user_id",
+    "agent_class",
+    "agent_name",
+    "cli_token_hash",
+    "capabilities",
+    "created_at",
+    "expires_at",
+    "used_at"
+  ],
+  "codex_device_flow@packages/cf-backend/src/user/schema.ts": [
+    "id",
+    "device_auth_id",
+    "user_code",
+    "poll_interval",
+    "portal_url",
+    "started_at"
+  ],
+  "compaction_archive@packages/core/src/identity/workspace-schema.ts": [
+    "session_key",
+    "range_hash",
+    "path",
+    "start_turn",
+    "end_turn",
+    "user_turns",
+    "assistant_turns",
+    "first_user_ask"
+  ],
+  "compaction_state@packages/core/src/identity/workspace-schema.ts": [
+    "session_key",
+    "plan_json",
+    "last_prompt_tokens",
+    "measured_at_length",
+    "force_compaction"
+  ],
+  "completed_turns@packages/core/src/evolution/session-window.ts": [
+    "id",
+    "turn",
+    "followup",
+    "in_window",
+    "review",
+    "created_at"
+  ],
+  "conversation_fts_state@packages/core/src/memory/conversation-search.ts": [
+    "id",
+    "regime",
+    "rev",
+    "synced_rev"
+  ],
+  "cp_audit@packages/cf-backend/src/control-plane/store.ts": [
+    "id",
+    "at",
+    "actor_email",
+    "actor_user",
+    "operation",
+    "target_kind",
+    "target",
+    "outcome",
+    "detail"
+  ],
+  "cp_feedback@packages/cf-backend/src/control-plane/store.ts": [
+    "id",
+    "created_at",
+    "user_id",
+    "email",
+    "note",
+    "route",
+    "workspace",
+    "object_key",
+    "content_type",
+    "bytes",
+    "user_agent"
+  ],
+  "cp_users@packages/cf-backend/src/control-plane/store.ts": [
+    "user_id",
+    "email",
+    "display_name",
+    "first_seen_at",
+    "last_seen_at"
+  ],
+  "cp_workspaces@packages/cf-backend/src/control-plane/store.ts": [
+    "user_id",
+    "name",
+    "display_name",
+    "created_at",
+    "last_seen_at",
+    "removed_at"
+  ],
+  "crafted_tools@packages/agent-utils/src/stores/craft.ts": [
+    "name",
+    "description",
+    "params",
+    "code",
+    "scope",
+    "created_at",
+    "updated_at"
+  ],
+  "crafted_tools@packages/core/src/craft/schemas.ts": [
+    "name",
+    "description",
+    "params",
+    "code",
+    "scope",
+    "created_at",
+    "updated_at",
+    "score",
+    "uses",
+    "last_used_at"
+  ],
+  "crafted_tools@packages/core/src/identity/schema.ts": [
+    "name",
+    "description",
+    "params",
+    "code",
+    "scope",
+    "created_at",
+    "updated_at"
+  ],
+  "deferred_approvals@packages/core/src/safety/deferred-approval.ts": [
+    "id",
+    "command",
+    "reason",
+    "status",
+    "requested_at",
+    "decided_at"
+  ],
+  "device_connect_tickets@packages/cf-backend/src/user/schema.ts": [
+    "ticket_hash",
+    "device_id",
+    "created_at",
+    "expires_at",
+    "used_at"
+  ],
+  "device_consent@packages/cf-backend/src/user/schema.ts": [
+    "agent_name",
+    "device_id",
+    "policy",
+    "scope",
+    "last_method",
+    "last_summary",
+    "updated_at"
+  ],
+  "device_inflight_requests@packages/cf-backend/src/user/device-inflight.ts": [
+    "request_id",
+    "device_id",
+    "workspace",
+    "turn_id",
+    "background_job_id",
+    "cancel_claim",
+    "cancel_outcome"
+  ],
+  "driver_lease@packages/cli-backend/src/agent-host/driver-lease.ts": [
+    "id",
+    "pid",
+    "token",
+    "kind"
+  ],
+  "effect_tombstones@packages/core/src/identity/effect-tombstones.ts": [
+    "scope",
+    "key",
+    "recorded_at"
+  ],
+  "evolution_events@packages/core/src/identity/schema.ts": [
+    "id",
+    "type",
+    "message",
+    "data",
+    "created_at"
+  ],
+  "executor_output@packages/core/src/identity/schema.ts": [
+    "id",
+    "executor",
+    "command",
+    "stdout",
+    "stderr",
+    "exit_code",
+    "created_at"
+  ],
+  "experience_library@packages/core/src/experience/library.ts": [
+    "id",
+    "kind",
+    "source_workspace",
+    "key",
+    "title",
+    "payload_json",
+    "evidence",
+    "search_text",
+    "published_at"
+  ],
+  "exploration_records@packages/core/src/strategy/records.ts": [
+    "record_key",
+    "objective_id",
+    "floor_digest",
+    "descriptor",
+    "artifact_digest",
+    "artifact",
+    "value",
+    "detail",
+    "measured_json",
+    "preset",
+    "label",
+    "root_id",
+    "config_digest",
+    "depth",
+    "branches",
+    "floor_value",
+    "floor_proof",
+    "cost_usd",
+    "cost_tokens",
+    "first_recorded_at",
+    "displacements"
+  ],
+  "facet_activation@packages/cf-backend/src/facet-activation.ts": [
+    "id",
+    "payload"
+  ],
+  "facet_identity@packages/cf-backend/src/facet-identity.ts": [
+    "id",
+    "user_id",
+    "capability_token",
+    "parent_workspace"
+  ],
+  "facet_model_operation_outbox@packages/cf-backend/src/exploration.ts": [
+    "id",
+    "event_json"
+  ],
+  "fibers@packages/cli-backend/src/fiber.ts": [
+    "id",
+    "name",
+    "snapshot",
+    "created_at"
+  ],
+  "fibers@packages/core/src/identity/schema.ts": [
+    "id",
+    "name",
+    "snapshot",
+    "created_at"
+  ],
+  "fork_lineage@packages/core/src/identity/schema.ts": [
+    "id",
+    "source_agent_id",
+    "source_agent_name",
+    "source_message_id",
+    "source_message_created_at",
+    "forked_at"
+  ],
+  "fork_staged_files@packages/core/src/identity/schema.ts": [
+    "path"
+  ],
+  "fork_transfer@packages/core/src/identity/schema.ts": [
+    "id",
+    "head_declared",
+    "head_source_id",
+    "head_source_name",
+    "head_cut_message_id",
+    "head_cut_created_at",
+    "mission",
+    "pane_table_created",
+    "staged_agent_config",
+    "staged_crafted_tools",
+    "staged_memory_chunks",
+    "staged_pane_messages",
+    "staged_messages",
+    "staged_files",
+    "transfer_id",
+    "expected_seq",
+    "section_cursor",
+    "stream",
+    "file_path",
+    "file_bytes",
+    "want_agent_config",
+    "want_crafted_tools",
+    "want_memory_chunks",
+    "want_pane_messages",
+    "want_messages",
+    "want_files",
+    "published"
+  ],
+  "gepa_candidates@packages/core/src/evolution/gepa/persistence.ts": [
+    "id",
+    "run_id",
+    "parent_id",
+    "source",
+    "scores_json",
+    "feedback_json",
+    "aggregate",
+    "created_at",
+    "iteration",
+    "accepted"
+  ],
+  "gepa_runs@packages/core/src/evolution/gepa/persistence.ts": [
+    "run_id",
+    "target",
+    "target_ref",
+    "started_at",
+    "ended_at",
+    "status",
+    "stop_reason",
+    "winner_id",
+    "metric_calls",
+    "iterations",
+    "budget_json"
+  ],
+  "head_evidence@packages/core/src/heads/schema.ts": [
+    "id",
+    "head_id",
+    "kind",
+    "body",
+    "ref",
+    "confidence",
+    "created_at"
+  ],
+  "head_journal@packages/core/src/heads/schema.ts": [
+    "id",
+    "parent_id",
+    "root_id",
+    "depth",
+    "task",
+    "rationale",
+    "status",
+    "spawned_at",
+    "completed_at",
+    "token_input",
+    "token_output",
+    "wall_clock_ms",
+    "summary",
+    "error_message",
+    "decisions_json",
+    "artifacts_json",
+    "tool_calls_json",
+    "child_head_ids_json",
+    "merge_strategy"
+  ],
+  "head_merge_results@packages/core/src/heads/schema.ts": [
+    "root_id",
+    "merged_narrative",
+    "selected_decisions_json",
+    "unresolved_questions_json",
+    "recommendations_json",
+    "cost_head_count",
+    "cost_total_tokens",
+    "cost_total_wall_ms",
+    "cost_max_depth",
+    "merged_at",
+    "merge_strategy"
+  ],
+  "head_runs@packages/core/src/heads/schema.ts": [
+    "root_id",
+    "rationale",
+    "spawned_at"
+  ],
+  "head_steps@packages/core/src/heads/schema.ts": [
+    "id",
+    "head_id",
+    "seq",
+    "text",
+    "reasoning",
+    "tool_calls_json",
+    "created_at"
+  ],
+  "imported_experience@packages/core/src/experience/imports.ts": [
+    "id",
+    "library_id",
+    "kind",
+    "key",
+    "title",
+    "payload_json",
+    "evidence",
+    "source_workspace",
+    "status",
+    "turn_ids",
+    "imported_at",
+    "corroborated_at"
+  ],
+  "instruction_approval_migrations@packages/core/src/safety/instruction-trust.ts": [
+    "scope"
+  ],
+  "instruction_approvals@packages/core/src/safety/instruction-trust.ts": [
+    "scope",
+    "path",
+    "digest",
+    "decision"
+  ],
+  "lessons@packages/core/src/evolution/outcomes.ts": [
+    "id",
+    "turn_ids",
+    "text",
+    "source",
+    "status",
+    "created_at",
+    "corroborated_at"
+  ],
+  "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
+    "root_id",
+    "task",
+    "root_msg_id",
+    "config_json",
+    "iteration",
+    "budget",
+    "status",
+    "epoch",
+    "created_at",
+    "updated_at"
+  ],
+  "memory_chunks@packages/agent-utils/src/memory/store.ts": [
+    "id",
+    "path",
+    "start_line",
+    "end_line",
+    "hash",
+    "text",
+    "updated_at"
+  ],
+  "messages@packages/core/src/identity/schema.ts": [
+    "id",
+    "session_id",
+    "parent_id",
+    "role",
+    "content",
+    "created_at"
+  ],
+  "mission_budget@packages/core/src/mission-budget.ts": [
+    "label",
+    "parent_label",
+    "limit_usd",
+    "limit_tokens",
+    "spent_tokens",
+    "spent_usd",
+    "blended_tokens",
+    "calls",
+    "spawns",
+    "created_at",
+    "exhausted_at"
+  ],
+  "monitor_incidents@packages/cf-backend/src/monitor/incidents.ts": [
+    "probe",
+    "detail",
+    "opened_at",
+    "alerted_at",
+    "failures",
+    "seen_at"
+  ],
+  "outcome_ensemble_labels@packages/core/src/evolution/outcomes.ts": [
+    "id",
+    "outcome_id",
+    "model",
+    "label",
+    "created_at"
+  ],
+  "outcome_labels@packages/core/src/evolution/outcomes.ts": [
+    "id",
+    "outcome_id",
+    "label",
+    "labeler",
+    "created_at"
+  ],
+  "pattern_extractions@packages/core/src/evolution/outcomes.ts": [
+    "effect_key",
+    "answer",
+    "created_at"
+  ],
+  "pending_steers@packages/cf-backend/src/actor-agent.ts": [
+    "seq",
+    "id",
+    "turn_id",
+    "mode",
+    "text"
+  ],
+  "plan_reviews@packages/core/src/plans/review.ts": [
+    "id",
+    "session_id",
+    "revision",
+    "content",
+    "status",
+    "annotations_json",
+    "feedback",
+    "handoff_accepted",
+    "handoff_attempt",
+    "created_at",
+    "updated_at",
+    "decided_at"
+  ],
+  "prompt_section_evaluations@packages/core/src/prompting/section-store.ts": [
+    "id",
+    "section_id",
+    "pending_version",
+    "instance_id",
+    "current_score",
+    "pending_score",
+    "winner",
+    "feedback",
+    "evaluated_at"
+  ],
+  "prompt_section_versions@packages/core/src/prompting/section-store.ts": [
+    "section_id",
+    "version",
+    "source",
+    "rationale",
+    "status",
+    "incumbent_bytes",
+    "written_at"
+  ],
+  "proposed_tasks@packages/core/src/curriculum/proposer.ts": [
+    "id",
+    "task",
+    "rationale",
+    "predicted_success",
+    "targets_skills",
+    "proposed_at",
+    "status"
+  ],
+  "refinement_requests@packages/core/src/evolution/refinement.ts": [
+    "id",
+    "trigger",
+    "scope",
+    "stage",
+    "claim",
+    "session_id",
+    "turn_ids",
+    "debt_key",
+    "proposal",
+    "routes",
+    "detail",
+    "created_at",
+    "updated_at"
+  ],
+  "release_approvals@packages/core/src/release/sql-store.ts": [
+    "id",
+    "change_id",
+    "approval_type",
+    "decision",
+    "approved_by",
+    "note",
+    "argument_digest",
+    "created_at",
+    "decided_at"
+  ],
+  "release_changes@packages/core/src/release/sql-store.ts": [
+    "id",
+    "agent_name",
+    "binding_id",
+    "status",
+    "user_prompt",
+    "plan",
+    "summary",
+    "patch",
+    "preview_url",
+    "created_at",
+    "updated_at"
+  ],
+  "release_checks@packages/core/src/release/sql-store.ts": [
+    "id",
+    "change_id",
+    "name",
+    "status",
+    "stdout",
+    "stderr",
+    "duration_ms",
+    "created_at",
+    "updated_at"
+  ],
+  "release_deployments@packages/core/src/release/sql-store.ts": [
+    "id",
+    "change_id",
+    "environment",
+    "worker_version_id",
+    "deployment_id",
+    "rollback_target",
+    "deployed_at"
+  ],
+  "release_sources@packages/core/src/release/sql-store.ts": [
+    "id",
+    "kind",
+    "label",
+    "repo_url",
+    "default_branch",
+    "local_device_id",
+    "local_root",
+    "deploy_target",
+    "created_at",
+    "updated_at"
+  ],
+  "replay_evals@packages/core/src/evolution/replay.ts": [
+    "id",
+    "ran_at",
+    "sample_size",
+    "accepted_n",
+    "negative_n",
+    "mean_score",
+    "loss",
+    "scaffold_version",
+    "details"
+  ],
+  "reply_channels@packages/core/src/events/hub/schema.ts": [
+    "id",
+    "event_id",
+    "kind",
+    "holder_addr",
+    "ttl_expires_at",
+    "payload_policy",
+    "state",
+    "reply_payload",
+    "attempt_count",
+    "created_at",
+    "updated_at"
+  ],
+  "run_events@packages/core/src/events/recorder.ts": [
+    "run_id",
+    "event_index",
+    "type",
+    "payload",
+    "ts"
+  ],
+  "sandbox_lifecycle_incidents@packages/cf-backend/src/sandbox-lifecycle.ts": [
+    "incident_id",
+    "first_seen_at",
+    "announced_at",
+    "outcome"
+  ],
+  "scaffold_evaluations@packages/core/src/scaffold/shadow.ts": [
+    "id",
+    "current_version",
+    "pending_version",
+    "task",
+    "current_output",
+    "pending_output",
+    "current_score",
+    "pending_score",
+    "winner",
+    "judge_rationale",
+    "evaluated_at"
+  ],
+  "scaffold_regression_fixtures@packages/core/src/scaffold/schemas.ts": [
+    "id",
+    "task",
+    "expected_keywords",
+    "created_at"
+  ],
+  "scaffold_trial_queue@packages/core/src/scaffold/shadow.ts": [
+    "id",
+    "pending_version",
+    "task",
+    "current_output",
+    "context",
+    "queued_at"
+  ],
+  "scaffold_versions@packages/core/src/scaffold/schemas.ts": [
+    "version",
+    "written_at",
+    "rationale",
+    "canary_score",
+    "baseline_score"
+  ],
+  "search_nodes@packages/core/src/mcts/schemas.ts": [
+    "id",
+    "parent_id",
+    "task",
+    "action",
+    "observation",
+    "code_used",
+    "visits",
+    "value",
+    "depth",
+    "status",
+    "msg_id",
+    "branch_agent_key",
+    "created_at"
+  ],
+  "sleep_time_updates@packages/cf-backend/src/orchestrator.ts": [
+    "effect_key",
+    "update_json",
+    "created_at"
+  ],
+  "subordinate_identity@packages/core/src/subordinates/support.ts": [
+    "id",
+    "name",
+    "mission",
+    "parent_workspace",
+    "owner_user_id",
+    "depth",
+    "lifetime"
+  ],
+  "swarm_node_records@packages/core/src/strategy/swarm-resume.ts": [
+    "node_id",
+    "root_id",
+    "record_json",
+    "merged_at",
+    "created_at"
+  ],
+  "task_history@packages/core/src/scaffold/schemas.ts": [
+    "id",
+    "task",
+    "scaffold_version",
+    "outcome",
+    "score",
+    "created_at"
+  ],
+  "terminal_effects@packages/core/src/orchestrator/terminal-effects.ts": [
+    "sequence_id",
+    "effect_key",
+    "effect_name",
+    "scope",
+    "seq",
+    "input_json",
+    "lane",
+    "status",
+    "outcome",
+    "attempts",
+    "next_attempt_at",
+    "claimed_at",
+    "settled_at"
+  ],
+  "terminal_intents@packages/cli-backend/src/local-session.ts": [
+    "message_id",
+    "turn_id",
+    "roster_json",
+    "recorded_at"
+  ],
+  "tool_effect_claims@packages/core/src/tools/effect-claim.ts": [
+    "turn_id",
+    "normalized_call_id",
+    "call_digest",
+    "result_json"
+  ],
+  "traces@packages/cf-backend/src/exploration.ts": [
+    "id",
+    "step",
+    "text",
+    "code_used",
+    "created_at"
+  ],
+  "traces@packages/cli-backend/src/branch-worker.ts": [
+    "id",
+    "step",
+    "text",
+    "code_used",
+    "created_at"
+  ],
+  "triggers@packages/core/src/events/hub/schema.ts": [
+    "id",
+    "kind",
+    "spec",
+    "creator_trust",
+    "fork_policy",
+    "state",
+    "rate_limit_per_min",
+    "created_at",
+    "paused_at",
+    "revoked_at",
+    "next_fire_at",
+    "last_fire_at",
+    "fire_count"
+  ],
+  "turn_craft_usage@packages/cf-backend/src/orchestrator.ts": [
+    "message_id",
+    "tool_names",
+    "created_at"
+  ],
+  "turn_feedback@packages/cf-backend/src/orchestrator.ts": [
+    "message_id",
+    "feedback",
+    "created_at"
+  ],
+  "turn_outcomes@packages/core/src/evolution/outcomes.ts": [
+    "id",
+    "turn_id",
+    "session_id",
+    "outcome",
+    "confidence",
+    "source",
+    "user_message",
+    "assistant_response",
+    "followup",
+    "scaffold_version",
+    "created_at"
+  ],
+  "user_access_tokens@packages/cf-backend/src/cli/access-token-store.ts": [
+    "token_hash",
+    "name",
+    "scopes",
+    "created_at",
+    "last_used_at",
+    "revoked_at"
+  ],
+  "user_auth_generation@packages/cf-backend/src/user/schema.ts": [
+    "id",
+    "generation",
+    "updated_at"
+  ],
+  "user_browser_sessions@packages/cf-backend/src/user/schema.ts": [
+    "token_hash",
+    "expires_at"
+  ],
+  "user_cli_tokens@packages/cf-backend/src/user/schema.ts": [
+    "token_hash",
+    "label",
+    "created_at",
+    "expires_at",
+    "last_used_at",
+    "revoked_at"
+  ],
+  "user_config@packages/cf-backend/src/user/schema.ts": [
+    "key",
+    "value",
+    "updated_at"
+  ],
+  "user_credential_revisions@packages/cf-backend/src/user/schema.ts": [
+    "key",
+    "revision",
+    "updated_at"
+  ],
+  "user_credentials_revision@packages/cf-backend/src/user/schema.ts": [
+    "id",
+    "revision",
+    "updated_at"
+  ],
+  "user_credentials@packages/cf-backend/src/user/schema.ts": [
+    "key",
+    "kind",
+    "value",
+    "created_at",
+    "updated_at"
+  ],
+  "user_devices@packages/cf-backend/src/user/schema.ts": [
+    "id",
+    "token_hash",
+    "label",
+    "os",
+    "hostname",
+    "created_at",
+    "connected_at",
+    "last_seen_at",
+    "revoked_at"
+  ],
+  "user_egress_secrets@packages/cf-backend/src/user/egress-vault.ts": [
+    "id",
+    "label",
+    "host",
+    "placeholder",
+    "secret",
+    "created_at",
+    "updated_at"
+  ],
+  "user_mcp_servers@packages/cf-backend/src/user/schema.ts": [
+    "id",
+    "name",
+    "server_url",
+    "transport",
+    "headers",
+    "allowed_tools",
+    "created_at",
+    "updated_at"
+  ],
+  "user_peer_grants@packages/cf-backend/src/user/schema.ts": [
+    "sender_user_id",
+    "sender_agent_name",
+    "created_at"
+  ],
+  "user_profile@packages/cf-backend/src/user/schema.ts": [
+    "id",
+    "email",
+    "display_name",
+    "created_at",
+    "last_seen_at"
+  ],
+  "user_schema_meta@packages/cf-backend/src/user/schema.ts": [
+    "key",
+    "value"
+  ],
+  "user_workspaces@packages/cf-backend/src/user/schema.ts": [
+    "name",
+    "display_name",
+    "created_at",
+    "last_visited",
+    "archived_at"
+  ],
+  "vfs_baseline@packages/core/src/read-models/workspace-diff.ts": [
+    "generation",
+    "path",
+    "content",
+    "active"
+  ],
+  "webhook_rate_windows@packages/core/src/events/ingress/rate-limit.ts": [
+    "trigger_id",
+    "window_start",
+    "delivery_count",
+    "updated_at"
+  ],
+  "webhook_replay_claims@packages/core/src/events/ingress/webhook.ts": [
+    "trigger_id",
+    "claim",
+    "event_id",
+    "claimed_at",
+    "expires_at"
+  ],
+  "webhook_secrets@packages/core/src/events/ingress/secrets.ts": [
+    "secret_id",
+    "trigger_id",
+    "secret",
+    "created_at"
+  ],
+  "workspace_capability_reconcile@packages/cf-backend/src/user/workspace-capability.ts": [
+    "workspace_name",
+    "token_hash",
+    "attempts",
+    "created_at",
+    "updated_at"
+  ],
+  "workspace_capability_tokens@packages/cf-backend/src/user/workspace-capability.ts": [
+    "workspace_name",
+    "token_hash",
+    "created_at"
+  ],
+  "workspace_capability@packages/cf-backend/src/actor-agent.ts": [
+    "id",
+    "token"
+  ],
+  "workspace_identity@packages/core/src/identity/schema.ts": [
+    "id",
+    "name",
+    "owner_user_id",
+    "created_at"
+  ],
+  "workspace_subordinates@packages/core/src/subordinates/roster.ts": [
+    "name",
+    "created_by",
+    "status",
+    "current_task",
+    "created_at",
+    "dismissed_at",
+    "lifetime",
+    "task_event_id"
+  ],
+  "workspace_tiers@packages/cf-backend/src/user/workspace-capability.ts": [
+    "workspace_name",
+    "tier",
+    "updated_at"
+  ]
+}

@@ -108,8 +108,7 @@ const db = new Database(dbPath);
 db.exec('PRAGMA journal_mode = WAL');
 db.exec(`CREATE TABLE IF NOT EXISTS traces (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  step INTEGER NOT NULL, text TEXT NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  step INTEGER NOT NULL, text TEXT NOT NULL
 )`);
 
 // Crafted tools from the parent workspace DB. Both tables it reads are

@@ -496,10 +496,9 @@ export class ExplorationAgent extends Agent<Env> {
   onStart(): void {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS traces (
-        id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
-        step       INTEGER NOT NULL,
-        text       TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+        id   TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
+        step INTEGER NOT NULL,
+        text TEXT NOT NULL
       )
     `);
     this.ensureModelOperationOutbox();
