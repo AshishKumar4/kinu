@@ -27,6 +27,7 @@ import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
 import { scratchDir } from '@kinu.run/test-utils';
 import {
+  DECIDING_METRIC,
   addressArmRequest,
   armLogTail,
   underArmLog,
@@ -87,6 +88,7 @@ const tick = (
 ): TickRecord => ({
   arm,
   workload,
+  repetition: extra.repetition ?? 1,
   segment: extra.segment ?? `${workload}-1`,
   wallMs,
   classA: extra.classA ?? 0,
@@ -1502,9 +1504,10 @@ describe('the lifecycle-proof gate at the rule', () => {
     const admission = devboxAdmission({
       arms: [arm],
       requested: ['bounded-layers'],
+      repetitions: 1,
       meta: {
         date: '2026-08-28', run: 'blank-run', worker: 'blank-fixture', bucket: 'blank-bucket',
-        image: SANDBOX_IMAGE, seed: '1', 'loop budget ms': '1',
+        image: SANDBOX_IMAGE, seed: '1', 'loop budget ms': '1', 'deciding repetitions': '1',
       },
       identity: {
         commit: '3a115f232', dirtyDigest: 'clean',
@@ -2007,6 +2010,36 @@ describe('arm selection and frozen historical context', () => {
     expect(help.stdout.toString()).toContain(STRATEGIES.join(', '));
     // The flag that named a privileged subset is gone, not merely unused.
     expect(help.stdout.toString()).not.toContain('--candidates-only');
+  });
+
+  test('--repetitions defaults to two under --decisive, one without, and refuses below one', () => {
+    // G9 censors a deciding cell below two repetitions, and until now the
+    // driver had no way to run one twice: every arm of run 20260902154130 was
+    // censored for measuring the deciding metric once or not at all. The
+    // decisive default is therefore the gate's own floor.
+    expect(parseOptions(['--decisive']).repetitions).toBe(2);
+    expect(parseOptions([]).repetitions).toBe(1);
+    expect(parseOptions(['--decisive', '--repetitions', '3']).repetitions).toBe(3);
+    expect(parseOptions(['--repetitions', '2']).repetitions).toBe(2);
+    for (const refused of ['0', '-1', 'two', '1.5']) {
+      expect(() => parseOptions(['--repetitions', refused]), refused)
+        .toThrow('--repetitions must be a whole number of 1 or more');
+    }
+  });
+
+  test('documents --repetitions in CLI help, with its default and the gate floor', () => {
+    const help = Bun.spawnSync(
+      ['bun', 'scripts/bench-devbox-strategies.ts', '--help'],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    expect(help.exitCode, help.stderr.toString()).toBe(0);
+    const text = help.stdout.toString();
+    expect(text).toContain('--repetitions <n>');
+    expect(text).toContain('Measure every deciding cell n times per arm');
+    expect(text).toContain(DECIDING_METRIC);
+    expect(text).toContain('Default 2 with --decisive, 1 without');
+    expect(text).toContain('Refuses n < 1');
   });
 
   test('a run that verifies its own cleanup refuses without the two S3 keys', () => {

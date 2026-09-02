@@ -978,6 +978,17 @@ export interface Options {
   /** Leave every external resource in place for inspection. Deliberate, but
    *  it means cleanup did not complete, so the run cannot recommend. */
   keep: boolean;
+  /**
+   * How many times each DECIDING cell is measured per arm.
+   *
+   * A deciding cell is the decisive workloads and the phase that carries
+   * {@link DECIDING_METRIC}; G9 scores the dispersion of those repetitions and
+   * censors a cell that has fewer than two, so a run with one measured nothing
+   * a statistical claim can rest on. Two under `--decisive`, one otherwise —
+   * an ordinary run is a smoke check and pays for no repetition it will not
+   * use — and never less than one.
+   */
+  repetitions: number;
   /** Unique Durable Object suffix. A Worker redeploy does not delete DO
    * storage, so fixed box names contaminate a later run with prior state. */
   runId: string;
@@ -2718,6 +2729,9 @@ async function runDecisive(
   arm: string,
   spec: (typeof DECISIVE_WORKLOADS)[number],
   seed: number,
+  /** Which repetition of this cell is running, counting from one. Stamped on
+   *  every tick, so the artifact keeps the per-repetition rows apart. */
+  repetition: number,
 ): Promise<{ ticks: TickRecord[]; treeBytes: number; notes: string[] }> {
   const notes: string[] = [];
   const ticks: TickRecord[] = [];
@@ -2782,6 +2796,7 @@ async function runDecisive(
     ticks.push({
       arm,
       workload: spec.id,
+      repetition,
       segment: segmentName,
       wallMs: cp.ms ?? -1,
       classA: (after.classA ?? 0) - (before.classA ?? 0),
@@ -3933,18 +3948,48 @@ async function measureArm(
     notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
   }
 
-  log('workload phases');
-  for (const phase of PHASES) {
+  /** One phase run, appended to the arm's rows whatever it answers. A phase
+   *  that throws records its reason and leaves the row absent, which G9 then
+   *  counts as one repetition fewer rather than as a silent success. */
+  const measurePhase = async (phase: string, what: string): Promise<void> => {
     try {
       result.phases.push(await runPhase(fixture, box, `/workspace/ab-${strategy}`, phase, options.seed, options.budgetMs));
     } catch (error) {
       const reason = describeThrown({ cause: error });
-      log(`phase ${phase} failed: ${reason.slice(0, 160)}`);
-      notes.push(`phase ${phase} did not complete: ${reason.slice(0, 240)}`);
+      log(`phase ${what} failed: ${reason.slice(0, 160)}`);
+      notes.push(`phase ${what} did not complete: ${reason.slice(0, 240)}`);
     }
     // FLUSH AT THE PHASE BOUNDARY, not a settle-and-hope.
     await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+  };
+
+  log('workload phases');
+  for (const phase of PHASES) await measurePhase(phase, phase);
+
+  // THE DECIDING PHASE, REPEATED. G9 scores the DISPERSION of the deciding
+  // metric's repetitions and censors a cell that has fewer than two, so a run
+  // measuring it once produced no statistical claim at all — the refusal every
+  // arm of run 20260902154130 carried. Which phase to repeat is read back from
+  // what the first pass MEASURED rather than named here, so the deciding metric
+  // can move between phases without this loop repeating the wrong one.
+  const decidingPhases = phasesMeasuring(result.phases, DECIDING_METRIC);
+  if (decidingPhases.length === 0 && options.repetitions > 1) {
+    notes.push(
+      `no phase measured the deciding metric \`${DECIDING_METRIC}\`, so its `
+      + `${options.repetitions} repetitions could not be run`,
+    );
   }
+  for (let repetition = 2; repetition <= options.repetitions; repetition += 1) {
+    for (const phase of decidingPhases) {
+      log(`deciding phase ${phase}, repetition ${repetition} of ${options.repetitions}`);
+      await measurePhase(phase, `${phase} repetition ${repetition}`);
+    }
+  }
+  log(
+    `the deciding metric \`${DECIDING_METRIC}\` was measured `
+    + `${metricRows(result, DECIDING_METRIC).length} time(s) over phase(s) `
+    + `${decidingPhases.length === 0 ? '(none)' : decidingPhases.join(', ')}`,
+  );
 
   result.generationAfterLadder = await chainGeneration(fixture, box);
   settle('the workload phases');
@@ -3953,22 +3998,35 @@ async function measureArm(
   // stop/wake, deliberately: these workloads leave hundreds of megabytes behind,
   // and a wake measured across that tree would be measuring the tree rather than
   // rows and nothing else.
+  //
+  // EVERY WORKLOAD n TIMES, one repetition after another, and each tick carries
+  // the repetition it belongs to: the artifact keeps the per-repetition rows so
+  // a reader can see the spread rather than only the pooled sum the report
+  // prices.
   if (options.decisive) {
-    for (const spec of DECISIVE_WORKLOADS) {
-      log(`decisive ${spec.id}`);
-      try {
-        // A timed-out container operation can stop the spot container and lose
-        // the harness with it. Reinstall through the box before each workload;
-        // this is also the attach/replay probe for the replacement generation.
-        await installHarness(fixture, box);
-        const run = await runDecisive(fixture, box, strategy, spec, options.seed);
-        result.decisiveTicks.push(...run.ticks);
-        result.treeBytes[spec.id] = run.treeBytes;
-        notes.push(...run.notes);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        log(`decisive ${spec.id} failed: ${reason.slice(0, 160)}`);
-        notes.push(`decisive ${spec.id} did not complete: ${reason.slice(0, 240)}`);
+    for (let repetition = 1; repetition <= options.repetitions; repetition += 1) {
+      for (const spec of DECISIVE_WORKLOADS) {
+        log(`decisive ${spec.id}, repetition ${repetition} of ${options.repetitions}`);
+        try {
+          // A timed-out container operation can stop the spot container and lose
+          // the harness with it. Reinstall through the box before each workload;
+          // this is also the attach/replay probe for the replacement generation.
+          await installHarness(fixture, box);
+          const run = await runDecisive(fixture, box, strategy, spec, options.seed, repetition);
+          result.decisiveTicks.push(...run.ticks);
+          // THE LARGEST TREE ANY REPETITION MEASURED. The workload is resumable
+          // by segment, so a later repetition re-runs the same segments over the
+          // tree the previous one left: taking the maximum keeps the recorded
+          // size the one the ticks ran against instead of the last reading.
+          result.treeBytes[spec.id] = Math.max(result.treeBytes[spec.id] ?? -1, run.treeBytes);
+          notes.push(...run.notes);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          log(`decisive ${spec.id} repetition ${repetition} failed: ${reason.slice(0, 160)}`);
+          notes.push(
+            `decisive ${spec.id} repetition ${repetition} did not complete: ${reason.slice(0, 240)}`,
+          );
+        }
       }
     }
   }
@@ -4365,6 +4423,26 @@ function metricRows(arm: ArmResult, name: string): { p50: number; wallMs: number
   return rows;
 }
 
+/**
+ * Which phases actually produced `metric`, as THIS run measured it.
+ *
+ * DERIVED FROM THE MEASUREMENT, never declared beside it. The repetition loop
+ * has to know which phase to run again, and a hardcoded `small1k` would be a
+ * second copy of a mapping that lives in the probe fixture: move the deciding
+ * metric to another phase and the loop would faithfully repeat a phase that no
+ * longer measures it, leaving G9 with one repetition and no way to see why.
+ * Exported so the repetition contract is provable against hand-built rows.
+ */
+export function phasesMeasuring(runs: readonly ProbeRun[], metric: string): string[] {
+  const names = new Set<string>();
+  for (const run of runs) {
+    for (const phase of run.phases) {
+      if (phase.metrics.some((row) => row.name === metric)) names.add(phase.phase);
+    }
+  }
+  return [...names];
+}
+
 function metricSummary(arm: ArmResult, name: string): Summary | null {
   const rows = metricRows(arm, name);
   return rows.length === 0 ? null : summarize(rows.map((row) => row.p50));
@@ -4396,6 +4474,9 @@ export interface RunMeta {
   image: string;
   seed: string;
   'loop budget ms': string;
+  /** Repetitions of each deciding cell the run asked for, so the header states
+   *  the intent the per-arm counts below are read against. */
+  'deciding repetitions': string;
   'frozen controls provenance'?: string;
   INCOMPLETE?: string;
 }
@@ -4746,6 +4827,16 @@ function render(
     out.push(`| \`${metric}\` | ${cells.join(' | ')} |`);
   }
   out.push('');
+  // HOW MANY REPETITIONS ACTUALLY RAN, per arm, beside the count the run asked
+  // for. G9 scores the dispersion of exactly these, so a reader who can see
+  // only the medians above cannot tell a scored cell from a censored one.
+  out.push(
+    `Repetitions of the deciding metric \`${DECIDING_METRIC}\`, which is what G9 scores: `
+    + `${arms.map((arm) => `\`${arm.strategy}\` ${metricRows(arm, DECIDING_METRIC).length}`).join(', ')}`
+    + `. The run asked for ${meta['deciding repetitions']} per arm, and G9 censors a cell below `
+    + `${MIN_DECIDING_REPETITIONS}.`,
+  );
+  out.push('');
 
   out.push('#### R2 operations and teardown');
   out.push('');
@@ -4954,6 +5045,13 @@ export const DECIDING_METRIC = 'small-stat-1k';
  *  arm produced how many instead of only that a cell was censored. */
 const MIN_DECIDING_REPETITIONS = 2;
 
+/** What `--decisive` asks for when nobody says otherwise: exactly the fewest
+ *  repetitions G9 will score. DERIVED from the floor above, never written
+ *  beside it — a default one short of the gate is a run that cannot be
+ *  admitted however well it measures, which is the whole of G9's refusal in
+ *  run 20260902154130. */
+const DECISIVE_REPETITIONS = MIN_DECIDING_REPETITIONS;
+
 /** Ladder rows one complete arm owes: a quiesce and a tick at every change
  *  size. Derived from the ladder itself, so changing the ladder cannot leave a
  *  completeness check asserting a stale count. */
@@ -5124,6 +5222,15 @@ export interface DevboxAdmissionInput {
    *  against exactly this, so a run that silently lost an arm — or gained one
    *  nobody requested — cannot look complete. */
   readonly requested: readonly Strategy[];
+  /**
+   * Repetitions of each deciding cell the run ASKED for (`--repetitions`).
+   *
+   * G9 already refuses a cell below the dispersion floor. This is the other
+   * direction: an arm that measured fewer repetitions than the run asked for
+   * lost some, and a refusal that can say `asked for 2, measured 1` names the
+   * loss instead of leaving a reader to assume the driver only ever tried once.
+   */
+  readonly repetitions: number;
   readonly meta: RunMeta;
   readonly identity: RunIdentity;
   readonly token: string;
@@ -5370,6 +5477,16 @@ function devboxRequirements(input: DevboxAdmissionInput) {
         + `${MIN_DECIDING_REPETITIONS} repetitions are the fewest a dispersion claim can rest on`,
       );
     }
+    // AND WHAT THE RUN ASKED FOR, which is the other direction: a run that
+    // requested more repetitions than an arm produced lost some, and a floor
+    // check alone would report the survivors as the whole intent.
+    if (repetitions < input.repetitions) {
+      g9.push(
+        `arm \`${strategy}\` measured the deciding metric \`${DECIDING_METRIC}\` ${repetitions} time(s) `
+        + `where the run asked for ${input.repetitions}: repetition(s) were lost, so the dispersion `
+        + 'is over fewer samples than the run intended',
+      );
+    }
   }
 
   if (input.requested.length === 0) {
@@ -5539,6 +5656,10 @@ Options:
                                     ${STRATEGIES.join(', ')}.
   --plan                            Print the execution plan without deploying.
   --decisive                        Run decisive workloads.
+  --repetitions <n>                 Measure every deciding cell n times per arm — the
+                                    decisive workloads and the \`${DECIDING_METRIC}\` phase
+                                    G9 scores. Default ${DECISIVE_REPETITIONS} with --decisive, 1 without;
+                                    G9 censors a cell below ${MIN_DECIDING_REPETITIONS} repetitions. Refuses n < 1.
   --keep                            Retain external resources for inspection.
   --out <path>                      Write the result artifact.
   --help                            Show this help.
@@ -5593,6 +5714,22 @@ export function parseOptions(argv: readonly string[]): Options {
   // NO PRIVILEGED SUBSET. `--candidates-only` used to select
   // {bounded-layers, merkle-pack} behind the operator's back; every arm now
   // competes, so a subset is named outright with `--arms` or it is all of them.
+  // REPETITIONS ARE THE ONLY THING G9 CAN SCORE, so the default follows the
+  // gate rather than the operator's memory: a decisive run asks for the fewest
+  // a dispersion claim can rest on, and an ordinary run — a smoke check that
+  // ranks nothing — asks for one.
+  const decisive = argv.includes('--decisive');
+  const rawRepetitions = value('repetitions', String(decisive ? DECISIVE_REPETITIONS : 1));
+  // THE WHOLE TEXT, not `parseInt`'s prefix of it: `parseInt('1.5')` is 1, so a
+  // fractional count would silently become a single repetition and the run
+  // would report a number nobody asked for.
+  const repetitions = /^\d+$/.test(rawRepetitions.trim()) ? Number(rawRepetitions.trim()) : Number.NaN;
+  if (!Number.isInteger(repetitions) || repetitions < 1) {
+    throw new Error(
+      `--repetitions must be a whole number of 1 or more; got "${rawRepetitions}". `
+      + `G9 censors a deciding cell below ${MIN_DECIDING_REPETITIONS} repetitions.`,
+    );
+  }
   return {
     runId,
     seed: Number.parseInt(value('seed', '20260824'), 10),
@@ -5601,6 +5738,7 @@ export function parseOptions(argv: readonly string[]): Options {
     verifyOnly: argv.includes('--verify-only'),
     plan: argv.includes('--plan'),
     keep: argv.includes('--keep'),
+    repetitions,
     controls,
     arms: requestedArms,
     out: value('out', join('bench-artifacts', `devbox-strategies-${runId}.json`)),
@@ -5626,6 +5764,8 @@ async function main(): Promise<number> {
       + `phases        ${PHASES.join(',')}\n`
       + `process-driven ${[...PROCESS_PHASES].join(',')}\n`
       + `change sizes  ${CHANGE_SIZES_KIB.map((k) => (k >= 1024 ? `${k / 1024}MiB` : `${k}KiB`)).join(', ')}\n`
+      + `repetitions   ${options.repetitions} per deciding cell (${DECIDING_METRIC} phase`
+      + `${options.decisive ? ' and every decisive workload' : ''})\n`
       + `workers       ${planned.map((names) => names.worker).join(', ')}\n`
       + `buckets       ${planned.map((names) => names.bucket).join(', ')}\n`
       + `artifact      ${options.out}\n\nNothing has run. Drop --plan to execute.\n`,
@@ -5898,6 +6038,7 @@ async function main(): Promise<number> {
     image: SANDBOX_IMAGE,
     seed: String(options.seed),
     'loop budget ms': String(options.budgetMs),
+    'deciding repetitions': String(options.repetitions),
   };
   if (frozenControls.length > 0) {
     meta['frozen controls provenance'] = frozenControls
@@ -5942,6 +6083,7 @@ async function main(): Promise<number> {
   const admission = devboxAdmission({
     arms,
     requested: options.arms,
+    repetitions: options.repetitions,
     meta,
     identity,
     token,

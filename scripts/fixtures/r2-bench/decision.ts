@@ -20,6 +20,18 @@ export interface TickRecord {
   /** Which workload produced it: `npm`, `npm-excluded`, `git` or `sqlite`. */
   readonly arm: string;
   readonly workload: string;
+  /**
+   * Which repetition of the deciding cell this tick belongs to, counting from
+   * one.
+   *
+   * KEPT PER ROW rather than pooled away, because the repetitions are the only
+   * thing a dispersion claim can rest on: `--repetitions 2` measures every
+   * workload twice per arm, and a reader who cannot separate the two passes
+   * cannot tell a stable arm from one whose second pass was twice as slow. The
+   * totals below deliberately pool them — pricing is per workload — so this
+   * field is what makes the pooling checkable.
+   */
+  readonly repetition: number;
   /** Segment name from the workload program, so a tick is attributable. */
   readonly segment: string;
   readonly wallMs: number;

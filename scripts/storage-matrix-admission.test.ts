@@ -553,10 +553,14 @@ function devboxVerdict(
   arms: readonly ArmResult[],
   requested: readonly Strategy[] = CANDIDATE_ARMS,
   identity: RunIdentity = fullIdentity(),
+  /** What `--repetitions` asked for. Two by default, which is what a decisive
+   *  run asks for and the fewest G9 will score. */
+  repetitions = 2,
 ): AdmissionVerdict {
   return devboxAdmission({
     arms,
     requested,
+    repetitions,
     identity,
     meta: {
       date: '2026-08-30',
@@ -566,6 +570,7 @@ function devboxVerdict(
       image: SANDBOX_IMAGE,
       seed: '20260824',
       'loop budget ms': '8000',
+      'deciding repetitions': String(repetitions),
     },
     token: 'devbox-test-token',
     cleanup: cleanCleanup(),
@@ -743,6 +748,56 @@ describe('the devbox run\'s own admission requirements', () => {
     expect(gateReasons(verdict, 'G9')).toContain(
       `measured the deciding metric \`${DECIDING_METRIC}\` 1 time(s)`,
     );
+  });
+
+  test('two repetitions of the deciding cell hold G9, and one still refuses it', () => {
+    // WHAT `--repetitions` BUYS, and the whole of it. Every arm of run
+    // 20260902154130 measured the deciding metric once or not at all, so every
+    // deciding cell was censored and no statistical claim survived — and the
+    // driver had no way to ask for a second pass. Two repetitions per arm is
+    // what a decisive run now asks for, and this is the pair of directions
+    // that makes the count load-bearing rather than decorative.
+    const twice = devboxVerdict(
+      [
+        measuredArm('bounded-layers', { phases: [probeRun(1.10), probeRun(1.15)] }),
+        measuredArm('merkle-pack', { phases: [probeRun(1.20), probeRun(1.24)] }),
+      ],
+      CANDIDATE_ARMS,
+      fullIdentity(),
+      2,
+    );
+    expect(gateHeld(twice, 'G9'), gateReasons(twice, 'G9')).toBe(true);
+
+    const once = devboxVerdict(
+      [
+        measuredArm('bounded-layers', { phases: [probeRun(1.10)] }),
+        measuredArm('merkle-pack', { phases: [probeRun(1.20)] }),
+      ],
+      CANDIDATE_ARMS,
+      fullIdentity(),
+      1,
+    );
+    expect(gateHeld(once, 'G9')).toBe(false);
+    expect(gateReasons(once, 'G9')).toContain('fewer than two repetitions');
+  });
+
+  test('G9 refuses an arm that measured fewer repetitions than the run asked for', () => {
+    // A run that asked for two and got one LOST a repetition. The floor check
+    // alone would report the survivor as the whole intent, so the count the
+    // driver asked for is fed to admission and named in the refusal.
+    const verdict = devboxVerdict(
+      [
+        measuredArm('bounded-layers', { phases: [probeRun(1.10), probeRun(1.15), probeRun(1.12)] }),
+        measuredArm('merkle-pack', { phases: [probeRun(1.20), probeRun(1.24)] }),
+      ],
+      CANDIDATE_ARMS,
+      fullIdentity(),
+      3,
+    );
+    expect(gateHeld(verdict, 'G9')).toBe(false);
+    expect(gateReasons(verdict, 'G9')).toContain('2 time(s) where the run asked for 3');
+    // And the arm that produced all three is not named by that refusal.
+    expect(gateReasons(verdict, 'G9')).not.toContain('`bounded-layers` measured the deciding metric');
   });
 
   test('G9 refuses an arm that measured the deciding metric not at all', () => {
