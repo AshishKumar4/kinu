@@ -19,6 +19,7 @@ import {
   archiveSizeCommand,
   baseObjectKey,
   chainBackupOptions,
+  ChainRecordAdvanced,
   chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
@@ -495,7 +496,7 @@ function harness(overrides: {
     allowExtraction: () => overrides.allowExtraction ?? true,
     archiveExcludes: () => overrides.archiveExcludes ?? CHAIN_EXCLUDES,
     readState: () => Promise.resolve(state),
-    writeState: (next) => {
+    writeState: (next, expectedRev) => {
       writes += 1;
       const rejected = overrides.rejectWrites?.includes(writes) === true;
       calls.push(
@@ -505,6 +506,9 @@ function harness(overrides: {
       // A rejected put changes nothing durable, which is the whole point: the
       // record a reader would find next is still the one before this call.
       if (rejected) return Promise.reject(new Error('durable storage unreachable'));
+      // The fence, as the Durable Object's transaction holds it.
+      const stored = state?.rev ?? null;
+      if (stored !== expectedRev) return Promise.reject(new ChainRecordAdvanced(expectedRev, stored));
       state = next;
       return Promise.resolve();
     },
@@ -1965,6 +1969,37 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.calls).toContain(
         `log:${DEVBOX_WORKDIR} that failure could not be stamped on the durable record`,
       );
+    });
+
+  test('a commit whose record another writer advanced is refused, and the loser is stamped on the record as it stands',
+    async () => {
+      // Two boots read one record at rev 1. The other one commits rev 2 while
+      // this one is still archiving, which the harness models by advancing the
+      // record after this checkpoint's read. The fence refuses this commit's
+      // pointer write; the failure is reported AND recorded, and it lands on
+      // the winner's record, because the stale copy cannot be written either.
+      const record = harness({
+        state: chainState({ base: { id: CHAIN_ID, bytes: 100 }, at: 1 }),
+        mounts: MOUNTED,
+        now: 10 * INTERVAL_MS,
+      });
+      const rival = chainState({ base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 7_000 }, rev: 2, at: 5 });
+      const ports: SnapshotChainPorts = {
+        ...record.ports,
+        checkChanges: async (dir, since) => {
+          record.state = rival;
+          return await record.ports.checkChanges(dir, since);
+        },
+      };
+      const outcome = await snapshotChainStorage(ports).checkpoint('quiesce');
+
+      expect(outcome.kind).toBe('failed');
+      expect(outcome.reason).toContain('another writer advanced the chain record to rev 2');
+      expect(record.state).toMatchObject({ rev: 2, at: 5, delta: { bytes: 7_000 } });
+      expect(record.state?.lastFailure?.reason).toContain('another writer advanced the chain record');
+      // The refused pointer is the only write that went backwards, and it
+      // changed nothing; the stamp is a second, in-place write on rev 2.
+      expect(record.calls.filter(call => call.startsWith('writeState:2:'))).toHaveLength(2);
     });
 
   test('VERDICT-2: excludes shrink BOTH archives, so they cannot trip the rebase ratio',

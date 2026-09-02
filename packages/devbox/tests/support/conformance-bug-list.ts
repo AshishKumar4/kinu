@@ -125,12 +125,6 @@ export const KNOWN_RED: readonly KnownRed[] = [
     reason: "bytesPut 4539046 > 4 × 64 dirty pages × 16384 = 4194304",
   },
   {
-    arm: 'snapshot-chain',
-    cell: '6.17',
-    since: '2026-09-02',
-    reason: "2 boots reported committed (A,B); the loser recorded no failure",
-  },
-  {
     arm: 'r2fs',
     cell: '6.17',
     since: '2026-09-02',

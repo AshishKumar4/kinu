@@ -156,6 +156,7 @@ import {
 } from './incidents';
 import {
   CHAIN_EXCLUDES,
+  ChainRecordAdvanced,
   chainStoreRoot,
   isOverlayMounted,
   normalizeChainState,
@@ -3641,9 +3642,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       allowExtraction: () => this.allowExtraction,
       archiveExcludes: () => this.archiveExcludes,
       readState: async () => normalizeChainState(await this.ctx.storage.get<StoredValue>(STORAGE_KEY)),
-      writeState: async (state) => {
-        await this.ctx.storage.put(STORAGE_KEY, state);
-      },
+      writeState: async (state, expectedRev) => await this.ctx.storage.transaction(async (transaction) => {
+        const stored = normalizeChainState(await transaction.get<StoredValue>(STORAGE_KEY))?.rev ?? null;
+        if (stored !== expectedRev) throw new ChainRecordAdvanced(expectedRev, stored);
+        await transaction.put(STORAGE_KEY, state);
+      }),
       clearState: async () => {
         await this.ctx.storage.delete(STORAGE_KEY);
       },

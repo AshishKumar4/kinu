@@ -101,6 +101,7 @@ import {
   type CheckpointKind,
   type CheckpointOutcome,
   type DevboxStorage,
+  type FailureStampDeps,
   type StoredValue,
   recordCheckpointFailure,
   stampFailure,
@@ -772,6 +773,14 @@ export function shouldCheckpoint(
 
 // ── ports ───────────────────────────────────────────────────────────────────
 
+/** The record was advanced since this writer read it, so its write is refused. */
+export class ChainRecordAdvanced extends Error {
+  constructor(expectedRev: number | null, storedRev: number | null) {
+    super(`another writer advanced the chain record to rev ${storedRev ?? 'none'} after this one read rev ${expectedRev ?? 'none'}`);
+    this.name = 'ChainRecordAdvanced';
+  }
+}
+
 /**
  * Everything the strategy needs from the world. The adapter implements it and
  * decides nothing; every entry maps to one public Sandbox SDK primitive, one
@@ -805,7 +814,14 @@ export interface SnapshotChainPorts {
    *  really the work replaces it. */
   archiveExcludes(): readonly string[];
   readState(): Promise<ChainState | null>;
-  writeState(state: ChainState): Promise<void>;
+  /**
+   * Persist `state` while the stored record's `rev` is still `expectedRev`
+   * (`null`: no record), else throw {@link ChainRecordAdvanced}. Read, compare
+   * and put are ONE transaction: two boots that read one record cannot both
+   * advance it, and a note on the record one of them read cannot overwrite
+   * the other's advance.
+   */
+  writeState(state: ChainState, expectedRev: number | null): Promise<void>;
   clearState(): Promise<void>;
   /** Minimum gap between two commits. Supplied by the host's policy so one
    *  place decides the cadence for both the schedule and this gate. */
@@ -1332,6 +1348,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const shell = chainShell(ports.exec, ports.storeRoot());
   /** This box's chain root: every key below it, one mount over it. */
   const root = ports.storeRoot();
+  /** The record's in-place writers: a stamp lands on the revision it read, or not at all. */
+  const stamps: FailureStampDeps<ChainState> = {
+    writeState: async (next) => await ports.writeState(next, next.rev),
+    log: ports.log,
+    now: ports.now,
+  };
 
   /**
    * Why a stored layer must not be attached from, or null when it is sound.
@@ -1817,7 +1839,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         orphans: record.fallback === undefined
           ? record.orphans
           : [...(record.orphans ?? []), record.fallback.base.id],
-      });
+      }, record.rev);
     } catch (error) {
       ports.log(
         `${DEVBOX_WORKDIR} is attached from generation ${served.base.id} and the record could `
@@ -1888,7 +1910,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       lastFailure: { at: ports.now(), reason },
     };
     ports.log(`${DEVBOX_WORKDIR} ${reason}; falling back to generation ${promoted.base.id}`);
-    await ports.writeState(promoted);
+    await ports.writeState(promoted, state.rev);
     const fallback = await serve(promoted.mode, promoted);
     if (!('served' in fallback)) {
       throw new Error(
@@ -2055,7 +2077,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         : { fallback: previous?.fallback, orphans: previous?.orphans }),
       lastFailure: undefined,
     };
-    await publish(committed);
+    await publish(previous, committed);
     ports.log(`${DEVBOX_WORKDIR} archived as ${backup.id} (${storedBytes} bytes, extract)`);
     return { kind: 'committed', reason: undefined, bytes: storedBytes, movedBytes: storedBytes };
   };
@@ -2080,7 +2102,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         metadataObjectKey(root, generation),
       ]);
     }
-    await ports.writeState({ ...state, orphans: undefined });
+    await ports.writeState({ ...state, orphans: undefined }, state.rev);
     ports.log(`${orphans.length} superseded generation(s) deleted`);
   };
 
@@ -2088,32 +2110,21 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * Write the record, then delete everything the new record supersedes.
    *
    * THE POINTER IS THE COMMIT, and this is the only function that crosses it.
-   * `writeState(committed)` is therefore the ONLY step here that may throw: a
-   * failure there committed nothing, so the caller's catch is right to stamp the
-   * record it read. Every step below that line deletes bytes the committed
+   * The fenced `writeState(committed)` is therefore the ONLY step here that may
+   * throw: a failure there committed nothing, so the caller's catch is right to
+   * stamp a failure. Every step below that line deletes bytes the committed
    * record no longer names, none of them can un-commit anything, and NONE OF
-   * THEM MAY THROW — the caller's catch is bound to the PRE-COMMIT record, and
-   * re-writing that over the committed pointer means, after a rebase, a record
-   * naming the generation the sweep had just begun deleting: every later attach
-   * then refuses on a base the store no longer holds, and `orphans` is dropped
-   * so the generation this commit had just written becomes unnameable and
-   * therefore unsweepable.
-   *
-   * So a cleanup failure is stamped on the PUBLISHED revision, and the stamp is
-   * best effort — see {@link stampFailure}, which is that policy for every
-   * strategy. Letting the stamp's own failure travel is the reversion this
-   * boundary exists to make unrepresentable.
-   *
-   * The sweep is re-runnable and it runs on every commit, not just the rebase
-   * that created an orphan, so the next checkpoint finishes what this one could
-   * not — the stamp included, which the next failure rewrites and the next
-   * commit clears.
+   * THEM MAY THROW — after a rebase the pre-commit record names the generation
+   * the sweep had just begun deleting, so a cleanup failure is stamped on the
+   * PUBLISHED revision instead, best effort ({@link stampFailure}). The sweep
+   * runs on every commit, so the next one finishes what this one could not.
    */
   const publish = async (
+    previous: ChainState | null,
     committed: ChainState,
     cleanup?: () => Promise<void>,
   ): Promise<void> => {
-    await ports.writeState(committed);
+    await ports.writeState(committed, previous?.rev ?? null);
     let reason: string;
     try {
       await cleanup?.();
@@ -2124,7 +2135,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         + `cleanup is not: ${describe({ cause: error })}`;
     }
     ports.log(`${DEVBOX_WORKDIR} ${reason}`);
-    await stampFailure(ports, committed, reason);
+    await stampFailure(stamps, committed, reason);
   };
 
   /**
@@ -2260,7 +2271,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         : { fallback: previous?.fallback, orphans: previous?.orphans }),
       lastFailure: undefined,
     };
-    await publish(committed, async () => {
+    await publish(previous, committed, async () => {
       await ports.exec(`rm -rf ${shellPath(stageDir)}`);
     });
     // THIS UPPER *IS* THE DELTA THAT WAS JUST PUBLISHED, so the stamp says so
@@ -2288,6 +2299,18 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     };
   };
 
+  /** A commit that did not commit, stamped. When the fence refused it, another
+   *  writer advanced the record this checkpoint read; the stale copy can no
+   *  longer be written either, so the stamp goes on the record as it stands. */
+  const commitFailed = async (
+    state: ChainState | null,
+    thrown: { readonly cause: unknown },
+  ): Promise<CheckpointOutcome> => await recordCheckpointFailure(
+    stamps,
+    thrown.cause instanceof ChainRecordAdvanced ? await ports.readState() : state,
+    describe(thrown),
+  );
+
   const checkpoint = async (kind: CheckpointKind): Promise<CheckpointOutcome> => {
     const idle = { reason: undefined, bytes: undefined, movedBytes: 0 };
     if (!ports.containerRunning()) {
@@ -2306,7 +2329,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const overlayMounted = isOverlayMounted(procMounts, DEVBOX_WORKDIR);
     if (state !== null && state.mode === 'chain' && !overlayMounted) {
       return await recordCheckpointFailure(
-        ports,
+        stamps,
         state,
         `${DEVBOX_WORKDIR} is not an overlay mount, so chain ${state.base.id} has no changed `
         + 'set to archive. Refusing to report a checkpoint for a work directory that is not '
@@ -2321,7 +2344,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       change = checked.status;
       version = checked.version;
     } catch (error) {
-      return await recordCheckpointFailure(ports, state, `checkChanges failed: ${describe({ cause: error })}`);
+      return await recordCheckpointFailure(stamps, state, `checkChanges failed: ${describe({ cause: error })}`);
     }
 
     // THE CHANGE GATE NEEDS SOMETHING TO BE RELATIVE TO.
@@ -2380,7 +2403,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         // commit after it is an ordinary delta again.
         return await commitChain(state, version, layered || shouldRebase(state, kind), mark);
       } catch (error) {
-        return await recordCheckpointFailure(ports, state, describe({ cause: error }));
+        return await commitFailed(state, { cause: error });
       }
     }
     const comparable = state?.changeVersion !== undefined;
@@ -2401,7 +2424,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // stop a box on a failed checkpoint, so a flaky durable write would hold
       // open a box whose work directory has nothing to archive.
       try {
-        await ports.writeState({ ...state, changeVersion: version });
+        await ports.writeState({ ...state, changeVersion: version }, state.rev);
       } catch (error) {
         ports.log(
           `${DEVBOX_WORKDIR} is unchanged and its change watermark could not be advanced, so `
@@ -2427,7 +2450,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if (state?.mode === 'extract') return await commitExtract(state, version);
       return await commitChain(state, version, shouldRebase(state, kind));
     } catch (error) {
-      return await recordCheckpointFailure(ports, state, describe({ cause: error }));
+      return await commitFailed(state, { cause: error });
     }
   };
 

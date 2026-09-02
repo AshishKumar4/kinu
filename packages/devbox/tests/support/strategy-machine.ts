@@ -144,6 +144,7 @@ import {
 import { R2FS_CACHE_DIR, r2fsStorage, type R2fsPorts } from '../../src/r2fs';
 import {
   baseObjectKey,
+  ChainRecordAdvanced,
   chainStoreRoot,
   deltaObjectKey,
   snapshotChainStorage,
@@ -1629,12 +1630,17 @@ function snapshotChainArm(): ConformanceArm {
         allowExtraction: () => false,
         archiveExcludes: () => [],
         readState: async () => row,
-        writeState: async (next) => {
+        writeState: async (next, expectedRev) => {
           // The pointer is the commit. The hold is before it: the old boot has
           // staged bytes and its late finalize arrives after the new boot.
           await this.#finalizeGate.cross();
           deaths.at('before-pointer');
+          // The Durable Object's read-compare-put, as one step: nothing runs
+          // between the comparison and the write.
+          const stored = row?.rev ?? null;
+          if (stored !== expectedRev) throw new ChainRecordAdvanced(expectedRev, stored);
           row = next;
+          if (next.lastFailure !== undefined) this.failures.push(next.lastFailure.reason);
           deaths.at('after-pointer');
         },
         clearState: async () => { row = null; },
