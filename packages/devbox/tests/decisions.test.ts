@@ -12,7 +12,7 @@
 // than that a function was reachable.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
@@ -1096,7 +1096,38 @@ describe('a composed container command is one a POSIX shell will run', () => {
   });
 
   /**
-   * THE COMMAND, RUN FOR REAL, against this host's own `/proc`.
+   * The holders, started INSIDE the namespace, because that is the only place
+   * the scan can see them — and reporting back on stdout, because every pid in
+   * here is namespace-local and the host holds no handle on any of them.
+   *
+   * Each holder ANNOUNCES its reference through a FIFO rather than being slept
+   * after, so the scan provably runs against references that already exist.
+   * The FIFOs live OUTSIDE the work directory: a holder that opened one inside
+   * it would hold an fd under the directory and be signalled as a stranger
+   * instead of named as the cwd-only holder this needs.
+   */
+  const HOLDER_SCENARIO = `
+dir=$1; script=$2; sready=$3; cready=$4
+mkfifo "$sready" "$cready"
+( exec 9>"$dir/stranger.bin"; echo ready > "$sready"; exec sleep 60 ) &
+stranger=$!
+( cd "$dir" && { echo ready > "$cready"; exec sleep 60; } ) &
+cwd=$!
+read _ < "$sready"
+read _ < "$cready"
+exec 8>"$dir/ancestor.bin"
+sh "$script"
+printf 'ALIVE %s' "$$"
+wait $stranger
+status=$?
+if kill -0 $cwd 2>/dev/null; then alive=yes; else alive=no; fi
+pids=$(ls /proc | grep -cE '^[0-9]+$')
+printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%s\\n' \\
+  "$stranger" "$cwd" "$$" "$status" "$alive" "$pids"
+`;
+
+  /**
+   * THE COMMAND, RUN FOR REAL, in a pid namespace of its own.
    *
    * The parse gate proves a shell will accept it; only running it proves what
    * it does, and the properties that matter cannot be asserted against a
@@ -1120,69 +1151,104 @@ describe('a composed container command is one a POSIX shell will run', () => {
    *     unreachable, the same class as a syntax error and with no message at
    *     all.
    *
-   * Linux only, like the `/proc` walk it exercises, and it really waits out
-   * HOLDER_TERM_WAIT_MS.
+   * IT RUNS IN A PID NAMESPACE BECAUSE PRODUCTION DOES, and running it without
+   * one is what made this test flaky. The scan walks EVERY pid of its own pid
+   * namespace (`lifecycle.ts:889`), forking two or three helpers per pid to
+   * read that pid's fds and cwd (`lifecycle.ts:891-895`), and it walks TWICE:
+   * once to choose who to signal, once to answer who is still holding
+   * (`lifecycle.ts:900`, `:913`). In production that namespace is the
+   * CONTAINER'S — the command travels through the box's own session shell
+   * (`devbox.ts:2161-2164`) — which is what its procfs contract is written for
+   * (`lifecycle.ts:789-792`): /proc there holds the container server and a
+   * handful of helpers. Against this host's /proc it walked the whole machine
+   * instead. MEASURED 2026-09-02 on the 24-thread box: 851 pids, 9.3-9.8 s per
+   * walk at load 63, so two walks plus the command's own five second wait could
+   * not fit the bound below, and the push tier failed here at 20,021 ms. The
+   * namespace is not a way to buy time — the two bounds below are unchanged,
+   * and `pidsInScan` asserts the scoping rather than trusting it — it is the
+   * environment whose cost this command was designed around.
+   *
+   * IT IS ALSO THE CLEANUP. Everything the scenario starts lives in the
+   * namespace, so its pid 1 exiting kills all of it; the host-side version
+   * leaked two `sleep 60` processes whenever an assertion failed before its
+   * last line.
+   *
+   * WHAT IT NO LONGER EXERCISES: a pid that answers NEITHER probe — a zombie,
+   * or another user's process refusing both reads. A host process table offered
+   * those by accident; eight pids under one uid do not. A zombie planted on
+   * purpose was reaped by the shell in one run of three, which is the kind of
+   * green this repair exists to remove, so it is not planted. Both cases are
+   * handled by the `2>/dev/null` on each probe and neither was asserted here
+   * before.
+   *
+   * Linux only, like the `/proc` walk it exercises. It needs `unshare` and an
+   * unprivileged user namespace — a weaker demand than the privileged
+   * `/dev/fuse` container the same tier runs next door — and it really waits
+   * out HOLDER_TERM_WAIT_MS.
    */
   test.skipIf(process.platform !== 'linux')(
     'a stranger is signalled and unnamed; a cwd holder and the scan\'s own session are named',
-    async () => {
+    () => {
       const dir = scratchDir('devbox-workdir-holders');
       const script = join(dir, 'release.sh');
       writeFileSync(script, releaseWorkdirHoldersCommand(dir));
-      // A process with an open fd under the directory and no relation to the
-      // scan: exactly what a stop has to clear before an unmount. It ANNOUNCES
-      // the open fd rather than being slept after, so the scan runs against a
-      // holder that provably exists.
-      const stranger = spawn('sh', ['-c', `exec 9>${dir}/stranger.bin; printf ready; exec sleep 60`], {
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const exited = new Promise<number | null>((resolve) => {
-        stranger.on('exit', (_code, signal) => { resolve(signal === 'SIGTERM' ? 15 : null); });
-      });
-      await new Promise<void>((resolve) => { stranger.stdout.once('data', () => { resolve(); }); });
-      // A holder whose ONLY reference is its working directory: no fd under the
-      // directory at all, so an fd-only scan cannot see it, and the kernel
-      // refuses an unmount for it all the same.
-      const cwdHolder = spawn('sh', ['-c', `cd ${dir}; printf ready; exec sleep 60`], {
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      await new Promise<void>((resolve) => { cwdHolder.stdout.once('data', () => { resolve(); }); });
-      // The scan runs as a CHILD of a shell that also holds the directory, so
-      // that shell is an ancestor of the scan and a holder at the same time.
-      const ran = spawnSync('sh', ['-c', `exec 8>${dir}/ancestor.bin; sh ${script}; printf 'ALIVE %s' "$$"`], {
-        encoding: 'utf8', timeout: HOLDER_TERM_WAIT_MS + 15_000,
-      });
+      const scenario = join(dir, 'holders.sh');
+      writeFileSync(scenario, HOLDER_SCENARIO);
+      // The namespace's pid 1 stands where the container server stands: the
+      // scan excludes it (`lifecycle.ts:889`), so it must not be the shell the
+      // scan runs under. It starts the session as a child and waits on it,
+      // because a pid namespace ends with its pid 1.
+      const init = join(dir, 'init.sh');
+      writeFileSync(init, 'inner=$1; shift; sh "$inner" "$@"\n');
+      const ready = { stranger: `${dir}-ready-stranger`, cwd: `${dir}-ready-cwd` };
+      const ran = spawnSync('unshare', [
+        '-Ur', '--fork', '--pid', '--mount-proc',
+        'sh', init, scenario, dir, script, ready.stranger, ready.cwd,
+      ], { encoding: 'utf8', timeout: HOLDER_TERM_WAIT_MS + 15_000 });
       const holders = parseWorkdirHolders(ran.stdout.split('ALIVE')[0] ?? '');
-      const named = (pid: number): boolean =>
-        holders.some((holder) => holder.pid === String(pid));
+      // The scenario's own answers, since every pid in them is namespace-local.
+      const reported = (name: string): string =>
+        new RegExp(`(?:^|\\s)${name}=(\\S+)`).exec(ran.stdout)?.[1] ?? '';
+      const named = (pid: string): boolean =>
+        pid.length > 0 && holders.some((holder) => holder.pid === pid);
       expect({
+        // Named first, because everything else reads as false when the command
+        // never ran at all: a missing `unshare`, a refused namespace, or the
+        // bound above firing all arrive here rather than as nine mysteries.
+        commandRan: ran.error === undefined ? 'yes' : ran.error.message,
         // The shell that hosted the scan ran the statement AFTER it: it is alive.
         sessionSurvived: ran.stdout.includes('ALIVE'),
         // SIGNALLED, and said so — but not reported as still holding, because it
         // is not: it is dead.
         strangerSignalled: ran.stderr.includes('signalling:'),
-        strangerStillNamed: named(stranger.pid ?? -1),
-        strangerSignal: await exited,
+        strangerStillNamed: named(reported('stranger')),
+        strangerSignal: Number(reported('status')) - 128,
         // NAMED AND ALIVE: neither of these may be signalled, and both really
         // are still holding the directory when the command ends.
-        cwdHolderNamed: named(cwdHolder.pid ?? -1),
-        cwdHolderSurvived: cwdHolder.exitCode === null && cwdHolder.signalCode === null,
+        cwdHolderNamed: named(reported('cwd')),
+        cwdHolderSurvived: reported('cwdalive'),
         cwdHolderExplained: ran.stderr.includes('cwd-only holders'),
-        ancestorNamed: holders.length > 1,
+        ancestorNamed: named(reported('session')),
         ancestorExplained: ran.stderr.includes("this session's own"),
+        // The scan is scoped to a container-sized process table, which is the
+        // whole reason its two walks fit inside one bounded stop.
+        pidsInScan: Number(reported('pidsInScan')) < 32,
       }).toEqual({
+        commandRan: 'yes',
         sessionSurvived: true,
         strangerSignalled: true,
         strangerStillNamed: false,
         strangerSignal: 15,
         cwdHolderNamed: true,
-        cwdHolderSurvived: true,
+        cwdHolderSurvived: 'yes',
         cwdHolderExplained: true,
         ancestorNamed: true,
         ancestorExplained: true,
+        pidsInScan: true,
       });
-      cwdHolder.kill('SIGKILL');
       rmSync(dir, { recursive: true, force: true });
+      rmSync(ready.stranger, { force: true });
+      rmSync(ready.cwd, { force: true });
     },
     HOLDER_TERM_WAIT_MS + 20_000,
   );
