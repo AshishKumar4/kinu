@@ -136,6 +136,10 @@ describe('UserDO schema bootstrap', () => {
     expect(columns(db, 'user_devices')).toEqual([
       'id', 'token_hash', 'label', 'os', 'hostname', 'created_at', 'connected_at', 'last_seen_at',
       'revoked_at', 'prev_token_hash', 'expires_at', 'last_ip', 'last_agent', 'replaced_at', 'unstopped_at',
+      // The device tiers: the base directory the owner named (F2) and the
+      // sandbox contract (capability, reason, GPU nodes, agent root, tier).
+      'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_gpu',
+      'agent_root', 'tier',
     ]);
     // The exact projection `UserDO.listDevices` runs, against the repaired row.
     expect(required(db.query<{ id: string; unstopped_at: number | null; replaced_at: number | null }, []>(
@@ -187,14 +191,18 @@ describe('UserDO schema bootstrap', () => {
     expect(columns(db, 'user_devices')).toEqual([
       'id', 'token_hash', 'prev_token_hash', 'label', 'os', 'hostname',
       'created_at', 'connected_at', 'last_seen_at', 'expires_at', 'revoked_at',
-      'last_ip', 'last_agent', 'replaced_at', 'unstopped_at',
+      'last_ip', 'last_agent', 'replaced_at',
+      'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_gpu',
+      'agent_root', 'tier', 'unstopped_at',
     ]);
     expect(columns(db, 'device_inflight_requests')).toEqual([
       'request_id', 'device_id', 'workspace', 'turn_id', 'background_job_id',
       'cancel_claim', 'cancel_outcome',
     ]);
+    // A binding row, not a tier: the sandbox switch on the device row replaced
+    // the per-grant scope column when the tiers collapsed.
     expect(columns(db, 'device_consent')).toEqual([
-      'agent_name', 'device_id', 'policy', 'scope', 'last_method',
+      'agent_name', 'device_id', 'policy', 'last_method',
       'last_summary', 'updated_at',
     ]);
     // NOT NULL with a default, so no row can carry the NULL a backfill existed

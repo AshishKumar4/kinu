@@ -31,7 +31,7 @@ import {
   createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type TestUserDO,
 } from './helpers/user-do';
-import { daemon, type DeviceResponder } from './helpers/device-harness';
+import { CAPABLE_HELLO, daemon, type DeviceResponder } from './helpers/device-harness';
 import {
   orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
@@ -80,6 +80,9 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   const user = createTestUserDO({ durableObjectId: OWNER_USER_ID, deviceResponder: responder });
   const { deviceId } = await user.userDO.registerDevice(await testOwner(), 'ashish@studio');
   user.attachDevice(deviceId);
+  // A real daemon proves what it can sandbox the moment its socket opens; a
+  // machine that says nothing is one the hub correctly refuses to run on.
+  await user.sendDeviceHello(CAPABLE_HELLO);
   const token = await provisionTestWorkspace(user, WORKSPACE, 'Jarvis');
   const actor = orchestratorHarness(undefined, {
     userDO: user.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID,
