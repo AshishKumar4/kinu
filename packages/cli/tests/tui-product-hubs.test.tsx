@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
+import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
 import { HubOverlay, type TuiHubData, type TuiHubView } from '../src/tui/hubs';
@@ -108,7 +108,7 @@ describe('role, tier, and agent hubs', () => {
         expect(jarvisHeading).toBeGreaterThan(reviewer);
       }
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });

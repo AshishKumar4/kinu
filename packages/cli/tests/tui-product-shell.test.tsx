@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ScrollBoxRenderable, TextareaRenderable } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
+import { createRoot, flushSync } from '@opentui/react';
 import { useRef, useState } from 'react';
 import { describe, expect, test } from 'bun:test';
 
@@ -144,8 +144,7 @@ async function mountProbe(options: {
       await renderSettled(testRenderer.renderOnce);
     },
     async destroy() {
-      root.render(<box />);
-      await testRenderer.renderOnce();
+      flushSync(() => { root.unmount(); });
       testRenderer.renderer.destroy();
       probeTextarea = null;
       probeSetNavigationOpen = null;
@@ -496,7 +495,7 @@ describe('adaptive TUI shell renderer', () => {
       expect(shellTextarea?.focused).toBe(true);
       expect(captureCharFrame()).toContain('survives');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
       shellTextarea = null;
       shellScroll = null;
@@ -625,8 +624,7 @@ async function mountRosterProbe(source: TuiAgentSource) {
       await testRenderer.mockMouse.click(4, index);
     },
     async destroy() {
-      root.render(<box />);
-      await testRenderer.renderOnce();
+      flushSync(() => { root.unmount(); });
       testRenderer.renderer.destroy();
       failingRoster = null;
     },

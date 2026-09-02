@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { join } from 'node:path';
 import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
+import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
 import { TUI_ADVERTISED_HINTS, TUI_MARKS } from '@kinu.run/core';
@@ -148,7 +148,7 @@ describe('TUI product registries', () => {
       expect(frame).toContain(`${TUI_MARKS.activity.running} worker`);
       expect(frame).toContain(`${TUI_MARKS.activity.idle} resting`);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -250,7 +250,7 @@ async function renderedThemeId(
     }
     throw new Error(`the theme probe never painted for a ${appearance} terminal`);
   } finally {
-    root.render(<box />);
+    flushSync(() => { root.unmount(); });
     renderer.destroy();
   }
 }

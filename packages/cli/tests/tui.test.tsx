@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
+import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { ReactNode } from 'react';
@@ -56,7 +56,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain(`cli ${VERSION}`);
 
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -88,7 +88,7 @@ describe('CLI TUI layout', () => {
         expect([...line].length).toBeLessThanOrEqual(52);
       }
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -122,7 +122,7 @@ describe('CLI TUI layout', () => {
         expect([...line].length).toBeLessThanOrEqual(20);
       }
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -146,7 +146,7 @@ describe('CLI TUI layout', () => {
       // The name may ellipsize; the mode may not silently vanish with it.
       expect(frame).toContain('local');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -172,7 +172,7 @@ describe('CLI TUI layout', () => {
         await renderSettled(renderOnce);
         assertions(captureCharFrame());
       } finally {
-        root.render(<box />);
+        flushSync(() => { root.unmount(); });
         renderer.destroy();
       }
     };
@@ -218,7 +218,7 @@ describe('CLI TUI layout', () => {
         await renderSettled(renderOnce);
         assertions(captureCharFrame());
       } finally {
-        root.render(<box />);
+        flushSync(() => { root.unmount(); });
         renderer.destroy();
       }
     };
@@ -251,7 +251,7 @@ describe('CLI TUI layout', () => {
         await renderSettled(renderOnce);
         frames.push(captureCharFrame());
       } finally {
-        root.render(<box />);
+        flushSync(() => { root.unmount(); });
         renderer.destroy();
       }
     };
@@ -351,7 +351,7 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       expect(selected[0]?.spec).toBe(MODELS[1]!.spec);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -413,7 +413,7 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       expect(topVisibleTranscriptLine(captureCharFrame())).toBeGreaterThan(beforeDraftArrow);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   // Measured 2.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
@@ -446,7 +446,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('Type to filter · Enter runs a completed command');
       expect(frame).toContain('Keep typing to filter.');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -481,7 +481,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('/very-long');
       expect(frame).not.toContain('without clipping');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -510,7 +510,7 @@ describe('CLI TUI layout', () => {
         index > commandLine && line.includes('╰'));
       expect(closingLine).toBeGreaterThan(commandLine);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -561,7 +561,7 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       expect(selected).toContain('/effort high');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -679,7 +679,7 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       expect(captureCharFrame()).toContain('indexed path');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -712,7 +712,7 @@ describe('CLI TUI layout', () => {
       expect(captureCharFrame()).toContain('current');
 
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -741,7 +741,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('latest · now run step two');
       expect(frame).toContain('-1 · plan the migration');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -766,7 +766,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('S use this session only');
       expect(frame).toContain("D don't ask again · N not now");
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -799,7 +799,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('✓ Connected for this session.');
       expect(frame).toContain('Press any key to continue');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -934,7 +934,7 @@ describe('CLI TUI layout', () => {
         import { readFileSync } from 'node:fs';
         import { createElement } from 'react';
         import { createTestRenderer } from '@opentui/core/testing.js';
-        import { createRoot } from '@opentui/react';
+        import { createRoot, flushSync } from '@opentui/react';
         import { CONFIG_PATH } from './packages/cli/src/config.ts';
         import { HomeApp } from './packages/cli/src/tui/home-app.tsx';
 
@@ -1010,7 +1010,7 @@ describe('CLI TUI layout', () => {
         });
         mockInput.pressArrow('right');
         await waitFor('the chosen effort to persist', () => defaultTier()?.reasoningEffort !== undefined && defaultTier().reasoningEffort !== 'medium');
-        root.render(createElement('box'));
+        flushSync(() => { root.unmount(); });
         renderer.destroy();
         console.log(JSON.stringify(defaultTier()));
       `;
@@ -1068,7 +1068,7 @@ async function renderOverlayFrame(showOverlay: boolean) {
     await renderSettled(renderOnce);
     return captureCharFrame();
   } finally {
-    root.render(<box />);
+    flushSync(() => { root.unmount(); });
     renderer.destroy();
   }
 }

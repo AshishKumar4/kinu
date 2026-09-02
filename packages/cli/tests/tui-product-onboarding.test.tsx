@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
+import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 
 import { GuidedOnboarding, type OnboardingReadiness, type TuiOnboardingOperations } from '../src/tui/onboarding';
@@ -58,13 +58,13 @@ describe('guided onboarding renderer', () => {
       mockInput.pressKey('s');
       await waitForFrame(renderOnce, captureCharFrame, 'Step 5/6 · keymap');
 
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       await renderSettled(renderOnce);
       root.render(scene);
       await waitForFrame(renderOnce, captureCharFrame, 'Step 5/6 · keymap');
       expect(readiness.skippedSteps).toEqual(['theme']);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -111,7 +111,7 @@ describe('guided onboarding renderer', () => {
       await waitForFrame(renderOnce, captureCharFrame, 'Step 1/6 · location');
       expect(captureCharFrame()).toContain('Where will your workspaces live?');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -151,7 +151,7 @@ describe('guided onboarding renderer', () => {
       await waitForFrame(renderOnce, captureCharFrame, 'readiness read failed: no such table: onboarding');
       expect(captureCharFrame()).not.toContain('Checking readiness…');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -201,7 +201,7 @@ describe('guided onboarding renderer', () => {
       mockInput.pressEnter();
       await waitForFrame(renderOnce, captureCharFrame, 'the location could not be saved: config.json is read-only');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
