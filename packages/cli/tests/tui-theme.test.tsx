@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
+import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
 
@@ -129,7 +129,7 @@ describe('TUI theme', () => {
       expect(hex(tool.bg)).toBe(light.colors.well.fill);
       expect(hex(tool.fg)).toBe(light.colors.well.ink);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });

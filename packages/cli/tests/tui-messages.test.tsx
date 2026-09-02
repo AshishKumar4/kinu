@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import type { CapturedSpan, RGBA } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
-import { createRoot } from '@opentui/react';
+import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { useState } from 'react';
 
@@ -36,7 +36,7 @@ describe('TUI transcript rendering', () => {
       expect(frame).toContain('Inspect');
       expect(frame).not.toContain('**Inspect**');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -75,7 +75,7 @@ describe('TUI transcript rendering', () => {
       expect(lineContaining(frame, 'before status')).toBeLessThan(lineContaining(frame, 'Workspace Status'));
       expect(lineContaining(frame, 'Workspace Status')).toBeLessThan(lineContaining(frame, 'after status'));
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -115,7 +115,7 @@ describe('TUI transcript rendering', () => {
       expect(at('THIRD')).toBeGreaterThan(at('write_file'));
       expect(frame).not.toContain('HIDDEN-TAIL');
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -138,7 +138,7 @@ describe('TUI transcript rendering', () => {
       // The live segment sits AFTER the tool it followed, with its text visible.
       expect(frame.indexOf('streaming reply')).toBeGreaterThan(frame.indexOf('read_file'));
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -163,7 +163,7 @@ describe('TUI transcript rendering', () => {
       // The marker belongs to the steered bubble only.
       expect(frame.split('↪ steered mid-turn')).toHaveLength(2);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
@@ -202,7 +202,7 @@ describe('TUI transcript rendering', () => {
         expect(hex(prose.bg)).not.toBe(theme.colors.well.fill);
         expect(hex(prose.fg)).toBe(theme.colors.text.primary);
       } finally {
-        root.render(<box />);
+        flushSync(() => { root.unmount(); });
         renderer.destroy();
       }
     }
@@ -240,7 +240,7 @@ describe('TUI transcript rendering', () => {
       expect(hex(fenced.bg)).toBe(contrast.colors.well.fill);
       expect(hex(fenced.fg)).toBe(contrast.colors.well.code);
     } finally {
-      root.render(<box />);
+      flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
