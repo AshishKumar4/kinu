@@ -12,7 +12,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { classify, classifyErrorCode, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { enforceOwnerOnly } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
@@ -667,9 +667,19 @@ function assertDaemonPlatformSupported(): void {
   throw new KinuError('unsupported', 'The desktop daemon supports Linux and macOS.');
 }
 
+/**
+ * The runtime the daemon runs on: the Bun that is already running this CLI.
+ * A `node` found on PATH is never consulted — the daemon speaks WebSocket with
+ * `globalThis.WebSocket`, which a host Node without a `ws` install lacks, and a
+ * machine's PATH Node is exactly the runtime the CLI does not control (a conda
+ * base Node answered `--version` and then killed the daemon with "install Node
+ * 22+ or the ws package"). The installer's Bun is the one runtime verified
+ * compatible, so the one that runs the CLI runs the daemon.
+ */
 function daemonRuntime(): string {
-  const node = spawnSync('node', ['--version'], { stdio: 'ignore' });
-  if (node.status === 0) return 'node';
   if ('bun' in process.versions) return process.execPath;
-  throw new KinuError('unsupported', 'Node.js or Bun is required for the desktop daemon. Install one, then retry.');
+  throw new KinuError(
+    'unsupported',
+    'The Kinu CLI must run under its bundled Bun to start the desktop daemon.',
+  );
 }

@@ -110,11 +110,19 @@ function installScriptResponse(origin: string): Response {
   // `kinu connect` writes ~/.kinu/device.json with the device token over
   // an authenticated HTTPS API call. This script only updates/starts the daemon
   // for users who already have that local config.
+  //
+  // The daemon starts on the same runtime the CLI itself requires: Kinu's own
+  // managed Bun at $KINU_HOME/runtime/bin/bun, then a compatible Bun already on
+  // PATH. A `node` on PATH is never consulted — the same PATH dependence that
+  // broke `kinu connect` on machines whose Node lacks a global WebSocket. The
+  // candidate must itself report a compatible version; presence is not
+  // compatibility.
   const script = `#!/usr/bin/env bash
 set -eu
+KINU_HOME="\${KINU_HOME:-$HOME/.kinu}"
 KINU_ORIGIN="\${KINU_ORIGIN:-${origin}}"
 
-DIR="$HOME/.kinu"
+DIR="$KINU_HOME"
 mkdir -p "$DIR"
 chmod 700 "$DIR"
 if [ ! -f "$DIR/device.json" ]; then
@@ -126,14 +134,20 @@ echo "Downloading Kinu device daemon…"
 curl -fsSL "$KINU_ORIGIN${DAEMON_JS_URL}" -o "$DIR/pc-agent.js"
 chmod 600 "$DIR/device.json"
 
-if command -v node >/dev/null 2>&1; then
-  echo "Starting daemon (node)…"
-  nohup node "$DIR/pc-agent.js" > "$DIR/pc-agent.log" 2>&1 &
-  echo "  PID=$! log=$DIR/pc-agent.log"
-else
-  echo "Node.js required. Install https://nodejs.org/ then re-run."
+KINU_BUN=""
+for candidate in "$DIR/runtime/bin/bun" "$(command -v bun 2>/dev/null || true)"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
+    KINU_BUN="$candidate"
+    break
+  fi
+done
+if [ -z "$KINU_BUN" ]; then
+  echo "Bun required. Re-run the Kinu install command, or install https://bun.sh then re-run."
   exit 1
 fi
+echo "Starting daemon ($KINU_BUN)…"
+nohup "$KINU_BUN" "$DIR/pc-agent.js" > "$DIR/pc-agent.log" 2>&1 &
+echo "  PID=$! log=$DIR/pc-agent.log"
 echo "Kinu device connected. Check the Environment tab. It should flip to connected within a few seconds."
 `;
   return new Response(script, {

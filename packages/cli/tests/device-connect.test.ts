@@ -411,6 +411,49 @@ describe('device-connect install hardening', () => {
     deviceDaemonPids.push(daemonPid);
   });
 
+  test('runs the daemon on the CLI Bun even when a WebSocket-less node sits on PATH', async () => {
+    // The Mac defect: a PATH node that answers --version but has no global
+    // WebSocket won daemonRuntime's probe and killed the daemon at startup.
+    // The daemon's runtime is the Bun running this CLI — a PATH node is never
+    // consulted, and this test's stub records every invocation to prove it.
+    const daemonScript = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      fs.writeFileSync(path.join(process.env.KINU_HOME, 'stub-proof.runtime'), process.versions.bun ? 'bun' : 'node');
+      setInterval(() => {}, 1000);
+    `;
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)], daemonScript });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    const stubDir = mkdtempSync(join(tmpdir(), 'kinu-stub-node-'));
+    tempDirs.push(stubDir);
+    writeFileSync(join(stubDir, 'node'), [
+      '#!/bin/sh',
+      // The stub records the probe, then acts healthy for --version and
+      // broken for anything else — the conda node's exact surface.
+      'echo "probe $*" >> "$0.calls"',
+      'if [ "$1" = "--version" ]; then echo "v18.0.0"; exit 0; fi',
+      'echo "no WebSocket implementation is available" >&2; exit 1',
+      '',
+    ].join('\n'), { mode: 0o755 });
+
+    const out = await runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      console.log(JSON.stringify(result));
+      process.exit(0);
+    `, { PATH: stubDir });
+
+    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    // The stub node answered --version and was still never chosen.
+    const calls = existsSync(`${join(stubDir, 'node')}.calls`)
+      ? readFileSync(`${join(stubDir, 'node')}.calls`, 'utf-8')
+      : '';
+    expect(calls).toBe('');
+    expect(readFileSync(join(home, 'stub-proof.runtime'), 'utf-8')).toBe('bun');
+    const pidFile = join(home, 'pc-agent.pid');
+    expect(existsSync(pidFile)).toBe(false); // session mode: no pidfile
+  });
+
   test('reports a device-log permission failure without exposing the device token', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
