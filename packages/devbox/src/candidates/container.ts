@@ -255,6 +255,20 @@ async function seedJournal(
 }
 
 /**
+ * What the container serves once an attach or a repair has settled, read from
+ * the one fact both paths hold: the published head. ONE derivation for both,
+ * because the durable attach row a wake is judged by has to name the head
+ * this drive serves whichever path reached it — see `Devbox.#repairAttachedAttempt`
+ * for the deployed wake that reached `attached` with the cold attach's `empty`
+ * still on the row.
+ */
+function servedOutcome(rootId: string | null, how: 'restored' | 'repaired'): AttachOutcome {
+  return rootId === null
+    ? { kind: 'empty', detail: 'candidate control has no published head' }
+    : { kind: 'attached', detail: `${how} candidate root ${rootId}` };
+}
+
+/**
  * The candidate arms share one container path. The runner moves payload only
  * through that mount. The Durable Object supplies and updates small control
  * metadata; it never receives a payload body.
@@ -291,7 +305,7 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
       // states: two daemons must never recover or append one journal/WAL.
       await ports.stopJournal();
       await ports.startJournal();
-      return { kind: 'empty', detail: 'candidate control has no published head' };
+      return servedOutcome(null, 'restored');
     }
     // A restore runner stays in the container after an isolate reset. Find it
     // before mountStore, because a replacement mount cuts off its payload read.
@@ -307,9 +321,7 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
       await ports.stopJournal();
       await ports.startJournal();
       await seedJournal(ports, control);
-      return restored.rootId === null
-        ? { kind: 'empty', detail: 'candidate control has no published head' }
-        : { kind: 'attached', detail: `restored candidate root ${restored.rootId}` };
+      return servedOutcome(restored.rootId, 'restored');
     }
 
     await ports.mountStore();
@@ -320,17 +332,29 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
     const restored = await invokeRestore(ports, control, bootId);
     await ports.startJournal();
     await seedJournal(ports, control);
-    return restored.rootId === null
-      ? { kind: 'empty', detail: 'candidate control has no published head' }
-      : { kind: 'attached', detail: `restored candidate root ${restored.rootId}` };
+    return servedOutcome(restored.rootId, 'restored');
   };
 
-  const repairAttached = async (): Promise<void> => {
+  /**
+   * ANSWERS WHAT IT SERVES, exactly as `attach` does. A same-container repair
+   * is the wake path whenever the instance survived a stop or an isolate
+   * reset, and the durable attach row is what the driver and `attachNow`
+   * read after either; a repair that settled silently left that row saying
+   * whatever the last full attach found — `empty`, on the deployed
+   * merkle-pack wake of run 20260902154130, against a head three quiesces had
+   * published.
+   */
+  const repairAttached = async (): Promise<AttachOutcome> => {
     const checkpoint = await ports.activeCheckpoint();
     let health = await ports.attachmentHealth();
     if (checkpoint !== null) {
       if (health.storeMounted && health.storeAccessible
-        && health.journalProcess && health.journalSocket && health.journalMounted) return;
+        && health.journalProcess && health.journalSocket && health.journalMounted) {
+        // The live runner owns the journal and nothing is re-seeded under it;
+        // the head it is publishing against is still the one served.
+        const control = await ports.restoreState();
+        return servedOutcome(control.head?.pointer.rootEnvelopeId ?? null, 'repaired');
+      }
       await ports.waitForRunnerExit(checkpoint.id);
       health = await ports.attachmentHealth();
     }
@@ -346,12 +370,14 @@ export function candidateContainerStorage(ports: CandidateContainerPorts): Devbo
     // A finalization can commit the durable head just before this isolate dies.
     // Seeding a healthy daemon is idempotent when it already has that head and
     // advances it when its in-memory base is stale.
-    await seedJournal(ports, await ports.restoreState());
+    const control = await ports.restoreState();
+    await seedJournal(ports, control);
     health = await ports.attachmentHealth();
     if (!health.storeMounted || !health.storeAccessible
       || !health.journalProcess || !health.journalSocket || !health.journalMounted) {
       throw new Error(attachmentFailure(health));
     }
+    return servedOutcome(control.head?.pointer.rootEnvelopeId ?? null, 'repaired');
   };
 
   return {

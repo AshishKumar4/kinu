@@ -1116,8 +1116,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // replaced, the heartbeat spots it and drives a fresh attempt, and this one
     // arrives with an outcome describing a container that no longer exists.
     if (!this.#owns(generation)) return;
-    await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
-    console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
+    await this.#recordAttach(outcome);
     const restored = await this.#restartWorkloads(generation, steps);
     if (!this.#owns(generation)) return;
     // Stamped after the whole walk, so no id exists on an instance whose
@@ -1149,6 +1148,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // that landed the work directory but not every service still clears it: the
     // box IS attached, and `repair` is what says the rest is not ready.
     await this.#releaseRecovery(claim, generation);
+  }
+
+  /**
+   * THE ATTACH RECORD, and the one place it is written.
+   *
+   * It is what `devboxState` reports as `lastAttach`, what `attachNow` answers
+   * with, and what the bench driver judges a startup by the moment the phase
+   * says `attached` (`scripts/bench-devbox-strategies.ts`,
+   * `startupPollVerdict`). So it is written by EVERY drive that reaches
+   * `attached`: the full restoration, and the same-container repair a wake
+   * takes when the instance survived. The repair used to settle without it,
+   * and the deployed merkle-pack wake of run 20260902154130 was refused as
+   * `wake restored empty, expected attached` on a row the cold attach had
+   * written — against a head three quiesces had published since.
+   *
+   * Fenced by the caller: every writer asks `#owns` after its last await and
+   * before this put, as every other durable write a restoration makes does.
+   */
+  async #recordAttach(outcome: AttachOutcome): Promise<void> {
+    await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
+    console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
   }
 
   /**
@@ -1460,6 +1480,19 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
+  /**
+   * The same-container half of a drive: prove the instance is the one this
+   * box stamped, let the storage re-establish what it serves, and settle.
+   *
+   * THE STORAGE'S ANSWER IS WRITTEN DOWN, the way the full attach's is. This
+   * is the path a wake takes whenever the instance survived the stop with its
+   * boot marker (`src/snapshot-chain.ts` records that the platform does bring
+   * one back), and it used to settle `attached` with no attach record of its
+   * own — so the durable row still described the COLD attach, and the driver,
+   * which reads that row the moment the phase says `attached`, refused the
+   * deployed merkle-pack wake of run 20260902154130 as `wake restored empty,
+   * expected attached` against a head three quiesces had published.
+   */
   async #repairAttachedAttempt(generation: number, retryBootStamp: boolean): Promise<void> {
     const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
     if (!this.#owns(generation)) return;
@@ -1472,8 +1505,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
     const budget = openStartBudget(this.policy.attachBudgetMs);
     const repair = this.#requireStorage().repairAttached;
-    if (repair !== undefined) {
-      await withContainerStartDeadline(
+    const served = repair === undefined
+      ? undefined
+      : await withContainerStartDeadline(
         'Devbox.repairAttached',
         budget,
         repair,
@@ -1484,13 +1518,17 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           );
         },
       );
-    }
     if (!this.#owns(generation)) return;
     if (expected !== undefined && (await this.#readBootId()) !== expected) {
       this.#invalidateGeneration();
       await this.#drive('request');
       return;
     }
+    if (!this.#owns(generation)) return;
+    // Only a storage that repaired its attachment has a fresh answer. A
+    // strategy without a repair re-runs the service half alone, and the record
+    // its full attach wrote for this same generation still stands.
+    if (served !== undefined) await this.#recordAttach(served);
     const steps = racedRestoreSteps(budget);
     const restored = await this.#restartWorkloads(generation, steps);
     if (!this.#owns(generation)) return;

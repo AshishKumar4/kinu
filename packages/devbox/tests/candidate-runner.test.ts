@@ -486,13 +486,19 @@ describe('candidate supervised runner', () => {
     ['journal socket missing', { storeMounted: true, storeAccessible: true, journalProcess: true, journalSocket: false, journalMounted: true }],
     ['journal mount missing', { storeMounted: true, storeAccessible: true, journalProcess: true, journalSocket: true, journalMounted: false }],
   ] as const satisfies readonly (readonly [string, CandidateAttachmentHealth])[])(
-    'repairs same-container %s without materializing its head',
+    'repairs same-container %s without materializing its head, and answers what it serves',
     async (_name, health) => {
       const fake = runnerFake({ health: [health] });
       const storage = candidateContainerStorage(fake.ports);
       if (storage.repairAttached === undefined) throw new Error('candidate storage has no attached repair');
 
-      await storage.repairAttached();
+      // An empty control, so the repair answers what the cold attach answers:
+      // the durable attach row a wake writes from this must say the same
+      // thing a full attach of the same box would have said.
+      await expect(storage.repairAttached()).resolves.toEqual({
+        kind: 'empty',
+        detail: 'candidate control has no published head',
+      });
 
       expect(fake.stops()).toBe(1);
       expect(fake.journals()).toBe(1);
@@ -524,7 +530,7 @@ describe('candidate supervised runner', () => {
     expect(fake.starts).toHaveLength(1);
   });
 
-  test('reseeds a healthy daemon after a head commit without replacing its container', async () => {
+  test('reseeds a healthy daemon after a head commit without replacing its container, naming the head it serves', async () => {
     const place = paths('healthy-reseed');
     try {
       const host = new Host('box-bounded-layers', place.store);
@@ -534,11 +540,22 @@ describe('candidate supervised runner', () => {
       });
       await checkpoint(host, 'bounded-layers', place, journal, 'published');
       const control = await host.restoreControl();
+      const root = control.head?.pointer.rootEnvelopeId;
+      if (root === undefined) throw new Error('the reseed fixture published no head');
       const fake = runnerFake({ control });
       const storage = candidateContainerStorage(fake.ports);
       if (storage.repairAttached === undefined) throw new Error('candidate storage has no attached repair');
 
-      await storage.repairAttached();
+      // THE ANSWER A WAKE WRITES DOWN. `attached`, naming the head, in the
+      // same terms `attach` uses — with `repaired` where a restore would say
+      // `restored`, because nothing was materialized: the tree never left the
+      // instance disk. A repair that answered nothing left the durable row
+      // saying whatever the last full attach found, which on the deployed
+      // merkle-pack wake of run 20260902154130 was the cold attach's `empty`.
+      await expect(storage.repairAttached()).resolves.toEqual({
+        kind: 'attached',
+        detail: `repaired candidate root ${root}`,
+      });
 
       expect(fake.mounts()).toBe(0);
       expect(fake.stops()).toBe(0);
@@ -548,13 +565,13 @@ describe('candidate supervised runner', () => {
       expect(fake.starts[0]?.command).toContain("'--action' 'seed'");
       const encoded = /'--control-state' '([^']+)'/.exec(fake.starts[0]?.command ?? '')?.[1];
       if (encoded === undefined) throw new Error('candidate repair omitted its control snapshot');
-      expect(JSON.parse(atob(encoded)).head.pointer.rootEnvelopeId).toBe(control.head?.pointer.rootEnvelopeId);
+      expect(JSON.parse(atob(encoded)).head.pointer.rootEnvelopeId).toBe(root);
     } finally {
       await rm(join(place.workspace, '..'), { recursive: true, force: true });
     }
   });
 
-  test('leaves a live checkpoint runner and healthy attachments untouched', async () => {
+  test('leaves a live checkpoint runner and healthy attachments untouched, and still answers what it serves', async () => {
     const checkpoint: CandidateRunnerProcess = {
       id: 'checkpoint-live',
       getLogs: async () => ({ stdout: '', stderr: '' }),
@@ -563,12 +580,19 @@ describe('candidate supervised runner', () => {
     const storage = candidateContainerStorage(fake.ports);
     if (storage.repairAttached === undefined) throw new Error('candidate storage has no attached repair');
 
-    await storage.repairAttached();
+    await expect(storage.repairAttached()).resolves.toEqual({
+      kind: 'empty',
+      detail: 'candidate control has no published head',
+    });
 
+    // Nothing in the CONTAINER is touched: no mount, no daemon replaced, no
+    // runner started under the one that owns the journal. The one read is
+    // the durable control the answer is derived from.
     expect(fake.mounts()).toBe(0);
     expect(fake.stops()).toBe(0);
     expect(fake.journals()).toBe(0);
-    expect(fake.restores()).toBe(0);
+    expect(fake.restores()).toBe(1);
+    expect(fake.starts).toHaveLength(0);
   });
 
   test('redrives terminal checkpoint work through the one reusable process slot', async () => {

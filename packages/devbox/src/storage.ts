@@ -199,9 +199,14 @@ export interface DevboxStorage {
   /**
    * Re-establish live serving state on the same already-attached container
    * without replaying the durable head. Used only after boot identity proves
-   * the container survived an isolate reset.
+   * the container survived an isolate reset or a stop.
+   *
+   * ANSWERS WHAT IT SERVES, in the same terms as `attach`: the box writes this
+   * down as its attach record on every drive that takes the repair, so a wake
+   * on the same instance is judged by what it serves rather than by whatever
+   * the last full attach found.
    */
-  repairAttached?(): Promise<void>;
+  repairAttached?(): Promise<AttachOutcome>;
   /**
    * Commit what changed. Returns its outcome; does not throw for an ordinary
    * failure.
