@@ -535,6 +535,7 @@ function plan(options) {
   const gpu = options.gpu ?? gpuNodes();
   return {
     view,
+    statusFd: options.statusFd,
     argv: buildLinuxArgv(view, { cwd, env, command, gpu, statusFd: options.statusFd }),
     // bwrap carries the environment through `--setenv`, so the process that
     // spawns it needs none of it: an inherited variable here would be a second
@@ -628,7 +629,11 @@ function helloCapability(probeResult) {
   if (probeResult.status === SANDBOX_STATUS.OK) {
     return { capability: 'sandboxed', reason: null };
   }
-  return { capability: 'files_only', reason: probeResult.status, reasonDetail: probeResult.detail };
+  // `raw_only` for a machine that can never sandbox, `files_only` for one that
+  // could if it were fixed: the first is a platform fact and the owner's only
+  // move is the switch, the second names a command that changes the answer.
+  const capability = probeResult.status === SANDBOX_STATUS.UNSUPPORTED_PLATFORM ? 'raw_only' : 'files_only';
+  return { capability, reason: probeResult.status, reasonDetail: probeResult.detail };
 }
 
 module.exports = {

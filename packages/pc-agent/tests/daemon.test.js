@@ -922,6 +922,68 @@ describe('daemon process under Bun against a local hub', () => {
     });
   }, 60_000);
 
+  // The sandbox, through the socket: the hub DECIDES the tier and the daemon
+  // enforces it, so this is the frame a hub with the switch on sends.
+  test('a sandboxed exec runs in the agent home and cannot reach the machine', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const sandbox = require('../src/sandbox.js');
+    if (sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    await withDaemon(undefined, async ({ hub, root, reply }) => {
+      const agentHome = path.join(root, 'agents', 'ws-1', 'home');
+      const consented = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-consented-'));
+      try {
+        hub.socket().send(JSON.stringify({
+          id: 'rpc-sandboxrun-1',
+          method: 'exec',
+          // The hub computes the agent home per (device, workspace) beneath the
+          // agentRoot the daemon reported on HELLO; the daemon creates it 0700
+          // on first use, which is what this asserts by not creating it here.
+          sandbox: { tier: 'sandboxed', agentHome, roots: [consented] },
+          params: [[
+            'echo HOME=$HOME',
+            'printf agent > "$HOME/mine" && echo home-write-ok',
+            `printf root > ${JSON.stringify(path.join(consented, 'mine'))} && echo root-write-ok`,
+            'touch /usr/local/nope 2>&1 | head -1',
+            'echo KINU_SANDBOX=$KINU_SANDBOX',
+          ].join('; ')],
+        }));
+        const ran = await reply('rpc-sandboxrun-1');
+        expect(ran.error).toBeUndefined();
+        expect(ran.result.stdout).toContain('home-write-ok');
+        expect(ran.result.stdout).toContain('root-write-ok');
+        expect(ran.result.stdout).toContain('Read-only file system');
+        expect(ran.result.stdout).toContain('KINU_SANDBOX=1');
+        // The bytes landed where the model was told they would, on the
+        // machine's own filesystem, and the agent home was created 0700.
+        expect(fs.readFileSync(path.join(agentHome, 'mine'), 'utf-8')).toBe('agent');
+        expect(fs.readFileSync(path.join(consented, 'mine'), 'utf-8')).toBe('root');
+        expect(fs.statSync(agentHome).mode & 0o777).toBe(0o700);
+        hub.socket().send(JSON.stringify({ id: 'rpc-sandboxack-1', method: 'execAck', params: ['rpc-sandboxrun-1', 1] }));
+        await reply('rpc-sandboxack-1');
+      } finally {
+        fs.rmSync(consented, { recursive: true, force: true });
+      }
+    });
+  }, 60_000);
+
+  test('a sandboxed exec naming an agent home outside the daemon\'s own root is refused', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    await withDaemon(undefined, async ({ hub, reply }) => {
+      // The hub computes this path, but the daemon owns the directory: a frame
+      // naming somewhere else would bind-mount a directory the owner never
+      // agreed to over the command's home.
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-sandboxbad-1',
+        method: 'exec',
+        sandbox: { tier: 'sandboxed', agentHome: '/tmp/not-kinus', roots: [] },
+        params: ['echo should-not-run'],
+      }));
+      const refused = await reply('rpc-sandboxbad-1');
+      expect(refused.result).toBeUndefined();
+      expect(refused.error).toContain('agent home must sit under');
+    });
+  }, 60_000);
+
   // F8. The daemon inherits the shell that ran `kinu connect`. Before this,
   // every command inherited that whole environment, so one `env` turned a
   // shell grant into the owner's CLI bearer, their PAT and their SSH agent.

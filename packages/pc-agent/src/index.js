@@ -889,7 +889,7 @@ const SUPERVISOR_SCRIPT = `
 const fs = require('node:fs');
 const { execFileSync, spawn } = require('node:child_process');
 
-const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText] = process.argv.slice(1);
+const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
 const marker = '[output truncated at ' + maxOutput + ' bytes]\\n';
 
@@ -963,6 +963,7 @@ class Capture {
 let child;
 let stdout;
 let stderr;
+let sandboxPid = 0;
 let cancellationRequested = false;
 let cancellationSignalDelivered = false;
 let completed = false;
@@ -1004,18 +1005,49 @@ function finish(kind, exitCode) {
 try {
   const command = fs.readFileSync(commandFile, 'utf8');
   fs.unlinkSync(commandFile);
+  // The DAEMON decides how the command runs — sandbox argv, environment, cwd —
+  // and this process only carries it out. That keeps the policy testable
+  // without spawning anything and keeps this script dumb, which matters
+  // because it outlives the daemon.
+  const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
+  fs.unlinkSync(planFile);
+  // The plan carries everything BUT the command, which this process appends
+  // from the file it just unlinked: the command text then lives in one place
+  // on disk rather than two, and a sentinel the daemon would have to
+  // interpolate into this script is not needed.
+  const argv = [...plan.argv, command];
   stdout = new Capture(stdoutFile);
   stderr = new Capture(stderrFile);
-  child = spawn('${COMMAND_SHELL}', ['-c', command], {
+  child = spawn(argv[0], argv.slice(1), {
     detached: true,
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    env: plan.env,
+    // A fourth pipe when the plan asked for one: bwrap writes its
+    // --json-status-fd there, and the first line carries the host pid of the
+    // sandbox's pid 1. Killing THAT is deterministic — the kernel reaps every
+    // process in the namespace before pid 1's exit completes — where a group
+    // kill returns before the namespace has finished dying.
+    stdio: plan.statusFd === 3 ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
   });
+  if (plan.statusFd === 3 && child.stdio[3]) {
+    let statusText = '';
+    child.stdio[3].on('data', (chunk) => {
+      // Scanned whole rather than split by line: this script is a template in
+      // the daemon's own source, so a newline escape here lands as a REAL
+      // newline inside a string literal and the supervisor stops parsing —
+      // which is exactly how it failed, silently, with exit 1.
+      statusText += chunk.toString();
+      const match = /"child-pid"\\s*:\\s*(\\d+)/.exec(statusText);
+      if (match) sandboxPid = Number(match[1]);
+    });
+  }
   process.on('SIGUSR1', () => {
     if (!child || completed || cancellationRequested) return;
     cancellationRequested = true;
     try {
-      process.kill(-child.pid, 'SIGKILL');
+      // The namespace's pid 1 when there is one, its process group otherwise.
+      // Both reach every descendant; only the first is synchronous.
+      if (sandboxPid > 0) process.kill(sandboxPid, 'SIGKILL');
+      else process.kill(-child.pid, 'SIGKILL');
       cancellationSignalDelivered = true;
     } catch (err) {
       if (!err || err.code !== 'ESRCH') finish('exited', 125);
@@ -1262,7 +1294,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
  * durable request owner without creating another supervisor. */
 const inFlight = createInFlight();
 
-function startSupervisor(requestId, command) {
+function startSupervisor(requestId, command, plan) {
   assertSupervisionSupported();
   const dir = requestDirectory(INFLIGHT_ROOT, requestId);
   fs.mkdirSync(INFLIGHT_ROOT, { recursive: true, mode: 0o700 });
@@ -1271,11 +1303,19 @@ function startSupervisor(requestId, command) {
   fs.chmodSync(dir, 0o700);
   const commandFile = path.join(dir, 'command');
   fs.writeFileSync(commandFile, command, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  const planFile = path.join(dir, 'plan.json');
+  // Without the command: `plan.argv` ends with it, and the supervisor appends
+  // it from `command`, which it unlinks before the command runs.
+  fs.writeFileSync(
+    planFile,
+    JSON.stringify({ argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd }),
+    { encoding: 'utf8', mode: 0o600, flag: 'wx' },
+  );
   const child = spawn(process.execPath, [
     '-e', SUPERVISOR_SCRIPT,
     commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
     path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
-    String(EXEC_STREAM_MAX_BYTES),
+    String(EXEC_STREAM_MAX_BYTES), planFile,
   ], { detached: true, env: COMMAND_ENV, stdio: 'ignore' });
   child.unref();
   return { child, dir };
@@ -1313,6 +1353,59 @@ function waitForSupervisorState(dir, child) {
 
 // ── RPC dispatch ───────────────────────────────────────────────────────
 
+/**
+ * The sandbox the hub asked for, as this daemon will enforce it.
+ *
+ * The hub DECIDES the tier (the owner's per-device Sandbox switch) and this
+ * daemon only enforces it, with one exception that is deliberately not a
+ * downgrade: a frame asking for 'sandboxed' on a machine whose own probe said
+ * it cannot sandbox is REFUSED, never run raw. The hub refuses it too; this is
+ * the second of the two, because the machine is the only party that knows
+ * whether its kernel will cooperate.
+ */
+function planFromFrame(msg, command) {
+  const requested = parseRecord(msg.sandbox ?? {}, 'exec sandbox options must be an object');
+  // Only an EXPLICIT 'sandboxed' enters the sandbox. The hub decides the tier
+  // and its default is on, but the hub and this daemon ship separately: a
+  // frame with no sandbox field comes from a hub that has not been told about
+  // the switch yet, and a daemon that read that as "sandbox it" would refuse
+  // every command on the machine for want of an agent home it was never sent.
+  const tier = requested.tier === 'sandboxed' ? 'sandboxed' : 'raw';
+  if (tier === 'sandboxed' && SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
+    const error = new Error(`sandbox_unavailable (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
+    error.code = 'sandbox_unavailable';
+    error.reason = SANDBOX_CAPABILITY.status;
+    throw error;
+  }
+  if (tier === 'raw') {
+    return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: process.cwd(), source: process.env });
+  }
+  const agentHome = path.resolve(parseString(requested.agentHome, 'exec sandbox options must name an agent home'));
+  if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
+    throw new Error(`exec sandbox agent home must sit under ${AGENT_ROOT}`);
+  }
+  const roots = Array.isArray(requested.roots)
+    ? requested.roots.map((root) => path.resolve(parseString(root, 'exec sandbox roots must be paths')))
+    : [];
+  const agentTmp = path.join(path.dirname(agentHome), 'tmp');
+  // Created on first use, 0700: the hub computes the path per (device,
+  // workspace) and this machine is the only one that can make the directory.
+  for (const dir of [agentHome, agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  sandbox.ensureUvmNode();
+  return sandbox.plan({
+    tier: 'sandboxed',
+    home: os.homedir(),
+    agentHome,
+    agentTmp,
+    deviceHome: DEVICE_HOME,
+    roots,
+    cwd: msg.cwd === undefined ? agentHome : path.resolve(parseString(msg.cwd, 'exec cwd must be a path')),
+    command,
+    source: process.env,
+    statusFd: 3,
+  });
+}
+
 function handle(msg, ws, ctx) {
   const { id, method, params } = msg;
   const checkpoints = ctx && ctx.checkpoints;
@@ -1332,7 +1425,10 @@ function handle(msg, ws, ctx) {
           if (fs.existsSync(dir)) {
             await waitForFile(path.join(dir, 'state'));
           } else {
-            const supervisor = startSupervisor(id, cmd);
+            // Computed once, HERE: a re-delivered exec joins the existing
+            // directory above and must not re-plan, or the same request could
+            // run under two policies.
+            const supervisor = startSupervisor(id, cmd, planFromFrame(msg, cmd));
             await waitForSupervisorState(supervisor.dir, supervisor.child);
             inFlight.register(id, supervisor.dir);
           }
