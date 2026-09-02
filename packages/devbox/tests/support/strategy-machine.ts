@@ -502,8 +502,8 @@ export class ContainerDisk {
   readonly mounts = new Map<string, MountRow>();
   readonly overlays = new Map<string, OverlayRow>();
   readonly trees = new Map<string, LiveTree>();
-  /** Plain files that are mount mirrors: present, readable, never charged. */
-  readonly mirrors = new Set<string>();
+  /** Plain files a mount serves on demand: present, readable, never charged. */
+  readonly mountServed = new Set<string>();
   /** Paths an overlay's upper has deleted from a lower: the whiteouts. */
   readonly whiteouts = new Map<string, Set<string>>();
   /** Every `mount` call this disk ever took, replacements included. */
@@ -550,8 +550,8 @@ export class ContainerDisk {
     for (const [key, bytes] of this.files) {
       if (key === path || key.startsWith(`${path}/`)) {
         this.files.delete(key);
-        if (!this.mirrors.has(key)) this.charge(-bytes.byteLength);
-        this.mirrors.delete(key);
+        if (!this.mountServed.has(key)) this.charge(-bytes.byteLength);
+        this.mountServed.delete(key);
       }
     }
     for (const key of this.dirs) {
@@ -580,9 +580,9 @@ export class ContainerDisk {
       return;
     }
     const held = this.files.get(path);
-    const heldCharge = held === undefined || this.mirrors.has(path) ? 0 : held.byteLength;
+    const heldCharge = held === undefined || this.mountServed.has(path) ? 0 : held.byteLength;
     this.charge(bytes.byteLength - heldCharge, path);
-    this.mirrors.delete(path);
+    this.mountServed.delete(path);
     this.mkdirp(parentOf(path));
     this.files.set(path, bytes.slice());
   }
@@ -592,11 +592,11 @@ export class ContainerDisk {
    * that occupies NO local disk, because the mount fetches on demand. Never
    * charged to the quota, and never refunded on unmount.
    */
-  mirror(path: string, bytes: Uint8Array): void {
-    this.#alive(`mirror ${path}`);
+  serveFromMount(path: string, bytes: Uint8Array): void {
+    this.#alive(`serve ${path}`);
     const held = this.files.get(path);
-    if (held !== undefined && !this.mirrors.has(path)) this.charge(-held.byteLength);
-    this.mirrors.add(path);
+    if (held !== undefined && !this.mountServed.has(path)) this.charge(-held.byteLength);
+    this.mountServed.add(path);
     this.mkdirp(parentOf(path));
     this.files.set(path, bytes);
   }
@@ -631,8 +631,8 @@ export class ContainerDisk {
       return;
     }
     const held = this.files.get(path);
-    if (held !== undefined && !this.mirrors.has(path)) this.charge(-held.byteLength);
-    this.mirrors.delete(path);
+    if (held !== undefined && !this.mountServed.has(path)) this.charge(-held.byteLength);
+    this.mountServed.delete(path);
     this.files.delete(path);
   }
 
@@ -1597,7 +1597,7 @@ function snapshotChainArm(): ConformanceArm {
         }
         const bytes = this.disk.readFile(archivePath);
         if (bytes === undefined) return undefined;
-        this.disk.mirror(mountedPath, bytes);
+        this.disk.serveFromMount(mountedPath, bytes);
         mounted.put(`${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`, bytes);
         deaths.at('after-payload');
         return bytes.byteLength;
@@ -1628,7 +1628,7 @@ function snapshotChainArm(): ConformanceArm {
           this.disk.mount(at, { source: `r2:${STORE_ROOT}`, fstype: 'fuse.s3fs', options: 'rw' });
           for (const key of durable.list(`${STORE_ROOT}/`)) {
             const relative = key.slice(STORE_ROOT.length + 1);
-            this.disk.mirror(`${at}/${relative}`, mounted.get(key)!);
+            this.disk.serveFromMount(`${at}/${relative}`, mounted.get(key)!);
           }
           this.#publishing = { at, prefix: `${STORE_ROOT}/` };
           deaths.reset('attach:after-store-mount');
