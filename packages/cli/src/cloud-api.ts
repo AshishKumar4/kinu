@@ -1,10 +1,14 @@
 import { resolveCloudOrigin } from './config';
 import {
   decodeJsonValue,
+  DEVICE_SANDBOX_CAPABILITIES,
+  DEVICE_SANDBOX_REASONS,
+  DEVICE_TIERS,
   JsonValueSchema,
   ProfileCatalogEnvelopeSchema,
   SPEND_SOURCES,
   UsageSchema,
+  type DeviceSandboxStatus,
   type JsonValue,
   type MissionBudgetSnapshot,
   type ProducerSpend,
@@ -56,7 +60,12 @@ export interface CloudDevice {
   connected: boolean;
   createdAt: number;
   lastSeenAt: number | null;
+  /** The Sandbox switch the owner set and what the daemon proved about the
+   *  machine. The registry knows nothing per workspace, so the workspace's
+   *  own home and roots are not here — they live on the runtime status. */
+  sandbox: CloudDeviceSandbox;
 }
+export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'gpu'>;
 
 export interface CloudAgentConnectTicket {
   ticket: string;
@@ -164,9 +173,20 @@ const CloudAgentSchema: v.GenericSchema<CloudAgent> = v.object({
 const CloudDeviceRegistrationSchema: v.GenericSchema<CloudDeviceRegistration> = v.object({
   deviceId: v.string(), token: v.string(), userId: v.string(), origin: v.string(),
 });
-const CloudDeviceSchema: v.GenericSchema<CloudDevice> = v.object({
+const CloudDeviceSandboxSchema = v.object({
+  tier: v.picklist(DEVICE_TIERS),
+  capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
+  reason: v.nullable(v.picklist(DEVICE_SANDBOX_REASONS)),
+  gpu: v.array(v.string()),
+});
+/** A hub too old to report the switch: the sandbox is on, because it is on by
+ *  default, and a machine that has not proved it can sandbox has not proved
+ *  it can sandbox. An older hub must still list the devices. */
+const UNREPORTED_SANDBOX: CloudDeviceSandbox = { tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] };
+const CloudDeviceSchema: v.GenericSchema<unknown, CloudDevice> = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
+  sandbox: v.optional(CloudDeviceSandboxSchema, UNREPORTED_SANDBOX),
 });
 const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = v.object({
   ticket: v.string(), expiresAt: v.number(),
@@ -539,7 +559,9 @@ function cloudErrorMessage(status: number, body: JsonValue): string {
 }
 
 async function cloudJson<T>(
-  schema: v.GenericSchema<T>,
+  // `unknown` on the way in: a decoder that fills a field an older hub omits
+  // reads a narrower input than it returns, and it still parses a wire body.
+  schema: v.GenericSchema<unknown, T>,
   origin: string,
   path: string,
   opts: CloudRequestOpts = {},

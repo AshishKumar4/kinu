@@ -34,7 +34,8 @@ import {
 } from './toolchain';
 import {
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, parseDeviceCancelAnswer,
-  isDeviceNotConnectedError, isDeviceUnknownMethodError, nextDeviceRequestId,
+  isDeviceNotConnectedError, isDeviceUnknownMethodError, isSandboxUnavailableError,
+  nextDeviceRequestId,
 } from './device-tunnel';
 import { readDeviceOwnershipContext, readExecSignal } from './signal';
 import {
@@ -242,9 +243,13 @@ export function createDeviceTunnelExecutor(
   const getStatus = (): ExecutorStatus => {
     const s = transport.status();
     const named = s.devices?.find((d) => d.connected) ?? s.devices?.[0];
-    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted'>> = {};
+    const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
     if (named) identity.label = named.name;
     if (s.workspaceGranted !== undefined) identity.granted = s.workspaceGranted;
+    // The one row the model reads before it decides where to put work, so it
+    // carries what the machine will actually do with a command: the owner's
+    // switch, what the machine proved, and this workspace's own home on it.
+    if (s.sandbox !== undefined) identity.sandbox = s.sandbox;
     if (s.connected) return { configured: true, available: true, active: true, status: 'active', ...identity };
     if (s.registered) {
       return {
@@ -324,6 +329,13 @@ export function createDeviceTunnelExecutor(
         } catch (err) {
           if (isAbortError(err)) throw err;
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          // The machine cannot run a command under the tier it was given. That
+          // is a REFUSAL with a named cause and a fix, not a transport fault,
+          // and the message already reads as one — prefixing it with the
+          // command would bury the sentence that says what to do about it.
+          if (isSandboxUnavailableError(err)) {
+            return refusalText(new KinuError('denied', renderThrownChain({ cause: err })));
+          }
           return refusalText(deviceFailure({ doing: `laptop exec \`${command}\``, cause: err }));
         }
       },
@@ -496,17 +508,21 @@ declare namespace laptop {
 }
 
 /**
- * Consent boundary of the device file view. The view exposes the device's REAL
- * root — a faithful window, not a lossy rewrite — but by default only the
- * directory the owner NAMED at `kinu connect` is reachable. Anything outside
- * it needs the stronger 'full_filesystem' tier.
+ * Scope of the device file view. The view exposes the device's REAL root — a
+ * faithful window, not a lossy rewrite — but only the directory the owner
+ * NAMED at `kinu connect` is reachable while the device's Sandbox switch is on.
  *
- * There is deliberately no fallback. The base tier used to default to `$HOME`,
+ * There is deliberately no fallback. The scope used to default to `$HOME`,
  * which holds `~/.kinu/config.json` (the owner's CLI bearer), `~/.ssh` and
  * `~/.aws` — so "inside its connected folder" was the whole home, and reading
- * one file in it escalated the tier. A device that reported no root has no
- * base-tier file access: the owner re-runs `kinu connect` in the directory
- * they mean, which is the only party that can answer that question.
+ * one file in it escalated what the agent could reach. A device that reported
+ * no root has no scoped file access: the owner re-runs `kinu connect` in the
+ * directory they mean, which is the only party that can answer that question.
+ *
+ * `unconfined` is the Sandbox switch, read from the hub. It is one question
+ * with one answer for both enforcers: the kernel sandbox the shell runs under,
+ * and this path scope. Two switches would let `readFile` and `bash` see
+ * different machines, which is the drift the one view exists to prevent.
  */
 export interface DeviceFileConsent {
   /** The directory the owner consented, or null when this device reported
@@ -514,16 +530,17 @@ export interface DeviceFileConsent {
    *  isolate. */
   consentedRoot(): Promise<string | null>;
   /** The machine's own home, as it reported on HELLO, or null. Where the file
-   *  view opens under the full tier — never a scope. */
+   *  view opens when no directory was consented — never a scope. */
   deviceHome(): Promise<string | null>;
-  /** Whether this agent holds the full-filesystem consent tier. */
-  hasFullFilesystem(): Promise<boolean>;
+  /** Whether the owner turned this device's Sandbox switch off, which lifts
+   *  the path scope for the same reason it lifts the shell's. */
+  unconfined(): Promise<boolean>;
 }
 
 const ALWAYS_CONSENTED: DeviceFileConsent = {
   consentedRoot: async () => '/',
   deviceHome: async () => '/',
-  hasFullFilesystem: async () => true,
+  unconfined: async () => true,
 };
 
 /** The device file view, plus the one thing only the device can answer. */
@@ -568,13 +585,17 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   };
 
   const guard = async (path: string, op: string): Promise<string | null> => {
-    if (await consent.hasFullFilesystem()) return null;
+    if (await consent.unconfined()) return null;
     const root = await effectiveRoot();
-    if (!(path === root || root === '/' || path.startsWith(`${root}/`))) {
+    // No fallback: a device that named no directory throws above rather than
+    // widening to `/`. The daemon enforces the same view a second time, so
+    // this lexical check is the cheap first line, never the boundary.
+    if (!(path === root || path.startsWith(`${root}/`))) {
       throw makeVfsError(
         'EACCES',
         `'${path}' is outside the consented device directory '${root}' — `
-        + `grant this agent the full-filesystem consent tier to reach it, ${op} '${path}'`,
+        + 'the agent sees its own home plus the folders the owner consented, and nothing else. '
+        + `Ask the owner to consent that directory, ${op} '${path}'`,
         path,
       );
     }

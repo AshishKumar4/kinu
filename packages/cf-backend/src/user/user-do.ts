@@ -126,13 +126,15 @@ import { installAnalyticsDiagnostics } from '../analytics/install';
 import { recordReleaseTransition } from '../analytics/record';
 import { openAnalyticsWindow } from '../analytics/writer';
 import {
-  DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
-  consentScopeCovers, deviceConsentScopeForMethod, mergeConsentScope, parseConsentScope, summarizeDeviceAction,
-  type DeviceConsentScope, type DeviceConsentDecision, type DeviceStatus,
-  type DeviceFleetEntry,
+  DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, SANDBOX_UNAVAILABLE,
+  effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix,
+  summarizeDeviceAction,
+  type DeviceConsentDecision, type DeviceStatus,
+  type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceSandboxCapability, type DeviceSandboxReason,
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
@@ -266,19 +268,42 @@ type DeviceCancellationOutcome = {
 /** The request id a cancellation frame names, parsed off the outgoing params. */
 const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
 
+/**
+ * What a daemon says about itself the moment its socket opens.
+ *
+ * Every field past `type` is optional, because a machine running an older
+ * daemon still connects and still serves files. What is absent is recorded as
+ * absent, never guessed: a daemon that says nothing about sandboxing has not
+ * proved it can sandbox, and the hub then refuses to run a command on it
+ * rather than running one unconfined.
+ */
 const DeviceHelloSchema = v.object({
   type: v.literal('HELLO'),
   os: v.optional(v.string()),
   hostname: v.optional(v.string()),
-  /** The directory `kinu connect` ran in — the base tier's whole reach — and
-   *  the machine's home. Absolute or ignored: a relative path names nothing
-   *  the hub can scope a call to. */
+  /** The directory `kinu connect` ran in — the one place besides its own agent
+   *  home a workspace reaches on this machine — and the machine's own home.
+   *  Absolute or ignored: a relative path names nothing the hub can scope a
+   *  call to. */
   root: v.optional(v.string()),
   home: v.optional(v.string()),
+  /** What the daemon PROVED at start. `capability` is its own probe's verdict,
+   *  `reason` names the failure from a closed vocabulary, `gpu` lists the
+   *  device nodes it found. */
+  sandbox: v.optional(v.object({
+    capability: v.optional(v.picklist(DEVICE_SANDBOX_CAPABILITIES)),
+    reason: v.optional(v.nullable(v.picklist(DEVICE_SANDBOX_REASONS))),
+    gpu: v.optional(v.array(v.string())),
+  })),
+  /** Where this machine keeps agent homes (`<home>/.kinu/agents`). The hub
+   *  composes `<agentRoot>/<workspace>/home` per exec, so the ROOT is what
+   *  travels and the hub never guesses a path on someone else's machine. */
+  agentRoot: v.optional(v.string()),
 });
+
+/** An absolute path, or null for anything else. A relative path names nothing
+ *  the hub can send to a machine, and an older daemon sends none at all. */
 const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\/.+/));
-/** An absolute path, or null for anything else — an older daemon sends
- *  nothing, and a relative path is not a scope. */
 function absolutePathOrNull(value: string | undefined): string | null {
   const parsed = v.safeParse(AbsolutePathSchema, value);
   if (!parsed.success) return null;
@@ -1882,17 +1907,7 @@ export class UserDO extends Agent<Env> {
     // that is not JSON at all) is an RPC response.
     const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
     if (hello.success) {
-      // COALESCE, not overwrite: a daemon too old to send these must not
-      // erase what a newer one already recorded for this machine.
-      this.sqlx(
-        `UPDATE user_devices
-            SET os = ?, hostname = ?, last_seen_at = ?,
-                consented_root = COALESCE(?, consented_root),
-                device_home = COALESCE(?, device_home)
-          WHERE id = ?`,
-        hello.output.os ?? null, hello.output.hostname ?? null, Date.now(),
-        absolutePathOrNull(hello.output.root), absolutePathOrNull(hello.output.home),
-        deviceId);
+      this.recordDeviceHello(deviceId, hello.output);
       return;
     }
     const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
@@ -1905,6 +1920,49 @@ export class UserDO extends Agent<Env> {
       return;
     }
     this._devices.handleMessage(deviceId, data);
+  }
+
+  /**
+   * Record what a daemon said about itself on connect.
+   *
+   * COALESCE, not overwrite, for the paths and the agent root: a daemon too old
+   * to send them must not erase what a newer one already recorded for this
+   * machine. The sandbox verdict is the opposite — it is a fact about THIS
+   * daemon on THIS boot, so silence means "not proved" and overwrites a stale
+   * yes. A machine that stops being able to sandbox must stop reading as able.
+   *
+   * A capability of `sandboxed` with no agent root is not a usable sandbox:
+   * there is nowhere to put the agent's home, so the frame cannot be built.
+   * That is recorded as `files_only` here, at the boundary, rather than
+   * discovered later by a command that has already been promised a sandbox.
+   */
+  private recordDeviceHello(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): void {
+    const agentRoot = absolutePathOrNull(hello.agentRoot);
+    const claimed = parseSandboxCapability(hello.sandbox?.capability);
+    const capability = claimed === 'sandboxed' && agentRoot === null ? 'files_only' : claimed;
+    // A daemon that sends no sandbox field at all is every daemon deployed
+    // before this contract. "It did not say" is not something an owner can act
+    // on, so the hub names the build and the fix instead: update the CLI.
+    const reason = hello.sandbox === undefined
+      ? 'daemon_outdated'
+      : parseSandboxReason(hello.sandbox.reason);
+    this.sqlx(
+      `UPDATE user_devices
+          SET os = ?, hostname = ?, last_seen_at = ?,
+              consented_root = COALESCE(?, consented_root),
+              device_home = COALESCE(?, device_home),
+              agent_root = COALESCE(?, agent_root),
+              sandbox_capability = ?, sandbox_reason = ?, sandbox_gpu = ?
+        WHERE id = ?`,
+      hello.os ?? null, hello.hostname ?? null, Date.now(),
+      absolutePathOrNull(hello.root),
+      absolutePathOrNull(hello.home),
+      agentRoot,
+      capability,
+      reason,
+      JSON.stringify(hello.sandbox?.gpu ?? []),
+      deviceId,
+    );
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
@@ -2056,10 +2114,16 @@ export class UserDO extends Agent<Env> {
     )[0] !== undefined;
   }
 
-  /** Forward a JSON-RPC call to a connected device — the single consent
+  /** Forward a JSON-RPC call to a connected device — the single binding
    *  chokepoint. Every agent call passes its name, so we can enforce the
-   *  per-(agent, device) policy: allow → run; deny → block; ask → call back to
-   *  the agent to raise a consent card and await the user's decision. */
+   *  per-(workspace, device) binding: allow → run; deny → block; ask → call
+   *  back to the agent to raise a bind card and await the owner's decision.
+   *
+   *  A command also carries the SANDBOX FRAME this hub computed: the tier the
+   *  owner set, this workspace's own home on the machine, and the directories
+   *  the owner consented. The daemon enforces that frame and never decides the
+   *  tier itself, so one machine serving five workspaces gives each of them a
+   *  different home from the same daemon. */
   async deviceRpc(
     caller: UserCaller,
     method: string,
@@ -2100,6 +2164,35 @@ export class UserDO extends Agent<Env> {
       );
       if (!consent.allowed) throw new Error(consent.reason);
     }
+    // A command is the one call that RUNS something, so it is the one call the
+    // sandbox decides. The file plane stays open in every mode — the daemon
+    // shows it the same view — and a cancellation is never gated at all.
+    //
+    // `agentHome` is empty ONLY under the raw tier, where there is no sandbox
+    // and the daemon has no use for one. A sandboxed command with nowhere to
+    // put its home is refused three lines above instead of being sent.
+    let execSandbox: JsonObject | null = null;
+    if (method === 'exec') {
+      const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
+      const sandbox = this.deviceSandboxFor(deviceId, workspace);
+      const mode = effectiveDeviceMode(sandbox);
+      // Refused HERE, before the frame leaves, so a machine that cannot honour
+      // the tier never sees the command. The daemon refuses it again on its own
+      // probe; neither end ever downgrades a sandboxed command to a raw one.
+      if (mode === 'files_only') {
+        throw new Error(this.sandboxRefusal(deviceId, sandbox, sandbox.reason ?? 'the daemon reported no reason'));
+      }
+      if (mode === 'sandboxed' && sandbox.agentHome === null) {
+        throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
+          ? 'an agent home belongs to a workspace, and this call has none'
+          : 'the daemon did not report where agent homes live'));
+      }
+      execSandbox = {
+        tier: sandbox.tier,
+        agentHome: sandbox.agentHome ?? '',
+        roots: [...sandbox.roots],
+      };
+    }
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     const tunnel = this._devices.tunnel(deviceId);
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
@@ -2114,6 +2207,7 @@ export class UserDO extends Agent<Env> {
         },
       };
     }
+    if (execSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: execSandbox };
     if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
     if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
 
@@ -2340,63 +2434,133 @@ export class UserDO extends Agent<Env> {
   }
 
 
-  // ── Device consent (ask-once-then-remember) ──────────────────────────
+  // ── Device sandbox (the owner's per-device switch) ───────────────────
 
-  private getDeviceConsentPolicy(agentName: string, deviceId: string): { policy: 'allow' | 'deny'; scope: DeviceConsentScope } | null {
-    const row = this.sqlx<{ policy: string; scope: string }>(
-      `SELECT policy, scope FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
+  /**
+   * How one device runs a command for one workspace, from the device row.
+   *
+   * The agent home is composed HERE and per call, never stored: one machine
+   * serves many workspaces, and each gets its own home under the root the
+   * daemon reported. Composed from the root the MACHINE named, so the hub
+   * never invents a path on someone else's disk.
+   *
+   * A workspace name is a path segment on that disk, so `.` and `..` are
+   * refused even though the name grammar admits them: the alternative is a
+   * home that resolves above the agent root.
+   */
+  private deviceSandboxFor(deviceId: string, workspace: string | null): DeviceSandboxStatus {
+    const row = this.sqlx<{
+      tier: string | null; sandbox_capability: string | null; sandbox_reason: string | null;
+      sandbox_gpu: string | null; agent_root: string | null; consented_root: string | null;
+    }>(
+      `SELECT tier, sandbox_capability, sandbox_reason, sandbox_gpu, agent_root, consented_root
+         FROM user_devices WHERE id = ?`, deviceId,
     )[0];
-    if (row?.policy !== 'allow' && row?.policy !== 'deny') return null;
-    return { policy: row.policy, scope: parseConsentScope(row.scope) };
+    const agentRoot = row?.agent_root ?? null;
+    const named = workspace !== null && workspace !== '.' && workspace !== '..' && workspace !== '';
+    const consented = row?.consented_root ?? null;
+    return {
+      tier: parseDeviceTier(row?.tier),
+      capability: parseSandboxCapability(row?.sandbox_capability),
+      reason: parseSandboxReason(row?.sandbox_reason),
+      gpu: v.parse(v.array(v.string()), JSON.parse(row?.sandbox_gpu ?? '[]')),
+      agentHome: agentRoot !== null && named ? `${agentRoot}/${workspace}/home` : null,
+      roots: consented === null ? [] : [consented],
+    };
   }
 
-  private setDeviceConsentPolicy(
+  /** What a model is told when a machine cannot run its command. It names the
+   *  machine, the cause, the fix, and the one switch that changes the answer —
+   *  the model cannot flip it, and the sentence says who can. The cause is
+   *  passed in because the caller is the one that knows which of the three
+   *  ways this can fail actually happened. */
+  private sandboxRefusal(deviceId: string, sandbox: DeviceSandboxStatus, cause: string): string {
+    return `${SANDBOX_UNAVAILABLE}: ${this.deviceLabel(deviceId)} cannot run commands — `
+      + `its Kinu daemon could not start a sandbox (${cause}), and Kinu never runs a command `
+      + `unsandboxed unless the owner asked for that. ${sandboxReasonFix(sandbox.reason)} `
+      + 'The owner can also turn Sandbox off for this device under Account settings → Devices, '
+      + 'which runs commands as them with full access to the machine. '
+      + 'Reading and writing files on the device still works.';
+  }
+
+  /**
+   * The owner's Sandbox switch for one device.
+   *
+   * Owner session only. A workspace holds `device.manage` for its own work, and
+   * a workspace that could turn its own sandbox off would be a workspace that
+   * grants itself the whole machine — which is the one thing this switch
+   * exists to keep in the owner's hands.
+   */
+  async setDeviceTier(caller: UserCaller, deviceId: string, tier: DeviceTier): Promise<{ ok: boolean }> {
+    const resolved = await this.requireTier(caller, 'device.manage');
+    if (resolved.kind !== 'owner_session') {
+      throw new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.');
+    }
+    if (!v.is(v.picklist(DEVICE_TIERS), tier)) return { ok: false };
+    const row = this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
+    )[0];
+    if (!row) return { ok: false };
+    this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
+    return { ok: true };
+  }
+
+  // ── Device binding (ask-once-then-remember) ──────────────────────────
+
+  /** Whether this workspace is bound to this device, and how it was answered.
+   *  There is no tier here: what a bound workspace may touch is the device's
+   *  own Sandbox switch, which only the owner sets. */
+  private getDeviceBinding(agentName: string, deviceId: string): 'allow' | 'deny' | null {
+    const row = this.sqlx<{ policy: string }>(
+      `SELECT policy FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
+    )[0];
+    if (row?.policy !== 'allow' && row?.policy !== 'deny') return null;
+    return row.policy;
+  }
+
+  private setDeviceBinding(
     agentName: string,
     deviceId: string,
     policy: 'allow' | 'deny',
     lastAction?: { method: string; command: string },
-    scope: DeviceConsentScope = DEVICE_CONSENT_SCOPE,
   ): void {
-    // Remembering a base action grant must not downgrade full_filesystem.
-    const existing = this.sqlx<{ scope: string }>(
-      `SELECT scope FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
-    )[0];
-    const effectiveScope = policy === 'allow' ? mergeConsentScope(existing?.scope, scope) : scope;
     this.sqlx(
       `INSERT INTO device_consent
-         (agent_name, device_id, policy, scope, last_method, last_summary, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+         (agent_name, device_id, policy, last_method, last_summary, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(agent_name, device_id) DO UPDATE SET
          policy = excluded.policy,
-         scope = excluded.scope,
          last_method = excluded.last_method,
          last_summary = excluded.last_summary,
          updated_at = excluded.updated_at`,
-      agentName, deviceId, policy, effectiveScope,
+      agentName, deviceId, policy,
       lastAction?.method ?? null, lastAction?.command ?? null, Date.now(),
     );
   }
 
-  /** Resolve consent for one agent→device call. Remembered policies short-
-   *  circuit (either tier covers device actions — full_filesystem implies the
-   *  base grant); otherwise the agent renders a card and the user decides. */
   /**
-   * Consent for one device call. Fails CLOSED, but says which kind of closed:
-   * a refusal the owner made, or a prompt nobody answered. The caller turns
-   * `reason` into the error the model reads, and the two must not be the same
-   * sentence — an unattended agent that reads an expired prompt as a refusal
-   * concludes the capability was taken away and stops asking for it.
+   * Is this workspace bound to this device? Asked once, then remembered.
+   *
+   * Fails CLOSED, but says which kind of closed: a refusal the owner made, or
+   * a prompt nobody answered. The caller turns `reason` into the error the
+   * model reads, and the two must not be the same sentence — an unattended
+   * agent that reads an expired prompt as a refusal concludes the capability
+   * was taken away and stops asking for it.
+   *
+   * The method and params ride along as context for the card and for the
+   * activity line. They are not what is being approved: the answer binds the
+   * workspace to the machine, and the machine's own Sandbox switch decides
+   * what a bound workspace may then touch.
    */
   private async checkDeviceConsent(
     agentName: string, deviceId: string, method: string, params: JsonValue[],
     /** Present when the caller is the named workspace itself — the card then
-     *  asks for THE WORKSPACE's grant, which is what "always" records. */
+     *  asks for THE WORKSPACE's binding, which is what "always" records. */
     workspaceName?: string,
   ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-    const requiredScope = deviceConsentScopeForMethod(method);
-    const policy = this.getDeviceConsentPolicy(agentName, deviceId);
-    if (policy?.policy === 'allow' && consentScopeCovers(policy.scope, requiredScope)) return { allowed: true };
-    if (policy?.policy === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
+    const bound = this.getDeviceBinding(agentName, deviceId);
+    if (bound === 'allow') return { allowed: true };
+    if (bound === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     const action = summarizeDeviceAction(method, params);
     let decision: DeviceConsentDecision;
     try {
@@ -2406,7 +2570,6 @@ export class UserDO extends Agent<Env> {
         deviceLabel: this.deviceLabel(deviceId),
         method: action.method,
         command: action.command,
-        scope: requiredScope,
       };
       const request: DeviceConsentRequest = workspaceName
         ? { ...base, workspaceName }
@@ -2421,20 +2584,7 @@ export class UserDO extends Agent<Env> {
     // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
     if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
-    // A CARD NEVER RECORDS THE FULL TIER. The card an exec raises names one
-    // command, and "always" on it granted an unattended `bash -c` as the owner
-    // on every later turn, from every ingress the workspace consumes — a peer
-    // agent's task, a webhook body, an inbound email. The owner who pressed it
-    // was answering about `printf %s "$HOME"`. The full tier is granted only
-    // where it is stated as a standing decision about a machine, in Account
-    // settings (`setDeviceConsentScope`), so "always" here remembers the base
-    // tier and an exec keeps asking until that toggle exists.
-    if (decision === 'always') {
-      const remembered = requiredScope === DEVICE_CONSENT_SCOPE_FULL_FS
-        ? DEVICE_CONSENT_SCOPE
-        : requiredScope;
-      this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action, remembered);
-    }
+    if (decision === 'always') this.setDeviceBinding(agentName, deviceId, 'allow', action);
     return { allowed: true };
   }
 
@@ -2456,7 +2606,6 @@ export class UserDO extends Agent<Env> {
         deviceLabel: 'this computer',
         method: DEVICE_PROVISION_METHOD,
         command: `Connect this computer so "${workspaceOrAgent}" can run commands on it — you will be walked through \`kinu connect\`.`,
-        scope: DEVICE_CONSENT_SCOPE,
         workspaceName: workspaceOrAgent,
       });
     } catch (error) {
@@ -2465,76 +2614,37 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  /** The remembered consent policies (Account settings → Devices — see/revoke which agents may
-   *  use a device). */
+  /** The remembered bindings (Account settings → Devices — see and revoke which
+   *  workspaces may use a device). */
   async listDeviceConsents(caller: UserCaller): Promise<Array<{
     agentName: string;
     deviceId: string;
     policy: string;
-    scope: DeviceConsentScope;
     lastMethod: string | null;
     lastSummary: string | null;
   }>> {
     await this.requireTier(caller, 'device.consent');
     return this.sqlx<{
-      agent_name: string; device_id: string; policy: string; scope: string;
+      agent_name: string; device_id: string; policy: string;
       last_method: string | null; last_summary: string | null;
     }>(
-      `SELECT agent_name, device_id, policy, scope, last_method, last_summary
+      `SELECT agent_name, device_id, policy, last_method, last_summary
        FROM device_consent ORDER BY updated_at DESC`,
     ).map((r) => ({
       agentName: r.agent_name,
       deviceId: r.device_id,
       policy: r.policy,
-      scope: parseConsentScope(r.scope),
       lastMethod: r.last_method,
       lastSummary: r.last_summary,
     }));
   }
 
-  /**
-   * Grant or reduce a workspace's consent tier on a device (Account settings →
-   * Devices, and the CLI's owner-authenticated route). Granting
-   * full_filesystem also records the base 'allow' policy.
-   *
-   * BOTH NAMES ARE CHECKED AGAINST THE REGISTRY, here rather than in the
-   * route. A grant is read by name on every later device call, so a row naming
-   * a workspace that does not exist is a grant waiting for one to be created
-   * with that name — which is exactly how a deleted workspace's
-   * full_filesystem used to be inherited by its replacement. Checking in the
-   * route instead would be a check-then-act across two RPCs, and this object
-   * serializes nothing across an await.
-   */
-  async setDeviceConsentScope(caller: UserCaller, agentName: string, deviceId: string, scope: DeviceConsentScope): Promise<{ ok: boolean }> {
-    await this.requireTier(caller, 'device.consent');
-    if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) {
-      return { ok: false };
-    }
-    // `workspaceMintable`, not `workspaceRegistered`: an archived workspace is
-    // reopenable and its grants are the owner's to set, while a name whose
-    // teardown has started is one this registry no longer holds. The device
-    // must be an unrevoked row for the same reason — a grant on a dead device
-    // id is a row the owner's roster shows and nothing can ever use.
-    if (!this.workspaceMintable(agentName) || !this.isActiveDevice(deviceId)) {
-      return { ok: false };
-    }
-    // An explicit tier choice overrides the no-downgrade merge.
-    this.sqlx(
-      `INSERT INTO device_consent (agent_name, device_id, policy, scope, updated_at)
-       VALUES (?, ?, 'allow', ?, ?)
-       ON CONFLICT(agent_name, device_id) DO UPDATE SET
-         policy = 'allow', scope = excluded.scope, updated_at = excluded.updated_at`,
-      agentName, deviceId, scope, Date.now(),
-    );
-    return { ok: true };
-  }
-
-  /** Revoke a workspace's grant on a device (Account settings → Devices).
+  /** Revoke a workspace's binding on a device (Account settings → Devices).
    *  The row is deleted rather than flipped to 'deny', so the next call asks
    *  again instead of reading as a standing refusal — and it takes effect on
    *  that next call, because the chokepoint reads this table every time.
    *
-   *  It is not a stop, and must not be read as one: consent decides what may
+   *  It is not a stop, and must not be read as one: a binding decides what may
    *  START, so a command already running keeps running and still returns its
    *  result. `revokeDevice` is the authority that ENDS live commands. */
   async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
@@ -2544,18 +2654,24 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  /** The device file view's path-scope check: does this workspace hold the
-   *  full-filesystem tier on the currently connected device? */
-  async getDeviceFsConsent(caller: UserCaller, agentName: string): Promise<{ fullFilesystem: boolean }> {
+  /**
+   * Does the device file view run unconfined?
+   *
+   * Only when the owner turned the device's Sandbox switch off. With the
+   * sandbox on, the daemon shows every file method the same view the shell
+   * gets — the agent home plus the consented directories — so the hub-side
+   * path scope stays on. One switch decides both enforcers, which is what
+   * keeps "what bash sees" and "what readFile sees" from drifting apart.
+   */
+  async getDeviceFileView(caller: UserCaller, agentName: string): Promise<{ unconfined: boolean }> {
     const resolved = await this.requireTier(caller, 'device.consent.read_self');
     const deviceId = this._devices.connectedDeviceId();
-    if (!deviceId) return { fullFilesystem: false };
-    const policy = this.getDeviceConsentPolicy(
-      resolved.kind === 'workspace' ? resolved.workspace : agentName, deviceId,
-    );
-    return {
-      fullFilesystem: policy?.policy === 'allow' && policy.scope === DEVICE_CONSENT_SCOPE_FULL_FS,
-    };
+    if (!deviceId) return { unconfined: false };
+    // Named so a facet cannot read a sibling workspace's answer by asking for
+    // it: a workspace caller's identity is its token, never its argument.
+    const workspace = resolved.kind === 'workspace' ? resolved.workspace : agentName;
+    if (this.getDeviceBinding(workspace, deviceId) !== 'allow') return { unconfined: false };
+    return { unconfined: this.deviceSandboxFor(deviceId, workspace).tier === 'raw' };
   }
 
   /**
@@ -2572,6 +2688,15 @@ export class UserDO extends Agent<Env> {
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
     lastIp: string | null; lastAgent: string | null; replacedAt: number | null;
     revokedAt: number | null; unstoppedAt: number | null;
+    /** The owner's Sandbox switch and what the machine proved about it. No
+     *  home or roots here: those are per workspace, and this is the account's
+     *  device registry, not one workspace's view of it. */
+    sandbox: {
+      tier: DeviceTier;
+      capability: DeviceSandboxCapability;
+      reason: DeviceSandboxReason | null;
+      gpu: string[];
+    };
   }>> {
     await this.requireTier(caller, 'device.manage');
     return this.sqlx<{
@@ -2579,8 +2704,11 @@ export class UserDO extends Agent<Env> {
       created_at: number; last_seen_at: number | null; expires_at: number | null;
       last_ip: string | null; last_agent: string | null; replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null;
+      tier: string | null; sandbox_capability: string | null;
+      sandbox_reason: string | null; sandbox_gpu: string | null;
     }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at,
-               last_ip, last_agent, replaced_at, revoked_at, unstopped_at
+               last_ip, last_agent, replaced_at, revoked_at, unstopped_at,
+               tier, sandbox_capability, sandbox_reason, sandbox_gpu
           FROM user_devices
          WHERE revoked_at IS NULL OR unstopped_at IS NOT NULL
          ORDER BY created_at DESC`)
@@ -2590,6 +2718,12 @@ export class UserDO extends Agent<Env> {
         createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
         lastIp: r.last_ip, lastAgent: r.last_agent, replacedAt: r.replaced_at,
         revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at,
+        sandbox: {
+          tier: parseDeviceTier(r.tier),
+          capability: parseSandboxCapability(r.sandbox_capability),
+          reason: parseSandboxReason(r.sandbox_reason),
+          gpu: v.parse(v.array(v.string()), JSON.parse(r.sandbox_gpu ?? '[]')),
+        },
       }));
   }
 
@@ -2620,7 +2754,7 @@ export class UserDO extends Agent<Env> {
     const devices = this.deviceFleet();
     if (deviceId) {
       const granted = workspace
-        ? this.getDeviceConsentPolicy(workspace, deviceId)?.policy === 'allow'
+        ? this.getDeviceBinding(workspace, deviceId) === 'allow'
         : undefined;
       const scope = this.sqlx<{ consented_root: string | null; device_home: string | null }>(
         `SELECT consented_root, device_home FROM user_devices WHERE id = ?`, deviceId,
@@ -2632,6 +2766,9 @@ export class UserDO extends Agent<Env> {
         devices,
         consentedRoot: scope?.consented_root ?? null,
         deviceHome: scope?.device_home ?? null,
+        // Per caller, not per device: the home and the roots this workspace
+        // gets are what the model needs to know before it writes anything.
+        sandbox: this.deviceSandboxFor(deviceId, workspace),
       };
       if (granted !== undefined) status.workspaceGranted = granted;
       return status;

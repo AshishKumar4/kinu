@@ -92,7 +92,7 @@ describe('createDeviceTunnelExecutor', () => {
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/home/dev/project',
       deviceHome: async () => '/home/dev',
-      hasFullFilesystem: async () => false,
+      unconfined: async () => false,
     });
 
     const read = await provider.tools.readFile.execute('/etc/passwd');
@@ -128,7 +128,7 @@ describe('createDeviceTunnelExecutor', () => {
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
-      hasFullFilesystem: async () => false,
+      unconfined: async () => false,
     });
 
     // Every file tool refuses, and none of them asks the machine anything —
@@ -148,7 +148,7 @@ describe('createDeviceTunnelExecutor', () => {
     const full = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
-      hasFullFilesystem: async () => true,
+      unconfined: async () => true,
     });
     // `homeDir` is the provider's own answer, not the VFS's.
     expect(await full.homeDir?.()).toBe('/home/dev');

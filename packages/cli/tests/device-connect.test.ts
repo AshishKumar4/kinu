@@ -12,9 +12,17 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonObject, type JsonObject } from '@kinu.run/core';
+import {
+  DEVICE_SANDBOX_CAPABILITIES,
+  DEVICE_SANDBOX_REASONS,
+  parseJsonObject,
+  sandboxReasonFix,
+  type DeviceSandboxReason,
+  type JsonObject,
+} from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
-import type { CloudDevice } from '../src/cloud-api';
+import { listCloudDevices, type CloudDevice } from '../src/cloud-api';
+import { describeDeviceSandbox } from '../src/device-connect';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
@@ -47,7 +55,9 @@ interface StubCloud {
 }
 
 interface StubCloudOptions {
-  devices?: () => CloudDevice[];
+  /** What the stub serves as the device list. Typed as the wire, not as
+   *  `CloudDevice`, so a case can serve the row an older hub sends. */
+  devices?: () => unknown[];
   /** Holds every registration until the test releases it. */
   registerGate?: { release: Promise<void>; onArrival?: () => void };
   registrationFailure?: { status: number; error: string };
@@ -152,7 +162,7 @@ async function scriptFailure(home: string, script: string, environment: Record<s
   throw new Error('expected script to fail');
 }
 
-function connectedDevice(connected: boolean): CloudDevice {
+function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {}): CloudDevice {
   return {
     id: 'dev_1',
     label: 'laptop',
@@ -161,7 +171,15 @@ function connectedDevice(connected: boolean): CloudDevice {
     connected,
     createdAt: 0,
     lastSeenAt: null,
+    sandbox: { tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [] },
+    ...overrides,
   };
+}
+
+/** What connectDevice returns for the stub's default row: the device id plus
+ *  the sandbox state that row reported. */
+function connectedResult() {
+  return { kind: 'connected', deviceId: 'dev_1', sandbox: connectedDevice(true).sandbox };
 }
 
 async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
@@ -198,7 +216,9 @@ function liveDaemons(script: string): number[] {
 }
 
 const DAEMON_PROBE_SCHEMA = v.object({
-  result: v.object({ kind: v.string(), deviceId: v.string() }),
+  // Loose on the result: `connectDevice` reports the machine's sandbox state
+  // beside the id, and this probe is about the daemon's command line.
+  result: v.looseObject({ kind: v.string(), deviceId: v.string() }),
   runtime: v.string(),
   command: v.string(),
 });
@@ -302,10 +322,10 @@ describe('device-connect daemon lifecycle', () => {
     `);
 
     const { result, status } = v.parse(v.object({
-      result: v.object({ kind: v.string(), deviceId: v.string() }),
+      result: v.looseObject({ kind: v.string(), deviceId: v.string() }),
       status: v.object({ sessionActive: v.boolean(), daemonPid: v.nullable(v.number()) }),
     }), JSON.parse(out.trim()));
-    expect(result).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(result).toEqual(connectedResult());
     expect(status.sessionActive).toBe(true);
     expect(status.daemonPid ?? 0).toBeGreaterThan(0); // the daemon holds the machine lock
 
@@ -319,6 +339,8 @@ describe('device-connect daemon lifecycle', () => {
     expect(deviceConfig).toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(statSync(join(home, 'device.json')).mode & 0o777).toBe(0o600);
+    // The root the daemon reports to the hub, created by the connect flow.
+    expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
 
     // The CLI process exited — its exit hook must have killed the session daemon.
@@ -352,6 +374,133 @@ describe('device-connect daemon lifecycle', () => {
   });
 });
 
+describe('the agent-home root the daemon reports', () => {
+  test('connect creates it owner-only under the home in KINU_HOME', async () => {
+    const home = makeHome({});
+    const out = await runScript(home, `
+      import { AGENT_ROOT, ensureAgentRoot } from './packages/cli/src/device-connect.ts';
+      ensureAgentRoot();
+      console.log(AGENT_ROOT);
+    `);
+    expect(out.trim()).toBe(join(home, 'agents'));
+    expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
+  });
+
+  test('a root an earlier build left group-readable is tightened', async () => {
+    const home = makeHome({});
+    const root = join(home, 'agents');
+    mkdirSync(root);
+    chmodSync(root, 0o755);
+    expect(statSync(root).mode & 0o777).toBe(0o755);
+
+    await runScript(home, `
+      import { ensureAgentRoot } from './packages/cli/src/device-connect.ts';
+      ensureAgentRoot();
+    `);
+
+    expect(statSync(root).mode & 0o777).toBe(0o700);
+  });
+});
+
+describe('the sandbox state the machine reported', () => {
+  /** One phrase out of each documented fix. A fix that stops naming its own
+   *  remedy fails here; a reason with no row fails the key check below. */
+  const REASON_FIX_MARKER = {
+    no_bwrap: 'sudo apt install bubblewrap',
+    no_userns: 'kernel.apparmor_restrict_unprivileged_userns=0',
+    wsl1: 'wsl --set-version',
+    no_sandbox_exec: '/usr/bin/sandbox-exec',
+    unsupported_platform: 'Linux and macOS only',
+    daemon_outdated: 'update the Kinu CLI',
+  } satisfies Record<DeviceSandboxReason, string>;
+  const NO_COMMANDS_LINE = 'No commands run on this machine until that is fixed, or until Sandbox'
+    + ' is off for this device under Account settings → Devices.';
+
+  test('every reason a machine cannot sandbox prints its documented fix', () => {
+    expect(Object.keys(REASON_FIX_MARKER).sort()).toEqual([...DEVICE_SANDBOX_REASONS].sort());
+
+    for (const reason of DEVICE_SANDBOX_REASONS) {
+      // A reason core carries no fix text for has no sentence to print.
+      const fix = sandboxReasonFix(reason);
+      expect(fix.length).toBeGreaterThan(20);
+      expect(fix).toContain(REASON_FIX_MARKER[reason]);
+      expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason, gpu: [] }))
+        .toEqual([`This machine cannot sandbox: ${reason}.`, fix, NO_COMMANDS_LINE]);
+    }
+  });
+
+  test('the user-namespace fix is core\'s sentence, never a second copy here', () => {
+    const source = readFileSync(resolve(repoRoot, 'packages/cli/src/device-connect.ts'), 'utf8');
+    expect(sandboxReasonFix('no_userns')).toContain('AppArmor');
+    expect(source).not.toContain('AppArmor');
+    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', gpu: [] })[1])
+      .toContain('AppArmor');
+  });
+
+  test('a machine that named no reason says exactly that', () => {
+    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] }))
+      .toEqual(['This machine cannot sandbox.', sandboxReasonFix(null), NO_COMMANDS_LINE]);
+  });
+
+  test('sandbox on names what the agent sees and the GPU nodes found', () => {
+    expect(describeDeviceSandbox({
+      tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
+    })).toEqual([
+      'Sandbox on: commands run in a sandbox — agent home plus the folders you consented,'
+      + ' your own files invisible. GPU: nvidia0, nvidiactl.',
+    ]);
+    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [] })[0])
+      .toContain('GPU: none.');
+  });
+
+  test('sandbox off says the agent runs with full access, whatever the machine proved', () => {
+    for (const capability of DEVICE_SANDBOX_CAPABILITIES) {
+      expect(describeDeviceSandbox({ tier: 'raw', capability, reason: null, gpu: [] }))
+        .toEqual(['Sandbox OFF for this device: commands run as you, with full access to this machine.']);
+    }
+  });
+
+  test('the device status line carries each connected device state', async () => {
+    const stub = startStubCloud({
+      devices: () => [
+        connectedDevice(true, { label: 'studio' }),
+        connectedDevice(true, {
+          id: 'dev_2', label: 'tower',
+          sandbox: { tier: 'raw', capability: 'sandboxed', reason: null, gpu: [] },
+        }),
+        connectedDevice(true, {
+          id: 'dev_3', label: 'vm',
+          sandbox: { tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', gpu: [] },
+        }),
+        connectedDevice(false, { id: 'dev_4', label: 'retired' }),
+      ],
+    });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const out = await runScript(home, `
+      import { deviceStatusLine } from './packages/cli/src/device-connect.ts';
+      console.log(await deviceStatusLine());
+    `);
+
+    expect(out.trim())
+      .toBe('Connected: studio (sandbox on), tower (sandbox OFF), vm (cannot sandbox: no_userns)');
+  });
+
+  test('a device row from a hub too old to report the switch still lists', async () => {
+    const stub = startStubCloud({
+      devices: () => [{
+        id: 'dev_1', label: 'laptop', os: 'linux', hostname: 'box',
+        connected: true, createdAt: 0, lastSeenAt: null,
+      }],
+    });
+
+    const devices = await listCloudDevices(stub.origin, 'ptc_test');
+
+    expect(devices).toHaveLength(1);
+    expect(devices[0].sandbox).toEqual({ tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] });
+  });
+});
+
 describe('device-connect install hardening', () => {
   test('installs the daemon inside this CLI and fetches no executable bytes', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -365,7 +514,7 @@ describe('device-connect install hardening', () => {
       process.exit(0);
     `);
 
-    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(JSON.parse(out.trim())).toEqual(connectedResult());
     // The origin serves poison at the retired route. Nothing asked for it, the
     // bytes on disk are this CLI's own, and the poison never ran.
     expect(stub.hits.daemonScript).toBe(0);
@@ -391,7 +540,7 @@ describe('device-connect install hardening', () => {
       process.exit(0);
     `);
 
-    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(JSON.parse(out.trim())).toEqual(connectedResult());
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8')))
       .toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
@@ -472,7 +621,7 @@ describe('device-connect install hardening', () => {
     const out = await runScript(home, daemonRuntimeProbe(stub.origin), { PATH: pathWithoutNode });
 
     const { result, runtime, command } = v.parse(DAEMON_PROBE_SCHEMA, JSON.parse(out.trim()));
-    expect(result).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(result).toEqual(connectedResult());
     // The live daemon process is the CLI's own Bun running the installed file.
     expect(command).toContain(runtime);
     expect(command).toContain(join(home, 'pc-agent.js'));
@@ -500,7 +649,7 @@ describe('device-connect install hardening', () => {
     const out = await runScript(home, daemonRuntimeProbe(stub.origin), { PATH: stubDir });
 
     const { result, runtime, command } = v.parse(DAEMON_PROBE_SCHEMA, JSON.parse(out.trim()));
-    expect(result).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(result).toEqual(connectedResult());
     // The stub node answered --version and was still never chosen.
     const calls = existsSync(`${join(stubDir, 'node')}.calls`)
       ? readFileSync(`${join(stubDir, 'node')}.calls`, 'utf-8')
@@ -565,7 +714,7 @@ describe('device-connect install hardening', () => {
       console.log(JSON.stringify(result));
     `);
 
-    expect(JSON.parse(out.trim())).toEqual({ kind: 'connected', deviceId: 'dev_1' });
+    expect(JSON.parse(out.trim())).toEqual(connectedResult());
     expect(sleeper.killed).toBe(false);
     expect(tolerate(() => {
       process.kill(sleeper.pid, 0);
@@ -850,7 +999,8 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     const connect = spawnConnectInPty(home);
     // The terms come BEFORE anything is installed.
     await connect.waitFor('Connecting installs the Kinu daemon on this machine');
-    await connect.waitFor('revoke it any time under Account settings');
+    await connect.waitFor('you can revoke it any time');
+    await connect.waitFor('one Sandbox switch per device');
     await connect.waitFor('Name this device');
     expect(stub.hits.register).toBe(0);
     expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
@@ -861,6 +1011,8 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
 
     await connect.send('y');
     await connect.waitFor('Connected this machine as');
+    // The machine's own report reaches the terminal.
+    await connect.waitFor('Sandbox on: commands run in a sandbox');
     await connect.proc.exited;
     await connect.drained;
 

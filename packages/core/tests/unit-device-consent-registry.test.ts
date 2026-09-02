@@ -18,7 +18,6 @@ const REQUEST: DeviceConsentRequest = {
   deviceLabel: "ashish's laptop",
   method: 'exec',
   command: 'git status',
-  scope: 'all_local_actions',
 };
 
 function registry(timeoutMs = 10_000) {
@@ -149,12 +148,11 @@ describe('DeviceConsentRegistry identity', () => {
       reg.request(REQUEST),
       reg.request({ ...REQUEST, command: 'rm -rf build' }),
       reg.request({ ...REQUEST, method: 'readFile' }),
-      reg.request({ ...REQUEST, scope: 'full_filesystem' }),
       reg.request({ ...REQUEST, deviceId: 'dev-2' }),
       reg.request({ ...REQUEST, workspaceName: 'notes' }),
     ];
-    // Approving one action must never approve another, so none of these join.
-    expect(reg.list()).toHaveLength(6);
+    // One card per question the owner would read differently, so none join.
+    expect(reg.list()).toHaveLength(5);
     for (const consent of reg.list()) {
       expect(reg.resolve(consent.consentId, 'deny')).toBe(true);
     }
@@ -202,33 +200,44 @@ describe('DeviceConsentRegistry always-grant coverage', () => {
     expect(await otherDevice).toBe('deny');
   });
 
-  test('a base-tier grant does not settle a prompt that needs the full-filesystem tier', async () => {
+  test('an always grant settles every other prompt for that machine, whatever the command', async () => {
+    // The vocabulary this replaces: two prompts on one device used to settle
+    // differently depending on their consent SCOPE — a base-tier grant left a
+    // `full_filesystem` prompt waiting, and a full grant settled the narrower
+    // ones under it. There is one binding now and no scope to compare, so the
+    // property those two cases pinned no longer exists: `DeviceConsentRequest`
+    // has no `scope` field, and `consentScopeCovers`, `parseConsentScope` and
+    // `mergeConsentScope` are gone from the tree (grepped: no callers). What
+    // replaces them is one rule — same machine, same workspace, one answer.
     const { reg } = registry();
-    const base = reg.request(REQUEST);
-    const wider = reg.request({ ...REQUEST, command: 'cat /etc/shadow', scope: 'full_filesystem' });
+    const asked = reg.request(REQUEST);
+    const wider = reg.request({ ...REQUEST, command: 'cat /etc/shadow' });
+    const readFile = reg.request({ ...REQUEST, method: 'readFile', command: 'readFile(/etc/shadow)' });
 
     reg.resolve('cons-1', 'always');
-    expect(await base).toBe('always');
-    // Still waiting: the grant the owner gave does not reach this one.
-    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
-    reg.resolve('cons-2', 'deny');
-    expect(await wider).toBe('deny');
+    expect(await asked).toBe('always');
+    // Bound, so allowed — but the remembering was the one "always" answer.
+    expect(await wider).toBe('once');
+    expect(await readFile).toBe('once');
+    expect(reg.list()).toEqual([]);
   });
 
-  test('a full-filesystem grant settles the base-tier prompts under it', async () => {
+  test('one workspace\'s binding never settles another workspace\'s card', async () => {
     const { reg } = registry();
-    const fullFilesystem = reg.request({ ...REQUEST, scope: 'full_filesystem' });
-    const narrower = reg.request({ ...REQUEST, command: 'ls ~' });
+    const mine = reg.request({ ...REQUEST, workspaceName: 'notes' });
+    const sibling = reg.request({ ...REQUEST, workspaceName: 'inbox' });
 
     reg.resolve('cons-1', 'always');
-    expect(await fullFilesystem).toBe('always');
-    expect(await narrower).toBe('once');
-    expect(reg.list()).toEqual([]);
+    expect(await mine).toBe('always');
+    // A binding is per (workspace, device). The sibling still has to be asked.
+    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-2']);
+    reg.resolve('cons-2', 'deny');
+    expect(await sibling).toBe('deny');
   });
 
   test('the provisioning card grants no device access, so it settles nothing else', async () => {
     const { reg } = registry();
-    const provision = { deviceId: '', deviceLabel: 'this computer', method: 'connect', scope: 'all_local_actions' } as const;
+    const provision = { deviceId: '', deviceLabel: 'this computer', method: 'connect' } as const;
     const first = reg.request({ ...provision, command: 'Connect this computer for "notes"' });
     const second = reg.request({ ...provision, command: 'Connect this computer for "inbox"' });
 

@@ -16,9 +16,9 @@
  *   POST   /api/user/credentials/:key              — set
  *   DELETE /api/user/credentials/:key              — delete
  *   PATCH  /api/user/devices/:id                   — rename a device (the name every surface shows)
- *   GET    /api/user/devices/consents              — per-(workspace, device) grants
- *   PUT    /api/user/devices/:id/consent           — set a workspace's consent tier on a device
- *   DELETE /api/user/devices/:id/consent           — revoke a workspace's grant on a device
+ *   GET    /api/user/devices/consents              — per-(workspace, device) bindings
+ *   PUT    /api/user/devices/:id/sandbox           — the device's Sandbox switch (owner only)
+ *   DELETE /api/user/devices/:id/consent           — revoke a workspace's binding on a device
  *   GET    /api/user/codex                         — Codex status
  *   POST   /api/user/codex/start                   — start device flow
  *   POST   /api/user/codex/poll                    — poll device flow
@@ -42,7 +42,7 @@
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
 import { PROFILE_CATALOG_CONFIG_KEY } from './schema';
-import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS, JsonValueSchema } from '@kinu.run/core';
+import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
 import { listAvailableModels, listProviderCatalog } from './available-models';
@@ -236,24 +236,22 @@ export async function handleUserRequest(
     return json({ ok: true });
   }
 
-  // ── Device grants (per-(workspace, device): may this workspace act, and how
-  //    far into the filesystem) ─────────────────────────────────────────────
+  // ── Device bindings (per-(workspace, device): may this workspace use this
+  //    machine at all) ────────────────────────────────────────────────────
   if (path === '/devices/consents' && method === 'GET') {
     return json(await stub.listDeviceConsents(await ownerCaller(env)));
   }
   const consentMatch = path.match(/^\/devices\/([^/]+)\/consent$/);
-  if (consentMatch && method === 'PUT') {
-    const body = await safeJson(request, v.object({
-      agentName: v.optional(v.string()),
-      scope: v.optional(v.string()),
-    }));
-    const agentName = body?.agentName;
-    const scope = body?.scope;
-    if (!agentName || (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS)) {
-      return err(400, `Body must be { agentName, scope: '${DEVICE_CONSENT_SCOPE}' | '${DEVICE_CONSENT_SCOPE_FULL_FS}' }`);
-    }
-    const result = await stub.setDeviceConsentScope(await ownerCaller(env), agentName, decodeURIComponent(consentMatch[1]), scope);
-    if (!result.ok) return err(400, 'consent scope not updated');
+  // ── The device's Sandbox switch. Owner session only: the UserDO refuses a
+  //    workspace caller, and a workspace that could turn its own sandbox off
+  //    would be granting itself the whole machine.
+  const sandboxMatch = path.match(/^\/devices\/([^/]+)\/sandbox$/);
+  if (sandboxMatch && method === 'PUT') {
+    const body = await safeJson(request, v.object({ tier: v.optional(v.picklist(DEVICE_TIERS)) }));
+    const tier = body?.tier;
+    if (!tier) return err(400, `Body must be { tier: ${DEVICE_TIERS.map((t) => `'${t}'`).join(' | ')} }`);
+    const result = await stub.setDeviceTier(await ownerCaller(env), decodeURIComponent(sandboxMatch[1]), tier);
+    if (!result.ok) return err(404, 'device not found');
     return json({ ok: true });
   }
   if (consentMatch && method === 'DELETE') {

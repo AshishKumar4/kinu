@@ -15,6 +15,7 @@
  * language work to a machine that may well have node, bun and python on it.
  */
 
+import * as v from 'valibot';
 import type { ExecutorCapability } from './types';
 import { TOOLCHAIN_PROBED_CAPABILITIES, toolchainCapabilities } from './toolchain';
 
@@ -78,6 +79,145 @@ export interface DeviceFleetEntry {
   readonly connected: boolean;
 }
 
+/**
+ * What a device runs commands under. The owner sets it per device in Settings
+ * — one switch, "Sandbox", on by default. The model never picks a tier, and no
+ * agent can change one.
+ */
+export const DEVICE_TIERS = ['sandboxed', 'raw'] as const;
+export type DeviceTier = (typeof DEVICE_TIERS)[number];
+
+/**
+ * What the daemon PROVED when it started, which is not what it was asked for.
+ *
+ *   `sandboxed`  the kernel sandbox probe passed, so this machine can honour
+ *                the sandboxed tier.
+ *   `files_only` the probe failed. No shell runs while the sandbox is on.
+ *   `raw_only`   this machine has no sandbox to prove: the daemon runs a
+ *                command unconfined or not at all.
+ *
+ * A machine that cannot sandbox is never silently downgraded to unconfined.
+ * The owner turns the sandbox off, or the machine runs no commands.
+ */
+export const DEVICE_SANDBOX_CAPABILITIES = ['sandboxed', 'files_only', 'raw_only'] as const;
+export type DeviceSandboxCapability = (typeof DEVICE_SANDBOX_CAPABILITIES)[number];
+
+/** Why a machine cannot sandbox. A closed vocabulary, because each value has
+ *  ONE documented fix the owner can act on and free text has none.
+ *
+ *  `daemon_outdated` is the one the hub assigns rather than the machine: every
+ *  daemon deployed before this contract sends no sandbox field at all, and
+ *  "it did not say" is not something an owner can act on. It names the build,
+ *  and its fix is the only fix. */
+export const DEVICE_SANDBOX_REASONS = [
+  'no_bwrap', 'no_userns', 'wsl1', 'no_sandbox_exec', 'unsupported_platform',
+  'daemon_outdated',
+] as const;
+export type DeviceSandboxReason = (typeof DEVICE_SANDBOX_REASONS)[number];
+
+/** How a device runs a command right now: the tier the owner set, narrowed by
+ *  what the machine proved. `files_only` is never granted — it is where a
+ *  device that cannot sandbox lands while the sandbox stays on. */
+export type DeviceMode = DeviceTier | 'files_only';
+
+/** The sandbox state of the connected device, for ONE calling workspace. The
+ *  home and the roots are per workspace, so two workspaces on one machine read
+ *  two different values here. */
+export interface DeviceSandboxStatus {
+  /** What the owner set. */
+  readonly tier: DeviceTier;
+  /** What the machine proved. */
+  readonly capability: DeviceSandboxCapability;
+  /** Why the machine cannot sandbox, or null when it can — or when it could
+   *  not say. */
+  readonly reason: DeviceSandboxReason | null;
+  /** GPU device nodes the daemon found, e.g. `/dev/nvidia0`. An empty list is
+   *  MEASURED empty: the daemon looked. */
+  readonly gpu: readonly string[];
+  /** This workspace's own home on the machine, which persists across turns and
+   *  which no other workspace can read. Null when the daemon has not said
+   *  where agent homes live, and a sandboxed command cannot run without it. */
+  readonly agentHome: string | null;
+  /** Directories on the machine the owner consented, writable at their real
+   *  paths inside the sandbox. */
+  readonly roots: readonly string[];
+}
+
+const DeviceTierSchema = v.picklist(DEVICE_TIERS);
+const DeviceSandboxCapabilitySchema = v.picklist(DEVICE_SANDBOX_CAPABILITIES);
+const DeviceSandboxReasonSchema = v.picklist(DEVICE_SANDBOX_REASONS);
+
+/** Narrow a stored tier. Anything unrecognised is the sandboxed tier: the
+ *  switch is on by default, and a damaged row must not read as "off". */
+export function parseDeviceTier(raw: string | null | undefined): DeviceTier {
+  const parsed = v.safeParse(DeviceTierSchema, raw);
+  return parsed.success ? parsed.output : 'sandboxed';
+}
+
+/** Narrow a reported capability. Anything unrecognised — including the silence
+ *  of a daemon too old to answer — is `files_only`: a machine that has not
+ *  proved it can sandbox has not proved it can sandbox. */
+export function parseSandboxCapability(raw: string | null | undefined): DeviceSandboxCapability {
+  const parsed = v.safeParse(DeviceSandboxCapabilitySchema, raw);
+  return parsed.success ? parsed.output : 'files_only';
+}
+
+/** Narrow a reported reason. Unrecognised is null — "it did not say", which
+ *  the surfaces render as exactly that rather than inventing a cause. */
+export function parseSandboxReason(raw: string | null | undefined): DeviceSandboxReason | null {
+  const parsed = v.safeParse(DeviceSandboxReasonSchema, raw);
+  return parsed.success ? parsed.output : null;
+}
+
+/**
+ * The one rule that turns an owner setting plus a machine fact into what
+ * actually happens. Written once because the hub enforces it, the prompt
+ * renders it, and the Settings row explains it — three readers, one answer.
+ */
+export function effectiveDeviceMode(
+  sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability'>,
+): DeviceMode {
+  if (sandbox.tier === 'raw') return 'raw';
+  return sandbox.capability === 'sandboxed' ? 'sandboxed' : 'files_only';
+}
+
+/** The fix for each reason, in the words the owner needs. `kinu connect`
+ *  prints it, and the Settings device row shows the same sentence. */
+const SANDBOX_REASON_FIX = {
+  no_bwrap:
+    'Install bubblewrap: `sudo apt install bubblewrap`, `sudo dnf install bubblewrap`, '
+    + 'or `sudo pacman -S bubblewrap`.',
+  no_userns:
+    'bwrap cannot create a user namespace. On Ubuntu 23.10 and later, install the packaged '
+    + 'bubblewrap — it carries the AppArmor profile — or run '
+    + '`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.',
+  wsl1:
+    'WSL1 has no user namespaces. Run `wsl --set-version <distro> 2`, then connect again.',
+  no_sandbox_exec:
+    'This macOS build has no /usr/bin/sandbox-exec. Turn Sandbox off for this device to run '
+    + 'commands on it.',
+  unsupported_platform:
+    'Kinu sandboxes commands on Linux and macOS only. Turn Sandbox off for this device to run '
+    + 'commands on it.',
+  daemon_outdated:
+    'update the Kinu CLI and run `kinu connect` again',
+} satisfies Record<DeviceSandboxReason, string>;
+
+/** What the owner can do about a reason. A machine that named no reason gets
+ *  the one honest sentence: nobody knows yet. */
+export function sandboxReasonFix(reason: DeviceSandboxReason | null): string {
+  return reason === null
+    ? 'The daemon did not say why. Run `kinu connect` on that machine to probe it again.'
+    : SANDBOX_REASON_FIX[reason];
+}
+
+/** The GPU nodes as one short phrase for a status line. `none` is measured
+ *  absent, never unknown — the daemon enumerates /dev on every exec. */
+export function describeGpuNodes(nodes: readonly string[]): string {
+  const names = nodes.map((node) => node.replace(/^\/dev\//, '')).filter((name) => name.length > 0);
+  return names.length > 0 ? names.join(', ') : 'none';
+}
+
 /** Hub snapshot of the user's device fleet, from the transport's perspective. */
 export interface DeviceStatus {
   /** A live daemon socket is open on the user's device hub right now. */
@@ -106,6 +246,10 @@ export interface DeviceStatus {
    *  view opens here under the full tier; carried so the hub never runs a
    *  command on the machine to learn a path. */
   deviceHome?: string | null;
+  /** How the connected device runs a command for THIS caller's workspace: the
+   *  owner's tier, what the machine proved, and the workspace's own home and
+   *  roots on it. Absent when no device is connected. */
+  sandbox?: DeviceSandboxStatus;
 }
 
 /** What the turn context says about the user's PC. */

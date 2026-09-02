@@ -132,13 +132,13 @@ import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import { AddServerCard } from "@/pages/UserMcpPage";
-import UserSettingsPage from "@/pages/UserSettingsPage";
+import UserSettingsPage, { DeviceRow } from "@/pages/UserSettingsPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
-  CHARS_PER_TOKEN, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
-  profileCatalogDigest, seekPage, sortDirEntries,
+  CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
+  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
@@ -152,7 +152,7 @@ import type {
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { ModelMenuEntry, WorkspaceEntry } from "@/lib/user-api";
+import type { ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";
 
@@ -188,20 +188,21 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,
   // so the one page a signed-in user lands on was never actually looked at.
   "/api/user/models": { models: MODEL_STUBS(), failures: [] },
-  // Settings' Device access card reads both, and a 404 photographs its failure
-  // state instead of the consent-scope control that card exists for.
+  // Account settings' Devices card reads both. A 404 photographs its failure
+  // state instead of the device row — and its Sandbox switch — the card exists for.
   "/api/user/devices": [
     {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
       expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
       replacedAt: null, revokedAt: null, unstoppedAt: null,
+      sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     },
   ],
   "/api/user/devices/consents": [
     {
       agentName: "checkout-fixes", deviceId: "dev_1", policy: "remembered",
-      scope: "all_local_actions", lastMethod: "exec", lastSummary: "bun test packages/core",
+      lastMethod: "exec", lastSummary: "bun test packages/core",
     },
   ],
 });
@@ -222,7 +223,7 @@ function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Re
   });
 }
 
-async function userSettingsFixture(path: string, method: string): Promise<Response> {
+async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
   if (path === "/api/user/profile") {
     return fixtureJson({ email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW });
   }
@@ -275,6 +276,13 @@ async function userSettingsFixture(path: string, method: string): Promise<Respon
     localStorage.setItem("gallery-device-incident", "acknowledged");
     return fixtureJson({ ok: true });
   }
+  // The Sandbox switch. The tier lands in localStorage so the roster read that
+  // follows the PUT shows the switch where the owner left it, across a reload.
+  if (path === "/api/user/devices/dev-1/sandbox" && method === "PUT") {
+    const { tier } = v.parse(v.object({ tier: v.picklist(DEVICE_TIERS) }), JSON.parse(v.parse(v.string(), body)));
+    localStorage.setItem("gallery-device-tier", tier);
+    return fixtureJson({ ok: true });
+  }
   if (path === "/api/user/devices" && method === "POST") {
     return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
   }
@@ -287,6 +295,10 @@ async function userSettingsFixture(path: string, method: string): Promise<Respon
       connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
       lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
       revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
+      sandbox: {
+        tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
+        capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
+      },
     }]);
   }
   if (path === "/api/user/devices/consents") return fixtureJson([]);
@@ -341,6 +353,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
       lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
       revokedAt: null, unstoppedAt: null,
+      sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
   }
   if (path === "/api/user/devices/consents" && method === "GET") return fixtureJson([]);
@@ -373,7 +386,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
   if (frame === "usersettingsstate" && path.startsWith("/api/user/")) {
-    return userSettingsFixture(path, method);
+    return userSettingsFixture(path, method, init?.body);
   }
   if (connectFixtureActive && path.startsWith("/api/user/devices")) {
     const answer = deviceConnectFixture(path, method);
@@ -2242,7 +2255,7 @@ function ChatMessages() {
       <DeviceConsentCard
         consent={{
           consentId: "c1", deviceLabel: "ashish-laptop", method: "exec",
-          command: "git push origin fix/coupon-kind", scope: "all_local_actions", createdAt: NOW,
+          command: "git push origin fix/coupon-kind", createdAt: NOW,
         }}
         onResolve={() => {}}
       />
@@ -5144,6 +5157,49 @@ function LazyRouteScene() {
   );
 }
 
+/* The device row in the three modes its Sandbox switch can land a machine in,
+   side by side, because the row explains a per-device setting through ONE line
+   of copy and the three lines are the thing to review. The first machine is
+   sandboxed; the second has the switch off; the third has the switch on and no
+   bwrap, which is the one state where the switch being on means no commands run
+   at all. No fetch: the roster is the prop, so the frame photographs the same
+   markup the Devices card renders. */
+function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]): UserDevice {
+  return {
+    id, label, os: "linux", hostname: label, connected: true,
+    createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
+    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null,
+    sandbox,
+  };
+}
+const SANDBOX_DEVICES: readonly UserDevice[] = [
+  galleryDevice("dev-sandboxed", "workstation", { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0", "/dev/nvidiactl"] }),
+  galleryDevice("dev-raw", "build-box", { tier: "raw", capability: "sandboxed", reason: null, gpu: [] }),
+  galleryDevice("dev-cannot", "old-laptop", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", gpu: [] }),
+];
+
+function DeviceSandboxFrame() {
+  return (
+    <div className="p-6 max-w-2xl p-bg p-text" data-device-sandbox-frame>
+      <div className="rounded-md border p-border overflow-hidden text-xs">
+        {SANDBOX_DEVICES.map((device) => (
+          <DeviceRow
+            key={device.id}
+            device={device}
+            grants={[{ agentName: "checkout-fixes", deviceId: device.id, policy: "allow", lastMethod: "exec", lastSummary: null }]}
+            onDeviceChanged={() => {}}
+            onGrantsChanged={() => {}}
+            onError={() => {}}
+            onRevoke={() => {}}
+            unstoppedCommands={undefined}
+            onAcknowledge={async () => {}}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -5348,6 +5404,9 @@ async function mount() {
     entries = [section === null ? "/user/settings" : `/user/settings#${section}`];
     node = <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>;
   }
+  // The device row alone, in the three modes its Sandbox switch can land a
+  // machine in — the close-up the Devices card renders one at a time.
+  else if (frame === "devicesandbox") node = <DeviceSandboxFrame />;
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");
     // Routed, not bare: the page reads `agentId` off the route, and every

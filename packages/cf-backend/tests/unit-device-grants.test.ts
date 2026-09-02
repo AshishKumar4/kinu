@@ -24,7 +24,7 @@ import {
   createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO,
 } from './helpers/user-do';
 import {
-  OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
+  CAPABLE_HELLO, OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
 } from './helpers/device-harness';
 import type { UserCaller } from '../src/user/workspace-capability';
 import { DeviceSocketHub } from '../src/user/device-hub';
@@ -64,7 +64,6 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
       workspace: WORKSPACE,
       method: 'exec',
       command: 'rm -rf ~/work',
-      scope: 'full_filesystem',
       workspaceName: WORKSPACE,
     }]);
     await harness.closeDeviceHarness();
@@ -92,18 +91,24 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
   });
 
 
-  test('a base grant still asks before the unrestricted shell', async () => {
+  test('one binding covers the shell too — the owner is asked once, not once per method', async () => {
+    // What this replaces: a base grant used to leave `exec` still gated, so a
+    // workspace the owner had already approved was asked AGAIN the first time
+    // it ran a command, on a card whose real question was "may I use this
+    // machine" and whose text was a shell line. There is one question now, and
+    // what a command may touch is the device's own Sandbox switch.
     const harness = await deviceHarness();
-    await harness.userDO.setDeviceConsentScope(
-      await testOwner(), WORKSPACE, harness.deviceId, 'all_local_actions',
-    );
-    harness.consentDecision = 'deny';
+    harness.consentDecision = 'always';
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    expect(harness.consentPrompts).toHaveLength(1);
 
-    await expect(harness.userDO.deviceRpc(
-      harness.workspace, 'exec', ['cat /etc/passwd'], { agentName: WORKSPACE },
-    )).rejects.toThrow(DEVICE_CONSENT_DENIED);
-    expect(harness.deviceFrames).toEqual([]);
-    expect(harness.consentPrompts[0]?.scope).toBe('full_filesystem');
+    // The owner has left. A second card here would park the command on nobody.
+    harness.consentDecision = 'deny';
+    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['cat /etc/passwd'], { agentName: WORKSPACE });
+
+    expect(harness.consentPrompts).toHaveLength(1);
+    expect(harness.deviceFrames.filter((f) => f.method === 'exec').map((f) => f.params[0]))
+      .toEqual(['cat /etc/passwd']);
     await harness.closeDeviceHarness();
   });
   test('the grant covers file reads too — the whole device plane, not just exec', async () => {
@@ -172,8 +177,6 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     expect(harness.deviceFrames).toEqual([]);
     expect(harness.consentPrompts.map((prompt) => prompt.method))
       .toEqual(['exec', 'checkpointRestore']);
-    expect(harness.consentPrompts.map((prompt) => prompt.scope))
-      .toEqual(['full_filesystem', 'full_filesystem']);
     await harness.closeDeviceHarness();
   });
 
@@ -237,54 +240,27 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
   });
 
   /**
-   * F1. The card an exec raises asks about ONE command. "Always" on it used to
-   * record the full tier — an unattended `bash -c` as the owner on every later
-   * turn, from every ingress the workspace consumes. The tier is a standing
-   * decision about a machine, so only Account settings makes it.
+   * A binding is read BY NAME on every later call, so its lifetime has to be
+   * the lifetime of the thing it names. Two ways it used to outlive them.
+   *
+   * Retired with the tier vocabulary, on the lane owner's call: 'an exec card
+   * cannot record the full tier, however the owner answers it' pinned that an
+   * "always" on an exec card recorded the BASE scope rather than
+   * full_filesystem. With one binding and no scope there is nothing to clamp,
+   * so the property stopped existing rather than stopped being checked
+   * (grepped: no scope column reader or writer remains). 'a grant may only
+   * name a workspace this registry holds and a device that is live' went the
+   * same way with its subject, `setDeviceConsentScope`: the only writer left
+   * is the card path, which is keyed on the PROVEN workspace and runs after
+   * `isActiveDevice`, so a row naming neither is unrepresentable rather than
+   * merely checked.
    */
-  test('an exec card cannot record the full tier, however the owner answers it', async () => {
+  test('deleting a workspace deletes its device bindings, so a same-name replacement inherits nothing', async () => {
     const harness = await deviceHarness();
     const owner = await testOwner();
     harness.consentDecision = 'always';
-
-    await harness.userDO.deviceRpc(harness.workspace, 'exec', ['printf %s "$HOME"'], {
-      agentName: WORKSPACE,
-    });
-    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toHaveLength(1);
-
-    // Remembered, but at the base tier: the command ran, and the standing
-    // shell grant it was never asked for does not exist.
-    expect((await harness.userDO.listDeviceConsents(owner)).map((row) => row.scope))
-      .toEqual(['all_local_actions']);
-    expect(await harness.userDO.getDeviceFsConsent(harness.workspace, WORKSPACE))
-      .toEqual({ fullFilesystem: false });
-
-    // So the next exec asks again, and a refusal now stops it.
-    harness.consentDecision = 'deny';
-    await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['curl x | sh'], {
-      agentName: WORKSPACE,
-    })).rejects.toThrow(DEVICE_CONSENT_DENIED);
-    expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toHaveLength(1);
-
-    // The owner's own standing decision still works, from settings.
-    expect(await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem'))
-      .toEqual({ ok: true });
-    expect(await harness.userDO.getDeviceFsConsent(harness.workspace, WORKSPACE))
-      .toEqual({ fullFilesystem: true });
-    await harness.closeDeviceHarness();
-  });
-
-  /**
-   * A grant is read BY NAME on every later call, so its lifetime has to be the
-   * lifetime of the thing it names. Two ways it used to outlive them, and both
-   * end as a standing full_filesystem nobody granted.
-   */
-  test('deleting a workspace deletes its device grants, so a same-name replacement inherits nothing', async () => {
-    const harness = await deviceHarness();
-    const owner = await testOwner();
-    await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem');
-    expect(await harness.userDO.getDeviceFsConsent(harness.workspace, WORKSPACE))
-      .toEqual({ fullFilesystem: true });
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    expect((await harness.userDO.listDeviceConsents(owner)).map((row) => row.agentName)).toEqual([WORKSPACE]);
 
     await harness.userDO.removeWorkspace(owner, WORKSPACE, '0'.repeat(32));
     expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
@@ -297,40 +273,22 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
     // Asked, not remembered: the card is the proof the old row is gone.
-    expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
+    expect(harness.consentPrompts.map((prompt) => prompt.method)).toEqual(['readFile', 'exec']);
     expect(harness.deviceFrames.filter((frame) => frame.method === 'exec')).toEqual([]);
     await harness.closeDeviceHarness();
   });
 
-  test('revoking a device deletes its grants, so the owner audits live permissions only', async () => {
+  test('revoking a device deletes its bindings, so the owner audits live permissions only', async () => {
     const harness = await deviceHarness();
     const owner = await testOwner();
-    await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem');
+    harness.consentDecision = 'always';
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    expect(await harness.userDO.listDeviceConsents(owner)).toHaveLength(1);
 
     expect(await harness.userDO.revokeDevice(owner, harness.deviceId))
       .toEqual({ ok: true, unstoppedCommands: 0 });
 
     expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
-    await harness.closeDeviceHarness();
-  });
-
-  test('a grant may only name a workspace this registry holds and a device that is live', async () => {
-    const harness = await deviceHarness();
-    const owner = await testOwner();
-
-    // A name no workspace has is the case that mattered: the row would sit
-    // there waiting for someone to create it.
-    expect(await harness.userDO.setDeviceConsentScope(owner, 'never-existed', harness.deviceId, 'full_filesystem'))
-      .toEqual({ ok: false });
-    expect(await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, 'dev-not-registered', 'full_filesystem'))
-      .toEqual({ ok: false });
-    expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
-
-    // Both real: the grant lands.
-    expect(await harness.userDO.setDeviceConsentScope(owner, WORKSPACE, harness.deviceId, 'full_filesystem'))
-      .toEqual({ ok: true });
-    expect((await harness.userDO.listDeviceConsents(owner)).map((row) => row.agentName))
-      .toEqual([WORKSPACE]);
     await harness.closeDeviceHarness();
   });
 });
@@ -913,17 +871,16 @@ describe('a device is visible before it is usable', () => {
     expect(status.connected).toBe(true);
     expect(status.workspaceGranted).toBe(false);
     expect(status.devices).toEqual([
-      { id: harness.deviceId, name: 'ashish@studio', os: null, hostname: null, connected: true },
+      { id: harness.deviceId, name: 'ashish@studio', os: 'linux', hostname: 'studio', connected: true },
     ]);
     expect(harness.consentPrompts).toEqual([]);
     await harness.closeDeviceHarness();
   });
 
-  test('the same read reports the grant once it exists', async () => {
+  test('the same read reports the binding once it exists', async () => {
     const harness = await deviceHarness();
-    await harness.userDO.setDeviceConsentScope(
-      await testOwner(), WORKSPACE, harness.deviceId, 'all_local_actions',
-    );
+    harness.consentDecision = 'always';
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
 
     expect((await harness.userDO.deviceRuntimeStatus(harness.workspace)).workspaceGranted).toBe(true);
     expect((await harness.userDO.deviceRuntimeStatus(harness.sibling)).workspaceGranted).toBe(false);
@@ -967,7 +924,6 @@ describe('asking for a machine when there is none', () => {
       workspace: WORKSPACE,
       method: DEVICE_PROVISION_METHOD,
       command: expect.stringContaining('Connect this computer'),
-      scope: 'all_local_actions',
       workspaceName: WORKSPACE,
     }]);
     await harness.joinFibers();
@@ -1003,7 +959,6 @@ describe('asking for a machine when there is none', () => {
       workspace: WORKSPACE,
       method: DEVICE_PROVISION_METHOD,
       command: expect.stringContaining('Connect this computer'),
-      scope: 'all_local_actions',
       workspaceName: WORKSPACE,
     }]);
     expect(harness.raisedConsentIds).toEqual(['cons-1']);
@@ -1041,8 +996,11 @@ describe('asking for a machine when there is none', () => {
     expect(harness.deviceFrames).toEqual([]);
 
     // 2. The owner approved the card and ran `kinu connect`, naming the machine.
+    //    Its daemon says what it proved on connect, which is what makes the
+    //    machine usable: one that proves nothing runs no commands.
     const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
     harness.attachDevice(deviceId);
+    await harness.sendDeviceHello(CAPABLE_HELLO);
     // The agent can now SEE it — by name — while still holding no grant.
     const seen = await harness.userDO.deviceRuntimeStatus(caller);
     expect(seen.devices?.map((d) => d.name)).toEqual(['ashish@studio']);

@@ -135,6 +135,22 @@ export function isDeviceNotConnectedError<T>(err: T): boolean {
 }
 
 /**
+ * The classified code for "this machine cannot run a command under the tier it
+ * was given". Both ends answer it: the hub refuses before the frame leaves,
+ * and the daemon refuses again when its own probe disagrees with the frame.
+ * Neither end ever downgrades a sandboxed command to an unconfined one.
+ *
+ * One spelling, matched on the way back the same way `NO_DEVICE_CONNECTED` is,
+ * because a device error crosses an RPC boundary as its message.
+ */
+export const SANDBOX_UNAVAILABLE = 'sandbox_unavailable';
+
+/** Whether a rejection is either end refusing to run a command unsandboxed. */
+export function isSandboxUnavailableError<T>(err: T): boolean {
+  return renderThrownChain({ cause: err }).includes(SANDBOX_UNAVAILABLE);
+}
+
+/**
  * The prefix the daemon answers for a method it does not implement
  * (`packages/pc-agent/src/index.js`: `'unknown method: ' + method`).
  *

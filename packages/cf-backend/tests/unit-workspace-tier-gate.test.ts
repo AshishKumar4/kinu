@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
+import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
 import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
 import { sha256Hex } from '../src/lib/crypto';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
@@ -117,7 +118,7 @@ const GATED_CALLS: GatedCall[] = [
   // the file view narrows its own path scope with the answer, so refusing it
   // would widen the scope rather than close it. Every other device method is
   // an account authority and lives in OWNER_ONLY_CALLS below.
-  { capability: 'device.consent.read_self', name: 'getDeviceFsConsent', run: (u, c) => u.getDeviceFsConsent(c, WORKSPACE) },
+  { capability: 'device.consent.read_self', name: 'getDeviceFileView', run: (u, c) => u.getDeviceFileView(c, WORKSPACE) },
 
   { capability: 'device.rpc', name: 'transferDeviceRequestToBackgroundJob', run: (u, c) => u.transferDeviceRequestToBackgroundJob(c, 'rpc-1', 'job-1') },
 
@@ -257,6 +258,14 @@ interface OwnerOnlyCall {
  */
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { name: 'getProfileCatalog', run: (userDO, caller) => userDO.getProfileCatalog(caller) },
+  // The device Sandbox switch. A workspace holds no device authority at all
+  // after F5/F6; this one additionally names the reason it can never move to a
+  // workspace: a workspace that could turn its own sandbox off would be
+  // granting itself the whole machine.
+  {
+    name: 'setDeviceTier',
+    run: (userDO: UserDOInstance, caller: UserCaller) => userDO.setDeviceTier(caller, 'dev-1', 'raw'),
+  },
   {
     name: 'putProfileCatalog',
     run: (userDO, caller) => userDO.putProfileCatalog(
@@ -268,7 +277,6 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
 
   // Writing a grant is granting the owner's machine away, and reading the
   // roster hands over every other workspace's grants too.
-  { capability: 'device.consent', name: 'setDeviceConsentScope', run: (u, c) => u.setDeviceConsentScope(c, WORKSPACE, 'dev-1', 'all_local_actions') },
   { capability: 'device.consent', name: 'listDeviceConsents', run: (u, c) => u.listDeviceConsents(c) },
   { capability: 'device.consent', name: 'revokeDeviceConsent', run: (u, c) => u.revokeDeviceConsent(c, WORKSPACE, 'dev-1') },
 
@@ -297,7 +305,10 @@ async function refused(call: Pick<GatedCall, 'run'>, userDO: UserDOInstance, cal
 async function setupWorkspaces(
   options: { connectedDeviceId?: string } = {},
 ): Promise<TestUserDO & { fullToken: string; otherToken: string }> {
-  const harness = createTestUserDO(options);
+  // A responder, so a call that PASSES the boundary completes instead of
+  // hanging on a socket nobody listens to — the fixture cannot seed a binding
+  // through the card the owner actually answers otherwise.
+  const harness = createTestUserDO({ ...options, deviceResponder: daemon });
   const fullToken = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
   const otherToken = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
   // A connected socket must belong to a registered device row. The real hub
@@ -309,6 +320,10 @@ async function setupWorkspaces(
       `INSERT INTO user_devices (id, token_hash, label) VALUES (?, ?, ?)`,
       options.connectedDeviceId, 'fixture-token-hash', 'fixture device',
     );
+    // And it reports like a daemon: a machine that has proved nothing runs no
+    // commands, which would refuse these calls for a reason this suite is not
+    // about.
+    await harness.sendDeviceHello(CAPABLE_HELLO);
   }
   return Object.assign(harness, { fullToken, otherToken });
 }
@@ -419,7 +434,7 @@ describe('a full workspace behaves exactly as before', () => {
       .toEqual([WORKSPACE, OTHER_WORKSPACE]);
     expect(await harness.userDO.hasWorkspace(caller, WORKSPACE)).toBe(true);
     expect(await harness.userDO.getAuthHeaders(caller, 'openai.bearer')).toEqual({ Authorization: 'Bearer sk-1' });
-    expect(await harness.userDO.getDeviceFsConsent(caller, WORKSPACE)).toEqual({ fullFilesystem: false });
+    expect(await harness.userDO.getDeviceFileView(caller, WORKSPACE)).toEqual({ unconfined: false });
     harness.close();
   });
 });
@@ -627,27 +642,32 @@ describe('facets attenuate with their workspace', () => {
   test('device consent answers for the PROVEN workspace, not the name the caller passed', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     const facetCaller: UserCaller = { workspaceToken: harness.fullToken };
-    // The owner grants the full-filesystem tier to workspace-a only.
-    await harness.userDO.setDeviceConsentScope(await testOwner(), WORKSPACE, 'dev-1', 'full_filesystem');
+    // workspace-a is bound to the machine, and the owner has turned that
+    // device's Sandbox switch off — the two facts that lift the file view.
+    harness.consentDecision = 'always';
+    await harness.userDO.deviceRpc(facetCaller, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    expect(await harness.userDO.setDeviceTier(await testOwner(), 'dev-1', 'raw')).toEqual({ ok: true });
 
     // A facet of workspace-a naming anything at all still gets workspace-a's
     // answer — its identity is the token, not the argument.
-    expect(await harness.userDO.getDeviceFsConsent(facetCaller, 'some-facet-name'))
-      .toEqual({ fullFilesystem: true });
-    expect(await harness.userDO.getDeviceFsConsent(facetCaller, OTHER_WORKSPACE))
-      .toEqual({ fullFilesystem: true });
+    expect(await harness.userDO.getDeviceFileView(facetCaller, 'some-facet-name'))
+      .toEqual({ unconfined: true });
+    expect(await harness.userDO.getDeviceFileView(facetCaller, OTHER_WORKSPACE))
+      .toEqual({ unconfined: true });
 
     // …and workspace-b cannot read workspace-a's grant by naming it.
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
-    expect(await harness.userDO.getDeviceFsConsent(sibling, WORKSPACE))
-      .toEqual({ fullFilesystem: false });
+    expect(await harness.userDO.getDeviceFileView(sibling, WORKSPACE))
+      .toEqual({ unconfined: false });
     harness.close();
   });
 
   test('a workspace cannot ride a sibling\'s remembered device grant', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     // workspace-a has already said "always" for this device.
-    await harness.userDO.setDeviceConsentScope(await testOwner(), WORKSPACE, 'dev-1', 'all_local_actions');
+    harness.consentDecision = 'always';
+    await harness.userDO.deviceRpc({ workspaceToken: harness.fullToken }, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
+    harness.consentDecision = 'deny';
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
 
     // workspace-b calls while CLAIMING to be workspace-a. Consent is resolved
@@ -655,11 +675,10 @@ describe('facets attenuate with their workspace', () => {
     // this harness's workspace refuses.
     await expect(harness.userDO.deviceRpc(sibling, 'exec', ['ls'], { agentName: WORKSPACE }))
       .rejects.toThrow('device use was not approved');
-    expect(harness.consentPrompts).toEqual([{
+    expect(harness.consentPrompts.filter((p) => p.workspace === OTHER_WORKSPACE)).toEqual([{
       workspace: OTHER_WORKSPACE,
       method: 'exec',
       command: 'ls',
-      scope: 'full_filesystem',
       workspaceName: OTHER_WORKSPACE,
     }]);
 
@@ -694,7 +713,7 @@ describe('facets attenuate with their workspace', () => {
     // Every remaining name argument is either scoped to the proven workspace
     await expect(harness.userDO.setWorkspaceDisplayName(facetCaller, OTHER_WORKSPACE, 'Hijacked', 'user'))
       .rejects.toThrow('may only rename itself');
-    await expect(harness.userDO.getDeviceFsConsent(facetCaller, OTHER_WORKSPACE))
+    await expect(harness.userDO.getDeviceFileView(facetCaller, OTHER_WORKSPACE))
       .rejects.toThrow(CapabilityDeniedError);
     await expect(harness.userDO.getReleaseBoard(facetCaller, OTHER_WORKSPACE))
       .rejects.toThrow(CapabilityDeniedError);

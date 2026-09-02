@@ -49,6 +49,7 @@ import {
 } from './sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
+import { describeGpuNodes, effectiveDeviceMode } from '../execution/device-status';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types';
 
@@ -389,6 +390,34 @@ function describeActivationReason(r: ActivationReason): string {
   }
 }
 
+/**
+ * What a command on the user's own machine actually gets, as a status suffix.
+ *
+ * The model cannot see the owner's Settings page, so without this line it
+ * cannot tell a machine that will run its build from one that will refuse
+ * every command until a human installs a package — and it cannot know which
+ * directory its files survive in. Three states, three sentences, no hedging:
+ * a model that has to guess whether it is sandboxed writes to the wrong place
+ * and reports success.
+ */
+function executorSandboxSuffix(exec: PromptExecutorInfo): string {
+  const sandbox = exec.sandbox;
+  if (sandbox === undefined) return '';
+  switch (effectiveDeviceMode(sandbox)) {
+    case 'sandboxed': {
+      const writable = sandbox.roots.length > 0 ? `, writable: ${sandbox.roots.join(', ')}` : '';
+      return ` — sandboxed full bash, GPU: ${describeGpuNodes(sandbox.gpu)}`
+        + `, agent home ${sandbox.agentHome ?? 'not reported'}${writable}`
+        + '. No sudo, apt, dnf or brew: install into the agent home (uv, python -m venv, npm -g, bun, cargo, micromamba)';
+    }
+    case 'raw':
+      return ' — Sandbox off for this device: commands run as the owner, with full access to the machine';
+    case 'files_only':
+      return ` — device cannot sandbox: ${sandbox.reason ?? 'the daemon reported no reason'}`
+        + ' — files only, no shell. Reading and writing files still works';
+  }
+}
+
 /** Per-list caps. The block rides every request of every step, so each roster
  *  states its head and an honest count of the tail rather than growing without
  *  bound. */
@@ -464,7 +493,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   if (executors.length > 0) {
     const rows = executors.map((exec) =>
       `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorMountSuffix(exec)}${executorLimitsSuffix(exec)}`
-      + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}`);
+      + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}${executorSandboxSuffix(exec)}`);
     // The legend rides along only when a row actually carries an unknown, so
     // the common case pays nothing for it — and where it does appear, the model
     // needs telling that this is ignorance rather than a denial.

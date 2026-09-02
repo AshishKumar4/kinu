@@ -128,20 +128,22 @@ export function ConversationSkeleton() {
 
 /**
  * Device card. Two shapes, one rail:
- *   - a device is connected and this workspace has no grant yet, so the agent's
- *     action is waiting on the owner. "Always allow" IS the grant, per
- *     workspace, revocable under Account settings → Devices.
+ *   - a device is connected and this workspace has no binding on it yet, so
+ *     the agent's action is waiting on the owner. One question: use this
+ *     machine for this workspace? "Use <device>" IS the binding, per
+ *     workspace, revocable under Account settings → Devices. The card names
+ *     no tier, because a binding has none: what a command may reach is the
+ *     machine's own Sandbox setting, set on the device row.
  *   - no device is connected at all (`DEVICE_PROVISION_METHOD`), so the agent
- *     is asking for one to exist. Approving cannot grant anything by itself —
+ *     is asking for one to exist. Approving cannot bind anything by itself —
  *     it points the owner at the connect flow, which states its own terms.
  */
 export function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
-  const asking = consent.workspaceName ? `“${consent.workspaceName}”` : "This agent";
-  const fullFilesystem = consent.scope === "full_filesystem";
   if (consent.method === DEVICE_PROVISION_METHOD) {
+    const asking = consent.workspaceName ? `“${consent.workspaceName}”` : "This agent";
     return (
       <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
         <div className="flex items-start gap-2">
@@ -169,20 +171,19 @@ export function DeviceConsentCard({ consent, onResolve }: {
       </div>
     );
   }
+  const forWhom = consent.workspaceName ? `“${consent.workspaceName}”` : "this workspace";
   return (
-    <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
+    <div className="p-tint-warning rounded-xl border p-3 animate-fade-in" data-device-bind={consent.consentId}>
       <div className="flex items-start gap-2">
         <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text">
-            {asking} wants to use <span className="font-medium">{consent.deviceLabel}</span>
-            {fullFilesystem ? " with full filesystem and shell access:" : " inside its connected folder:"}
+            Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?
           </div>
           <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
-            {fullFilesystem
-              ? `This one command only. Full filesystem and shell access on ${consent.deviceLabel} is a standing decision, made under Account settings → Devices.`
-              : `Always allow grants native file actions inside the connected folder on ${consent.deviceLabel}. You can revoke it under Account settings → Devices.`}
+            Approving lets this workspace run commands on {consent.deviceLabel} under that machine's
+            Sandbox setting. You can revoke it under Account settings → Devices.
           </div>
         </div>
       </div>
@@ -193,14 +194,10 @@ export function DeviceConsentCard({ consent, onResolve }: {
           once or deny, and the standing decision lives in Account settings. */}
       <div className="flex items-center gap-2 mt-2.5 justify-end">
         <button onClick={() => onResolve(consent.consentId, "deny")}
-          className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Deny</button>
-        {fullFilesystem ? null : (
-          <button onClick={() => onResolve(consent.consentId, "once")}
-            className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Allow once</button>
-        )}
-        <button onClick={() => onResolve(consent.consentId, fullFilesystem ? "once" : "always")}
+          className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Not now</button>
+        <button onClick={() => onResolve(consent.consentId, "always")}
           className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">
-          {fullFilesystem ? "Allow this command" : "Grant this workspace"}
+          Use {consent.deviceLabel}
         </button>
       </div>
     </div>

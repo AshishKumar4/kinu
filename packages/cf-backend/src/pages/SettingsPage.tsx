@@ -10,7 +10,7 @@ import { Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, CheckIcon, ArrowLeftIcon,
   ShieldIcon, TreeStructureIcon, KeyIcon, PlugIcon, SparkleIcon,
-  DesktopTowerIcon, DownloadSimpleIcon, EyeIcon,
+  DownloadSimpleIcon, EyeIcon,
 } from "@phosphor-icons/react";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
@@ -22,10 +22,6 @@ import {
 } from "@kinu.run/core";
 import { executorLabel } from "@/lib/executors";
 import { useKinu } from "@/hooks/use-kinu";
-import {
-  listDevices, listDeviceConsents, setDeviceConsentScope,
-  type UserDevice, type DeviceConsentScope,
-} from "../lib/user-api";
 import { Card, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -389,9 +385,6 @@ export default function SettingsPage() {
         {/* Scaffold shadow rollout — promote/rollback + per-trial verdict now
             live on the agent's Self surface (single source of truth). */}
 
-        {/* Per-agent device file-access tier */}
-        {agentId && <DeviceAccessCard agentName={agentId} />}
-
         {/* Always-active skills */}
         <AlwaysActiveSkillsCard rpc={rpc} />
 
@@ -635,84 +628,6 @@ export function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
         </div>
       )}
       {err && <div className="p-meta p-danger mt-1">{err}</div>}
-    </Card>
-  );
-}
-
-// ── Per-agent device file-access tier ────────────────────────────
-
-/** The grant surface for the laptop executor's full-filesystem consent tier — a workspace
- *  concern (this agent's tier on your connected device), while device
- *  registration itself is account-level (Account settings → Devices). By
- *  default the laptop file plane reaches only the consented folder (connect dir /
- *  home); this flips THIS agent's tier via setDeviceConsentScope — the same
- *  remembered policy the hub enforces. */
-function DeviceAccessCard({ agentName }: { agentName: string }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  // `null` = the listing succeeded and no device is connected. A failed
-  // listing must not render that same "register a device" state — it sends the
-  // user off to re-enrol a device that is already there.
-  const load = useCallback(async (): Promise<{ device: UserDevice; scope: DeviceConsentScope } | null> => {
-    const connected = (await listDevices()).find((d) => d.connected);
-    if (!connected) return null;
-    const consents = await listDeviceConsents();
-    const row = consents.find((c) => c.agentName === agentName && c.deviceId === connected.id);
-    return { device: connected, scope: row?.scope ?? "all_local_actions" };
-  }, [agentName]);
-  const { resource, reload } = useAsyncResource(load);
-  const current = lastValue(resource);
-
-  const full = current?.scope === "full_filesystem";
-  const toggle = async () => {
-    if (!current) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      await setDeviceConsentScope(current.device.id, agentName, full ? "all_local_actions" : "full_filesystem");
-      reload();
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Card title="Device access" icon={DesktopTowerIcon}>
-      <p className="p-meta p-text-3">
-        By default this workspace can use native file actions only inside the
-        connected folder. Full access also enables the unrestricted shell.
-      </p>
-      {resource.status === "error" && !current ? (
-        <LoadFailure what="your connected devices" message={resource.message} onRetry={reload} />
-      ) : resource.status === "loading" ? (
-        <p className="text-xs p-text-3">Checking connected devices…</p>
-      ) : !current ? (
-        <p className="text-xs p-text-3">
-          No device connected. Register one under{" "}
-          <Link to="/user/settings#devices" className="p-accent underline">Account settings → Devices</Link>.
-        </p>
-      ) : (
-        <div className="flex items-center gap-2 text-xs">
-          <span className="p-text-3">Access on {current.device.label}:</span>
-          <span className={`font-medium ${full ? "p-warning" : "p-text-2"}`}>
-            {full ? "Full filesystem + shell" : "Consented folder; no shell"}
-          </span>
-          {err && <span className="p-danger truncate">{err}</span>}
-          <button
-            onClick={async () => { await toggle(); }}
-            disabled={busy}
-            className="ml-auto px-2 py-1 rounded-sm p-card p-card-hover p-text-2 disabled:opacity-50"
-            title={full
-              ? "Restrict this agent to native file actions inside the consented folder"
-              : "Allow this agent to use the full filesystem and unrestricted shell"}
-          >
-            {busy ? "…" : full ? "Restrict to folder" : "Allow full access"}
-          </button>
-        </div>
-      )}
     </Card>
   );
 }

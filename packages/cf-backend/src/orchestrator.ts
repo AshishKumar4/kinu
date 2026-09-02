@@ -2023,7 +2023,6 @@ export class OrchestratorAgent extends ActorAgent {
           deviceLabel: consent.deviceLabel,
           method: consent.method,
           command: consent.command,
-          scope: consent.scope,
           workspaceName: consent.workspaceName ?? null,
         }));
         return;

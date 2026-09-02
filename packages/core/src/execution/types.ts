@@ -10,6 +10,7 @@
 
 import type { VFS } from '../types/primitives';
 import type { JsonValue } from '../utils/json';
+import type { DeviceSandboxStatus } from './device-status';
 
 /**
  * How "this call carries no work deadline" is spelled for a mechanism that
@@ -114,6 +115,9 @@ export interface ExecutorStatus {
    *  consent-gated environment answers; absent means the question does not
    *  arise. */
   granted?: boolean;
+  /** How this environment runs a command, when it is a device the owner has a
+   *  Sandbox switch for. Absent everywhere else. */
+  sandbox?: DeviceSandboxStatus;
 }
 
 /**
@@ -295,6 +299,10 @@ export interface ExecutorInfo {
   label?: string;
   /** Whether the reading agent holds this environment's access grant. */
   granted?: boolean;
+  /** How the machine behind this row runs a command, when it is a device the
+   *  owner has a Sandbox switch for. Absent on every environment that has no
+   *  such switch. */
+  sandbox?: DeviceSandboxStatus;
 }
 
 /**

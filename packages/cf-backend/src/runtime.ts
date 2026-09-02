@@ -166,7 +166,7 @@ export interface ActorRuntimeIdentity {
 }
 
 interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
-  getDeviceFsConsent(caller: UserCaller, agentName: string): Promise<{ fullFilesystem: boolean }>;
+  getDeviceFileView(caller: UserCaller, agentName: string): Promise<{ unconfined: boolean }>;
 }
 
 interface RuntimeUserDONamespace {
@@ -663,9 +663,10 @@ export function createCFRuntime(
     ]);
   })();
   // The executor's file view scopes paths to the ONE directory the owner named
-  // at `kinu connect`, unless the agent holds the full-filesystem consent tier
-  // on the hub. Action consent (ask-once-then-remember) still applies to every
-  // RPC beneath.
+  // at `kinu connect`, unless the owner turned this device's Sandbox switch
+  // OFF, which lifts the view for the same reason it lifts the shell: one
+  // switch, both enforcers. The binding (ask-once-then-remember) still applies
+  // to every RPC beneath.
   //
   // A CLI turn answers with its own cwd, which is the machine the CLI runs on
   // and needs no tunnel. Everything else reads the connected device's row: the
@@ -679,7 +680,7 @@ export function createCFRuntime(
     try {
       return (await hub.deviceRuntimeStatus(await userCallerFor(actor)))[field] ?? null;
     } catch (error) {
-      // Fail CLOSED, and say so: a null scope refuses base-tier file access
+      // Fail CLOSED, and say so: a null scope refuses scoped file access
       // rather than widening it to the home directory, which is the escalation
       // this whole seam exists to remove.
       diagnostics.failure('device.scope_unreadable', toKinuError({
@@ -693,18 +694,18 @@ export function createCFRuntime(
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
     consentedRoot: async () => cliCwdForDevice() ?? await deviceScope('consentedRoot'),
     deviceHome: async () => cliCwdForDevice() ?? await deviceScope('deviceHome'),
-    hasFullFilesystem: async () => {
+    unconfined: async () => {
       const hub = userDOStubFor(env, actor);
       if (!hub) return false;
       try {
-        return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
+        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName)).unconfined;
       } catch (error) {
-        // Fail CLOSED: unverifiable consent must narrow the executor to the
-        // consented subtree, never widen it. Recorded rather than discarded —
-        // `false` alone cannot distinguish "no full-filesystem tier" from "the hub
+        // Fail CLOSED: an unverifiable answer must narrow the executor to the
+        // consented directory, never widen it. Recorded rather than discarded —
+        // `false` alone cannot distinguish "the sandbox is on" from "the hub
         // could not be reached", and only one of those is a fault.
-        diagnostics.failure('device.fs_consent_unverifiable', toKinuError({
-          doing: "reading the device's full-filesystem consent tier",
+        diagnostics.failure('device.file_view_unverifiable', toKinuError({
+          doing: "reading the device's file-view scope",
           cause: error,
           otherwise: 'unavailable',
         }), { workspace: actor.workspaceName });

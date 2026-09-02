@@ -34,9 +34,14 @@ export { explainNativeToolReferenceError } from './sandbox-errors';
 export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
+  effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason,
+  sandboxReasonFix, describeGpuNodes,
   DEVICE_PRESENCE_CONFIG_KEY, DEVICE_TOOLCHAIN_TTL_MS,
+  DEVICE_TIERS, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
   type DeviceToolchain, type DeviceFleetEntry,
+  type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
+  type DeviceSandboxCapability, type DeviceSandboxReason,
 } from './device-status';
 export {
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
@@ -45,6 +50,7 @@ export {
 export {
   DeviceTunnel, type TunnelSocket,
   TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
+  SANDBOX_UNAVAILABLE, isSandboxUnavailableError,
   DEVICE_UNKNOWN_METHOD, isDeviceUnknownMethodError, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
   DEVICE_DUPLICATE_REQUEST, DeviceCancelResultSchema, nextDeviceRequestId,

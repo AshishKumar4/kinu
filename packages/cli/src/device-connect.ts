@@ -19,9 +19,10 @@ import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { classify, classifyErrorCode, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
-import { enforceOwnerOnly } from '@kinu.run/cli-backend';
+import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
+import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
-import { listCloudDevices, registerCloudDevice } from './cloud-api';
+import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 
@@ -31,6 +32,10 @@ const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
 const SANDBOX_PATH = join(AGENT_HOME, 'sandbox.js');
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
+/** Where this machine keeps agent homes. The daemon reports this ROOT to the
+ *  hub on HELLO and the hub composes `<root>/<workspace>/home` per command, so
+ *  the CLI creates the root and the daemon owns everything under it. */
+export const AGENT_ROOT = join(AGENT_HOME, 'agents');
 export const DEVICE_CONNECT_DEADLINE_MS = 20_000;
 const CONNECT_POLL_MS = 1_000;
 const DAEMON_EARLY_EXIT_GRACE_MS = 250;
@@ -48,6 +53,15 @@ export function defaultDeviceName(): string {
   const user = (tolerate(() => userInfo().username, 'enoent') ?? process.env.USER ?? '').trim();
   const host = hostname().trim();
   return user && host ? `${user}@${host}` : UNNAMED_DEVICE_NAME;
+}
+
+/**
+ * Create the agent-home root, owner-only. `mkdir -p` then a VERIFIED chmod, so
+ * a root an earlier build left group-readable is tightened instead of kept.
+ * What the agent writes on this machine is the owner's alone.
+ */
+export function ensureAgentRoot(): void {
+  ensureSecretDir(AGENT_ROOT);
 }
 
 /**
@@ -77,7 +91,7 @@ export interface ConnectOutcomeDescription {
 }
 
 export type ConnectDeviceResult =
-  | { kind: 'connected'; deviceId: string }
+  | { kind: 'connected'; deviceId: string; sandbox: CloudDeviceSandbox }
   | { kind: 'timeout'; deviceId: string }
   /** Session mode found a persistent daemon already running and left it alone. */
   | { kind: 'already-running'; connected: boolean };
@@ -97,8 +111,9 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   // Don't trust the spawn — the daemon must show up as connected on the
   // server before we claim success.
   const connected = await waitForDeviceConnected(auth, device.deviceId, opts.onPoll);
-  if (connected) anyDeviceConnected = true;
-  return { kind: connected ? 'connected' : 'timeout', deviceId: device.deviceId };
+  if (connected === undefined) return { kind: 'timeout', deviceId: device.deviceId };
+  anyDeviceConnected = true;
+  return { kind: 'connected', deviceId: device.deviceId, sandbox: connected.sandbox };
 }
 
 
@@ -173,7 +188,10 @@ export async function deviceStatusLine(): Promise<string> {
     const devices = await listCloudDevices(auth.origin, auth.token);
     anyDeviceConnected = devices.some((device) => device.connected);
     const connected = devices.filter((device) => device.connected);
-    if (connected.length > 0) return `Connected: ${connected.map((device) => device.label).join(', ')}`;
+    if (connected.length > 0) {
+      const named = connected.map((device) => `${device.label} (${sandboxStateTag(device.sandbox)})`);
+      return `Connected: ${named.join(', ')}`;
+    }
     if (devices.length > 0) return `${devices.length} registered device${devices.length === 1 ? '' : 's'}, none connected.`;
     return 'No devices are registered for your account yet.';
   } catch (err) {
@@ -197,6 +215,43 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
           ? 'Connected for this session. The daemon stops when you leave the CLI.'
           : 'Connected. This PC stays linked across sessions.',
       };
+  }
+}
+
+/**
+ * What the machine reported about its own sandbox, in the words the owner
+ * needs. One line while the sandbox is on or off. Three lines when the machine
+ * cannot sandbox, because then there is a cause, a fix, and a consequence. The
+ * fix sentence lives in `@kinu.run/core`, so every surface prints the same one.
+ */
+export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
+  switch (effectiveDeviceMode(sandbox)) {
+    case 'sandboxed':
+      return [
+        'Sandbox on: commands run in a sandbox — agent home plus the folders you consented,'
+        + ` your own files invisible. GPU: ${describeGpuNodes(sandbox.gpu)}.`,
+      ];
+    case 'raw':
+      return ['Sandbox OFF for this device: commands run as you, with full access to this machine.'];
+    case 'files_only':
+      return [
+        sandbox.reason === null
+          ? 'This machine cannot sandbox.'
+          : `This machine cannot sandbox: ${sandbox.reason}.`,
+        sandboxReasonFix(sandbox.reason),
+        'No commands run on this machine until that is fixed, or until Sandbox is off for this'
+        + ' device under Account settings → Devices.',
+      ];
+  }
+}
+
+/** The shortest honest form of a connected device's sandbox state, for the
+ *  one-line device status. */
+function sandboxStateTag(sandbox: CloudDeviceSandbox): string {
+  switch (effectiveDeviceMode(sandbox)) {
+    case 'sandboxed': return 'sandbox on';
+    case 'raw': return 'sandbox OFF';
+    case 'files_only': return sandbox.reason === null ? 'cannot sandbox' : `cannot sandbox: ${sandbox.reason}`;
   }
 }
 
@@ -256,6 +311,7 @@ function redactSecrets(text: string, secrets: string[]): string {
 function installDaemonFiles(device: { origin: string; userId: string; token: string }): void {
   try {
     ensureAgentHome();
+    ensureAgentRoot();
   } catch (cause) {
     throw toKinuError({
       doing: `preparing the device install directory ${AGENT_HOME}`,
@@ -400,7 +456,10 @@ function syncAgentDirectory(): void {
   }
 }
 
-async function waitForDeviceConnected(auth: DeviceAuth, deviceId: string, onPoll?: () => void): Promise<boolean> {
+/** The connected device row the server reports, or undefined once the deadline
+ *  passes. The row carries what the machine said about its own sandbox, so the
+ *  caller states that without a second request. */
+async function waitForDeviceConnected(auth: DeviceAuth, deviceId: string, onPoll?: () => void): Promise<CloudDevice | undefined> {
   const deadline = Date.now() + DEVICE_CONNECT_DEADLINE_MS;
   while (Date.now() < deadline) {
     const nextPoll = Promise.withResolvers<void>();
@@ -408,9 +467,10 @@ async function waitForDeviceConnected(auth: DeviceAuth, deviceId: string, onPoll
     await nextPoll.promise;
     onPoll?.();
     const devices = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
-    if (devices.some((device) => device.id === deviceId && device.connected)) return true;
+    const connected = devices.find((device) => device.id === deviceId && device.connected);
+    if (connected) return connected;
   }
-  return false;
+  return undefined;
 }
 
 function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch | null {

@@ -36,6 +36,7 @@ import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type TestUserDO,
 } from './helpers/user-do';
+import { CAPABLE_HELLO } from './helpers/device-harness';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { makeKv } from './helpers/kv';
 import type { UserCaller } from '../src/user/workspace-capability';
@@ -161,6 +162,11 @@ async function seam(options: {
   const owner = await testOwner();
   const { deviceId } = await user.userDO.registerDevice(owner, 'ashish@studio');
   user.attachDevice(deviceId);
+  // The daemon reports on connect, exactly as a real one does: what it proved
+  // about sandboxing, where it keeps agent homes, and the directory the owner
+  // ran `kinu connect` in. Without the last of those the file view reaches
+  // nothing, which is F2's rule and not what these tests are about.
+  await user.sendDeviceHello({ ...CAPABLE_HELLO, root: DEVICE_HOME, home: DEVICE_HOME });
 
   const actors = new Map<string, ActorHarness<HarnessOrchestratorAgent>>();
   for (const workspace of options.workspaces) {
@@ -391,22 +397,19 @@ describe('a device the workspace has no grant on', () => {
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
   });
 
-  test('the base action tier does not carry the device file view, and says which tier does', async () => {
-    // The owner granted local actions from settings, not the whole machine. The
-    // file view's own consent boundary is the device's home, and the plane
-    // learns where that is by asking the machine — a shell call, which is the
-    // full-filesystem tier by construction (deviceConsentScopeForMethod). So a
-    // base-tier workspace is refused at the boundary read, before any file.
+  test('an unbound workspace reaches no file on the device, and is asked once', async () => {
+    // What this replaces: the base action tier used to stop short of the file
+    // view, because the view learned the device's home by running a shell
+    // command and a shell was the OTHER tier. Both halves of that are gone —
+    // the paths arrive on HELLO, and there is one binding. So the boundary
+    // here is the binding itself: refuse it, and no frame reaches the machine.
     const rail = await seam({ workspaces: ['device-base'] });
-    expect(await rail.user.userDO.setDeviceConsentScope(
-      rail.owner, 'device-base', rail.deviceId, 'all_local_actions',
-    )).toEqual({ ok: true });
     rail.user.consentDecision = 'deny';
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'device-base', path: PC_FILE });
 
     expect(await errorOf(read)).toContain('device use was not approved');
-    expect(rail.user.consentPrompts.map((prompt) => prompt.scope)).toEqual(['full_filesystem']);
+    expect(rail.user.consentPrompts.map((prompt) => prompt.workspaceName)).toEqual(['device-base']);
     expect(rail.fileFrames()).toEqual([]);
   });
 });
@@ -483,8 +486,16 @@ describe('a request the authority behind it has since withdrawn', () => {
     // The token the actor still holds is no longer a workspace identity, so the
     // user plane refuses it — the route's 404 is not the only thing standing
     // between a deleted workspace and the owner's machine.
-    expect(await rail.actorFor('stale-capability').readExecutorFile('workspace', PC_FILE))
-      .toMatchObject({ error: expect.stringContaining('capability') });
+    // Refused, and nothing reached the machine. The MESSAGE is whichever
+    // refusal the caller met first: the file view now reads its scope off the
+    // device row before it sends anything, and that read is refused for the
+    // same reason the RPC would have been. Pinning one of the two sentences
+    // would pin the order rather than the boundary.
+    const before = rail.fileFrames().length;
+    const stale = await rail.actorFor('stale-capability').readExecutorFile('workspace', PC_FILE);
+    expect(stale).toMatchObject({ error: expect.any(String) });
+    expect(stale).not.toHaveProperty('content');
+    expect(rail.fileFrames()).toHaveLength(before);
   });
 
   test('a cookie the owner signed out of buys nothing, even where the KV delete has not landed', async () => {

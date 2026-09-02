@@ -37,7 +37,7 @@ import {
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
   acknowledgeUnstoppedDevice, registerDevice, renameDevice, revokeDevice,
-  listDeviceConsents, revokeDeviceConsent,
+  listDeviceConsents, revokeDeviceConsent, setDeviceSandboxTier,
   type CredentialSummary, type CodexStatus,
   type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
   type CloudflareGatewayStatus, type CloudflareAccountStatus, type UserDevice,
@@ -55,6 +55,7 @@ import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import * as v from "valibot";
+import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 const ProviderCatalogEntrySchema = v.object({
@@ -413,7 +414,7 @@ function DevicesCard() {
               key={d.id}
               device={d}
               grants={grants.filter((g) => g.deviceId === d.id && g.policy === "allow")}
-              onRenamed={reloadDevices}
+              onDeviceChanged={reloadDevices}
               onGrantsChanged={grantRoster.reload}
               onError={setErr}
               onRevoke={() => revoke(d.id, d.label)}
@@ -449,25 +450,50 @@ function DevicesCard() {
       </div>
 
       <p className="p-meta p-text-3">
-        Each workspace's file-access tier on a device (consented folder vs full filesystem) is set
-        in that workspace's settings.
+        A workspace's access to a machine is a yes/no binding, revoked from that machine's row.
       </p>
     </Card>
   );
 }
 
+/** The one line under the switch, per mode. `effectiveDeviceMode` decides the
+ *  mode; the hub enforces the same function, so the row explains exactly what
+ *  the hub will do. The first two are the owner's own words. */
+const SANDBOX_MODE_COPY = {
+  sandboxed: "Commands run in a sandbox: agent home + the folders you consented, your own files invisible, GPU and network available",
+  raw: "Off: the agent runs as you with full access to this machine",
+  files_only: "This machine cannot sandbox, so no commands run on it.",
+} satisfies Record<DeviceMode, string>;
+
+/** A fix from core carries its commands in backticks, as `kinu connect` prints
+ *  them. On this page a command is a `<code>` — the treatment this card already
+ *  gives `kinu connect` in its offline hint. */
+function withCodeSpans(text: string): ReactNode[] {
+  return text.split("`").map((segment, index) =>
+    index % 2 === 1 ? <code key={index} className="font-mono">{segment}</code> : segment);
+}
+
 /**
  * One linked machine: its name (editable — this is the name every surface
- * shows, from the agent's executor row to a consent card), its platform, its
- * liveness, and the workspaces that hold a grant on it. The grants sit here
+ * shows, from the agent's executor row to a bind card), its platform, its
+ * liveness, its Sandbox switch, and the workspaces bound to it.
+ *
+ * The switch is the owner's one decision about what a command may reach on
+ * this machine, and it is owner-only: the server answers 403 to anyone else.
+ * On by default. Turning it off asks first, because off means the agent runs
+ * as the owner. A machine that cannot sandbox is never quietly run unconfined
+ * — with the switch on it runs no commands, and the row says so with the fix.
+ *
+ * Exported for the gallery, which photographs the three modes side by side.
  */
-function DeviceRow({
-  device, grants, onRenamed, onGrantsChanged, onError, onRevoke,
+export function DeviceRow({
+  device, grants, onDeviceChanged, onGrantsChanged, onError, onRevoke,
   unstoppedCommands, onAcknowledge,
 }: {
   device: UserDevice;
   grants: DeviceConsent[];
-  onRenamed: () => void;
+  /** The roster must be re-read: this row renamed the device or moved its switch. */
+  onDeviceChanged: () => void;
   onGrantsChanged: () => void;
   onError: (message: string) => void;
   onRevoke: () => void;
@@ -476,6 +502,7 @@ function DeviceRow({
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [acknowledging, setAcknowledging] = useState(false);
+  const [switching, setSwitching] = useState(false);
 
   if (device.revokedAt !== null) {
     const countLine = unstoppedCommands === undefined
@@ -524,13 +551,29 @@ function DeviceRow({
     if (!name || name === device.label) return;
     try { await renameDevice(device.id, name); }
     catch (e) { onError(`Could not rename device: ${renderThrownChain({ cause: e })}`); }
-    onRenamed();
+    onDeviceChanged();
   };
 
   const dropGrant = async (agentName: string) => {
     try { await revokeDeviceConsent(device.id, agentName); }
     catch (e) { onError(`Could not revoke the grant: ${renderThrownChain({ cause: e })}`); }
     onGrantsChanged();
+  };
+
+  const { sandbox } = device;
+  const sandboxOn = sandbox.tier === "sandboxed";
+  const mode = effectiveDeviceMode(sandbox);
+  const cannotSandbox = sandbox.capability !== "sandboxed";
+
+  // Off is the one direction that asks: it names the machine and what "off"
+  // means. On needs no confirmation — it only ever narrows what a command reaches.
+  const setSandbox = async (on: boolean) => {
+    if (!on && !confirm(`Turn Sandbox off for "${device.label}"? The agent will run as you with full access to this machine.`)) return;
+    setSwitching(true);
+    try { await setDeviceSandboxTier(device.id, on ? "sandboxed" : "raw"); }
+    catch (e) { onError(`Could not change the Sandbox setting: ${renderThrownChain({ cause: e })}`); }
+    finally { setSwitching(false); }
+    onDeviceChanged();
   };
 
   return (
@@ -566,6 +609,35 @@ function DeviceRow({
         <span className="p-text-3 ml-auto">{device.connected ? "connected" : "offline"}</span>
         <button onClick={onRevoke} title="Revoke device" className="p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
       </div>
+      {/* The switch, then its consequence. One line of copy per mode; the badge
+          is a machine fact the switch cannot change, so it sits beside the switch
+          rather than inside the sentence. */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <label className="inline-flex items-center gap-2 p-text">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={sandboxOn}
+            aria-label={`Sandbox on ${device.label}`}
+            disabled={switching}
+            onClick={async () => { await setSandbox(!sandboxOn); }}
+            className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
+              sandboxOn ? "border-[var(--c-accent)] bg-[var(--c-accent)]" : "border-[var(--c-border-strong)] bg-[var(--c-fill)]"
+            }`}
+          >
+            <span className={`size-3 rounded-full transition-transform ${
+              sandboxOn ? "translate-x-3 bg-[var(--c-accent-on)]" : "translate-x-0.5 bg-[var(--c-text-3)]"
+            }`} />
+          </button>
+          <span className="font-medium">Sandbox</span>
+        </label>
+        {cannotSandbox && <span className="p-badge-warning px-1.5 py-0.5">Cannot sandbox</span>}
+        {mode === "sandboxed" && <span className="p-text-3">GPU: {describeGpuNodes(sandbox.gpu)}</span>}
+      </div>
+      <p className="mt-1 p-meta p-text-3" data-sandbox-mode={mode}>
+        {SANDBOX_MODE_COPY[mode]}
+        {cannotSandbox && <> {withCodeSpans(sandboxReasonFix(sandbox.reason))}</>}
+      </p>
       <div className="mt-1 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
         {grants.length === 0 ? (
           <span>No workspace has access yet — the first one to ask will prompt you.</span>
@@ -575,7 +647,6 @@ function DeviceRow({
             {grants.map((g) => (
               <span key={g.agentName} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm p-fill">
                 {g.agentName}
-                {g.scope === "full_filesystem" && <span className="p-text-3">· full filesystem</span>}
                 <button onClick={async () => { await dropGrant(g.agentName); }} title={`Revoke ${g.agentName}'s access`} className="p-text-3 hover:p-danger">
                   <XIcon size={10} />
                 </button>

@@ -41,6 +41,24 @@ export interface DeviceHarness extends TestUserDO {
  *  is how a test holds a command's result open across its cancellation. */
 export type DeviceResponder = (frame: DeviceFrame) => JsonValue | Promise<JsonValue>;
 
+/** What a current daemon reports the moment its socket opens: it proved it can
+ *  sandbox, and it named where it keeps agent homes. A real machine always
+ *  says this, so a fixture that stays silent is not a quieter machine — it is
+ *  a machine the hub correctly refuses to run commands on. */
+export const CAPABLE_HELLO = {
+  type: 'HELLO',
+  os: 'linux',
+  hostname: 'studio',
+  agentRoot: '/home/ashish/.kinu/agents',
+  sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
+} satisfies JsonValue;
+
+export interface DeviceHarnessOptions {
+  /** What the daemon says on connect. `null` sends nothing, which is how a
+   *  test asks for a machine that has proved nothing. */
+  hello?: JsonValue | null;
+}
+
 /**
  * A registered device, connected, with two workspaces holding real capability
  * tokens. The id comes from `registerDevice` and is then attached to the live
@@ -49,10 +67,13 @@ export type DeviceResponder = (frame: DeviceFrame) => JsonValue | Promise<JsonVa
 export async function deviceHarness(
   name = 'ashish@studio',
   responder: DeviceResponder = daemon,
+  options: DeviceHarnessOptions = {},
 ): Promise<DeviceHarness> {
   const harness = createTestUserDO({ deviceResponder: responder });
   const { deviceId } = await harness.userDO.registerDevice(await testOwner(), name);
   harness.attachDevice(deviceId);
+  const hello = options.hello === undefined ? CAPABLE_HELLO : options.hello;
+  if (hello !== null) await harness.sendDeviceHello(hello);
   const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
   const sibling = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
   return Object.assign(harness, {

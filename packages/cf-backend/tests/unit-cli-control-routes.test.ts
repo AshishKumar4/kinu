@@ -101,7 +101,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     },
     async listPendingConsents() {
       calls.push('consents:list');
-      return [{ consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', scope: 'all_local_actions', createdAt: 1 }];
+      return [{ consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', createdAt: 1 }];
     },
     async resolveDeviceConsent(id: string, decision: string) {
       calls.push(`consents:resolve:${id}:${decision}`);
@@ -245,7 +245,7 @@ describe('CLI control routes', () => {
       ],
     });
     expect(await rpcResult(env, 'listPendingConsents')).toEqual([
-      { consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', scope: 'all_local_actions', createdAt: 1 },
+      { consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', createdAt: 1 },
     ]);
     expect(await rpcResult(env, 'resolveDeviceConsent', ['cons-1', 'once'])).toEqual({ ok: true });
     expect(await rpcResult(env, 'setModel', ['openai/gpt-5.1'])).toEqual({ ok: true, spec: 'openai/gpt-5.1' });

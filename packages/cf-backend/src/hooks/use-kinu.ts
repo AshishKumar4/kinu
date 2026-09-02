@@ -320,7 +320,6 @@ const SocketMessageSchema = v.variant("type", [
   v.object({
     type: v.literal("device_consent"), consentId: v.string(), deviceLabel: v.string(),
     method: v.optional(v.string()), command: v.string(),
-    scope: v.picklist(["all_local_actions", "full_filesystem"]),
     workspaceName: v.optional(v.nullable(v.string())),
   }),
   v.object({ type: v.literal("device_consent_resolved"), consentId: v.string() }),
@@ -1251,7 +1250,6 @@ export function useKinu(target?: string | KinuActorAddress) {
               deviceLabel: msg.deviceLabel,
               method: msg.method ?? "exec",
               command: msg.command,
-              scope: msg.scope,
               createdAt: Date.now(),
             };
             if (msg.workspaceName) card.workspaceName = msg.workspaceName;

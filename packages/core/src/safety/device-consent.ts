@@ -1,15 +1,16 @@
 /**
- * Device consent — per-(agent, device), ask-once-then-remember, and the
- * registry of prompts waiting on an answer.
+ * Device binding — per-(workspace, device), asked once, then remembered, and
+ * the registry of prompts waiting on an answer.
  *
- * Two tiers:
- *   'all_local_actions' — the base grant: native file actions are confined to
- *     the device connect directory / home. An unrestricted shell is excluded:
- *     shell syntax can address any path and cannot honor a subtree boundary.
- *   'full_filesystem'   — the stronger tier: lifts the subtree scope and
- *     enables the shell executor. Implies the base grant. Never the default.
+ * ONE question, asked once per workspace: may this workspace use this machine?
+ * There is no second tier to grant and no per-command card. What a command may
+ * touch is decided by the device's own Sandbox switch, which only the owner
+ * sets, in Settings. Consent answers WHO, the sandbox answers WHAT. Folding
+ * the two into one card is how the owner ended up being asked to approve
+ * `rm -rf ~/work` at two in the morning, on a card whose only real choice was
+ * whether to keep working.
  *
- * A prompt that nobody answered is not one of them. It used to resolve as
+ * A prompt that nobody answered is neither answer. It used to resolve as
  * `deny`, so the model was told its request had been refused when the owner
  * was simply away from the keyboard — and an agent meant to run for hours
  * unattended reads a refusal as policy and stops asking, turning a temporary
@@ -26,18 +27,6 @@
 import type { DynamicApproval } from '../prompting/volatile-context';
 import * as v from 'valibot';
 
-export const DEVICE_CONSENT_SCOPE = 'all_local_actions';
-export const DEVICE_CONSENT_SCOPE_FULL_FS = 'full_filesystem';
-
-export type DeviceConsentScope = typeof DEVICE_CONSENT_SCOPE | typeof DEVICE_CONSENT_SCOPE_FULL_FS;
-
-/** Shell execution and checkpoint restore can write any device path, so both
- * require the full-machine tier. Native file actions remain subtree-confined. */
-export function deviceConsentScopeForMethod(method: string): DeviceConsentScope {
-  return method === 'exec' || method === 'checkpointRestore'
-    ? DEVICE_CONSENT_SCOPE_FULL_FS
-    : DEVICE_CONSENT_SCOPE;
-}
 /** How a consent prompt settled. `timeout` is NOT a decision — nobody made
  *  one. It is never remembered, and it never becomes a stored policy. */
 export type DeviceConsentDecision = 'once' | 'always' | 'deny' | 'timeout';
@@ -74,35 +63,13 @@ export const DEVICE_PROVISION_METHOD = 'connect';
  */
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
   'Connecting installs the Kinu daemon on this machine and links it to your account.',
-  'A workspace you grant access to can then run commands, read and write files here,',
-  'as you — not root. Access is per workspace: you approve each one once, and you can',
-  'revoke it any time under Account settings → Devices.',
+  'A workspace you approve then runs commands here in a sandbox: the agent gets its own',
+  'home directory plus the folders you consented, and your own files stay invisible to it.',
+  'Access is per workspace: you approve each one once, and you can revoke it any time',
+  'under Account settings → Devices. The same page has one Sandbox switch per device;',
+  'turning it off gives the agent full access to this machine, as you — not root.',
   'The daemon dials out over one WebSocket; it opens no inbound ports.',
 ];
-
-/** Narrow a stored scope string; unknown values mean the base tier. */
-export function parseConsentScope(raw: string | null | undefined): DeviceConsentScope {
-  return raw === DEVICE_CONSENT_SCOPE_FULL_FS ? DEVICE_CONSENT_SCOPE_FULL_FS : DEVICE_CONSENT_SCOPE;
-}
-
-/** Remembering a new grant never downgrades an existing stronger tier. */
-export function mergeConsentScope(existing: string | null | undefined, granted: DeviceConsentScope): DeviceConsentScope {
-  return parseConsentScope(existing) === DEVICE_CONSENT_SCOPE_FULL_FS
-    ? DEVICE_CONSENT_SCOPE_FULL_FS
-    : granted;
-}
-
-/**
- * Whether an allow at `granted` scope decides a request needing `required`.
- * `full_filesystem` implies the base tier; the base tier does not imply it.
- *
- * One spelling, used by the stored-policy short-circuit and by the registry
- * when an "always" grant settles the prompts it covers. Two spellings of this
- * comparison is how one of them comes to allow slightly more than the other.
- */
-export function consentScopeCovers(granted: DeviceConsentScope, required: DeviceConsentScope): boolean {
-  return required === DEVICE_CONSENT_SCOPE || granted === DEVICE_CONSENT_SCOPE_FULL_FS;
-}
 
 export interface DeviceActionSummary {
   method: string;
@@ -123,10 +90,14 @@ function summarizeParam<Value>(value: Value): string {
   return (rendered ?? String(value)).slice(0, 120);
 }
 
-/** What the agent is asking permission for.
+/** What the agent is asking for: this workspace's use of this machine.
+ *
+ *  `method` and `command` say what the agent was doing when it first reached
+ *  for the machine. They are context on the card, never the thing being
+ *  approved — the answer binds the workspace to the device, not the command.
  *
  *  `workspaceName` names the workspace whose access is being decided when the
- *  caller is a workspace — the grant is per-(workspace, device), and a card
+ *  caller is a workspace — the binding is per-(workspace, device), and a card
  *  that cannot say which workspace asks cannot be answered once with
  *  understanding. Absent for non-workspace callers. */
 export interface DeviceConsentRequest {
@@ -134,7 +105,6 @@ export interface DeviceConsentRequest {
   readonly deviceLabel: string;
   readonly method: string;
   readonly command: string;
-  readonly scope: DeviceConsentScope;
   readonly workspaceName?: string;
 }
 
@@ -177,17 +147,16 @@ interface Waiting {
 
 /**
  * A pending prompt has one capability context (device and workspace) and one
- * action (method, command, and scope). A changed device label is presentation
- * metadata for that same device, not a new question for the owner.
+ * action (method and command) that raised it. A changed device label is
+ * presentation metadata for that same device, not a new question for the
+ * owner.
  */
 function sameRequest(pending: DeviceConsentRequest, request: DeviceConsentRequest): boolean {
   if (
     pending.deviceId !== request.deviceId
     || pending.workspaceName !== request.workspaceName
   ) return false;
-  return pending.method === request.method
-    && pending.command === request.command
-    && pending.scope === request.scope;
+  return pending.method === request.method && pending.command === request.command;
 }
 
 /**
@@ -256,27 +225,32 @@ export class DeviceConsentRegistry {
     // Anything unrecognised is the weakest grant, never a stronger one.
     const effective = decision === 'always' || decision === 'deny' ? decision : 'once';
     pending.settle(effective);
-    if (effective === 'always') this.settleCoveredByGrant(pending.view);
+    if (effective === 'always') this.settleBoundByGrant(pending.view);
     return true;
   }
 
   /**
-   * An "always" answer is a policy, and a policy decides more than the card it
-   * was given on. Every other prompt still waiting for the same device whose
-   * scope that grant covers is now answered, so leaving its card up asks the
-   * owner to decide again what they just decided forever — the duplicate they
-   * see. Those settle as `once`: the remembering is the one "always", never
-   * one per card.
+   * An "always" answer is a binding, and a binding decides more than the card
+   * it was given on. Every other prompt still waiting for the same device AND
+   * the same workspace is now answered, so leaving its card up asks the owner
+   * to decide again what they just decided forever — the duplicate they see.
+   * Those settle as `once`: the remembering is the one "always", never one per
+   * card.
+   *
+   * The workspace has to match. A binding is per (workspace, device), so one
+   * workspace's answer is not another's — a host that ever holds two
+   * workspaces' prompts in one registry must not let the first one in on the
+   * second one's card.
    */
-  private settleCoveredByGrant(granted: PendingDeviceConsent): void {
-    // The provisioning card names no machine and grants no device access.
+  private settleBoundByGrant(granted: PendingDeviceConsent): void {
+    // The provisioning card names no machine and binds nothing.
     if (!granted.deviceId) return;
     // Iterated directly: deleting the CURRENT key mid-iteration is defined
     // behaviour for a Map, and this loop deletes nothing else, so a snapshot
     // copy would buy nothing.
     for (const [consentId, pending] of this.waiting) {
       if (pending.view.deviceId !== granted.deviceId) continue;
-      if (!consentScopeCovers(granted.scope, pending.view.scope)) continue;
+      if (pending.view.workspaceName !== granted.workspaceName) continue;
       this.waiting.delete(consentId);
       this.deps.announce({ kind: 'settled', consentId });
       pending.settle('once');

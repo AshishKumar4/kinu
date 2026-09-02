@@ -254,7 +254,7 @@ const cases: Case[] = [
     make: () => nimbusSessionFiles(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
   { name: 'device file view', statMissing: 'null',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
-      consentedRoot: async () => '/', deviceHome: async () => '/', hasFullFilesystem: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
     }), path: (s) => `/conf/${s}` },
 ];
 
@@ -409,15 +409,15 @@ describe('the global workspace namespace', () => {
 describe('device file view — the consented subtree is a boundary', () => {
   function scoped(root: string) {
     const calls: string[] = [];
-    const consent = { consentedRoot: async () => root, deviceHome: async () => root, hasFullFilesystem: async () => false };
+    const consent = { consentedRoot: async () => root, deviceHome: async () => root, unconfined: async () => false };
     return { vfs: deviceFiles(deviceTransport(new MemFs(), calls), consent), calls };
   }
 
-  test('SECURITY: escaping the consented subtree is denied without the full-fs tier', async () => {
+  test('SECURITY: escaping the consented directory is denied while the sandbox is on', async () => {
     const { vfs, calls } = scoped('/home/me/proj');
     expect(await rejectionCode(() => vfs.readFile('/etc/passwd'))).toBe('EACCES');
     await expect(vfs.readFile('/etc/passwd')).rejects.toThrow(
-      /outside the consented device directory '\/home\/me\/proj'[\s\S]*full-filesystem consent tier/,
+      /outside the consented device directory '\/home\/me\/proj'[\s\S]*Ask the owner to consent that directory/,
     );
     // A sibling whose name merely BEGINS with the consented one is outside it.
     expect(await rejectionCode(() => vfs.readFile('/home/me/projects/x'))).toBe('EACCES');
@@ -464,7 +464,7 @@ describe('device file view — bounded range reads', () => {
     const consent = {
       consentedRoot: async () => '/home/me/proj',
       deviceHome: async () => '/home/me',
-      hasFullFilesystem: async () => false,
+      unconfined: async () => false,
     };
     const vfs = deviceFiles(deviceTransport(fs, calls), consent);
 

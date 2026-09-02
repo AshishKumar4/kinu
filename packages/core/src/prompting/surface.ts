@@ -7,6 +7,7 @@ import {
 } from '../tools/registry';
 import { isMcpToolKey } from '../tools/mcp-naming';
 import type { ExecutorLifecycleStatus, ResourceLimits } from '../execution/types';
+import type { DeviceSandboxStatus } from '../execution/device-status';
 import {
   resolvePromptModelProfile,
   type PromptModelContext,
@@ -106,6 +107,10 @@ export interface PromptExecutorInfo {
   /** Whether this agent holds the environment's access grant already — what
    *  tells the model whether its first call runs or raises a consent card. */
   granted?: boolean;
+  /** How the machine behind this row runs a command, when it is a device with
+   *  a Sandbox switch: the owner's setting, what the machine proved, this
+   *  workspace's own home on it, and the directories it may write. */
+  sandbox?: DeviceSandboxStatus;
 }
 
 export interface PromptExternalToolInfo {

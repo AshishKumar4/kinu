@@ -4,8 +4,11 @@
  * is synthesized server-side), so these fetches are bare.
  */
 import {
+  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS,
   ProfileCatalogEnvelopeSchema,
   type Credential,
+  type DeviceSandboxStatus,
+  type DeviceTier,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
@@ -186,16 +189,33 @@ export interface UserDevice {
   revokedAt: number | null;
   /** The owner revoked this device while a command lacked confirmed termination. */
   unstoppedAt: number | null;
+  /** The Sandbox switch the owner set and what the daemon proved about the
+   *  machine. The registry knows nothing per workspace, so the workspace's
+   *  own home and roots are not here — they live on the runtime status. */
+  sandbox: UserDeviceSandbox;
 }
+export type UserDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'gpu'>;
 export interface RegisteredDevice {
   origin: string;
   installCommand: string;
 }
+const DeviceSandboxSchema = v.object({
+  tier: v.picklist(DEVICE_TIERS),
+  capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
+  reason: v.nullable(v.picklist(DEVICE_SANDBOX_REASONS)),
+  gpu: v.array(v.string()),
+});
+/** A row written before the registry recorded a sandbox: the switch is on by
+ *  default, and a machine that has not proved it can sandbox has not proved
+ *  it can sandbox — the same reading `parseSandboxCapability` gives silence. */
+const UNREPORTED_SANDBOX: v.InferOutput<typeof DeviceSandboxSchema> =
+  { tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] };
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
   lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
+  sandbox: v.optional(DeviceSandboxSchema, UNREPORTED_SANDBOX),
 });
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });
 export const listDevices    = () => api(v.array(UserDeviceSchema), 'GET', '/devices');
@@ -207,20 +227,22 @@ export const revokeDevice   = (id: string) =>
   api(v.object({ ok: v.literal(true), unstoppedCommands: v.number() }), 'DELETE', `/devices/${encodeURIComponent(id)}`);
 export const acknowledgeUnstoppedDevice = (id: string) =>
   api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}/unstopped`);
+/** Set a device's Sandbox switch. Owner-session only; the server answers 403
+ *  to anyone else. What a command may then reach is decided by the machine,
+ *  not by any workspace's binding. */
+export const setDeviceSandboxTier = (deviceId: string, tier: DeviceTier) =>
+  api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/sandbox`, { tier });
 
-/** Per-(agent, device) remembered consent: native file actions inside the
- *  connected folder, or full-filesystem plus unrestricted shell access. */
-export type DeviceConsentScope = 'all_local_actions' | 'full_filesystem';
+/** Per-(workspace, device) remembered binding: whether that workspace may use
+ *  the machine at all. It carries no tier — the device's Sandbox switch decides
+ *  what a command may reach. */
 const DeviceConsentSchema = v.object({
   agentName: v.string(), deviceId: v.string(), policy: v.string(),
-  scope: v.picklist(['all_local_actions', 'full_filesystem']),
   lastMethod: v.nullable(v.string()), lastSummary: v.nullable(v.string()),
 });
 export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;
 export const listDeviceConsents = () => api(v.array(DeviceConsentSchema), 'GET', '/devices/consents');
-export const setDeviceConsentScope = (deviceId: string, agentName: string, scope: DeviceConsentScope) =>
-  api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/consent`, { agentName, scope });
-/** Revoke a workspace's grant on a device. The row is deleted, so the next
+/** Revoke a workspace's binding on a device. The row is deleted, so the next
  *  device call asks again rather than reading as a standing refusal. */
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
   api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`);

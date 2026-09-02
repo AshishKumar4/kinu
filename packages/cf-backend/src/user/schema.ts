@@ -58,13 +58,29 @@ const USER_DEVICES_ADDED_COLUMNS = {
   // fact; survives removal of the active in-flight row.
   unstopped_at: 'INTEGER',
   // The directory `kinu connect` ran in, and the machine's home, both carried
-  // on HELLO. The base consent tier is scoped to `consented_root`, so it is
+  // on HELLO. A workspace's file view is scoped to `consented_root`, so it is
   // one directory the owner NAMED rather than a default the hub computed; a
-  // row with none has no base-tier file access at all. `device_home` is what
+  // row with none has no scoped file access at all. `device_home` is what
   // the file view opens at, and it exists so the hub never has to run a
   // command on the machine to learn a path.
   consented_root: 'TEXT',
   device_home: 'TEXT',
+  // What the daemon PROVED about sandboxing when it started, and why it could
+  // not. A row with neither reads as `files_only`: a machine that has not
+  // proved it can sandbox has not proved it can sandbox, and the sandbox tier
+  // then runs nothing rather than quietly running everything unconfined.
+  sandbox_capability: 'TEXT',
+  sandbox_reason: 'TEXT',
+  // GPU device nodes the daemon found, as a JSON array.
+  sandbox_gpu: 'TEXT',
+  // Where this machine keeps agent homes (`<home>/.kinu/agents`), reported on
+  // HELLO. The hub composes `<agent_root>/<workspace>/home` per exec, so it
+  // never guesses a path on someone else's machine.
+  agent_root: 'TEXT',
+  // The owner's Sandbox switch for this device. Defaulted rather than
+  // nullable: the switch is ON, and a row written before the column existed
+  // must read as on.
+  tier: `TEXT NOT NULL DEFAULT 'sandboxed'`,
 } as const;
 
 // A ticket bought with the CURRENT device token is the one accept that may
@@ -331,8 +347,21 @@ export function initUserTables(sql: SqlExec): void {
       last_ip         TEXT,
       last_agent      TEXT,
       replaced_at     INTEGER,
+      -- The directory the owner ran "kinu connect" in, and the machine's own
+      -- home, both reported on HELLO. The consented directory is the one place
+      -- besides its own agent home a workspace reaches here.
       consented_root  TEXT,
       device_home     TEXT,
+      -- What the daemon proved about sandboxing, why it could not, and the GPU
+      -- nodes it found (JSON array). Absent reads as files_only.
+      sandbox_capability TEXT,
+      sandbox_reason  TEXT,
+      sandbox_gpu     TEXT,
+      -- Where this machine keeps agent homes. The hub composes one per
+      -- workspace under it and never guesses a path on the machine.
+      agent_root      TEXT,
+      -- The owner's Sandbox switch. ON unless the owner turned it off.
+      tier            TEXT NOT NULL DEFAULT 'sandboxed',
       -- Revocation found a command it could not confirm stopped. This owner-
       -- visible fact survives removal of its active in-flight row; reconnection
       -- cannot clear it because a revoked device never reconnects.
@@ -416,16 +445,20 @@ export function initUserTables(sql: SqlExec): void {
   // access-token store next to the rest of the CLI bearer machinery.
   initAccessTokenTable(sql);
 
-  // Per-(agent, device) consent policy. Ask-once-then-remember: a missing row
-  // means ASK (the agent raises a card in chat the first time it touches the
-  // device); 'allow' / 'deny' are the remembered decisions. One device, many
-  // agents — each agent earns its own consent.
+  // Per-(workspace, device) BINDING. Ask-once-then-remember: a missing row
+  // means ASK (the agent raises one card in chat the first time it reaches for
+  // the machine); 'allow' / 'deny' are the remembered answers. One device,
+  // many workspaces — each workspace earns its own binding.
+  //
+  // There is no tier column. What a bound workspace may touch is the device's
+  // own Sandbox switch (`user_devices.tier`), which only the owner sets. A row
+  // written when the tier lived here keeps a defaulted `scope` column that
+  // nothing reads or writes.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_consent (
       agent_name  TEXT NOT NULL,
       device_id   TEXT NOT NULL,
       policy      TEXT NOT NULL,
-      scope       TEXT NOT NULL DEFAULT 'all_local_actions',
       last_method TEXT,
       last_summary TEXT,
       updated_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),

@@ -75,6 +75,7 @@ export class DefaultExecutionRouter implements ExecutionRouter {
       if (status.reason !== undefined) Object.assign(info, { reason: status.reason });
       if (status.label !== undefined) Object.assign(info, { label: status.label });
       if (status.granted !== undefined) Object.assign(info, { granted: status.granted });
+      if (status.sandbox !== undefined) Object.assign(info, { sandbox: status.sandbox });
       if (p.resourceLimits !== undefined) Object.assign(info, { resourceLimits: p.resourceLimits });
       return info;
     });

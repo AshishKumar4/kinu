@@ -4,6 +4,7 @@ import {
   daemonStatus,
   DAEMON_LOG_PATH,
   defaultDeviceName,
+  describeDeviceSandbox,
   DEVICE_CONFIG_PATH,
   DEVICE_CONNECT_DEADLINE_MS,
   DEVICE_CONNECT_DISCLOSURE,
@@ -44,6 +45,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     }
     console.log('');
     console.log(`${OK('✓')} Connected this machine as ${ACCENT(name)}`);
+    for (const line of describeDeviceSandbox(result.sandbox)) console.log(`  ${line}`);
     console.log(`${DIM('Rename or revoke it under Account settings → Devices.')}`);
     console.log(`${DIM('Daemon log:')} ${DAEMON_LOG_PATH}`);
     console.log('');

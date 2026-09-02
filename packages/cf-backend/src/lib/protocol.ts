@@ -3,7 +3,7 @@
  */
 
 import type {
-	ActivityLogEntry, ContextComposition, DeviceConsentScope, HeadReportStatus,
+	ActivityLogEntry, ContextComposition, HeadReportStatus,
 	HeadUnsettledStatus, StepTelemetry, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 
@@ -257,16 +257,16 @@ export interface ReleaseBoard {
 
 /** A pending device request — either an agent wants to act on a connected
  *  device, or (method `connect`) it is asking for a device to exist at all.
- *  The user decides (Allow once / Always / Deny); `always` IS the per-workspace
- *  grant. */
+ *  The owner decides (Use <device> / Not now); `always` IS the per-workspace
+ *  binding. It carries no tier: the device's own Sandbox switch decides what a
+ *  command may reach. */
 export interface PendingConsent {
 	consentId: string;
 	deviceLabel: string;
 	method: string;
 	command: string;
-	scope: DeviceConsentScope;
 	createdAt: number;
-	/** The workspace whose grant is being decided, when a workspace asked. */
+	/** The workspace whose binding is being decided, when a workspace asked. */
 	workspaceName?: string;
 }
 

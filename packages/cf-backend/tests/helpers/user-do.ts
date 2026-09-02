@@ -15,7 +15,6 @@ import {
   JsonValueSchema,
   type DeviceConsentDecision,
   type DeviceConsentRequest,
-  type DeviceConsentScope,
   type JsonValue,
   type SqlExec,
   type SqlExecRow,
@@ -80,7 +79,6 @@ export interface TestUserDO {
     workspace: string;
     method: string;
     command: string;
-    scope: DeviceConsentScope;
     workspaceName?: string;
   }>;
   /** Ids of the cards actually RAISED, in order. The registry mints one per
@@ -102,6 +100,11 @@ export interface TestUserDO {
   /** Attach (or detach with null) the device this harness's live socket
    *  belongs to — the id `registerDevice` just minted. */
   attachDevice(deviceId: string | null): void;
+  /** Deliver a HELLO the way a daemon does — through the real socket handler,
+   *  so what the hub records is what a machine could actually make it record.
+   *  The frame is passed as sent, unvalidated here, because a daemon that sends
+   *  a field this build does not know is exactly the case worth testing. */
+  sendDeviceHello(hello: JsonValue): Promise<void>;
   /** Sockets the UserDO accepted through its own upgrade path, with what it
    *  wrote to each — how a test reads the rotation frame the hub pushes.
    *  `drop` closes one from the far end, which is what makes a redial
@@ -168,12 +171,19 @@ export interface DeviceFrame {
   id: string;
   method: string;
   params: JsonValue[];
+  /** The sandbox frame the hub computed for this command, which the daemon
+   *  enforces. It rides beside `id`/`method`/`params` because `DeviceTunnel`
+   *  SPREADS its `extra` into the frame. Recorded because a decision the hub
+   *  makes on the way out is invisible in the params: they are the same
+   *  whether or not the command was sandboxed. */
+  sandbox?: JsonValue;
 }
 
 const DeviceFrameSchema = v.object({
   id: v.string(),
   method: v.string(),
   params: v.optional(v.array(JsonValueSchema)),
+  sandbox: v.optional(JsonValueSchema),
 });
 
 interface TestUserEnvironment {
@@ -268,6 +278,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
       if (!frame.success) return;
       const call: DeviceFrame = { id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [] };
+      if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
       deviceFrames.push(call);
       const responder = options.deviceResponder;
       const owner = hub.current;
@@ -324,7 +335,6 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           workspace: name,
           method: consent.method,
           command: consent.command,
-          scope: consent.scope,
         };
         if (consent.workspaceName) prompt.workspaceName = consent.workspaceName;
         consentPrompts.push(prompt);
@@ -421,6 +431,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         for (const waiting of registry.list()) registry.resolve(waiting.consentId, answer);
       }
     },
+    sendDeviceHello: (hello) => userDO.webSocketMessage(socket, JSON.stringify(hello)),
     attachDevice: (deviceId) => { attached = deviceId; },
     get acceptedSockets() { return ACCEPTED_SOCKETS.slice(acceptedFrom); },
     joinFibers: joinHarnessFibers,

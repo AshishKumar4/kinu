@@ -62,7 +62,6 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       deviceLabel: 'laptop',
       method: 'shell',
       command: 'git push origin main',
-      scope: 'full_filesystem',
     });
 
     const approvals = agent.observeDynamicContext().approvals;

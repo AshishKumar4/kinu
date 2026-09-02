@@ -1,9 +1,8 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import {
-  DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
-  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
-  deviceConsentScopeForMethod, mergeConsentScope, parseConsentScope, summarizeDeviceAction,
+  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_CONNECT_DISCLOSURE,
+  summarizeDeviceAction,
   type JsonValue,
 } from '@kinu.run/core';
 import { handleUserRequest } from '../src/user/routes';
@@ -26,10 +25,6 @@ describe('device consent prompt data', () => {
     });
   });
 
-  test('remembered consent scope is the broad local action grant', () => {
-    expect(DEVICE_CONSENT_SCOPE).toBe('all_local_actions');
-  });
-
   test('an unanswered prompt does not read as a refusal', () => {
     // Both are failures, but they mean opposite things to an agent running
     // unattended: a refusal is policy and should stop it asking, while an
@@ -41,35 +36,24 @@ describe('device consent prompt data', () => {
     expect(DEVICE_CONSENT_DENIED).toContain('declined');
     expect(DEVICE_CONSENT_DENIED).not.toContain('later');
   });
-});
 
-describe('consent tiers (the /pc mount scope)', () => {
-  test('the full-filesystem tier is a distinct, never-default scope', () => {
-    expect(DEVICE_CONSENT_SCOPE_FULL_FS).toBe('full_filesystem');
-    expect(parseConsentScope(undefined)).toBe(DEVICE_CONSENT_SCOPE);
-    expect(parseConsentScope(null)).toBe(DEVICE_CONSENT_SCOPE);
-    expect(parseConsentScope('garbage')).toBe(DEVICE_CONSENT_SCOPE);
-    expect(parseConsentScope('full_filesystem')).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
-  });
-
-  test('unrestricted shell requests the full-machine tier', () => {
-    expect(deviceConsentScopeForMethod('exec')).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
-    expect(deviceConsentScopeForMethod('checkpointRestore')).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
-    expect(deviceConsentScopeForMethod('readFile')).toBe(DEVICE_CONSENT_SCOPE);
-    expect(deviceConsentScopeForMethod('writeFile')).toBe(DEVICE_CONSENT_SCOPE);
-  });
-
-  test('remembering a base action grant never downgrades full_filesystem', () => {
-    expect(mergeConsentScope('full_filesystem', DEVICE_CONSENT_SCOPE)).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
-    expect(mergeConsentScope('all_local_actions', DEVICE_CONSENT_SCOPE)).toBe(DEVICE_CONSENT_SCOPE);
-    expect(mergeConsentScope(null, DEVICE_CONSENT_SCOPE_FULL_FS)).toBe(DEVICE_CONSENT_SCOPE_FULL_FS);
-    expect(mergeConsentScope('garbage', DEVICE_CONSENT_SCOPE)).toBe(DEVICE_CONSENT_SCOPE);
+  test('the connect disclosure states the sandbox and where the switch is', () => {
+    // The disclosure is what a person reads BEFORE the daemon is installed, so
+    // it has to describe what actually happens now: a sandbox by default, and
+    // one switch that turns it off. It said "run commands, read and write
+    // files here, as you" — true only with the sandbox off.
+    const text = DEVICE_CONNECT_DISCLOSURE.join(' ');
+    expect(text).toContain('sandbox');
+    expect(text).toContain('Sandbox switch');
+    expect(text).toContain('per workspace');
+    expect(text).toContain('no inbound ports');
   });
 });
 
-// ── The grant path: /api/user/devices/consents + …/:id/consent ─────────────
-// setDeviceConsentScope previously had ZERO callers — the full_filesystem
-// tier existed and was enforced by the /pc mount but could never be granted.
+// ── The Sandbox switch: PUT /api/user/devices/:id/sandbox ──────────────────
+// The tier the owner sets is the only tier there is. The consent-scope PUT
+// this replaces granted a `full_filesystem` tier per workspace; there is no
+// per-workspace tier now, so the route is gone with the vocabulary.
 
 const IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef',
@@ -79,23 +63,20 @@ const IDENTITY: AuthIdentity = {
   authTime: Date.now(),
 };
 
-function consentRoutesSetup() {
-  // In-memory (agent, device) → scope, mirroring the UserDO consent table's
-  // grant/reduce contract so the flip is observable through the same routes.
-  const scopes = new Map<string, string>();
-  const calls: Array<{ agentName: string; deviceId: string; scope: string }> = [];
+function deviceRoutesSetup() {
+  // In-memory device → tier, mirroring the UserDO contract so the flip is
+  // observable through the same routes a browser uses.
+  const tiers = new Map<string, string>();
+  const calls: Array<{ deviceId: string; tier: string }> = [];
   const stub = {
     async ensureProfile() {},
     async listDeviceConsents(_caller: UserCaller) {
-      return [...scopes.entries()].map(([key, scope]) => {
-        const [agentName, deviceId] = key.split('|');
-        return { agentName, deviceId, policy: 'allow', scope, lastMethod: null, lastSummary: null };
-      });
+      return [{ agentName: 'jarvis', deviceId: 'dev-1', policy: 'allow', lastMethod: null, lastSummary: null }];
     },
-    async setDeviceConsentScope(_caller: UserCaller, agentName: string, deviceId: string, scope: string) {
-      calls.push({ agentName, deviceId, scope });
-      if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) return { ok: false };
-      scopes.set(`${agentName}|${deviceId}`, scope);
+    async setDeviceTier(_caller: UserCaller, deviceId: string, tier: string) {
+      calls.push({ deviceId, tier });
+      if (deviceId !== 'dev-1') return { ok: false };
+      tiers.set(deviceId, tier);
       return { ok: true };
     },
   };
@@ -114,7 +95,7 @@ function consentRoutesSetup() {
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     }), env, IDENTITY);
-  return { call, calls, scopes };
+  return { call, calls, tiers };
 }
 
 function requiredResponse(response: Response | null | undefined): Response {
@@ -122,39 +103,60 @@ function requiredResponse(response: Response | null | undefined): Response {
   return response;
 }
 
-describe('device consent-tier routes (the full_filesystem grant path)', () => {
-  test('PUT grants the full-filesystem tier and the flip is visible in the consent listing', async () => {
-    const { call, calls } = consentRoutesSetup();
+describe('the device Sandbox route', () => {
+  test('PUT turns the sandbox off and the tier reaches the UserDO', async () => {
+    const { call, calls, tiers } = deviceRoutesSetup();
 
-    const put = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
-    expect(requiredResponse(put).status).toBe(200);
-    expect(calls).toEqual([{ agentName: 'jarvis', deviceId: 'dev-1', scope: 'full_filesystem' }]);
+    const off = await call('/devices/dev-1/sandbox', 'PUT', { tier: 'raw' });
+    expect(requiredResponse(off).status).toBe(200);
+    expect(calls).toEqual([{ deviceId: 'dev-1', tier: 'raw' }]);
+    expect(tiers.get('dev-1')).toBe('raw');
 
+    const on = await call('/devices/dev-1/sandbox', 'PUT', { tier: 'sandboxed' });
+    expect(requiredResponse(on).status).toBe(200);
+    expect(tiers.get('dev-1')).toBe('sandboxed');
+  });
+
+  test('a tier outside the vocabulary is refused before the DO call', async () => {
+    const { call, calls } = deviceRoutesSetup();
+    // `files_only` is what a machine REPORTS, never what an owner selects. A
+    // route that accepted it would let the UI offer a third state that means
+    // "run nothing", which no owner would choose on purpose.
+    for (const tier of ['files_only', 'root_of_everything', '']) {
+      const bad = await call('/devices/dev-1/sandbox', 'PUT', { tier });
+      expect(requiredResponse(bad).status).toBe(400);
+    }
+    const missing = await call('/devices/dev-1/sandbox', 'PUT', {});
+    expect(requiredResponse(missing).status).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  test('an unknown device answers 404 rather than reporting success', async () => {
+    const { call } = deviceRoutesSetup();
+    const gone = await call('/devices/dev-nope/sandbox', 'PUT', { tier: 'raw' });
+    expect(requiredResponse(gone).status).toBe(404);
+  });
+
+  test('a binding listing carries no tier of its own', async () => {
+    // One tier, on the device. A per-workspace tier beside it is what made two
+    // answers to "what may this reach" possible in the first place.
+    const { call } = deviceRoutesSetup();
     const list = await call('/devices/consents', 'GET');
     expect(requiredResponse(list).status).toBe(200);
-    const consents = v.parse(
-      v.array(v.object({ agentName: v.string(), deviceId: v.string(), scope: v.string() })),
+    const rows = v.parse(
+      v.array(v.looseObject({ agentName: v.string(), deviceId: v.string() })),
       await requiredResponse(list).json(),
     );
-    expect(consents).toEqual([
-      expect.objectContaining({ agentName: 'jarvis', deviceId: 'dev-1', scope: 'full_filesystem' }),
-    ]);
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0] ?? {})).not.toContain('scope');
   });
 
-  test('PUT reduces back to the base tier (explicit choice overrides no-downgrade)', async () => {
-    const { call, scopes } = consentRoutesSetup();
-    await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
-    const reduce = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'all_local_actions' });
-    expect(requiredResponse(reduce).status).toBe(200);
-    expect(scopes.get('jarvis|dev-1')).toBe('all_local_actions');
-  });
-
-  test('an out-of-vocabulary scope or missing agent is refused before the DO call', async () => {
-    const { call, calls } = consentRoutesSetup();
-    const bad = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'root_of_everything' });
-    expect(requiredResponse(bad).status).toBe(400);
-    const missing = await call('/devices/dev-1/consent', 'PUT', { scope: 'full_filesystem' });
-    expect(requiredResponse(missing).status).toBe(400);
+  test('the consent-tier PUT is gone, not merely unused', async () => {
+    const { call, calls } = deviceRoutesSetup();
+    const legacy = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
+    // No route matches, so the user router falls through to its own 404 or
+    // answers nothing at all. Either way, nothing reached the UserDO.
+    expect(legacy === null || legacy === undefined || legacy.status === 404).toBe(true);
     expect(calls).toEqual([]);
   });
 });

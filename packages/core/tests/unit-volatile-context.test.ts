@@ -322,6 +322,95 @@ describe('renderDynamicContextBlock', () => {
     // machine has to actually be there.
     expect(executorAvailabilityLabel({ name: 'laptop', configured: true })).toBe('available');
   });
+
+  /**
+   * The model cannot see the owner's Settings page. Without this line it
+   * cannot tell a machine that will run its build from one that refuses every
+   * command, and it cannot know which directory its files survive in — so it
+   * writes to the wrong place and reports success.
+   */
+  test('a sandboxed device says what a command gets: the home, the GPU, the roots', () => {
+    const text = renderDynamicContextBlock({
+      executors: [{
+        ...connectedLaptop,
+        sandbox: {
+          tier: 'sandboxed',
+          capability: 'sandboxed',
+          reason: null,
+          gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
+          agentHome: '/home/ashish/.kinu/agents/notes/home',
+          roots: ['/home/ashish/projects/kinu'],
+        },
+      }],
+    })!;
+    expect(text).toContain('- laptop: connected');
+    expect(text).toContain('sandboxed full bash');
+    expect(text).toContain('GPU: nvidia0, nvidiactl');
+    expect(text).toContain('agent home /home/ashish/.kinu/agents/notes/home');
+    expect(text).toContain('writable: /home/ashish/projects/kinu');
+    // The install story, stated proactively: the refusal a model would
+    // otherwise discover by running sudo and reading a message about it.
+    expect(text).toContain('No sudo, apt, dnf or brew');
+  });
+
+  test('a device that cannot sandbox says so, with the reason and no shell', () => {
+    const text = renderDynamicContextBlock({
+      executors: [{
+        ...connectedLaptop,
+        sandbox: {
+          tier: 'sandboxed',
+          capability: 'files_only',
+          reason: 'no_userns',
+          gpu: [],
+          agentHome: null,
+          roots: [],
+        },
+      }],
+    })!;
+    expect(text).toContain('device cannot sandbox: no_userns');
+    expect(text).toContain('files only, no shell');
+    expect(text).toContain('Reading and writing files still works');
+    expect(text).not.toContain('sandboxed full bash');
+  });
+
+  test('a device with the sandbox switched off says the agent runs as the owner', () => {
+    const text = renderDynamicContextBlock({
+      executors: [{
+        ...connectedLaptop,
+        sandbox: {
+          tier: 'raw',
+          capability: 'sandboxed',
+          reason: null,
+          gpu: ['/dev/dri'],
+          agentHome: '/home/ashish/.kinu/agents/notes/home',
+          roots: [],
+        },
+      }],
+    })!;
+    expect(text).toContain('Sandbox off for this device');
+    expect(text).toContain('full access to the machine');
+    expect(text).not.toContain('sandboxed full bash');
+  });
+
+  test('a machine with no GPU says none, which is measured rather than unknown', () => {
+    const text = renderDynamicContextBlock({
+      executors: [{
+        ...connectedLaptop,
+        sandbox: {
+          tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [],
+          agentHome: '/home/ashish/.kinu/agents/notes/home', roots: [],
+        },
+      }],
+    })!;
+    expect(text).toContain('GPU: none');
+    // Nothing to say about writable roots when the owner consented none.
+    expect(text).not.toContain('writable:');
+  });
+
+  test('an executor with no sandbox block adds nothing to its row', () => {
+    expect(renderDynamicContextBlock({ executors: [connectedLaptop] })!)
+      .toEndWith('- laptop: connected — files at /pc\n</dynamic_context>');
+  });
 });
 
 describe('the dynamic block carries every genuinely-live plane', () => {

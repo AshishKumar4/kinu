@@ -174,7 +174,7 @@ describe('the workspace plane mount table', () => {
 			'/home/dev/notes.txt': 'consented',
 			'/etc/secrets.key': 'outside',
 		};
-		let fullFilesystem = false;
+		let unconfined = false;
 		const transport: DeviceTransport = {
 			status: () => ({ connected: true, registered: true, toolchain: null }),
 			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
@@ -195,7 +195,7 @@ describe('the workspace plane mount table', () => {
 		const view = deviceFiles(transport, {
 			consentedRoot: async () => '/home/dev',
 			deviceHome: async () => '/home/dev',
-			hasFullFilesystem: async () => fullFilesystem,
+			unconfined: async () => unconfined,
 		});
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', view)]);
 
@@ -205,10 +205,10 @@ describe('the workspace plane mount table', () => {
 			path: '/etc/secrets.key',
 		});
 
-		fullFilesystem = true;
+		unconfined = true;
 		expect(await mounted.readFile('/pc/etc/secrets.key', { encoding: 'utf8' })).toBe('outside');
 
-		fullFilesystem = false;
+		unconfined = false;
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toThrow(
 			/outside the consented device directory/,
 		);
