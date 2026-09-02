@@ -12,9 +12,7 @@ import {
   BUILTIN_TUI_THEMES,
   DEFAULT_TUI_THEME_SELECTION,
   TuiThemeProvider,
-  contrastRatio,
   createThemeRegistry,
-  themeContrastPairs,
 } from '../src/tui/theme';
 
 const TUI_SOURCES = join(import.meta.dir, '..', 'src', 'tui');
@@ -24,6 +22,21 @@ const MID_TONE_TERMINALS = {
   dark: { 'Nord #2E3440': '#2E3440', 'Dracula #282A36': '#282A36', 'Solarized dark #002B36': '#002B36' },
   light: { 'Solarized light #FDF6E3': '#FDF6E3', 'GitHub light #FFFFFF': '#FFFFFF' },
 } as const;
+
+/** WCAG 2.x relative luminance and contrast, owned by this test so the palette
+ *  is judged against the standard's arithmetic rather than the registry's own. */
+function luminance(hex: string): number {
+  const channel = (index: number): number => {
+    const value = Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
+}
+
+function contrast(foreground: string, background: string): number {
+  const [light, dark] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+  return (light + 0.05) / (dark + 0.05);
+}
 
 describe('TUI theme', () => {
   test('a missing preference file follows the terminal; an existing file keeps its choice', () => {
@@ -36,31 +49,42 @@ describe('TUI theme', () => {
     expect(createFileTuiPreferenceStore(path).read().theme).toEqual({ mode: 'theme', themeId: 'kinu-dusk' });
   });
 
-  test('every preset passes the contrast gate, and the numbers are printed', () => {
+  test('every preset passes the registry contrast gate, and the numbers are printed', () => {
+    // The registry refuses any theme whose ink does not reach the WCAG floor
+    // over the grounds it is drawn on — presets included, at module load. So
+    // the presets standing here IS the assertion; the ratios are printed on
+    // the green path because a floor says nothing about the margin.
     const registry = createThemeRegistry(BUILTIN_TUI_THEMES);
     expect(registry.themes.map((theme) => theme.id)).toEqual([
       'kinu-light', 'kinu-dark', 'kinu-dusk', 'kinu-light-solid', 'kinu-dark-solid', 'kinu-paper', 'high-contrast',
     ]);
     const lines: string[] = [];
     for (const theme of registry.themes) {
-      const pairs = themeContrastPairs(theme);
-      expect(pairs.length).toBeGreaterThan(40);
-      for (const pair of pairs) {
-        expect(pair.ratio, `${theme.id} ${pair.label}`).toBeGreaterThanOrEqual(pair.minimum);
-      }
-      const primaryOnUser = pairs.find((pair) => pair.label === 'text.strong/background.user')!;
-      const onAccent = pairs.find((pair) => pair.label === 'text.onAccent/background.accent')!;
-      const worst = [...pairs].sort((left, right) => left.ratio / left.minimum - right.ratio / right.minimum)[0]!;
-      lines.push(`${theme.id}: ${String(pairs.length)} pairs · bubble ink ${primaryOnUser.ratio.toFixed(2)} · ink on gold ${onAccent.ratio.toFixed(2)} · tightest ${worst.label} ${worst.ratio.toFixed(2)}≥${String(worst.minimum)}`);
-      if (theme.colors.background.canvas === undefined) {
+      const { text, background } = theme.colors;
+      const bubble = contrast(text.strong, background.user);
+      const onAccent = contrast(text.onAccent, background.accent);
+      expect(bubble, `${theme.id} bubble ink`).toBeGreaterThanOrEqual(4.5);
+      expect(onAccent, `${theme.id} ink on accent`).toBeGreaterThanOrEqual(4.5);
+      lines.push(`${theme.id}: bubble ink ${bubble.toFixed(2)} · ink on accent ${onAccent.toFixed(2)}`);
+      if (background.canvas === undefined) {
         // Blind spot, printed on the green path: the gate measures the web
         // canvas and the extreme, never the mid-tone terminals in between.
         const grounds = MID_TONE_TERMINALS[theme.appearance];
-        const dim = Object.entries(grounds).map(([name, ground]) => `${name} ${contrastRatio(theme.colors.text.muted, ground).toFixed(2)}`);
+        const dim = Object.entries(grounds).map(([name, ground]) => `${name} ${contrast(text.muted, ground).toFixed(2)}`);
         lines.push(`  not gated — text.muted on ${dim.join(', ')}`);
       }
     }
     console.log(lines.join('\n'));
+  });
+
+  test('the registry refuses a theme whose ink vanishes into its own ground, naming the pair', () => {
+    const [light] = BUILTIN_TUI_THEMES;
+    const invisible = {
+      ...light,
+      id: 'invisible-ink',
+      colors: { ...light.colors, text: { ...light.colors.text, strong: light.colors.background.user } },
+    };
+    expect(() => createThemeRegistry([invisible])).toThrow(/text\.strong\/background\.user contrast/);
   });
 
   test('under Kinu light a user turn sits on the user fill and the assistant turn does not', async () => {

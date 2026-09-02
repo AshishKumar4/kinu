@@ -278,7 +278,7 @@ function scanCommandLine(line: string, openQuote: string): CommandLineScan {
  * `do` — submits, and the shell reports the syntax error. Reading those needs
  * the parse, and a wrong guess strands a user at a prompt no key can leave.
  */
-export function needsMoreInput(source: string): boolean {
+function needsMoreInput(source: string): boolean {
   const lines = source.split('\n');
   // A trailing newline ends the last line; it does not start an empty one.
   if (lines[lines.length - 1] === '') lines.pop();

@@ -162,8 +162,8 @@ export interface ThemeRegistry {
   get(themeId: string): TuiThemeDefinition;
 }
 
-export const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark';
-export const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light';
+const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark';
+const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light';
 /**
  * What a fresh install paints: the ink set the terminal's own background
  * calls for, on that background. The same rule as omp's `getDefaultTheme`.
@@ -185,8 +185,8 @@ export const REFERENCE_TERMINAL_GROUNDS: Readonly<Record<ThemeAppearance, readon
 });
 
 /** WCAG AA for running text; 3:1 for marks, labels and the focus rule. */
-export const TEXT_CONTRAST_MINIMUM = 4.5;
-export const MARK_CONTRAST_MINIMUM = 3;
+const TEXT_CONTRAST_MINIMUM = 4.5;
+const MARK_CONTRAST_MINIMUM = 3;
 
 /** The web's dark code surface; every theme's well unless it says otherwise. */
 const KINU_DARK_WELL: TuiThemeColors['well'] = {
@@ -634,7 +634,7 @@ export interface ThemeContrastPair {
  * or label sits on, the focus rule on the canvas, and the well's own inks and
  * marks on the well.
  */
-export function themeContrastPairs(theme: TuiThemeDefinition): readonly ThemeContrastPair[] {
+function themeContrastPairs(theme: TuiThemeDefinition): readonly ThemeContrastPair[] {
   const { background, border, text, intent, well } = theme.colors;
   const pairs: ThemeContrastPair[] = [];
   const push = (label: string, foreground: string, ground: string, minimum: number) => {
@@ -683,7 +683,7 @@ function themeContrastFailures(theme: TuiThemeDefinition): string[] {
  * 11 luminance the renderer supplies here, its tier 2 is this env var, and
  * its last answer is dark.
  */
-export function appearanceFromEnvironment(
+function appearanceFromEnvironment(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): ThemeAppearance {
   const colorFgBg = environment.COLORFGBG?.split(';');
@@ -699,7 +699,7 @@ export function appearanceFromEnvironment(
  * itself in `packages/tui/src/terminal.ts` (`#startDirectOsc11Query`,
  * `#handleOsc11Response`). Until an answer arrives, the environment decides.
  */
-export function useTerminalAppearance(override?: ThemeAppearance): ThemeAppearance {
+function useTerminalAppearance(override?: ThemeAppearance): ThemeAppearance {
   const renderer = useRenderer();
   const [reported, setReported] = useState<ThemeAppearance | null>(() => renderer.themeMode);
   useEffect(() => {
@@ -826,7 +826,7 @@ function freezeTheme(theme: TuiThemeDefinition): TuiThemeDefinition {
   });
 }
 
-export function contrastRatio(foreground: string, background: string): number {
+function contrastRatio(foreground: string, background: string): number {
   const luminance = (hex: string): number => {
     const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
     const [red, green, blue] = channels.map((channel) => (

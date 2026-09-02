@@ -229,6 +229,37 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
+  test('is NOT reported when an `Omit<…>` draft of the interface supplies it', () => {
+    // The seam that mints `id` takes `Omit<DisplayMessage, 'id'>` drafts, and
+    // every optional field of that interface was supplied through them while
+    // this census read `Omit` as the shape. The first argument is the shape.
+    // One visible `RunDeps` literal without the optional fields (so the
+    // interface IS judged) and the draft that supplies them, as chat-app's
+    // `welcomeMessage()` and its `addMessage` drafts do.
+    const body = `${SUPPLY(`{ rt: 'x' }`)}
+  const draft: Omit<RunDeps, 'rt'> = { mission: 'm', logger: 'l' };
+  runIt(fromSomewhereElse(draft));`;
+    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
+  });
+
+  test('does not treat a `Pick<…>` literal as building the whole interface', () => {
+    // `providerFromEnv` returns `Pick<OAuthProviderConfig, 'id' | …>` and the
+    // rest of the config is pushed later through a spread. A Pick cannot carry
+    // the keys outside its set, so it is no construction site of the whole.
+    const body = `  function seed(): Pick<RunDeps, 'rt'> { return { rt: 'x' }; }
+  runIt(fromSomewhereElse(seed()));`;
+    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
+  });
+
+  test('still reports a field a `Record<…, RunDeps>` value does not supply', () => {
+    // The direction the utility rule must not widen: the annotated thing is
+    // the record, and a record of RunDeps constructs no RunDeps.
+    const body = `  const byName: Record<string, RunDeps> = {};
+  void byName;
+${SUPPLY(`{ rt: 'x' }`)}`;
+    expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
+  });
+
   test('is NOT judged at all when nothing visibly builds the interface', () => {
     // `runIt` is called with a value this gate cannot type. Guessing here is how
     // a gate earns a false positive and then a disabled line in a config.

@@ -12,7 +12,7 @@ import * as v from 'valibot';
 
 /** The platforms the CLI distribution is built for. The launcher's `uname`
  *  maps onto these exactly: Darwin/Linux and arm64/x86_64. */
-export const CLI_DIST_PLATFORMS = [
+const CLI_DIST_PLATFORMS = [
   'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64',
 ] as const;
 

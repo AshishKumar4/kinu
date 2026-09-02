@@ -25,6 +25,7 @@ import {
   describeConnectOutcome,
   deviceStatusLine,
   dismissDeviceConnectPrompt,
+  killSessionDaemon,
   shouldOfferDeviceConnect,
 } from './device-connect';
 import { requireAuthConfig } from './config';
@@ -82,6 +83,12 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       await Promise.race([client.close(), cap.promise]);
     } catch (err) {
       console.log(WARN('\n  This session did not close cleanly — its last evolution window may not have flushed.'));
+      console.log(formatFailure({ cause: err }));
+    }
+    // A session daemon lives as long as the chat it was started for.
+    try {
+      killSessionDaemon();
+    } catch (err) {
       console.log(formatFailure({ cause: err }));
     }
     console.log(DIM('\n  Goodbye.\n'));

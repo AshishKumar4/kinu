@@ -838,7 +838,23 @@ function annotatedTypes(annotation: SyntaxNode | undefined): readonly string[] {
   const descend = (node: SyntaxNode): void => {
     if (node.raw.type === 'TSTypeReference') {
       const name = identifierText(node.children[0] ?? node);
-      if (name !== undefined) names.push(name);
+      if (name === undefined) return;
+      if (INSTANCE_UTILITIES.has(name)) {
+        // `Omit<T, 'id'>` is still an instance of T's shape, minus a key — the
+        // draft an `id`-minting seam takes is the case that made this visible:
+        // every field the interface declares was supplied through such drafts
+        // and the census read them as supplied by nothing. Only the FIRST
+        // argument is the shape; `Record<K, V>` stays opaque above for the
+        // reason its comment gives, and `Pick`/`Partial` are NOT here: a
+        // `Pick<T, K>` literal cannot carry the keys outside K, so counting it
+        // as a construction of T reported every other field of
+        // `OAuthProviderConfig` as unsupplied on the first run of this rule.
+        const arguments_ = node.children.find((child) => child.raw.type === 'TSTypeParameterInstantiation');
+        const first = arguments_?.children[0];
+        if (first !== undefined) descend(first);
+        return;
+      }
+      names.push(name);
       return;
     }
     if (node.raw.type === 'TSTypeLiteral' || node.raw.type === 'TSFunctionType') return;
@@ -847,6 +863,10 @@ function annotatedTypes(annotation: SyntaxNode | undefined): readonly string[] {
   descend(annotation);
   return names;
 }
+
+/** The mapped utilities whose instances carry the annotated shape whole (less
+ *  the named keys, for `Omit`). `Pick` and `Partial` are deliberately absent. */
+const INSTANCE_UTILITIES: ReadonlySet<string> = new Set(['Omit', 'Required', 'Readonly']);
 
 const annotationOf = (node: SyntaxNode): SyntaxNode | undefined =>
   node.children.find((child) => child.raw.type === 'TSTypeAnnotation');

@@ -353,7 +353,8 @@ function ChatScene({
   const beginSegment = useCallback(() => {
     const id = `msg-${++msgIdRef.current}`;
     activeSegmentRef.current = id;
-    setMessages((prev) => [...prev, { id, role: 'assistant', content: '', live: true }]);
+    const segment: DisplayMessage = { id, role: 'assistant', content: '', live: true };
+    setMessages((prev) => [...prev, segment]);
     stream.start();
   }, [stream]);
 
@@ -409,9 +410,9 @@ function ChatScene({
       const message: Omit<DisplayMessage, 'id'> = {
         role: 'user',
         content: prompt.text,
+        attachments: prompt.attached.length > 0 ? prompt.attached.map(describePromptAttachment) : undefined,
+        steered: steering,
       };
-      if (prompt.attached.length > 0) message.attachments = prompt.attached.map(describePromptAttachment);
-      if (steering) message.steered = true;
       addMessage(message);
       const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd() };
@@ -437,7 +438,8 @@ function ChatScene({
       const text = input.trim();
       if (!text) return;
       if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
-        addMessage({ role: 'user', content: text, branched: true });
+        const branch: Omit<DisplayMessage, 'id'> = { role: 'user', content: text, branched: true };
+        addMessage(branch);
         return;
       }
       await sendPrompt(text);
@@ -801,7 +803,8 @@ function ChatScene({
       case 'status':
         setStatus(outcome.status);
         setModelSpec(outcome.status.model ?? '');
-        addMessage({ role: 'system', content: '', status: outcome.status });
+        const note: Omit<DisplayMessage, 'id'> = { role: 'system', content: '', status: outcome.status };
+        addMessage(note);
         return;
       case 'exit':
         if (onExit) await onExit();

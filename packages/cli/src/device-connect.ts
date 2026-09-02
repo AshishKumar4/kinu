@@ -642,7 +642,7 @@ function installSessionCleanup(): void {
   if (sessionCleanupInstalled) return;
   sessionCleanupInstalled = true;
   process.on('exit', () => {
-    if (sessionDaemon && sessionDaemon.exitCode === null) sessionDaemon.kill('SIGTERM');
+    killSessionDaemon();
   });
 }
 

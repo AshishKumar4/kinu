@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { KINU_BUN_VERSION, bunResolutionShell, bunVersionKey } from '../src/cli/bun-runtime';
-import { CLI_DIST_PLATFORMS } from '../src/lib/deployed-assets';
+import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
 
 const ORIGIN = 'https://kinu.example.com';
 const tempDirs: string[] = [];
@@ -435,7 +435,13 @@ describe('the CLI installs as a prebuilt artifact', () => {
     }
     expect(launcher).toContain('arm64|aarch64) KINU_ARCH=arm64 ;;');
     expect(launcher).toContain('x86_64|amd64) KINU_ARCH=x64 ;;');
-    expect([...named].sort()).toEqual([...CLI_DIST_PLATFORMS].sort());
+    // The platforms the deploy publishes are read off the published paths —
+    // the surface production serves — not off a private list.
+    const published = CLI_DIST_PATHS.flatMap((path) => {
+      const match = /\/downloads\/kinu-cli-([a-z0-9-]+)\.tar\.gz$/.exec(path);
+      return match ? [match[1]] : [];
+    });
+    expect([...named].sort()).toEqual([...published].sort());
     // An unsupported pair stops rather than downloading a page.
     expect(launcher).toContain('Kinu supports macOS and Linux.');
     expect(launcher).toContain('Kinu supports arm64 and x86_64.');

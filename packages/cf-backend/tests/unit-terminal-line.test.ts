@@ -24,7 +24,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  LineTerminalState, feedInput, needsMoreInput, terminalLane, writeOutputRow,
+  LineTerminalState, feedInput, terminalLane, writeOutputRow,
   type TerminalPaneOutput, type TerminalWriter,
 } from '../src/lib/terminal-lane';
 
@@ -70,6 +70,19 @@ function editor(): LineTerminalState {
   const state = new LineTerminalState();
   state.reset();
   return state;
+}
+
+/**
+ * Whether Enter after `source` opens a continuation line or submits: the
+ * lexer judged through the editor's own surface, the way a paste reaches it.
+ * Submitted, or an empty Enter that redrew the prompt, both read as finished;
+ * only a drawn `> ` continuation reads as still listening.
+ */
+function keepsReading(source: string): boolean {
+  const term = new Recorder();
+  const state = editor();
+  const command = feedInput(term, state, source.replace(/\n/g, '\r'));
+  return command === null && Bun.stripANSI(term.raw).endsWith('\r\n> ');
 }
 
 describe('program output reaches the terminal as terminal lines', () => {
@@ -254,7 +267,7 @@ describe('when the shell is still reading', () => {
     ['cat <<-EOF\n\tbody\n', 'a tab-stripping heredoc'],
     ['cat <<A <<B\nfirst\nA\n', 'the second of two heredocs'],
   ])('%p keeps reading (%s)', (source) => {
-    expect(needsMoreInput(source)).toBe(true);
+    expect(keepsReading(source)).toBe(true);
   });
 
   test.each([
@@ -270,17 +283,17 @@ describe('when the shell is still reading', () => {
     ['cat <<<"here string"\n', 'a here-string, which takes no body'],
     ['echo "a#b" # done\n', 'a hash inside quotes and a real comment after it'],
   ])('%p is finished (%s)', (source) => {
-    expect(needsMoreInput(source)).toBe(false);
+    expect(keepsReading(source)).toBe(false);
   });
 
   test('a heredoc body is not read for quotes of its own', () => {
     // The body is data. A lone apostrophe in it opened a quote that never
     // closed, which would strand the editor on a continuation prompt.
-    expect(needsMoreInput("cat <<EOF\nit's fine\nEOF\n")).toBe(false);
+    expect(keepsReading("cat <<EOF\nit's fine\nEOF\n")).toBe(false);
   });
 
   test('a delimiter line with trailing text does not close the heredoc', () => {
-    expect(needsMoreInput('cat <<EOF\nEOF trailing\n')).toBe(true);
+    expect(keepsReading('cat <<EOF\nEOF trailing\n')).toBe(true);
   });
 });
 
