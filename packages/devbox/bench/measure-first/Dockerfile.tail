@@ -1,0 +1,39 @@
+# Appended by probe.ts to the journal daemon's own recipe (bench/journal-daemon/
+# Dockerfile, re-pinned to the manifest digest the driver pins), so the image
+# under measurement is the daemon image plus the lane 0 instruments and nothing
+# else changes underneath: same libfuse build, same compiler flags, same
+# `kinu-journal-daemon` binary.
+#
+# Instruments: fio for the I/O rows, the candidate daemon builds behind their
+# -DMEASURE_* knobs, the FUSE capability probe, the metadata and range-read
+# microbenchmarks, and libfuse's own passthrough_fh example as the no-journal
+# FUSE floor. sqlite arrives through bun:sqlite, already in the image.
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fio \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY journal-daemon-candidate.c /usr/local/src/journal-daemon-candidate.c
+COPY fuse-caps.c metabench.c rangeread.c fsyncbench.c /usr/local/src/
+RUN set -e; \
+    for build in \
+      "jd-keepcache -DMEASURE_KEEP_CACHE_READS" \
+      "jd-nofsync -DMEASURE_NO_WAL_FSYNC" \
+      "jd-v2 -DMEASURE_KEEP_CACHE_READS -DMEASURE_NO_WAL_FSYNC -DMEASURE_ATTR_CACHE" \
+      "jd-pt -DMEASURE_PASSTHROUGH_READS -DMEASURE_NO_WAL_FSYNC -DMEASURE_ATTR_CACHE"; do \
+      set -- $build; name=$1; shift; \
+      cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 "$@" \
+        /usr/local/src/journal-daemon-candidate.c -o "/usr/local/bin/$name" \
+        $(pkg-config --cflags --libs fuse3) -lcrypto -pthread; \
+    done
+RUN cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 \
+      /usr/local/src/fuse-caps.c -o /usr/local/bin/fuse-caps $(pkg-config --cflags --libs fuse3) -pthread \
+ && cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 \
+      /usr/local/src/metabench.c -o /usr/local/bin/metabench \
+ && cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 \
+      /usr/local/src/rangeread.c -o /usr/local/bin/rangeread -pthread \
+ && cc -std=c17 -D_FILE_OFFSET_BITS=64 -Wall -Wextra -Werror -Wpedantic -O2 \
+      /usr/local/src/fsyncbench.c -o /usr/local/bin/fsyncbench \
+ && cc -std=c17 -D_FILE_OFFSET_BITS=64 -O2 \
+      /tmp/libfuse/example/passthrough_fh.c -o /usr/local/bin/fuse-floor \
+      $(pkg-config --cflags --libs fuse3) -pthread

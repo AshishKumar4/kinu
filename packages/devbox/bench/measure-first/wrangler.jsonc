@@ -1,0 +1,42 @@
+// LANE 0 FIXTURE CONFIG. `probe.ts` makes a per-run copy with a unique Worker,
+// bucket, token and generated image recipe. This file is not named by any
+// product deploy.
+{
+  "$schema": "../../../../node_modules/wrangler/config-schema.json",
+  "name": "kinu-devbox-measure-first",
+  "main": "worker.ts",
+  "account_id": "f44999d1ddda7012e9a87729eba250f1",
+  "compatibility_date": "2025-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "MeasureBox", "name": "MeasureBox" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MeasureBox"] }
+  ],
+
+  // Tag, instance size and disk equal the product and the decisive driver's
+  // fixture. The generated per-run config replaces only `image` with the
+  // Dockerfile whose first FROM is the immutable digest from that driver.
+  "containers": [
+    {
+      "class_name": "MeasureBox",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    }
+  ],
+
+  "vars": { "SANDBOX_TRANSPORT": "rpc" },
+
+  // `probe.ts` creates and deletes this per-run bucket. The binding name is
+  // fixed because the SDK's egress endpoint routes `/BACKUP_BUCKET/<key>`.
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-devbox-measure-first" }
+  ]
+}
