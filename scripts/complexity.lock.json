@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-01",
-  "files": 1915,
-  "functions": 48676,
+  "measuredAt": "2026-09-02",
+  "files": 1926,
+  "functions": 48968,
   "ceiling": 126,
   "line": 39,
   "inventory": [
@@ -11,7 +11,7 @@
     },
     {
       "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
-      "complexity": 124
+      "complexity": 125
     },
     {
       "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
@@ -30,8 +30,16 @@
       "complexity": 89
     },
     {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 73
+    },
+    {
       "key": "scripts/bench-devbox-strategies.ts#candidateLifecycleChecks",
       "complexity": 73
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "complexity": 72
     },
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useKeyboard",
@@ -40,14 +48,6 @@
     {
       "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
       "complexity": 72
-    },
-    {
-      "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 71
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 68
     },
     {
       "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
@@ -90,6 +90,10 @@
       "complexity": 53
     },
     {
+      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
+      "complexity": 52
+    },
+    {
       "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
       "complexity": 52
     },
@@ -100,10 +104,6 @@
     {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 51
-    },
-    {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
-      "complexity": 49
     },
     {
       "key": "packages/pc-agent/src/index.js#handle",
