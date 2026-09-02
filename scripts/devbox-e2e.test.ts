@@ -282,6 +282,71 @@ describe('the ceiling is the oracle', () => {
   });
 });
 
+describe('a sample the platform ate is reported, never hidden and never retried', () => {
+  test('the runtime\'s opaque /create error is classified platform-opaque, not an arm failure',
+    async () => {
+      // THREE MEASURED SAMPLES DIED THIS WAY — `internal error; reference = …`
+      // thrown by `/create` at 314-656 ms, before any container work, on a
+      // Worker deployed seconds earlier. The run must still fail (nothing was
+      // proven), but it must not read as the strategy answering wrongly, and
+      // nothing may retry it: a driver retry hides how often the platform eats a
+      // sample, and a product retry is the defect class this programme refuses.
+      let asks = 0;
+      const eaten = fakeSeam({}, {
+        startup: async (): Promise<StartupOutcome> => {
+          asks += 1;
+          throw new Error('internal error; reference = fn4ejp7pn7h5qmfjtttidtdt');
+        },
+      });
+
+      const verdict = await drive(eaten, ceilingsAt(5_000));
+
+      expect(verdict.passed).toBeFalse();
+      expect(verdict.failures[0]).toContain('was consumed by the platform');
+      expect(verdict.failures[0]).toContain('proves nothing about the arm');
+      expect(verdict.failures[0]).toContain('reference = fn4ejp7pn7h5qmfjtttidtdt');
+      // NOT a wrong answer and NOT a ceiling: a reader deciding whether to
+      // re-sample must not have to infer which from the wording.
+      expect(verdict.failures[0]).not.toContain('did not hold');
+      expect(verdict.failures[0]).not.toContain('ceiling');
+      const step = verdict.steps.find((record) => record.op === 'cold-attach');
+      expect(step?.platformOpaque).toBeTrue();
+      // ONE ASK. The driver did not try again.
+      expect(asks).toBe(1);
+    });
+
+  test('a container the platform reclaimed mid-operation reads the same way', async () => {
+    // Run e2e20260902082212 lost its cold attach to exactly this at 29,217 ms;
+    // the box classified it `stale-owner → retry` and armed a successor, which
+    // is the correct PRODUCT answer. The driver's job is only to say the sample
+    // was consumed.
+    const reclaimed = fakeSeam({}, {
+      startup: async (): Promise<StartupOutcome> => {
+        throw new Error('[stale-owner → retry] The sandbox container stopped while the '
+          + 'operation was pending.');
+      },
+    });
+
+    const verdict = await drive(reclaimed, ceilingsAt(5_000));
+
+    expect(verdict.failures[0]).toContain('was consumed by the platform');
+    expect(verdict.steps.find((record) => record.op === 'cold-attach')?.platformOpaque).toBeTrue();
+  });
+
+  test('an ARM failure is still an arm failure, so the classifier is not a blanket excuse',
+    async () => {
+      // The other direction, because a classifier that called everything
+      // platform-opaque would make every red run unreadable.
+      const wrong = fakeSeam({ driftTree: true });
+
+      const verdict = await drive(wrong, ceilingsAt(5_000));
+
+      expect(verdict.failures[0]).toContain('did not hold');
+      expect(verdict.failures[0]).not.toContain('consumed by the platform');
+      expect(verdict.steps.every((record) => record.platformOpaque !== true)).toBeTrue();
+    });
+});
+
 describe('the restore is verified byte for byte', () => {
   test('a restored tree that is not the tree that was checkpointed fails', async () => {
     const verdict = await drive(fakeSeam({ driftTree: true }), ceilingsAt(5_000));

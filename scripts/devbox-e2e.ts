@@ -55,7 +55,7 @@ import {
   type ArmFixture, type Fixture, type Strategy,
 } from './bench-devbox-strategies';
 import {
-  WRANGLER_FAILED, describeThrown, publishTeardown, runTeardownOnce, runWrangler,
+  WRANGLER_FAILED, delay, describeThrown, publishTeardown, runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
@@ -187,6 +187,15 @@ export const CALIBRATION_CEILING_MS = 900_000;
  */
 const CEILING_GRACE_MS = 15_000;
 
+/** How many times the run observes a deployed arm before it kicks the first
+ *  `/create`, and how long it waits between asks. A COUNT, never a deadline:
+ *  the question is "does this deployment answer for its box yet", and a
+ *  provisioning that needs more asks than this is a finding the run reports
+ *  rather than a wait it extends. */
+const PROVISION_OBSERVATIONS = 10;
+const PROVISION_OBSERVATION_INTERVAL_MS = 2_000;
+const PROVISION_OBSERVATION_TIMEOUT_MS = 15_000;
+
 // ── the verdict ─────────────────────────────────────────────────────────────
 
 export interface StepRecord {
@@ -196,6 +205,9 @@ export interface StepRecord {
   readonly ok: boolean;
   /** What the operation answered, in its own words. */
   readonly detail: string;
+  /** The PLATFORM consumed this sample, and the arm proved nothing either way.
+   *  See {@link platformOpaque}: absent means the arm's own answer. */
+  readonly platformOpaque?: boolean;
 }
 
 export interface StrategyVerdict {
@@ -205,6 +217,34 @@ export interface StrategyVerdict {
   readonly steps: StepRecord[];
   readonly failures: string[];
   readonly notes: string[];
+}
+
+/**
+ * Did the PLATFORM end this sample, rather than the arm answering wrongly?
+ *
+ * THREE FAMILIES, all measured on this suite's own runs, and none of them says
+ * anything about the strategy under test:
+ *
+ *   • `internal error; reference = …` on `/create` — the runtime's opaque
+ *     error, thrown at 314-656 ms, before any container work (runs
+ *     e2e20260901214123, e2e20260901215639 and one more).
+ *   • `The sandbox container stopped while the operation was pending` — the
+ *     platform reclaiming a spot instance mid-operation. Run e2e20260902082212
+ *     lost its cold attach to one at 29,217 ms; the box classified it
+ *     `stale-owner → retry` and armed a successor, which is the correct
+ *     product answer to it.
+ *   • no container instance / capacity — a contended account with nothing to
+ *     give, which this suite has measured for minutes at a time.
+ *
+ * NAMED, NEVER RETRIED. A retry inside the driver would hide how often the
+ * platform eats a sample, and a retry inside the PRODUCT is the defect class
+ * this programme exists to refuse. The sample is reported as consumed and the
+ * run says so; re-sampling is a decision a reader makes, with the count in
+ * front of them.
+ */
+export function platformOpaque(detail: string): boolean {
+  return /internal error; reference = |container stopped while the operation was pending|no container instance|container service is unreachable/i
+    .test(detail);
 }
 
 /** The one sentence a failing step reports, in the one shape every reader of
@@ -224,6 +264,16 @@ export function wrongAnswer(
   strategy: string, op: LifecycleOp, elapsedMs: number, detail: string,
 ): string {
   return `${strategy}: ${op} settled in ${String(elapsedMs)} ms and did not hold: ${detail}`;
+}
+
+/** The sentence for a sample the PLATFORM ended. It names the operation and the
+ *  platform's own words, and it deliberately does NOT read as an arm failure:
+ *  nothing about the strategy was measured. */
+export function platformConsumed(
+  strategy: string, op: LifecycleOp, elapsedMs: number, detail: string,
+): string {
+  return `${strategy}: ${op} was consumed by the platform after ${String(elapsedMs)} ms, so `
+    + `this sample proves nothing about the arm: ${detail}`;
 }
 
 // ── the deployed operations, behind one seam ────────────────────────────────
@@ -482,10 +532,21 @@ export async function runLifecycle(
     } catch (error) {
       const elapsed = Date.now() - started;
       const detail = describeThrown({ cause: error });
-      const text = elapsed >= ceiling.ms
-        ? ceilingRefusal(strategy, op, ceiling.ms, elapsed, detail)
-        : wrongAnswer(strategy, op, elapsed, detail);
-      steps.push({ op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail });
+      // WHO ENDED THIS SAMPLE, decided before anything is written down. A
+      // platform-consumed step is still a failed RUN — nothing was proven, so
+      // nothing may read green — but it is not the arm answering wrongly, and a
+      // reader deciding whether to re-sample needs the difference in front of
+      // them rather than inferred from the wording of a SandboxError.
+      const consumed = platformOpaque(detail);
+      const text = consumed
+        ? platformConsumed(strategy, op, elapsed, detail)
+        : elapsed >= ceiling.ms
+          ? ceilingRefusal(strategy, op, ceiling.ms, elapsed, detail)
+          : wrongAnswer(strategy, op, elapsed, detail);
+      const record: StepRecord = consumed
+        ? { op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail, platformOpaque: true }
+        : { op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail };
+      steps.push(record);
       failures.push(text);
       options.settle?.(partial());
       throw new Error(text, { cause: error });
@@ -880,6 +941,50 @@ export function render(verdicts: readonly StrategyVerdict[], options: Options): 
   return lines.join('\n');
 }
 
+/**
+ * Settle the deployed Worker's container provisioning before the first
+ * `/create`, and answer what it took.
+ *
+ * MEASURED DEFECT THIS REPAIRS. Three samples died on `/create` at 314-656 ms
+ * with the runtime's opaque `internal error; reference = …` — before any
+ * container work, on a Worker deployed seconds earlier, which is the shape of a
+ * container application whose provisioning has not settled. Those runs consumed
+ * an arm and proved nothing.
+ *
+ * AN OBSERVATION, NOT A RETRY, and the difference is the whole point. This asks
+ * the box's own `/state` — which reads `ctx.container` and therefore the SDK's
+ * own view of whether this object has a container handle at all — a COUNT-
+ * bounded number of times, and it never touches `/create`. Nothing is retried:
+ * the first `/create` still happens exactly once, and a sample the platform
+ * eats anyway is classified {@link platformOpaque} rather than blamed on the
+ * arm.
+ */
+async function settleProvisioning(
+  fixture: Fixture,
+  box: string,
+  log: (message: string) => void,
+): Promise<{ readonly asks: number; readonly ms: number }> {
+  const started = Date.now();
+  for (let ask = 1; ask <= PROVISION_OBSERVATIONS; ask += 1) {
+    try {
+      const reply = await fetch(`${fixture.origin}/state?box=${box}&strategy=${box.split('-').slice(1, -1).join('-')}`, {
+        headers: { authorization: `Bearer ${fixture.token}` },
+        signal: AbortSignal.timeout(PROVISION_OBSERVATION_TIMEOUT_MS),
+      });
+      if (reply.ok) {
+        await reply.body?.cancel();
+        return { asks: ask, ms: Date.now() - started };
+      }
+      log(`${box}: provisioning not settled on ask ${String(ask)} (${String(reply.status)})`);
+      await reply.body?.cancel();
+    } catch (error) {
+      log(`${box}: provisioning observation ${String(ask)} did not answer: ${describeThrown({ cause: error })}`);
+    }
+    await delay(PROVISION_OBSERVATION_INTERVAL_MS);
+  }
+  return { asks: PROVISION_OBSERVATIONS, ms: Date.now() - started };
+}
+
 /** One arm's deployment, and what the run has to give back. */
 interface Lane {
   readonly fixture: ArmFixture;
@@ -887,6 +992,11 @@ interface Lane {
   live: Fixture | null;
   stop: (() => readonly string[]) | null;
   refusal: string | null;
+  /** When the deploy returned, and how long the first `/create` waited after
+   *  it. The gap is what a platform-opaque `/create` refusal is read against. */
+  deployedAt: number | null;
+  deployToCreateMs: number | null;
+  provisioning: { readonly asks: number; readonly ms: number } | null;
 }
 
 async function main(): Promise<number> {
@@ -924,6 +1034,9 @@ async function main(): Promise<number> {
     live: null,
     stop: null,
     refusal: null,
+    deployedAt: null,
+    deployToCreateMs: null,
+    provisioning: null,
   }));
   const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
   const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
@@ -982,6 +1095,7 @@ async function main(): Promise<number> {
         const started = await deployFixture(token, lane.fixture);
         lane.live = started.fixture;
         lane.stop = started.stop;
+        lane.deployedAt = Date.now();
         logLine(`${lane.fixture.strategy}: deployed at ${started.fixture.origin}`);
       } catch (error) {
         lane.refusal = `deploy failed: ${describeThrown({ cause: error })}`;
@@ -1018,6 +1132,16 @@ async function main(): Promise<number> {
         settle(refused);
         return refused;
       }
+      // SETTLE BEFORE THE FIRST KICK, and record what the wait cost. Three
+      // earlier samples died on `/create` with the runtime's opaque
+      // `internal error; reference = …` at 314-656 ms — a container application
+      // whose provisioning had not settled on a Worker deployed seconds before
+      // — and each consumed an arm while proving nothing.
+      lane.provisioning = await settleProvisioning(live, lane.box, logLine);
+      lane.deployToCreateMs = lane.deployedAt === null ? null : Date.now() - lane.deployedAt;
+      logLine(`${arm}: provisioning settled after ${String(lane.provisioning.asks)} ask(s) in `
+        + `${String(lane.provisioning.ms)} ms; deploy -> /create gap `
+        + `${String(lane.deployToCreateMs ?? -1)} ms`);
       const base = deployedSeam(live, lane.box);
       return await runLifecycle(
         arm,
@@ -1048,6 +1172,18 @@ async function main(): Promise<number> {
       midScaleMib: options.midScaleMib,
       workers: lanes.map((lane) => lane.fixture.worker),
       buckets: lanes.map((lane) => lane.fixture.bucket),
+      // WHAT THE PLATFORM WAS ASKED, AND WHEN. A `/create` refusal carrying the
+      // runtime's opaque `internal error; reference = …` is read against this
+      // gap: a Worker deployed a moment earlier is a container application whose
+      // provisioning may not have settled, and that is a platform-opaque sample
+      // rather than an arm failure.
+      provisioning: lanes.map((lane) => ({
+        strategy: lane.fixture.strategy,
+        deployedAt: lane.deployedAt === null ? null : new Date(lane.deployedAt).toISOString(),
+        deployToCreateMs: lane.deployToCreateMs,
+        observations: lane.provisioning?.asks ?? null,
+        settleMs: lane.provisioning?.ms ?? null,
+      })),
     },
     ceilings,
     verdicts,
