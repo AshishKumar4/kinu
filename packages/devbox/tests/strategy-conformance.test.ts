@@ -705,10 +705,17 @@ const CELLS: readonly Cell[] = [
       const problems: string[] = [];
       if (outcome.kind === 'committed') problems.push('the late finalize reported committed');
       if (heads.length !== 1) problems.push(`${heads.length} heads`);
-      const winner = canonical({ ...OLD, ...THIRD });
+      // THE WINNER IS MEASURED, NEVER ASSUMED: the tree the new boot served
+      // after its own commit. A new boot may legitimately adopt a COMPLETE
+      // unreferenced delta the old boot left (the crash-window rule cell 6.4
+      // accepts at `after-payload`) and publish OLD+NEW+THIRD; what it may
+      // never do is let the old boot's late finalize move the head, or serve
+      // after a wake anything but what it served before it. The new boot's
+      // own commit must be in that tree, or the race lost a committed write.
+      if (!served.includes(JSON.stringify(Object.entries(THIRD)[0]![1]))) problems.push(`the new boot's commit is absent from the tree it served: ${served}`);
       const afterWake = await wake(arm);
       if (afterWake.kind !== 'attached') problems.push(`wake answered ${afterWake.kind}`);
-      if (canonical(tree(arm)) !== winner) problems.push(`the wake served ${canonical(tree(arm))}, the new boot published ${winner} (before the wake: ${served})`);
+      if (canonical(tree(arm)) !== served) problems.push(`the wake served ${canonical(tree(arm))}, the new boot served ${served}`);
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
