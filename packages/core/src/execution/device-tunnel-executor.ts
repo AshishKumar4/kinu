@@ -417,7 +417,7 @@ export function createDeviceTunnelExecutor(
     // STRUCTURAL is what the tunnel's existence and this provider's own tools
     // establish, with no probe needed:
     //
-    //   shell          `exec` runs commands through the device's own shell.
+    //   shell          `exec` runs the command under `bash -c` on the device.
     //   native_binary  the daemon holding this tunnel open is one, on that
     //                  machine.
     //   fs_owned       the device's real files, behind the consent boundary.

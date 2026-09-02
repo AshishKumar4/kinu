@@ -899,6 +899,29 @@ describe('daemon process under Bun against a local hub', () => {
     });
   }, 60_000);
 
+  // The owner's direction: one shell, bash, resolved on the machine's PATH.
+  // `/bin/sh` is dash on Debian and Ubuntu, so a command the model wrote with
+  // `[[ `, `set -o pipefail` or an array ran on some machines and failed on
+  // others. There is no sh fallback: two shells is two behaviours.
+  test('a command runs under bash, so bash-only syntax is not a machine lottery', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    await withDaemon(undefined, async ({ hub, reply }) => {
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-bashsyntax-1',
+        method: 'exec',
+        params: ['set -o pipefail; [[ 1 == 1 ]] && printf %s "bash=${BASH_VERSION%%.*}"'],
+      }));
+      const ran = await reply('rpc-bashsyntax-1');
+      expect(ran.error).toBeUndefined();
+      expect(ran.result.exitCode).toBe(0);
+      // The version is bash's own answer, so this cannot pass under a shell
+      // that merely tolerated the syntax.
+      expect(ran.result.stdout).toMatch(/^bash=\d+$/);
+      hub.socket().send(JSON.stringify({ id: 'rpc-bashack00-1', method: 'execAck', params: ['rpc-bashsyntax-1', 1] }));
+      await reply('rpc-bashack00-1');
+    });
+  }, 60_000);
+
   // F8. The daemon inherits the shell that ran `kinu connect`. Before this,
   // every command inherited that whole environment, so one `env` turned a
   // shell grant into the owner's CLI bearer, their PAT and their SSH agent.

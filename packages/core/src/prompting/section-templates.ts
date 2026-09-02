@@ -151,7 +151,7 @@ export const SANDBOX_EXECUTOR_LINE = definePromptSection(
 
 export const LAPTOP_EXECUTOR_LINE = definePromptSection(
   'executors/laptop',
-  '- **laptop.*** / `runtime: "laptop"` — {{deviceName}}: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}your user\'s own computer, reached through the Kinu device tunnel. Use it when the task targets their local files, local commands, or desktop environment.{{#if granted}} This workspace holds its access grant already.{{else}} This workspace has NO grant yet: your first call asks them to grant it once, for this workspace — that prompt is expected, not an error.{{/if}}{{/if}}',
+  '- **laptop.*** / `runtime: "laptop"` — {{deviceName}}: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}your user\'s own computer, reached through the Kinu device tunnel. Commands run under `bash -c`. Use it when the task targets their local files, local commands, or desktop environment.{{#if granted}} This workspace holds its access grant already.{{else}} This workspace has NO grant yet: your first call asks them to grant it once, for this workspace — that prompt is expected, not an error.{{/if}}{{/if}}',
 );
 
 /** A registered-but-offline device is still listed (the user can bring it

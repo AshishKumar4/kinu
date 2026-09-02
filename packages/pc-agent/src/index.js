@@ -707,6 +707,14 @@ function supervisionSupported(platform = process.platform) {
   return platform === 'linux' || platform === 'darwin';
 }
 
+/** Named before the command is written to disk, so the answer is one error
+ *  frame that says what to do rather than a supervisor that exits 125. */
+function assertCommandShellPresent() {
+  if (whichAll([COMMAND_SHELL]).length === 0) {
+    throw new Error(`device commands run under ${COMMAND_SHELL}, which is not on this machine's PATH; install ${COMMAND_SHELL} and reconnect`);
+  }
+}
+
 function assertSupervisionSupported() {
   if (!supervisionSupported()) throw new Error('pc-agent command supervision requires POSIX Linux or macOS');
 }
@@ -848,6 +856,17 @@ function readExecResult(dir) {
   };
 }
 
+/** The one shell a device command runs under, resolved on the machine's PATH
+ *  rather than at a fixed path.
+ *
+ *  `/bin/sh` is dash on Debian and Ubuntu, so every command the model wrote
+ *  with `[[ `, `set -o pipefail`, arrays or process substitution failed on
+ *  those machines and succeeded on the ones where `/bin/sh` happens to be
+ *  bash. One shell removes that difference. There is deliberately NO fallback:
+ *  a second shell is a second behaviour, reached only on the machines nobody
+ *  tests, and an exec that cannot find bash says so instead. */
+const COMMAND_SHELL = 'bash';
+
 const SUPERVISOR_SCRIPT = `
 'use strict';
 const fs = require('node:fs');
@@ -970,7 +989,7 @@ try {
   fs.unlinkSync(commandFile);
   stdout = new Capture(stdoutFile);
   stderr = new Capture(stderrFile);
-  child = spawn('/bin/sh', ['-c', command], {
+  child = spawn('${COMMAND_SHELL}', ['-c', command], {
     detached: true,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -1284,6 +1303,7 @@ function handle(msg, ws, ctx) {
     if (method === 'exec') {
       const cmd = parseString(params[0], 'exec expects a command string');
       assertSupervisionSupported();
+      assertCommandShellPresent();
       if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
       const dir = requestDirectory(INFLIGHT_ROOT, id);
       /** @param {unknown} error */
