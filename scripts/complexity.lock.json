@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-02",
-  "files": 1943,
-  "functions": 49924,
+  "files": 1946,
+  "functions": 50219,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -82,10 +82,6 @@
       "complexity": 55
     },
     {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
-      "complexity": 55
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#render",
       "complexity": 54
     },
@@ -104,6 +100,10 @@
     {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 51
+    },
+    {
+      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
+      "complexity": 50
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#controlWitnessChecks>map",

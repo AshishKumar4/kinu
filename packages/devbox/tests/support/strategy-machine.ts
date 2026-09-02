@@ -1253,6 +1253,73 @@ export class ArmRefused extends Error {
  * mount. That is what makes "the exact bytes came back" an assertion about the
  * chain rather than about a stub.
  */
+type ShellReply = { stdout: string; stderr: string; exitCode: number };
+const shellOk = (stdout = ''): ShellReply => ({ stdout, stderr: '', exitCode: 0 });
+const shellFail = (stderr: string): ShellReply => ({ stdout: '', stderr, exitCode: 1 });
+
+/**
+ * The chain checkpoint's own three commands — pack, publish, space gate —
+ * answered as the real commands answer them: `<exit> <bytes>` on stdout,
+ * their own words on stderr. Undefined when the command is none of the three.
+ */
+function checkpointCommand(
+  command: string,
+  disk: ContainerDisk,
+  publish: (archivePath: string, mountedPath: string) => number | undefined,
+): ShellReply | undefined {
+  const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
+  if (squash !== undefined) {
+    const archive = disk.pack(squash.source!);
+    try {
+      disk.writeFile(squash.archive!, archive);
+    } catch (error) {
+      // mksquashfs on a full disk: a non-zero rc on stdout, its own words on
+      // stderr, exactly as the real command reports it.
+      if (!(error instanceof DiskFull)) throw error;
+      return { stdout: '1 0', stderr: `FATAL ERROR: Failed to write to output filesystem: ${error.message}`, exitCode: 0 };
+    }
+    // `<exit> <bytes>`, the one command that builds and measures.
+    return shellOk(`0 ${archive.byteLength}`);
+  }
+
+  // THE PUBLICATION, and the whole reason this arm has no payload port. The
+  // container reads its own staged archive and writes it onto the store
+  // mount; `conv=fsync` is the flush, so the upload's success is this
+  // command's exit code. Nothing is handed to the isolate.
+  // The copy, whatever precedes it: the publication creates the generation's
+  // directory on the mount in the same command, because s3fs shows no parent
+  // for a key nothing lives under yet.
+  const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
+    .exec(command)?.groups;
+  if (published !== undefined) {
+    const landed = publish(published.archive!, published.mounted!);
+    // `<exit> <bytes>` on stdout either way, exactly as the real command
+    // reports it: dd's own failure is a non-zero code there, not a thrown
+    // shell error.
+    if (landed === undefined) {
+      return {
+        stdout: '1 0',
+        stderr: `dd: can't open '${published.archive!}': No such file or directory`,
+        exitCode: 0,
+      };
+    }
+    return shellOk(`0 ${landed}`);
+  }
+
+  if (command.includes('df -Pk')) {
+    // `<need> <free>`, both honest: the archive of the source directory
+    // needs about its data bytes, and the disk has what its quota leaves.
+    // Without a quota the disk never fills and the gate never refuses.
+    const source = /find '(?<source>[^']+)'/.exec(command)?.groups?.source;
+    const need = source === undefined ? 1 : Math.max(1, disk.snapshot(source).reduce(
+      (sum, entry) => sum + (entry.content === undefined ? 0 : runBytes(entry.content)), 0,
+    ));
+    const free = disk.quotaBytes === null ? Number.MAX_SAFE_INTEGER : Math.max(0, disk.quotaBytes - disk.usedBytes);
+    return shellOk(`${need} ${free}`);
+  }
+  return undefined;
+}
+
 function chainExec(
   disk: ContainerDisk,
   deaths: DeathWatch,
@@ -1266,8 +1333,8 @@ function chainExec(
     // strategy's answer, on a deployment or here. See `session-shell.ts`.
     const refused = sessionShellRefusal(command);
     if (refused !== undefined) throw refused;
-    const fail = (stderr: string) => ({ stdout: '', stderr, exitCode: 1 });
-    const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
+    const fail = shellFail;
+    const ok = shellOk;
     if (command === 'cat /proc/mounts') return ok(disk.procMounts());
 
     const exists = /^test -e '(?<path>[^']+)'/.exec(command)?.groups?.path;
@@ -1347,56 +1414,8 @@ function chainExec(
       return ok();
     }
 
-    const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
-    if (squash !== undefined) {
-      const archive = disk.pack(squash.source!);
-      try {
-        disk.writeFile(squash.archive!, archive);
-      } catch (error) {
-        // mksquashfs on a full disk: a non-zero rc on stdout, its own words on
-        // stderr, exactly as the real command reports it.
-        if (!(error instanceof DiskFull)) throw error;
-        return { stdout: '1 0', stderr: `FATAL ERROR: Failed to write to output filesystem: ${error.message}`, exitCode: 0 };
-      }
-      // `<exit> <bytes>`, the one command that builds and measures.
-      return ok(`0 ${archive.byteLength}`);
-    }
-
-    // THE PUBLICATION, and the whole reason this arm has no payload port. The
-    // container reads its own staged archive and writes it onto the store
-    // mount; `conv=fsync` is the flush, so the upload's success is this
-    // command's exit code. Nothing is handed to the isolate.
-    // The copy, whatever precedes it: the publication creates the generation's
-    // directory on the mount in the same command, because s3fs shows no parent
-    // for a key nothing lives under yet.
-    const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
-      .exec(command)?.groups;
-    if (published !== undefined) {
-      const landed = publish(published.archive!, published.mounted!);
-      // `<exit> <bytes>` on stdout either way, exactly as the real command
-      // reports it: dd's own failure is a non-zero code there, not a thrown
-      // shell error.
-      if (landed === undefined) {
-        return {
-          stdout: '1 0',
-          stderr: `dd: can't open '${published.archive!}': No such file or directory`,
-          exitCode: 0,
-        };
-      }
-      return ok(`0 ${landed}`);
-    }
-
-    if (command.includes('df -Pk')) {
-      // `<need> <free>`, both honest: the archive of the source directory
-      // needs about its data bytes, and the disk has what its quota leaves.
-      // Without a quota the disk never fills and the gate never refuses.
-      const source = /find '(?<source>[^']+)'/.exec(command)?.groups?.source;
-      const need = source === undefined ? 1 : Math.max(1, disk.snapshot(source).reduce(
-        (sum, entry) => sum + (entry.content === undefined ? 0 : runBytes(entry.content)), 0,
-      ));
-      const free = disk.quotaBytes === null ? Number.MAX_SAFE_INTEGER : Math.max(0, disk.quotaBytes - disk.usedBytes);
-      return ok(`${need} ${free}`);
-    }
+    const checkpoint = checkpointCommand(command, disk, publish);
+    if (checkpoint !== undefined) return checkpoint;
 
     if (command.includes('sha256sum') && command.includes('sort -z')) {
       // The walk the real command makes: inode, type, mode, size, mtime,
