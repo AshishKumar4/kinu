@@ -1,33 +1,37 @@
 {
   "measuredAt": "2026-09-02",
-  "files": 1926,
-  "functions": 48968,
-  "ceiling": 126,
+  "files": 1942,
+  "functions": 49867,
+  "ceiling": 125,
   "line": 39,
   "inventory": [
     {
-      "key": "packages/cf-backend/src/user/routes.ts#handleUserRequest",
-      "complexity": 126
-    },
-    {
       "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
       "complexity": 125
+    },
+    {
+      "key": "packages/cf-backend/src/user/routes.ts#handleUserRequest",
+      "complexity": 123
     },
     {
       "key": "packages/cf-backend/src/cli/routes.ts#handleCliRequest",
       "complexity": 114
     },
     {
+      "key": "scripts/bench-devbox-strategies.ts#measureArm",
+      "complexity": 94
+    },
+    {
       "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
       "complexity": 93
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#measureArm",
-      "complexity": 92
-    },
-    {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
       "complexity": 89
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "complexity": 73
     },
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
@@ -38,16 +42,12 @@
       "complexity": 73
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
       "complexity": 72
     },
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useKeyboard",
-      "complexity": 72
-    },
-    {
-      "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
-      "complexity": 72
+      "complexity": 71
     },
     {
       "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
@@ -82,16 +82,16 @@
       "complexity": 55
     },
     {
+      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
+      "complexity": 55
+    },
+    {
       "key": "scripts/bench-devbox-strategies.ts#render",
       "complexity": 54
     },
     {
       "key": "packages/devbox/bench/worker.ts#fetch",
       "complexity": 53
-    },
-    {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
-      "complexity": 52
     },
     {
       "key": "scripts/fixtures/r2-bench/report.ts#renderMarkdown",
@@ -104,10 +104,6 @@
     {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 51
-    },
-    {
-      "key": "packages/pc-agent/src/index.js#handle",
-      "complexity": 49
     },
     {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
@@ -130,7 +126,15 @@
       "complexity": 46
     },
     {
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 46
+    },
+    {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
+      "complexity": 46
+    },
+    {
+      "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 46
     },
     {
