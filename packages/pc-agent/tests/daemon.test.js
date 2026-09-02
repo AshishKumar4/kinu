@@ -630,12 +630,12 @@ describe('daemon process under Bun against a local hub', () => {
   }
 
   /** Spawn the daemon as a real child process, the runtime device-connect uses. */
-  function spawnDaemon(root) {
+  function spawnDaemon(root, extraEnv) {
     const logPath = path.join(root, 'pc-agent.log');
     const logFd = fs.openSync(logPath, 'a');
     const child = Bun.spawn({
       cmd: [process.execPath, DAEMON_PATH],
-      env: { ...process.env, KINU_HOME: root, KINU_INFLIGHT_ROOT: path.join(root, 'inflight') },
+      env: { ...process.env, KINU_HOME: root, KINU_INFLIGHT_ROOT: path.join(root, 'inflight'), ...extraEnv },
       // Stdio to the log FILE, never pipes: bun's runner exits when the last
       // open handle closes, and a piped child holds its pipe open for as long
       // as it lives. The log is read from the file, so nothing needs the pipe.
@@ -661,6 +661,10 @@ describe('daemon process under Bun against a local hub', () => {
   test('HELLO on connect, rotation, exec, cancel, file op, and reconnect — all under Bun', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-e2e-'));
+    // Outside KINU_HOME on purpose: Kinu's own directory is never served
+    // through the tunnel (see the credential-fence test below), so a file op
+    // that proves the socket works must target a consented directory instead.
+    const files = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-e2e-files-'));
     try {
       const hub = startFakeHub();
       try {
@@ -713,11 +717,12 @@ describe('daemon process under Bun against a local hub', () => {
           // teardown below cannot race a live supervisor.
           await untilHub(() => !fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1')));
 
-          // file op: an absolute path inside the daemon's own home.
-          hub.socket().send(JSON.stringify({ id: 'rpc-e2efile0-1', method: 'writeFile', params: [path.join(root, 'note.txt'), 'bun wrote this'] }));
+          // file op: an absolute path the owner could have consented to.
+          const note = path.join(files, 'note.txt');
+          hub.socket().send(JSON.stringify({ id: 'rpc-e2efile0-1', method: 'writeFile', params: [note, 'bun wrote this'] }));
           const writeResult = await reply('rpc-e2efile0-1');
           expect(writeResult.result).toEqual({ success: true });
-          expect(fs.readFileSync(path.join(root, 'note.txt'), 'utf-8')).toBe('bun wrote this');
+          expect(fs.readFileSync(note, 'utf-8')).toBe('bun wrote this');
 
           // Reconnect after a socket drop: the hub closes; the daemon redials.
           hub.socket().close();
@@ -749,11 +754,218 @@ describe('daemon process under Bun against a local hub', () => {
       }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(files, { recursive: true, force: true });
     }
   // A finite sequence, with its own waits: every `untilHub` fails by name
   // within its 10-15 s. The outer bound is their sum, not a detector — the
   // sequence spawns three Bun processes and the daemon's 1 s reconnect
   // backoff sits inside it, and it measured 11.9-12.0 s on a box at load
   // 64 (three runs, 2026-09-02), where bun's default 5 s read red.
+  }, 60_000);
+
+  /**
+   * One connected daemon, torn down. Composed from the four helpers above so
+   * each hardening case below is its own named failure rather than another
+   * phase inside the sequence test.
+   */
+  async function withDaemon(extraEnv, body) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-case-'));
+    try {
+      const hub = startFakeHub();
+      try {
+        makeConfig(root, hub.origin);
+        const { child, logPath } = spawnDaemon(root, extraEnv);
+        const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+        try {
+          const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
+          if (!hello) throw new Error(`daemon never connected: log says ${daemonLog()}`);
+          const reply = async (id, timeoutMs = 15_000) => {
+            const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
+            if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
+            return frame;
+          };
+          await body({ hub, root, child, reply, daemonLog });
+        } finally {
+          child.kill('SIGTERM');
+          await child.exited;
+          const inflight = path.join(root, 'inflight');
+          if (fs.existsSync(inflight)) {
+            for (const entry of fs.readdirSync(inflight)) {
+              const state = path.join(inflight, entry, 'state');
+              if (!fs.existsSync(state)) continue;
+              const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
+              if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+            }
+          }
+        }
+      } finally {
+        await hub.close();
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  /** Whether `pid` names a process this user can still signal. */
+  function processAlive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      if (err && err.code === 'ESRCH') return false;
+      throw err;
+    }
+  }
+
+  async function until(predicate, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (predicate()) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  // F2. ~/.kinu holds device.json (this machine's long-lived token) and
+  // config.json (the owner's interactive CLI bearer). Reading either one turns
+  // a file grant into the tier that granted it, so the fence does not depend
+  // on which root the call carries: these frames send NO root at all, which is
+  // the full tier — the strongest thing a workspace can hold.
+  test('Kinu\'s own directory is never served through the tunnel, at any tier', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    await withDaemon(undefined, async ({ hub, root, reply }) => {
+      fs.writeFileSync(path.join(root, 'config.json'), '{"accessToken":"ptc_owner_bearer"}', { mode: 0o600 });
+      const refused = [
+        ['rpc-fence00rd-1', 'readFile', [path.join(root, 'config.json')]],
+        ['rpc-fence00dv-1', 'readFile', [path.join(root, 'device.json')]],
+        ['rpc-fence00ls-1', 'listFiles', [root]],
+        ['rpc-fence00st-1', 'statPath', [path.join(root, 'device.json')]],
+        ['rpc-fence00wr-1', 'writeFile', [path.join(root, 'device.json'), '{"token":"attacker"}']],
+        ['rpc-fence00un-1', 'unlinkPath', [path.join(root, 'device.json')]],
+        ['rpc-fence00mk-1', 'mkdirPath', [path.join(root, 'planted')]],
+      ];
+      for (const [id, method, params] of refused) {
+        hub.socket().send(JSON.stringify({ id, method, params }));
+        const frame = await reply(id);
+        // Result first: an un-fenced daemon answers with the credential
+        // itself, and that is the sentence the failure should print.
+        expect(frame.result).toBeUndefined();
+        expect(frame.error).toContain("inside Kinu's own directory");
+      }
+      // The credentials are intact and the plant did not land.
+      expect(fs.readFileSync(path.join(root, 'config.json'), 'utf-8')).toContain('ptc_owner_bearer');
+      expect(fs.existsSync(path.join(root, 'device.json'))).toBe(true);
+      expect(fs.existsSync(path.join(root, 'planted'))).toBe(false);
+
+      // A symlink is refused by where it LANDS, not by how it is spelled.
+      const bait = path.join(os.tmpdir(), `kinu-fence-bait-${process.pid}`);
+      fs.symlinkSync(path.join(root, 'device.json'), bait);
+      try {
+        hub.socket().send(JSON.stringify({ id: 'rpc-fence00sy-1', method: 'readFile', params: [bait] }));
+        expect((await reply('rpc-fence00sy-1')).error).toContain("inside Kinu's own directory");
+      } finally {
+        fs.rmSync(bait, { force: true });
+      }
+    });
+  }, 60_000);
+
+  // F8. The daemon inherits the shell that ran `kinu connect`. Before this,
+  // every command inherited that whole environment, so one `env` turned a
+  // shell grant into the owner's CLI bearer, their PAT and their SSH agent.
+  test('a command gets an allow-listed environment, never the daemon\'s inherited credentials', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    // NODE_OPTIONS is the code-loading class the allow-list exists for, and
+    // bun ignores it, so a pre-fix tree still RUNS the command and the failure
+    // below is the credential leak rather than a broken spawn. BUN_INSPECT is
+    // the same class and the same construction excludes it, but a pre-fix
+    // supervisor exits 1 trying to open that socket, which proves nothing
+    // about credentials.
+    const poison = {
+      KINU_TOKEN: 'ptc_leaked_cli_bearer',
+      KINU_AUTH: 'leaked-gateway-auth',
+      GITHUB_TOKEN: 'ghp_leaked_pat',
+      AWS_SECRET_ACCESS_KEY: 'leaked-aws-key',
+      SSH_AUTH_SOCK: '/tmp/leaked-agent.sock',
+      NODE_OPTIONS: '--require /tmp/leaked-preload.js',
+    };
+    await withDaemon(poison, async ({ hub, reply }) => {
+      hub.socket().send(JSON.stringify({ id: 'rpc-envdump000-1', method: 'exec', params: ['env'] }));
+      const dumped = await reply('rpc-envdump000-1');
+      expect(dumped.error).toBeUndefined();
+      expect(dumped.result.exitCode).toBe(0);
+      const names = new Set(
+        dumped.result.stdout.split('\n')
+          .filter((line) => line.includes('='))
+          .map((line) => line.slice(0, line.indexOf('='))),
+      );
+      // A command that cannot find its own tools is not hardened, it is broken.
+      expect(names.has('PATH')).toBe(true);
+      expect(names.has('HOME')).toBe(true);
+      // Asserted as a SET so the failure names what leaked.
+      expect([...names].filter((name) => Object.hasOwn(poison, name))).toEqual([]);
+      expect(dumped.result.stdout).not.toContain('ptc_leaked_cli_bearer');
+      expect(dumped.result.stdout).not.toContain('ghp_leaked_pat');
+
+      hub.socket().send(JSON.stringify({ id: 'rpc-envdmpack-1', method: 'execAck', params: ['rpc-envdump000-1', 1] }));
+      await reply('rpc-envdmpack-1');
+    });
+  }, 60_000);
+
+  // The supervisor holds a terminal result until the cloud acknowledges it,
+  // and the daemon is the FIFO's only writer. A daemon that dies in that
+  // window used to leave the supervisor waiting forever; 156 of them were
+  // found on one machine in a day, each from a test whose daemon exited.
+  test('a supervisor whose daemon is gone stops waiting for an ack nobody can send', async () => {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-orphan-'));
+    const requestId = 'rpc-orphanwait-1';
+    const requestDir = path.join(root, 'inflight', requestId);
+    let supervisorPid = 0;
+    try {
+      const hub = startFakeHub();
+      try {
+        makeConfig(root, hub.origin);
+        const first = spawnDaemon(root);
+        const firstLog = () => fs.readFileSync(first.logPath, 'utf-8');
+        expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).toBeDefined();
+        hub.socket().send(JSON.stringify({ id: requestId, method: 'exec', params: ['printf orphan-check'] }));
+        const done = await untilHub(() => hub.frames.find((f) => f.id === requestId));
+        if (!done) throw new Error(`no exec reply: log says ${firstLog()}`);
+        expect(done.result.stdout).toContain('orphan-check');
+
+        // Terminal, un-acknowledged: the supervisor is on its ack FIFO now.
+        supervisorPid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(path.join(requestDir, 'state'), 'utf-8'))[1]);
+        expect(processAlive(supervisorPid)).toBe(true);
+        expect(fs.existsSync(path.join(requestDir, 'result'))).toBe(true);
+
+        // The one writer of that FIFO dies without acknowledging.
+        first.child.kill('SIGKILL');
+        await first.child.exited;
+        expect(await until(() => !processAlive(supervisorPid), 20_000)).toBe(true);
+
+        // The result outlives it, so a replacement daemon still delivers and
+        // clears the request — writing the FIFO here would hang the daemon
+        // instead of the supervisor, which is the same leak one process along.
+        const second = spawnDaemon(root);
+        try {
+          expect(await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1])).toBeDefined();
+          hub.socket().send(JSON.stringify({ id: 'rpc-orphanack-1', method: 'execAck', params: [requestId, 1] }));
+          const acked = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-orphanack-1'), 15_000);
+          if (!acked) throw new Error(`no ack reply: log says ${fs.readFileSync(second.logPath, 'utf-8')}`);
+          expect(acked.result).toEqual({ requestId, acknowledged: true });
+          expect(fs.existsSync(requestDir)).toBe(false);
+        } finally {
+          second.child.kill('SIGTERM');
+          await second.child.exited;
+        }
+      } finally {
+        await hub.close();
+      }
+    } finally {
+      if (supervisorPid > 0) tolerate(() => process.kill(-supervisorPid, 'SIGKILL'), 'esrch');
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  // Two daemon spawns, one exec, and the supervisor's 1 s orphan poll, each
+  // with its own named wait inside.
   }, 60_000);
 });

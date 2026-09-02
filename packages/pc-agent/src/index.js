@@ -16,7 +16,44 @@ const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
  *  one dependency-free file and cannot import the constant. */
 const TOKEN_ROTATION = 'ROTATE';
 
-const { KINU_INFLIGHT_ROOT, ...SUPERVISOR_ENV } = process.env;
+const { KINU_INFLIGHT_ROOT } = process.env;
+
+/** The environment a command runs with, built by ALLOW-LIST out of this
+ *  daemon's own.
+ *
+ *  The daemon inherits the shell that ran `kinu connect`, so its environment
+ *  can hold the CLI bearer (KINU_TOKEN), SSH_AUTH_SOCK, cloud keys and a
+ *  GitHub PAT. A command that runs `env` reads all of them, which made a
+ *  full-tier grant a credential read as well as a shell. Only the names a
+ *  POSIX command needs to find its tools, its home and its locale cross.
+ *
+ *  An allow-list rather than a deny-list, because the dangerous set is open:
+ *  NODE_OPTIONS and BUN_INSPECT load code into the next process this daemon
+ *  starts, and nobody can enumerate the rest. LC_* is a family, so it is
+ *  matched; the others are named.
+ */
+const COMMAND_ENV_NAMES = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR',
+  'XDG_RUNTIME_DIR', 'KINU_HOME',
+];
+const COMMAND_ENV_FAMILY = /^LC_[A-Z_]+$/;
+
+function commandEnvironment(source = process.env) {
+  const env = {};
+  for (const name of COMMAND_ENV_NAMES) {
+    const value = source[name];
+    if (value !== undefined) env[name] = value;
+  }
+  for (const name of Object.keys(source)) {
+    if (COMMAND_ENV_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
+  }
+  return env;
+}
+
+/** One construction for both processes: the supervisor is started with this,
+ *  and hands its own `process.env` to `/bin/sh`. */
+const COMMAND_ENV = commandEnvironment();
+
 /** The method that terminates one in-flight command's process group, and the
  *  cancellation protocol this daemon speaks. Both mirror core's
  *  DEVICE_CANCEL_METHOD / DEVICE_CANCEL_PROTOCOL (execution/device-tunnel.ts);
@@ -573,23 +610,56 @@ function withinDeviceRoot(realRoot, target) {
     || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+/** Kinu's own directory is never served through the tunnel, whatever root a
+ *  call carries. It holds device.json (this machine's long-lived token),
+ *  config.json (the owner's interactive CLI bearer) and the in-flight command
+ *  store. A base-tier root that contained it — a home directory, say — or a
+ *  full-tier call, which carries no root at all, would otherwise read the
+ *  credentials that grant the tier: base escalates to full by opening
+ *  config.json, and full clones the machine by opening device.json. So the
+ *  fence sits below every file method and is not a root the caller can choose.
+ *
+ *  Resolved through realpath first, so a symlink pointing into it is refused
+ *  by where it LANDS rather than by how it is spelled. */
+function refuseDeviceHome(requested, target) {
+  let realHome = DEVICE_HOME;
+  try {
+    realHome = fs.realpathSync(DEVICE_HOME);
+  } catch (err) {
+    // A directory that does not exist holds nothing, so its literal path is
+    // already the right fence. Anything else — EACCES, ELOOP — is this
+    // daemon's own breakage, and swallowing it would silently WIDEN what the
+    // tunnel serves, so it surfaces.
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+  if (withinDeviceRoot(realHome, target)) {
+    throw new Error(`device path '${requested}' is inside Kinu's own directory, which the tunnel never serves`);
+  }
+}
+
+/** The path a file method will actually touch: symlinks followed where the
+ *  target exists, and composed onto the nearest existing ancestor where it
+ *  does not. */
+function resolveDevicePath(requested, allowMissing) {
+  if (fs.existsSync(requested)) return fs.realpathSync(requested);
+  if (!allowMissing) throw new Error(`device path does not exist: ${requested}`);
+  let parent = path.dirname(path.resolve(requested));
+  while (!fs.existsSync(parent)) {
+    const next = path.dirname(parent);
+    if (next === parent) throw new Error(`device path has no existing parent: ${requested}`);
+    parent = next;
+  }
+  const realParent = fs.realpathSync(parent);
+  return path.resolve(realParent, path.relative(parent, path.resolve(requested)));
+}
+
 function confinedDevicePath(requested, root, allowMissing = false) {
+  // A rootless call is the full tier, which resolves only to be fenced: a
+  // missing path still reaches the syscall and reports its own ENOENT.
+  const target = resolveDevicePath(requested, root ? allowMissing : true);
+  refuseDeviceHome(requested, target);
   if (!root) return requested;
   const realRoot = fs.realpathSync(root);
-  let target;
-  if (fs.existsSync(requested)) {
-    target = fs.realpathSync(requested);
-  } else {
-    if (!allowMissing) throw new Error(`device path does not exist: ${requested}`);
-    let parent = path.dirname(path.resolve(requested));
-    while (!fs.existsSync(parent)) {
-      const next = path.dirname(parent);
-      if (next === parent) throw new Error(`device path has no existing parent: ${requested}`);
-      parent = next;
-    }
-    const realParent = fs.realpathSync(parent);
-    target = path.resolve(realParent, path.relative(parent, path.resolve(requested)));
-  }
   if (!withinDeviceRoot(realRoot, target)) {
     throw new Error(`device path '${requested}' resolves outside the consented directory '${root}'`);
   }
@@ -600,14 +670,16 @@ function confinedDevicePath(requested, root, allowMissing = false) {
  * symlink only when its target stays inside the root; unlink removes the named
  * entry itself, which is native unlink semantics and cannot touch the target. */
 function confinedDeviceEntry(requested, root) {
-  if (!root) return requested;
-  const realRoot = fs.realpathSync(root);
   const requestedAbsolute = path.resolve(requested);
   const realParent = fs.realpathSync(path.dirname(requestedAbsolute));
+  const target = path.join(realParent, path.basename(requestedAbsolute));
+  refuseDeviceHome(requested, target);
+  if (!root) return requested;
+  const realRoot = fs.realpathSync(root);
   if (!withinDeviceRoot(realRoot, realParent)) {
     throw new Error(`device path '${requested}' resolves outside the consented directory '${root}'`);
   }
-  return path.join(realParent, path.basename(requestedAbsolute));
+  return target;
 }
 
 
@@ -779,6 +851,12 @@ const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxT
 const maxOutput = Number(maxText);
 const marker = '[output truncated at ' + maxOutput + ' bytes]\\n';
 
+/** The daemon that started this supervisor, by IDENTITY rather than liveness:
+ * the kernel reparents an orphan, so a changed ppid is exactly "the parent is
+ * gone" and carries no pid-reuse hazard. Read before anything can fail. */
+const parentPid = process.ppid;
+const ORPHAN_POLL_MS = 1000;
+
 function startIdentity(pid) {
   if (process.platform === 'linux') {
     const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
@@ -862,7 +940,18 @@ function finish(kind, exitCode) {
   execFileSync('mkfifo', [ackFile]);
   writeTerminalResult(kind, exitCode);
   const acknowledgement = fs.createReadStream(ackFile);
+  // The daemon is the only writer of this FIFO, so once it is gone the wait can
+  // never end and this process would hold the request directory on the machine
+  // forever. Watched only HERE, not while the command runs: a running command
+  // must survive a daemon restart, and the restarted daemon adopts its live
+  // supervisor by start identity. Past the result there is nothing to adopt —
+  // the result file stays on disk, and whichever daemon reconciles it next
+  // removes the directory itself.
+  const orphaned = setInterval(() => {
+    if (process.ppid !== parentPid) process.exit(0);
+  }, ORPHAN_POLL_MS);
   acknowledgement.once('data', () => {
+    clearInterval(orphaned);
     acknowledgement.destroy();
     fs.rmSync(require('node:path').dirname(stateFile), { recursive: true, force: true });
     process.exit(0);
@@ -1089,7 +1178,12 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // stranding UserDO's durable row on a now-unknown local request.
     if (!entry) return { requestId, acknowledged: true };
     const terminal = readTerminalResult(entry.dir);
-    if (terminal.kind === 'exited') {
+    // The FIFO is a handshake with a LIVE supervisor: it is the only reader,
+    // so writing to it when it has exited blocks that writer forever — the
+    // same leak, moved into this daemon. A supervisor whose start identity no
+    // longer matches is gone (its daemon died and it left the result behind),
+    // and this daemon owns the directory instead.
+    if (terminal.kind === 'exited' && supervisorStartMatches(entry)) {
       await writeAcknowledgement(entry.dir);
       await waitForDirectoryRemoval(entry.dir);
     } else {
@@ -1140,7 +1234,7 @@ function startSupervisor(requestId, command) {
     commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
     path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
     String(EXEC_STREAM_MAX_BYTES),
-  ], { detached: true, env: SUPERVISOR_ENV, stdio: 'ignore' });
+  ], { detached: true, env: COMMAND_ENV, stdio: 'ignore' });
   child.unref();
   return { child, dir };
 }
