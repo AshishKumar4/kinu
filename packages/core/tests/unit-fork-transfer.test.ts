@@ -606,7 +606,11 @@ describe('fork transfer receiver', () => {
     expect(run.published).toBe(true);
     expect(committed.get(HUGE_PATH)).toEqual({ bytes: HUGE_SIZE, digest: hugeForkDigest() });
     expect(temp.size).toBe(0);
-  });
+  // A finite run: 256 MiB hashed through the receiver, with GC forced at every
+  // sample. Measured 4.5-5.2 s on a box at load 78-81 (three runs, 2026-09-02),
+  // where bun's default 5 s read red in the pre-push hook and green alone. A
+  // bound on a finite run, stated with its measurement, not a detector.
+  }, 30_000);
 
   test('the bound is measured, not assumed: a sink that keeps the ranges blows it', async () => {
     // The negative control for the test above. Same source, same 256 MiB, and
@@ -639,7 +643,9 @@ describe('fork transfer receiver', () => {
     // assertion is `peakRetained === 0` above. One metric, both directions.
     expect(retainedPeak).toBe(HUGE_SIZE);
     expect(run.peakRetainedHeapDelta).toBeGreaterThanOrEqual(192 * 1024 * 1024);
-  });
+  // The same 256 MiB run as its twin above, holding the whole file on purpose;
+  // the same measured bound applies, and it is if anything the slower of the two.
+  }, 30_000);
 
   test('a native sink abort keeps an existing destination and commit replaces it atomically', async () => {
     const files = new Map<string, Uint8Array>([['memory/existing.md', new TextEncoder().encode('old')]]);
