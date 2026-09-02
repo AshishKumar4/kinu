@@ -57,7 +57,6 @@ export {
   archiveCommand,
   archiveExcludeFile,
   archiveSizeCommand,
-  assertChainId,
   baseObjectKey,
   chainBackupOptions,
   CHAIN_EXCLUDES,

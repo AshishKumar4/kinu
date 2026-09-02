@@ -691,7 +691,6 @@
   "packages/devbox/src/lifecycle.ts#RECOVERY_STAGES (unreached-export)",
   "packages/devbox/src/lifecycle.ts#canonicalPath (unreached-export)",
   "packages/devbox/src/lifecycle.ts#healthProbeCommand (unreached-export)",
-  "packages/devbox/src/lifecycle.ts#runRestoreStep (unreached-export)",
   "packages/devbox/src/lifecycle.ts#scopesOverlap (unreached-export)",
   "packages/devbox/src/native-openat2.ts#MAX_NAME_BYTES (unreached-export)",
   "packages/devbox/src/native-openat2.ts#MAX_PATH_BYTES (unreached-export)",

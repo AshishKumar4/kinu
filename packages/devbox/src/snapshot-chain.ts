@@ -379,7 +379,7 @@ export function isChainId(id: string): boolean {
 }
 
 /** Validate a chain id or refuse the operation, naming the refusal. */
-export function assertChainId(id: string): string {
+function assertChainId(id: string): string {
   if (!isChainId(id)) {
     throw new Error(
       `chain id ${JSON.stringify(id.slice(0, 64))} is not a UUID; refusing to build `

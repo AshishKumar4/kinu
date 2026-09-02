@@ -60,7 +60,6 @@ import {
 } from '../src/capture/journal/command';
 import { requireSessionShellAccepts } from './support/session-shell';
 import {
-  assertChainId,
   baseObjectKey,
   chainStoreRoot,
   chainBackupOptions,
@@ -1383,10 +1382,9 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
       'ZZZZZZZZ-0000-4000-8000-000000000009', `${CHAIN_ID}/..`, ` ${CHAIN_ID}`,
     ]) {
       expect(isChainId(bad)).toBe(false);
-      expect(() => assertChainId(bad)).toThrow(/is not a UUID/);
     }
     expect(isChainId(CHAIN_ID)).toBe(true);
-    expect(assertChainId(CHAIN_ID)).toBe(CHAIN_ID);
+    // The refusal itself is judged where it is spent: the key builders below.
   });
 
   test('every key builder validates, so no path can be assembled from a guess', () => {

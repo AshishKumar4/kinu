@@ -375,31 +375,32 @@ describe('device-connect daemon lifecycle', () => {
 });
 
 describe('the agent-home root the daemon reports', () => {
-  test('connect creates it owner-only under the home in KINU_HOME', async () => {
-    const home = makeHome({});
-    const out = await runScript(home, `
-      import { AGENT_ROOT, ensureAgentRoot } from './packages/cli/src/device-connect.ts';
-      ensureAgentRoot();
-      console.log(AGENT_ROOT);
+  // Through the one public path that installs the daemon files: a connect.
+  const connect = (stub: ReturnType<typeof startStubCloud>, home: string) => runScript(home, `
+      import { connectDevice } from './packages/cli/src/device-connect.ts';
+      await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' }, { session: true });
+      process.exit(0);
     `);
-    expect(out.trim()).toBe(join(home, 'agents'));
+
+  test('connect creates it owner-only under the home in KINU_HOME', async () => {
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+    await connect(stub, home);
     expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
-  });
+  }, 20_000);
 
   test('a root an earlier build left group-readable is tightened', async () => {
-    const home = makeHome({});
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     const root = join(home, 'agents');
     mkdirSync(root);
     chmodSync(root, 0o755);
     expect(statSync(root).mode & 0o777).toBe(0o755);
 
-    await runScript(home, `
-      import { ensureAgentRoot } from './packages/cli/src/device-connect.ts';
-      ensureAgentRoot();
-    `);
+    await connect(stub, home);
 
     expect(statSync(root).mode & 0o777).toBe(0o700);
-  });
+  }, 20_000);
 });
 
 describe('the sandbox state the machine reported', () => {

@@ -35,7 +35,7 @@ export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 /** Where this machine keeps agent homes. The daemon reports this ROOT to the
  *  hub on HELLO and the hub composes `<root>/<workspace>/home` per command, so
  *  the CLI creates the root and the daemon owns everything under it. */
-export const AGENT_ROOT = join(AGENT_HOME, 'agents');
+const AGENT_ROOT = join(AGENT_HOME, 'agents');
 export const DEVICE_CONNECT_DEADLINE_MS = 20_000;
 const CONNECT_POLL_MS = 1_000;
 const DAEMON_EARLY_EXIT_GRACE_MS = 250;
@@ -60,7 +60,7 @@ export function defaultDeviceName(): string {
  * a root an earlier build left group-readable is tightened instead of kept.
  * What the agent writes on this machine is the owner's alone.
  */
-export function ensureAgentRoot(): void {
+function ensureAgentRoot(): void {
   ensureSecretDir(AGENT_ROOT);
 }
 
