@@ -42,6 +42,14 @@ import {
 } from './candidate-control';
 import { sessionShellRefusal } from './session-shell';
 import {
+  LiveTree,
+  ancestorsOf,
+  runBytes,
+  sortedByPath,
+  type LiveInode,
+  type TreeProperty,
+} from './tree-model';
+import {
   appendJournalBatch,
   blobKey,
   coalesce,
@@ -74,6 +82,7 @@ import {
 import {
   candidateStorePaths,
   candidateContainerStorage,
+  CANDIDATE_JOURNAL_ROOT,
   CANDIDATE_STORE_MOUNT,
   type CandidateContainerFormat,
   type CandidateContainerPorts,
@@ -102,15 +111,20 @@ import {
   type CandidatePayloadStore,
 } from '../../src/candidates/publication';
 import {
+  contentSize,
   issueVerifiedJournalCapture,
   manifestSha256,
   type AuditedCapture,
   type Capture,
+  type FileContent,
   type NodeEntry,
+  type PosixMetadata,
 } from '../../src/capture/model';
+import { paintedSegments } from '../../src/candidates/merkle-pack/chunk';
 import type {
   CandidateControlStateV1,
   CandidateRunControlV1,
+  DurabilityAwaitPoint,
   ImmutableObjectRef,
   ObjectReceipt,
   PayloadGrant,
@@ -278,6 +292,9 @@ interface StoredObject {
    *  per upload and reports it from `head` forever after, which is the identity
    *  a same-length replacement cannot copy. */
   readonly version: string;
+  /** User metadata stored beside the body, as R2's `customMetadata` and the
+   *  `x-amz-meta-*` headers s3fs keeps a file's mode, owner and times in. */
+  readonly meta: Readonly<Record<string, string>>;
 }
 
 /**
@@ -294,26 +311,51 @@ interface StoreInventory {
   bytes: number;
 }
 
+/** One remote operation against the store, as the work rows count them. */
+export interface RemoteOp {
+  readonly op: 'get' | 'put' | 'head' | 'list' | 'delete';
+  readonly key: string;
+  /** Bytes that crossed the wire: the body of a get or put; 0 otherwise. */
+  readonly bytes: number;
+}
+
 export class DurableStore {
   readonly objects = new Map<string, StoredObject>();
   /** Every mutation, in order. A crash-ordering assertion needs the order, not
    *  the end state. */
   readonly writes: string[] = [];
+  /**
+   * EVERY remote operation, reads included, in order. The counted-work rows
+   * (`RestoreWork`, `PublishWork`) are windows over this log: a wake's remote
+   * ops are the entries between the attach's start and its return, whatever
+   * port the arm reached them through. Counting here rather than in each arm
+   * is what makes one arm's row comparable with another's.
+   */
+  readonly ops: RemoteOp[] = [];
   #uploads = 0;
 
-  put(key: string, bytes: Uint8Array): string {
+  put(key: string, bytes: Uint8Array, meta: Readonly<Record<string, string>> = {}): string {
     this.#uploads += 1;
     const version = `v${this.#uploads}`;
-    this.objects.set(key, { bytes: bytes.slice(), version });
+    this.objects.set(key, { bytes: bytes.slice(), version, meta: { ...meta } });
     this.writes.push(`put:${key}`);
+    this.ops.push({ op: 'put', key, bytes: bytes.byteLength });
     return version;
   }
 
   get(key: string): Uint8Array | null {
-    return this.objects.get(key)?.bytes ?? null;
+    const held = this.objects.get(key);
+    this.ops.push({ op: 'get', key, bytes: held?.bytes.byteLength ?? 0 });
+    return held?.bytes ?? null;
+  }
+
+  /** The metadata stored beside `key`, or null for an absent object. */
+  meta(key: string): Readonly<Record<string, string>> | null {
+    return this.objects.get(key)?.meta ?? null;
   }
 
   head(key: string): { size: number; digest: string; version: string } | null {
+    this.ops.push({ op: 'head', key, bytes: 0 });
     const held = this.objects.get(key);
     if (held === undefined) return null;
     return {
@@ -324,11 +366,13 @@ export class DurableStore {
   }
 
   delete(key: string): void {
+    this.ops.push({ op: 'delete', key, bytes: 0 });
     if (this.objects.delete(key)) this.writes.push(`delete:${key}`);
   }
 
   list(prefix: string): string[] {
-    return [...this.objects.keys()].filter(key => key.startsWith(prefix)).sort();
+    this.ops.push({ op: 'list', key: prefix, bytes: 0 });
+    return this.#keysUnder(prefix);
   }
 
   deletePrefix(prefix: string): number {
@@ -340,7 +384,7 @@ export class DurableStore {
   inventory(prefix: string): StoreInventory {
     let objects = 0;
     let bytes = 0;
-    for (const key of this.list(prefix)) {
+    for (const key of this.#keysUnder(prefix)) {
       objects += 1;
       bytes += this.objects.get(key)!.bytes.byteLength;
     }
@@ -361,13 +405,21 @@ export class DurableStore {
     if (how === 'flip') {
       if (bytes.byteLength === 0) throw new Error(`cannot flip a byte of empty ${key}`);
       bytes[Math.floor(bytes.byteLength / 2)] ^= 0xff;
-      this.objects.set(key, { bytes, version: held.version });
+      this.objects.set(key, { bytes, version: held.version, meta: held.meta });
       return;
     }
     this.objects.set(key, {
       bytes: bytes.subarray(0, Math.max(1, bytes.byteLength - 17)),
       version: held.version,
+      meta: held.meta,
     });
+  }
+
+  /** Keys under `prefix`, sorted, WITHOUT recording a remote op: the arms'
+   *  own bookkeeping reads (`inventory`, a control-plane listing) are not
+   *  the work a wake or a publish pays for. */
+  #keysUnder(prefix: string): string[] {
+    return [...this.objects.keys()].filter(key => key.startsWith(prefix)).sort();
   }
 }
 
@@ -391,31 +443,101 @@ interface OverlayRow {
  * store are parsed rather than trusted, so a truncated or flipped archive
  * REFUSES here exactly as squashfuse refuses a damaged image — which is what
  * makes a corrupt layer a refusal instead of a silently short tree.
+ *
+ * WHAT A LAYER CARRIES is what squashfs carries: mode, uid, gid, ONE time
+ * (squashfs stores mtime and nothing else), xattrs, symlink targets, hardlinks
+ * (one inode, several names) and sparse geometry (holes are not stored). An
+ * archive that carried more than the real format would let the chain pass a
+ * fidelity cell the deployed chain cannot pass.
  */
-const ArchiveSchema = v.strictObject({
-  archive: v.literal(1),
-  rows: v.array(v.strictObject({ path: v.string(), body: v.string() })),
+const ArchiveMetadataSchema = v.strictObject({
+  uid: v.number(),
+  gid: v.number(),
+  mtimeNs: v.string(),
+  xattrs: v.record(v.string(), v.string()),
 });
+const ArchiveEntrySchema = v.strictObject({
+  path: v.string(),
+  kind: v.picklist(['file', 'dir', 'symlink']),
+  mode: v.number(),
+  ino: v.number(),
+  metadata: ArchiveMetadataSchema,
+  target: v.optional(v.string()),
+  size: v.optional(v.number()),
+  /** Data runs only: `[offset, base64 bytes]`. Holes are what is between them. */
+  runs: v.optional(v.array(v.tuple([v.number(), v.string()]))),
+});
+const ArchiveSchema = v.strictObject({
+  archive: v.literal(2),
+  entries: v.array(ArchiveEntrySchema),
+});
+
+/** The disk refused a write for want of room: `ENOSPC`, as `write(2)` says it. */
+export class DiskFull extends Error {
+  constructor(readonly path: string, readonly needed: number, readonly free: number) {
+    super(`ENOSPC: ${path} needs ${needed} bytes and the disk has ${free} free`);
+    this.name = 'DiskFull';
+  }
+}
 
 /**
  * One container's disk, and the mounts on it.
  *
- * Paths are absolute and files are bytes; a directory exists when something
- * says it does. `dead` is what a replacement leaves behind: the strategy's
- * in-flight operation keeps holding this object, and every call on it fails the
- * way a call against a container that no longer exists fails.
+ * Two kinds of thing live here. PLAIN FILES (`files`) are bytes at a path:
+ * archives, stages, runner replies. TREES (`trees`) are full-fidelity
+ * filesystem trees at a directory — the layers squashfuse serves, an
+ * overlay's upper, the journal daemon's backing root — held as
+ * {@link LiveTree}s so a hardlink, a hole or an xattr survives the way it
+ * would on a real disk. Both are charged to one QUOTA: a write past it is
+ * refused with {@link DiskFull} before any effect lands, which is the
+ * `intent-before-effect` rule the ENOSPC cell asserts.
+ *
+ * `dead` is what a replacement leaves behind: the strategy's in-flight
+ * operation keeps holding this object, and every call on it fails the way a
+ * call against a container that no longer exists fails.
  */
 export class ContainerDisk {
   readonly files = new Map<string, Uint8Array>();
   readonly dirs = new Set<string>([DEVBOX_WORKDIR, DEVBOX_RUNTIME_DIR]);
   readonly mounts = new Map<string, MountRow>();
   readonly overlays = new Map<string, OverlayRow>();
+  readonly trees = new Map<string, LiveTree>();
+  /** Plain files that are mount mirrors: present, readable, never charged. */
+  readonly mirrors = new Set<string>();
+  /** Paths an overlay's upper has deleted from a lower: the whiteouts. */
+  readonly whiteouts = new Map<string, Set<string>>();
+  /** Every `mount` call this disk ever took, replacements included. */
+  mountCalls = 0;
+  /** The subset that mounted squashfs layers: restore replay units. */
+  layerMountCalls = 0;
+  /** Bytes this disk may hold, or null for a disk that never fills. */
+  quotaBytes: number | null = null;
+  usedBytes = 0;
   dead = false;
   stopped = false;
 
   #alive(what: string): void {
     if (this.dead) throw new ContainerDied(`a dead container was asked to ${what}`);
     if (this.stopped) throw new ContainerStopped(what);
+  }
+
+  /** Charge `delta` bytes against the quota; refuse, effect-free, past it. */
+  charge(delta: number, path = '(tree)'): void {
+    if (delta > 0 && this.quotaBytes !== null && this.usedBytes + delta > this.quotaBytes) {
+      throw new DiskFull(path, delta, Math.max(0, this.quotaBytes - this.usedBytes));
+    }
+    this.usedBytes += delta;
+  }
+
+  /** The tree at `dir`, created empty on first use and charged to this disk. */
+  tree(dir: string): LiveTree {
+    let held = this.trees.get(dir);
+    if (held === undefined) {
+      held = new LiveTree((delta) => this.charge(delta, dir));
+      this.trees.set(dir, held);
+      this.mkdirp(dir);
+    }
+    return held;
   }
 
   mkdirp(path: string): void {
@@ -425,66 +547,151 @@ export class ContainerDisk {
 
   rmrf(path: string): void {
     this.#alive(`rm -rf ${path}`);
-    for (const key of this.files.keys()) {
-      if (key === path || key.startsWith(`${path}/`)) this.files.delete(key);
+    for (const [key, bytes] of this.files) {
+      if (key === path || key.startsWith(`${path}/`)) {
+        this.files.delete(key);
+        if (!this.mirrors.has(key)) this.charge(-bytes.byteLength);
+        this.mirrors.delete(key);
+      }
     }
     for (const key of this.dirs) {
       if (key === path || key.startsWith(`${path}/`)) this.dirs.delete(key);
+    }
+    for (const [dir, tree] of this.trees) {
+      if (dir === path || dir.startsWith(`${path}/`)) {
+        tree.clear();
+        this.trees.delete(dir);
+      }
     }
   }
 
   exists(path: string): boolean {
     this.#alive(`stat ${path}`);
     if (this.dirs.has(path) || this.files.has(path)) return true;
-    return this.#overlayOwner(path) !== undefined;
+    return this.#treeAt(path) !== undefined;
   }
 
   writeFile(path: string, bytes: Uint8Array): void {
     this.#alive(`write ${path}`);
-    const target = this.#redirect(path);
-    this.mkdirp(parentOf(target));
-    this.files.set(target, bytes.slice());
+    const owner = this.#overlayOwner(path);
+    if (owner !== undefined) {
+      this.tree(owner.overlay.upper).writeFile(owner.relative, bytes);
+      this.whiteouts.get(owner.point)?.delete(owner.relative);
+      return;
+    }
+    const held = this.files.get(path);
+    const heldCharge = held === undefined || this.mirrors.has(path) ? 0 : held.byteLength;
+    this.charge(bytes.byteLength - heldCharge, path);
+    this.mirrors.delete(path);
+    this.mkdirp(parentOf(path));
+    this.files.set(path, bytes.slice());
+  }
+
+  /**
+   * A store object as an s3fs mount shows it: a file the container can read
+   * that occupies NO local disk, because the mount fetches on demand. Never
+   * charged to the quota, and never refunded on unmount.
+   */
+  mirror(path: string, bytes: Uint8Array): void {
+    this.#alive(`mirror ${path}`);
+    const held = this.files.get(path);
+    if (held !== undefined && !this.mirrors.has(path)) this.charge(-held.byteLength);
+    this.mirrors.add(path);
+    this.mkdirp(parentOf(path));
+    this.files.set(path, bytes);
   }
 
   readFile(path: string): Uint8Array | undefined {
     this.#alive(`read ${path}`);
     const direct = this.files.get(path);
     if (direct !== undefined) return direct;
-    const resolved = this.#resolveThroughOverlay(path);
-    return resolved === undefined ? undefined : this.files.get(resolved);
+    const located = this.#treeAt(path);
+    if (located === undefined || located.node.kind !== 'file' || located.node.content === undefined) return undefined;
+    const content = located.node.content;
+    if (content.kind === 'dense') return content.bytes;
+    if (content.kind === 'sealed') return undefined;
+    const out = new Uint8Array(content.size);
+    for (const run of content.runs) out.set(run.bytes.subarray(0, Math.max(0, content.size - run.offset)), run.offset);
+    return out;
   }
 
   removeFile(path: string): void {
     this.#alive(`unlink ${path}`);
-    this.files.delete(this.#redirect(path));
+    const owner = this.#overlayOwner(path);
+    if (owner !== undefined) {
+      this.tree(owner.overlay.upper).remove(owner.relative);
+      // A name a lower still holds is hidden by a whiteout, as fuse-overlayfs
+      // hides it: the upper cannot unlink a lower's file, only mask it.
+      let masked = this.whiteouts.get(owner.point);
+      if (masked === undefined) {
+        masked = new Set();
+        this.whiteouts.set(owner.point, masked);
+      }
+      masked.add(owner.relative);
+      return;
+    }
+    const held = this.files.get(path);
+    if (held !== undefined && !this.mirrors.has(path)) this.charge(-held.byteLength);
+    this.mirrors.delete(path);
+    this.files.delete(path);
   }
 
   /** Every file under `dir`, as paths relative to it, through any overlay. */
   entries(dir: string): string[] {
     this.#alive(`list ${dir}`);
-    const overlay = this.overlays.get(dir);
-    const found = new Set<string>();
-    if (overlay !== undefined) {
-      for (const layer of [overlay.upper, ...overlay.lowers]) {
-        for (const key of this.files.keys()) {
-          if (key.startsWith(`${layer}/`)) found.add(key.slice(layer.length + 1));
-        }
-      }
-    }
-    for (const key of this.files.keys()) {
-      if (key.startsWith(`${dir}/`)) found.add(key.slice(dir.length + 1));
-    }
-    return [...found].sort();
+    return this.snapshot(dir).filter((entry) => entry.kind === 'file').map((entry) => entry.path);
   }
 
+  /**
+   * The tree served at `dir`, as capture entries: an overlay mount point
+   * answers the merged view (upper wins, whiteouts hide), a tree directory
+   * answers its own tree, anything else answers the plain files below it.
+   */
+  snapshot(dir: string): NodeEntry[] {
+    this.#alive(`walk ${dir}`);
+    const overlay = this.overlays.get(dir);
+    if (overlay !== undefined) {
+      const merged = new Map<string, NodeEntry>();
+      const masked = this.whiteouts.get(dir) ?? new Set<string>();
+      let inoBase = 0;
+      // Lowers first, oldest last in the list, so a newer layer's row replaces
+      // an older one's; the upper replaces every lower. Inode ids are made
+      // disjoint across layers by offset, and stay shared within a layer.
+      for (const layer of [...overlay.lowers].reverse().concat(overlay.upper)) {
+        const tree = this.trees.get(layer);
+        if (tree === undefined) continue;
+        let highest = 0;
+        for (const entry of tree.snapshot()) {
+          highest = Math.max(highest, entry.ino);
+          merged.set(entry.path, { ...entry, ino: entry.ino + inoBase });
+        }
+        inoBase += highest;
+      }
+      for (const path of masked) merged.delete(path);
+      return sortedByPath([...merged.values()]);
+    }
+    const tree = this.trees.get(dir);
+    if (tree !== undefined) return tree.snapshot();
+    const rows: NodeEntry[] = [];
+    let ino = 1;
+    for (const [key, bytes] of [...this.files].sort(([a], [b]) => (a < b ? -1 : 1))) {
+      if (!key.startsWith(`${dir}/`)) continue;
+      rows.push({
+        path: key.slice(dir.length + 1),
+        kind: 'file',
+        mode: 0o644,
+        ino: ino++,
+        metadata: { uid: 0, gid: 0, atimeNs: '0', mtimeNs: '0', ctimeNs: '0', xattrs: {} },
+        content: { kind: 'dense', bytes },
+      });
+    }
+    return rows;
+  }
+
+  /** `cp -a from/. to/`: the tree at `from` planted into the tree at `to`. */
   copyTree(from: string, to: string): void {
     this.#alive(`cp -a ${from} ${to}`);
-    this.mkdirp(to);
-    for (const relative of this.entries(from)) {
-      const bytes = this.readFile(`${from}/${relative}`);
-      if (bytes === undefined) continue;
-      this.writeFile(`${to}/${relative}`, bytes);
-    }
+    this.tree(to).plant(this.snapshot(from));
   }
 
   /**
@@ -493,13 +700,29 @@ export class ContainerDisk {
    * The stand-in for mksquashfs, and deliberately a format that FAILS TO PARSE
    * when a byte of it is lost: a truncated squashfs does not mount either, and
    * a fake whose archive tolerated damage would let a corrupt layer be served.
+   * Sparse files are written as their data runs: mksquashfs does not store a
+   * hole, and neither does this.
    */
   pack(dir: string): Uint8Array {
-    const rows = this.entries(dir).map(relative => ({
-      path: relative,
-      body: bytesToBase64(this.readFile(`${dir}/${relative}`) ?? new Uint8Array(0)),
-    }));
-    return new TextEncoder().encode(JSON.stringify({ archive: 1, rows }));
+    const entries = this.snapshot(dir).map((entry): v.InferOutput<typeof ArchiveEntrySchema> => {
+      const metadata = entry.metadata!;
+      const row: v.InferOutput<typeof ArchiveEntrySchema> = {
+        path: entry.path,
+        kind: entry.kind,
+        mode: entry.mode,
+        ino: entry.ino,
+        metadata: { uid: metadata.uid, gid: metadata.gid, mtimeNs: metadata.mtimeNs, xattrs: { ...metadata.xattrs } },
+      };
+      if (entry.kind === 'symlink') row.target = entry.target;
+      if (entry.kind === 'file' && entry.content !== undefined) {
+        row.size = contentSize(entry.content);
+        row.runs = paintedSegments(entry.content).segments
+          .filter((segment) => !segment.zeros)
+          .map((segment) => [segment.start, bytesToBase64(segment.view!)]);
+      }
+      return row;
+    });
+    return new TextEncoder().encode(JSON.stringify({ archive: 2, entries }));
   }
 
   unpack(bytes: Uint8Array, dir: string): void {
@@ -512,10 +735,30 @@ export class ContainerDisk {
     } catch (error) {
       throw new Error('the archive superblock is not readable', { cause: error });
     }
-    this.mkdirp(dir);
-    for (const row of archive.rows) {
-      this.writeFile(`${dir}/${row.path}`, base64ToBytes(row.body));
-    }
+    const entries = archive.entries.map((row): NodeEntry => {
+      // squashfuse reports the one stored time for all three.
+      const metadata: PosixMetadata = {
+        uid: row.metadata.uid,
+        gid: row.metadata.gid,
+        atimeNs: row.metadata.mtimeNs,
+        mtimeNs: row.metadata.mtimeNs,
+        ctimeNs: row.metadata.mtimeNs,
+        xattrs: row.metadata.xattrs,
+      };
+      const base = { path: row.path, kind: row.kind, mode: row.mode, ino: row.ino, metadata };
+      if (row.kind === 'symlink') return { ...base, target: row.target };
+      if (row.kind !== 'file') return base;
+      const runs = (row.runs ?? []).map(([offset, body]) => ({ offset, bytes: base64ToBytes(body) }));
+      const size = row.size ?? 0;
+      const dense = runs.length === 1 && runs[0]!.offset === 0 && runs[0]!.bytes.byteLength === size;
+      return {
+        ...base,
+        content: dense ? { kind: 'dense', bytes: runs[0]!.bytes } : { kind: 'sparse', size, runs },
+      };
+    });
+    const tree = this.tree(dir);
+    tree.clear();
+    tree.plant(entries);
   }
 
   procMounts(): string {
@@ -527,6 +770,8 @@ export class ContainerDisk {
 
   mount(point: string, row: MountRow): void {
     this.#alive(`mount ${point}`);
+    this.mountCalls += 1;
+    if (row.fstype.includes('squashfuse')) this.layerMountCalls += 1;
     this.mkdirp(point);
     this.mounts.set(point, row);
   }
@@ -535,6 +780,7 @@ export class ContainerDisk {
     this.#alive(`unmount ${point}`);
     this.mounts.delete(point);
     this.overlays.delete(point);
+    this.whiteouts.delete(point);
   }
 
   mountOverlay(point: string, overlay: OverlayRow): void {
@@ -544,29 +790,32 @@ export class ContainerDisk {
       options: 'rw,nosuid',
     });
     this.overlays.set(point, overlay);
+    this.tree(overlay.upper);
   }
 
-  /** Where a write to `path` really lands: an overlay write goes to its upper. */
-  #redirect(path: string): string {
+  /** The node a path names through an overlay or a tree directory. */
+  #treeAt(path: string): { node: LiveInode } | undefined {
     const owner = this.#overlayOwner(path);
-    if (owner === undefined) return path;
-    return `${owner.overlay.upper}/${owner.relative}`;
-  }
-
-  #resolveThroughOverlay(path: string): string | undefined {
-    const owner = this.#overlayOwner(path);
-    if (owner === undefined) return undefined;
-    for (const layer of [owner.overlay.upper, ...owner.overlay.lowers]) {
-      const candidate = `${layer}/${owner.relative}`;
-      if (this.files.has(candidate)) return candidate;
+    if (owner !== undefined) {
+      if (this.whiteouts.get(owner.point)?.has(owner.relative)) return undefined;
+      for (const layer of [owner.overlay.upper, ...owner.overlay.lowers]) {
+        const node = this.trees.get(layer)?.node(owner.relative);
+        if (node !== undefined) return { node };
+      }
+      return undefined;
+    }
+    for (const [dir, tree] of this.trees) {
+      if (!path.startsWith(`${dir}/`)) continue;
+      const node = tree.node(path.slice(dir.length + 1));
+      if (node !== undefined) return { node };
     }
     return undefined;
   }
 
-  #overlayOwner(path: string): { overlay: OverlayRow; relative: string } | undefined {
+  #overlayOwner(path: string): { point: string; overlay: OverlayRow; relative: string } | undefined {
     for (const [point, overlay] of this.overlays) {
       if (path.startsWith(`${point}/`)) {
-        return { overlay, relative: path.slice(point.length + 1) };
+        return { point, overlay, relative: path.slice(point.length + 1) };
       }
     }
     return undefined;
@@ -612,7 +861,19 @@ export interface Workspace {
   write(path: string, text: string): void;
   read(path: string): string | undefined;
   remove(path: string): void;
+  /** File paths only, sorted: the listing a text fixture compares against. */
   paths(): readonly string[];
+  /**
+   * Plant a complete tree at full fidelity: directories, files, symlinks,
+   * hardlinks (entries that share an `ino` share one inode), sparse content
+   * as runs, and every metadata field. Existing paths are replaced.
+   */
+  plant(entries: readonly NodeEntry[]): void;
+  /** The tree the workspace serves, as capture entries, at the fidelity the
+   *  arm serves it. Inode ids share exactly where the served inodes share. */
+  snapshot(): readonly NodeEntry[];
+  /** `pwrite(2)`: overwrite bytes in place at an offset. The sqlite pattern. */
+  pwrite(path: string, offset: number, bytes: Uint8Array): void;
 }
 
 /** One object a strategy's own record DECLARES a size and identity for. */
@@ -634,6 +895,118 @@ export interface ControlPlacement {
   readonly head: string | null;
 }
 
+// ── counted work ────────────────────────────────────────────────────────────
+//
+// The rows below carry the field names the durability contract declares for
+// them (`SealWork`, `PublishWork`, `RestoreWork` in `src/durability/contracts.ts`;
+// the first two land with the contracts lane, `RestoreWork` is shipped). The
+// machine derives every row from things it can OBSERVE — the durable store's
+// op log, the disk's mount count, the shipped builders' own statistics, the
+// bytes the fence handed over — never from a number an arm reports about
+// itself, so a counter cannot flatter the arm that emits it.
+
+/** What one seal (fence plus build) cost. */
+export interface SealWork {
+  /** Bytes the fence copied into the stage: the whole tree today. */
+  readonly bytesStaged: number;
+  /** Bytes the chunker consumed. */
+  readonly bytesChunked: number;
+  /** Chunk digests computed. */
+  readonly chunksHashed: number;
+  /** Tree nodes serialized and hashed. */
+  readonly nodesRewritten: number;
+  /** Files staged whole rather than by dirty cluster. */
+  readonly wholeFiles: number;
+}
+
+/** What one publish cost against the store and the control plane. */
+export interface PublishWork {
+  readonly objectsPut: number;
+  readonly bytesPut: number;
+  /** Head compare-and-swap transactions attempted. */
+  readonly casAttempts: number;
+}
+
+/** What one wake cost. The shipped `RestoreWork` row, field for field. */
+export interface RestoreWork {
+  /** Remote ops on the critical path. The store here answers synchronously
+   *  and every shipped restore awaits one op before issuing the next, so this
+   *  equals `totalRemoteOps`; it stays a separate field so a concurrent
+   *  restore reports the difference. */
+  readonly serialRemoteOps: number;
+  readonly totalRemoteOps: number;
+  /** Bytes read from keys outside every payload prefix the arm names. */
+  readonly metadataBytes: number;
+  /** Bytes read from keys under a payload prefix. */
+  readonly payloadBytes: number;
+  /** Entries the restore materialized on the container. */
+  readonly cpuSteps: number;
+  readonly mounts: number;
+  /** Journal entries or layers replayed over a base. */
+  readonly replayUnits: number;
+}
+
+export interface WorkRows {
+  /** The last checkpoint's seal. */
+  readonly seal: SealWork;
+  /** The last checkpoint's publish. */
+  readonly publish: PublishWork;
+  /** The last attach's restore. */
+  readonly restore: RestoreWork;
+}
+
+/**
+ * Which `DURABILITY_AWAIT_POINTS` an arm reaches, in register order. Mirrors
+ * the contracts lane's `AwaitPointDeclaration` (`{ format, uses }`); an arm
+ * outside the durability contract declares `uses: []` and says why.
+ */
+export interface AwaitPointUse {
+  readonly uses: readonly DurabilityAwaitPoint[];
+  /** Why the arm reaches none, for an arm that predates the contract. */
+  readonly none?: string;
+}
+
+/** A cell, or a tree property, the arm refuses by name and says why. */
+export interface Refusal {
+  readonly reason: string;
+}
+
+/** A held finalize: `entered` settles when the commit reaches the gate. */
+export interface HeldFinalize {
+  readonly entered: Promise<void>;
+  readonly release: () => void;
+}
+
+/** Container-side starts that survive a Durable Object isolate reset. */
+export interface LifecycleCounts {
+  readonly daemonStarts: number;
+  readonly restoreStarts: number;
+}
+
+/** The write-ahead journal a container still holds: one record per admitted
+ *  write, and the records a refused effect cancelled. */
+export interface JournalFacts {
+  readonly records: readonly string[];
+  readonly failedWrites: readonly string[];
+}
+
+/** A second container on the same box: the same durable store and rows, its
+ *  own disk, its own daemon, its own strategy instance. */
+export interface ArmBoot {
+  storage(): DevboxStorage;
+  readonly workspace: Workspace;
+  /** Every failure the strategy recorded durably through its port. */
+  readonly failures: readonly string[];
+  /**
+   * Hold the boot's next commit at the DO-side finalize: the runner has
+   * staged (uploaded) and the draft is about to reach the control plane.
+   * `entered` settles when it is held; `release` resumes the old commit.
+   */
+  holdFinalize(): HeldFinalize;
+  /** A blank disk, the same durable store, and the same durable rows. */
+  replaceContainer(): void;
+}
+
 /**
  * One strategy, driven through exactly the operations the contract names.
  *
@@ -643,18 +1016,22 @@ export interface ControlPlacement {
  * defect was a placement bug, and a test carrying its own copy of the layout
  * cannot see one.
  */
-export interface ConformanceArm {
+export interface ConformanceArm extends ArmBoot {
   readonly name: DevboxStrategyName;
-  /** The strategy under test. Replaced with the container, like the real
-   *  restoration owner: an isolate rarely survives a replacement. */
-  storage(): DevboxStorage;
-  readonly workspace: Workspace;
   readonly durable: DurableStore;
   readonly deaths: DeathWatch;
-  /** A blank disk, the same durable store, and the same durable rows. */
-  replaceContainer(): void;
   /** The container stops where it stands: no teardown, no replacement. */
   stopContainer(): void;
+  /**
+   * The isolate goes and comes back: a NEW strategy instance over the SAME
+   * container, disk intact, daemon and mounts where they were. The opposite
+   * of a replacement, and what a Durable Object reset really is.
+   */
+  resetIsolate(): void;
+  /** A second live container on this box, beside the current one. */
+  secondBoot(): ArmBoot;
+  /** The current container's disk: quota, usage, mounts. */
+  disk(): ContainerDisk;
   /** The commit sub-steps this strategy exposes, in the order it performs
    *  them. Derived from its own key layout, never invented here. */
   readonly commitSeams: readonly string[];
@@ -667,7 +1044,14 @@ export interface ConformanceArm {
    * a timeout.
    */
   readonly publishSeam: string;
+  /** The attach sub-steps an isolate reset can land after, in order. Each
+   *  is a port whose effect is on the container when the reset lands. */
+  readonly attachSeams: readonly string[];
   dieAt(seam: string): void;
+  /** Arm one reset/death at the named durability await point. */
+  faultAt(point: DurabilityAwaitPoint): void;
+  /** How many times this arm reached the await point. */
+  awaitVisits(point: DurabilityAwaitPoint): number;
   /** Prefixes the container owns through its mount. */
   payloadPrefixes(): readonly string[];
   controlPlane(): Promise<ControlPlacement>;
@@ -684,8 +1068,178 @@ export interface ConformanceArm {
   readonly refusesCorruptPayload: boolean;
   /** Every committed head the ledger names. Exactly one is the invariant. */
   committedHeads(): Promise<readonly string[]>;
+  /** The counted-work rows for the last checkpoint and the last attach. */
+  work(): WorkRows;
+  /** Which durability await points this arm reaches. */
+  readonly awaitPoints: AwaitPointUse;
+  /** Container-side starts that survive a Durable Object isolate reset. */
+  lifecycleCounts?(): LifecycleCounts;
+  /** Evict clean local bytes, as the design's disk-pressure escape requires.
+   *  Returns how many clean bytes it found to free. An arm without an
+   *  eviction hook reports that fact: it can only refuse when full. */
+  evictCleanBytes?(): number;
+  /** The write-ahead journal records a container still holds, in order: one
+   *  line per workload effect, 'W <path>' for a write that landed. Empty for
+   *  arms whose write path keeps no journal. */
+  journalFacts?(): JournalFacts;
+  /** Tree properties the arm's format does not carry, by name. */
+  readonly refusedProperties: Readonly<Partial<Record<TreeProperty, Refusal>>>;
+  /** Cells the arm refuses outright, by cell id. */
+  readonly refusedCells: Readonly<Record<string, Refusal>>;
 }
 
+// ── work accounting shared by every arm ─────────────────────────────────────
+
+/** A window over the durable op log, opened at one moment and read later. */
+interface OpWindow {
+  readonly from: number;
+}
+
+/** The publish row for the ops since `window` opened. */
+function publishWorkSince(durable: DurableStore, window: OpWindow, casAttempts: number): PublishWork {
+  let objectsPut = 0;
+  let bytesPut = 0;
+  for (const op of durable.ops.slice(window.from)) {
+    if (op.op !== 'put') continue;
+    objectsPut += 1;
+    bytesPut += op.bytes;
+  }
+  return { objectsPut, bytesPut, casAttempts };
+}
+
+/** The restore row for the ops since `window` opened. */
+function restoreWorkSince(
+  durable: DurableStore,
+  window: OpWindow,
+  payloadPrefixes: readonly string[],
+  local: { readonly mounts: number; readonly cpuSteps: number; readonly replayUnits: number },
+): RestoreWork {
+  let total = 0;
+  let metadataBytes = 0;
+  let payloadBytes = 0;
+  for (const op of durable.ops.slice(window.from)) {
+    if (op.op === 'put' || op.op === 'delete') continue;
+    total += 1;
+    if (payloadPrefixes.some((prefix) => op.key.startsWith(prefix))) payloadBytes += op.bytes;
+    else metadataBytes += op.bytes;
+  }
+  return {
+    serialRemoteOps: total,
+    totalRemoteOps: total,
+    metadataBytes,
+    payloadBytes,
+    cpuSteps: local.cpuSteps,
+    mounts: local.mounts,
+    replayUnits: local.replayUnits,
+  };
+}
+
+
+/** The optional members of a storage, carried over a metered wrapper in
+ *  statements: an absent `detach` stays absent, a present one is delegated. */
+function withOptionalMembers(raw: DevboxStorage, metered: Pick<DevboxStorage, 'attach' | 'checkpoint' | 'discard'>): DevboxStorage {
+  const storage: DevboxStorage = { ...metered };
+  const repair = raw.repairAttached;
+  if (repair !== undefined) storage.repairAttached = async () => await repair.call(raw);
+  const detach = raw.detach;
+  if (detach !== undefined) storage.detach = async () => await detach.call(raw);
+  return storage;
+}
+
+const NO_SEAL: SealWork = { bytesStaged: 0, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles: 0 };
+const NO_PUBLISH: PublishWork = { objectsPut: 0, bytesPut: 0, casAttempts: 0 };
+const NO_RESTORE: RestoreWork = {
+  serialRemoteOps: 0, totalRemoteOps: 0, metadataBytes: 0, payloadBytes: 0, cpuSteps: 0, mounts: 0, replayUnits: 0,
+};
+
+/**
+ * The seal row for a whole-tree fence: what every shipped arm does today. The
+ * fence hands the builder every file, so staged bytes, chunked bytes and
+ * rewritten nodes are all the tree's. `chunksHashed` is the count of
+ * `chunkBytes`-sized windows over the data (holes excluded), which is what a
+ * fixed-size chunker hashes; a content-defined chunker's own count replaces it
+ * where the builder reports one.
+ */
+function wholeTreeSeal(entries: readonly NodeEntry[], chunkBytes: number): SealWork {
+  let bytesStaged = 0;
+  let chunksHashed = 0;
+  let wholeFiles = 0;
+  const seen = new Set<number>();
+  for (const entry of entries) {
+    if (entry.kind !== 'file' || entry.content === undefined || seen.has(entry.ino)) continue;
+    seen.add(entry.ino);
+    wholeFiles += 1;
+    bytesStaged += runBytes(entry.content);
+    for (const segment of paintedSegments(entry.content).segments) {
+      if (!segment.zeros) chunksHashed += Math.ceil((segment.end - segment.start) / chunkBytes);
+    }
+  }
+  return { bytesStaged, bytesChunked: bytesStaged, chunksHashed, nodesRewritten: entries.length, wholeFiles };
+}
+
+/**
+ * The declaration every arm outside the durability contract makes: it reaches
+ * no await point because its ports predate the register. Its own commit seams
+ * are its fault map, and cell 6.4 walks them.
+ */
+const NO_AWAIT_POINTS: AwaitPointUse = {
+  uses: [],
+  none: 'the strategy predates the durability contract; its commit seams are its fault map',
+};
+
+/** One namespace keeps await-point faults distinct from legacy commit seams. */
+function awaitPointSeam(point: DurabilityAwaitPoint): string {
+  return `await:${point}`;
+}
+
+/** The one cell this machine cannot host for any arm: it lives on the
+ *  devbox-harness with the real class. Named so the matrix says where. */
+export const HARNESS_OWNED_CELLS = {
+  '6.19': { reason: 'owned by candidate-attach.test.ts: stop then wake on the same instance needs the Devbox class and the platform stand-in' },
+} satisfies Readonly<Record<string, Refusal>>;
+
+/** One deterministic pause at a port. A cell holds, waits until the operation
+ *  reaches it, drives the competing boot, then releases the old operation. */
+class OneShotGate {
+  #waiting: Promise<void> | null = null;
+  #release: (() => void) | null = null;
+  #entered: (() => void) | null = null;
+
+  hold(): HeldFinalize {
+    if (this.#waiting !== null) throw new Error('a finalize gate is already held');
+    this.#waiting = new Promise<void>((resolve) => { this.#release = resolve; });
+    const entered = new Promise<void>((resolve) => { this.#entered = resolve; });
+    return {
+      release: () => {
+        const release = this.#release;
+        if (release === null) return;
+        this.#release = null;
+        this.#waiting = null;
+        release();
+      },
+      entered,
+    };
+  }
+
+  async cross(): Promise<void> {
+    const waiting = this.#waiting;
+    if (waiting === null) return;
+    const entered = this.#entered;
+    this.#entered = null;
+    entered?.();
+    await waiting;
+  }
+}
+
+
+/** An arm explicitly refused one named cell. The matrix accepts this only
+ *  when the arm's declaration names the SAME cell with the SAME reason. */
+export class ArmRefused extends Error {
+  constructor(readonly cell: string, readonly reason: string) {
+    super(`${cell} refused: ${reason}`);
+    this.name = 'ArmRefused';
+  }
+}
 // ── snapshot-chain ──────────────────────────────────────────────────────────
 
 /**
@@ -771,6 +1325,8 @@ function chainExec(
         return fail(`squashfuse: ${error instanceof Error ? error.message : String(error)}`);
       }
       disk.mount(layer.point!, { source: layer.archive!, fstype: 'fuse.squashfuse', options: 'ro' });
+      // The layer is mounted on the container when the isolate may go.
+      deaths.reset('attach:after-layer-mount');
       return ok();
     }
 
@@ -781,6 +1337,7 @@ function chainExec(
         lowers: overlay.lowers!.split(':').map(unquote),
         upper: unquote(overlay.upper!),
       });
+      deaths.reset('attach:after-overlay');
       return ok();
     }
 
@@ -793,7 +1350,14 @@ function chainExec(
     const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
     if (squash !== undefined) {
       const archive = disk.pack(squash.source!);
-      disk.writeFile(squash.archive!, archive);
+      try {
+        disk.writeFile(squash.archive!, archive);
+      } catch (error) {
+        // mksquashfs on a full disk: a non-zero rc on stdout, its own words on
+        // stderr, exactly as the real command reports it.
+        if (!(error instanceof DiskFull)) throw error;
+        return { stdout: '1 0', stderr: `FATAL ERROR: Failed to write to output filesystem: ${error.message}`, exitCode: 0 };
+      }
       // `<exit> <bytes>`, the one command that builds and measures.
       return ok(`0 ${archive.byteLength}`);
     }
@@ -823,17 +1387,27 @@ function chainExec(
     }
 
     if (command.includes('df -Pk')) {
-      // `<need> <free>`: room for anything, so the staging gate is never the
-      // reason a case fails.
-      return ok(`1 ${Number.MAX_SAFE_INTEGER}`);
+      // `<need> <free>`, both honest: the archive of the source directory
+      // needs about its data bytes, and the disk has what its quota leaves.
+      // Without a quota the disk never fills and the gate never refuses.
+      const source = /find '(?<source>[^']+)'/.exec(command)?.groups?.source;
+      const need = source === undefined ? 1 : Math.max(1, disk.snapshot(source).reduce(
+        (sum, entry) => sum + (entry.content === undefined ? 0 : runBytes(entry.content)), 0,
+      ));
+      const free = disk.quotaBytes === null ? Number.MAX_SAFE_INTEGER : Math.max(0, disk.quotaBytes - disk.usedBytes);
+      return ok(`${need} ${free}`);
     }
 
     if (command.includes('sha256sum') && command.includes('sort -z')) {
+      // The walk the real command makes: inode, type, mode, size, mtime,
+      // ctime, link target, path — metadata only, never content, so a hole is
+      // never read and a 1 GiB sparse file costs one row.
       const upper = `${DEVBOX_RUNTIME_DIR}/upper`;
-      const rows = disk.entries(upper).map(
-        relative => `${relative}:${sha256Hex(disk.readFile(`${upper}/${relative}`) ?? new Uint8Array(0))}`,
-      );
-      return ok(rows.length === 0 ? sha256Hex(encoder.encode('empty')) : sha256Hex(encoder.encode(rows.join('\n'))));
+      const rows = disk.snapshot(upper).map((entry) => [
+        entry.ino, entry.kind, entry.mode, entry.content === undefined ? 0 : contentSize(entry.content),
+        entry.metadata?.mtimeNs ?? '0', entry.metadata?.ctimeNs ?? '0', entry.target ?? '', entry.path,
+      ].join('\0'));
+      return ok(rows.length === 0 ? sha256Hex(encoder.encode('empty')) : sha256Hex(encoder.encode(rows.sort().join('\0'))));
     }
 
     const statted = /^stat -c %s '(?<path>[^']+)'/.exec(command)?.groups?.path;
@@ -873,200 +1447,241 @@ function chainExec(
 function snapshotChainArm(): ConformanceArm {
   const durable = new DurableStore();
   const deaths = new DeathWatch();
-  /**
-   * The store as the ISOLATE may touch it: metadata only.
-   *
-   * WIRED TO REFUSE, so "no payload byte transits the Durable Object" is a
-   * postcondition of every case in this battery rather than a claim about the
-   * code. Every port below reaches for `head` or `delete`; the archive itself
-   * moves through `mounted`, which is the container's own filesystem over its
-   * own egress. A port that went back to carrying bytes would land on one of
-   * these two throws and fail every case that provoked it.
-   */
-  const isolate = {
-    head: (key: string) => durable.head(key),
-    delete: (key: string) => durable.delete(key),
-    get: (key: string): never => {
-      throw new Error(`payload must not be read through the isolate: ${key}`);
-    },
-    put: (key: string): never => {
-      throw new Error(`payload must not be written through the isolate: ${key}`);
-    },
-  };
-  /** The store as the MOUNT reaches it: whole objects, container-side. */
-  const mounted = {
-    get: (key: string) => durable.get(key),
-    put: (key: string, bytes: Uint8Array) => durable.put(key, bytes),
-  };
-  /** The Durable Object's own row. It survives every container replacement,
-   *  which is exactly why the chain's control plane is not in the store. */
+  /** The Durable Object's own row. Shared by every boot and isolate. */
   let row: ChainState | null = null;
-  let disk = new ContainerDisk();
-  /** The seed stamp lives beside the upper on the container's own disk, so a
-   *  replacement takes it with the upper it describes. */
-  let seedStamp: string | undefined;
-  /** The writable mount a publication is happening through, while one is
-   *  mounted, and where a flush through it lands. Nothing else can write to the
-   *  store: an unmounted publication has nowhere to put bytes, which is the
-   *  shape the strategy's `finally` exists to leave behind. */
-  let publishing: { readonly at: string; readonly prefix: string } | undefined;
-  let storage = build();
-
-  function build(): DevboxStorage {
-    /**
-     * One archive, moved by the container into the store.
-     *
-     * THE FLUSH IS THE UPLOAD, which is why the death seams are here: this is
-     * the moment an archive becomes an object nothing names yet, and the moment
-     * a container replacement can strand one. They are the same two seams the
-     * relay had, around the same transition.
-     */
-    const publish = (archivePath: string, mountedPath: string): number | undefined => {
-      deaths.at('before-payload');
-      const mount = publishing;
-      if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
-        throw new Error(`nothing writable is mounted for ${mountedPath}`);
-      }
-      const bytes = disk.readFile(archivePath);
-      if (bytes === undefined) return undefined;
-      disk.writeFile(mountedPath, bytes);
-      mounted.put(`${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`, bytes);
-      deaths.at('after-payload');
-      return bytes.byteLength;
-    };
-    const exec = chainExec(disk, deaths, publish);
-    const ports: SnapshotChainPorts = {
-      containerRunning: () => !disk.dead && !disk.stopped,
-      allowExtraction: () => false,
-      archiveExcludes: () => [],
-      readState: async () => row,
-      writeState: async (next) => {
-        // THE POINTER IS THE COMMIT. A death before this leaves a complete
-        // archive nothing names; a death after leaves a committed record whose
-        // cleanup never ran.
-        deaths.at('before-pointer');
-        row = next;
-        deaths.at('after-pointer');
-      },
-      clearState: async () => {
-        row = null;
-      },
-      checkpointIntervalMs: () => 0,
-      checkChanges: async () => ({ status: 'changed', version: `v${durable.writes.length}` }),
-      readSeedStamp: async () => disk.dead ? undefined : seedStamp,
-      writeSeedStamp: async (stamp) => {
-        seedStamp = stamp;
-      },
-      exec,
-      storeRoot: () => STORE_ROOT,
-      mountStore: async (at) => {
-        if (disk.dead) throw new ContainerDied('mountStore on a dead container');
-        // THE ONE MOUNT, ONE SETTING, held for the container's life. The SDK
-        // admits a second mount of a binding only at the same prefix with the
-        // same setting, so there is no read access to model: this is the same
-        // writable mount the attach reads through and the publication writes
-        // through. Every object under the subtree appears as a file named by the
-        // last segment of its key, and a flush through the mount lands under the
-        // chain's own prefix.
-        disk.mount(at, {
-          source: `r2:${STORE_ROOT}`,
-          fstype: 'fuse.s3fs',
-          options: 'rw',
-        });
-        // THE WHOLE BOX ROOT, so a generation minted after this mount appears
-        // under it without a remount — which is the property the per-box prefix
-        // exists for. Each object shows up at the path its key holds below the
-        // root, `<generation>/<name>`.
-        for (const key of durable.list(`${STORE_ROOT}/`)) {
-          const relative = key.slice(STORE_ROOT.length + 1);
-          disk.writeFile(`${at}/${relative}`, mounted.get(key)!);
-        }
-        publishing = { at, prefix: `${STORE_ROOT}/` };
-      },
-      unmountStore: async (at) => {
-        // The mount is gone whatever the container's state: a publication that
-        // cannot reach the store must not be able to write one anyway.
-        if (publishing?.at === at) publishing = undefined;
-        if (disk.dead || disk.stopped) return;
-        for (const path of disk.entries(at)) disk.removeFile(`${at}/${path}`);
-        disk.unmount(at);
-      },
-      objectFacts: async (key) => {
-        const held = isolate.head(key);
-        if (held === null) return undefined;
-        return { bytes: held.size, digest: held.digest, objectVersion: held.version };
-      },
-      deleteObjects: async (keys) => {
-        deaths.at('before-cleanup');
-        for (const key of keys) isolate.delete(key);
-      },
-      countEntries: async (dir) => disk.entries(dir).length,
-      restoreExtract: async () => ({ success: false }),
-      createExtractSnapshot: async () => {
-        throw new Error('the conformance battery runs the chain, never extraction');
-      },
-      now: () => Date.now(),
-      log: () => undefined,
-    };
-    return snapshotChainStorage(ports);
-  }
-
-  const workspace: Workspace = {
-    write: (path, text) => {
-      if (!disk.overlays.has(DEVBOX_WORKDIR)) {
-        throw new Error('the chain workspace is not attached, so a write has nowhere to land');
-      }
-      disk.writeFile(`${DEVBOX_WORKDIR}/${path}`, encoder.encode(text));
-    },
-    read: (path) => {
-      const bytes = disk.readFile(`${DEVBOX_WORKDIR}/${path}`);
-      return bytes === undefined ? undefined : decoder.decode(bytes);
-    },
-    remove: (path) => disk.removeFile(`${DEVBOX_WORKDIR}/${path}`),
-    paths: () => disk.entries(DEVBOX_WORKDIR),
-  };
 
   const generations = (): readonly string[] => row === null ? [] : [
     row.base.id,
     ...(row.fallback === undefined ? [] : [row.fallback.base.id]),
     ...(row.orphans ?? []),
   ];
+  const payloadPrefixes = (): readonly string[] => generations().map(id => `${STORE_ROOT}/${id}/`);
 
+  /** One container boot. Every field below dies with it except the shared row
+   *  and durable object store captured from the function above. */
+  class ChainBoot implements ArmBoot {
+    disk = new ContainerDisk();
+    readonly failures: string[] = [];
+    readonly workspace: Workspace;
+    #storage: DevboxStorage;
+    #seedStamp: string | undefined;
+    #publishing: { readonly at: string; readonly prefix: string } | undefined;
+    #finalizeGate = new OneShotGate();
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+
+    constructor() {
+      this.workspace = {
+        write: (path, text) => {
+          if (!this.disk.overlays.has(DEVBOX_WORKDIR)) {
+            throw new Error('the chain workspace is not attached, so a write has nowhere to land');
+          }
+          this.disk.writeFile(`${DEVBOX_WORKDIR}/${path}`, encoder.encode(text));
+        },
+        read: (path) => {
+          const bytes = this.disk.readFile(`${DEVBOX_WORKDIR}/${path}`);
+          return bytes === undefined ? undefined : decoder.decode(bytes);
+        },
+        remove: (path) => this.disk.removeFile(`${DEVBOX_WORKDIR}/${path}`),
+        paths: () => this.disk.entries(DEVBOX_WORKDIR),
+        plant: (entries) => {
+          const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
+          if (overlay === undefined) throw new Error('the chain workspace is not attached');
+          this.disk.tree(overlay.upper).plant(entries);
+        },
+        snapshot: () => this.disk.snapshot(DEVBOX_WORKDIR),
+        pwrite: (path, offset, bytes) => {
+          const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
+          if (overlay === undefined) throw new Error('the chain workspace is not attached');
+          const upper = this.disk.tree(overlay.upper);
+          if (!upper.has(path)) {
+            // fuse-overlayfs copy-up: the WHOLE lower file is copied before one
+            // page is changed. This is the reason the sqlite cell rejects the
+            // chain, and a quota can refuse this copy before the write lands.
+            const merged = this.disk.snapshot(DEVBOX_WORKDIR);
+            const names = new Set([...ancestorsOf(path), path]);
+            upper.plant(merged.filter((entry) => names.has(entry.path)));
+          }
+          upper.pwrite(path, offset, bytes);
+        },
+      };
+      this.#storage = this.#build();
+    }
+
+    storage(): DevboxStorage {
+      return this.#storage;
+    }
+
+    holdFinalize(): HeldFinalize {
+      return this.#finalizeGate.hold();
+    }
+
+    resetIsolate(): void {
+      // New adapter, same container: mounts, upper and boot-local stamp stay.
+      this.#storage = this.#build();
+    }
+
+    replaceContainer(): void {
+      this.disk.dead = true;
+      this.disk = new ContainerDisk();
+      this.#seedStamp = undefined;
+      this.#publishing = undefined;
+      // The old boot's held commit keeps the old gate; the replacement gets its own.
+      this.#finalizeGate = new OneShotGate();
+      this.#storage = this.#build();
+    }
+
+    stop(): void {
+      this.disk.stopped = true;
+    }
+
+    work(): WorkRows {
+      return this.#rows;
+    }
+
+    #meter(raw: DevboxStorage): DevboxStorage {
+      return withOptionalMembers(raw, {
+        attach: async () => {
+          const window = { from: durable.ops.length };
+          const mounts = this.disk.mountCalls;
+          const layers = this.disk.layerMountCalls;
+          const outcome = await raw.attach();
+          this.#rows = {
+            ...this.#rows,
+            restore: restoreWorkSince(durable, window, payloadPrefixes(), {
+              mounts: this.disk.mountCalls - mounts,
+              cpuSteps: this.workspace.snapshot().length,
+              replayUnits: this.disk.layerMountCalls - layers,
+            }),
+          };
+          return outcome;
+        },
+        checkpoint: async (kind) => {
+          const window = { from: durable.ops.length };
+          const snapshot = this.workspace.snapshot();
+          const outcome = await raw.checkpoint(kind);
+          this.#rows = {
+            ...this.#rows,
+            seal: wholeTreeSeal(snapshot, 128 * 1024),
+            publish: publishWorkSince(durable, window, outcome.kind === 'committed' ? 1 : 0),
+          };
+          return outcome;
+        },
+        discard: async () => await raw.discard(),
+      });
+    }
+
+    #build(): DevboxStorage {
+      /** The store as the isolate may touch it: metadata only. A payload body
+       *  crossing this port is a hard failure. */
+      const isolate = {
+        head: (key: string) => durable.head(key),
+        delete: (key: string) => durable.delete(key),
+        get: (key: string): never => {
+          throw new Error(`payload must not be read through the isolate: ${key}`);
+        },
+        put: (key: string): never => {
+          throw new Error(`payload must not be written through the isolate: ${key}`);
+        },
+      };
+      /** The store as the mount reaches it: whole objects, container-side. */
+      const mounted = {
+        get: (key: string) => durable.get(key),
+        put: (key: string, bytes: Uint8Array) => durable.put(key, bytes),
+      };
+      /** One archive, moved by the container into the store. */
+      const publish = (archivePath: string, mountedPath: string): number | undefined => {
+        deaths.at('before-payload');
+        const mount = this.#publishing;
+        if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
+          throw new Error(`nothing writable is mounted for ${mountedPath}`);
+        }
+        const bytes = this.disk.readFile(archivePath);
+        if (bytes === undefined) return undefined;
+        this.disk.mirror(mountedPath, bytes);
+        mounted.put(`${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`, bytes);
+        deaths.at('after-payload');
+        return bytes.byteLength;
+      };
+      const exec = chainExec(this.disk, deaths, publish);
+      const ports: SnapshotChainPorts = {
+        containerRunning: () => !this.disk.dead && !this.disk.stopped,
+        allowExtraction: () => false,
+        archiveExcludes: () => [],
+        readState: async () => row,
+        writeState: async (next) => {
+          // The pointer is the commit. The hold is before it: the old boot has
+          // staged bytes and its late finalize arrives after the new boot.
+          await this.#finalizeGate.cross();
+          deaths.at('before-pointer');
+          row = next;
+          deaths.at('after-pointer');
+        },
+        clearState: async () => { row = null; },
+        checkpointIntervalMs: () => 0,
+        checkChanges: async () => ({ status: 'changed', version: `v${durable.writes.length}` }),
+        readSeedStamp: async () => this.disk.dead ? undefined : this.#seedStamp,
+        writeSeedStamp: async (stamp) => { this.#seedStamp = stamp; },
+        exec,
+        storeRoot: () => STORE_ROOT,
+        mountStore: async (at) => {
+          if (this.disk.dead) throw new ContainerDied('mountStore on a dead container');
+          this.disk.mount(at, { source: `r2:${STORE_ROOT}`, fstype: 'fuse.s3fs', options: 'rw' });
+          for (const key of durable.list(`${STORE_ROOT}/`)) {
+            const relative = key.slice(STORE_ROOT.length + 1);
+            this.disk.mirror(`${at}/${relative}`, mounted.get(key)!);
+          }
+          this.#publishing = { at, prefix: `${STORE_ROOT}/` };
+          deaths.reset('attach:after-store-mount');
+        },
+        unmountStore: async (at) => {
+          if (this.#publishing?.at === at) this.#publishing = undefined;
+          if (this.disk.dead || this.disk.stopped) return;
+          for (const path of this.disk.entries(at)) this.disk.removeFile(`${at}/${path}`);
+          this.disk.unmount(at);
+        },
+        objectFacts: async (key) => {
+          const held = isolate.head(key);
+          if (held === null) return undefined;
+          return { bytes: held.size, digest: held.digest, objectVersion: held.version };
+        },
+        deleteObjects: async (keys) => {
+          deaths.at('before-cleanup');
+          for (const key of keys) isolate.delete(key);
+        },
+        countEntries: async (dir) => this.disk.snapshot(dir).length,
+        restoreExtract: async () => ({ success: false }),
+        createExtractSnapshot: async () => {
+          throw new Error('the conformance battery runs the chain, never extraction');
+        },
+        now: () => Date.now(),
+        log: () => undefined,
+      };
+      return this.#meter(snapshotChainStorage(ports));
+    }
+  }
+
+  let current = new ChainBoot();
   return {
     name: 'snapshot-chain',
-    storage: () => storage,
-    workspace,
+    storage: () => current.storage(),
+    get workspace() { return current.workspace; },
+    get failures() { return current.failures; },
     durable,
     deaths,
-    replaceContainer: () => {
-      disk.dead = true;
-      disk = new ContainerDisk();
-      // The stamp described an upper on the disk that just died. A blank disk
-      // holds neither, which is what makes a replacement seed in full.
-      seedStamp = undefined;
-      // A mount belongs to the container that held it. The replacement has
-      // none, so a publication interrupted mid-flush cannot land bytes on the
-      // new disk under the old generation's name.
-      publishing = undefined;
-      storage = build();
-    },
-    stopContainer: () => {
-      disk.stopped = true;
-    },
-    // Four windows, and every one of them is a real code point the chain
-    // crosses: nothing staged, the archive landed under a key nothing names
-    // yet, the record about to be replaced, and the record committed with its
-    // cleanup outstanding. A death AFTER `writeState` returns is deliberately
-    // absent: that write is the Durable Object's own storage, not a container
-    // call, so the next thing a dead container refuses is the cleanup.
+    holdFinalize: () => current.holdFinalize(),
+    replaceContainer: () => current.replaceContainer(),
+    stopContainer: () => current.stop(),
+    resetIsolate: () => current.resetIsolate(),
+    secondBoot: () => new ChainBoot(),
+    disk: () => current.disk,
     commitSeams: ['before-payload', 'after-payload', 'before-pointer', 'before-cleanup'],
     publishSeam: 'before-pointer',
+    attachSeams: ['attach:after-store-mount', 'attach:after-layer-mount', 'attach:after-overlay'],
     dieAt: (seam) => deaths.arm(seam),
-    payloadPrefixes: () => generations().map(id => `${STORE_ROOT}/${id}/`),
+    faultAt: (point) => deaths.arm(awaitPointSeam(point)),
+    awaitVisits: (point) => deaths.visits(awaitPointSeam(point)),
+    payloadPrefixes,
     controlPlane: async () => ({
-      // The chain keeps NO control metadata in the store: `meta.json` exists
-      // only for the extraction path, and the record that names a generation is
-      // a Durable Object row. That is why a mount replacement cannot eat it.
       objectKeys: [],
       rows: ['chain-state'],
       head: row === null ? null : `${row.base.id}#${row.rev}`,
@@ -1089,132 +1704,303 @@ function snapshotChainArm(): ConformanceArm {
     },
     refusesCorruptPayload: true,
     committedHeads: async () => row === null ? [] : [`${row.base.id}#${row.rev}`],
+    work: () => current.work(),
+    awaitPoints: NO_AWAIT_POINTS,
+    refusedProperties: {
+      times: { reason: 'squashfs stores mtime only; atime and ctime are not durable fields' },
+    },
+    refusedCells: HARNESS_OWNED_CELLS,
   };
 }
-
 // ── r2fs ────────────────────────────────────────────────────────────────────
 
 function r2fsArm(): ConformanceArm {
   const durable = new DurableStore();
   const deaths = new DeathWatch();
   const prefix = 'boxes/box-conformance';
-  let disk = new ContainerDisk();
-  let storage = build();
+  const prefixWithSlash = `${prefix}/`;
+  const largeSparseRefusal = 's3fs stores an object body; it has no sparse-hole wire format and a 1 GiB hole would become 1 GiB';
 
-  function build(): DevboxStorage {
-    const ports: R2fsPorts = {
-      containerRunning: () => !disk.dead && !disk.stopped,
-      readMounts: async () => disk.procMounts(),
-      exec: async (command) => {
-        const refused = sessionShellRefusal(command);
-        if (refused !== undefined) throw refused;
-        if (command.startsWith('mkdir -p')) {
-          for (const path of command.slice('mkdir -p'.length).trim().split(' ')) {
-            disk.mkdirp(path.replace(/^'|'$/g, ''));
-          }
-          return { stdout: '', stderr: '', exitCode: 0 };
-        }
-        if (command.startsWith('sync')) {
-          // THE ONLY TWO SUB-STEPS THIS STRATEGY HAS. s3fs uploads a file when
-          // its last handle closes, so a closed file is already durable and a
-          // commit has no payload step of its own to interrupt: what a death
-          // here interrupts is the flush that makes the kernel's dirty pages
-          // reach s3fs at all.
-          deaths.at('before-sync');
-          const flushed = { stdout: '0', stderr: '', exitCode: 0 };
-          deaths.at('after-sync');
-          return flushed;
-        }
-        return { stdout: '', stderr: '', exitCode: 0 };
-      },
-      pathExists: async (path) => disk.exists(path),
-      mount: async () => {
-        if (disk.dead) throw new ContainerDied('mount on a dead container');
-        disk.mkdirp(R2FS_CACHE_DIR);
-        disk.mount(DEVBOX_WORKDIR, {
-          source: `s3fs:${prefix}`,
-          fstype: 'fuse.s3fs',
-          options: 'rw',
-        });
-      },
-      unmount: async () => {
-        disk.unmount(DEVBOX_WORKDIR);
-      },
-      // THIS MACHINE MODELS DURABILITY ACROSS DEATHS, NOT MOUNT REFERENCES.
-      // Nothing here stands in the work directory, so parking is a no-op that
-      // reports where it would have parked, and an ordinary unmount always
-      // succeeds — so the lazy path is never reached from here. The reference
-      // physics that makes both load-bearing is modelled in `r2fs.test.ts`,
-      // whose unmount refuses while the session is on the mount.
-      parkSession: async () => DEVBOX_RUNTIME_DIR,
-      lazyUnmount: async () => {
-        disk.unmount(DEVBOX_WORKDIR);
-        return true;
-      },
-      inventory: async () => durable.inventory(`${prefix}/`),
-      clearPrefix: async () => durable.deletePrefix(`${prefix}/`),
-      // NOTHING IN THIS MACHINE WRITES TO A BARE MOUNTPOINT: `workspace.write`
-      // refuses when nothing is mounted, so the sweep has nothing to move and
-      // says so. The dirty-mountpoint case lives in `r2fs.test.ts`, whose mount
-      // refuses a non-empty mountpoint the way s3fs does.
-      quarantineMountpoint: async () => 0,
-      log: () => undefined,
-    };
-    return r2fsStorage(ports);
-  }
+  const objectMeta = (entry: NodeEntry) => ({
+    'kinu-kind': entry.kind,
+    'kinu-mode': String(entry.mode),
+    'kinu-uid': String(entry.metadata?.uid ?? 0),
+    'kinu-gid': String(entry.metadata?.gid ?? 0),
+    'kinu-atime-ns': entry.metadata?.atimeNs ?? '0',
+    'kinu-mtime-ns': entry.metadata?.mtimeNs ?? '0',
+    'kinu-ctime-ns': entry.metadata?.ctimeNs ?? '0',
+    'kinu-xattrs': JSON.stringify(entry.metadata?.xattrs ?? {}),
+  });
 
-  const mounted = (): boolean => disk.mounts.get(DEVBOX_WORKDIR)?.fstype.includes('s3fs') === true;
-
-  const workspace: Workspace = {
-    write: (path, text) => {
-      if (!mounted()) throw new Error('the r2fs workspace is not mounted');
-      // A closed file IS an object. That is the whole strategy.
-      durable.put(`${prefix}/${path}`, encoder.encode(text));
-    },
-    read: (path) => {
-      if (!mounted()) return undefined;
-      const bytes = durable.get(`${prefix}/${path}`);
-      return bytes === null ? undefined : decoder.decode(bytes);
-    },
-    remove: (path) => {
-      durable.delete(`${prefix}/${path}`);
-    },
-    paths: () => mounted()
-      ? durable.list(`${prefix}/`).map(key => key.slice(prefix.length + 1))
-      : [],
+  const denseBody = (entry: NodeEntry): Uint8Array => {
+    if (entry.kind === 'symlink') return encoder.encode(entry.target ?? '');
+    if (entry.kind !== 'file' || entry.content === undefined) return new Uint8Array(0);
+    if (entry.content.kind === 'dense') return entry.content.bytes;
+    if (entry.content.kind === 'sealed') throw new Error('r2fs cannot stage a sealed capture handle');
+    if (entry.content.size > 128 * 1024 * 1024) throw new ArmRefused('6.14', largeSparseRefusal);
+    const bytes = new Uint8Array(entry.content.size);
+    for (const run of entry.content.runs) bytes.set(
+      run.bytes.subarray(0, Math.max(0, entry.content.size - run.offset)), run.offset,
+    );
+    return bytes;
   };
 
+  class R2Boot implements ArmBoot {
+    disk = new ContainerDisk();
+    readonly failures: string[] = [];
+    readonly workspace: Workspace;
+    #dirty = this.disk.tree(`${DEVBOX_RUNTIME_DIR}/r2fs-dirty`);
+    readonly #tombstones = new Set<string>();
+    #finalizeGate = new OneShotGate();
+    #storage: DevboxStorage;
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+    #publishFrom = durable.ops.length;
+
+    constructor() {
+      this.workspace = {
+        write: (path, text) => {
+          this.#dirty.writeFile(path, encoder.encode(text));
+          this.#tombstones.delete(path);
+        },
+        read: (path) => {
+          const local = this.#dirty.node(path);
+          if (local?.kind === 'file' && local.content?.kind === 'dense') return decoder.decode(local.content.bytes);
+          if (this.#tombstones.has(path)) return undefined;
+          const bytes = durable.get(`${prefixWithSlash}${path}`);
+          const meta = durable.meta(`${prefixWithSlash}${path}`);
+          return bytes === null || meta?.['kinu-kind'] !== 'file' ? undefined : decoder.decode(bytes);
+        },
+        remove: (path) => {
+          this.#dirty.remove(path);
+          this.#tombstones.add(path);
+        },
+        paths: () => {
+          const files = new Set<string>();
+          for (const [key, held] of durable.objects) {
+            if (key.startsWith(prefixWithSlash) && held.meta['kinu-kind'] === 'file') {
+              files.add(key.slice(prefixWithSlash.length));
+            }
+          }
+          for (const path of this.#dirty.filePaths()) files.add(path);
+          for (const path of this.#tombstones) files.delete(path);
+          return [...files].sort();
+        },
+        plant: (entries) => {
+          this.#dirty.plant(entries);
+          for (const entry of entries) this.#tombstones.delete(entry.path);
+        },
+        snapshot: () => this.#snapshot(),
+        pwrite: (path, offset, bytes) => {
+          if (!this.#dirty.has(path)) {
+            const durableEntries = this.#durableEntries();
+            const entry = durableEntries.find((row) => row.path === path);
+            if (entry === undefined) throw new Error(`pwrite: no file at ${path}`);
+            const names = new Set([...ancestorsOf(path), path]);
+            this.#dirty.plant(durableEntries.filter((row) => names.has(row.path)));
+          }
+          this.#dirty.pwrite(path, offset, bytes);
+          this.#tombstones.delete(path);
+        },
+      };
+      this.#storage = this.#build();
+    }
+
+    storage(): DevboxStorage {
+      return this.#storage;
+    }
+
+    holdFinalize(): HeldFinalize {
+      return this.#finalizeGate.hold();
+    }
+
+    resetIsolate(): void {
+      this.#storage = this.#build();
+    }
+
+    replaceContainer(): void {
+      this.disk.dead = true;
+      this.disk = new ContainerDisk();
+      this.#dirty = this.disk.tree(`${DEVBOX_RUNTIME_DIR}/r2fs-dirty`);
+      this.#tombstones.clear();
+      this.#finalizeGate = new OneShotGate();
+      this.#storage = this.#build();
+    }
+
+    stop(): void {
+      this.disk.stopped = true;
+    }
+
+    work(): WorkRows {
+      return this.#rows;
+    }
+
+    #durableEntries(): NodeEntry[] {
+      const entries: NodeEntry[] = [];
+      let ino = 1;
+      for (const [key, held] of [...durable.objects].sort(([a], [b]) => (a < b ? -1 : 1))) {
+        if (!key.startsWith(prefixWithSlash)) continue;
+        const kind = held.meta['kinu-kind'];
+        if (kind !== 'file' && kind !== 'dir' && kind !== 'symlink') continue;
+        const path = key.slice(prefixWithSlash.length);
+        const metadata: PosixMetadata = {
+          uid: Number(held.meta['kinu-uid'] ?? 0),
+          gid: Number(held.meta['kinu-gid'] ?? 0),
+          atimeNs: held.meta['kinu-atime-ns'] ?? '0',
+          mtimeNs: held.meta['kinu-mtime-ns'] ?? '0',
+          ctimeNs: held.meta['kinu-ctime-ns'] ?? '0',
+          xattrs: JSON.parse(held.meta['kinu-xattrs'] ?? '{}'),
+        };
+        const base = { path, mode: Number(held.meta['kinu-mode'] ?? 0), ino: ino++, metadata };
+        if (kind === 'symlink') entries.push({ ...base, kind: 'symlink', target: decoder.decode(held.bytes) });
+        else if (kind === 'file') entries.push({ ...base, kind: 'file', content: { kind: 'dense', bytes: held.bytes } });
+        else entries.push({ ...base, kind: 'dir' });
+      }
+      return entries;
+    }
+
+    #snapshot(): NodeEntry[] {
+      const durableEntries = this.#durableEntries();
+      const merged = new Map(durableEntries.map((entry) => [entry.path, entry]));
+      const inoBase = durableEntries.length + 1;
+      for (const entry of this.#dirty.snapshot()) merged.set(entry.path, { ...entry, ino: entry.ino + inoBase });
+      for (const path of this.#tombstones) merged.delete(path);
+      return sortedByPath([...merged.values()]);
+    }
+
+    #flush(): void {
+      for (const path of this.#tombstones) durable.delete(`${prefixWithSlash}${path}`);
+      for (const entry of this.#dirty.snapshot()) {
+        durable.put(`${prefixWithSlash}${entry.path}`, denseBody(entry), objectMeta(entry));
+      }
+      this.#dirty.clear();
+      this.#tombstones.clear();
+    }
+
+    #meter(raw: DevboxStorage): DevboxStorage {
+      return withOptionalMembers(raw, {
+        attach: async () => {
+          const window = { from: durable.ops.length };
+          const mounts = this.disk.mountCalls;
+          const outcome = await raw.attach();
+          this.#rows = {
+            ...this.#rows,
+            restore: restoreWorkSince(durable, window, [prefixWithSlash], {
+              mounts: this.disk.mountCalls - mounts, cpuSteps: 0, replayUnits: 0,
+            }),
+          };
+          this.#publishFrom = durable.ops.length;
+          return outcome;
+        },
+        checkpoint: async (kind) => {
+          const changed = this.#dirty.snapshot();
+          const outcome = await raw.checkpoint(kind);
+          let stagedBytes = 0;
+          let files = 0;
+          for (const entry of changed) {
+            if (entry.kind !== 'file' || entry.content === undefined) continue;
+            stagedBytes += runBytes(entry.content);
+            files += 1;
+          }
+          this.#rows = {
+            ...this.#rows,
+            seal: {
+              bytesStaged: stagedBytes, bytesChunked: 0, chunksHashed: 0,
+              nodesRewritten: changed.length, wholeFiles: files,
+            },
+            publish: publishWorkSince(durable, { from: this.#publishFrom }, 0),
+          };
+          this.#publishFrom = durable.ops.length;
+          return outcome;
+        },
+        discard: async () => await raw.discard(),
+      });
+    }
+
+    #build(): DevboxStorage {
+      const ports: R2fsPorts = {
+        containerRunning: () => !this.disk.dead && !this.disk.stopped,
+        readMounts: async () => this.disk.procMounts(),
+        exec: async (command) => {
+          const refused = sessionShellRefusal(command);
+          if (refused !== undefined) throw refused;
+          if (command.startsWith('mkdir -p')) {
+            for (const path of command.slice('mkdir -p'.length).trim().split(' ')) {
+              this.disk.mkdirp(path.replace(/^'|'$/g, ''));
+            }
+            return { stdout: '', stderr: '', exitCode: 0 };
+          }
+          if (command.startsWith('sync')) {
+            await this.#finalizeGate.cross();
+            deaths.at('before-sync');
+            this.#flush();
+            deaths.at('after-sync');
+            return { stdout: '0', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+        pathExists: async (path) => this.disk.exists(path),
+        mount: async () => {
+          if (this.disk.dead) throw new ContainerDied('mount on a dead container');
+          this.disk.mkdirp(R2FS_CACHE_DIR);
+          this.disk.mount(DEVBOX_WORKDIR, { source: `s3fs:${prefix}`, fstype: 'fuse.s3fs', options: 'rw' });
+          deaths.reset('attach:after-mount');
+        },
+        unmount: async () => { this.disk.unmount(DEVBOX_WORKDIR); },
+        parkSession: async () => DEVBOX_RUNTIME_DIR,
+        lazyUnmount: async () => {
+          this.disk.unmount(DEVBOX_WORKDIR);
+          return true;
+        },
+        inventory: async () => durable.inventory(prefixWithSlash),
+        clearPrefix: async () => durable.deletePrefix(prefixWithSlash),
+        quarantineMountpoint: async () => 0,
+        log: () => undefined,
+      };
+      return this.#meter(r2fsStorage(ports));
+    }
+  }
+
+  let current = new R2Boot();
   return {
     name: 'r2fs',
-    storage: () => storage,
-    workspace,
+    storage: () => current.storage(),
+    get workspace() { return current.workspace; },
+    get failures() { return current.failures; },
     durable,
     deaths,
-    replaceContainer: () => {
-      disk.dead = true;
-      disk = new ContainerDisk();
-      storage = build();
-    },
-    stopContainer: () => {
-      disk.stopped = true;
-    },
+    holdFinalize: () => current.holdFinalize(),
+    replaceContainer: () => current.replaceContainer(),
+    stopContainer: () => current.stop(),
+    resetIsolate: () => current.resetIsolate(),
+    secondBoot: () => new R2Boot(),
+    disk: () => current.disk,
     commitSeams: ['before-sync', 'after-sync'],
     publishSeam: 'after-sync',
+    attachSeams: ['attach:after-mount'],
     dieAt: (seam) => deaths.arm(seam),
-    payloadPrefixes: () => [`${prefix}/`],
+    faultAt: (point) => deaths.arm(awaitPointSeam(point)),
+    awaitVisits: (point) => deaths.visits(awaitPointSeam(point)),
+    payloadPrefixes: () => [prefixWithSlash],
     controlPlane: async () => ({
-      // NONE, and that is the strategy: the object store IS the filesystem, so
-      // there is no head, no cursor and no envelope to misplace.
       objectKeys: [],
       rows: [],
-      head: durable.inventory(`${prefix}/`).objects === 0 ? null : `${prefix}/`,
+      head: durable.inventory(prefixWithSlash).objects === 0 ? null : prefixWithSlash,
     }),
     declaredPayload: async () => [],
     refusesCorruptPayload: false,
-    committedHeads: async () => durable.inventory(`${prefix}/`).objects === 0 ? [] : [`${prefix}/`],
+    committedHeads: async () => durable.inventory(prefixWithSlash).objects === 0 ? [] : [prefixWithSlash],
+    work: () => current.work(),
+    awaitPoints: NO_AWAIT_POINTS,
+    refusedProperties: {
+      hardlink: { reason: 's3fs stores one object per path and does not preserve inode sharing' },
+      sparse: { reason: 'the object body carries logical bytes and no hole geometry' },
+    },
+    refusedCells: {
+      ...HARNESS_OWNED_CELLS,
+      '6.14': { reason: largeSparseRefusal },
+    },
   };
 }
-
 // ── overlay-cas ─────────────────────────────────────────────────────────────
 
 /** The CAS seam, over the durable store, at the box's own prefix. */
@@ -1227,10 +2013,14 @@ class DurableCasStore implements CasStore {
     private readonly deaths: DeathWatch,
   ) {}
 
-  async put(key: string, bytes: Uint8Array, _meta?: CasPutMeta): Promise<void> {
+  async put(key: string, bytes: Uint8Array, meta?: CasPutMeta): Promise<void> {
     this.counters.putCalls += 1;
     this.counters.bytesPut += bytes.byteLength;
-    this.durable.put(`${this.prefix}${key}`, bytes);
+    this.durable.put(`${this.prefix}${key}`, bytes, meta === undefined ? {} : {
+      mode: String(meta.mode),
+      mtimeMs: String(meta.mtimeMs ?? 0),
+      symlink: String(meta.symlink === true),
+    });
     // THE SEAMS ARE THE KEY LAYOUT. Each prefix is one durable sub-step of a
     // fold, so a death named after a prefix lands between two of them and
     // cannot drift from what it interrupts.
@@ -1287,16 +2077,24 @@ function overlayCasArm(): ConformanceArm {
   const durable = new DurableStore();
   const deaths = new DeathWatch();
   const prefix = 'boxes/box-conformance';
+  const lateRaceRefusal = 'overlay-cas has no control head CAS; concurrent containers share and may merge one prefix';
+  const fidelityRefusal = 'overlay-cas tree objects carry mode and mtime only; they do not preserve uid/gid, xattrs, hardlink inode sharing or holes';
+  const largeSparseRefusal = 'overlay-cas scans a file as dense 512 KiB chunks; it has no sparse-hole scan protocol';
   let row: OverlayCasState | null = null;
+  let rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+  const failures: string[] = [];
+  let finalizeGate = new OneShotGate();
   let container = freshContainer();
   let storage = build();
 
   /** The upper, and the whiteouts a delete leaves in it. Both die with the
    *  container: only `/workspace` is supplied by the image. */
   function freshContainer() {
+    const disk = new ContainerDisk();
     return {
-      disk: new ContainerDisk(),
+      disk,
       upper: new Map<string, Uint8Array>(),
+      tree: disk.tree(`${DEVBOX_RUNTIME_DIR}/overlay-upper`),
       whiteouts: new Set<string>(),
       overlay: false,
       storeMounted: false,
@@ -1332,13 +2130,20 @@ function overlayCasArm(): ConformanceArm {
       for (const entry of pending) {
         if (entry.kind === 'delete') {
           container.upper.delete(entry.path);
+          container.tree.remove(entry.path);
           container.whiteouts.add(entry.path);
           continue;
         }
+        // The current runner restores every non-file kind too. This machine
+        // keeps the byte workload here and declares the richer fidelity cell
+        // refused below; text durability still crosses the shipped stream.
         if (entry.kind !== 'file') continue;
-        container.upper.set(entry.path, await drain(fileChunkStream(cas, entry)));
+        const bytes = await drain(fileChunkStream(cas, entry));
+        container.upper.set(entry.path, bytes);
+        container.tree.writeFile(entry.path, bytes);
         container.whiteouts.delete(entry.path);
       }
+      deaths.reset('attach:after-restore');
       return receipt('restore', {
         entries: pending.length,
         movedBytes: moved(),
@@ -1403,6 +2208,35 @@ function overlayCasArm(): ConformanceArm {
     });
   }
 
+  function meter(raw: DevboxStorage): DevboxStorage {
+    return withOptionalMembers(raw, {
+      attach: async () => {
+        const window = { from: durable.ops.length };
+        const mounts = container.disk.mountCalls;
+        const outcome = await raw.attach();
+        rows = {
+          ...rows,
+          restore: restoreWorkSince(durable, window, [`${prefix}/${PREFIX_BLOBS}`, `${prefix}/${PREFIX_TREE}`], {
+            mounts: container.disk.mountCalls - mounts, cpuSteps: container.tree.size, replayUnits: container.tree.size,
+          }),
+        };
+        return outcome;
+      },
+      checkpoint: async (kind) => {
+        const window = { from: durable.ops.length };
+        const snapshot = workspace.snapshot();
+        const outcome = await raw.checkpoint(kind);
+        rows = {
+          ...rows,
+          seal: wholeTreeSeal(snapshot, 512 * 1024),
+          publish: publishWorkSince(durable, window, 0),
+        };
+        return outcome;
+      },
+      discard: async () => await raw.discard(),
+    });
+  }
+
   function build(): DevboxStorage {
     const ports: OverlayCasPorts = {
       containerRunning: () => !container.disk.dead && !container.disk.stopped,
@@ -1416,6 +2250,7 @@ function overlayCasArm(): ConformanceArm {
         });
         container.disk.mkdirp(CAS_TREE_MOUNT);
         container.storeMounted = true;
+        deaths.reset('attach:after-store-mount');
       },
       unmountStore: async () => {
         if (container.disk.dead || container.disk.stopped) return;
@@ -1425,6 +2260,7 @@ function overlayCasArm(): ConformanceArm {
       mountOverlay: async () => {
         if (container.disk.dead) throw new ContainerDied('mountOverlay on a dead container');
         container.overlay = true;
+        deaths.reset('attach:after-overlay');
       },
       unmountOverlay: async () => {
         container.overlay = false;
@@ -1435,7 +2271,7 @@ function overlayCasArm(): ConformanceArm {
           const printed = await invokeRunner(operation);
           return { stdout: `${JSON.stringify(printed)}\n`, stderr: '', exitCode: 0 };
         } catch (error) {
-          if (error instanceof ContainerDied) throw error;
+          if (error instanceof ContainerDied || error instanceof ControlReset || error instanceof ArmRefused) throw error;
           // A runner that failed prints its diagnosis and exits non-zero, which
           // is the only evidence the Durable Object gets.
           return {
@@ -1454,7 +2290,9 @@ function overlayCasArm(): ConformanceArm {
       salvageWorkdirResidue: async () => 0,
       readState: async () => row,
       writeState: async (next) => {
+        await finalizeGate.cross();
         row = next;
+        if (next.lastFailure !== undefined) failures.push(next.lastFailure.reason);
       },
       clearState: async () => {
         row = null;
@@ -1463,7 +2301,7 @@ function overlayCasArm(): ConformanceArm {
       now: () => Date.now(),
       log: () => undefined,
     };
-    return overlayCasStorage(ports);
+    return meter(overlayCasStorage(ports));
   }
 
   /** The overlay: the upper over the folded tree, which is what the mount
@@ -1472,19 +2310,21 @@ function overlayCasArm(): ConformanceArm {
   const workspace: Workspace = {
     write: (path, text) => {
       if (!container.overlay) throw new Error('the overlay-cas workspace is not attached');
-      container.upper.set(path, encoder.encode(text));
+      const bytes = encoder.encode(text);
+      container.tree.writeFile(path, bytes);
+      container.upper.set(path, bytes);
       container.whiteouts.delete(path);
     },
     read: (path) => {
       const held = container.upper.get(path);
       if (held !== undefined) return decoder.decode(held);
-      if (container.whiteouts.has(path)) return undefined;
-      if (!container.overlay) return undefined;
+      if (container.whiteouts.has(path) || !container.overlay) return undefined;
       const lower = durable.get(`${prefix}/${treeKey(path)}`);
       return lower === null ? undefined : decoder.decode(lower);
     },
     remove: (path) => {
       container.upper.delete(path);
+      container.tree.remove(path);
       container.whiteouts.add(path);
     },
     paths: () => {
@@ -1497,26 +2337,83 @@ function overlayCasArm(): ConformanceArm {
       for (const path of container.whiteouts) found.delete(path);
       return [...found].sort();
     },
+    plant: (entries) => {
+      for (const entry of entries) {
+        if (entry.content?.kind === 'sparse' && entry.content.size > 128 * 1024 * 1024) {
+          throw new ArmRefused('6.14', largeSparseRefusal);
+        }
+      }
+      container.tree.plant(entries);
+      for (const entry of entries) {
+        if (entry.kind !== 'file' || entry.content === undefined) continue;
+        let bytes: Uint8Array;
+        if (entry.content.kind === 'dense') bytes = entry.content.bytes;
+        else if (entry.content.kind === 'sealed') throw new Error('overlay-cas cannot scan a sealed capture handle');
+        else {
+          bytes = new Uint8Array(entry.content.size);
+          for (const run of entry.content.runs) bytes.set(run.bytes, run.offset);
+        }
+        container.upper.set(entry.path, bytes);
+      }
+    },
+    snapshot: () => {
+      const merged = new Map<string, NodeEntry>();
+      let ino = 1;
+      const treePrefix = `${prefix}/${PREFIX_TREE}`;
+      for (const [key, held] of durable.objects) {
+        if (!key.startsWith(treePrefix)) continue;
+        const path = key.slice(treePrefix.length);
+        const mtimeNs = String(BigInt(held.meta.mtimeMs ?? '0') * 1_000_000n);
+        const mode = Number(held.meta.mode ?? 0) & 0o7777;
+        const metadata = { uid: 0, gid: 0, atimeNs: mtimeNs, mtimeNs, ctimeNs: mtimeNs, xattrs: {} };
+        merged.set(path, held.meta.symlink === 'true'
+          ? { path, kind: 'symlink', mode, ino: ino++, metadata, target: decoder.decode(held.bytes) }
+          : { path, kind: 'file', mode, ino: ino++, metadata, content: { kind: 'dense', bytes: held.bytes } });
+      }
+      const base = ino;
+      for (const entry of container.tree.snapshot()) merged.set(entry.path, { ...entry, ino: entry.ino + base });
+      for (const path of container.whiteouts) merged.delete(path);
+      return sortedByPath([...merged.values()]);
+    },
+    pwrite: (path, offset, bytes) => {
+      if (!container.tree.has(path)) {
+        const lower = durable.get(`${prefix}/${treeKey(path)}`);
+        if (lower === null) throw new Error(`pwrite: no file at ${path}`);
+        container.tree.writeFile(path, lower);
+      }
+      container.tree.pwrite(path, offset, bytes);
+      const content = container.tree.node(path)?.content;
+      if (content?.kind !== 'dense') throw new Error('overlay-cas pwrite produced non-dense content');
+      container.upper.set(path, content.bytes);
+      container.whiteouts.delete(path);
+    },
   };
 
   return {
     name: 'overlay-cas',
     storage: () => storage,
     workspace,
+    failures,
     durable,
     deaths,
+    holdFinalize: () => finalizeGate.hold(),
     replaceContainer: () => {
       container.disk.dead = true;
       container = freshContainer();
+      finalizeGate = new OneShotGate();
       storage = build();
     },
-    stopContainer: () => {
-      container.disk.stopped = true;
-    },
+    stopContainer: () => { container.disk.stopped = true; },
+    resetIsolate: () => { storage = build(); },
+    secondBoot: () => { throw new ArmRefused('6.17', lateRaceRefusal); },
+    disk: () => container.disk,
     // One per durable sub-step of a fold, named from the CAS key layout.
     commitSeams: ['after-blob', 'after-journal', 'after-tree', 'after-manifest', 'after-cursor'],
     publishSeam: 'after-cursor',
+    attachSeams: ['attach:after-store-mount', 'attach:after-restore', 'attach:after-overlay'],
     dieAt: (seam) => deaths.arm(seam),
+    faultAt: (point) => deaths.arm(awaitPointSeam(point)),
+    awaitVisits: (point) => deaths.visits(awaitPointSeam(point)),
     payloadPrefixes: () => [`${prefix}/${PREFIX_BLOBS}`, `${prefix}/${PREFIX_TREE}`],
     controlPlane: async () => {
       const keys = [
@@ -1556,6 +2453,22 @@ function overlayCasArm(): ConformanceArm {
       const cursor = durable.get(`${prefix}/${KEY_CURSOR}`);
       return cursor === null ? [] : [`cursor:${decoder.decode(cursor).trim()}`];
     },
+    work: () => rows,
+    awaitPoints: NO_AWAIT_POINTS,
+    refusedProperties: {
+      owner: { reason: fidelityRefusal },
+      times: { reason: fidelityRefusal },
+      xattrs: { reason: fidelityRefusal },
+      hardlink: { reason: fidelityRefusal },
+      sparse: { reason: fidelityRefusal },
+    },
+    refusedCells: {
+      ...HARNESS_OWNED_CELLS,
+      '6.10': { reason: lateRaceRefusal },
+      '6.11': { reason: fidelityRefusal },
+      '6.14': { reason: largeSparseRefusal },
+      '6.17': { reason: lateRaceRefusal },
+    },
   };
 }
 
@@ -1593,9 +2506,11 @@ class MountedPayloadStore implements CandidatePayloadStore {
     private readonly durable: DurableStore,
     private readonly payloadPrefix: string,
     private readonly deaths: DeathWatch,
+    private readonly rootKey: () => string | null,
   ) {}
 
   async issuePayloadGrant(intent: UploadIntent): Promise<PayloadGrant> {
+    this.deaths.at(awaitPointSeam('issue-payload-grant'));
     return {
       operationId: intent.operationId,
       attemptId: intent.attemptId,
@@ -1609,6 +2524,7 @@ class MountedPayloadStore implements CandidatePayloadStore {
     const sha256 = sha256Hex(bytes);
     this.durable.put(`${this.payloadPrefix}/${grant.opaque}`, bytes);
     this.deaths.at('after-payload');
+    if (grant.opaque === this.rootKey()) this.deaths.at(awaitPointSeam('upload-root'));
     return {
       operationId: grant.operationId,
       attemptId: grant.attemptId,
@@ -1633,35 +2549,25 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
   const deaths = new DeathWatch();
   const boxId = 'box-conformance';
   const paths = candidateStorePaths(`boxes/${boxId}`, format);
-  /** The Durable Object's own control record. It survives replacements, which
-   *  is the whole reason the head is not payload. */
   const control = new MemoryControlStore();
-  let container = freshContainer();
-  let storage = build();
+  let casAttempts = 0;
+  let bootSequence = 0;
 
-  function freshContainer() {
-    return {
-      disk: new ContainerDisk(),
-      files: new Map<string, Uint8Array>(),
-      journal: false,
-      storeMounted: false,
-      bootId: `boot-${crypto.randomUUID()}`,
-      results: new Map<string, string>(),
-      processes: new Map<string, CandidateRunnerProcess>(),
-    };
-  }
+  const awaitPoints: AwaitPointUse = {
+    // Register order, not execution order: this is the same ordering rule as
+    // AwaitPointDeclarationSchema in the contracts lane.
+    uses: [
+      'issue-payload-grant',
+      'verify-upload',
+      'upload-root',
+      'publish-head',
+      'complete-mark',
+      'mount-root',
+      'cleanup-resource',
+    ],
+  };
 
-  const payload = (): MountedPayloadStore =>
-    new MountedPayloadStore(durable, paths.payloadPrefix, deaths);
-
-  /**
-   * The envelope store, where the production adapter puts it: under the box's
-   * CONTROL prefix, never under the payload prefix the container's mount owns.
-   *
-   * Deliberately store-backed rather than the in-memory envelope map the
-   * publication suites use — the whole first defect class is a PLACEMENT bug,
-   * and a map keyed by digest has no placement to get wrong.
-   */
+  /** The envelope store is under the control prefix, outside the payload mount. */
   const envelopes: CandidateEnvelopeStore = {
     write: async (envelope, rootEnvelopeId) => {
       const key = `${paths.envelopePrefix}/${rootEnvelopeId}.json`;
@@ -1683,8 +2589,8 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     },
   };
 
-  /** The head CAS and the completion mark, with a death at each durable phase
-   *  the shipped control plane writes. */
+  /** The shared head CAS and completion mark, with both the legacy commit seams
+   *  and the contract's await points at their durable effects. */
   const controlStore: CandidateControlStore = {
     read: async () => await control.read(),
     update: async (apply) => {
@@ -1694,16 +2600,18 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         phase = update.next?.operation?.phase;
         return update;
       });
-      // AFTER the record is durable: the head CAS and the completion mark are
-      // separate durable writes, so the interesting window is between them.
       if (phase !== undefined) deaths.reset(`after-${phase}`);
+      if (phase === 'completion-pending') {
+        casAttempts += 1;
+        deaths.reset(awaitPointSeam('publish-head'));
+      }
+      if (phase === 'published') deaths.reset(awaitPointSeam('complete-mark'));
       return result;
     },
     clear: async () => await control.clear(),
   };
 
-  /** The metadata check the production adapter makes from store metadata
-   *  alone: absent, wrong length, wrong digest, or no upload version. */
+  /** The metadata check the production adapter makes from store facts alone. */
   const verifyObject = async (ref: ImmutableObjectRef): Promise<void> => {
     const key = `${paths.payloadPrefix}/${ref.key}`;
     const held = durable.head(key);
@@ -1715,157 +2623,311 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
     ) {
       throw new Error(`candidate object metadata does not match immutable ref: ${ref.key}`);
     }
+    deaths.reset(awaitPointSeam('verify-upload'));
   };
 
-  const identityOf = (run: CandidateRunControlV1) => {
-    const operation = run.operation;
-    if (operation?.phase !== 'transferring') {
-      throw new Error('candidate checkpoint requires a transferring operation');
-    }
-    return {
-      operationId: operation.operationId,
-      attemptId: operation.attemptId,
-      boxId,
-      epoch: operation.epoch,
-      bootId: operation.bootId,
-      kind: operation.kind,
-      expiresAt: '99999999999999',
-      baseRevision: operation.baseRevision,
-    };
+  const fallbackMetadata: PosixMetadata = {
+    uid: 0,
+    gid: 0,
+    atimeNs: '0',
+    mtimeNs: '0',
+    ctimeNs: '0',
+    xattrs: {},
   };
 
-  /**
-   * The workspace, as an audited capture.
-   *
-   * Through `issueVerifiedJournalCapture`, which is the shipped factory a
-   * journal-daemon capture goes through: nothing here hand-stamps a cut onto an
-   * unaudited object, and the manifest digest is the shipped one.
-   */
-  function capture(input: { operationId: string; epoch: string; baseRevision: string }): AuditedCapture {
-    let ino = 100;
-    const entries: NodeEntry[] = [...container.files]
-      .sort(([a], [b]) => a < b ? -1 : 1)
-      .map(([path, bytes]) => ({
-        path,
-        kind: 'file' as const,
-        mode: 0o644,
-        ino: ino++,
-        content: { kind: 'dense' as const, bytes },
-        metadata: { uid: 1000, gid: 1000, atimeNs: '1', mtimeNs: '2', ctimeNs: '3', xattrs: {} },
-      }));
-    const cut = Number(input.baseRevision) + 1;
-    const captured: Capture = {
-      mechanism: 'mutation-journal',
-      cut,
-      generation: Number(input.epoch),
-      entries,
-    };
-    return issueVerifiedJournalCapture({
-      cut,
-      generation: Number(input.epoch),
-      entries,
-      identity: {
-        captureId: input.operationId,
-        epoch: input.epoch,
-        baseRevision: input.baseRevision,
-        stableStageHandle: `stage-${input.operationId}`,
-      },
-      manifestSha256: manifestSha256(captured),
-    });
-  }
+  class CandidateBoot implements ArmBoot {
+    disk = new ContainerDisk();
+    tree = this.disk.tree(CANDIDATE_JOURNAL_ROOT);
+    readonly workspace: Workspace;
+    readonly failures: string[] = [];
+    journal = false;
+    storeMounted = false;
+    bootId = `boot-${++bootSequence}`;
+    readonly results = new Map<string, string>();
+    readonly processes = new Map<string, CandidateRunnerProcess>();
+    readonly processActions = new Map<string, string>();
+    readonly actionStarts = { restore: 0, checkpoint: 0, seed: 0 };
+    daemonStarts = 0;
+    /** The journal daemon's own WAL model: one line per admitted write, plus
+     *  the lines a full disk made it cancel before their effect. */
+    readonly wal: string[] = [];
+    readonly cancelledWal: string[] = [];
+    #storage: DevboxStorage;
+    #rootUploadKey: string | null = null;
+    #finalizeGate = new OneShotGate();
+    #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
+    #restoreWindow: { from: number; mounts: number } | null = null;
 
-  async function recoverParent(
-    head: NonNullable<CandidateRunControlV1['head']>,
-    store: MountedPayloadStore,
-    identity: { operationId: string; attemptId: string; boxId: string; epoch: string; expiresAt: string },
-  ) {
-    const rootBytes = await store.readRange({
-      ...identity,
-      exactKey: head.envelope.rootObject.key,
-      method: 'GET',
-      byteOffset: '0',
-      byteLength: head.envelope.rootObject.byteLength,
-      sha256: head.envelope.rootObject.sha256,
-    });
-    return recoverPublishedParent({
-      head: head.pointer,
-      currentHead: head.pointer,
-      envelope: head.envelope,
-      envelopeBytes: envelopeBytes(head.envelope),
-      rootBytes,
-      expected: {
-        format: head.envelope.format,
-        capturedCut: head.envelope.cut,
-        lastOperationId: head.pointer.lastOperationId,
-      },
-    });
-  }
-
-  /** The container-side runner: build and stage through the shipped codecs. */
-  async function runCheckpoint(run: CandidateRunControlV1): Promise<string> {
-    const identity = identityOf(run);
-    const store = payload();
-    const sink = new MemoryCandidateObjectSink();
-    const head = run.head;
-    const audited = capture(identity);
-    let plan;
-    if (format === 'bounded-layers') {
-      const parent = head === null
-        ? undefined
-        : (await openBoundedLayers(head.envelope.rootObject, store, identity))
-          .withPublishedParent(await recoverParent(head, store, identity));
-      plan = (await buildBoundedLayers(audited, parent, sink)).plan;
-    } else {
-      let parent = null;
-      if (head !== null) {
-        const manifestBytes = await store.readRange({
-          ...identity,
-          exactKey: head.envelope.rootObject.key,
-          method: 'GET',
-          byteOffset: '0',
-          byteLength: head.envelope.rootObject.byteLength,
-          sha256: head.envelope.rootObject.sha256,
-        });
-        parent = parentFromPublishedParent(
-          await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, identity),
-          await recoverParent(head, store, identity),
-        );
-      }
-      plan = (await buildMerklePack(audited, { sink, parent })).plan;
+    constructor() {
+      this.workspace = {
+        write: (path, text) => {
+          if (!this.journal) throw new Error('the candidate workspace has no journal daemon');
+          this.#journaled(`W ${path} ${encoder.encode(text).byteLength}`, () => this.tree.writeFile(path, encoder.encode(text)));
+        },
+        read: (path) => {
+          const entry = this.tree.node(path);
+          if (entry?.kind !== 'file' || entry.content?.kind !== 'dense') return undefined;
+          return decoder.decode(entry.content.bytes);
+        },
+        remove: (path) => this.tree.remove(path),
+        paths: () => this.tree.filePaths(),
+        plant: (entries) => this.tree.plant(entries),
+        snapshot: () => this.tree.snapshot(),
+        pwrite: (path, offset, bytes) => this.#journaled(`W ${path} ${offset}+${bytes.byteLength}`, () => this.tree.pwrite(path, offset, bytes)),
+      };
+      this.#storage = this.#build();
     }
-    const draft = await stageCandidatePayload(plan, identity, store);
-    return JSON.stringify({
-      ok: true,
-      movedBytes: [...draft.dependencyReceipts, draft.rootReceipt, draft.closureReceipt]
-        .reduce((bytes, receipt) => bytes + Number(receipt.byteLength), 0),
-      heldBytes: draft.closure.reduce((bytes, ref) => bytes + Number(ref.byteLength), 0),
-      draft,
-    });
-  }
-
-  /** The container-side restore: read the published head back through the
-   *  shipped verifying read path, and materialize it. */
-  async function runRestore(run: CandidateRunControlV1): Promise<string> {
-    const head = run.head;
-    if (head === null) return JSON.stringify({ ok: true, rootId: null });
-    const store = payload();
-    const identity = {
-      operationId: `restore-${head.pointer.lastOperationId}`,
-      attemptId: '1',
-      boxId,
-      epoch: head.envelope.epoch,
-      expiresAt: '99999999999999',
-    };
-    container.files.clear();
-    if (format === 'bounded-layers') {
-      const view = await openBoundedLayers(head.envelope.rootObject, store, identity);
-      for (const path of view.entryPaths()) {
-        const entry = view.stat(path);
-        if (entry === null || entry === undefined) continue;
-        if (entry.kind !== 'file' || entry.size === undefined) continue;
-        container.files.set(path, await view.readRange(path, 0, entry.size));
+    /** INTENT BEFORE EFFECT, the journal daemon's own rule. The record lands
+     *  first; an effect the disk refuses moves its record to the cancelled
+     *  list and rethrows, so there is never an effect without a record. */
+    #journaled(line: string, effect: () => void): void {
+      this.wal.push(line);
+      try {
+        effect();
+      } catch (error) {
+        this.wal.pop();
+        this.cancelledWal.push(line);
+        throw error;
       }
-    } else {
+    }
+
+    /** Journal and eviction facts, exposed to the ENOSPC and reset cells. */
+    journalFacts(): JournalFacts {
+      return { records: this.wal, failedWrites: this.cancelledWal };
+    }
+
+    evictCleanBytes(): number {
+      // Today's candidate keeps every clean byte resident: nothing evicts, and
+      // a full disk stays full. That fact is what cell 6.18 records as red.
+      return 0;
+    }
+
+    storage(): DevboxStorage {
+      return this.#storage;
+    }
+
+    holdFinalize(): HeldFinalize {
+      return this.#finalizeGate.hold();
+    }
+
+    resetIsolate(): void {
+      this.#storage = this.#build();
+    }
+
+    replaceContainer(): void {
+      this.disk.dead = true;
+      this.disk = new ContainerDisk();
+      this.tree = this.disk.tree(CANDIDATE_JOURNAL_ROOT);
+      this.journal = false;
+      this.storeMounted = false;
+      this.bootId = `boot-${++bootSequence}`;
+      this.results.clear();
+      this.processes.clear();
+      this.processActions.clear();
+      this.#restoreWindow = null;
+      this.#finalizeGate = new OneShotGate();
+      this.#storage = this.#build();
+    }
+
+    stop(): void {
+      this.disk.stopped = true;
+    }
+
+    work(): WorkRows {
+      return this.#rows;
+    }
+
+    lifecycleCounts(): LifecycleCounts {
+      return { daemonStarts: this.daemonStarts, restoreStarts: this.actionStarts.restore };
+    }
+
+    #payload(): MountedPayloadStore {
+      return new MountedPayloadStore(durable, paths.payloadPrefix, deaths, () => this.#rootUploadKey);
+    }
+
+    #capture(input: { operationId: string; epoch: string; baseRevision: string }): AuditedCapture {
+      const entries = this.tree.snapshot();
+      const cut = Number(input.baseRevision) + 1;
+      const captured: Capture = {
+        mechanism: 'mutation-journal',
+        cut,
+        generation: Number(input.epoch),
+        entries,
+      };
+      return issueVerifiedJournalCapture({
+        cut,
+        generation: Number(input.epoch),
+        entries,
+        identity: {
+          captureId: input.operationId,
+          epoch: input.epoch,
+          baseRevision: input.baseRevision,
+          stableStageHandle: `stage-${input.operationId}`,
+        },
+        manifestSha256: manifestSha256(captured),
+      });
+    }
+
+    #identityOf(run: CandidateRunControlV1) {
+      const operation = run.operation;
+      if (operation?.phase !== 'transferring') {
+        throw new Error('candidate checkpoint requires a transferring operation');
+      }
+      return {
+        operationId: operation.operationId,
+        attemptId: operation.attemptId,
+        boxId,
+        epoch: operation.epoch,
+        bootId: operation.bootId,
+        kind: operation.kind,
+        expiresAt: '99999999999999',
+        baseRevision: operation.baseRevision,
+      };
+    }
+
+    async #recoverParent(
+      head: NonNullable<CandidateRunControlV1['head']>,
+      store: MountedPayloadStore,
+      identity: { operationId: string; attemptId: string; boxId: string; epoch: string; expiresAt: string },
+    ) {
+      const rootBytes = await store.readRange({
+        ...identity,
+        exactKey: head.envelope.rootObject.key,
+        method: 'GET',
+        byteOffset: '0',
+        byteLength: head.envelope.rootObject.byteLength,
+        sha256: head.envelope.rootObject.sha256,
+      });
+      return recoverPublishedParent({
+        head: head.pointer,
+        currentHead: head.pointer,
+        envelope: head.envelope,
+        envelopeBytes: envelopeBytes(head.envelope),
+        rootBytes,
+        expected: {
+          format: head.envelope.format,
+          capturedCut: head.envelope.cut,
+          lastOperationId: head.pointer.lastOperationId,
+        },
+      });
+    }
+
+    async #runCheckpoint(run: CandidateRunControlV1): Promise<string> {
+      const identity = this.#identityOf(run);
+      const store = this.#payload();
+      const sink = new MemoryCandidateObjectSink();
+      const head = run.head;
+      const audited = this.#capture(identity);
+      let plan;
+      if (format === 'bounded-layers') {
+        const parent = head === null
+          ? undefined
+          : (await openBoundedLayers(head.envelope.rootObject, store, identity))
+            .withPublishedParent(await this.#recoverParent(head, store, identity));
+        const built = await buildBoundedLayers(audited, parent, sink);
+        plan = built.plan;
+        this.#rows = { ...this.#rows, seal: wholeTreeSeal(audited.entries, 512 * 1024) };
+      } else {
+        let parent = null;
+        if (head !== null) {
+          const manifestBytes = await store.readRange({
+            ...identity,
+            exactKey: head.envelope.rootObject.key,
+            method: 'GET',
+            byteOffset: '0',
+            byteLength: head.envelope.rootObject.byteLength,
+            sha256: head.envelope.rootObject.sha256,
+          });
+          parent = parentFromPublishedParent(
+            await openMerklePack({ rootId: sha256Hex(manifestBytes), manifestBytes }, store, identity),
+            await this.#recoverParent(head, store, identity),
+          );
+        }
+        const built = await buildMerklePack(audited, { sink, parent });
+        plan = built.plan;
+        const staged = wholeTreeSeal(audited.entries, 4096);
+        this.#rows = {
+          ...this.#rows,
+          seal: {
+            ...staged,
+            chunksHashed: built.stats.distinctChunks,
+            nodesRewritten: built.stats.nodes,
+          },
+        };
+      }
+      this.#rootUploadKey = plan.root.ref.key;
+      const draft = await stageCandidatePayload(plan, identity, store);
+      return JSON.stringify({
+        ok: true,
+        movedBytes: [...draft.dependencyReceipts, draft.rootReceipt, draft.closureReceipt]
+          .reduce((bytes, receipt) => bytes + Number(receipt.byteLength), 0),
+        heldBytes: draft.closure.reduce((bytes, ref) => bytes + Number(ref.byteLength), 0),
+        draft,
+      });
+    }
+
+    async #boundedEntries(run: CandidateRunControlV1): Promise<NodeEntry[]> {
+      const head = run.head!;
+      const identity = {
+        operationId: `restore-${head.pointer.lastOperationId}`,
+        attemptId: '1',
+        boxId,
+        epoch: head.envelope.epoch,
+        expiresAt: '99999999999999',
+      };
+      const view = await openBoundedLayers(head.envelope.rootObject, this.#payload(), identity);
+      const entries: NodeEntry[] = [];
+      const contentByIno = new Map<number, FileContent>();
+      for (const path of [...view.entryPaths()].sort()) {
+        const stat = view.stat(path);
+        if (stat === null) continue;
+        const metadata = stat.metadata ?? fallbackMetadata;
+        if (stat.kind === 'dir') {
+          entries.push({ path, kind: 'dir', mode: stat.mode, ino: stat.ino, metadata });
+          continue;
+        }
+        if (stat.kind === 'symlink') {
+          entries.push({ path, kind: 'symlink', mode: stat.mode, ino: stat.ino, metadata, target: stat.target });
+          continue;
+        }
+        let content = contentByIno.get(stat.ino);
+        if (content === undefined) {
+          const doc = view.entryAt(path);
+          if (doc?.kind !== 'file') throw new Error(`bounded layer has no file row for ${path}`);
+          const hasHole = doc.chunks.some((part) => 'count' in part || part.hole === true);
+          if (!hasHole) {
+            content = { kind: 'dense', bytes: await view.readRange(path, 0, doc.size) };
+          } else {
+            let offset = 0;
+            const runs: Array<{ offset: number; bytes: Uint8Array }> = [];
+            for (const part of doc.chunks) {
+              const count = 'count' in part ? part.count : 1;
+              if ('count' in part || part.hole === true) {
+                offset += part.size * count;
+                continue;
+              }
+              runs.push({ offset, bytes: await view.readRange(path, offset, part.size) });
+              offset += part.size;
+            }
+            content = { kind: 'sparse', size: doc.size, runs };
+          }
+          contentByIno.set(stat.ino, content);
+        }
+        entries.push({ path, kind: 'file', mode: stat.mode, ino: stat.ino, metadata, content });
+      }
+      return entries;
+    }
+
+    async #merkleEntries(run: CandidateRunControlV1): Promise<NodeEntry[]> {
+      const head = run.head!;
+      const identity = {
+        operationId: `restore-${head.pointer.lastOperationId}`,
+        attemptId: '1',
+        boxId,
+        epoch: head.envelope.epoch,
+        expiresAt: '99999999999999',
+      };
+      const store = this.#payload();
       const manifestBytes = await store.readRange({
         ...identity,
         exactKey: head.envelope.rootObject.key,
@@ -1879,172 +2941,237 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
         store,
         identity,
       );
+      const entries: NodeEntry[] = [];
+      const contentByIno = new Map<number, FileContent>();
       const walk = async (at: string): Promise<void> => {
         for (const child of await view.readdir(at)) {
           const path = at === '' ? child : `${at}/${child}`;
-          const entry = await view.stat(path);
-          if (entry === null) continue;
-          if (entry.kind === 'dir') {
+          const stat = await view.stat(path);
+          if (stat === null) continue;
+          const ino = stat.ino ?? entries.length + 1;
+          const metadata = stat.metadata ?? fallbackMetadata;
+          if (stat.kind === 'dir') {
+            entries.push({ path, kind: 'dir', mode: stat.mode, ino, metadata });
             await walk(path);
             continue;
           }
-          if (entry.kind !== 'file' || entry.size === undefined) continue;
-          container.files.set(path, await view.readRange(path, 0, entry.size));
+          if (stat.kind === 'symlink') {
+            entries.push({ path, kind: 'symlink', mode: stat.mode, ino, metadata, target: stat.target });
+            continue;
+          }
+          let content = contentByIno.get(ino);
+          if (content === undefined) {
+            const extents = await view.extents(path);
+            const hasHole = extents.some((extent) => extent.kind === 'hole');
+            if (!hasHole) {
+              content = { kind: 'dense', bytes: await view.readRange(path, 0, stat.size) };
+            } else {
+              const runs: Array<{ offset: number; bytes: Uint8Array }> = [];
+              for (const extent of extents) {
+                if (extent.kind === 'data') {
+                  runs.push({ offset: extent.offset, bytes: await view.readRange(path, extent.offset, extent.length) });
+                }
+              }
+              content = { kind: 'sparse', size: stat.size, runs };
+            }
+            contentByIno.set(ino, content);
+          }
+          entries.push({ path, kind: 'file', mode: stat.mode, ino, metadata, content });
         }
       };
       await walk('');
+      return entries;
     }
-    return JSON.stringify({ ok: true, rootId: head.pointer.rootEnvelopeId });
+
+    async #runRestore(run: CandidateRunControlV1): Promise<string> {
+      const head = run.head;
+      if (head === null) return JSON.stringify({ ok: true, rootId: null });
+      const entries = format === 'bounded-layers'
+        ? await this.#boundedEntries(run)
+        : await this.#merkleEntries(run);
+      this.tree.clear();
+      this.tree.plant(entries);
+      return JSON.stringify({ ok: true, rootId: head.pointer.rootEnvelopeId });
+    }
+
+    #meter(raw: DevboxStorage): DevboxStorage {
+      return withOptionalMembers(raw, {
+        attach: async () => {
+          if (this.#restoreWindow === null) {
+            this.#restoreWindow = { from: durable.ops.length, mounts: this.disk.mountCalls };
+          }
+          const outcome = await raw.attach();
+          const opened = this.#restoreWindow;
+          this.#restoreWindow = null;
+          this.#rows = {
+            ...this.#rows,
+            restore: restoreWorkSince(durable, { from: opened.from }, [`${paths.payloadPrefix}/`], {
+              mounts: this.disk.mountCalls - opened.mounts,
+              cpuSteps: this.tree.size,
+              replayUnits: 0,
+            }),
+          };
+          return outcome;
+        },
+        checkpoint: async (kind) => {
+          const window = { from: durable.ops.length };
+          const casBefore = casAttempts;
+          const outcome = await raw.checkpoint(kind);
+          this.#rows = {
+            ...this.#rows,
+            publish: publishWorkSince(durable, window, casAttempts - casBefore),
+          };
+          return outcome;
+        },
+        discard: async () => await raw.discard(),
+      });
+    }
+
+    #build(): DevboxStorage {
+      const ports: CandidateContainerPorts = {
+        format,
+        runnerPath: '/opt/kinu/candidate-runner.bundle.mjs',
+        mountStore: async () => {
+          if (this.disk.dead) throw new ContainerDied('mountStore on a dead container');
+          if (this.disk.stopped) throw new ContainerStopped('mountStore');
+          this.disk.mount(CANDIDATE_STORE_MOUNT, {
+            source: `s3fs:${paths.payloadPrefix}`,
+            fstype: 'fuse.s3fs',
+            options: 'rw',
+          });
+          this.storeMounted = true;
+          deaths.at(awaitPointSeam('mount-root'));
+        },
+        unmountStore: async () => {
+          if (this.disk.dead || this.disk.stopped) return;
+          this.disk.unmount(CANDIDATE_STORE_MOUNT);
+          this.storeMounted = false;
+          deaths.at(awaitPointSeam('cleanup-resource'));
+        },
+        clearStore: async () => {
+          durable.deletePrefix(`${paths.payloadPrefix}/`);
+          durable.deletePrefix(`${paths.envelopePrefix}/`);
+        },
+        attachmentHealth: async () => ({
+          storeMounted: this.storeMounted,
+          storeAccessible: this.storeMounted,
+          journalProcess: this.journal,
+          journalSocket: this.journal,
+          journalMounted: this.journal,
+        }),
+        begin: async (kind) => await beginCandidateOperation({
+          kind: kind === 'tick' ? 'tick' : 'barrier',
+          bootId: this.bootId,
+          store: controlStore,
+          envelopes,
+          verifyObject,
+        }),
+        finalize: async (draft) => {
+          await this.#finalizeGate.cross();
+          return await finalizeCandidateOperation({
+            draft,
+            boxId,
+            store: controlStore,
+            envelopes,
+            verifyObject,
+          });
+        },
+        restoreState: async () => await candidateRunControl(controlStore, envelopes, verifyObject),
+        settleNoChange: async (run) => {
+          const active = run.operation;
+          if (active?.phase !== 'transferring') {
+            throw new Error('candidate no-change reply has no transferring operation to settle');
+          }
+          return await settleCandidateNoChange({ active, store: controlStore });
+        },
+        bootId: async () => this.bootId,
+        redrive: async (run) => {
+          const active = run.operation;
+          if (active?.phase !== 'transferring') {
+            throw new Error('candidate runner failure has no transferring operation to redrive');
+          }
+          return await redriveCandidateOperation({ active, store: controlStore, envelopes });
+        },
+        clearControl: async () => await controlStore.clear(),
+        clearRunnerAttempt: async (resultPath) => {
+          this.results.delete(resultPath);
+          for (const [id, process] of this.processes) {
+            if (process.id.includes('checkpoint')) {
+              this.processes.delete(id);
+              this.processActions.delete(id);
+            }
+          }
+          deaths.at(awaitPointSeam('cleanup-resource'));
+        },
+        clearRunnerResults: async () => { this.results.clear(); },
+        startJournal: async () => {
+          if (this.disk.dead) throw new ContainerDied('startJournal on a dead container');
+          if (this.disk.stopped) throw new ContainerStopped('startJournal');
+          this.journal = true;
+          this.daemonStarts += 1;
+        },
+        stopJournal: async () => {
+          if (this.disk.dead) throw new ContainerDied('stopJournal on a dead container');
+          if (this.disk.stopped) throw new ContainerStopped('stopJournal');
+          this.journal = false;
+        },
+        getRunnerProcess: async (processId) => this.processes.get(processId) ?? null,
+        waitForRunnerExit: async (processId) => {
+          if (this.processActions.get(processId) === 'restore') deaths.reset('attach:after-restore-process');
+          return { exitCode: 0 };
+        },
+        activeCheckpoint: async () => null,
+        startRunnerProcess: async (command, processId) => {
+          if (this.disk.dead) throw new ContainerDied('startRunnerProcess on a dead container');
+          if (this.disk.stopped) throw new ContainerStopped('startRunnerProcess');
+          const argv = tokenize(command);
+          const action = valueOf(argv, '--action');
+          const resultPath = valueOf(argv, '--result');
+          const run: CandidateRunControlV1 = JSON.parse(atob(valueOf(argv, '--control-state')));
+          if (action === 'restore') this.actionStarts.restore += 1;
+          else if (action === 'checkpoint') this.actionStarts.checkpoint += 1;
+          else this.actionStarts.seed += 1;
+          this.processActions.set(processId, action);
+          let printed = '';
+          const process: CandidateRunnerProcess = {
+            id: processId,
+            getLogs: async () => ({ stdout: printed, stderr: '' }),
+          };
+          this.processes.set(processId, process);
+          printed = action === 'checkpoint'
+            ? await this.#runCheckpoint(run)
+            : action === 'restore'
+              ? await this.#runRestore(run)
+              : JSON.stringify({ ok: true });
+          this.results.set(resultPath, printed);
+          return process;
+        },
+        readRunnerResult: async (path) => {
+          const held = this.results.get(path);
+          if (held === undefined) throw new Error(`no candidate runner result at ${path}`);
+          return held;
+        },
+        boxId: () => boxId,
+        recordFailure: async (reason) => { this.failures.push(reason); },
+      };
+      return this.#meter(candidateContainerStorage(ports));
+    }
   }
 
-  function build(): DevboxStorage {
-    const ports: CandidateContainerPorts = {
-      format,
-      runnerPath: '/opt/kinu/candidate-runner.bundle.mjs',
-      mountStore: async () => {
-        if (container.disk.dead) throw new ContainerDied('mountStore on a dead container');
-        if (container.disk.stopped) throw new ContainerStopped('mountStore');
-        container.disk.mount(CANDIDATE_STORE_MOUNT, {
-          source: `s3fs:${paths.payloadPrefix}`,
-          fstype: 'fuse.s3fs',
-          options: 'rw',
-        });
-        container.storeMounted = true;
-      },
-      unmountStore: async () => {
-        if (container.disk.dead || container.disk.stopped) return;
-        container.disk.unmount(CANDIDATE_STORE_MOUNT);
-        container.storeMounted = false;
-      },
-      clearStore: async () => {
-        durable.deletePrefix(`${paths.payloadPrefix}/`);
-        durable.deletePrefix(`${paths.envelopePrefix}/`);
-      },
-      attachmentHealth: async () => ({
-        storeMounted: container.storeMounted,
-        storeAccessible: container.storeMounted,
-        journalProcess: container.journal,
-        journalSocket: container.journal,
-        journalMounted: container.journal,
-      }),
-      begin: async (kind) => await beginCandidateOperation({
-        kind: kind === 'tick' ? 'tick' : 'barrier',
-        bootId: container.bootId,
-        store: controlStore,
-        envelopes,
-        verifyObject,
-      }),
-      finalize: async (draft) => await finalizeCandidateOperation({
-        draft,
-        boxId,
-        store: controlStore,
-        envelopes,
-        verifyObject,
-      }),
-      restoreState: async () => await candidateRunControl(controlStore, envelopes, verifyObject),
-      settleNoChange: async (run) => {
-        const active = run.operation;
-        if (active?.phase !== 'transferring') {
-          throw new Error('candidate no-change reply has no transferring operation to settle');
-        }
-        return await settleCandidateNoChange({ active, store: controlStore });
-      },
-      bootId: async () => container.bootId,
-      redrive: async (run) => {
-        const active = run.operation;
-        if (active?.phase !== 'transferring') {
-          throw new Error('candidate runner failure has no transferring operation to redrive');
-        }
-        return await redriveCandidateOperation({ active, store: controlStore, envelopes });
-      },
-      clearControl: async () => await controlStore.clear(),
-      clearRunnerAttempt: async (resultPath) => {
-        container.results.delete(resultPath);
-        for (const [id, process] of container.processes) {
-          if (process.id.includes('checkpoint')) container.processes.delete(id);
-        }
-      },
-      clearRunnerResults: async () => {
-        container.results.clear();
-      },
-      startJournal: async () => {
-        if (container.disk.dead) throw new ContainerDied('startJournal on a dead container');
-        if (container.disk.stopped) throw new ContainerStopped('startJournal');
-        container.journal = true;
-      },
-      stopJournal: async () => {
-        if (container.disk.dead) throw new ContainerDied('stopJournal on a dead container');
-        if (container.disk.stopped) throw new ContainerStopped('stopJournal');
-        container.journal = false;
-      },
-      getRunnerProcess: async (processId) => container.processes.get(processId) ?? null,
-      waitForRunnerExit: async () => ({ exitCode: 0 }),
-      activeCheckpoint: async () => null,
-      startRunnerProcess: async (command, processId) => {
-        if (container.disk.dead) throw new ContainerDied('startRunnerProcess on a dead container');
-        if (container.disk.stopped) throw new ContainerStopped('startRunnerProcess');
-        const argv = tokenize(command);
-        const action = valueOf(argv, '--action');
-        const resultPath = valueOf(argv, '--result');
-        const run: CandidateRunControlV1 = JSON.parse(atob(valueOf(argv, '--control-state')));
-        const printed = action === 'checkpoint'
-          ? await runCheckpoint(run)
-          : action === 'restore'
-            ? await runRestore(run)
-            : JSON.stringify({ ok: true });
-        container.results.set(resultPath, printed);
-        const process: CandidateRunnerProcess = {
-          id: processId,
-          getLogs: async () => ({ stdout: printed, stderr: '' }),
-        };
-        return process;
-      },
-      readRunnerResult: async (path) => {
-        const held = container.results.get(path);
-        if (held === undefined) throw new Error(`no candidate runner result at ${path}`);
-        return held;
-      },
-      boxId: () => boxId,
-      recordFailure: async () => undefined,
-    };
-    return candidateContainerStorage(ports);
-  }
-
-  const workspace: Workspace = {
-    write: (path, text) => {
-      if (!container.journal) throw new Error('the candidate workspace has no journal daemon');
-      container.files.set(path, encoder.encode(text));
-    },
-    read: (path) => {
-      const held = container.files.get(path);
-      return held === undefined ? undefined : decoder.decode(held);
-    },
-    remove: (path) => {
-      container.files.delete(path);
-    },
-    paths: () => [...container.files.keys()].sort(),
-  };
-
+  let current = new CandidateBoot();
   return {
     name: format,
-    storage: () => storage,
-    workspace,
+    storage: () => current.storage(),
+    get workspace() { return current.workspace; },
+    get failures() { return current.failures; },
     durable,
     deaths,
-    replaceContainer: () => {
-      container.disk.dead = true;
-      container = freshContainer();
-      storage = build();
-    },
-    stopContainer: () => {
-      container.disk.stopped = true;
-    },
-    // The five windows the shipped publication really crosses: the payload
-    // objects land under the container's own mount prefix; the envelope becomes
-    // immutable under the CONTROL prefix; the sealed record is persisted; the
-    // head CAS commits it (the pointer swap); and the completion mark closes
-    // the operation. `after-transferring` is the begun-but-nothing-staged
-    // window, which is the one a re-drive has to survive.
+    holdFinalize: () => current.holdFinalize(),
+    replaceContainer: () => current.replaceContainer(),
+    stopContainer: () => current.stop(),
+    resetIsolate: () => current.resetIsolate(),
+    secondBoot: () => new CandidateBoot(),
+    disk: () => current.disk,
     commitSeams: [
       'after-transferring',
       'after-payload',
@@ -2054,7 +3181,10 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       'after-published',
     ],
     publishSeam: 'after-published',
+    attachSeams: ['attach:after-restore-process'],
     dieAt: (seam) => deaths.arm(seam),
+    faultAt: (point) => deaths.arm(awaitPointSeam(point)),
+    awaitVisits: (point) => deaths.visits(awaitPointSeam(point)),
     payloadPrefixes: () => [`${paths.payloadPrefix}/`, `${paths.mountPrefix.slice(1)}/`],
     controlPlane: async () => {
       const record: CandidateControlStateV1 = await control.read();
@@ -2079,10 +3209,15 @@ function candidateArm(format: CandidateContainerFormat): ConformanceArm {
       const record: CandidateControlStateV1 = await control.read();
       return record.head === null ? [] : [record.head.rootEnvelopeId];
     },
+    work: () => current.work(),
+    awaitPoints,
+    lifecycleCounts: () => current.lifecycleCounts(),
+    journalFacts: () => current.journalFacts(),
+    evictCleanBytes: () => current.evictCleanBytes(),
+    refusedProperties: {},
+    refusedCells: HARNESS_OWNED_CELLS,
   };
 }
-
-/** One command as the strategy really quoted it. */
 function tokenize(command: string): readonly string[] {
   return [...command.matchAll(/'((?:[^']|'\\'')*)'/g)].map(
     match => match[1]!.replaceAll("'\\''", "'"),
