@@ -4,6 +4,8 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
 import type { AgentModelMenu } from '../src/model-catalog';
 import type { TuiHubData } from '../src/tui/hubs';
+import { asFetchFunction } from '@kinu.run/core';
+
 import { TURN, cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 
 afterEach(cleanupChats);
@@ -502,5 +504,46 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the hub the key asked for', () => screen.frame().includes('Agent Hub'));
     // The row is the open conversation, relabelled live from its own status.
     expect(screen.frame()).toContain('slowhub · main');
+  });
+
+  // No unit test may read the developer's home. The hub's re-read used to go
+  // through the CLI's own profile reader, whose account authority is a live
+  // network read of the machine's signed-in session — measured at 1,567 ms
+  // against the real home, inside a unit test. The runner's preload mints a
+  // throwaway home so that read cannot leave the machine, and the fixture
+  // answers from memory so it never even reaches a store; this test holds
+  // both: a switch's hub refresh crosses no network boundary at all.
+  test('a workspace switch refreshes the hub without one network request', async () => {
+    const alpha = fakeClient({ name: 'alpha' });
+    const beta = fakeClient({ name: 'beta' });
+    const realFetch = globalThis.fetch;
+    const seen: unknown[] = [];
+    // Records every outbound request and still answers — a spy, not a stub.
+    globalThis.fetch = asFetchFunction(async (input) => {
+      seen.push(input);
+      return realFetch(input);
+    });
+    try {
+      const screen = await mountChat(alpha.client, {
+        hubData: HUB_FIXTURE,
+        listWorkspaces: () => [
+          { name: 'alpha', label: 'Alpha', mode: 'local' },
+          { name: 'beta', label: 'Beta', mode: 'local' },
+        ],
+        onWorkspaceSelect: async () => beta.client,
+      });
+      screen.mockInput.pressKey('w', { meta: true });
+      await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
+      screen.mockInput.pressArrow('down');
+      screen.mockInput.pressEnter();
+      await screen.waitFor('the beta workspace', () => screen.frame().includes('Connected to beta'));
+      // Give the refresh every chance to fire, then prove the network stayed
+      // closed across the whole switch.
+      screen.mockInput.pressKey('a', { meta: true });
+      await screen.waitFor('the hub after the switch', () => screen.frame().includes('Agent Hub'));
+      expect(seen).toEqual([]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
