@@ -389,25 +389,51 @@ export function assertChainId(id: string): string {
   return id;
 }
 
+/**
+ * Where THIS BOX's chains live, and why the box is in the key at all.
+ *
+ * ONE MOUNT PER CONTAINER LIFE NEEDS ONE PREFIX PER BOX. The store subtree is
+ * mounted into the container, and the SDK admits a second mount of a binding
+ * only at the same prefix (`@cloudflare/sandbox`, `dist/sandbox-CPj2jsbz.js`,
+ * the r2-egress prefix check) — so a prefix scoped to one GENERATION cannot
+ * survive a rebase, which mints a new generation id while the old layers are
+ * still mounted as the live overlay's lowers and cannot be released. A prefix
+ * scoped to the BOX absorbs every generation it will ever have.
+ *
+ * IT ALSO CLOSES THE SWEEP HAZARD this file used to carry: `backups/<uuid>/`
+ * was a namespace shared by every box, so an orphan sweep could not list its
+ * own generations without looking at other boxes' live ones, and an R2 lifecycle
+ * rule on the prefix would have destroyed live workspaces. Under a per-box root
+ * the box's chains are exactly what lives beneath it — the same convention every
+ * other strategy here already uses (`boxes/<id>/…`).
+ *
+ * NO MIGRATION EXISTS OR IS NEEDED: devbox is not deployed for users, and the
+ * benchmark deploys ephemeral Workers and buckets that are torn down with the
+ * run, so no stored chain predates this layout.
+ */
+export function chainStoreRoot(boxPrefix: string): string {
+  return `${boxPrefix}/backups`;
+}
+
 /** The immutable full base layer. */
-export function baseObjectKey(chainId: string): string {
+export function baseObjectKey(root: string, chainId: string): string {
   assertChainId(chainId);
-  return `backups/${chainId}/data.sqsh`;
+  return `${root}/${chainId}/data.sqsh`;
 }
 
 /** The cumulative changed set. ONE key, atomically replaced by every checkpoint
  *  after the base exists: supersession is a PUT, never a delete. */
-export function deltaObjectKey(chainId: string): string {
+export function deltaObjectKey(root: string, chainId: string): string {
   assertChainId(chainId);
-  return `backups/${chainId}/delta.sqsh`;
+  return `${root}/${chainId}/delta.sqsh`;
 }
 
 /** The SDK's own metadata object, written only by its backup API. A chain
  *  records its sizes in the box's own state instead, so this key exists for
  *  extraction-mode handles and for discard to clean up after them. */
-export function metadataObjectKey(chainId: string): string {
+export function metadataObjectKey(root: string, chainId: string): string {
   assertChainId(chainId);
-  return `backups/${chainId}/meta.json`;
+  return `${root}/${chainId}/meta.json`;
 }
 
 // ── mount facts ─────────────────────────────────────────────────────────────
@@ -550,8 +576,8 @@ export interface ChainBaseLayer extends ChainLayer {
 /**
  * ONE GENERATION of the chain: the immutable base, and the cumulative changed
  * set on top of it once one has landed. Both live under a single
- * `backups/<uuid>/` prefix, which is what makes a generation either wholly
- * referenced or wholly garbage.
+ * `<box>/backups/<uuid>/` prefix, which is what makes a generation either
+ * wholly referenced or wholly garbage.
  *
  * ONE SHAPE, TWO ROLES. A record names the generation it serves and the
  * generation it falls back to, and those are the same thing described twice, so
@@ -630,10 +656,10 @@ export interface ChainState extends ChainGeneration {
    * WRITTEN BEFORE THE DELETE, cleared after it, for the same reason the record
    * is written before any other cleanup: a crash between the rebase's state
    * flip and the old generation's deletion used to orphan that generation
-   * forever, because nothing anywhere still named it. Chain objects live under
-   * a GLOBAL `backups/<uuid>/` namespace shared by every box, so a sweep cannot
-   * discover this box's own orphans by listing — it would see other boxes'
-   * live generations. The box therefore remembers them, and the sweep is
+   * forever, because nothing anywhere still named it. The ids are remembered
+   * rather than discovered by listing even now that each box has its own chain
+   * root ({@link chainStoreRoot}): a listing would name every generation the box
+   * holds, live ones included, and cannot say which are orphans. The sweep is
    * re-runnable: a crash mid-sweep leaves the ids in place for the next one.
    */
   readonly orphans: readonly string[] | undefined;
@@ -801,13 +827,22 @@ export interface SnapshotChainPorts {
   /** Ephemeral generation id, when the host can observe one. */
   containerGeneration?(): Promise<string | undefined>;
   /**
-   * Mount this chain's store subtree at `at`, writable.
+   * This box's chain root in the store — see {@link chainStoreRoot}.
    *
-   * ONE MOUNT, ONE SETTING, and the host has no choice to make: the SDK admits
-   * a second mount of one binding only at the same prefix with the same setting,
-   * so a read access and a write access are not two things this port can offer.
-   * Idempotent for that reason — asking again for the same chain is admitted and
-   * costs one SDK call.
+   * A PORT rather than a constant, because the box's identity is the host's:
+   * the strategy must not know how a box is named, only that its chains live
+   * under one prefix that outlives every generation.
+   */
+  storeRoot(): string;
+  /**
+   * Mount THIS BOX's chain root at `at`, writable.
+   *
+   * ONE MOUNT, ONE SETTING, ONE PREFIX, and the host has no choice to make: the
+   * SDK admits a second mount of one binding only at the same path, prefix and
+   * setting, so neither a read access nor a per-generation prefix is something
+   * this port can offer. The prefix is {@link chainStoreRoot} — the box's own
+   * subtree — which is what lets one mount serve every generation the box will
+   * ever publish, a rebase included.
    *
    * The subtree is scoped to this chain's own UUID prefix, so the container sees
    * its own generation and nothing else, and CREDENTIALS NEVER LEAVE THE
@@ -815,7 +850,7 @@ export interface SnapshotChainPorts {
    * requests are resolved against the binding by a Worker entrypoint. Writable
    * therefore hands the container no capability it can read or replay.
    */
-  mountStore(chainId: string, at: string): Promise<void>;
+  mountStore(at: string): Promise<void>;
   /**
    * Release the mount at `at` THROUGH THE SDK, not through the kernel.
    *
@@ -950,14 +985,15 @@ function deltaLayerMountPoint(chainId: string): string {
  * Where one generation's object appears inside a mount scoped to that
  * generation's prefix.
  *
- * ONE DERIVATION FOR BOTH MOUNTS. A store subtree mounted at `backups/<uuid>/`
- * shows each object as a file named by the last segment of its key, so the read
- * path's `squashfuse` source and the write path's `dd` target are the same
- * question asked twice. Spelling it twice is how the two would drift into
- * writing one name and mounting another.
+ * ONE DERIVATION FOR BOTH ROLES. The subtree is mounted at the box's chain root,
+ * so an object appears under the mount at whatever the key holds BELOW that root
+ * — `<generation>/<name>` — and the read path's `squashfuse` source and the
+ * write path's `dd` target are the same question asked twice. Spelling it twice
+ * is how the two would drift into writing one name and mounting another.
  */
-function mountedLayerPath(mountPoint: string, objectKey: string): string {
-  return `${mountPoint}/${objectKey.split('/').pop() ?? objectKey}`;
+function mountedLayerPath(mountPoint: string, root: string, objectKey: string): string {
+  const relative = objectKey.startsWith(`${root}/`) ? objectKey.slice(root.length + 1) : objectKey;
+  return `${mountPoint}/${relative}`;
 }
 
 /**
@@ -1013,7 +1049,7 @@ const MOUNT_RELEASE_ATTEMPTS = 20;
 
 type ContainerExec = SnapshotChainPorts['exec'];
 
-function chainShell(exec: ContainerExec) {
+function chainShell(exec: ContainerExec, root: string) {
   /** Run a command and refuse on a non-zero exit, naming what was attempted.
    *  The container's own words are the diagnosis; this code has no better one. */
   const must = async (doing: string, command: string): Promise<string> => {
@@ -1128,7 +1164,7 @@ function chainShell(exec: ContainerExec) {
      */
     mountLayer: async (objectKey: string, mountPoint: string): Promise<void> => {
       await must('squashfuse mount', `mkdir -p ${shellPath(mountPoint)} && /usr/bin/squashfuse `
-        + `${shellPath(mountedLayerPath(CHAIN_STORE_MOUNT, objectKey))} ${shellPath(mountPoint)} `
+        + `${shellPath(mountedLayerPath(CHAIN_STORE_MOUNT, root, objectKey))} ${shellPath(mountPoint)} `
         + '-o allow_other,ro,nonempty');
     },
     /** Attach `lowers` (first entry is newest) with a fresh writable upper. Its
@@ -1293,7 +1329,9 @@ function chainShell(exec: ContainerExec) {
 // ── the strategy ────────────────────────────────────────────────────────────
 
 export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
-  const shell = chainShell(ports.exec);
+  const shell = chainShell(ports.exec, ports.storeRoot());
+  /** This box's chain root: every key below it, one mount over it. */
+  const root = ports.storeRoot();
 
   /**
    * Why a stored layer must not be attached from, or null when it is sound.
@@ -1344,12 +1382,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (mode === 'extract') return { refusal: null, delta: undefined };
     const unsound = layerIntegrityFailure({
       declared: generation.base,
-      stored: await ports.objectFacts(baseObjectKey(generation.base.id)),
+      stored: await ports.objectFacts(baseObjectKey(root, generation.base.id)),
       label: 'base',
     });
     if (unsound !== null) return { refusal: unsound };
     if (generation.delta === undefined) return { refusal: null, delta: undefined };
-    const stored = await ports.objectFacts(deltaObjectKey(generation.base.id));
+    const stored = await ports.objectFacts(deltaObjectKey(root, generation.base.id));
     if (stored === undefined) {
       return {
         refusal: `delta archive is missing from the store, but the record names one of `
@@ -1427,6 +1465,31 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
+  /**
+   * Take the chain's store mount, or report the one already standing.
+   *
+   * THE CONTAINER IS THE AUTHORITY, because the SDK holds TWO registries and
+   * only one of them can be asked a question: its binding registry admits a
+   * second mount at the same prefix and setting, but its PATH registry refuses a
+   * second mount at one path UNCONDITIONALLY (`activeMounts.has(mountPath)`,
+   * sandbox-CPj2jsbz.js:8369 — measured live as `Mount path "/backups" is
+   * already in use by bucket "BACKUP_BUCKET"`, run e2e20260902060426). There is
+   * no API to read either, and the in-memory one resets when the isolate does,
+   * so the strategy cannot remember across checkpoints. `/proc/mounts` can be
+   * asked, and it names exactly the fact that matters: is anything mounted at
+   * the path. One `cat` the attach already needed anyway (line
+   * `readMounts` for the overlay), and the answer is true across DO evictions
+   * because the mount lives in the container, not the isolate.
+   *
+   * True answers "already standing, nothing was mounted". A mount made by this
+   * call is a NEW one on a container that had nothing at the path.
+   */
+  const mountStoreOnce = async (): Promise<boolean> => {
+    if (findMount(await shell.readMounts(), CHAIN_STORE_MOUNT) !== undefined) return true;
+    await ports.mountStore(CHAIN_STORE_MOUNT);
+    return false;
+  };
+
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const containerGeneration = await ports.containerGeneration?.();
     // Release any mount the SDK still believes it holds at this path before
@@ -1439,7 +1502,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it came: the platform's own words are the diagnosis, and this code has no
     // better one.
     try {
-      await ports.mountStore(generation.base.id, CHAIN_STORE_MOUNT);
+      await mountStoreOnce();
     } catch (error) {
       throw new Error(
         `chain ${generation.base.id} is stored as lazy layers and its store subtree could not `
@@ -1464,7 +1527,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
       throw new LayerUnreadable(layer, generation.base.id, thrown);
     };
-    const mountedBase = mountedLayerPath(CHAIN_STORE_MOUNT, baseObjectKey(generation.base.id));
+    const mountedBase = mountedLayerPath(CHAIN_STORE_MOUNT, root, baseObjectKey(root, generation.base.id));
     // WAIT BY COUNT, THEN SAY WHAT IS THERE. The wait used to be an unbounded
     // poll in the host adapter: one `test -e` per RPC, every 100 ms, with no
     // exit except the path appearing — and its container-replacement exit was
@@ -1488,7 +1551,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // is the one a stamp may claim. An unreferenced but complete delta — a
     // previous run crashed between the atomic PUT and the state write — is
     // adopted, as this file's header describes.
-    const storedDelta = await ports.objectFacts(deltaObjectKey(generation.base.id));
+    const storedDelta = await ports.objectFacts(deltaObjectKey(root, generation.base.id));
     const haveDelta = generation.delta !== undefined || storedDelta !== undefined;
 
     // IS THIS UPPER ALREADY THIS DELTA?
@@ -1535,7 +1598,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       ? [lowerBase, lowerDeltaRoot, workDir]
       : [lowerBase, lowerDeltaRoot, upperDir, workDir]);
     try {
-      await shell.mountLayer(baseObjectKey(generation.base.id), lowerBase);
+      await shell.mountLayer(baseObjectKey(root, generation.base.id), lowerBase);
     } catch (error) {
       await layerFailed('base', { cause: error });
     }
@@ -1566,7 +1629,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const deltaLayer = deltaLayerMountPoint(generation.base.id);
     if (composing) {
       try {
-        await shell.mountLayer(deltaObjectKey(generation.base.id), deltaLayer);
+        await shell.mountLayer(deltaObjectKey(root, generation.base.id), deltaLayer);
       } catch (error) {
         await layerFailed('delta', { cause: error });
       }
@@ -1900,10 +1963,15 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * rather than as sound.
    */
   const stageAndPut = async (
-    chainId: string,
     key: string,
     sourceDir: string,
     excludes: readonly string[],
+    /** The chain's store mount is already held by THIS checkpoint — the
+     *  first-checkpoint proof's, when there was no chain to attach from. Passing
+     *  it is what keeps the whole commit to one mount call: the SDK's PATH
+     *  registry refuses a second mount at one path even when prefix and setting
+     *  match. */
+    storeHeld = false,
   ): Promise<ChainLayer> => {
     const archivePath = `${stageDir}/layer.sqsh`;
     // ROOM TO WRITE IT, ASKED BEFORE WRITING IT. An archiver that fills the
@@ -1923,13 +1991,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const short = await shell.stagingShortfall(sourceDir, excludes);
     if (short !== null) throw new Error(short);
     await shell.makeSquashfs(sourceDir, archivePath, excludes);
-    // THROUGH THE MOUNT THE BOX ALREADY HOLDS, asked for again because a cold
-    // box has not attached anything yet. Idempotent: the same prefix and the
-    // same setting is what the SDK admits a second time, which is the whole
-    // reason there is only one setting.
-    await ports.mountStore(chainId, CHAIN_STORE_MOUNT);
+    // THE MOUNT THIS CHECKPOINT ALREADY HOLDS — the first-checkpoint proof's
+    // when there was no chain, the attach's when the wake restored one. Asking
+    // again is not an option: the SDK's PATH registry refuses a second mount at
+    // one path even when prefix and setting match, so the standing mount is
+    // detected from `/proc/mounts` and only a bare path is mounted.
+    if (!storeHeld) await mountStoreOnce();
     const published = await shell.publishArchive(
-      archivePath, mountedLayerPath(CHAIN_STORE_MOUNT, key),
+      archivePath, mountedLayerPath(CHAIN_STORE_MOUNT, root, key),
     );
     const landed = await ports.objectFacts(key);
     if (landed === undefined) {
@@ -1956,7 +2025,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const backup = await ports.createExtractSnapshot(
       chainBackupOptions(true, ports.archiveExcludes()),
     );
-    const stored = await ports.objectFacts(baseObjectKey(backup.id));
+    const stored = await ports.objectFacts(baseObjectKey(root, backup.id));
     if (stored === undefined || stored.bytes <= 0) {
       throw new Error(`archive ${backup.id} is not sound: the object is missing or empty`);
     }
@@ -1979,8 +2048,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // deletes it, and it is RETAINED as the fallback rather than deleted
       // outright — the same two roles the chain path publishes, decided by the
       // same policy. This path used to delete it inline, so a crash in that
-      // window stranded it forever: `backups/<uuid>/` is shared by every box,
-      // and an id no record carries can never be swept.
+      // window stranded it forever: an id no record carries can never be swept,
+      // because only the record names which generations this box still holds.
       ...(previous !== null && previous.base.id !== backup.id
         ? supersedeGeneration(previous)
         : { fallback: previous?.fallback, orphans: previous?.orphans }),
@@ -1997,18 +2066,18 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * THE STATE ROW IS THE TRUTH, which is what makes this safe against the very
    * crash that created the orphan: the ids were recorded before the delete, the
    * referenced generation is never among them, and a crash mid-sweep simply
-   * leaves the remainder for the next run. It cannot be done by listing —
-   * `backups/<uuid>/` is a namespace shared by every box, so a sweep that
-   * enumerated it would be looking at other boxes' live generations.
+   * leaves the remainder for the next run. It cannot be done by listing: a
+   * listing of this box's chain root names its live generations too, and only
+   * the record can say which of them nothing points at any more.
    */
   const sweepOrphans = async (state: ChainState): Promise<void> => {
     const orphans = state.orphans ?? [];
     if (orphans.length === 0) return;
     for (const generation of orphans) {
       await ports.deleteObjects([
-        baseObjectKey(generation),
-        deltaObjectKey(generation),
-        metadataObjectKey(generation),
+        baseObjectKey(root, generation),
+        deltaObjectKey(root, generation),
+        metadataObjectKey(root, generation),
       ]);
     }
     await ports.writeState({ ...state, orphans: undefined });
@@ -2088,11 +2157,21 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it could. A capability that reports itself present and then refuses is
     // exactly the shape that produced a silent no-op on a live container.
     //
-    // One mount, once per box, and it is the same mount the publication below
-    // writes through — so the proof is the mount this checkpoint needs anyway.
+    // One mount, once per box, and it is the ONLY mount call this checkpoint
+    // makes: the SDK's PATH registry refuses a second mount at the same path even
+    // with the same prefix and setting (`activeMounts.has(mountPath)`,
+    // sandbox-CPj2jsbz.js:8369 — measured live as `Mount path "/backups" is
+    // already in use by bucket "BACKUP_BUCKET"`, run e2e20260902060426), so the
+    // proof cannot be one call and the publication another. `storeHeld` carries
+    // the one mount the publication below writes through.
+    let storeHeld = false;
     if (first) {
       try {
-        await ports.mountStore(chainId, CHAIN_STORE_MOUNT);
+        // THE PROOF IS THE MOUNT. `mountStoreOnce` answers whether it was already
+        // standing; either way THIS checkpoint now holds it, which is what the
+        // publication below reads.
+        await mountStoreOnce();
+        storeHeld = true;
       } catch (error) {
         // Where extraction is not permitted, a failed proof is a FAILED
         // CHECKPOINT carrying the platform's own reason. Converting it into
@@ -2117,7 +2196,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     let layer: ChainLayer;
     if (fresh) {
       layer = await stageAndPut(
-        chainId, baseObjectKey(chainId), DEVBOX_WORKDIR, ports.archiveExcludes(),
+        baseObjectKey(root, chainId), DEVBOX_WORKDIR, ports.archiveExcludes(), storeHeld,
       );
     } else {
       // The upper is the path THIS strategy passed to the mount command, not one
@@ -2155,7 +2234,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // delta" was true only until one happened. A box whose `dist/` really is
       // the work overrides `archiveExcludes` and keeps it in both.
       layer = await stageAndPut(
-        chainId, deltaObjectKey(chainId), upperDir, ports.archiveExcludes(),
+        deltaObjectKey(root, chainId), upperDir, ports.archiveExcludes(), storeHeld,
       );
     }
 
@@ -2368,9 +2447,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       ...(state.orphans ?? []),
     ].flatMap(
       (generation) => [
-        baseObjectKey(generation),
-        deltaObjectKey(generation),
-        metadataObjectKey(generation),
+        baseObjectKey(root, generation),
+        deltaObjectKey(root, generation),
+        metadataObjectKey(root, generation),
       ],
     ));
     await ports.clearState();

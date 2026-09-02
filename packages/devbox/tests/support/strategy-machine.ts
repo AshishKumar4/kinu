@@ -128,6 +128,7 @@ import {
 import { R2FS_CACHE_DIR, r2fsStorage, type R2fsPorts } from '../../src/r2fs';
 import {
   baseObjectKey,
+  chainStoreRoot,
   deltaObjectKey,
   snapshotChainStorage,
   type ChainState,
@@ -139,6 +140,10 @@ import {
   type DevboxStorage,
   type DevboxStrategyName,
 } from '../../src/storage';
+
+/** The box this machine stands for, and the chain root its keys live under —
+ *  derived, never spelled, so the mirror cannot drift from the strategy. */
+const STORE_ROOT = chainStoreRoot('boxes/conformance-box');
 
 /** A mirror of the strategy's own read mount point, which it does not export:
  *  the host is handed the path as an argument, so this file states the one the
@@ -937,7 +942,8 @@ function snapshotChainArm(): ConformanceArm {
         seedStamp = stamp;
       },
       exec,
-      mountStore: async (chainId, at) => {
+      storeRoot: () => STORE_ROOT,
+      mountStore: async (at) => {
         if (disk.dead) throw new ContainerDied('mountStore on a dead container');
         // THE ONE MOUNT, ONE SETTING, held for the container's life. The SDK
         // admits a second mount of a binding only at the same prefix with the
@@ -947,14 +953,19 @@ function snapshotChainArm(): ConformanceArm {
         // last segment of its key, and a flush through the mount lands under the
         // chain's own prefix.
         disk.mount(at, {
-          source: `r2:backups/${chainId}`,
+          source: `r2:${STORE_ROOT}`,
           fstype: 'fuse.s3fs',
           options: 'rw',
         });
-        for (const key of durable.list(`backups/${chainId}/`)) {
-          disk.writeFile(`${at}/${key.split('/').pop()!}`, mounted.get(key)!);
+        // THE WHOLE BOX ROOT, so a generation minted after this mount appears
+        // under it without a remount — which is the property the per-box prefix
+        // exists for. Each object shows up at the path its key holds below the
+        // root, `<generation>/<name>`.
+        for (const key of durable.list(`${STORE_ROOT}/`)) {
+          const relative = key.slice(STORE_ROOT.length + 1);
+          disk.writeFile(`${at}/${relative}`, mounted.get(key)!);
         }
-        publishing = { at, prefix: `backups/${chainId}/` };
+        publishing = { at, prefix: `${STORE_ROOT}/` };
       },
       unmountStore: async (at) => {
         // The mount is gone whatever the container's state: a publication that
@@ -1035,7 +1046,7 @@ function snapshotChainArm(): ConformanceArm {
     commitSeams: ['before-payload', 'after-payload', 'before-pointer', 'before-cleanup'],
     publishSeam: 'before-pointer',
     dieAt: (seam) => deaths.arm(seam),
-    payloadPrefixes: () => generations().map(id => `backups/${id}/`),
+    payloadPrefixes: () => generations().map(id => `${STORE_ROOT}/${id}/`),
     controlPlane: async () => ({
       // The chain keeps NO control metadata in the store: `meta.json` exists
       // only for the extraction path, and the record that names a generation is
@@ -1047,15 +1058,15 @@ function snapshotChainArm(): ConformanceArm {
     declaredPayload: async () => {
       if (row === null) return [];
       const declared: DeclaredObject[] = [{
-        key: baseObjectKey(row.base.id),
+        key: baseObjectKey(STORE_ROOT, row.base.id),
         byteLength: row.base.bytes,
-        names: [baseObjectKey(row.base.id), 'base'],
+        names: [baseObjectKey(STORE_ROOT, row.base.id), 'base'],
       }];
       if (row.delta !== undefined) {
         declared.push({
-          key: deltaObjectKey(row.base.id),
+          key: deltaObjectKey(STORE_ROOT, row.base.id),
           byteLength: row.delta.bytes,
-          names: [deltaObjectKey(row.base.id), 'delta'],
+          names: [deltaObjectKey(STORE_ROOT, row.base.id), 'delta'],
         });
       }
       return declared;

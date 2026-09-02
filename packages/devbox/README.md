@@ -74,8 +74,11 @@ the state record before cleanup. A crash between them leaves a complete unnamed
 delta that the next attach adopts. Squashfs checks its superblock, so the mount
 validates the object.
 
-Keys are `backups/<uuid>/data.sqsh` and `backups/<uuid>/delta.sqsh`. Key
-builders require a UUID, so no key can use `..` or another box's guess.
+Keys are `boxes/<box>/backups/<uuid>/data.sqsh` and `…/delta.sqsh`: one chain
+root per box, every generation beneath it. Key builders require a UUID, so no
+key can use `..` or another box's guess, and one mount over the box root serves
+every generation the box will ever publish — including one a rebase mints while
+the previous generation's layers are still mounted.
 
 A record names two generations: the one it serves, and one fallback. A rebase
 writes a new generation and keeps the outgoing one. The attach that mounts the

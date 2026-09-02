@@ -364,10 +364,10 @@
   // read by KinuSandbox. Bucket: `wrangler r2 bucket create kinu-backups`
   // (already created).
   //
-  // DO NOT PUT AN R2 LIFECYCLE RULE ON THE `backups/` PREFIX. This comment used
+  // DO NOT PUT AN R2 LIFECYCLE RULE ON THE `backups/` SUBTREES. This comment used
   // to tell an operator to add one "to GC archives past their TTL", and that
-  // instruction destroys live workspaces. `backups/<uuid>/{data,delta,meta}` is
-  // a GLOBAL namespace shared by every box (`devbox/src/snapshot-chain.ts`), and
+  // instruction destroys live workspaces. `boxes/<box>/backups/<uuid>/` holds
+  // one box's chain generations (`devbox/src/snapshot-chain.ts`), and
   // a generation's BASE is immutable and referenced for as long as the box
   // exists — a workspace that has not checkpointed in months still restores from
   // an object that old, and its archive is the only copy of its /workspace. An

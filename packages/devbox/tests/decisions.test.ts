@@ -62,6 +62,7 @@ import { requireSessionShellAccepts } from './support/session-shell';
 import {
   assertChainId,
   baseObjectKey,
+  chainStoreRoot,
   chainBackupOptions,
   CHAIN_EXCLUDES,
   deltaObjectKey,
@@ -1389,13 +1390,18 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
   });
 
   test('every key builder validates, so no path can be assembled from a guess', () => {
+    const STORE_ROOT = chainStoreRoot('boxes/box-under-test');
     for (const build of [baseObjectKey, deltaObjectKey, metadataObjectKey]) {
-      expect(() => build('../../etc/passwd')).toThrow(/is not a UUID/);
-      expect(build(CHAIN_ID)).toStartWith(`backups/${CHAIN_ID}/`);
+      expect(() => build(STORE_ROOT, '../../etc/passwd')).toThrow(/is not a UUID/);
+      // UNDER THIS BOX'S ROOT, never a global one: the generation prefix is
+      // nested inside the box's own subtree, which is what lets one mount cover
+      // every generation and what keeps one box's sweep off another's layers.
+      expect(build(STORE_ROOT, CHAIN_ID)).toStartWith(`${STORE_ROOT}/${CHAIN_ID}/`);
+      expect(build(STORE_ROOT, CHAIN_ID)).toStartWith('boxes/');
     }
     // Three distinct objects under one prefix, so a discard can name all of
     // them and a delta can be replaced without touching the base.
-    const keys = [baseObjectKey(CHAIN_ID), deltaObjectKey(CHAIN_ID), metadataObjectKey(CHAIN_ID)];
+    const keys = [baseObjectKey(STORE_ROOT, CHAIN_ID), deltaObjectKey(STORE_ROOT, CHAIN_ID), metadataObjectKey(STORE_ROOT, CHAIN_ID)];
     expect(new Set(keys).size).toBe(3);
   });
 

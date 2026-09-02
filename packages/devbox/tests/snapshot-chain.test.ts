@@ -47,6 +47,9 @@ const LAYER_VISIBILITY_PROBES = 20;
  *  through. Mirrored for the same reason as the layer paths above — the host is
  *  handed them as arguments, so nothing outside the strategy declares them. */
 const CHAIN_STORE_MOUNT = '/backups';
+/** This box's chain root, mirrored from the strategy's own derivation: every key
+ *  a test spells lives under it, and the one mount covers it. */
+const STORE_ROOT = 'boxes/box-under-test/backups';
 
 import {
   ATTACH_OUTCOME_KINDS,
@@ -112,8 +115,8 @@ function baseLayer(id: string, bytes: number): ChainBaseLayer {
   return {
     id,
     bytes,
-    digest: digestOf(baseObjectKey(id), bytes),
-    objectVersion: versionOf(baseObjectKey(id), bytes),
+    digest: digestOf(baseObjectKey(STORE_ROOT, id), bytes),
+    objectVersion: versionOf(baseObjectKey(STORE_ROOT, id), bytes),
   };
 }
 
@@ -121,8 +124,8 @@ function baseLayer(id: string, bytes: number): ChainBaseLayer {
 function deltaLayer(id: string, bytes: number): ChainLayer {
   return {
     bytes,
-    digest: digestOf(deltaObjectKey(id), bytes),
-    objectVersion: versionOf(deltaObjectKey(id), bytes),
+    digest: digestOf(deltaObjectKey(STORE_ROOT, id), bytes),
+    objectVersion: versionOf(deltaObjectKey(STORE_ROOT, id), bytes),
   };
 }
 
@@ -276,6 +279,13 @@ interface SdkMountRegistry {
   held?: { readonly prefix: string; readonly readOnly: boolean };
 }
 
+/** The CONTAINER's own mount table, shared the same way the SDK registry is:
+ *  `/proc/mounts` belongs to the container, not to the isolate reading it, so
+ *  a stop and a wake — two isolates, one container — see the same lines. */
+interface ContainerMounts {
+  mounted?: { readonly at: string; readonly prefix: string };
+}
+
 function harness(overrides: {
   state?: ChainState | null;
   mounts?: string | (() => string);
@@ -336,6 +346,10 @@ function harness(overrides: {
    *  which is exactly what a stop and a wake are. Omitted means this harness
    *  owns a private registry, which is a container nothing else has touched. */
   registry?: SdkMountRegistry;
+  /** The container's mount table, shared for the same reason: a fresh harness
+   *  is a fresh isolate, not a fresh container, and `/proc/mounts` does not
+   *  reset with it. */
+  mountsTable?: ContainerMounts;
 } = {}): Harness {
   const generations = [...(overrides.generations ?? [])];
   const calls = overrides.calls ?? [];
@@ -360,8 +374,9 @@ function harness(overrides: {
    *  through it lands under. The ONE mount, one setting, held for the
    *  container's life — the shape the SDK's own registry forces, because it
    *  admits a second mount of a binding only at the same prefix with the same
-   *  setting. Undefined means nothing is mounted yet. */
-  let mounted: { readonly at: string; readonly prefix: string } | undefined;
+   *  setting. Shared with the harness's siblings when the caller says so, so a
+   *  stop-and-wake sees one container. */
+  const table: ContainerMounts = overrides.mountsTable ?? {};
   /**
    * The SDK's own registry: what it last mounted for the one binding.
    *
@@ -385,7 +400,7 @@ function harness(overrides: {
    * watching a checkpoint that never published.
    */
   const publish = (mountedPath: string) => {
-    const mount = mounted;
+    const mount = table.mounted;
     if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
       // What a real container answers when the path is not on a mount: the
       // directory is not there to be written into.
@@ -471,8 +486,16 @@ function harness(overrides: {
       const published = /^dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
         .exec(command)?.groups;
       if (published !== undefined) return Promise.resolve(publish(published.mounted!));
+      // THE CONTAINER'S OWN VIEW: the strategy's `mountStoreOnce` reads
+      // `/proc/mounts`, so the store mount has to appear there exactly as a real
+      // s3fs mount does — one line at the path, for exactly as long as the fake
+      // holds it mounted. That is what makes the one-mount design observable to
+      // the code rather than remembered by it.
+      const procMounts = () => table.mounted === undefined
+        ? mounts()
+        : `${mounts()}\ns3fs ${table.mounted.at} fuse.s3fs rw,nosuid,nodev,relatime 0 0\n`;
       const label = shellLabel(
-        command, mounts(), overrides.missingPaths ?? [],
+        command, procMounts(), overrides.missingPaths ?? [],
         overrides.freeBytes ?? Number.MAX_SAFE_INTEGER,
         liveMark,
         overrides.stagedReport ?? `0 ${DELTA_BYTES}`,
@@ -505,8 +528,9 @@ function harness(overrides: {
       if (generations.length > 1) return generations.shift();
       return generations[0];
     },
-    mountStore: (chainId, at) => {
-      calls.push(`mountStore:${chainId}:${at}`);
+    storeRoot: () => STORE_ROOT,
+    mountStore: (at) => {
+      calls.push(`mountStore:${at}`);
       if (overrides.refuseStoreMount === true) {
         // The real local failure: the container has no FUSE device. Deliberately
         // NOT the interception wording, so the degrade cannot be passing because
@@ -517,7 +541,14 @@ function harness(overrides: {
       // binding is admitted only at the same prefix with the same setting, which
       // under the one-mount design is the SAME mount asked for again. Anything
       // else is the shape that killed the deployed second checkpoint.
-      const prefix = `backups/${chainId}/`;
+      const prefix = `${STORE_ROOT}/`;
+      // TWO REGISTRIES, because the SDK holds two. The BINDING registry admits a
+      // second mount only at the same prefix with the same setting; the PATH
+      // registry refuses a second mount at one path UNCONDITIONALLY
+      // (`activeMounts.has(mountPath)`, sandbox-CPj2jsbz.js:8369 — measured live
+      // as `Mount path "/backups" is already in use by bucket "BACKUP_BUCKET"`,
+      // run e2e20260902060426). Together they say: one mount call, at one path,
+      // with one setting — asking again is not idempotent.
       const held = sdk.held;
       if (held !== undefined && (held.prefix !== prefix || held.readOnly !== false)) {
         return Promise.reject(new Error(
@@ -526,8 +557,14 @@ function harness(overrides: {
           + 'value for additional mounts.',
         ));
       }
+      if (held !== undefined || table.mounted?.at === at) {
+        return Promise.reject(new Error(
+          `Mount path "${at}" is already in use by bucket "BACKUP_BUCKET". Unmount the `
+          + 'existing bucket first or use a different mount path.',
+        ));
+      }
       sdk.held = { prefix, readOnly: false };
-      mounted = { at, prefix };
+      table.mounted = { at, prefix };
       return Promise.resolve();
     },
     unmountStore: (at) => {
@@ -537,7 +574,7 @@ function harness(overrides: {
       // "nothing is mounted here" refusal and survives it, so this fake answers
       // the same way — resolved, with the mount and the registry entry gone
       // when the path was the one being held.
-      if (mounted?.at === at) mounted = undefined;
+      if (table.mounted?.at === at) table.mounted = undefined;
       sdk.held = undefined;
       return Promise.resolve();
     },
@@ -573,7 +610,7 @@ function harness(overrides: {
       calls.push(`createExtractSnapshot:${options.localBucket}`);
       const id = `a1b2c3d4-0000-4000-8000-${String(extractSeq).padStart(12, '0')}`;
       extractSeq += 1;
-      objects.set(baseObjectKey(id), DELTA_BYTES);
+      objects.set(baseObjectKey(STORE_ROOT, id), DELTA_BYTES);
       return Promise.resolve({ id, dir: options.dir, localBucket: true });
     },
     now: () => overrides.now ?? 10 * INTERVAL_MS,
@@ -594,9 +631,9 @@ function harness(overrides: {
   for (const generation of state === null
     ? []
     : [state, ...(state.fallback === undefined ? [] : [state.fallback])]) {
-    seed(baseObjectKey(generation.base.id), generation.base);
+    seed(baseObjectKey(STORE_ROOT, generation.base.id), generation.base);
     if (generation.delta !== undefined) {
-      seed(deltaObjectKey(generation.base.id), generation.delta);
+      seed(deltaObjectKey(STORE_ROOT, generation.base.id), generation.delta);
     }
   }
   return {
@@ -650,11 +687,11 @@ function generationLiteral(literal: GenerationLiteral): ChainGeneration {
   return {
     base: {
       id: literal.base.id,
-      ...layer(baseObjectKey(literal.base.id), literal.base),
+      ...layer(baseObjectKey(STORE_ROOT, literal.base.id), literal.base),
     },
     delta: literal.delta === undefined
       ? undefined
-      : layer(deltaObjectKey(literal.base.id), literal.delta),
+      : layer(deltaObjectKey(STORE_ROOT, literal.base.id), literal.delta),
   };
 }
 
@@ -749,9 +786,9 @@ describe('attach — the mount must be observed to have landed', () => {
       // from mount points it is handed; a mounted overlay therefore proves the
       // whole composition landed, which is what the `already-attached` early
       // return assumes.
-      const base = record.calls.indexOf(`mountLayer:${CHAIN_STORE_MOUNT}/data.sqsh:${LOWER_BASE}`);
+      const base = record.calls.indexOf(`mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh:${LOWER_BASE}`);
       const delta = record.calls.indexOf(
-        `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+        `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
       );
       const mounted = record.calls.indexOf(`overlayAttach:${DEVBOX_WORKDIR}:2`);
       expect(base).toBeGreaterThan(-1);
@@ -816,12 +853,12 @@ describe('attach — the mount must be observed to have landed', () => {
         mounts: mountsAfterAttach(calls),
         calls,
       });
-      record.objects.set(deltaObjectKey(CHAIN_ID), DELTA_BYTES);
+      record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
       expect((await attachOf(record)).kind).toBe('attached');
       // Adopted means COMPOSED: the orphan delta becomes a layer under the fresh
       // upper, exactly like a referenced one.
       expect(record.calls).toContain(
-        `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+        `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
       );
       expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
     });
@@ -876,7 +913,7 @@ describe('attach — the mount must be observed to have landed', () => {
       expect(outcome.reason).toContain('not an overlay mount');
       // The delta the chain already holds is untouched: nothing was archived
       // over it, so the content the attach failed to restore is still there.
-      expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+      expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
     });
 
@@ -947,7 +984,7 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('a missing base object refuses the start loudly', async () => {
     const record = harness({ state: chainState() });
-    record.objects.delete(baseObjectKey(CHAIN_ID));
+    record.objects.delete(baseObjectKey(STORE_ROOT, CHAIN_ID));
     await expect(attachOf(record)).rejects.toThrow(/base.*missing|Refusing to start/i);
   });
 
@@ -969,13 +1006,13 @@ describe('attach — the mount must be observed to have landed', () => {
       const record = harness({
         state: chainState(), mounts: mountsAfterAttach(calls), calls,
       });
-      record.objects.set(deltaObjectKey(CHAIN_ID), drifted);
+      record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), drifted);
       // A DIFFERENT archive, which is what a crash between the PUT and the state
       // write leaves: another size and another identity under the same key.
-      const landed = digestOf(deltaObjectKey(CHAIN_ID), drifted);
-      const landedVersion = versionOf(deltaObjectKey(CHAIN_ID), drifted);
-      record.digests.set(deltaObjectKey(CHAIN_ID), landed);
-      record.versions.set(deltaObjectKey(CHAIN_ID), landedVersion);
+      const landed = digestOf(deltaObjectKey(STORE_ROOT, CHAIN_ID), drifted);
+      const landedVersion = versionOf(deltaObjectKey(STORE_ROOT, CHAIN_ID), drifted);
+      record.digests.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), landed);
+      record.versions.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), landedVersion);
 
       const outcome = await attachOf(record);
 
@@ -993,7 +1030,7 @@ describe('attach — the mount must be observed to have landed', () => {
     // content loss, not a stale number. Serving the base alone would hand the
     // caller a workspace missing everything since it.
     const record = harness({ state: chainState() });
-    record.objects.delete(deltaObjectKey(CHAIN_ID));
+    record.objects.delete(deltaObjectKey(STORE_ROOT, CHAIN_ID));
     await expect(attachOf(record)).rejects.toThrow(/delta archive is missing/);
   });
 
@@ -1103,7 +1140,7 @@ describe('attach — the mount must be observed to have landed', () => {
 
 describe('a wake whose upper already holds this delta', () => {
   const stampFor = (chainId = CHAIN_ID, bytes = DELTA_BYTES): string =>
-    `${chainId}:${bytes}:${versionOf(deltaObjectKey(chainId), bytes)}`;
+    `${chainId}:${bytes}:${versionOf(deltaObjectKey(STORE_ROOT, chainId), bytes)}`;
 
   test('mounts the base alone over the upper it kept', async () => {
     const calls: string[] = [];
@@ -1150,7 +1187,7 @@ describe('a wake whose upper already holds this delta', () => {
 
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.calls).toContain(
-      `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+      `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
     );
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
   });
@@ -1187,7 +1224,7 @@ describe('a wake whose container instance changed', () => {
     // What replaced it: the delta mounted at its own generation's layer path,
     // and an overlay composed over two lowers.
     expect(record.calls).toContain(
-      `mountLayer:${CHAIN_STORE_MOUNT}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
+      `mountLayer:${CHAIN_STORE_MOUNT}/${CHAIN_ID}/delta.sqsh:${deltaLayerMountPoint(CHAIN_ID)}`,
     );
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:2`);
     expect(outcome.detail).toContain('base+delta layered');
@@ -1215,7 +1252,7 @@ describe('a wake whose container instance changed', () => {
     const mounts = [
       'sysfs /sys sysfs rw,relatime 0 0',
       `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw 0 0`,
-      `${deltaObjectKey(CHAIN_ID)} ${deltaLayerMountPoint(CHAIN_ID)} fuse.squashfuse ro 0 0`,
+      `${deltaObjectKey(STORE_ROOT, CHAIN_ID)} ${deltaLayerMountPoint(CHAIN_ID)} fuse.squashfuse ro 0 0`,
     ].join(`\n`);
     expect(deltaLayerServed(mounts, CHAIN_ID)).toBe(true);
     // A DIFFERENT generation's layer is not this generation's changed set, and
@@ -1246,8 +1283,8 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     return [
       'sysfs /sys sysfs rw,relatime 0 0',
       `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
-      `${baseObjectKey(chainId)} ${LOWER_BASE} fuse.squashfuse ro 0 0`,
-      `${deltaObjectKey(chainId)} ${deltaLayerMountPoint(chainId)} fuse.squashfuse ro 0 0`,
+      `${baseObjectKey(STORE_ROOT, chainId)} ${LOWER_BASE} fuse.squashfuse ro 0 0`,
+      `${deltaObjectKey(STORE_ROOT, chainId)} ${deltaLayerMountPoint(chainId)} fuse.squashfuse ro 0 0`,
     ].join('\n');
   }
 
@@ -1271,7 +1308,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     expect(record.state?.delta).toBeUndefined();
     // And the delta object of the generation being served is never rewritten,
     // which is the loss this rule exists to prevent.
-    expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
     // The superseded generation is RETAINED as the fallback rather than dropped:
     // its layers are what the live overlay is still serving from.
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
@@ -1300,7 +1337,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     // than on the generation would rebase here forever.
     expect(record.state?.base.id).toBe(collapsed);
     expect(record.state?.delta).toBeDefined();
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(collapsed)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, collapsed)}`);
   });
 
   test('an ORPHAN delta the record does not name still forces the collapse', async () => {
@@ -1314,13 +1351,13 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
-    record.objects.set(deltaObjectKey(CHAIN_ID), DELTA_BYTES);
+    record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
 
     const outcome = await checkpointOf(record, 'tick');
 
     expect(outcome.kind).toBe('committed');
     expect(record.state?.base.id).not.toBe(CHAIN_ID);
-    expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).not.toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
   });
 
   test('a wake that wrote nothing pays for nothing', async () => {
@@ -1352,14 +1389,14 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
       mounts: MOUNTED,
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-publication',
-      seedStamp: `${CHAIN_ID}:${DELTA_BYTES}:${versionOf(deltaObjectKey(CHAIN_ID), DELTA_BYTES)}`,
+      seedStamp: `${CHAIN_ID}:${DELTA_BYTES}:${versionOf(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES)}`,
     });
 
     const outcome = await checkpointOf(record, 'tick');
 
     expect(outcome.kind).toBe('committed');
     expect(record.state?.base.id).toBe(CHAIN_ID);
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
     expect(record.calls.some(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toBe(true);
   });
 });
@@ -1377,14 +1414,15 @@ describe('an attach that cannot see or cannot release says so', () => {
       const record = harness({
         state: chainState(),
         mounts: NOT_MOUNTED,
-        missingPaths: [`${CHAIN_STORE_MOUNT}/data.sqsh`],
+        missingPaths: [`${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh`],
       });
 
       const refusal = attachOf(record);
 
-      await expect(refusal).rejects.toThrow(
-        new RegExp(`does not expose ${CHAIN_STORE_MOUNT}/data.sqsh after ${String(LAYER_VISIBILITY_PROBES)} probes`),
-      );
+      await expect(refusal).rejects.toThrow(new RegExp(
+        `does not expose ${CHAIN_STORE_MOUNT}/${CHAIN_ID}/data.sqsh `
+        + `after ${String(LAYER_VISIBILITY_PROBES)} probes`,
+      ));
       // WHAT THE SUBTREE DOES HOLD travels with the refusal: an operator reading
       // it can tell "the mount is empty" from "the mount holds another
       // generation's archives" without a second deployment.
@@ -1488,7 +1526,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(squashed).toStartWith(`makeSquashfs:${DEVBOX_WORKDIR}:`);
     expect(squashed).not.toBe(`makeSquashfs:${DEVBOX_WORKDIR}:0`);
     expect(record.calls.some(
-      call => call === `publishArchive:${baseObjectKey(record.state!.base.id)}`,
+      call => call === `publishArchive:${baseObjectKey(STORE_ROOT, record.state!.base.id)}`,
     )).toBe(true);
     expect(record.state?.delta).toBeUndefined();
   });
@@ -1595,8 +1633,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.state?.orphans).toBeUndefined();
       // NOTHING was deleted, so both generations are whole and both are named.
       expect(record.calls.filter(c => c.startsWith('deleteObjects'))).toEqual([]);
-      expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
-      expect(record.objects.has(baseObjectKey(record.state!.base.id))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, record.state!.base.id))).toBe(true);
     });
 
   test('a second unproven publication orphans the UNPROVEN generation, never the proven one',
@@ -1628,10 +1666,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(named).toBeGreaterThan(-1);
       expect(named).toBeLessThan(deleted);
       expect(record.state?.orphans).toBeUndefined();
-      expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(false);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(false);
       // The proven fallback and the new generation both survived it.
-      expect(record.objects.has(baseObjectKey(FALLBACK_ID))).toBe(true);
-      expect(record.objects.has(baseObjectKey(record.state!.base.id))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, FALLBACK_ID))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, record.state!.base.id))).toBe(true);
     });
 
   test('a crash before the sweep leaves an id the NEXT checkpoint cleans up', async () => {
@@ -1642,13 +1680,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       state: chainState({ orphans: [stranded] }),
       mounts: MOUNTED,
     });
-    record.objects.set(baseObjectKey(stranded), 4_096);
+    record.objects.set(baseObjectKey(STORE_ROOT, stranded), 4_096);
     await checkpointOf(record, 'quiesce');
 
-    expect(record.objects.has(baseObjectKey(stranded))).toBe(false);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, stranded))).toBe(false);
     expect(record.state?.orphans).toBeUndefined();
     // The live generation survived the sweep that removed the stranded one.
-    expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
   });
 
   test('a sweep that fails AFTER publication never restores the superseded pointer',
@@ -1684,13 +1722,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const committed = record.state!;
       expect(committed.rev).toBe(2);
       expect(committed.base.id).not.toBe(CHAIN_ID);
-      expect(record.objects.has(baseObjectKey(committed.base.id))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, committed.base.id))).toBe(true);
       // The failure is stamped on the COMMITTED revision, and the generation
       // the sweep could not delete is still named, so the next commit retries
       // it and nothing reachable was dropped.
       expect(committed.lastFailure?.reason).toContain('store unreachable');
       expect(committed.orphans).toEqual([CHAIN_ID]);
-      expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
       // No write went backwards: every record this checkpoint wrote names the
       // new generation.
       const writes = record.calls.filter(call => call.startsWith('writeState:'));
@@ -1739,8 +1777,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(committed.lastFailure).toBeUndefined();
       expect(committed.orphans).toEqual([CHAIN_ID]);
       // Everything either record names is still reachable.
-      expect(record.objects.has(baseObjectKey(committed.base.id))).toBe(true);
-      expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, committed.base.id))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
       // TWO writes, both naming the new generation, and no third attempt that
       // could have carried the pre-commit record.
       const writes = record.calls.filter(call => call.startsWith('writeState:'));
@@ -1840,10 +1878,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // See the commit path: applying them to one side only delivered no saving
       // and made the rebase ratio compare incommensurable quantities.
       expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
-      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
       // The base is untouched: same id, same bytes, and nothing published to it.
       expect(record.state?.base).toEqual(baseLayer(CHAIN_ID, BASE_BYTES));
-      expect(record.calls).not.toContain(`publishArchive:${baseObjectKey(CHAIN_ID)}`);
+      expect(record.calls).not.toContain(`publishArchive:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
     });
 
   // ── the byte plane ────────────────────────────────────────────────────────
@@ -1882,8 +1920,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(outcome.movedBytes).toBe(DELTA_BYTES);
     // It moved the bytes the way it now moves them: the container copied the
     // archive onto a writable mount, and this side read the store's metadata.
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
-    expect(record.calls).toContain(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
   });
 
   test('a checkpoint publishes through a WRITABLE mount and never through the isolate',
@@ -1897,12 +1935,12 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // writable for one publication, and the SDK refuses one binding mounted
       // twice under different settings: measured live, the second checkpoint
       // after a wake (runs e2e20260902032038, e2e20260902032318).
-      expect(record.calls).toContain(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}`);
+      expect(record.calls).toContain(`mountStore:${CHAIN_STORE_MOUNT}`);
       // The archive went in through that mount, under the key the record names.
-      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
-      expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
+      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+      expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
       // And the ONLY thing this side learned about it is metadata.
-      expect(record.calls).toContain(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
+      expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
     });
 
   test('the flush happens through the held mount, before the record',
@@ -1918,9 +1956,9 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
-      const mounted = record.calls.indexOf(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}`);
-      const flushed = record.calls.indexOf(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
-      const read = record.calls.indexOf(`objectFacts:${deltaObjectKey(CHAIN_ID)}`);
+      const mounted = record.calls.indexOf(`mountStore:${CHAIN_STORE_MOUNT}`);
+      const flushed = record.calls.indexOf(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+      const read = record.calls.indexOf(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
       const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
       expect(mounted).toBeGreaterThan(-1);
       expect(mounted).toBeLessThan(flushed);
@@ -1943,7 +1981,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });
     expect((await checkpointOf(record, 'tick')).kind).toBe('failed');
     // Nothing landed, and the record still describes what the box can attach.
-    expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
+    expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
     expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
   });
 
@@ -2000,7 +2038,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
     expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
     // What it DID ask the store for: metadata, and only metadata.
-    expect(record.calls).toContain(`objectFacts:${baseObjectKey(CHAIN_ID)}`);
+    expect(record.calls).toContain(`objectFacts:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
     // The layers were mounted, which is where the bytes come from.
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
   });
@@ -2037,7 +2075,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // with the SDK's own sentence — so these assertions are the reader's view
       // of a constraint the fake would have failed on.
       for (const mount of mounts) {
-        const at = mount.split(':')[2]!;
+        const at = mount.split(':')[1]!;
         expect(at).toBe(CHAIN_STORE_MOUNT);
       }
       // And a wake that re-attaches releases the store mount first, so a new
@@ -2056,7 +2094,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
   test('CRASH ORDERING: the state write lands before any cleanup', async () => {
     const record = harness({ state: chainState(), mounts: MOUNTED });
     await checkpointOf(record, 'tick');
-    const put = record.calls.indexOf(`publishArchive:${deltaObjectKey(CHAIN_ID)}`);
+    const put = record.calls.indexOf(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
     const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
     const cleaned = record.calls.lastIndexOf('exec:rm');
     // PUT, then record, then clean up. A crash between the PUT and the record
@@ -2156,7 +2194,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
       // The record agrees with the object, which is the whole point.
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, 702791680));
-      expect(record.objects.get(deltaObjectKey(CHAIN_ID))).toBe(702791680);
+      expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(702791680);
       // EVERY STATE SIZE COMES FROM A COMPLETED UPLOAD. There are four writers
       // of a size into the record — the commit's own layer, the extract path's
       // stored base, and the adoption below — and each one's provenance is an R2
@@ -2170,8 +2208,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const woken = harness({
         state: record.state, mounts: mountsAfterAttach(wokenCalls), calls: wokenCalls,
       });
-      woken.objects.set(baseObjectKey(CHAIN_ID), BASE_BYTES);
-      woken.objects.set(deltaObjectKey(CHAIN_ID), 702791680);
+      woken.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES);
+      woken.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), 702791680);
       const attached = await snapshotChainStorage(woken.ports).attach();
       expect(attached.kind).toBe('attached');
     });
@@ -2202,8 +2240,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const woken = harness({
         state: record.state, mounts: mountsAfterAttach(wokenCalls), calls: wokenCalls,
       });
-      woken.objects.set(baseObjectKey(CHAIN_ID), BASE_BYTES);
-      woken.objects.set(deltaObjectKey(CHAIN_ID), landed);
+      woken.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES);
+      woken.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), landed);
       expect((await snapshotChainStorage(woken.ports).attach()).kind).toBe('attached');
     });
 
@@ -2396,7 +2434,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mode: 'extract', base: { id: EXTRACT_ID, bytes: 1 }, delta: undefined,
       }),
     });
-    record.objects.set(baseObjectKey(EXTRACT_ID), 1);
+    record.objects.set(baseObjectKey(STORE_ROOT, EXTRACT_ID), 1);
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('committed');
     expect(record.calls.findIndex(call => call.startsWith('writeState:'))).toBeGreaterThan(-1);
@@ -2404,7 +2442,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     // nothing is deleted here and a crash leaves two archives, never zero.
     expect(record.state?.fallback?.base).toEqual(baseLayer(EXTRACT_ID, 1));
     expect(record.calls.filter(call => call.startsWith('deleteObjects:'))).toEqual([]);
-    expect(record.objects.has(baseObjectKey(EXTRACT_ID))).toBe(true);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, EXTRACT_ID))).toBe(true);
   });
 });
 
@@ -2420,8 +2458,8 @@ describe('discard — objects before the pointer', () => {
     // nothing would delete them.
     expect(deleted).toBeLessThan(cleared);
     expect(record.calls).toContain('deleteObjects:3');
-    for (const key of [baseObjectKey(CHAIN_ID), deltaObjectKey(CHAIN_ID),
-      metadataObjectKey(CHAIN_ID)]) {
+    for (const key of [baseObjectKey(STORE_ROOT, CHAIN_ID), deltaObjectKey(STORE_ROOT, CHAIN_ID),
+      metadataObjectKey(STORE_ROOT, CHAIN_ID)]) {
       expect(record.objects.has(key)).toBe(false);
     }
     expect(record.state).toBeNull();
@@ -2462,9 +2500,9 @@ describe('discard sweeps every generation the record still names', () => {
     const stranded = 'a1b2c3d4-0000-4000-8000-0000000000ff';
     const record = harness({ state: chainState({ orphans: [stranded] }) });
     for (const id of [CHAIN_ID, stranded]) {
-      record.objects.set(baseObjectKey(id), BASE_BYTES);
-      record.objects.set(deltaObjectKey(id), DELTA_BYTES);
-      record.objects.set(metadataObjectKey(id), 64);
+      record.objects.set(baseObjectKey(STORE_ROOT, id), BASE_BYTES);
+      record.objects.set(deltaObjectKey(STORE_ROOT, id), DELTA_BYTES);
+      record.objects.set(metadataObjectKey(STORE_ROOT, id), 64);
     }
 
     await snapshotChainStorage(record.ports).discard();
@@ -2474,7 +2512,7 @@ describe('discard sweeps every generation the record still names', () => {
     expect(deleted).toBeLessThan(cleared);
     expect(record.calls).toContain('deleteObjects:6');
     for (const id of [CHAIN_ID, stranded]) {
-      for (const key of [baseObjectKey(id), deltaObjectKey(id), metadataObjectKey(id)]) {
+      for (const key of [baseObjectKey(STORE_ROOT, id), deltaObjectKey(STORE_ROOT, id), metadataObjectKey(STORE_ROOT, id)]) {
         expect(record.objects.has(key)).toBe(false);
       }
     }
@@ -2856,20 +2894,20 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // entry; the publication then asked for the same binding WRITABLE and was
       // refused.
       //
-      // The registry below is SHARED across the three harnesses, because it
-      // belongs to the SDK: one per container, whichever isolate asks. Under
-      // the two-setting design this is exactly the sequence the live run took,
-      // and the second checkpoint fails with that same sentence; under the
-      // one-mount design every mount is the same prefix at the same setting,
-      // so it is admitted, and the commit lands.
+      // The registry AND the container's mount table are both SHARED across the
+      // three harnesses, because neither belongs to the isolate: the SDK keeps
+      // one registry per container, and `/proc/mounts` is the container's own
+      // file. A stop and a wake are two isolates on one container, which is
+      // exactly the sequence that killed the live run.
       const registry: SdkMountRegistry = {};
+      const container: ContainerMounts = {};
       const firstCalls: string[] = [];
       const first = harness({
         state: chainState({ upperMark: 'stale', at: 1 }),
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
         calls: firstCalls,
-        registry,
+        registry, mountsTable: container,
       });
       expect((await checkpointOf(first, 'tick')).kind).toBe('committed');
 
@@ -2879,10 +2917,10 @@ describe('the binding has ONE mount for the container\'s life', () => {
       const wakeCalls: string[] = [];
       const woken = harness({
         state: first.state, mounts: mountsAfterAttach(wakeCalls), calls: wakeCalls,
-        registry,
+        registry, mountsTable: container,
       });
-      woken.objects.set(baseObjectKey(CHAIN_ID), BASE_BYTES);
-      woken.objects.set(deltaObjectKey(CHAIN_ID), DELTA_BYTES);
+      woken.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES);
+      woken.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
       expect((await attachOf(woken)).kind).toBe('attached');
 
       // THE SECOND CHECKPOINT, and it commits. Under the two-setting design it
@@ -2894,7 +2932,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
         state: { ...first.state!, upperMark: 'stale-again', at: 1 },
         mounts: MOUNTED,
         calls: secondCalls,
-        registry,
+        registry, mountsTable: container,
         upperMark: '8:4096:1700000000',
         now: 20 * INTERVAL_MS,
       });
@@ -2906,11 +2944,65 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // the wake.
       for (const call of [...firstCalls, ...wakeCalls, ...secondCalls]) {
         if (!call.startsWith('mountStore:')) continue;
-        const at = call.split(':')[2]!;
+        const at = call.split(':')[1]!;
         expect(at).toBe(CHAIN_STORE_MOUNT);
       }
       // Both publications landed, and the wake's attach proved the first one.
-      expect(second.objects.get(deltaObjectKey(CHAIN_ID))).toBe(DELTA_BYTES);
+      expect(second.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
+    });
+
+  test('a REBASE across a container life mounts nothing new, and the fold commits',
+    async () => {
+      // THE LATENT HAZARD THE PER-BOX ROOT CLOSES. A rebase mints a NEW
+      // generation id while the old generation's layers are still mounted as the
+      // live overlay's lowers — squashfuse reads them through the store mount, so
+      // that mount cannot be released. Under a per-GENERATION prefix the fold's
+      // publication needed a different subtree at the same path, which the SDK
+      // refuses ('already mounted at … with a different prefix'), and the box
+      // could never collapse its chain again. Under the box's own root the fold
+      // writes through the mount it already holds.
+      const registry: SdkMountRegistry = {};
+      const container: ContainerMounts = {};
+      const wakeCalls: string[] = [];
+      const woken = harness({
+        state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
+        mounts: mountsAfterAttach(wakeCalls),
+        calls: wakeCalls,
+        registry, mountsTable: container,
+      });
+      expect((await attachOf(woken)).kind).toBe('attached');
+      const mountsAfterWake = wakeCalls.filter(call => call.startsWith('mountStore:')).length;
+
+      // The upper is NOT the whole changed set — the delta is a layer — so this
+      // commit collapses the chain onto a fresh generation.
+      const foldCalls: string[] = [];
+      const fold = harness({
+        state: woken.state,
+        // The composed shape the wake left: an overlay over the base and this
+        // generation's own delta layer, which is what makes the upper less than
+        // the whole changed set and forces the collapse.
+        mounts: [
+          'sysfs /sys sysfs rw,relatime 0 0',
+          `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+          `${baseObjectKey(STORE_ROOT, CHAIN_ID)} ${LOWER_BASE} fuse.squashfuse ro 0 0`,
+          `${deltaObjectKey(STORE_ROOT, CHAIN_ID)} ${deltaLayerMountPoint(CHAIN_ID)} fuse.squashfuse ro 0 0`,
+        ].join('\n'),
+        calls: foldCalls,
+        registry, mountsTable: container,
+        upperMark: 'written-since-the-wake',
+        now: 20 * INTERVAL_MS,
+      });
+      const folded = await checkpointOf(fold, 'quiesce');
+
+      expect(folded.kind).toBe('committed');
+      // A FRESH generation, published through the mount the wake already held.
+      expect(fold.state?.base.id).not.toBe(CHAIN_ID);
+      expect(foldCalls.filter(call => call.startsWith('mountStore:'))).toEqual([]);
+      expect(mountsAfterWake).toBe(1);
+      // And the registry still holds exactly the box's root, unchanged by a
+      // generation that did not exist when it was mounted.
+      expect(registry.held).toEqual({ prefix: `${STORE_ROOT}/`, readOnly: false });
+      expect(fold.objects.has(baseObjectKey(STORE_ROOT, fold.state!.base.id))).toBe(true);
     });
 
   test('a generation that changes releases the one mount before the next takes it',
@@ -2927,7 +3019,9 @@ describe('the binding has ONE mount for the container\'s life', () => {
         registry,
       });
       expect((await attachOf(first)).kind).toBe('attached');
-      expect(registry.held).toEqual({ prefix: `backups/${CHAIN_ID}/`, readOnly: false });
+      // THE BOX'S ROOT, not a generation's: that is what lets one mount serve
+      // every generation this box will publish, a rebase included.
+      expect(registry.held).toEqual({ prefix: `${STORE_ROOT}/`, readOnly: false });
 
       const secondCalls: string[] = [];
       const second = harness({
@@ -2969,7 +3063,7 @@ describe('the generation lifecycle, against ONE box', () => {
     const rebased = record.state!.base.id;
     expect(rebased).not.toBe(CHAIN_ID);
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
-    expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
 
     // The container is replaced, so the next start attaches for real. THAT is
     // the proof, and it is what retires the fallback — named, not deleted.
@@ -2978,18 +3072,18 @@ describe('the generation lifecycle, against ONE box', () => {
     expect(record.state?.base.id).toBe(rebased);
     expect(record.state?.fallback).toBeUndefined();
     expect(record.state?.orphans).toEqual([CHAIN_ID]);
-    expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
 
     // The next publication is what finally deletes it, through the sweep that
     // has always run there.
     record.upperMark = 'restarted-and-wrote';
     expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
     expect(record.state?.orphans).toBeUndefined();
-    expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(false);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(false);
     // One generation left, and it is the one an attach has served.
     expect(record.state?.base.id).toBe(rebased);
     expect(record.state?.fallback).toBeUndefined();
-    expect(record.objects.has(baseObjectKey(rebased))).toBe(true);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, rebased))).toBe(true);
   });
 });
 
@@ -3055,7 +3149,7 @@ describe('the retained fallback', () => {
     // the sweep belongs to the next commit and is re-runnable.
     expect(record.state?.orphans).toEqual([FALLBACK_ID]);
     expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
-    expect(record.objects.has(baseObjectKey(FALLBACK_ID))).toBe(true);
+    expect(record.objects.has(baseObjectKey(STORE_ROOT, FALLBACK_ID))).toBe(true);
   });
 
   test('survives an already-attached container, which proves nothing', async () => {
@@ -3093,7 +3187,7 @@ describe('a restore that refuses the newest generation recovers from the older o
       // this was terminal: the record named one generation, the sweep had
       // already deleted the one before it, and the only advice on offer was to
       // discard the box's state — which is the whole workspace.
-      record.objects.delete(baseObjectKey(CHAIN_ID));
+      record.objects.delete(baseObjectKey(STORE_ROOT, CHAIN_ID));
 
       const outcome = await attachOf(record);
 
@@ -3101,8 +3195,12 @@ describe('a restore that refuses the newest generation recovers from the older o
       expect(outcome.detail).toContain('recovered');
       // The FALLBACK's layers are what mounted, and the refused generation's
       // store subtree was never even mounted.
-      expect(record.calls).toContain(`mountStore:${FALLBACK_ID}:${CHAIN_STORE_MOUNT}`);
-      expect(record.calls).not.toContain(`mountStore:${CHAIN_ID}:${CHAIN_STORE_MOUNT}`);
+      // ONE mount, whichever generation it ends up serving: the recovery
+      // mounts the box's root once and reads the fallback's layers through it.
+      expect(record.calls.filter(call => call.startsWith('mountStore:')))
+        .toEqual([`mountStore:${CHAIN_STORE_MOUNT}`]);
+      // And what it READ is the fallback's objects, never the refused one's.
+      expect(record.calls).toContain(`awaitLayer:${CHAIN_STORE_MOUNT}/${FALLBACK_ID}/data.sqsh`);
       // PROMOTED BEFORE SERVED: a crash after the mount must never leave the box
       // running on these bytes under a record that still names what it refused,
       // because the next checkpoint would write a delta into a generation whose
@@ -3137,13 +3235,13 @@ describe('a restore that refuses the newest generation recovers from the older o
       // with the delta is deliberate — see `probe` — and it stays a refusal.
       const calls: string[] = [];
       const record = harness({ state: withFallback(), mounts: mountsAfterAttach(calls), calls });
-      record.objects.set(baseObjectKey(CHAIN_ID), BASE_BYTES + 4_096);
+      record.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES + 4_096);
 
       expect((await attachOf(record)).detail).toContain('recovered');
 
       expect(record.state?.base.id).toBe(FALLBACK_ID);
       expect(record.state?.lastFailure?.reason).toContain('state declares');
-      expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
     });
 
   test('a base that will not read is that generation own failure, so the fallback serves',
@@ -3177,8 +3275,8 @@ describe('a restore that refuses the newest generation recovers from the older o
 
   test('both generations unsound is an honest failure that deletes neither', async () => {
     const record = harness({ state: withFallback(), mounts: NOT_MOUNTED });
-    record.objects.delete(baseObjectKey(CHAIN_ID));
-    record.objects.delete(baseObjectKey(FALLBACK_ID));
+    record.objects.delete(baseObjectKey(STORE_ROOT, CHAIN_ID));
+    record.objects.delete(baseObjectKey(STORE_ROOT, FALLBACK_ID));
 
     const failure = attachOf(record);
     await expect(failure).rejects.toThrow(/was refused at attach/);
@@ -3195,7 +3293,7 @@ describe('a restore that refuses the newest generation recovers from the older o
   test('a box with no retained generation still refuses rather than serving an empty tree',
     async () => {
       const record = harness({ state: chainState(), mounts: NOT_MOUNTED });
-      record.objects.delete(baseObjectKey(CHAIN_ID));
+      record.objects.delete(baseObjectKey(STORE_ROOT, CHAIN_ID));
 
       await expect(attachOf(record)).rejects.toThrow(/names no earlier generation/);
 
@@ -3207,7 +3305,7 @@ describe('a restore that refuses the newest generation recovers from the older o
     // anything, so its failure is pre-commit and travels: the box does not
     // start, and the record still names exactly what it named before.
     const record = harness({ state: withFallback(), mounts: NOT_MOUNTED, rejectWrites: [1] });
-    record.objects.delete(baseObjectKey(CHAIN_ID));
+    record.objects.delete(baseObjectKey(STORE_ROOT, CHAIN_ID));
 
     await expect(attachOf(record)).rejects.toThrow(/durable storage unreachable/);
 
@@ -3294,7 +3392,7 @@ describe('an archive replaced at the same length is refused', () => {
   test('the current generation is refused and the retained fallback serves', async () => {
     const calls: string[] = [];
     const record = harness({ state: withFallback(), mounts: mountsAfterAttach(calls), calls });
-    record.digests.set(baseObjectKey(CHAIN_ID), REPLACED_DIGEST);
+    record.digests.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
 
     const outcome = await attachOf(record);
 
@@ -3303,7 +3401,7 @@ describe('an archive replaced at the same length is refused', () => {
     expect(record.state?.lastFailure?.reason).toContain('different archive of the same length');
     // The SIZE never disagreed, so nothing but the digest could have caught it,
     // and nothing was deleted on the way through.
-    expect(record.objects.get(baseObjectKey(CHAIN_ID))).toBe(BASE_BYTES);
+    expect(record.objects.get(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(BASE_BYTES);
     expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
   });
 
@@ -3317,7 +3415,7 @@ describe('an archive replaced at the same length is refused', () => {
       const corrupt = harness({
         state: withFallback(), mounts: mountsAfterAttach(refusing), calls: refusing,
       });
-      corrupt.digests.set(deltaObjectKey(CHAIN_ID), REPLACED_DIGEST);
+      corrupt.digests.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
       expect((await attachOf(corrupt)).detail).toContain('recovered');
       expect(corrupt.state?.lastFailure?.reason).toContain('delta archive');
       expect(corrupt.state?.lastFailure?.reason).toContain('different archive of the same length');
@@ -3327,9 +3425,9 @@ describe('an archive replaced at the same length is refused', () => {
         state: withFallback(), mounts: mountsAfterAttach(adopting), calls: adopting,
       });
       const drifted = DELTA_BYTES + 4_096;
-      superseded.objects.set(deltaObjectKey(CHAIN_ID), drifted);
-      superseded.digests.set(deltaObjectKey(CHAIN_ID), REPLACED_DIGEST);
-      superseded.versions.set(deltaObjectKey(CHAIN_ID), REPLACED_VERSION);
+      superseded.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), drifted);
+      superseded.digests.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
+      superseded.versions.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_VERSION);
 
       const outcome = await attachOf(superseded);
 
@@ -3343,8 +3441,8 @@ describe('an archive replaced at the same length is refused', () => {
   test('both generations replaced at the same length fails honestly and deletes neither',
     async () => {
       const record = harness({ state: withFallback(), mounts: NOT_MOUNTED });
-      record.digests.set(baseObjectKey(CHAIN_ID), REPLACED_DIGEST);
-      record.digests.set(baseObjectKey(FALLBACK_ID), REPLACED_DIGEST);
+      record.digests.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
+      record.digests.set(baseObjectKey(STORE_ROOT, FALLBACK_ID), REPLACED_DIGEST);
 
       const failure = attachOf(record);
       await expect(failure).rejects.toThrow(/different archive of the same length/);
@@ -3354,8 +3452,8 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.state?.base.id).toBe(FALLBACK_ID);
       expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
       expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
-      expect(record.objects.has(baseObjectKey(CHAIN_ID))).toBe(true);
-      expect(record.objects.has(baseObjectKey(FALLBACK_ID))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, FALLBACK_ID))).toBe(true);
     });
 
   test('a record written before layer digests existed still attaches', async () => {
@@ -3373,8 +3471,8 @@ describe('an archive replaced at the same length is refused', () => {
       calls,
     });
     // The store has answers; the record has neither. Nothing to compare.
-    record.digests.set(baseObjectKey(CHAIN_ID), REPLACED_DIGEST);
-    record.versions.set(baseObjectKey(CHAIN_ID), REPLACED_VERSION);
+    record.digests.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
+    record.versions.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_VERSION);
 
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.state?.lastFailure).toBeUndefined();
@@ -3399,7 +3497,7 @@ describe('an archive replaced at the same length is refused', () => {
       });
       // The store holds the recorded length, no digest of its own, and a version
       // from a different upload.
-      record.versions.set(baseObjectKey(CHAIN_ID), REPLACED_VERSION);
+      record.versions.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_VERSION);
 
       const outcome = await attachOf(record);
 
@@ -3409,7 +3507,7 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.state?.lastFailure?.reason).toContain('no checksum');
       // Size never disagreed and no digest existed on either side, so the
       // version is the only thing that could have caught it.
-      expect(record.objects.get(baseObjectKey(CHAIN_ID))).toBe(BASE_BYTES);
+      expect(record.objects.get(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(BASE_BYTES);
       expect(record.calls.filter(call => call.startsWith('deleteObjects'))).toEqual([]);
     });
 
@@ -3433,7 +3531,7 @@ describe('an archive replaced at the same length is refused', () => {
 
       expect(record.state?.lastFailure).toBeUndefined();
       expect(record.state?.base.objectVersion)
-        .toBe(versionOf(baseObjectKey(CHAIN_ID), BASE_BYTES));
+        .toBe(versionOf(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES));
     });
 
   test('the record carries the digest the upload reported, for the base and for the delta',
@@ -3453,7 +3551,7 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
       // And the store was asked to verify it, which is what makes the pre-attach
       // comparison possible at all.
-      expect(record.digests.get(deltaObjectKey(CHAIN_ID)))
+      expect(record.digests.get(deltaObjectKey(STORE_ROOT, CHAIN_ID)))
         .toBe(record.state?.delta?.digest);
     });
 });

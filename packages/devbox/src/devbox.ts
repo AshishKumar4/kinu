@@ -155,7 +155,7 @@ import {
 } from './incidents';
 import {
   CHAIN_EXCLUDES,
-  assertChainId,
+  chainStoreRoot,
   isOverlayMounted,
   normalizeChainState,
   snapshotChainStorage,
@@ -3617,17 +3617,21 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       },
       exec: async (command) => await this.#rawExec(command),
       containerGeneration: async () => await this.#readBootId(),
-      mountStore: async (chainId, at) => {
-        // ONE MOUNT, ONE SETTING, ONE PREFIX. The SDK admits a second mount of
-        // a binding only at the same prefix with the same setting, so there is
-        // no read access to offer: the prefix — this generation's own subtree —
-        // is the boundary, and a writable mount can only ever create this
-        // chain's own layer names. It carries no credential either: this is the
-        // SDK's R2-binding mount, where the container's s3fs is handed a dummy
-        // password file and a Worker entrypoint resolves the binding for the
-        // intercepted request.
+      storeRoot: () => chainStoreRoot(this.#boxPrefix()),
+      mountStore: async (at) => {
+        // ONE MOUNT, ONE SETTING, ONE PREFIX — and the prefix is the BOX's, not
+        // a generation's. The SDK admits a second mount of a binding only at the
+        // same path, prefix and setting, so a per-generation prefix could not
+        // survive a rebase: the new generation needs a different subtree while
+        // the old layers are still mounted as the live overlay's lowers and
+        // cannot be released. The box's own root absorbs every generation, and
+        // it is the same boundary every other strategy here scopes to.
+        //
+        // It carries no credential either: this is the SDK's R2-binding mount,
+        // where the container's s3fs is handed a dummy password file and a
+        // Worker entrypoint resolves the binding for the intercepted request.
         await this.mountBucket(store.binding, at, {
-          prefix: `/backups/${assertChainId(chainId)}`,
+          prefix: `/${chainStoreRoot(this.#boxPrefix())}`,
           readOnly: false,
         });
       },

@@ -3213,7 +3213,7 @@ async function runControlWitnessCells(
       const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
       const chainId = state.state?.chain?.base?.id ?? '';
       if (chainId.length === 0) throw new Error('/state reported no chain generation');
-      const delta = await headKey(`backups/${chainId}/delta.sqsh`);
+      const delta = await headKey(`${state.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
       const inUpper = await execInBox(
         fixture, box, `test -f ${CHAIN_UPPER_DIR}/${input.markerFile} && echo yes || echo no`,
       );
@@ -3335,7 +3335,7 @@ async function deltaAfterOneChange(
   const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
   const chainId = state.state?.chain?.base?.id ?? '';
   if (chainId.length === 0) throw new Error('/state reported no chain generation');
-  const key = `backups/${chainId}/delta.sqsh`;
+  const key = `${state.storePrefix ?? ''}backups/${chainId}/delta.sqsh`;
   const head = await call(
     fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
   );
@@ -3370,23 +3370,28 @@ export interface ChainArchiveExpectation {
 export function chainArchiveExpectations(
   chainId: string | undefined,
   recordNamesDelta: boolean,
+  /** The box's own store prefix, as `/state` reports it (`boxes/<id>/`). Chain
+   *  generations live under it — one prefix per box rather than a namespace
+   *  shared by every box — so a key built without it names nothing. */
+  storePrefix = '',
 ): ChainArchiveExpectation[] {
   if (chainId === undefined || chainId.length === 0) return [];
+  const root = `${storePrefix}backups/${chainId}`;
   return [
     {
       name: 'the base object the record names exists in the store with non-zero size',
-      key: `backups/${chainId}/data.sqsh`,
+      key: `${root}/data.sqsh`,
       present: true,
     },
     recordNamesDelta
       ? {
           name: 'the delta object the record names exists in the store with non-zero size',
-          key: `backups/${chainId}/delta.sqsh`,
+          key: `${root}/delta.sqsh`,
           present: true,
         }
       : {
           name: 'the store holds no delta for a generation whose record names none',
-          key: `backups/${chainId}/delta.sqsh`,
+          key: `${root}/delta.sqsh`,
           present: false,
         },
   ];
@@ -3719,6 +3724,7 @@ async function measureArm(
     const expectations = chainArchiveExpectations(
       chain?.base?.id,
       chain?.delta !== undefined && chain?.delta !== null,
+      afterWake.storePrefix ?? '',
     );
     if (expectations.length === 0) {
       verify('the record names a generation to check the store against', false, '(no chain generation recorded)');
@@ -3742,7 +3748,9 @@ async function measureArm(
       mode === 'extract'
         ? 'the archive object exists in the store with non-zero size'
         : 'the delta object exists in the store with non-zero size',
-      chainId === undefined ? undefined : `backups/${chainId}/${mode === 'extract' ? 'data.sqsh' : 'delta.sqsh'}`,
+      chainId === undefined
+        ? undefined
+        : `${afterWake.storePrefix ?? ''}backups/${chainId}/${mode === 'extract' ? 'data.sqsh' : 'delta.sqsh'}`,
     );
   }
   result.verifyPassed = result.verifyChecks.every((check) => check.pass);
