@@ -293,7 +293,7 @@ export interface ClassifierDeclaration {
   readonly async: boolean;
 }
 
-/** Where the corpus declares {@link START_GATE_RESTORE}, and the two facts the
+/** Where the corpus declares {@link START_GATE_ARMS}, and the two facts the
  *  container-start rule needs about it. */
 export interface RestoreDeclaration {
   readonly file: string;
@@ -301,6 +301,9 @@ export interface RestoreDeclaration {
   /** Routes its work through {@link START_DEADLINE} — a timer, and therefore a
    *  paper bound where this method runs. */
   readonly deadlineWrapped: boolean;
+  /** Names of {@link CONTAINER_REACHES} calls found inside it. Each one is a hop
+   *  that cannot complete while the gate is held. */
+  readonly reaches: readonly string[];
   /** Names of {@link DO_SIDE_TIMERS} calls found inside it, nested functions
    *  included. Each one is a wait the runtime cannot deliver while the gate is
    *  held. */
@@ -340,7 +343,7 @@ export type HookKind = 'per-request' | 'container-start' | 'recovery';
  */
 const ADMITTED_INIT_AWAITS: readonly string[] = [
   'await this.hostedWorkspace().bundle.session()',
-  'await this.restoreInStartGate()',
+  'await this.#armContainerSchedules()',
 ];
 
 /**
@@ -348,30 +351,46 @@ const ADMITTED_INIT_AWAITS: readonly string[] = [
  * declare it.
  *
  * A SECOND PIN, for the same reason {@link RECOVERY_CLASSIFIER} is one: the
- * admission is only as good as what the admitted call is allowed to do, and two
- * properties of THAT declaration are decidable here with zero type information.
+ * admission is only as good as what the admitted call is allowed to do — and
+ * what this one is allowed to do is now a COUNT rather than a budget. Deployed
+ * probe `gp0902011918` measured the first container command issued inside the
+ * gate never returning: reaching the container asks the SDK for a nested
+ * `blockConcurrencyWhile` the runtime will not grant while the outer one is
+ * held, so the activation ran to the cap `do.block_concurrency.cancel_ms` names
+ * and the object was reset. A
+ * bound on that work was never the missing piece; the work does not belong
+ * there at all. Three properties of the declaration are decidable here with
+ * zero type information:
  *
  *   • It must not route through {@link START_DEADLINE}. That bound is a timer,
  *     and a timer set inside `blockConcurrencyWhile` is not delivered until the
- *     block releases — so inside the gate it is a paper bound. The gate's own
- *     rule already refuses the wrapper beside the storage marker for exactly
- *     this reason; the restore is held to it too.
+ *     block releases — so inside the gate it is a paper bound.
  *   • It must contain no {@link DO_SIDE_TIMERS} call, anywhere inside it,
  *     nested functions included. A sleep in the Durable Object cannot be
  *     delivered while the gate is held, so one on this path does not slow the
- *     restore down — it WEDGES the activation, and the platform answers a wedged
- *     activation by resetting the object. This is the single most valuable thing
- *     this file can check about the new shape, and it is the cheapest.
+ *     hook down — it WEDGES the activation.
+ *   • It must reach NOTHING on the container: no {@link CONTAINER_REACHES} call
+ *     anywhere inside it. That is the property the probe bought, and it is the
+ *     cheapest one this file can hold.
  *
- * WHAT IS NOT CHECKED, stated rather than implied, in the spirit of the blind
- * spots printed on the success path: the restore's total boundedness is NOT
- * decidable here. It rests on the polled budget and on every waiting step doing
- * its waiting inside the container, neither of which a syntactic walk can see
- * past the first call. What this pin buys is that the two ways the property is
- * usually lost — a paper bound, and a sleep — cannot be reintroduced without an
- * edit to this list.
+ * WHAT IS NOT CHECKED, stated rather than implied: that the storage writes it
+ * DOES make are few and small. The devbox package's own restore-out-of-gate
+ * suite counts them against a container fake that answers nothing.
  */
-const START_GATE_RESTORE = 'restoreInStartGate';
+const START_GATE_ARMS = 'armContainerSchedules';
+
+/**
+ * Calls that reach the CONTAINER, pinned by name.
+ *
+ * Any of them inside the admitted arming await is the refuted design coming
+ * back: the SDK routes each through its own control connection, and
+ * establishing that connection asks for a nested `blockConcurrencyWhile`.
+ */
+const CONTAINER_REACHES: readonly string[] = [
+  'exec', 'containerFetch', 'mountBucket', 'unmountBucket', 'startProcess',
+  'killProcess', 'exposePort', 'start', 'startAndWaitForPorts', 'destroy',
+  'createBackup', 'restoreBackup', 'attach', 'checkpoint',
+];
 
 /**
  * Calls that make the Durable Object itself wait on a timer, pinned by name.
@@ -552,7 +571,7 @@ function handedBack(body: SyntaxNode): SyntaxNode[] {
 }
 
 /**
- * The declaration of {@link START_GATE_RESTORE} in one file, if it is here, with
+ * The declaration of {@link START_GATE_ARMS} in one file, if it is here, with
  * the two facts the container-start rule asks about it.
  *
  * A METHOD, not a module function — the mirror of {@link classifierIn}'s choice,
@@ -570,9 +589,10 @@ function restoreIn(parsed: Parsed, file: string): RestoreDeclaration | null {
   let found: RestoreDeclaration | null = null;
   walk(parsed.root, (node) => {
     if (found !== null || node.type !== 'MethodDefinition') return;
-    if (declaredName(node) !== START_GATE_RESTORE) return;
+    if ((declaredName(node) ?? '').replace(/^#/, '') !== START_GATE_ARMS) return;
     const body = blockBodyOf(functionOf(node) ?? node);
     const timers: string[] = [];
+    const reaches: string[] = [];
     let deadlineWrapped = false;
     if (body !== undefined) {
       walk(body, (inner) => {
@@ -580,9 +600,10 @@ function restoreIn(parsed: Parsed, file: string): RestoreDeclaration | null {
         if (called === undefined) return;
         if (called === START_DEADLINE) deadlineWrapped = true;
         else if (DO_SIDE_TIMERS.includes(called)) timers.push(called);
+        else if (CONTAINER_REACHES.includes(called)) reaches.push(called);
       });
     }
-    found = { file, line: parsed.lineAt(node.start), deadlineWrapped, timers };
+    found = { file, line: parsed.lineAt(node.start), deadlineWrapped, timers, reaches };
   });
   return found;
 }
@@ -751,7 +772,7 @@ export function auditFile(
             + 'cancelled at do.block_concurrency.cancel_ms by RESETTING the object, so the '
             + `work needs a budget of its own, carry \`${BOUNDED_STORAGE_MARKER}\` for `
             + `plainly bounded writes to this object own storage, or hold the admitted `
-            + `\`${START_GATE_RESTORE}\` await`);
+            + `\`${START_GATE_ARMS}\` await`);
         }
       }
       if (hook !== 'recovery') continue;
@@ -772,15 +793,26 @@ export function auditFile(
   const restore = restoreIn(parsed, file);
   if (restore !== null && restore.deadlineWrapped) {
     violations.push({
-      file, line: restore.line, owner: START_GATE_RESTORE, member: START_GATE_RESTORE,
+      file, line: restore.line, owner: START_GATE_ARMS, member: START_GATE_ARMS,
       reason: `routes through \`${START_DEADLINE}\` — this method runs inside the init gate, `
         + 'where a timer is not delivered until the block releases, so that bound cannot '
-        + 'fire. Poll the budget instead (gateRestoreSteps)',
+        + 'fire. Poll the budget instead is not the answer either: arm the schedule row and '
+        + 'let a delivered frame do the work',
+    });
+  }
+  for (const reached of restore?.reaches ?? []) {
+    violations.push({
+      file, line: restore?.line ?? 0, owner: START_GATE_ARMS, member: START_GATE_ARMS,
+      reason: `reaches \`${reached}\` — this method runs inside the init gate, and a command `
+        + 'sent to the container from there NEVER RETURNS: the SDK asks for a nested '
+        + 'blockConcurrencyWhile the runtime will not grant while the outer one is held, so the '
+        + 'activation reaches do.block_concurrency.cancel_ms and the object is RESET (measured, '
+        + 'deployed probe gp0902011918). Arm a schedule row and restore on a delivered frame',
     });
   }
   for (const timer of restore?.timers ?? []) {
     violations.push({
-      file, line: restore?.line ?? 0, owner: START_GATE_RESTORE, member: START_GATE_RESTORE,
+      file, line: restore?.line ?? 0, owner: START_GATE_ARMS, member: START_GATE_ARMS,
       reason: `waits on \`${timer}\` — a Durable Object timer is not delivered while the init `
         + 'gate is held, so this does not slow the restore down, it WEDGES the activation and '
         + 'the platform answers by resetting the object. Wait inside the container, in one '
@@ -810,7 +842,7 @@ export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
     // declares none of them is not parsed. The classifier's own module is in the
     // set because its declaration is half of the recovery rule.
     if (!text.includes('onStart') && !RECOVERY_HOOKS.some((name) => text.includes(name))
-      && !text.includes(RECOVERY_CLASSIFIER) && !text.includes(START_GATE_RESTORE)) continue;
+      && !text.includes(RECOVERY_CLASSIFIER) && !text.includes(START_GATE_ARMS)) continue;
     const one = auditFile(file, text, lineage);
     inspected.push(...one.inspected);
     violations.push(...one.violations);
@@ -866,7 +898,7 @@ if (import.meta.main) {
   // would admit a call that cannot happen — and leave the gate looking green
   // while nothing at all was checked about the restore.
   if (restore === null) {
-    problems.push(`no source declares \`${START_GATE_RESTORE}\` — the container-start gate's `
+    problems.push(`no source declares \`${START_GATE_ARMS}\` — the container-start gate's `
       + 'admitted await is pinned to a name that no longer exists');
   }
   // The sink rule's other half, and the same argument the classifier pin makes:
@@ -907,12 +939,12 @@ if (import.meta.main) {
       + '\n  model under a name not on the list is ungoverned — and the recovery hooks are exempt'
       + ' from that rule outright, because their sanctioned answer hands a re-drive (which may'
       + '\n  reach the model) to a detached durable carrier'
-      + `;\n  what \`${START_GATE_RESTORE}\``
+      + `;\n  what \`${START_GATE_ARMS}\``
       + ` (${restore?.file ?? '(unknown)'}:${restore?.line ?? 0}) CALLS: this gate proves it`
-      + ' holds no paper bound and sleeps on no Durable Object timer, which are the two ways'
-      + '\n  the in-gate restore loses its bound in practice — but its TOTAL boundedness rests'
-      + ' on the polled budget and on every waiting step waiting inside the container, and'
-      + '\n  neither is decidable from here. Those are held by the devbox package\'s own tests'
+      + ' reaches no container, holds no paper bound and sleeps on no Durable Object timer —'
+      + '\n  the three ways an activation stops completing. What it does NOT prove is that the'
+      + ' storage writes it does make are few and small; the devbox package\'s own'
+      + '\n  restore-out-of-gate suite counts them against a container fake that answers nothing'
       + (vendor.length > 0
         ? `;\n  the startup of vendor DO classes this repo re-exports (${vendor.join(', ')})`
         : ''),
@@ -928,7 +960,8 @@ if (import.meta.main) {
     + '\nPer-request hook: preconditions that need I/O belong on the turn path'
     + '\n(ActorAgent.beforeTurn); recovery work that must reach the model is detached.'
     + `\nContainer-start hook: return \`${START_DEADLINE}(...)\` so the work is bounded, or hold`
-    + `\nthe admitted \`await this.${START_GATE_RESTORE}()\` and bound it by polling.`
+    + `\nthe admitted \`await this.#${START_GATE_ARMS}()\`, which arms the schedule rows and`
+    + '\nreaches no container: a command sent from inside the block never returns.'
     + `\nRecovery hook: classify synchronously through \`${RECOVERY_CLASSIFIER}\` and hand`
     + '\nevery re-drive to a detached durable carrier (ActorAgent.redriveRecoveredLane).'
     + '\nEither onStart, whatever the gate waits on: a call named in `MODEL_SINKS` is refused'

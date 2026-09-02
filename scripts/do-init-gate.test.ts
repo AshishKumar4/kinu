@@ -146,7 +146,7 @@ describe('DO init-gate purity — container-start hook', () => {
     // that refuses every OTHER await by name.
     const widened = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.restoreInStartGate();
+        await this.#armContainerSchedules();
         await this.warmTheCaches();
       }
     }`;
@@ -161,7 +161,7 @@ describe('DO init-gate purity — container-start hook', () => {
     // restore instead of this class hoping a promise is joined.
     const admitted = `export class KinuSandbox extends Sandbox<Env> {
       override async onStart(): Promise<void> {
-        await this.restoreInStartGate();
+        await this.#armContainerSchedules();
       }
     }`;
     expect(reasons(admitted)).toEqual([]);
@@ -174,7 +174,7 @@ describe('DO init-gate purity — container-start hook', () => {
     const looping = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
         for (const _ of this.generations()) {
-          await this.restoreInStartGate();
+          await this.#armContainerSchedules();
         }
       }
     }`;
@@ -185,7 +185,7 @@ describe('DO init-gate purity — container-start hook', () => {
   test('the admitted restore may not also claim a timer bound — it cannot fire here', () => {
     const papered = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.restoreInStartGate();
+        await this.#armContainerSchedules();
         void withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
     }`;
@@ -197,7 +197,7 @@ describe('DO init-gate purity — container-start hook', () => {
     const mismarked = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
         void BOUNDED_STORAGE_ONLY;
-        await this.restoreInStartGate();
+        await this.#armContainerSchedules();
       }
     }`;
     expect(reasons(mismarked))
@@ -211,9 +211,9 @@ describe('DO init-gate purity — container-start hook', () => {
     // platform cancels it and RESETS the object.
     const sleeping = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.restoreInStartGate();
+        await this.#armContainerSchedules();
       }
-      async restoreInStartGate(): Promise<void> {
+      async #armContainerSchedules(): Promise<void> {
         while (!this.attached) await scheduler.wait(100);
       }
     }`;
@@ -229,10 +229,11 @@ describe('DO init-gate purity — container-start hook', () => {
     // is held.
     const nested = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.restoreInStartGate();
+        await this.#armContainerSchedules();
       }
-      async restoreInStartGate(): Promise<void> {
-        await this.attach(async () => { await scheduler.wait(50); });
+      async #armContainerSchedules(): Promise<void> {
+        await this.ctx.storage.put('k', 1);
+        void (async () => { await scheduler.wait(50); })();
       }
     }`;
     expect(reasons(nested))
@@ -242,10 +243,10 @@ describe('DO init-gate purity — container-start hook', () => {
   test('the pinned restore may not carry the paper bound either', () => {
     const wrapped = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.restoreInStartGate();
+        await this.#armContainerSchedules();
       }
-      async restoreInStartGate(): Promise<void> {
-        await withContainerStartDeadline('x', 1, () => this.attach(), () => {});
+      async #armContainerSchedules(): Promise<void> {
+        await withContainerStartDeadline('x', 1, () => this.ctx.storage.put('k', 1), () => {});
       }
     }`;
     expect(reasons(wrapped))
@@ -314,6 +315,35 @@ describe('DO init-gate purity — container-start hook', () => {
 // bodies only, printed `ok` over a hook that awaited an advisor model call, a
 // session-evolution pass, a settled job's turn-awaiting wake and a terminal
 // replay of SMTP round trips.
+describe('DO init-gate purity — what the admitted arming await may do', () => {
+  // BOTH WAYS, because a rule that only ever goes green is a rule nobody has
+  // seen work. Deployed probe gp0902011918 measured the red case live: the first
+  // container command issued inside the block never returned, the activation
+  // reached the ~30 s cap, and the Durable Object was reset every 31 s.
+  const arming = (body: string): string => `export class KinuSandbox extends Sandbox<Env> {
+      override async onStart(): Promise<void> {
+        await this.#armContainerSchedules();
+      }
+      async #armContainerSchedules(): Promise<void> {
+${body}
+      }
+    }`;
+
+  test('a container call inside the admitted await is refused by name', () => {
+    const reached = reasons(arming("        await this.exec('cat /proc/mounts');"));
+    expect(reached).toEqual([expect.stringContaining('reaches `exec`')]);
+    expect(reached[0]).toContain('NEVER RETURNS');
+  });
+
+  test('the schedule writes pass', () => {
+    expect(reasons(arming(
+      "        await this.#arm('devboxStartup', 1);\n"
+      + "        await this.#arm('devboxCheckpoint', 300);\n"
+      + "        await this.#arm('devboxHeartbeat', 60);",
+    ))).toEqual([]);
+  });
+});
+
 describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
   /**
    * The shipped defect, recovered from the diff and not invented. This is
@@ -723,6 +753,7 @@ export class A extends Agent {
     // admits a call that cannot happen, and leaves the gate reading green while
     // nothing about the restore was checked at all.
     expect(audit(SOURCES).restore).toEqual({
+      reaches: [],
       file: 'packages/devbox/src/devbox.ts',
       line: expect.any(Number),
       deadlineWrapped: false,
@@ -739,7 +770,7 @@ export class A extends Agent {
     expect(real).toBeDefined();
 
     const renamed = real!.replace(
-      '    await this.restoreInStartGate();',
+      '    await this.#armContainerSchedules();',
       '    await this.restoreEverythingNow();',
     );
     expect(renamed).not.toBe(real);
@@ -755,12 +786,12 @@ export class A extends Agent {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const slept = real!.replace(
-      '    await this.#armContainerSchedules();',
-      '    await this.#armContainerSchedules();\n    await scheduler.wait(100);',
+      '    await this.#sweepUnknownSchedules();',
+      '    await this.#sweepUnknownSchedules();\n    await scheduler.wait(100);',
     );
     expect(slept).not.toBe(real);
     const { violations } = auditFile(file, slept);
-    expect(violations.map((v) => v.member)).toEqual(['restoreInStartGate']);
+    expect(violations.map((v) => v.member)).toEqual(['armContainerSchedules']);
     expect(violations[0]!.reason).toContain('WEDGES the activation');
   });
 
@@ -768,12 +799,12 @@ export class A extends Agent {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const papered = real!.replace(
-      '      await this.#restoreNow(generation, gateRestoreSteps(budget));',
-      '      await withContainerStartDeadline(\'x\', budget, () => this.#restoreNow(generation, gateRestoreSteps(budget)), () => {});',
+      '    await this.#arm(HEARTBEAT_CALLBACK, this.policy.heartbeatSeconds);',
+      '    await withContainerStartDeadline(\'x\', 1, () => this.#arm(HEARTBEAT_CALLBACK, 1), () => {});',
     );
     expect(papered).not.toBe(real);
     const { violations } = auditFile(file, papered);
-    expect(violations.map((v) => v.member)).toEqual(['restoreInStartGate']);
+    expect(violations.map((v) => v.member)).toEqual(['armContainerSchedules']);
     expect(violations[0]!.reason).toContain('Poll the budget instead');
   });
 
@@ -786,8 +817,8 @@ export class A extends Agent {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const detached = real!.replace(
-      '  override async onStart(): Promise<void> {\n    await this.restoreInStartGate();',
-      '  override onStart(): void {\n    void this.restoreInStartGate();',
+      '  override async onStart(): Promise<void> {\n    await this.#armContainerSchedules();',
+      '  override onStart(): void {\n    void this.#armContainerSchedules();',
     );
     expect(detached).not.toBe(real);
     const { violations } = auditFile(file, detached);

@@ -654,6 +654,11 @@ class BenchBox extends Devbox<BenchEnv> {
       // the fixture's own server binds immediately.
       portWaitMs: 6_000,
       portProbeIntervalMs: 1_000,
+      // The DRIVER re-asks, so a held request buys nothing here: it polls
+      // `/state` on its own cadence and the arm's numbers are the fixture's own
+      // timestamps. Long enough that an ordinary cold attach still answers in
+      // one request, bounded so a slow one cannot hold an edge connection.
+      requestJoinMs: 5_000,
     };
   }
 }

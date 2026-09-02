@@ -527,7 +527,7 @@ describe('incident retry schedule', () => {
 describe('readiness is per container, not per Durable Object', () => {
   test('the startup callback turns the lifecycle over before admitting a stopped container', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-    const startup = source.slice(source.indexOf('async devboxStartup('));
+    const startup = source.slice(source.indexOf('async #drive('));
     const body = startup.slice(0, startup.indexOf('\n  }'));
     expect(body).toContain('this.#invalidateGeneration();');
     expect(body).toContain('await this.start(undefined, {');
@@ -561,44 +561,62 @@ describe('every self-re-arming schedule needs a first link', () => {
     return tail.slice(0, tail.indexOf('\n  }'));
   };
 
-  test('onStart arms all three self-re-arming rows', () => {
+  test('onStart forges a first link for all three self-re-arming rows', () => {
     const schedules = bodyOf('async #armContainerSchedules(');
-    for (const callback of ['STARTUP_CALLBACK', 'CHECKPOINT_CALLBACK', 'HEARTBEAT_CALLBACK']) {
+    for (const callback of ['CHECKPOINT_CALLBACK', 'HEARTBEAT_CALLBACK']) {
       expect(schedules).toContain(`this.#arm(${callback}`);
     }
+    // THE STARTUP ROW GOES THROUGH `kickStartup`, which owns the question "is
+    // anything going to try". A bare `#arm` here armed a successor one second
+    // after every admission probe — and the SDK runs this hook on every probe —
+    // so a settled box woke itself for ever. `kickStartup` arms the same row on
+    // the same cadence and refuses on a phase that needs no drive.
+    expect(schedules).toContain('await this.kickStartup();');
+    expect(bodyOf('async kickStartup(')).toContain('this.#arm(STARTUP_CALLBACK, 1)');
   });
 
-  test('the activation arms the chains PLAINLY — the in-gate restore wears no timer bound', () => {
-    // The arming is three local storage writes whose bound is inherent, and the
-    // restore beside it is bounded by a POLLED budget. Neither may wear
-    // `withContainerStartDeadline`: a timer cannot fire inside
-    // `blockConcurrencyWhile`, so wrapping either would claim a bound that
-    // cannot arrive. scripts/do-init-gate.ts holds this from the other side.
-    const restore = bodyOf('async restoreInStartGate(');
-    expect(restore).not.toContain('withContainerStartDeadline(');
-    expect(restore).toContain('this.#armContainerSchedules()');
-    expect(restore).toContain('gateRestoreSteps(budget)');
-    // And the hook itself holds exactly the one admitted await.
+  test('the hook holds the arming await and nothing else', () => {
+    // WHAT THE PROBE REFUTED, pinned so it cannot come back. A restore inside
+    // this hook cannot complete at all: the first container command asks the SDK
+    // for a nested `blockConcurrencyWhile` that the runtime will not grant while
+    // this one is held, so the activation runs to the cap
+    // `do.block_concurrency.cancel_ms` names and the object is reset (deployed
+    // probe gp0902011918). So the body is the arming await, and
+    // it wears no timer bound either — a timer cannot fire in here.
     const hook = bodyOf('override async onStart(');
-    expect(hook).toContain('await this.restoreInStartGate();');
-    expect(hook).not.toContain('withContainerStartDeadline(');
+    expect(hook.slice(hook.indexOf('{') + 1).trim()).toBe('await this.#armContainerSchedules();');
+    const schedules = bodyOf('async #armContainerSchedules(');
+    expect(schedules).not.toContain('withContainerStartDeadline(');
+    expect(schedules).not.toContain('#restoreNow(');
+    expect(schedules).not.toContain('#rawExec(');
+    // ONE CALLER FOR THE RESTORE, reached from the two doors rather than from
+    // here: `restoreInStartGate` and the polled in-gate step policy are gone.
+    expect(source).not.toContain('restoreInStartGate');
+    expect(source).not.toContain('gateRestoreSteps');
+    expect(source).not.toContain('#startGate');
+    expect([...source.matchAll(/this\.#restoreNow\(/g)]).toHaveLength(1);
   });
 
-  test('the rows are armed BEFORE the restore, so a refusing box is still repairable', () => {
-    // ORDER IS THE CONTENT. The schedule rows are what the fallback rides: the
-    // heartbeat that notices a replaced container, and the startup row a
-    // classified failure re-arms. A restore that ends `unattached` — or an
-    // activation the platform cancels mid-restore — must still leave those rows
-    // behind, so the arming cannot sit after the work that might not finish.
-    const restore = bodyOf('async restoreInStartGate(');
-    expect(restore.indexOf('this.#armContainerSchedules()'))
-      .toBeLessThan(restore.indexOf('this.#restoreNow('));
+  test('the sweep of unreachable schedule rows runs BEFORE anything is armed', () => {
+    // MEASURED IN PRODUCTION: `Callback snapshotWorkspaceIfDue not found or is
+    // not a function`, every three minutes for ever, because the alarm loop logs
+    // a dead callback and keeps its row. The sweep is bounded — one SELECT over
+    // this object's own table — and it runs first, so the arming below cannot be
+    // starved by rows nothing can execute.
+    const schedules = bodyOf('async #armContainerSchedules(');
+    expect(schedules.indexOf('this.#sweepUnknownSchedules()'))
+      .toBeLessThan(schedules.indexOf('this.kickStartup()'));
+    const sweep = bodyOf('async #sweepUnknownSchedules(');
+    expect(sweep).toContain('SELECT DISTINCT callback FROM container_schedules');
+    expect(sweep).toContain('this.deleteSchedules(callback)');
+    // By whether THIS class can call it, not by a list of retired names: a
+    // subclass arms its own callbacks and a name list here would delete them.
+    expect(sweep).toContain('if (callback in this) continue;');
   });
 
   test('the incident row is armed on demand, not at start', () => {
     // The fourth row is deliberately NOT a start link: an incident schedule with
     // no incidents to deliver is a wakeup that does nothing forever.
-    expect(bodyOf('async restoreInStartGate(')).not.toContain('INCIDENT_CALLBACK');
     expect(bodyOf('async #armContainerSchedules(')).not.toContain('INCIDENT_CALLBACK');
     expect(source).toContain('this.#arm(INCIDENT_CALLBACK');
   });
@@ -642,13 +660,15 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect({
       total: armSites(source),
       onStart: armSites(bodyOf('async #armContainerSchedules(')),
-      startupAdmission: armSites(bodyOf('async devboxStartup(')),
+      startupAdmission: armSites(bodyOf('async #drive(')),
       startupRetry: armSites(bodyOf('async #recover(')),
+      startupUnclassified: armSites(bodyOf('async #startupAttempt(')),
       onKick: armSites(bodyOf('async kickStartup(')),
       onRecord: armSites(bodyOf('async #record(')),
       guard: armSites(bodyOf('async #scheduled(')),
     }).toEqual({
-      total: 8, onStart: 3, startupAdmission: 1, startupRetry: 1, onKick: 1, onRecord: 1, guard: 1,
+      total: 8, onStart: 2, startupAdmission: 1, startupRetry: 1, startupUnclassified: 1,
+      onKick: 1, onRecord: 1, guard: 1,
     });
     // And the ONE re-arm is reachable only from the action that means "ask this
     // same identity again". A refusal or a replacement that armed a startup
@@ -687,7 +707,7 @@ describe('every self-re-arming schedule needs a first link', () => {
     // copy of that comparison is how the two would drift.
     expect(heartbeat).toContain('#containerWasReplaced()');
     expect(bodyOf('async #containerWasReplaced(')).toContain('#readBootId()');
-    expect(heartbeat).toContain('this.devboxStartup()');
+    expect(heartbeat).toContain("this.#drive('schedule')");
     // The COUNTER lives where the evidence is, not where it is noticed. Every
     // restoration passes through the stamp, whether the container-start hook or
     // a heartbeat drove it. Counting only in the heartbeat under-reported the
@@ -719,7 +739,7 @@ describe('every self-re-arming schedule needs a first link', () => {
     // Re-attach through the ordinary restoration, so the recovery ladder and the
     // strategy's own residue handling are the ones that run.
     expect(heal).toContain('this.#invalidateGeneration();');
-    expect(heal).toContain('await this.devboxStartup();');
+    expect(heal).toContain("await this.#drive('request');");
   });
 
   test('keepAlive is never enabled, because it kills the alarm chain', () => {

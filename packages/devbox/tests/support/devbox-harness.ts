@@ -110,6 +110,31 @@ export interface FileOperation {
 }
 
 
+/**
+ * The container SDK's own schedule table, which lives in the Durable Object's
+ * SQLite (`@cloudflare/containers`, `container.js:389-399`).
+ *
+ * ONE TABLE, TWO READERS, and that is why it is not a field on either fake: the
+ * SDK writes it through `schedule()` and reads it through `listSchedules()`,
+ * while the class under test sweeps it through `ctx.storage.sql` and deletes
+ * through the SDK's `deleteSchedules`. Two copies could disagree about a row,
+ * which is precisely the defect the sweep exists for.
+ */
+const scheduleTables = new WeakMap<DurableObjectStorage, { callback: string; time: number }[]>();
+
+export function scheduleTableOf(
+  storage: DurableObjectStorage,
+): { callback: string; time: number }[] {
+  const held = scheduleTables.get(storage);
+  if (held !== undefined) return held;
+  // A box built on a storage this module did not make holds no rows: the fake
+  // registers its table when it builds the handle, so an absent one is a fresh
+  // table rather than a missing one.
+  const fresh: { callback: string; time: number }[] = [];
+  scheduleTables.set(storage, fresh);
+  return fresh;
+}
+
 export interface FakeStorage {
   readonly rows: Map<string, StoredValue>;
   readonly handle: DurableObjectStorage;
@@ -142,6 +167,7 @@ export interface FakeStorage {
  */
 export function fakeStorage(): FakeStorage {
   const rows = new Map<string, StoredValue>();
+  const schedules: { callback: string; time: number }[] = [];
   const gates: Record<string, Gate | undefined> = {};
   const faults: Record<string, Error | undefined> = {};
   // SAFETY: `DurableObjectStorage` declares the platform's whole storage API,
@@ -168,10 +194,23 @@ export function fakeStorage(): FakeStorage {
       return Promise.resolve();
     },
     delete: (key: string): Promise<boolean> => Promise.resolve(rows.delete(key)),
+    // The DO's own SQLite, as the ONE statement the class issues sees it. A fake
+    // that answered a statement it does not model would answer it wrongly, so
+    // anything else refuses by name — see `session-shell.ts` for why.
+    sql: {
+      exec: (query: string) => {
+        if (!query.includes('FROM container_schedules')) {
+          throw new Error(`the fake Durable Object SQLite was asked an unmodelled statement: ${query}`);
+        }
+        const distinct = [...new Set(schedules.map((row) => row.callback))];
+        return { toArray: () => distinct.map((callback) => ({ callback })) };
+      },
+    },
     list: (options: { prefix: string }): Promise<Map<string, StoredValue>> => Promise.resolve(
       new Map([...rows].filter(([key]) => key.startsWith(options.prefix))),
     ),
   } as DurableObjectStorage;
+  scheduleTables.set(handle, schedules);
   return {
     rows,
     handle,
@@ -218,7 +257,9 @@ export class FakeSandbox {
   readonly execs: string[] = [];
   readonly exposures: { port: number; token: string | undefined; name: string | undefined }[] = [];
   readonly schedules: string[] = [];
-  readonly scheduleRows: { readonly callback: string; readonly time: number }[] = [];
+  /** THE SDK'S TABLE, shared with the Durable Object's SQLite: see
+   *  {@link scheduleTableOf}. */
+  readonly scheduleRows: { callback: string; time: number }[];
   /** Ports a probe finds a listener on. A port absent from here answers the way
    *  a refused connection does, which is what the shipped probe reads. */
   readonly listening = new Set<number>();
@@ -298,6 +339,11 @@ export class FakeSandbox {
    *  these are two different calls and two different windows. */
   containerStartGate: Gate | undefined;
   execGate: Gate | undefined;
+  /** How long every command waits INSIDE the container before answering — the
+   *  shape of a counted loop (`awaitLayer`, `awaitListenerCommand`), whose whole
+   *  duration belongs to one command. A real wait, because what is under test is
+   *  whether that duration can extend a caller's own window. */
+  execDelayMs = 0;
   stampGate: Gate | undefined;
   exposeGate: Gate | undefined;
   destroyFault: Error | undefined;
@@ -331,6 +377,15 @@ export class FakeSandbox {
 
   constructor(readonly ctx: DurableObjectState) {
     FakeSandbox.last = this;
+    this.scheduleRows = scheduleTableOf(ctx.storage);
+  }
+
+  /** The SDK's own delete-by-callback (`container.js:1492-1494`), which is what
+   *  the class's sweep of unreachable rows goes through. */
+  deleteSchedules(callback: string): void {
+    for (let index = this.scheduleRows.length - 1; index >= 0; index -= 1) {
+      if (this.scheduleRows[index]?.callback === callback) this.scheduleRows.splice(index, 1);
+    }
   }
 
   onStart(): Promise<void> {
@@ -377,6 +432,7 @@ export class FakeSandbox {
       held.enter();
       await held.promise;
     }
+    if (this.execDelayMs > 0) await scheduler.wait(this.execDelayMs);
     if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') {
       return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
     }
@@ -666,8 +722,7 @@ export class FakeSandbox {
     if (beforeRunning !== undefined) throw beforeRunning;
     const wasRunning = this.running.running;
     this.running.running = true;
-    if (!wasRunning) {
-      this.containerStarts += 1;
+    if (!wasRunning) this.containerStarts += 1;
       // THE INIT GATE, modelled where the SDK really opens it. `container.js`
       // runs this hook inside `ctx.blockConcurrencyWhile`, so for as long as it
       // is held the runtime delivers NO event to the object — which is the
@@ -681,14 +736,21 @@ export class FakeSandbox {
       // rather than derived from the hook's promise: a rejection handler here
       // would turn a failed activation into the same value a successful one
       // produces, and the fake would be answering for something it did not see.
-      const opened = Promise.withResolvers<void>();
-      this.initGate = opened.promise;
-      try {
-        await this.onStart();
-      } finally {
-        this.initGate = undefined;
-        opened.resolve();
-      }
+      //
+      // RUN ON EVERY `start()`, NOT ONLY ON A REAL ONE, because that is what the
+      // SDK does: `container.js:583` opens the block and calls the hook whether
+      // or not `startContainerIfNotRunning` started anything, and
+      // `startAndWaitForPorts` does the same after `setHealthy()`. Measured on
+      // deployed probe `gp0902011918`, where the hook was re-entered 37 ms into
+      // a restore's first exec. A fake that skipped it could not hold the
+      // property that a re-entered hook fences nothing.
+    const opened = Promise.withResolvers<void>();
+    this.initGate = opened.promise;
+    try {
+      await this.onStart();
+    } finally {
+      this.initGate = undefined;
+      opened.resolve();
     }
     const fault = this.startFaultAfterRunning;
     this.startFaultAfterRunning = undefined;

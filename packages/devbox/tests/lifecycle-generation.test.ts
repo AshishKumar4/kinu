@@ -135,8 +135,16 @@ function incidents(rows: Map<string, StoredValue>): readonly FiledIncident[] {
     .map(([, row]) => v.parse(FiledIncidentSchema, row));
 }
 
+/** Startup rows the box is actually holding.
+ *
+ *  THE LIVE TABLE, not the log of arm calls, and the difference is the property.
+ *  The container-start hook arms a startup row for a box with nothing restored
+ *  yet, and the SDK runs that hook on every admission probe — so "was an arm
+ *  ever issued" stopped being the question. What matters is whether a row
+ *  survives to wake this box: a terminal ladder deletes it (`#recover`), and a
+ *  retry leaves exactly one. */
 const armed = (container: FakeSandbox): number =>
-  container.schedules.filter(callback => callback === 'devboxStartup').length;
+  container.scheduleRows.filter(row => row.callback === 'devboxStartup').length;
 
 /** The ladder row as stored, read raw so a test sees the owner as well as the
  *  stage. */
@@ -227,13 +235,17 @@ describe('the startup kick arms restoration without attaching inline', () => {
     const state = await box.devboxState();
     expect({
       starts: container.containerStarts,
+      // NO ROW SURVIVES A SETTLED RESTORATION. The container-start hook arms one
+      // for a box with nothing restored yet; the attempt that settles retires it,
+      // because a row firing on an attached box is a wake, a port probe and a
+      // boot-id read that nothing asked for.
       startupArms: armed(container),
       restoration: state.restoration,
       attach: state.lastAttach?.kind,
       ready: state.ready,
     }).toEqual({
       starts: 1,
-      startupArms: 1,
+      startupArms: 0,
       restoration: 'attached',
       attach: 'empty',
       ready: true,
@@ -263,15 +275,14 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect((await box.devboxState()).restoration).toBe('unstarted');
   });
 
-  test('an unhealthy answer AFTER the container ran files no blocker: its start hook restored the box', async () => {
-    // THE GATE CHANGES WHAT THIS FAULT MEANS, and the difference is the whole
-    // point of the placement. `startFaultAfterRunning` fires once the platform
-    // has an instance — which is AFTER the SDK ran the container-start hook, so
-    // the restore already happened inside it and the box is attached. The
-    // admission refusal that used to be filed here would be a blocker about a
-    // box that is working, on the one channel built to be trusted; the
-    // generation the start hook turned over is what makes this attempt's
-    // refusal inert.
+  test('an unhealthy answer AFTER the container ran is a transient refusal the next drive heals', async () => {
+    // `startFaultAfterRunning` fires once the platform has an instance, so the
+    // container really is up — but this attempt cannot know that, because the
+    // admission probe it asked threw. The restore no longer happens inside the
+    // container-start hook (see restore-out-of-gate.test.ts for the probe that
+    // refuted that placement), so what this box owes is the honest sequence: the
+    // refusal is recorded as transient, a successor is armed, and the next drive
+    // — one second later on the schedule, or the next operation — attaches.
     const { box, container, rows } = harness(TestBox);
     await container.stop();
     container.startFaultAfterRunning = new SandboxFailure({
@@ -281,9 +292,22 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
+    expect((await box.devboxState()).restoration).toBe('unstarted');
+    expect(incidents(rows)).toEqual([
+      expect.objectContaining({
+        stage: 'attach',
+        reason: expect.stringContaining('[transient → retry]'),
+      }),
+    ]);
+    expect(armed(container)).toBe(1);
+
+    // THE HEAL, on the row that refusal armed. The fault was one-shot, as a
+    // transient one is, so the same identity attaches.
+    await box.devboxStartup();
+
     const state = await box.devboxState();
-    expect({ restoration: state.restoration, ready: state.ready, incidents: incidents(rows) })
-      .toEqual({ restoration: 'attached', ready: true, incidents: [] });
+    expect({ restoration: state.restoration, ready: state.ready })
+      .toEqual({ restoration: 'attached', ready: true });
   });
 
   test('a stopped replacement cannot reuse the prior container attachment after eviction', async () => {
@@ -1180,10 +1204,13 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     // Another owner takes the row while this attempt is inside its conditional
     // write. Without the comparison the write lands and the assertion fails.
     fixture.rows.set(RECOVERY_KEY, { owner: 'another-attempt' });
+    // What the superseded attempt is measured against: whatever the container
+    // start had already armed. An inert attempt may not ADD to it.
+    const armedBeforeSettling = armed(fixture.container);
     settling.release();
     await expect(attempt).rejects.toThrow('RPC_TRANSPORT_ERROR');
     expect(fixture.rows.get(RECOVERY_KEY)).toEqual({ owner: 'another-attempt' });
-    expect(armed(fixture.container)).toBe(0);
+    expect(armed(fixture.container)).toBe(armedBeforeSettling);
     expect(incidents(fixture.rows)).toEqual([]);
   });
 

@@ -81,6 +81,29 @@ export interface DevboxPolicy {
   readonly portWaitMs: number;
   /** Gap between two listener probes inside that window. */
   readonly portProbeIntervalMs: number;
+  /**
+   * How long a REQUEST may be held on a restoration before it answers from the
+   * restoration's state instead of waiting for it.
+   *
+   * THE SAME LAW AS THE INIT GATE, applied to the other kind of frame: no frame
+   * is held hostage to restore duration. The container-start hook learned that
+   * the hard way — a restore there could not complete at all — and a request
+   * frame differs only in that it CAN wait, not that it should wait without
+   * bound. So a caller that arrives while an attempt is in flight joins it for
+   * this long and then answers "a restoration is running, ask again", which is
+   * a readable, re-askable answer rather than an open connection.
+   *
+   * GENEROUS ON PURPOSE. A cold attach measured 2,480 ms live, so the ordinary
+   * case still settles inside one request and the caller gets its answer first
+   * time. What this bounds is the pathological case, and it bounds it with a
+   * timer that IS delivered: nothing on this path runs inside
+   * `blockConcurrencyWhile`.
+   *
+   * The ALARM door has no such bound and must not: it holds no caller, and
+   * something has to drive a restoration to completion for a box nobody is
+   * asking about.
+   */
+  readonly requestJoinMs: number;
 }
 
 export const DEFAULT_DEVBOX_POLICY: DevboxPolicy = {
@@ -91,6 +114,7 @@ export const DEFAULT_DEVBOX_POLICY: DevboxPolicy = {
   attachBudgetMs: 25_000,
   portWaitMs: 30_000,
   portProbeIntervalMs: 2_000,
+  requestJoinMs: 5_000,
 };
 
 // ── the container-start budget ──────────────────────────────────────────────
@@ -121,32 +145,6 @@ export class ContainerStartOverrun extends Error {
       + 'running inside the container cannot be fenced from here.',
     );
     this.name = 'ContainerStartOverrun';
-  }
-}
-
-/**
- * The activation's own restore ran out of the time it may hold the init gate,
- * so it declined to issue the NEXT container command.
- *
- * THE OPPOSITE OF {@link ContainerStartOverrun}, and the difference decides the
- * recovery. An overrun abandons work that is still running inside the
- * container, which nothing here can fence, so the identity has to go. This one
- * abandons NOTHING: the budget is polled before a command is issued, so the
- * command was never sent and the only thing left behind is a half-built mount
- * graph that the next attach releases and rebuilds anyway.
- *
- * A TYPE, NOT A SENTENCE, for the reason the overrun is one: it names its own
- * recovery class ({@link RecoveryClass} `gate-bound`), whose whole point is
- * that a container which is merely slower than one activation may hold must
- * never be destroyed for it.
- */
-export class GateBudgetSpent extends Error {
-  constructor(doing: string, budgetMs: number) {
-    super(
-      `the init gate's ${budgetMs}ms restore budget was spent before ${doing}, so the `
-      + 'command was not issued and the activation completes without it.',
-    );
-    this.name = 'GateBudgetSpent';
   }
 }
 
@@ -286,14 +284,10 @@ async function raceAllowance<T>(
  * taxonomy. Every step AFTER the attach reports instead: see
  * {@link withStepAllowance}.
  *
- * ONE mechanism for both hooks (`onStart` under the concurrency gate, the
- * scheduled restoration outside it) — two copies of this race drifted within a
- * day of the second landing.
- *
- * ONLY OUTSIDE THE INIT GATE. Inside `blockConcurrencyWhile` the timer is not
- * delivered until the block releases (measured, not assumed), so this bound
- * cannot fire there and a caller that used it would be carrying a paper bound.
- * The in-gate policy polls instead: see {@link gateRestoreSteps}.
+ * A REAL TIMER, WHICH IS WHY NO RESTORE MAY RUN INSIDE THE INIT GATE. A
+ * `setTimeout` set inside `blockConcurrencyWhile` is not delivered until the
+ * block releases, so this bound cannot fire there — and a restore that held the
+ * gate could not be bounded at all, which is what `Devbox.onStart` records.
  *
  * Detaching the work is not an alternative either: a promise left floating in a
  * Durable Object is cancelled on eviction with its rejection swallowed, so the
@@ -322,16 +316,16 @@ export async function withContainerStartDeadline<T>(
  * HOW ONE RESTORATION BOUNDS ITS STEPS, as a value the restore is handed.
  *
  * The restore itself is one walk — attach, processes, listeners, exposures,
- * boot stamp — and it runs in two places that can bound it in two different
- * ways. Passing the policy in is what keeps that ONE walk: the alternative is a
- * second copy of the phase order per home, and two copies of a restoration
- * drift the way the two copies of `raceAllowance` drifted within a day.
+ * boot stamp — and {@link racedRestoreSteps} is now its one policy: every step
+ * raced against its allowance, abandoned and reported when it outruns one.
  *
- *   • {@link racedRestoreSteps} — outside the init gate, where a timer is
- *     delivered. A step that outruns its allowance is ABANDONED and reported.
- *   • {@link gateRestoreSteps} — inside it, where a timer is not. A step is
- *     admitted only while the budget still has time for one, and a spent budget
- *     reports without starting the step, so nothing is ever abandoned.
+ * IT IS STILL A VALUE THE WALK IS HANDED rather than calls the walk makes
+ * directly, because the two failure policies inside it — the attach throws, the
+ * post-attach steps report — are the contract the phases are written against,
+ * and inlining them would spread that decision over six call sites. There was a
+ * second implementation, a polled one for a restore that held the init gate;
+ * probe `gp0902011918` refuted that home (see `Devbox.onStart`) and the polled
+ * policy went with it.
  */
 export interface RestoreSteps {
   /** One post-attach step: a process start, a listener proof, an exposure, the
@@ -351,65 +345,14 @@ export interface RestoreSteps {
   remainingMs(): number;
 }
 
-/** The policy for a restoration OUTSIDE the init gate: every step raced against
- *  its allowance, and an abandoned attach classified `abandoned` so the ladder
- *  replaces the identity whose mount it left half-built. */
+/** The restore's step policy: every step raced against its allowance, and an
+ *  abandoned attach classified `abandoned` so the ladder replaces the identity
+ *  whose mount it left half-built. */
 export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
   return {
     run: async (work, onLate) => await runRestoreStep(budget.nextAllowanceMs(), work, onLate),
     attach: async (work, onOverrun) =>
       await withContainerStartDeadline('Devbox.attach', budget, work, onOverrun),
-    declare: (steps) => budget.declare(steps),
-    skip: () => void budget.nextAllowanceMs(),
-    remainingMs: () => budget.remainingMs(),
-  };
-}
-
-/**
- * The policy for a restoration INSIDE the init gate: the budget is POLLED, and
- * that is the whole difference.
- *
- * WHY NOT THE RACE. A `setTimeout` set inside `blockConcurrencyWhile` is not
- * delivered until the block releases, so the late arm of `raceAllowance` cannot
- * resolve there: every step would read as `done` however long it took, and the
- * platform's own cancel — which RESETS the object — would be the only bound. A
- * budget that cannot fire is not a bound, and the do-init gate refuses one by
- * name.
- *
- * WHAT POLLING BOUNDS, EXACTLY, said rather than implied. A step is started only
- * while the budget still holds time, so gate occupancy is at most the budget
- * plus ONE step. That is a real bound because every step of this restoration is
- * itself bounded where it runs: each is a single container round trip, and the
- * ones that must WAIT — a layer becoming visible, a mount releasing, a listener
- * binding — do their waiting inside the container in one command with a counted
- * loop, never by sleeping in the Durable Object. A sleep here would not be
- * delivered either.
- *
- * NOTHING IS EVER ABANDONED, which is why the late arm carries no cause: a step
- * that was not started has nothing running to settle later. That is strictly
- * better than the raced policy, and it is why an exhausted gate budget is
- * `gate-bound` rather than `abandoned` — no container has to die for it.
- */
-export function gateRestoreSteps(budget: StartBudget): RestoreSteps {
-  const admit = <T>(work: () => Promise<T>): Promise<StepOutcome<T>> => {
-    // The allowance is consumed either way, so the divisor of the steps still
-    // to come is the same in both policies and a skipped step leaves its share
-    // behind exactly as a fast one does.
-    budget.nextAllowanceMs();
-    if (budget.remainingMs() <= 0) return Promise.resolve({ kind: 'late' });
-    return work().then<StepOutcome<T>, StepOutcome<T>>(
-      (value) => ({ kind: 'done', value }),
-      (cause: LateStartFailure['cause']) => ({ kind: 'failed', cause }),
-    );
-  };
-  return {
-    run: async (work) => await admit(work),
-    attach: async (work) => {
-      if (budget.remainingMs() <= 0) {
-        throw new GateBudgetSpent('the attach began', budget.budgetMs);
-      }
-      return await work();
-    },
     declare: (steps) => budget.declare(steps),
     skip: () => void budget.nextAllowanceMs(),
     remainingMs: () => budget.remainingMs(),
@@ -443,19 +386,6 @@ export type RecoveryClass =
    *  is not. Says NOTHING about the health of a container identity, so it must
    *  never advance a ladder that ends in destroying one. */
   | 'stale-owner'
-  /**
-   * The activation's own restore ran out of the time it may hold the init gate.
-   *
-   * ITS OWN CLASS BECAUSE THE ALTERNATIVE DESTROYS HEALTHY CONTAINERS. Left
-   * `unclassified`, a second slow activation walks the ladder to `replace` and
-   * kills a container whose only fault was needing more than one gate's worth
-   * of restore — the cure that destroys the patient, in a new place. Nothing was
-   * abandoned (the budget is polled BEFORE a command is issued, so the command
-   * was never sent), and the restore has a home where a real timer bounds it:
-   * the schedule row. So the answer is to ask the same identity again, there,
-   * without advancing the ladder.
-   */
-  | 'gate-bound'
   /** A resource ran out. Running the same work again spends it again. */
   | 'exhausted'
   /** Configuration the container cannot satisfy. The inputs are the same next
@@ -524,7 +454,6 @@ const CodedFailureSchema = v.object({ code: v.string() });
 export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryClass {
   for (let value = thrown.cause; ;) {
     if (value instanceof ContainerStartOverrun) return 'abandoned';
-    if (value instanceof GateBudgetSpent) return 'gate-bound';
     const coded = v.safeParse(CodedFailureSchema, value);
     if (coded.success) {
       const held = RECOVERY_BY_SDK_CODE.get(coded.output.code);
@@ -656,10 +585,9 @@ export interface RecoveryDecision {
  *
  * Read top to bottom, the rules are: a superseded attempt does nothing;
  * exhaustion and permanent configuration refuse without repeating the work,
- * destroying anything, or moving the ladder; a stale owner and a spent gate
- * budget retry WITHOUT advancing it, because neither is evidence against the
- * container identity — the first failed on an identity that is already gone,
- * the second never issued the command it was refused for; a failure at
+ * destroying anything, or moving the ladder; a stale owner retries WITHOUT
+ * advancing it, because an attempt that failed on an identity which is already
+ * gone is no evidence against the identity that replaced it; a failure at
  * `replace` is terminal and STAYS at `replace`; and everything else walks the
  * ladder — retry the identity, then replace the identity. Abandoned work enters
  * at `replace`, since the only cancellation for it is the container's death.
@@ -673,7 +601,7 @@ export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   if (input.failure === 'exhausted' || input.failure === 'permanent') {
     return { action: 'refuse', stage };
   }
-  if (input.failure === 'stale-owner' || input.failure === 'gate-bound') {
+  if (input.failure === 'stale-owner') {
     return { action: 'retry', stage };
   }
   if (stage === 'replace') return { action: 'refuse', stage };

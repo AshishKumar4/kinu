@@ -287,14 +287,14 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
    * owe different sentences. A stop has nothing to add and rethrows as-is. Both
    * of `attach`'s refusals have a sentence the refusal must NOT replace: the one
    * naming the DEFECT, which is the only thing telling a caller why this mount
-   * was rejected — and a bare throw here erased it, measured against the init
-   * gate's restore deadline, where a release refused before it was even issued
-   * produced a report that never mentioned what was wrong with the mount. The
-   * refusal instead travels as the `cause` of that sentence, which loses
+   * was rejected — and a bare throw here erased it, measured against a restore
+   * deadline, where a release refused before it was even issued produced a
+   * report that never mentioned what was wrong with the mount. The refusal
+   * instead travels as the `cause` of that sentence, which loses
    * nothing: `classifyRecovery` walks the cause chain and returns on the first
-   * classified value, so a gate refusal buried under a defect sentence still
-   * classifies `gate-bound` and still retries without advancing the destructive
-   * ladder, and `describeThrown` renders the whole chain so one incident reason
+   * classified value, so a transport refusal buried under a defect sentence
+   * still classifies and still retries on the class its evidence supports,
+   * and `describeThrown` renders the whole chain so one incident reason
    * carries the defect AND the refusal.
    */
   const releaseMount = async (why: string): Promise<Error | undefined> => {
