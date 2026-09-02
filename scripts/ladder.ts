@@ -516,7 +516,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27).
@@ -750,13 +750,28 @@ export const LADDER: readonly Gate[] = [
   },
 
   {
+    run: 'bun run gate:scanner-bundle',
+    tier: 'push',
+    seconds: 0.3,
+    catches: 'the install scanner Bun loads drifting from its source. Bun loads the scanner '
+      + 'BEFORE it installs anything, so the file bunfig names cannot import a dependency — '
+      + 'the source\'s one `valibot` import kept every GitHub workflow red at "Install '
+      + 'dependencies" (measured 2026-09-02 on a depth-1 clone: SecurityScannerNotInDependencies '
+      + 'after four tarballs). bunfig therefore names a committed `bun build` of the source, '
+      + 'and this gate rebuilds it in memory and refuses a byte of difference, a bare import, '
+      + 'or a bunfig that names anything else. At push rather than commit because the commit '
+      + 'tier\'s declared cost is at its 15 s cap; a stale bundle still cannot reach main.',
+    blind: 'whether the bundled decoder BEHAVES as the source over a real feed answer — that '
+      + 'is gate:dependency-advisories below, over a real `bun pm scan`, at the ci tier.',
+  },
+  {
     run: 'bun run gate:dependency-advisories',
     tier: 'ci',
     seconds: 0.3,
     catches: 'a dependency arriving with a known vulnerability nobody reviewed. `bun pm scan` '
       + 'was named as the tool for this in the note above and was invoked NOWHERE — and could '
       + 'not have helped if it had been, because bun ships no scanner and answers `error: no '
-      + 'security scanner configured`. `bunfig.toml` now points at `scripts/security-scanner.ts`, '
+      + 'security scanner configured`. `bunfig.toml` now points at the built `scripts/security-scanner.bundle.js`, '
       + 'so every `bun install` checks all 1288 lockfile entries against npm\'s advisory feed '
       + 'before unpacking a tarball, and this gate asserts the exposures are EXACTLY the 54 ids '
       + 'over 19 packages reviewed in REVIEWED_ADVISORIES — failing both when a new one appears '

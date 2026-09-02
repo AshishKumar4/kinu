@@ -34,15 +34,6 @@ fi
 if ! cmp -s "$TREE/bun.lock" "$MAIN/bun.lock"; then
   echo "bun.lock differs from the main checkout: this branch changed dependencies." >&2
   echo "Borrowed modules would be the wrong ones — run 'bun install' in $TREE instead." >&2
-  # `bun install` in an empty tree dies before installing anything: bunfig's
-  # security scanner (scripts/security-scanner.ts) imports valibot, which is
-  # not installed yet — SecurityScannerNotInDependencies, a bootstrap deadlock.
-  # Seed exactly the scanner's own import so the install it guards can run.
-  if [ ! -e "$TREE/node_modules/valibot" ] && [ -e "$MAIN/node_modules/valibot" ]; then
-    mkdir -p "$TREE/node_modules"
-    ln -s "$MAIN/node_modules/valibot" "$TREE/node_modules/valibot"
-    echo "Seeded node_modules/valibot so the security scanner can load during that install." >&2
-  fi
   exit 1
 fi
 

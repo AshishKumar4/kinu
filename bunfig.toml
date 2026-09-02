@@ -8,8 +8,11 @@ linker = "hoisted"
 # having checked none of them against any advisory feed. This line is what makes
 # the check exist; `scripts/dependency-advisory-gate.ts` asserts it is still
 # here, because deleting it would turn that gate green over a scan nobody ran.
+# It names the BUILT bundle, not the source: Bun loads this file before it
+# installs anything, so it cannot import a dependency. scripts/scanner-bundle-gate.ts
+# keeps the bundle a fresh build of scripts/security-scanner.ts.
 [install.security]
-scanner = "./scripts/security-scanner.ts"
+scanner = "./scripts/security-scanner.bundle.js"
 
 [test]
 preload = ["./scripts/test-preload.ts"]

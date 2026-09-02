@@ -36,12 +36,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # The self-test scans the reachable HISTORY (scripts/secret-scan.test.ts,
+          # 'the checked-in history has only its reviewed exact adjudications');
+          # a depth-1 clone has no history to adjudicate and reads red.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      # The self-test imports the repository's own modules (valibot, test-utils);
+      # without an install it fails on the first import, not on a finding.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       # The scanner's own gate. Its patterns, its ignore-file semantics, and the
       # fact that the committed ignore file really does suppress the fixture it

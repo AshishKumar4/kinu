@@ -51,13 +51,15 @@ import {
   REPORT_ENV, REPORT_SENTINEL, REVIEWED_ADVISORIES, SEVERITIES,
   type AdvisoryScan, type Exposure, type ReviewedPackage,
 } from './security-scanner';
+import { SCANNER_BUNDLE } from './scanner-bundle-gate';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
 export const GATE = 'dependency-advisories';
 
-/** What `bunfig.toml` must name, exactly. */
-export const SCANNER_PATH = './scripts/security-scanner.ts';
+/** What `bunfig.toml` must name, exactly: the built bundle of the scanner,
+ *  which scripts/scanner-bundle-gate.ts keeps fresh. */
+export const SCANNER_PATH = `./${SCANNER_BUNDLE}`;
 
 /** Names the environment variable that records "I know the feed was down". */
 export const UNREACHABLE_ACK = 'KINU_ADVISORY_FEED_BLOCKED';

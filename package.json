@@ -58,6 +58,8 @@
     "bench:r2-workspace": "bun scripts/bench-r2-workspace.ts",
     "gate:install-scripts": "bun scripts/install-scripts-gate.ts",
     "gate:dependency-advisories": "bun scripts/dependency-advisory-gate.ts",
+    "gate:scanner-bundle": "bun scripts/scanner-bundle-gate.ts",
+    "build:scanner": "bun scripts/scanner-bundle-gate.ts --write",
     "gate:patch-parity": "bun scripts/patch-parity.ts",
     "gate:secret-history": "bun scripts/secret-scan.ts --history",
     "gate:bench-corpus": "bun scripts/bench-corpus-gate.ts",

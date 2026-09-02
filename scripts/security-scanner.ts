@@ -39,6 +39,14 @@
  * Bun's scanner contract is declared here rather than imported: `Bun.Security`
  * does not exist in the installed `@types/bun` (1.3.14), so `Bun.Security.Scanner`
  * would not typecheck.
+ *
+ * WHAT BUN LOADS IS NOT THIS FILE. Bun loads the scanner before it installs
+ * anything, so a scanner that imports `valibot` deadlocks every fresh install
+ * (`SecurityScannerNotInDependencies`) — which is what kept every GitHub
+ * workflow red until 2026-09-02. bunfig names `security-scanner.bundle.js`, the
+ * committed `bun build` of this file with the decoder inlined; run
+ * `bun run build:scanner` after editing here, and `gate:scanner-bundle` refuses
+ * a bundle that is not a fresh build of this source.
  */
 
 import * as v from 'valibot';

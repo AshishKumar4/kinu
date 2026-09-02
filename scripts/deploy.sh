@@ -495,7 +495,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Hammer and fence gate self-tests" bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
@@ -526,6 +526,7 @@ run_required_gate "Measured set equals governed set" bun run gate:set-equality
 run_required_gate "External citation register" bun run gate:literature-citations
 run_required_gate "Commit message hygiene" bun run gate:commit-message
 run_required_gate "Dependency install-script policy" bun run gate:install-scripts
+run_required_gate "Install scanner bundle" bun run gate:scanner-bundle
 run_required_gate "Dependency advisory policy" bun run gate:dependency-advisories
 run_required_gate "Committed patches reproduce node_modules" bun run gate:patch-parity
 run_required_gate "Seeded bench defects still apply" bun run gate:bench-corpus

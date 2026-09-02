@@ -64,6 +64,7 @@
   "ignorePatterns": [
     "node_modules",
     "dist",
-    "tools/oxlint/anti-slop"
+    "tools/oxlint/anti-slop",
+    "scripts/security-scanner.bundle.js"
   ]
 }

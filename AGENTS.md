@@ -124,9 +124,15 @@ edit lands in the primary, no error anywhere. So:
 Parallel writers use isolated worktrees and make focused commits. Main merges
 and verifies those commits before updating `origin/main`.
 
-A fresh worktree whose branch changed `bun.lock` needs its own `bun install`,
-and that install needs the security scanner's own imports resolvable before
-anything is installed — the script pre-seeds them; do not delete that step.
+A fresh worktree whose branch changed `bun.lock` needs its own `bun install`.
+Bun loads the install scanner BEFORE it installs anything, so the file bunfig
+names cannot import a dependency — and the source (`scripts/security-scanner.ts`)
+must keep its decoder, because the anti-slop rules forbid hand-rolled narrowing
+of boundary input. So bunfig names a committed BUILD of the source,
+`scripts/security-scanner.bundle.js`, and `gate:scanner-bundle` refuses a byte of
+drift between the two (`bun run build:scanner` regenerates it). The source's
+`valibot` import kept every GitHub workflow red at "Install dependencies" until
+2026-09-02.
 
 Branches get pruned; the `archive/*` tags are what make that safe. Before deleting
 anything under `refs/tags/archive/`, read [docs/BRANCH-ARCHIVE.md](docs/BRANCH-ARCHIVE.md).
