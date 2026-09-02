@@ -727,14 +727,16 @@ path leaves the repository.
 ### The baseline, measured 2026-09-02
 
 One `bun run coverage` at `ffcdfab2d`, 12-core box under load ~98:
-**1,911.6 s wall**, 885 repository files in the merged lcov. Re-merging the
-same per-group lcov files with `--merge-only` takes **2.3 s**.
+**1,911.6 s wall** for the suites. Re-merging the same per-group lcov files
+with `--merge-only` takes **2.3 s** and is how the table below is reproduced.
+The merged lcov holds **946 repository files**; records outside the repository
+are dropped.
 
 | Package | lines | funcs | branches | files |
 |---|---|---|---|---|
 | agent-utils | 66.4 % | 81.9 % | — | 13 |
 | cf-backend | 62.1 % | 36.7 % | 4.5 % | 223 |
-| cli | 22.5 % | 5.0 % | — | 10 |
+| cli | 34.5 % | 42.7 % | — | 71 |
 | cli-backend | 68.5 % | 88.2 % | — | 31 |
 | compaction | 84.2 % | 95.1 % | — | 9 |
 | core | 75.9 % | 93.6 % | — | 423 |
@@ -743,7 +745,10 @@ same per-group lcov files with `--merge-only` takes **2.3 s**.
 | scripts | 65.1 % | 79.8 % | — | 87 |
 | test-utils | 84.9 % | 84.3 % | — | 28 |
 | tests | 56.6 % | 62.2 % | — | 12 |
-| **TOTAL** | **68.8 %** | **70.7 %** | **3.2 %** | **885** |
+| **TOTAL** | **66.2 %** | **69.7 %** | **3.2 %** | **946** |
+
+`bun run coverage:check` prints the same figures as JSON: 114,626 of 173,098
+lines, 11,346 of 16,284 functions, 240 of 7,392 branches.
 
 Read the columns knowing what produces them. `bun test --coverage-reporter=lcov`
 (1.4.0) emits `DA` lines and `FNF`/`FNH` function totals, and **no branch data
@@ -751,13 +756,16 @@ at all** — so a branch figure exists only for the two workerd groups, and the
 3.2 % total is over those alone, not over the repository.
 `@vitest/coverage-istanbul` emits the full line, function and branch set.
 
-The `cli` row is NOT cli's coverage. Its group crashed: `bun test --coverage`
-over cli's 62 suites dies with `panic(main thread): Segmentation fault`
-(reproduced twice, exit 139, Bun 1.4.0), so it wrote no lcov and those 10 files
-are only what other groups imported. The command prints that under
-`NO COVERAGE DATA` and records it in `coverage/summary.json` as
-`groupsWithoutCoverageData` rather than letting a transitive number pass for a
-measurement.
+**One group cannot be measured, and it is a Bun crash, not a gap.**
+`bun test --coverage` over `packages/cli`'s 10 `.test.tsx` TUI suites dies with
+`panic(main thread): Segmentation fault` (exit 139, Bun 1.4.0, reproduced
+three times). A crashed process writes no lcov, so running all 62 cli suites in
+one group erased the whole package's coverage. The runner therefore splits
+`cli-tsx` off as its own group: cli's 52 `.test.ts` suites report the 34.5 %
+above, and `cli-tsx` is named under `NO COVERAGE DATA` in the summary and in
+`coverage/summary.json`'s `groupsWithoutCoverageData`. Those TUI suites still
+RUN under `bun test` — only coverage instrumentation crashes. Delete the split
+in `bunGroups()` once a coverage run over the whole package survives.
 
 ### What is instrumented, and what is not
 

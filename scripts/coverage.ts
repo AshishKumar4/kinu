@@ -104,9 +104,20 @@ function bunGroups(): SuiteGroup[] {
   const buckets = new Map<string, string[]>();
   for (const suite of allBunSuites()) {
     const parts = suite.split('/');
-    const label = suite.startsWith('packages/') ? parts[1] ?? 'packages'
+    const owner = suite.startsWith('packages/') ? parts[1] ?? 'packages'
       : suite.startsWith('scripts/') ? 'scripts'
         : 'tests';
+    // ONE exception to owner-grouping, and it is measured rather than stylistic.
+    // `bun test --coverage` over all 62 `packages/cli` suites dies with
+    // `panic(main thread): Segmentation fault` (exit 139, Bun 1.4.0, reproduced
+    // twice, bun.report/1.4.0/lt134cbb9aiDskooCmi5jB…), and a crashed process
+    // writes NO lcov — so one Bun defect erased the whole package's coverage.
+    // Splitting the `.tsx` TUI suites into their own group contains it: the 51
+    // `.test.ts` suites report, and if the `.tsx` group still crashes it is
+    // named under NO COVERAGE DATA instead of taking the package with it.
+    // Delete this branch once a `bun test --coverage` over the whole package
+    // survives; the group boundary has no other reason to exist.
+    const label = owner === 'cli' && suite.endsWith('.tsx') ? 'cli-tsx' : owner;
     const bucket = buckets.get(label);
     if (bucket === undefined) buckets.set(label, [suite]);
     else bucket.push(suite);
@@ -115,7 +126,9 @@ function bunGroups(): SuiteGroup[] {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([label, suites]) => ({
       label,
-      pkg: label,
+      // `cli-tsx` is a RUNNER group, not a package: its records belong to cli,
+      // and `packageOf` attributes them by path, so the table stays per-package.
+      pkg: label === 'cli-tsx' ? 'cli' : label,
       argv: [
         'bun', 'test', '--coverage', '--coverage-reporter=lcov',
         '--coverage-dir', `coverage/${label}`, ...suites,
