@@ -626,7 +626,7 @@ function processIsInstalledDaemon(pid: number): boolean {
   }
 }
 
-function killSessionDaemon(): void {
+export function killSessionDaemon(): void {
   const daemon = sessionDaemon;
   if (daemon && daemon.exitCode === null && !daemon.killed) {
     try {

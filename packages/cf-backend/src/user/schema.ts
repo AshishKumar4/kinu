@@ -37,6 +37,28 @@ const USER_CLI_TOKEN_ADDED_COLUMNS = {
   authorization_hash: 'TEXT',
 } as const;
 
+// `user_devices` shipped 2026-06-12 with nine columns; every device security
+// hardening since has added one, and a UserDO first created before them keeps
+// its old shape because CREATE TABLE IF NOT EXISTS is a no-op on it. That
+// reached production as `no such column: unstopped_at` on GET /api/cli/devices,
+// which also failed `kinu connect` on a machine whose daemon had connected.
+const USER_DEVICES_ADDED_COLUMNS = {
+  // Superseded secret, held until the new one is first used, so a rotation
+  // message lost with the socket does not brick the machine.
+  prev_token_hash: 'TEXT',
+  // Rotation window, absolute from the last accept.
+  expires_at: 'INTEGER',
+  // Provenance of the newest accept and the record that a second socket took
+  // the slot — rendered in Account settings because a silent takeover is the
+  // shape these three columns exist to expose.
+  last_ip: 'TEXT',
+  last_agent: 'TEXT',
+  replaced_at: 'INTEGER',
+  // Revocation found a command it could not confirm stopped. Owner-visible
+  // fact; survives removal of the active in-flight row.
+  unstopped_at: 'INTEGER',
+} as const;
+
 const USER_CONFIG_ADDED_COLUMNS = {
   version: 'INTEGER NOT NULL DEFAULT 0',
 } as const;
@@ -298,6 +320,7 @@ export function initUserTables(sql: SqlExec): void {
       unstopped_at    INTEGER
     )
   `);
+  reconcileSqlExecColumns(sql, 'user_devices', USER_DEVICES_ADDED_COLUMNS);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
 
   // Device commands whose request reached a daemon but has not reached a

@@ -110,6 +110,44 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
+  test('repairs a user_devices table created before the six device-hardening columns', () => {
+    // The genesis shape (8dab4c8e6, 2026-06-12): nine columns. Every device
+    // security wave since added one, and CREATE TABLE IF NOT EXISTS is a no-op
+    // on a table that exists — the owner's own UserDO answered
+    // `no such column: unstopped_at` on GET /api/cli/devices for exactly this.
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE user_devices (
+        id           TEXT PRIMARY KEY,
+        token_hash   TEXT NOT NULL,
+        label        TEXT NOT NULL,
+        os           TEXT,
+        hostname     TEXT,
+        created_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+        connected_at INTEGER,
+        last_seen_at INTEGER,
+        revoked_at   INTEGER
+      );
+      INSERT INTO user_devices (id, token_hash, label) VALUES ('legacy-device', 'hash', 'Ashish PC');
+    `);
+
+    initUserTables(sqlExec(db));
+
+    expect(columns(db, 'user_devices')).toEqual([
+      'id', 'token_hash', 'label', 'os', 'hostname', 'created_at', 'connected_at', 'last_seen_at',
+      'revoked_at', 'prev_token_hash', 'expires_at', 'last_ip', 'last_agent', 'replaced_at', 'unstopped_at',
+    ]);
+    // The exact projection `UserDO.listDevices` runs, against the repaired row.
+    expect(required(db.query<{ id: string; unstopped_at: number | null; replaced_at: number | null }, []>(
+      `SELECT id, label, os, hostname, created_at, last_seen_at, expires_at,
+              last_ip, last_agent, replaced_at, revoked_at, unstopped_at
+         FROM user_devices
+        WHERE revoked_at IS NULL OR unstopped_at IS NOT NULL
+        ORDER BY created_at DESC`,
+    ).get())).toMatchObject({ id: 'legacy-device', unstopped_at: null, replaced_at: null });
+    db.close();
+  });
+
   test('peer-grant store: default deny, idempotent grant, revoke', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
