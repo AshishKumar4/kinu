@@ -45,6 +45,7 @@ export type WorkspaceBoxOp =
   | { op: 'runCode'; code: string; options?: WorkspaceRunCodeOptions }
   | { op: 'files.read'; path: string }
   | { op: 'files.readBytes'; path: string }
+  | { op: 'files.readRange'; path: string; offset: number; length: number }
   | { op: 'files.write'; path: string; content: string | Uint8Array }
   | { op: 'files.stat'; path: string }
   | { op: 'files.lstat'; path: string }
@@ -74,6 +75,7 @@ export interface WorkspaceBoxResults {
   'runCode': NimbusExecResult;
   'files.read': string | null;
   'files.readBytes': Uint8Array | null;
+  'files.readRange': Awaited<ReturnType<NonNullable<BoxFiles['readRange']>>>;
   'files.write': undefined;
   'files.stat': Awaited<ReturnType<NonNullable<BoxFiles['stat']>>>;
   'files.lstat': Awaited<ReturnType<NonNullable<BoxFiles['lstat']>>>;
@@ -172,6 +174,8 @@ export async function applyWorkspaceBoxOp(
       return await required(box.startProcess, 'startProcess')(op.command, op.options);
     case 'runCode': return await required(box.runCode, 'runCode')(op.code, op.options);
     case 'files.read': return await files.read(op.path);
+    case 'files.readRange':
+      return await required(files.readRange, 'files.readRange')(op.path, op.offset, op.length);
     case 'files.readBytes': return await required(files.readBytes, 'files.readBytes')(op.path);
     case 'files.write': await files.write(op.path, op.content); return undefined;
     case 'files.stat': return await required(files.stat, 'files.stat')(op.path);
@@ -218,6 +222,7 @@ export function createWorkspaceBoxClient(deps: {
     runCode: (code, options) => call({ op: 'runCode', code, options }),
     files: {
       read: (path) => call({ op: 'files.read', path }),
+      readRange: (path, offset, length) => call({ op: 'files.readRange', path, offset, length }),
       readBytes: (path) => call({ op: 'files.readBytes', path }),
       write: async (path, content) => { await call({ op: 'files.write', path, content }); },
       stat: (path) => call({ op: 'files.stat', path }),

@@ -16,6 +16,7 @@ import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
+import type { FilesEioProbeDO } from './files-eio-probe';
 
 declare global {
   namespace Cloudflare {
@@ -39,6 +40,7 @@ declare global {
       STREAM_LIFECYCLE: DurableObjectNamespace<StreamLifecycleDO>;
       SEND_ADMISSION_PROBE: DurableObjectNamespace<SendAdmissionProbeDO>;
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
+      FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
     }
   }
 }

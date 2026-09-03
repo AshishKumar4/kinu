@@ -25,25 +25,48 @@ import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
-/** One fixed origin-session prefix reader. Path and offsets travel as JSON in
- *  one environment value, never through shell text. Nimbus's SDK `files.read`
- *  / `readBytes` surfaces take only a path and materialize the whole file; the
- *  session's own Node can instead open and read exactly the window the viewer
- *  admitted. */
+/** The fallback's own constants: one environment value carries path and
+ *  offsets as JSON, so no shell text ever quotes a path. */
 const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
 const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(process.env.${NIMBUS_RANGE_ENV});if(!Number.isSafeInteger(r.offset)||r.offset<0||!Number.isSafeInteger(r.length)||r.length<=0)throw new Error('invalid range');const fd=fs.openSync(r.path,'r');try{const b=Buffer.allocUnsafe(r.length);const n=fs.readSync(fd,b,0,r.length,r.offset);process.stdout.write(b.subarray(0,n).toString('base64'));}finally{fs.closeSync(fd);}`;
 
+/**
+ * One window of one file's bytes, off the session's own filesystem.
+ *
+ * A file read must not require a shell: the reader below used to run
+ * `node -e <one-line CJS reader>` through the box's exec, and the `node`
+ * command compiles its `-e` source with `new Function` — which the Workers
+ * runtime forbids outright, so the first ranged read on a hosted workspace
+ * died as EIO with "Code generation from strings disallowed for this
+ * context" while every Node-run test stayed green. The box's file plane now
+ * carries the native ranged read; the shell reader survives only as the
+ * fallback for an SDK handle that predates it, and no hosted deployment is
+ * on one (the box carries the op on both sides of the RPC).
+ */
 async function readNimbusOriginRange(
   box: NimbusSandboxHandle, path: string, offset: number, length: number,
 ): Promise<Uint8Array> {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
     throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
   }
+  const absolute = workspacePath(path);
+  const native = box.files.readRange;
+  if (native) {
+    const bytes = await native.call(box.files, absolute, offset, length);
+    if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+    return bytes;
+  }
+  // Path and offsets travel as JSON in one environment value, never through
+  // shell text, for the handles that still need the session's own Node.
   const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
-    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: workspacePath(path), offset, length }) },
+    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
   });
   if (!result.success || result.exitCode !== 0) {
-    throw makeVfsError('EIO', result.stderr.trim() || `could not read range of '${path}'`, path);
+    throw makeVfsError(
+      'EIO',
+      `this file's bytes could not be read right now — try opening it again, or download it instead`,
+      path,
+    );
   }
   return base64ToBytes(result.stdout.trim());
 }
@@ -119,6 +142,10 @@ export interface NimbusSandboxHandle {
     read(path: string): Promise<string | null>;
     /** Raw-byte read (SDK ≥0.1.4) — the binary-safe counterpart of `read`. */
     readBytes?(path: string): Promise<Uint8Array | null>;
+    /** Exactly this window of one file's bytes, without materializing the
+     *  file. Absent on an SDK handle that predates it; null when the path is
+     *  absent, the same answer `read` gives. */
+    readRange?(path: string, offset: number, length: number): Promise<Uint8Array | null>;
     /** Whole-file write. The SDK takes no precondition and answers nothing, so
      *  a caller that needs compare-and-write cannot get it here. */
     write(path: string, content: string | Uint8Array): Promise<void>;

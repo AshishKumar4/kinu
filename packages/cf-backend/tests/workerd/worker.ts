@@ -35,6 +35,9 @@ export { DeviceLedgerProbeDO } from './device-inflight-probe';
 // The terminal-effect ledger — the same charter exception, for what one settled
 // turn still owes after the isolate running its effects dies.
 export { TerminalEffectProbeDO } from './terminal-effect-probe';
+// The Files-tab EIO probe — the same charter exception: the real workspace
+// file plane under the runtime whose CSP is the defect.
+export { FilesEioProbeDO } from './files-eio-probe';
 import * as v from 'valibot';
 
 /**

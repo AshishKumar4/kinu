@@ -98,6 +98,10 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
       const vfs = await open();
       return absentAsNull(() => vfs.readFile(path));
     },
+    async readRange(path, offset, length) {
+      const vfs = await open();
+      return absentAsNull(() => vfs.readRange(path, offset, length));
+    },
     async write(path, content) {
       const vfs = await open();
       // The SDK write contract creates missing parents — the remote session's
