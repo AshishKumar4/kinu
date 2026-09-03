@@ -18,6 +18,7 @@ import type {
 import type { CraftedTool } from './craft';
 import type { Usage } from '../usage';
 import type { ExecutionRouter } from '../execution/types';
+import type { DeviceTransport } from '../execution/device-tunnel-executor';
 import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
 import type { WorkMode } from '../prompting/surface';
@@ -177,6 +178,15 @@ export interface AgentRuntime {
    * code that doesn't need multi-executor support ignores this field.
    */
   executionRouter?: ExecutionRouter;
+  /**
+   * The device fleet's transport, where a backend reaches the user's own
+   * machines through a hub (CF). Its cached snapshot is what the dynamic
+   * context reads to tell the model the fleet — every machine by name, with
+   * platform and liveness — once per step and byte-stably. Absent on a
+   * backend whose only machine is the host it runs on (the CLI), which then
+   * renders no fleet: one machine is not a roster.
+   */
+  deviceTransport?: DeviceTransport;
   /**
    * POSIX shell bound to the agent's VFS. Supplied by the backend adapter
    * (CF: createShell(sqliteFS); CLI: createShell(sqliteFS)). The `run` tool

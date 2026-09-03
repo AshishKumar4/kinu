@@ -49,7 +49,11 @@ import {
 } from './sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
-import { describeGpuNodes, effectiveDeviceMode } from '../execution/device-status';
+import {
+  connectedDevices, describeGpuNodes, effectiveDeviceMode,
+  type DeviceFleetEntry,
+} from '../execution/device-status';
+import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types';
 
@@ -123,6 +127,12 @@ export interface DynamicContext {
   /** Live executor lifecycle — rendered as status labels only; the executor
    *  doctrine itself lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
+  /** The user's device fleet — every registered machine by name with its
+   *  platform, liveness and, per LIVE machine, this workspace's reach on it.
+   *  Rendered as its own roster so the model is told the fleet once, by name,
+   *  and never a single "the device" that two machines take turns being.
+   *  Absent where a backend has no fleet (the CLI's own host is not one). */
+  devices?: readonly DeviceFleetEntry[];
   /** Background work still running (newest first). */
   jobs?: ActiveRoster<DynamicJob>;
   /** The agent's own open task list, in write order, each task followed by its
@@ -202,6 +212,9 @@ export interface DynamicContextSources {
    *  so a finding recorded mid-turn is visible on the very next step. */
   readonly recoveryFindings: readonly string[];
   readonly executors: readonly PromptExecutorInfo[];
+  /** The device fleet, off the device transport's cached snapshot — absent
+   *  on a backend with no fleet. */
+  readonly devices?: readonly DeviceFleetEntry[];
   /** The running half of the background-job registry, with its true count —
    *  BackgroundJobStore.listRunning(). */
   readonly runningJobs: ActiveRoster<{ id: string; kind: string; label: string | null }>;
@@ -257,6 +270,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
       total: subordinateDelegates.length + sources.liveHeadRuns.total,
     },
   };
+  if (sources.devices !== undefined && sources.devices.length > 0) context.devices = sources.devices;
   if (sources.approvals && sources.approvals.total > 0) context.approvals = sources.approvals;
   if (sources.factsBlock) context.factsBlock = sources.factsBlock;
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
@@ -418,6 +432,36 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
   }
 }
 
+/**
+ * One machine of the fleet, as a status line: its name, platform and
+ * liveness, and — live only — where its files sit in the agent's plane, this
+ * workspace's grant on it, how it runs a command, and what it can run.
+ *
+ * Nothing clock-derived and nothing order-derived: the toolchain renders in
+ * the canonical capability order, and `probedAt` never renders, so an
+ * unchanged fleet is the same bytes on every step. The mount segment is the
+ * same function the file plane routes on, so what the model reads here is
+ * exactly what `/pc/<name>` resolves.
+ */
+function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[]): string {
+  const platform = device.os ? ` (${device.os})` : '';
+  if (!device.connected) {
+    return `- ${device.name}${platform}: registered, OFFLINE — the user can reconnect it with \`kinu connect\``;
+  }
+  const live = connectedDevices(fleet);
+  const mount = live.length > 1 ? `/pc/${deviceMountSegment(device, fleet)}` : '/pc';
+  const parts = [`- ${device.name}${platform}: connected — files at ${mount}`];
+  if (device.granted === true) parts.push('this workspace holds its grant');
+  else if (device.granted === false) parts.push('no grant yet for this workspace: the first call asks once');
+  if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'laptop', sandbox: device.sandbox }).replace(/^ — /, ''));
+  // The hub re-asks a machine whose answer aged out, so what arrives here is
+  // fresh or null by the hub's clock — no clock is consulted in a render.
+  const present = device.toolchain?.present ?? [];
+  const runs = EXECUTOR_CAPABILITIES.filter((capability) => present.includes(capability));
+  if (runs.length > 0) parts.push(`runs: ${runs.join(', ')}`);
+  return parts.join(' — ');
+}
+
 /** Per-list caps. The block rides every request of every step, so each roster
  *  states its head and an honest count of the tail rather than growing without
  *  bound. */
@@ -506,6 +550,22 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
       'Live availability for the runtimes described in the system prompt, and what each one declares it can run:',
       ...rows,
       ...legend,
+    ].join('\n'));
+  }
+
+  const fleet = ctx.devices ?? [];
+  if (fleet.length > 0) {
+    const live = connectedDevices(fleet);
+    // The rule the model has to act on, stated with the roster it applies to:
+    // one live machine needs no name; several do, and the ask says so in the
+    // same words the refusal uses.
+    const doctrine = live.length > 1
+      ? 'Several machines are connected: name the machine each `laptop` call and `run { runtime: "laptop" }` is for, with `device: "<name>"`. A call that names none is refused.'
+      : 'One machine is connected: `laptop` calls reach it with no `device` needed.';
+    sections.push([
+      '## Your user\'s machines (the `laptop` runtime)',
+      doctrine,
+      ...fleet.map((device) => renderDeviceLine(device, fleet)),
     ].join('\n'));
   }
 

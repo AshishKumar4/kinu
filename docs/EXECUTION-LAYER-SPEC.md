@@ -31,12 +31,27 @@ on no surface list, so `sealRpcSurface` shadows it and a stub-holder cannot
 call it. The Environment surface labels this `Parent workspace`
 (`cf-backend/src/lib/executors.ts:38`).
 
-The mount table (`core/src/vfs/mounts.ts`) exposes a live device at `/pc` and a
-bound container at `/sandbox`. Mount paths route to the target `files` VFS
-with the prefix stripped, preserving its consent and path boundaries. An
-absent environment is explicit (`ENXIO: /pc — no device connected`), never an
-empty directory. There is no copy, sync, failover, or second Cloudflare
-`nimbus.*` provider. Name a runtime for commands; cross a mount for files.
+The mount table (`core/src/vfs/mounts.ts`) exposes the user's live device at
+`/pc` and a bound container at `/sandbox`. Mount paths route to the target
+`files` VFS with the prefix stripped, preserving its consent and path
+boundaries. An absent environment is explicit (`ENXIO: /pc — no device
+connected`), never an empty directory. There is no copy, sync, failover, or
+second Cloudflare `nimbus.*` provider. Name a runtime for commands; cross a
+mount for files.
+
+The user's account is a fleet: several machines can be linked and several live
+at once. One live machine keeps `/pc` as its own root, byte for byte. Two or
+more mount each machine under `/pc/<name>`, the segment being the machine's
+user-chosen name, or its id when the name is shared or is not a usable path
+segment (`deviceMountSegment`, `core/src/execution/device-tunnel-executor.ts`).
+`/pc` itself then lists the machines. A path under no live machine is
+`ENXIO` naming the fleet. Commands name their machine the same way: every
+`laptop` tool and `run { runtime: "laptop" }` take `device: "<name>"`; with one
+machine live it may be omitted, with several a call that names none is refused
+with the classified ask (`deviceFleetAsk`, `core/src/execution/device-status.ts`).
+The hub routes on the device id, which rides every frame it sends, and never
+picks a machine for an unnamed call (`DeviceSocketHub.connectedDeviceId`,
+`cf-backend/src/user/device-hub.ts`). Grants stay per (workspace, device).
 
 I omit line numbers for `packages/devbox/**`, `core/src/execution/**`, and
 `cf-backend/src/{runtime,kinu-sandbox,sandbox-lifecycle}.ts`: those files

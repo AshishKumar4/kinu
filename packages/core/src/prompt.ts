@@ -217,11 +217,7 @@ function renderExecutorLine(
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, {});
       case 'laptop':
-        return render(LAPTOP_EXECUTOR_LINE, {
-          cliLocal,
-          deviceName: deviceDisplayName(exec),
-          granted: exec.granted === true,
-        });
+        return render(LAPTOP_EXECUTOR_LINE, { cliLocal });
       default:
         return render(GENERIC_EXECUTOR_LINE, { name: exec.name });
   }

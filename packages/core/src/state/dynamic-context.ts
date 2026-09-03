@@ -80,6 +80,9 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql),
     executors: rt.executionRouter?.listExecutors() ?? [],
+    // The fleet, off the transport's cached snapshot: sync, cheap, and the
+    // same read the executor row is derived from, so the two cannot disagree.
+    devices: rt.deviceTransport?.status().devices,
     runningJobs: stores.jobs.listRunning(),
     openTasks: stores.taskList.listOpen(),
     liveHeadRuns: stores.headJournal.listLive(),

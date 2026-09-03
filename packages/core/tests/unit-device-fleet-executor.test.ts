@@ -10,6 +10,10 @@ import {
 } from '../src/execution/device-tunnel-executor';
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
 import { parseRefusal } from '../src/execution/exec-result';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { toolExecute } from '@kinu.run/test-utils';
+import { createTestRuntime } from './helpers';
 import type { JsonValue } from '../src/utils/json';
 
 const STUDIO: DeviceFleetEntry = {
@@ -212,5 +216,39 @@ describe('the composite file plane', () => {
     expect(deviceMountSegment(twin, fleet)).toBe('dev-twin');
     expect(deviceMountSegment(slashed, fleet)).toBe('dev-slashed');
     expect(deviceMountSegment(RIG, [STUDIO, RIG])).toBe('mrwhite@rig');
+  });
+});
+
+describe('the run tool names the machine', () => {
+  /** `run` over the real router and the real provider — the path a model's
+   *  `run { runtime: "laptop", device }` actually takes. */
+  function runTool(fleet: readonly DeviceFleetEntry[]) {
+    const t = fleetTransport(fleet);
+    const { rt } = createTestRuntime();
+    const router = new DefaultExecutionRouter();
+    router.register(createDeviceTunnelExecutor(t));
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
+    return {
+      t,
+      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, string>(tools.run),
+    };
+  }
+
+  test('device rides the call to the named machine, and its absence on a fleet is the ask', async () => {
+    const { t, run } = runTool([STUDIO, RIG]);
+
+    expect(await run({ command: 'uname', runtime: 'laptop', device: 'mrwhite@rig', why: 'their GPU' })).toBe('ran on dev-rig');
+    expect(t.sent.map((frame) => frame.deviceId)).toEqual(['dev-rig']);
+
+    const refusal = parseRefusal(await run({ command: 'uname', runtime: 'laptop', why: 'their GPU' }));
+    expect(refusal?.reason).toBe('bad_input');
+    expect(refusal?.error).toContain('name the machine this command runs on');
+    expect(t.sent).toHaveLength(1);
+  });
+
+  test('the field exists on the schema the model reads, and only laptop needs it', async () => {
+    const { run } = runTool([STUDIO]);
+    // One machine: no device needed, exactly as before the fleet.
+    expect(await run({ command: 'uname', runtime: 'laptop', why: 'their files' })).toBe('ran on dev-studio');
   });
 });

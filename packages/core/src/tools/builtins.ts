@@ -464,7 +464,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // somewhere else.
   tools.run = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.run,
-    inputSchema: jsonSchema<{ command: string; runtime?: string; why?: string }>({
+    inputSchema: jsonSchema<{ command: string; runtime?: string; device?: string; why?: string }>({
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command to run' },
@@ -476,6 +476,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
             'Every other value names a registered environment; the live prompt states which files it addresses and any provisioning or consent semantics. Choose that runtime explicitly when the work lives there.',
         },
+        device: {
+          type: 'string',
+          description:
+            'For runtime "laptop": the machine this command runs on, by the name the execution-status block lists. Required when more than one of the user\'s machines is connected; a command that names none is refused. With one machine connected it may be omitted.',
+        },
         why: {
           type: 'string',
           description:
@@ -484,7 +489,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       },
       required: ['command'],
     }),
-    execute: async (args: { command: string; runtime?: string; why?: string }, options?: ToolExecutionOptions) => {
+    execute: async (args: { command: string; runtime?: string; device?: string; why?: string }, options?: ToolExecutionOptions) => {
       const signal = options?.abortSignal;
       // No gate here — the approval ladder (reviewCommand / shellApprovalMode
       // / the interactive channel) lives at the execution seam this tool
@@ -567,9 +572,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           message: `Runtime "${runtimeKey}" is provisioned but does not expose shell exec.`,
         });
       }
+      // The trailing context every executor's exec reads: the abort signal,
+      // and — for a device runtime — which of the user's machines the command
+      // is for. An executor with no fleet ignores the device.
+      const context = { signal, device: args.device };
       let result: string;
       try {
-        result = String(await execTool.execute(args.command, signal ? { signal } : undefined));
+        result = String(await execTool.execute(args.command, context));
       } catch (caught) {
         // A remote executor that cannot kill an in-flight command stops WAITING
         // and throws (execution/signal.ts), and the platform's own memory wall

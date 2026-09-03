@@ -11,8 +11,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_DENIED, SEVERAL_DEVICES_CONNECTED, NO_DEVICE_CONNECTED,
-  connectedDevices,
-  type DeviceFleetEntry, type JsonValue,
+  DynamicContextLedger, connectedDevices, deviceFleetAsk, renderDynamicContextBlock,
+  type DeviceFleetEntry, type DeviceStatus, type DynamicContext, type JsonValue,
 } from '@kinu.run/core';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner,
@@ -239,6 +239,86 @@ describe('two daemons connected at once', () => {
     expect(await fleet.userDO.getDeviceFileView(fleet.workspace, WORKSPACE, fleet.macId)).toEqual({ unconfined: false });
     // Asked about no machine while two are live: the closed answer, never a pick.
     expect(await fleet.userDO.getDeviceFileView(fleet.workspace, WORKSPACE)).toEqual({ unconfined: false });
+    await fleet.end();
+  });
+});
+
+describe('what the model is told', () => {
+  /** The executor row plus the fleet, as the dynamic-context block renders
+   *  them from a hub snapshot — the same two inputs both backends assemble
+   *  (state/dynamic-context.ts reads the fleet off the transport's snapshot). */
+  function context(status: DeviceStatus): DynamicContext {
+    return {
+      executors: [{
+        name: 'laptop', kind: 'laptop', available: status.connected, configured: status.registered,
+        active: status.connected, status: status.connected ? 'active' : 'disconnected',
+      }],
+      devices: status.devices,
+    };
+  }
+  const render = (status: DeviceStatus): string => renderDynamicContextBlock(context(status)) ?? '';
+
+  test('the fleet is named once, with platform, liveness, files and grant per machine', async () => {
+    const fleet = await twoDaemons();
+    fleet.consentDecision = 'always';
+    await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['ls'], { agentName: WORKSPACE, deviceId: fleet.macId });
+
+    const block = render(await fleet.userDO.deviceRuntimeStatus(fleet.workspace));
+
+    expect(block).toContain("## Your user's machines (the `laptop` runtime)");
+    expect(block).toContain('Several machines are connected: name the machine');
+    expect(block).toContain('- ashish@mac (darwin): connected — files at /pc/ashish@mac — this workspace holds its grant');
+    expect(block).toContain('- mrwhite@rig (linux): connected — files at /pc/mrwhite@rig — no grant yet for this workspace');
+    // Each machine's own sandbox and toolchain, not the other's.
+    expect(block).toContain('GPU: nvidia0');
+    expect(block).toContain('agent home /home/mrwhite/.kinu/agents/workspace-a/home');
+    expect(block).toContain('agent home /Users/ashish/.kinu/agents/workspace-a/home');
+    expect(block).toContain('runs: javascript');
+    // Each name appears in the roster exactly once — told once, not per row
+    // of some other section.
+    expect(block.split('ashish@mac (darwin)')).toHaveLength(2);
+    expect(block.split('mrwhite@rig (linux)')).toHaveLength(2);
+    // No id and no socket detail reaches the model.
+    expect(block).not.toContain('dev-');
+    await fleet.end();
+  });
+
+  test('two renders of one fleet are one block: the ledger does not flap', async () => {
+    const fleet = await twoDaemons();
+    const ledger = new DynamicContextLedger();
+    const status = async () => fleet.userDO.deviceRuntimeStatus(fleet.workspace);
+    const snapshot = async () => render(await status());
+
+    const first = await snapshot();
+    const second = await snapshot();
+    expect(second).toBe(first);
+    // The ledger's own rule — append only when the render differs — sees one
+    // block across two steps of an unchanged fleet.
+    ledger.weave([], context(await status()));
+    ledger.weave([], context(await status()));
+    expect(ledger.size).toBe(1);
+
+    // A machine leaving IS a change, and is said once: the rig reads as
+    // registered and offline, the mac keeps its line, and the doctrine drops
+    // to the one-machine rule.
+    await fleet.rig.close();
+    const after = await snapshot();
+    expect(after).not.toBe(first);
+    expect(after).toContain('- mrwhite@rig (linux): registered, OFFLINE');
+    expect(after).toContain('- ashish@mac (darwin): connected — files at /pc —');
+    expect(after).toContain('One machine is connected');
+    expect(await snapshot()).toBe(after);
+    await fleet.end();
+  });
+
+  test('the roster and the refusal speak the same words', async () => {
+    const fleet = await twoDaemons();
+    const status = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
+    // The ask a refused call carries names exactly the machines the roster
+    // lists as connected, in the roster's order, with the same platforms.
+    expect(deviceFleetAsk(status.devices)).toBe(
+      'name the machine this command runs on — connected: mrwhite@rig (linux), ashish@mac (darwin). Pass it as device: "<name>".',
+    );
     await fleet.end();
   });
 });

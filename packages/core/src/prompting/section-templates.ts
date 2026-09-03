@@ -173,9 +173,16 @@ export const SANDBOX_EXECUTOR_LINE = definePromptSection(
   '- **sandbox.*** / `runtime: "sandbox"`: a full Linux container with its own CPU, memory and disk — heavier installs, longer-running processes, large clones and builds, bulk data, and user-visible port-listening apps. It provisions on first use, so moving a job here the moment it outgrows the workspace is the normal step.',
 );
 
+/**
+ * The namespace line names no machine. Which machines the user has, which
+ * are live, and whether this workspace holds each one's grant are the FLEET,
+ * and the fleet is volatile: it renders in the dynamic-context block, by
+ * name, every step. This line carries only what never changes — what the
+ * namespace is and how a call names its machine.
+ */
 export const LAPTOP_EXECUTOR_LINE = definePromptSection(
   'executors/laptop',
-  '- **laptop.*** / `runtime: "laptop"` — {{deviceName}}: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}your user\'s own computer, reached through the Kinu device tunnel. Commands run under `bash -c`. Use it when the task targets their local files, local commands, or desktop environment.{{#if granted}} This workspace holds its access grant already.{{else}} This workspace has NO grant yet: your first call asks them to grant it once, for this workspace — that prompt is expected, not an error.{{/if}}{{/if}}',
+  '- **laptop.*** / `runtime: "laptop"`: {{#if cliLocal}}the local machine the Kinu CLI is running on — direct access, no tunnel or consent prompt.{{else}}your user\'s own machines, over the Kinu device tunnel; commands run under `bash -c`. Use it for their local files, commands or desktop. The execution-status block names each machine and what it can do. With more than one connected, name the machine on every call with `device: "<name>"`; a call that names none is refused. Grants are per machine: a first call on an ungranted machine asks them once — expected, not an error.{{/if}}',
 );
 
 /** A registered-but-offline device is still listed (the user can bring it

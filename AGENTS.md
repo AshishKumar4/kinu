@@ -291,7 +291,10 @@ own, which would be a second, empty workspace. Optional sandbox and laptop rows 
 with their own native paths. The workspace plane carries a MOUNT TABLE
 (`core/src/vfs/mounts.ts`): a live device's files appear at `/pc`, a bound
 container's at `/sandbox`, served through the owning executor's own `files`
-VFS with every boundary it enforces (device consent) intact. The mount table
+VFS with every boundary it enforces (device consent) intact. The device plane
+is a FLEET: with several of the user's machines live, each mounts under
+`/pc/<name>` and every `laptop` call names its machine with `device` (one live
+machine keeps plain `/pc` and needs no name); see docs/EXECUTION-LAYER-SPEC.md. The mount table
 extends the one view; there is no second Nimbus executor or filesystem, and no
 copy of workspace bytes behind a mount point. The workspace shell does not see
 mount points — commands reach other machines only through their namespaces.

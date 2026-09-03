@@ -811,52 +811,53 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('laptop.***');
   });
 
-  test('an ungranted device teaches that the first call asks for this workspace', () => {
+  test('the online laptop line names no machine and no grant: the fleet is volatile', () => {
+    // The user may have several machines live at once, and which they are,
+    // which are connected and whether THIS workspace holds each one's grant
+    // change under a session. All of that renders in the dynamic-context
+    // roster, by name, every step. The stable prefix carries only what never
+    // changes — and it used to carry one machine's name, which with two
+    // connected was whichever the hub happened to pick.
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        {
-          name: 'laptop', kind: 'laptop', available: true, configured: true, active: true,
-          status: 'active', label: 'ashish@studio', granted: false,
-        },
-      ],
-    });
+    for (const granted of [false, true]) {
+      const prompt = buildSystemPromptSync(rt, {
+        backend: 'cf',
+        executors: [
+          {
+            name: 'laptop', kind: 'laptop', available: true, configured: true, active: true,
+            status: 'active', label: 'ashish@studio', granted,
+          },
+        ],
+      });
 
-    expect(prompt).toContain('laptop.*');
-    expect(prompt).toContain('ashish@studio');
-    expect(prompt).toContain('NO grant yet');
-    expect(prompt).toContain('expected, not an error');
-    // The live-state framing replaces "assume absent forever".
-    expect(prompt).toContain('live state at the start of THIS turn');
+      expect(prompt).toContain('laptop.*');
+      expect(prompt).not.toContain('ashish@studio');
+      expect(prompt).not.toContain('NO grant yet');
+      expect(prompt).not.toContain('holds its access grant already');
+      // What the line DOES teach: grants are per machine, the first call asks
+      // once, and a fleet of several needs the machine named on every call.
+      expect(prompt).toContain('Grants are per machine');
+      expect(prompt).toContain('expected, not an error');
+      expect(prompt).toContain('device: "<name>"');
+      expect(prompt).toContain('a call that names none is refused');
+      // The live-state framing replaces "assume absent forever".
+      expect(prompt).toContain('live state at the start of THIS turn');
+    }
   });
 
-  test('a granted device says so, so the model does not predict a prompt that will not come', () => {
+  test('the online laptop line renders the same bytes whatever the fleet looks like', () => {
+    // The whole reason names left the prefix: two fleets, one prefix. A
+    // connect or a rename must not re-prefill the conversation.
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, {
+    const render = (identity: { label?: string; granted?: boolean }) => buildSystemPromptSync(rt, {
       backend: 'cf',
-      executors: [
-        {
-          name: 'laptop', kind: 'laptop', available: true, configured: true, active: true,
-          status: 'active', label: 'ashish@studio', granted: true,
-        },
-      ],
+      executors: [{
+        name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
+        ...identity,
+      }],
     });
-
-    expect(prompt).toContain('holds its access grant already');
-    expect(prompt).not.toContain('NO grant yet');
-  });
-
-  test('an unnamed device is described, never called "laptop", to the user', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
-      ],
-    });
-
-    expect(prompt).toContain("your user's PC");
+    expect(render({ label: 'ashish@studio', granted: false })).toBe(render({ label: 'mrwhite@rig', granted: true }));
+    expect(render({})).toBe(render({ label: 'ashish@studio', granted: true }));
   });
 
   test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
@@ -1258,7 +1259,15 @@ describe('buildSystemPromptSync', () => {
       //     +73 (device identity) the laptop rows now name the machine the user
       //       named it and say whether this workspace already holds its access
       //       grant. 2928 → 3001.
-      'Execution environments': 3050,
+      // 2026-09-03: RAISED 3050 → 3150 for the fleet, measured 3118.
+      //   +117 NET. The laptop line stopped naming ONE machine and one grant
+      //     (−73: both left for the dynamic-context roster, where every machine
+      //     renders by name each step — with two connected, the prefix's one
+      //     name was whichever the hub happened to pick) and now states the
+      //     fleet rule instead (+190): a call names its machine with
+      //     `device: "<name>"` when more than one is connected, a call that
+      //     names none is refused, and grants are per machine.
+      'Execution environments': 3150,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
