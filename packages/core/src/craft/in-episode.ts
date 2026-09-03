@@ -99,11 +99,10 @@ export const CRAFT_INVOCATION_QUALITY = { returned: 0.7, raised: 0.1 } as const;
  *  can never be retired however badly it behaves. */
 export const CRAFT_NEUTRAL_PRIOR = 0.5;
 
-/** Sandbox namespaces a crafted tool is callable through. Both backends bind
- *  the same object under both names — CF splices `const tools = {…}` into the
- *  sandbox arrow and seeds `codemode.<name>`; the CLI binds one crafted-tool
- *  record as both parameters. */
-const CRAFT_NAMESPACES = ['tools', 'codemode'] as const;
+/** Sandbox namespace a crafted tool is callable through. One name on both
+ *  backends: CF defines the tools in the `tools` provider's prelude, and the
+ *  CLI binds the crafted-tool record as the `tools` parameter. */
+const CRAFT_NAMESPACES = ['tools'] as const;
 
 /** A name that can be written as `<namespace>.<name>(`. Names that cannot are
  *  skipped rather than escaped: a crafted tool nobody can dot-call has no call
@@ -223,8 +222,9 @@ export function craftCreatesTool(code: string): boolean {
 /** The attribution stamp a crafted tool's failure carries out of the sandbox,
  *  so the host can tell "this artifact raised" from "the code around it did".
  *  Emitted by core's crafted-tool binding (tools/builtins.ts) and by the CF
- *  in-sandbox preamble (cf-backend/crafted-tool-registry.ts) — one format, and
- *  it is defined here because this module is the only thing that reads it. */
+ *  sandbox's `defineCrafted` (cf-backend/src/codemode-node-shim.ts) — one
+ *  format, and it is defined here because this module is the only thing that
+ *  reads it. */
 export function craftFailureMarker(name: string): string {
   return `[crafted:${name}]`;
 }

@@ -7,7 +7,7 @@
  * and the agent's tool surface is intersected with `allowed_tools`.
  *
  * This is fundamentally different from a CraftedTool: a CraftedTool is
- * executable JavaScript the agent wrote and can call as `codemode.<name>`;
+ * executable JavaScript the agent wrote and can call as `tools.<name>`;
  * a Skill is a prompt fragment + tool gate. The two coexist.
  *
  * Format (round-trippable with Anthropic Claude Code):

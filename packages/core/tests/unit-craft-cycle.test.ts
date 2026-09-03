@@ -134,7 +134,7 @@ describe('CraftCycle — the fitness signal', () => {
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
     cycle.reset(true);
     ledger.tools.push('sum');
-    block(cycle, 'await workspace.createTool("sum","d","async()=>1"); return codemode.sum(1)', { result: '1' });
+    block(cycle, 'await workspace.createTool("sum","d","async()=>1"); return tools.sum(1)', { result: '1' });
 
     expect(ledger.observations).toEqual([]);
     const snap = cycle.snapshot()!;
@@ -296,7 +296,7 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
 
   test('a crafted tool called from a submitted block is the turn\'s craft usage', () => {
     expect(turnUsage(fakeLedger(['sum', 'fmt']), [
-      { toolName: 'execute_tools', code: 'const a = await tools.sum(1); return codemode.fmt(a)' },
+      { toolName: 'execute_tools', code: 'const a = await tools.sum(1); return tools.fmt(a)' },
     ])).toEqual(['sum', 'fmt']);
   });
 

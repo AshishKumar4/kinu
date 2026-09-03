@@ -262,7 +262,8 @@ import {
   CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
-import { createExecuteToolsTool } from "./execute-tools";
+import { createExecuteToolsFactory, SANDBOX_TOOL_PLACEHOLDER, type ExecuteToolsFactory } from "./execute-tools";
+import { codemodeEgress } from "./codemode-egress";
 import { createHeadRuntime } from "./head-runtime";
 import { spawnNodeFacet } from "./facet-spawn";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
@@ -1669,33 +1670,6 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  /**
-   * Drop the in-flight turn's pending steers and hand their texts back — the
-   * abort path's half of the steer contract (core cancelCurrentWork calls this
-   * through `interruptSteers`). Stop means stop; it does not mean "stop and
-   * then do what I typed". But the surface already rendered them as sent, so
-   * they come back to the composer rather than disappearing.
-   */
-  protected async interruptUserSteers(): Promise<string[]> {
-    await this.userSteer.waitForLanding();
-    const dropped = this.userSteer.interrupt();
-    try {
-      for (const steer of dropped) {
-        if (steer.id) this.ctx.storage.sql.exec('DELETE FROM pending_steers WHERE id = ?', steer.id);
-      }
-    } catch (err) {
-      // The SQL row is still authority. Put the exact prefix back in RAM before
-      // surfacing failure, so a second Stop in this activation sees what SQL says
-      // is queued; never emit returned for a transition that did not commit.
-      this.userSteer.restoreInterrupted(dropped);
-      throw err;
-    }
-    for (const steer of dropped) {
-      if (steer.id) this.broadcastSteerStatus({ status: 'returned', steerId: steer.id, text: steer.text });
-    }
-    return dropped.map((steer) => steer.text);
-  }
-
   /** The one place a steer's lifecycle reaches connected surfaces. Written as a
    *  literal so the broadcast-wiring gate can see the channel it must prove has
    *  a consumer. */
@@ -1849,7 +1823,6 @@ export abstract class ActorAgent extends Think<Env> {
         context: this.acc.context,
         files: this.acc.files,
         escalations: this.acc.escalations,
-        delegation: this.orch.steering.delegationSnapshot(),
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         recoveries: this.orch.recoverySnapshot(),
@@ -2734,9 +2707,6 @@ export abstract class ActorAgent extends Think<Env> {
         // promotion gate's trials. Every actor wires it: a facet accrues
         // evolution debt like any agent, and its refiner is the port above.
         refinementLane: () => this.runRefinementLane(),
-        roleCatalog: () => this._turnProfileInputs
-          ? Object.keys(effectiveRoleCatalog(this._turnProfileInputs.envelope.catalog))
-          : undefined,
         sinks: {
           logActivity: (e, d) => this.logActivity(e, d),
           onToolCallEvent: (ev) => {
@@ -3543,11 +3513,11 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
 
-  // Preamble-injection: the codemode tool is built once per DO lifetime.
-  // Its executor (PreambleCraftedExecutor) reads craftStore.list() on every
-  // execute call, so newly-saved tools appear on the next execute_tools
-  // invocation without any registry or cache coherence work.
-  private readonly _craftExecTools = new Map<string, ReturnType<typeof createExecuteToolsTool>>();
+  // The execute_tools factory is built once per DO lifetime. Its sandbox
+  // reads craftStore.list() on every execute call, so newly-saved tools appear
+  // on the next execute_tools invocation without any registry or cache
+  // coherence work.
+  private readonly _craftExecTools = new Map<string, ExecuteToolsFactory>();
 
   /** The stores every agent has, from core — one list both backends inherit,
    *  so a store added there exists for this actor too. Lazy inside: the bundle
@@ -4449,8 +4419,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected get rt(): CFRuntime {
     if (!this._rt) {
-      // No onToolRegistered hook: PreambleCraftedExecutor reads craftStore.list()
-      // fresh on every execute_tools call, so mid-turn saves propagate
+      // No onToolRegistered hook: the execute_tools sandbox reads
+      // craftStore.list() fresh on every call, so mid-turn saves propagate
       // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
       // `this` (a subclass) DOES have access to its protected env/ctx; cast to
       // the AgentHost view createCFRuntime needs.
@@ -4518,7 +4488,7 @@ export abstract class ActorAgent extends Think<Env> {
    * Every codemode namespace this turn wires, in one place.
    *
    * ONE list with two readers: `beforeTurn` asks it which codemode-only
-   * capabilities exist so a role can name them, and `getExecuteToolsTool` asks
+   * capabilities exist so a role can name them, and `getExecuteToolsFactory` asks
    * it what to narrow. Two lists would let a role allow a capability whose
    * provider is absent, or narrow a set the resolver never saw.
    *
@@ -4534,7 +4504,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Build (or return cached) this DO's execute_tools tool. Construction (see
    *  execute-tools.ts) is once per DO lifetime; crafted tools saved mid-turn
    *  still become callable because the executor re-reads craftStore per call. */
-  private getExecuteToolsTool(mode: WorkMode, profileKey: string): ReturnType<typeof createExecuteToolsTool> {
+  private getExecuteToolsFactory(mode: WorkMode, profileKey: string): ExecuteToolsFactory {
     // The role's narrowing is PART OF THE KEY. `profileKey` is the actor's
     // active tool names, which two roles can share while reaching different
     // namespaces — so without the digest the first role's provider set is
@@ -4542,10 +4512,12 @@ export abstract class ActorAgent extends Think<Env> {
     const narrowing = narrowToolSurface(this._turnProfile?.allowedTools);
     const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${this._turnProfile?.digest ?? ''}`;
     if (!this._craftExecTools.has(key)) {
-      this._craftExecTools.set(key, createExecuteToolsTool({
+      this._craftExecTools.set(key, createExecuteToolsFactory({
         loader: this.env.LOADER,
+        egress: codemodeEgress(),
         rt: this.rt,
         sql: this.boundSql,
+        workspace: this.workspaceName(),
         webSearch: this.getWebSearchProvider(),
         // `agents.*` in the sandbox — the same deps the top-level tool holds,
         // so a script delegates through the one path with the one action gate.
@@ -4567,9 +4539,9 @@ export abstract class ActorAgent extends Think<Env> {
         },
       }));
     }
-    const tool = this._craftExecTools.get(key);
-    if (tool === undefined) throw new Error(`execute_tools profile ${key} was not built`);
-    return tool;
+    const factory = this._craftExecTools.get(key);
+    if (factory === undefined) throw new Error(`execute_tools profile ${key} was not built`);
+    return factory;
   }
 
   /**
@@ -4841,7 +4813,10 @@ export abstract class ActorAgent extends Think<Env> {
     return { landed: await this.acceptUserSteer(text, isWorkMode(mode) ? mode : 'build') };
   }
 
-  /** Stop the turn on screen — the composer's Stop button.
+  /** Stop the turn on screen — the composer's Stop button. Aborts the in-flight
+   *  LLM request itself first, so the turn stops even when the client's cancel
+   *  frame is lost; queued steers stay queued and the turn settle path re-queues
+   *  what the model never saw as the next user-origin turn.
    *
    *  Foreground only. Work that has DETACHED from its turn keeps running: the
    *  task roster's per-job control stops it by id (`cancelBackgroundJob`),
@@ -4852,9 +4827,9 @@ export abstract class ActorAgent extends Think<Env> {
     this.ensureSchema();
     const turnId = this.durableTurnId();
     return await cancelCurrentWork({
+      cancelChats: () => this.cancelAllChats(),
       activeToolControllers: this._activeToolControllers,
       broadcast: (payload) => this.broadcast(payload),
-      interruptSteers: () => this.interruptUserSteers(),
       stopDeviceCommands: turnId === null ? undefined : async () => {
         try {
           const { stub, caller } = await this.userHub();
@@ -4893,12 +4868,9 @@ export abstract class ActorAgent extends Think<Env> {
 
   /**
    * Delegates to @kinu.run/core's canonical prompt builder, which documents the
-   * crafted-tool call form core's sandbox contract declares — `tools.<name>`,
-   * the preamble-injected object literal spliced into the sandbox arrow. This
-   * comment used to assert the opposite, that `codemode.*` was "the real
-   * namespace crafted tools land in", which contradicted the correction this
-   * backend's own crafted dispatcher raises. Cached across turns; invalidated
-   * when the soul text or the registered executor set changes.
+   * one crafted-tool call form core's sandbox contract declares —
+   * `tools.<name>`, defined by the sandbox prelude. Cached across turns;
+   * invalidated when the soul text or the registered executor set changes.
    */
   protected _cachedSystemPrompt: string | null = null;
   protected _cachedSystemPromptKey: string = "";
@@ -5197,7 +5169,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
 
     try {
-      // No registry sync: PreambleCraftedExecutor reads craftStore.list()
+      // No registry sync: the execute_tools sandbox reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §3.
 
       const builtinDeps: Parameters<typeof buildActorTools>[0] = {
@@ -5214,7 +5186,7 @@ export abstract class ActorAgent extends Think<Env> {
             ? () => this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID
             : () => claimScope,
         },
-        preBuiltExecuteTool: this.getExecuteToolsTool(mode, profileKey),
+        preBuiltExecuteTool: SANDBOX_TOOL_PLACEHOLDER,
         // The turn's cumulative bulk budget lives on the accumulator, so the
         // cached toolset holds a stable reference across turns and the reset
         // rides the turn's own accounting.
@@ -5241,13 +5213,17 @@ export abstract class ActorAgent extends Think<Env> {
         facts: this.facts,
         // The remaining actor-profile dep: the subordinate report spine.
         // The release lane is codemode-only now (release.* — see
-        // getExecuteToolsTool below), not a BuiltinToolDeps field.
+        // getExecuteToolsFactory below), not a BuiltinToolDeps field.
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       };
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
       const tools = buildActorTools(builtinDeps);
+      // The sandbox's declaration lists the FINISHED native surface, so the
+      // tool is built from the set that now holds every other tool. The
+      // placeholder above only satisfies the builder's shape check.
+      tools.execute_tools = this.getExecuteToolsFactory(mode, profileKey).toolFor(tools);
 
       // Anthropic prompt-caching: one breakpoint on the last tool caches the
       // whole stable tool surface (tools precede system+messages in Anthropic's

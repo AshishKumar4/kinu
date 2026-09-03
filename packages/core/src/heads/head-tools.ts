@@ -33,7 +33,8 @@
  */
 
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { buildBuiltinTools } from '../tools/builtins';
+import * as v from 'valibot';
+import { buildBuiltinTools, isExecutableToolEntry } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
 import { budgetExhausted, HEAD_BUILTIN_TOOLS, keepBuiltins } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -64,7 +65,10 @@ export interface HeadToolDeps {
    *  to the inference prompt; this value backs `run`, `file`, and execute_tools. */
   rt: AgentRuntime;
   /** Pre-built `execute_tools`; the backend owns it because codemode
-   *  construction differs per platform (cf: LOADER Worker; CLI: Node eval). */
+   *  construction differs per platform (cf: LOADER Worker; CLI: Node eval).
+   *  A FUNCTION is called with the finished head surface and its result
+   *  replaces `execute_tools` in it — the hosted sandbox declares every tool
+   *  of that surface as `tools.*`, so it needs the surface first. */
   executeTool: unknown;
   webSearch: WebSearchProvider;
   /** Recursive split. The backend owns the spawn substrate; the budget gate in
@@ -163,7 +167,13 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     });
   }
 
-  if (input.allowedTools === undefined) return all;
-  const allowed = new Set(input.allowedTools);
-  return Object.fromEntries(Object.entries(all).filter(([name]) => allowed.has(name)));
+  const surface = input.allowedTools === undefined
+    ? all
+    : Object.fromEntries(Object.entries(all).filter(([name]) => new Set(input.allowedTools).has(name)));
+  const buildFromSurface = v.safeParse(v.function(), deps.executeTool);
+  if (buildFromSurface.success && 'execute_tools' in surface) {
+    const entry = { value: buildFromSurface.output(surface) };
+    if (isExecutableToolEntry(entry)) surface.execute_tools = entry.value;
+  }
+  return surface;
 }

@@ -6,7 +6,6 @@
 // multi-line — one statement per line — as the model actually writes it, which
 // is what the shared addImplicitReturn is built for.
 import { describe, expect, test } from 'bun:test';
-import { craftedNamespaceCorrection } from '@kinu.run/core';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
 import { toolExecute } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
@@ -61,7 +60,8 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   test('calling the native `run` tool from inside execute_tools gets an actionable hint, not a bare ReferenceError', async () => {
     const out = await makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
     expect(out.error).toContain('run is not defined');
-    expect(out.error).toContain('"run" is a native Kinu tool, not a codemode member');
+    expect(out.error).toContain('"run" is a native Kinu tool');
+    expect(out.error).toContain('`tools.run(input)`');
     // Where the capability actually is now comes from TOOL_REACH, so the
     // pointer is the namespace rather than one hand-picked member — and it is
     // right for all eight native tools instead of only `run`.
@@ -208,24 +208,6 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
     ]);
     const out = await makeToolOverStore(store)({ code: 'return await tools.double(2);' });
     expect(out.result).toBe(4);
-  });
-
-  test('`codemode.<name>` is declared and REFUSES, with core\'s own correction', async () => {
-    // The alias used to be a second callable binding here and a throw on the
-    // cloud backend, so a crafted tool the experience library carried between
-    // workspaces ran locally and died in production. It stays DECLARED — the
-    // name has to be discoverable — and refuses by throwing.
-    const store = new Map<string, CraftedToolSet[string]['execute']>([
-      ['double', async (n) => Number(n) * 2],
-    ]);
-    const tool = makeToolOverStore(store);
-
-    const declared = await tool({ code: 'return typeof codemode.double;' });
-    expect(declared.result).toBe('function');
-
-    const refused = await tool({ code: 'return await codemode.double(3);' });
-    expect(refused.result).toBeUndefined();
-    expect(refused.error).toContain(craftedNamespaceCorrection('double'));
   });
 
   test('a provider may not take one of the fixed namespaces', async () => {

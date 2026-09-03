@@ -8,12 +8,7 @@
  * and runs it in-process with the execution router's provider namespaces
  * (`workspace.*` from the always-registered inline executor, plus any
  * extras) and the crafted-tool executes bound under the ONE callable form core
- * declares (tools/sandbox-contract.ts): `tools.<name>`. The alias namespace is
- * still DECLARED, so a crafted tool appears in the types the model reads, but
- * every alias entry REFUSES with core's own correction sentence — the same
- * refusal the CF sandbox raises. Binding the set twice, which this factory used
- * to do, made model-authored code that the experience library carries between
- * workspaces run locally and throw in the cloud.
+ * declares (tools/sandbox-contract.ts): `tools.<name>`.
  *
  * The crafted set is resolved per execute (opts.craftedTools()), so a
  * tool crafted mid-turn is callable on the next call rather than at the next
@@ -33,7 +28,7 @@ import type {
 } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import {
-  CRAFTED_TOOL_ALIAS_NAMESPACE, CRAFTED_TOOL_NAMESPACE, craftedNamespaceCorrection,
+  CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainNativeToolReferenceError, renderExecuteToolsDescription,
 } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
@@ -45,11 +40,10 @@ export interface NodeExecuteToolFactoryDeps {
 }
 
 /** The sandbox parameters this factory always binds, in order: the workspace
- *  namespace, the crafted-tool record under its one callable name, the same set
- *  of names as refusing aliases, and the capturing console. A provider may not
- *  take any of them. */
+ *  namespace, the crafted-tool record under its one callable name, and the
+ *  capturing console. A provider may not take any of them. */
 const FIXED_NAMESPACES: readonly string[] = [
-  'workspace', CRAFTED_TOOL_NAMESPACE, CRAFTED_TOOL_ALIAS_NAMESPACE, 'console',
+  'workspace', CRAFTED_TOOL_NAMESPACE, 'console',
 ];
 const abortOptionsSchema = v.object({ abortSignal: v.optional(v.instance(AbortSignal)) });
 
@@ -87,6 +81,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
       // them as callables.
       description: renderExecuteToolsDescription(
         providers.map((provider) => provider.types).filter((types) => !!types).join('\n\n'),
+        'local',
       ),
       inputSchema: jsonSchema<{ code: string }>({
         type: 'object',
@@ -112,16 +107,9 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           const context = signal ? { signal } : undefined;
           // Resolved here, not at construction: the CraftStore is read for
           // THIS call, so a tool the model crafted a step ago is callable now.
-          //
-          // Two maps over one set of names. The callable one is the contract;
-          // the alias one exists so the name is DISCOVERABLE in the sandbox
-          // types and refuses with core's own sentence when reached for, which
-          // is exactly what the CF sandbox does.
           const craftedBindings: Record<string, CraftedExecute> = {};
-          const craftedAliases: Record<string, CraftedExecute> = {};
           for (const [name, entry] of Object.entries(opts.craftedTools())) {
             craftedBindings[name] = (arg) => containRejection(() => entry.execute(arg), pendingCalls);
-            craftedAliases[name] = async () => { throw new Error(craftedNamespaceCorrection(name)); };
           }
           const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
           for (const p of providers) {
@@ -145,7 +133,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
           const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
           const argValues: object[] = [
-            workspace, craftedBindings, craftedAliases, sandboxConsole,
+            workspace, craftedBindings, sandboxConsole,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
 

@@ -10,6 +10,7 @@
 import { reconcileColumns } from './columns';
 import { initSearchTables } from '../mcts/schemas';
 import { initScaffoldTables } from '../scaffold/schemas';
+import { initCodemodeStateTable } from '../tools/state-codemode';
 import { initViewTables } from '../views/store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
@@ -195,6 +196,9 @@ export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   initSearchTables(execRaw, sql);
   initScaffoldTables(execRaw, sql);
   initViewTables(execRaw);
+  // The `state.*` sandbox namespace: what an execute_tools program saved for
+  // the next one. Actor-local for the same reason `agent_views` is.
+  initCodemodeStateTable(execRaw);
 }
 
 /** Initialize all workspace tables. Idempotent — safe to call on every startup. */

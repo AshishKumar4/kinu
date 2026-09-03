@@ -65,7 +65,7 @@ function requiredCraftedTool(tools: CraftedToolSet, name: string) {
 }
 
 describe('crafted-tool execution integration', () => {
-  test('codemode.<name>(arg) round-trips a stored tool', async () => {
+  test('tools.<name>(arg) round-trips a stored tool', async () => {
     const { rt } = createTestRuntime();
 
     // Store the tool (simulates a successful workspace.createTool from an earlier turn)
@@ -86,7 +86,7 @@ describe('crafted-tool execution integration', () => {
 
     const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
     const res = v.parse(ExecuteResultSchema, await execTool({
-      code: 'return await codemode.double(21);',
+      code: 'return await tools.double(21);',
     }));
     expect(res.error).toBeUndefined();
     expect(res.result).toBe(42);
@@ -110,7 +110,7 @@ describe('crafted-tool execution integration', () => {
     });
     const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
 
-    const res = v.parse(ExecuteResultSchema, await execTool({ code: 'return await codemode.exploder();' }));
+    const res = v.parse(ExecuteResultSchema, await execTool({ code: 'return await tools.exploder();' }));
     // The model is told WHICH of its own tools broke, and the in-episode
     // fitness signal reads the same stamp to score that artifact and no other.
     expect(res.error).toContain(craftFailureMarker('exploder'));
@@ -130,7 +130,7 @@ describe('crafted-tool execution integration', () => {
         requiredCraftedTool(crafted, 'quiet').execute(null)),
     });
     const res = v.parse(ExecuteResultSchema, await toolExecute<{ code: string }, JsonValue>(tools.execute_tools)(
-      { code: 'return await codemode.quiet();' },
+      { code: 'return await tools.quiet();' },
     ));
     expect(res.error).toBeUndefined();
     expect(res.result).toBe('ok');

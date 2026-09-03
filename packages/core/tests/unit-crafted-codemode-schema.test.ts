@@ -1,6 +1,6 @@
 /**
  * Phase D evidence: buildBuiltinTools hands crafted tools to the injected
- * createExecuteTool factory under the shape that produces the `codemode.<name>()`
+ * createExecuteTool factory under the shape that produces the `tools.<name>()`
  * namespace — the LLM-visible contract.
  *
  * We do NOT import the real @cloudflare/codemode here (it's a cf-backend peer
@@ -8,7 +8,7 @@
  * to the createExecuteTool factory, call it as the sandbox would, and assert:
  *
  *   1. The resolved map has an entry keyed by each crafted tool's name.
- *      codemode's createCodeTool turns this into `declare const codemode: {
+ *      codemode's createCodeTool turns this into `declare const tools: {
  *      <name>(input: ...): Promise<...>; }` — see
  *      @cloudflare/codemode/dist/ai.js:113-155 (generateTypes).
  *
@@ -16,10 +16,10 @@
  *      factory. Calling it fans out to the injected craftedToolExecute.
  *
  *   3. Low-score tools are filtered BEFORE reaching the createExecuteTool
- *      factory — they can't appear in the codemode namespace at all.
+ *      factory — they can't appear in the namespace at all.
  *
  * Phase G's live-server test provides the true end-to-end proof that the LLM
- * actually sees `codemode.double` in the request body. This test exercises the
+ * actually sees `tools.double` in the request body. This test exercises the
  * wiring-level invariant: if it's in craftedToolSet, codemode will advertise it.
  */
 
@@ -66,7 +66,7 @@ function captureExecuteTool(): CapturedExecuteTool {
   };
 }
 
-describe('Phase D — crafted tools reach createExecuteTool under codemode.*', () => {
+describe('Phase D — crafted tools reach createExecuteTool under tools.*', () => {
   test('crafted tool appears in the tools map passed to createExecuteTool', () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({

@@ -285,17 +285,17 @@ Inside `execute_tools`, the LLM also sees:
 - `release.*`, `agent.*`: no native tool. The orchestrator gets both from
   `extraCodemodeProviders()` (`cf-backend/src/orchestrator.ts:798-803`); a
   subordinate returns only a report provider and gets neither.
-- Crafted tools: `tools.<name>(args)` literals injected into lexical scope by
-  the preamble (`cf-backend/src/crafted-tool-registry.ts`).
+- Crafted tools: `tools.<name>(args)`, defined in the sandbox by the `tools`
+  provider's prelude (`cf-backend/src/codemode-sandbox.ts`) or bound as the
+  `tools` argument of the evaluated function
+  (`cli-backend/src/execute-tools-factory.ts`).
 
-`tools.<name>(args)` is the one crafted-tool call form on every backend.
-`core/src/tools/sandbox-contract.ts` states it, and both sandboxes build from
-its two constants. `codemode.<name>` remains declared for generated-type
-discovery but is a refusing alias: it THROWS
-`craftedNamespaceCorrection(name)`, naming the right form. It cannot return
-`{ error }`: the model would read a value as a result, the runtime would read
-a successful call, and an in-episode fitness observation could be taken on a
-call that never ran.
+`tools.<name>(args)` is the one call form on every backend, for native builtins
+and crafted tools alike. `core/src/tools/sandbox-contract.ts` states it in one
+constant — `CRAFTED_TOOL_NAMESPACE` — and both sandboxes build from it. There is
+no alias namespace: a name that is not in `tools` is not a tool, and a bare
+identifier naming a native tool comes back as
+`explainNativeToolReferenceError`'s sentence naming the right form.
 
 ## The agent's persistent state
 

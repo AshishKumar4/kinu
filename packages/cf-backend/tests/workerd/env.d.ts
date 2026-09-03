@@ -17,6 +17,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
+import type { CodemodeEgress } from '../../src/codemode-egress';
 
 declare global {
   namespace Cloudflare {
@@ -41,6 +42,13 @@ declare global {
       SEND_ADMISSION_PROBE: DurableObjectNamespace<SendAdmissionProbeDO>;
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
+      /** The dynamic-Worker loader the execute_tools sandbox runs in. */
+      LOADER: WorkerLoader;
+    }
+    /** The test worker re-exports the production egress entrypoint, so
+     *  `exports.CodemodeEgress` is a loopback stub here as it is in production. */
+    interface GlobalProps {
+      mainModule: { CodemodeEgress: typeof CodemodeEgress };
     }
   }
 }

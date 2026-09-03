@@ -147,12 +147,12 @@ export interface BuiltinToolDeps {
   craftedToolExecute?: CraftedToolExecute;
   /**
    * When supplied, used as-is for `execute_tools`. Both `codemodeLoader`
-   * and `createExecuteTool` are ignored. The CF adapter uses this to
-   * install a pre-constructed codemode tool wired to a `PreambleCraftedExecutor`
-   * that splices a `const tools = {...}` preamble into the LLM's sandbox
-   * arrow, so crafted tools are visible to subsequent `codemode.<name>(args)`
-   * calls in the same turn. Core doesn't care how the tool is constructed —
-   * it only needs the final ToolSet entry.
+   * and `createExecuteTool` are ignored. The CF adapter uses this to install a
+   * pre-constructed codemode tool whose one `tools` provider carries the native
+   * tools as host-dispatched functions and defines every injectable crafted
+   * tool in its sandbox prelude, so `tools.<name>(args)` is the spelling for
+   * both. Core doesn't care how the tool is constructed — it only needs the
+   * final ToolSet entry.
    */
   preBuiltExecuteTool?: unknown;
   /**
@@ -878,7 +878,7 @@ function webErrorResult(err: Error | string) {
   return { error: err instanceof Error ? err.message : err };
 }
 
-function isExecutableToolEntry(
+export function isExecutableToolEntry(
   input: { value: unknown },
 ): input is { value: ExecutableToolEntry } {
   return v.is(v.object({

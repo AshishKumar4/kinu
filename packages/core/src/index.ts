@@ -509,12 +509,14 @@ export {
   REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
 export {
-  CRAFTED_TOOL_NAMESPACE, CRAFTED_TOOL_ALIAS_NAMESPACE,
-  craftedNamespaceCorrection,
-  craftedToolDescription, craftedDispatcherEntry,
-  type CraftedDispatcherEntry,
+  CRAFTED_TOOL_NAMESPACE,
+  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema,
+  renderToolsDeclaration, nativeToolInput,
+  type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
+export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider } from './tools/state-codemode';
+export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
@@ -1111,7 +1113,6 @@ export {
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType, StepCost,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
-  DelegationOpportunityRecord, DelegationSurface,
   ExecutionRecoveryRecord,
   CacheHitStats, StepTelemetry,
 } from './events/index';
@@ -1439,7 +1440,7 @@ export {
 export { SignalDelivery } from './orchestrator/signals';
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
-  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
+  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER,
   STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
   type TurnProgressInputs,
 } from './orchestrator/turn-steering';

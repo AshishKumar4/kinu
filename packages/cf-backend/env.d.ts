@@ -11,6 +11,7 @@ import type { KinuSandbox } from "./src/kinu-sandbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
+import type { CodemodeEgress } from "./src/codemode-egress";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 
 // This file has top-level imports (for the DO class generics below), which
@@ -176,6 +177,15 @@ declare global {
      *  identifier carried in the clear by every token, not a credential. Unset or
      *  empty ⇒ the admin plane answers 404 to everyone. */
     CONTROL_PLANE_ACCESS_AUD?: string;
+  }
+
+  namespace Cloudflare {
+    /** What `exports` (the `enable_ctx_exports` loopback bindings) is typed as.
+     *  Only the entrypoint this code reads is declared: naming the whole main
+     *  module would drag every Durable Object class into one recursive type. */
+    interface GlobalProps {
+      mainModule: { CodemodeEgress: typeof CodemodeEgress };
+    }
   }
 }
 

@@ -277,13 +277,15 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
     expect(listedTools.map((tool) => tool.name)).toEqual(storedNames);
 
     // Callable inherited craft, through the same adapter LocalAgentSession
-    // wires. `tools.<name>` is the ONE callable form (registry.ts namespace
-    // contract); `codemode.<name>` is type-declared for discovery and REFUSES
-    // at call time with the correction naming the callable spelling.
+    // wires. `tools.<name>` is the ONE callable form — the namespace constant
+    // in sandbox-contract.ts — for native and crafted tools alike.
     expect(await execute({ code: 'return await tools.doubleIt(21);' }))
       .toEqual({ result: 42 });
-    const aliasRefusal = await execute({ code: 'return await codemode.doubleIt(21);' });
-    expect(JSON.stringify(aliasRefusal)).toContain('tools.doubleIt');
+    // And there is no second one. The alias that used to be declared and refuse
+    // calls is gone, so a call written against it reaches nothing at all: this
+    // is what goes red if a second namespace is ever bound again.
+    expect(JSON.stringify(await execute({ code: 'return await codemode.doubleIt(21);' })))
+      .toContain('codemode is not defined');
     expect(await execute({ code: 'return await tools.increment(41);' }))
       .toEqual({ result: 42 });
   }, 0);

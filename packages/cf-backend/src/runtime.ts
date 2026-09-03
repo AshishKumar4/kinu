@@ -288,8 +288,9 @@ export type CFRuntime = AgentRuntime & {
 export interface CFRuntimeHooks {
   /**
    * Fires synchronously from workspace.createTool after a successful
-   * create/update. PreambleCraftedExecutor does not need it because it reads
-   * craftStore.list() live; other adapters can use it for eager notification.
+   * create/update. The execute_tools sandbox does not need it because it reads
+   * craftStore.list() on every call; other adapters can use it for eager
+   * notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
   /**
@@ -515,7 +516,7 @@ export function createCFRuntime(
       // sql is used by workspace.listTools() to read the crafted tools' EMA
       // quality columns.
       sql,
-      // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
+      // Optional eager notification; the execute_tools sandbox live-reads CraftStore.
       onToolRegistered: hooks.onToolRegistered,
       // Shares the native `file` tool's turn ledger/budget with workspace.*
       // (editFile's gate, readFile/writeFile's observe). The thunks are passed

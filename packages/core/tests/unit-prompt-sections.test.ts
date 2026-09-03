@@ -107,7 +107,13 @@ describe('the sectionised builder renders the pre-change bytes', () => {
     // sections. The rung it replaces — `rlm.query`'s decomposition recipe — was
     // removed in the same change, so the net is the ~3.7k a rung costs across
     // every surface that renders the ladder, not a duplicate of what went.
-    const MATRIX_CEILING_BYTES = 127_200;
+    // Lowered 2026-09-03 to 111,800, measured 110,668: the delegation nudge
+    // cutover. The Delegation section is a neutral index now (no shape test,
+    // no triggers, no coordination loop, no artifact trail), the Code-execution
+    // section lost its `agents.ask` bullet, the `agents` schema shed the
+    // Breadth/Doubt triggers and the payoff framing, and the placeholder
+    // mission lost its heads/subordinates clause.
+    const MATRIX_CEILING_BYTES = 111_800;
     const total = PROMPT_MATRIX
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
     expect({ total, over: total > MATRIX_CEILING_BYTES })

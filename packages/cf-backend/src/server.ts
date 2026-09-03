@@ -90,6 +90,10 @@ export { OrchestratorAgent } from "./orchestrator";
 export { ExplorationAgent } from "./exploration";
 export { SubordinateAgent } from "./subordinate-agent";
 export { KinuSandbox } from "./kinu-sandbox";
+// The loopback Fetcher every `fetch()` inside an `execute_tools` program rides
+// (codemode-egress.ts). Resolved by `enable_ctx_exports` like the Nimbus
+// entrypoints below; absent, the sandbox has no network at all.
+export { CodemodeEgress } from "./codemode-egress";
 // REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
 // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
 // without this export `applyOutboundInterception` throws and no egress handler

@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type { FinishReason } from 'ai';
+import { jsonSchema, tool, type FinishReason } from 'ai';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { createTestSql } from '@kinu.run/test-utils';
 import {
@@ -20,9 +20,8 @@ import {
   buildProviderCatalogSnapshot, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
-  craftedNamespaceCorrection, craftedDispatcherEntry,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
-  CRAFTED_TOOL_NAMESPACE, CRAFTED_TOOL_ALIAS_NAMESPACE,
+  CRAFTED_TOOL_NAMESPACE, renderToolsDeclaration, nativeToolInput, jsonSchemaToTs,
   attributeCraftedFailure, wrapCraftedBodyWithAttribution, craftFailureMarker,
   initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
@@ -545,35 +544,47 @@ describe('defaultSpecFor — never the first thing in the menu', () => {
 
 // ── Seam 1: the sandbox contract ────────────────────────────────────────────
 
-describe('the crafted-tool sandbox contract — one callable form', () => {
-  // The drift: crafted tools were callable as codemode.<n> on one backend and
-  // threw on the other, so a durable model-authored artifact was not portable.
-  test('the correction names the working form and the one that does not', () => {
-    expect(craftedNamespaceCorrection('summarize')).toBe(
-      'Crafted tools are callable as tools.summarize(args) in this sandbox, not codemode.summarize(args).',
-    );
-  });
-
-  test('the namespaces are the ones the correction is built from', () => {
+describe('the sandbox contract — one namespace for every tool', () => {
+  test('the namespace is `tools`, and a crafted tool without a description is labelled', () => {
     expect(CRAFTED_TOOL_NAMESPACE).toBe('tools');
-    expect(CRAFTED_TOOL_ALIAS_NAMESPACE).toBe('codemode');
-    // Built from the constants, so the sentence cannot name a namespace the
-    // module does not declare.
-    expect(craftedNamespaceCorrection('f')).toContain(`${CRAFTED_TOOL_NAMESPACE}.f(args)`);
-    expect(craftedNamespaceCorrection('f')).toContain(`${CRAFTED_TOOL_ALIAS_NAMESPACE}.f(args)`);
+    expect(craftedToolDescription('summarize')).toBe('Crafted tool: summarize');
+    expect(craftedToolDescription('summarize', 'Folds a report')).toBe('Folds a report');
   });
 
-  // A returned {error} is a value the model reads as a result and the runtime
-  // reads as a successful call — wrong twice, and it would let an in-episode
-  // fitness observation be taken on a call that never ran.
-  test('the alias entry THROWS rather than returning an error value', async () => {
-    const entry = craftedDispatcherEntry('summarize');
-    await expect(entry.execute()).rejects.toThrow(craftedNamespaceCorrection('summarize'));
+  test('the declaration lists native tools with their input type, then crafted tools', () => {
+    const native = {
+      file: tool({
+        description: 'The file plane: read | edit | write.\nMore doctrine.',
+        inputSchema: jsonSchema<{ action: string; path: string }>({
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['read', 'edit', 'write'] },
+            path: { type: 'string', description: 'A workspace path.' },
+          },
+          required: ['action', 'path'],
+        }),
+        execute: async () => 'x',
+      }),
+    };
+    const rendered = renderToolsDeclaration(native, [{ name: 'summarize', description: 'Folds a report' }]);
+    expect(rendered).toContain('export declare const tools: {');
+    expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; /** A workspace path. */ path: string }): Promise<unknown>;');
+    expect(rendered).toContain('/** The file plane: read | edit | write. Same input as the native `file` tool. */');
+    expect(rendered).toContain('/** Folds a report (crafted by you) */');
+    expect(rendered).toContain('summarize(...args: unknown[]): Promise<unknown>;');
   });
 
-  test('the alias is still DECLARED, so the model can discover the tool', () => {
-    expect(craftedDispatcherEntry('summarize').description).toBe('Crafted tool: summarize');
-    expect(craftedDispatcherEntry('summarize', 'Folds a report').description).toBe('Folds a report');
+  test('a native tool takes exactly one JSON object through the sandbox', () => {
+    expect(nativeToolInput('file', [{ action: 'read', path: 'a' }])).toEqual({ action: 'read', path: 'a' });
+    expect(nativeToolInput('file', [])).toEqual({});
+    const refused = nativeToolInput('file', ['a']);
+    expect('error' in refused && refused.error).toContain('tools.file(input): input must be one JSON object');
+  });
+
+  test('a schema this renderer cannot read renders as unknown, never throws', () => {
+    expect(jsonSchemaToTs(undefined)).toBe('unknown');
+    expect(jsonSchemaToTs({ type: 'array', items: { type: 'number' } })).toBe('number[]');
+    expect(jsonSchemaToTs({ anyOf: [{ type: 'string' }, { type: 'null' }] })).toBe('string | null');
   });
 });
 
