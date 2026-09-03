@@ -2065,7 +2065,15 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'device.rpc');
     const session = `pty-${nanoid(16)}`;
     const target = this._devices.connectedDeviceId(deviceId);
-    if (!target) throw new Error(NO_DEVICE_CONNECTED);
+    // A caller that named no machine gets one answer when several are live,
+    // not the one that says none are. `deviceRpc` says the same below, with
+    // the machines' names; this says it before a session is minted.
+    if (!target) {
+      if (deviceId === undefined && this._devices.connectedDeviceIds().length > 1) {
+        throw new Error(`${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
+      }
+      throw new Error(NO_DEVICE_CONNECTED);
+    }
     try {
       await this.deviceRpc(
         caller,
