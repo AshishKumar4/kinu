@@ -363,13 +363,28 @@ type RefinerAnswer =
   | { readonly ok: true; readonly proposal: RefinementProposal }
   | { readonly ok: false; readonly error: string };
 
-/** Workspace instruction files a refiner may read ITSELF.
+/** Workspace instruction files a refiner may read ITSELF, when this workspace
+ *  has them.
  *
  *  Named rather than globbed: these are the files whose CONTENT a proposal has
  *  to be written against, and the channel exists so their bytes never enter a
- *  parent's window. A path this workspace cannot resolve is refused by name by
- *  the port, never truncated. */
-const REFINER_CONTEXT_REFS: readonly string[] = ['AGENTS.md', 'MEMORY.md'];
+ *  parent's window. The memory file is at the path genesis writes it
+ *  (`identity/create.ts`: `memory/MEMORY.md`); `AGENTS.md` exists only in a
+ *  workspace whose owner wrote one. The port refuses an absent path BY NAME
+ *  rather than truncating, so a candidate is offered only after this
+ *  workspace's own filesystem says it is there — the lane used to name
+ *  `MEMORY.md` at the root and `AGENTS.md` unconditionally, and every automatic
+ *  refinement in a standard workspace was refused before the refiner started. */
+const REFINER_CONTEXT_CANDIDATES: readonly string[] = ['memory/MEMORY.md', 'AGENTS.md'];
+
+async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {
+  const vfs = deps.control.rt.storage.vfs;
+  const present: string[] = [];
+  for (const path of REFINER_CONTEXT_CANDIDATES) {
+    if (await vfs.exists(path)) present.push(path);
+  }
+  return present;
+}
 
 async function askRefiner(
   deps: RefinementDeps,
@@ -377,11 +392,12 @@ async function askRefiner(
 ): Promise<RefinerAnswer> {
   const refiner = deps.refiner;
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
+  const contextRefs = await presentContextRefs(deps);
   const outcome = await refiner.run({
     role: { kind: 'catalog', roleId: 'general' },
     roleLabel: 'refiner',
-    task: renderRefinerBrief(deps, request),
-    contextRefs: REFINER_CONTEXT_REFS,
+    task: renderRefinerBrief(deps, request, contextRefs),
+    contextRefs,
     // PLAN mode, and structurally: a refiner that could write would be a second
     // authority for every artifact it reviewed.
     mode: 'plan',
@@ -433,7 +449,7 @@ async function askRefiner(
  * this ledger uses, so a refiner cannot be handed more of a turn than the judge
  * that graded it saw.
  */
-function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest): string {
+function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): string {
   const sql = deps.control.sql;
   const split = buildOutcomeEvalSplit(sql, clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()));
   // The split's instances carry the turn's user message as `input`; that is the
@@ -495,7 +511,7 @@ function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest): s
     '',
     history || '  (this is the first refinement)',
     '',
-    `## Files you may read yourself: ${REFINER_CONTEXT_REFS.join(', ')}`,
+    `## Files you may read yourself: ${contextRefs.length === 0 ? '(none in this workspace)' : contextRefs.join(', ')}`,
     '',
     '## Your answer',
     '',

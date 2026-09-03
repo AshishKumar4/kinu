@@ -254,11 +254,6 @@ const SLEEP_TIME_APPLIED = 'sleep_time';
  *  section a second time. */
 const PROMPT_SECTION_LANE = 'prompt_section_lane';
 
-/** Where the scaffold GEPA pass records its per-tick attempt and completion. Its
- *  own scope, not the prompt-section lane's: the two share a cadence tick and
- *  nothing else, and a cut inside one must not abandon the other. */
-const SCAFFOLD_GEPA_LANE = 'scaffold_gepa_lane';
-
 /** A turn's tool calls as the sleep-time lane replays them. Parsed rather than
  *  cast: the row was written by an earlier activation, and a shape that no
  *  longer matches must fail by name here rather than reach the judge. */
@@ -4833,23 +4828,18 @@ export class OrchestratorAgent extends ActorAgent {
       const sinceTs = recent ? new Date(recent.startedAt).toISOString() : null;
       if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
     }
-    if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; the count keeps growing
-    // The prompt-section lane rides the same cadence and the same switch. It is
-    // judge-only where a scaffold pass is a rollout PLUS a judge call, so the
-    // two share a tick rather than competing for one, and neither needs a
-    // second config key nobody would find.
-    // BOTH lanes awaited, and each with its OWN durable disposition. They share
-    // one cadence tick but not one obligation: a cut inside the scaffold pass used
-    // to replay the prompt-section lane too, rotating it to another section and
-    // spending a second model call on a step that had already happened.
-    // Keyed on the TICK, not on GEPA history: the scaffold pass below opens a
-    // new `running` run before its first model await, so a key read off the
-    // latest run changes under a replay and rotates this lane a second time.
+    // The prompt-section lane is the ONE automatic lane. The scaffold GEPA pass
+    // that used to share this tick optimised `scaffold/agent.js`, which the
+    // chat turn does not run: the turn is Think's loop over `getSystemPrompt` /
+    // `getTools` / `beforeTurn`, and `runScaffold` is reached only by the MCP
+    // one-shot, the shadow trials and GEPA's own rollouts. Every 25 turns it
+    // spent rollouts and judge calls improving an artifact no user ever saw
+    // answer them (measured 2026-09-03 by grepping `runScaffold(` callers). The
+    // manual `runScaffoldGepaOptimization` RPC stays for the scaffold tooling.
     const lane = tick === undefined ? undefined : `${this.name}:${tick}`;
     this._gepaTickRunning = true;
     try {
       await this.oncePerTick(PROMPT_SECTION_LANE, lane, () => this.advancePromptSections());
-      await this.oncePerTick(SCAFFOLD_GEPA_LANE, lane, async () => { await this.runScaffoldGepaOptimization(); });
     } finally {
       this._gepaTickRunning = false;
     }

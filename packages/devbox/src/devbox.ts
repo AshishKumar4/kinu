@@ -616,6 +616,46 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  {@link createResourceLane} and the banner below. */
   #resources = createResourceLane();
 
+  /**
+   * Sweep dead schedule rows at OBJECT ACTIVATION, ahead of the alarm loop.
+   *
+   * MEASURED IN PRODUCTION (build 6d19d50e7): `Callback snapshotWorkspaceIfDue
+   * not found or is not a function`, twice a second per sandbox object, with
+   * the alarm re-arming for ever. The sweep used to run in `onStart`, but the
+   * SDK fires that hook from `start()` and `startAndWaitForPorts`
+   * (`container.js:583, 632-636`) — never on a wake whose container is asleep.
+   * A sleeping container's object still runs its alarm loop
+   * (`container.js:1502`), which logs a dead row and keeps it (`:1532-1535`),
+   * then re-arms from the non-empty table (`:1556-1563`); a due row re-arms at
+   * once, which is the twice-a-second spin.
+   *
+   * The constructor is the one place that runs before that loop can read the
+   * table. The SDK's own constructor queues its block first
+   * (`container.js:355-360`), and the runtime delivers no event — alarm
+   * included — until every block queued from a constructor settles. Either
+   * execution order is safe: `scheduleNextAlarm` never reads the table
+   * (`container.js:1624-1634`).
+   *
+   * An emptied table ends the chain on its own. With the container asleep and
+   * no rows left, the next alarm deletes the physical alarm itself
+   * (`container.js:1556-1560`), so the sweep issues no `deleteAlarm`: one
+   * fired beside a live row would end a live chain.
+   *
+   * Storage only, which is what may run inside this gate: one sync SELECT
+   * plus sync deletes, no container I/O and no R2 — the same rule `onStart`
+   * keeps.
+   */
+  constructor(ctx: DurableObjectState<{}>, env: Env) {
+    super(ctx, env);
+    // Not awaited: a constructor cannot be. The gate holds every event until
+    // the sweep settles, and a storage failure here is the object's own SQLite
+    // failing, which the first request will report on its own terms.
+    void ctx.blockConcurrencyWhile(() => this.#sweepUnknownSchedules())
+      .catch((cause: LateStartFailure['cause']) => {
+        console.error(`[devbox] schedule sweep failed at activation: ${describe({ cause })}`);
+      });
+  }
+
   // ── the override surface ─────────────────────────────────────────────────
 
   /**
@@ -802,7 +842,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /**
    * The three durable chains this box rides, armed from the one hook that fires
-   * per container start — and the dead rows swept first.
+   * per container start. Dead rows are swept at activation, not here: see the
+   * constructor.
    *
    * THE STARTUP ROW GOES THROUGH `kickStartup`, not through a bare `#arm`, and
    * the difference is a loop. Every readiness drive calls `start()`, which
@@ -818,7 +859,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * asking again costs one schedule read.
    */
   async #armContainerSchedules(): Promise<void> {
-    await this.#sweepUnknownSchedules();
     await this.kickStartup();
     if (this.ambientCheckpoints) {
       await this.#arm(CHECKPOINT_CALLBACK, Math.ceil(this.policy.checkpointIntervalMs / 1000));
@@ -830,16 +870,21 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * Drop schedule rows naming a callback this class cannot call.
    *
    * MEASURED DEFECT THIS REPAIRS, in production logs rather than in theory:
-   * `Callback snapshotWorkspaceIfDue not found or is not a function`, every
-   * three minutes, for ever. The alarm loop in `@cloudflare/containers`
-   * (`container.js:1532-1535`) looks the callback up on `this`, logs that line
-   * when it is missing, and `continue`s — WITHOUT deleting the row, so the row
-   * outlives every deployment. It then re-arms the alarm at `now + 3 min`
-   * because the table is not empty, which also keeps this object's alarm chain
-   * alive for work nothing can run. The rows were written by the pre-devbox
+   * `Callback snapshotWorkspaceIfDue not found or is not a function`, twice a
+   * second per sandbox object, for ever. The alarm loop in
+   * `@cloudflare/containers` (`container.js:1532-1535`) looks the callback up
+   * on `this`, logs that line when it is missing, and `continue`s — WITHOUT
+   * deleting the row, so the row outlives every deployment. It then re-arms
+   * the alarm because the table is not empty, which also keeps this object's
+   * alarm chain alive for work nothing can run. The rows were written by the
    * snapshot machinery, whose callbacks were renamed when it moved into this
    * package (`devboxCheckpoint` / `devboxHeartbeat` / `devboxIncidents`, at
    * c264ef04b), and nothing since has been able to reach them.
+   *
+   * AT ACTIVATION, NOT AT CONTAINER START. The constructor queues this in its
+   * activation gate, which settles before the alarm loop can read the table;
+   * `onStart` never fires on a wake whose container is asleep, so a sweep
+   * there could not reach the rows that spin the loop.
    *
    * BY WHETHER THIS CLASS CARRIES THE MEMBER, which is the question the alarm
    * loop itself asks a moment later — so nothing survives the sweep that the
@@ -854,6 +899,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * spelled in the vocabulary that owns the table.
    */
   async #sweepUnknownSchedules(): Promise<void> {
+    // The SDK's own constructor created `container_schedules` synchronously
+    // before this runs (`container.js`, the `CREATE TABLE IF NOT EXISTS` right
+    // after its options block), so the read needs no guard.
     const rows = this.ctx.storage.sql
       .exec<{ callback: string }>('SELECT DISTINCT callback FROM container_schedules')
       .toArray();

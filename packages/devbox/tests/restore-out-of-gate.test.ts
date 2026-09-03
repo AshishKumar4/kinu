@@ -34,7 +34,8 @@ import { describe, expect, test } from 'bun:test';
 import type { StoredValue } from '../src/storage';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import {
-  Devbox, FakeSandbox, STAMP_COMMAND, gate, harness, type Harness,
+  Devbox, FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, fakeStorage, gate, harness,
+  scheduleTableOf, type Harness,
 } from './support/devbox-harness';
 
 /** Test-length probes. The listener proof is one container command whose loop
@@ -151,23 +152,51 @@ describe('the container-start hook carries no container work', () => {
     expect((await box.devboxState()).restoration).toBe('attached');
   });
 
-  test('a schedule row naming a callback this class cannot call is dropped, and a live one is kept', async () => {
-    // MEASURED IN PRODUCTION LOGS: `Callback snapshotWorkspaceIfDue not found or
-    // is not a function`, every three minutes, for ever. The alarm loop logs the
-    // line and `continue`s WITHOUT deleting the row
-    // (`@cloudflare/containers`, `container.js:1532-1535`), then re-arms because
-    // the table is not empty. The probe is membership on `this`, so a callback
-    // the class carries — inherited or its own — must survive, or the sweep
-    // would break a live chain.
-    const { box, container } = await stoppedBoxWithService();
-    container.scheduleRows.push({ callback: 'snapshotWorkspaceIfDue', time: Date.now() / 1000 + 60 });
-    container.scheduleRows.push({ callback: 'devboxIncidents', time: Date.now() / 1000 + 60 });
+  test('a schedule row naming a callback this class cannot call is dropped at activation, with no container start', async () => {
+    // MEASURED IN PRODUCTION LOGS (build 6d19d50e7): `Callback
+    // snapshotWorkspaceIfDue not found or is not a function`, twice a second
+    // per sandbox object, with the alarm re-arming for ever. The sweep used to
+    // run in the container-start hook, but the SDK fires that hook from
+    // `start()` (`@cloudflare/containers`, `container.js:583`) — never on a
+    // wake whose container is asleep — while the alarm loop still runs
+    // (`container.js:1502-1535`). So the sweep runs in the constructor's
+    // activation gate instead, and this test activates the way the platform
+    // does: storage first with the rows already in it, then `new`, then no
+    // `start()` at all.
+    const storage = fakeStorage();
+    // Overdue: the shape that re-arms the physical alarm at once and spins the
+    // twice-a-second loop.
+    const overdue = Date.now() / 1000 - 1;
+    scheduleTableOf(storage.handle).push(
+      { callback: 'snapshotWorkspaceIfDue', time: overdue },
+      { callback: 'devboxIncidents', time: overdue },
+    );
+    // Built the way `harness` builds it — the same members the class reads at
+    // construction — but with the dead row already present, which is what an
+    // activation wakes into.
+    // SAFETY: the constructor's contract reads `storage`, `id` and
+    // `blockConcurrencyWhile` off its state and nothing else (devbox.ts
+    // constructor + `#sweepUnknownSchedules`); the fake is constructed with
+    // exactly those three members.
+    const state = {
+      storage: storage.handle,
+      id: { toString: () => TEST_BOX_ID },
+      blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
+    } as ConstructorParameters<typeof Devbox>[0];
+    const box = new TestBox(state, {});
+    expect(box).toBeInstanceOf(TestBox);
+    // No waiting: this stub runs the gate closure inline inside `new`, and the
+    // sweep body is synchronous storage I/O, so the rows are gone before `new`
+    // returns. An `await` added inside the sweep must update this test.
 
-    await box.start();
-
-    const remaining = container.scheduleRows.map((row) => row.callback);
+    // The probe is membership on `this`, so a callback the class carries —
+    // inherited or its own — survives, or the sweep would break a live chain.
+    const remaining = scheduleTableOf(storage.handle).map((row) => row.callback);
     expect(remaining).not.toContain('snapshotWorkspaceIfDue');
     expect(remaining).toContain('devboxIncidents');
+    // And the box never left activation: nothing armed, nothing ran.
+    expect(FakeSandbox.last?.schedules).toEqual([]);
+    expect(FakeSandbox.last?.execs).toEqual([]);
   });
 });
 

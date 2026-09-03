@@ -59,6 +59,7 @@ import {
   nimbusProgrammatic,
   type ProgrammaticHost,
 } from './nimbus-programmatic';
+import { guardHostedShell } from './workspace-shell-guard';
 
 /**
  * A read whose only tolerated failure is "there is no such path".
@@ -268,6 +269,8 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // both are real here.
         const { registerGitCommands } = await nimbusProgrammatic();
         registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
+        // 2026-09-03: the heavy git/npm commands exhausted this isolate's memory (exceededMemory on kinu_OrchestratorAgent), so refuse them here and run them in the container instead.
+        await guardHostedShell(session.registry);
         return programmaticHost(session, portRegistry, deps);
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
