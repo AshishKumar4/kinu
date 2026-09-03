@@ -23,7 +23,7 @@
  * be acted on later, not a second narration. And the run's meters stay on the
  * gauge beside the strip, which was already the right home for them.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
@@ -91,13 +91,16 @@ export interface WorkTabProps {
   onOpenSurface: (surface: SurfaceKind) => void;
   /** The changelog was seen — zero the badge upstream. */
   onChangelogSeen?: () => void;
+  /** Re-read the queue after a decision, so decided rows leave on the click
+   *  rather than on the next ambient poll. */
+  onRefreshQueue?: () => void;
   /** A turn is in flight — the plan is rewritten while it is. */
   isStreaming: boolean;
   rpc: Rpc;
 }
 
 export function WorkTab({
-  pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, isStreaming, rpc,
+  pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
 
@@ -156,7 +159,7 @@ export function WorkTab({
             badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
             <div className="divide-y divide-dashed divide-[var(--c-dash)]">
               {parkedCommands.length > 0 && (
-                <ParkedCommands actions={parkedCommands} rpc={rpc} />
+                <ParkedCommands actions={parkedCommands} rpc={rpc} onDecided={onRefreshQueue} />
               )}
               {elsewhere.map((action) => (
                 <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} />
@@ -282,44 +285,114 @@ function countLabel(chosen: number, total: number): string {
  * cannot be granted at all. Settings → Standing approvals lists what is held
  * and is the only place to take one back.
  */
-function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }) {
-  const [selected, setSelected] = useState<Set<string> | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [decided, setDecided] = useState<string | null>(null);
-  // Null means "everything", so a newly-parked action arriving mid-review is
-  // included rather than silently left out of an "approve all" click.
-  const chosen = selected ?? new Set(actions.map((a) => a.id));
+/** The three answers the queue has always accepted. */
+export type ParkedDecision = "approved" | "denied" | "always";
 
-  const toggle = (id: string) => {
-    setSelected(new Set(
-      chosen.has(id) ? [...chosen].filter((x) => x !== id) : [...chosen, id],
-    ));
+export interface ParkedDecisionDeps {
+  /** `decideDeferredApprovals` over the surface's RPC seam. */
+  decide: (ids: string[], decision: ParkedDecision) => Promise<{ decided: string[] }>;
+  /** Re-read the queue — a decided row leaves the list on this click, not on
+   *  the next ambient poll. */
+  onDecided: () => void;
+}
+
+export interface ParkedQueueSnapshot {
+  /** What a bulk button would act on: null is the untouched default and means
+   *  EVERYTHING, so a command parked mid-review joins an "approve all" click
+   *  instead of being silently left out. After a decision it is the EMPTY set
+   *  — what was decided stays unticked; it is not re-selected. */
+  readonly selected: ReadonlySet<string> | null;
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly decided: ParkedDecision | null;
+}
+
+/**
+ * The queue's decision half, and a plain object so every claim about it is
+ * provable without a browser: nothing it records re-selects what was just
+ * decided, and a recorded decision always re-reads the queue.
+ *
+ * The defect this locks: `decide` used to reset the selection to null — and
+ * null means everything — so approving re-ticked every box the instant the
+ * call landed, and nothing re-read the queue to make the decided rows leave.
+ */
+export class ParkedDecisionFlow {
+  #snapshot: ParkedQueueSnapshot = { selected: null, busy: false, error: null, decided: null };
+  readonly #listeners = new Set<() => void>();
+  readonly #deps: ParkedDecisionDeps;
+
+  constructor(deps: ParkedDecisionDeps) {
+    this.#deps = deps;
+  }
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener);
+    return () => { this.#listeners.delete(listener); };
   };
 
-  const decide = async (decision: "approved" | "denied" | "always") => {
-    if (busy || chosen.size === 0) return;
-    setBusy(true);
-    setError(null);
-    setDecided(null);
+  readonly snapshot = (): ParkedQueueSnapshot => this.#snapshot;
+
+  /** What a bulk button would act on — everything while untouched, exactly
+   *  what is ticked once anything is. */
+  chosen(allIds: readonly string[]): ReadonlySet<string> {
+    return this.#snapshot.selected ?? new Set(allIds);
+  }
+
+  readonly toggle = (id: string, allIds: readonly string[]): void => {
+    const chosen = this.chosen(allIds);
+    this.#set({
+      selected: new Set(
+        chosen.has(id) ? [...chosen].filter((x) => x !== id) : [...chosen, id],
+      ),
+    });
+  };
+
+  readonly decide = async (decision: ParkedDecision, ids: readonly string[]): Promise<void> => {
+    if (this.#snapshot.busy || ids.length === 0) return;
+    this.#set({ busy: true, error: null, decided: null });
     try {
-      await rpc("decideDeferredApprovals", [[...chosen], decision]);
-      setSelected(null);
+      await this.#deps.decide([...ids], decision);
+      // The EMPTY set, never null: null selects everything, and what was
+      // just decided must leave, not re-tick.
+      this.#set({ busy: false, selected: new Set(), error: null, decided: decision });
+      // Deciding records the answer; re-reading is what makes the rows leave.
+      this.#deps.onDecided();
+    } catch (cause) {
+      // The answer never landed, so the selection stands — the owner's intent
+      // is still the selection on screen.
+      this.#set({ busy: false, error: `Could not record the decision: ${renderThrownChain({ cause })}` });
+    }
+  };
+
+  #set(partial: Partial<ParkedQueueSnapshot>): void {
+    this.#snapshot = { ...this.#snapshot, ...partial };
+    for (const listener of this.#listeners) listener();
+  }
+}
+
+export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { actions: PendingAction[]; rpc: Rpc; onDecided?: () => void; flow?: ParkedDecisionFlow }) {
+  const [fresh] = useState(() => new ParkedDecisionFlow({
+    decide: (ids, decision) => rpc("decideDeferredApprovals", [ids, decision]),
+    onDecided: () => onDecided?.(),
+  }));
+  const flow = injected ?? fresh;
+  const state = useSyncExternalStore(flow.subscribe, flow.snapshot, flow.snapshot);
+  const allIds = actions.map((a) => a.id);
+  // Null means "everything", so a newly-parked action arriving mid-review is
+  // included rather than silently left out of an "approve all" click. The
+  // rule lives in the flow, beside the untick that must never become it.
+  const chosen = flow.chosen(allIds);
+
+  const decidedLine = state.decided === "denied"
+    ? "Denied. The agent will be told, and nothing runs."
+    : state.decided === "always"
       // Permission is not an effect: the command still has not run, and the
       // agent is the only thing that runs it. Saying "done" here would be the
       // same lie the queued tool result is worded to avoid.
-      setDecided(decision === "denied"
-        ? "Denied. The agent will be told, and nothing runs."
-        : decision === "always"
-          ? "Approved. Kinu will stop asking about these checks in this environment."
-          : "Approved. It runs when the agent picks the decision up.");
-    } catch (e) {
-      const message = renderThrownChain({ cause: e });
-      setError(`Could not record the decision: ${message}`);
-    } finally {
-      setBusy(false);
-    }
-  };
+      ? "Approved. Kinu will stop asking about these checks in this environment."
+      : state.decided === "approved"
+        ? "Approved. It runs when the agent picks the decision up."
+        : null;
 
   return (
     <div className="py-1 space-y-2">
@@ -340,7 +413,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
           <label key={action.id}
             className="flex items-start gap-2 rounded-md px-2 py-1.5 p-elevated cursor-pointer">
             <input type="checkbox" className="mt-0.5 shrink-0" checked={chosen.has(action.id)}
-              onChange={() => toggle(action.id)} disabled={busy} />
+              onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
               <code className="block text-[11px] p-text break-all whitespace-pre-wrap">{action.detail}</code>
               {/* Which machine, before you authorise it. The read model puts it
@@ -352,21 +425,21 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
         ))}
       </div>
 
-      {error && <div className="text-[10px] p-danger">{error}</div>}
-      {decided && <div className="text-[10px] p-text-3">{decided}</div>}
+      {state.error && <div className="text-[10px] p-danger">{state.error}</div>}
+      {decidedLine && <div className="text-[10px] p-text-3">{decidedLine}</div>}
 
       <div className="flex items-center gap-1.5 flex-wrap">
-        <Button size="sm" variant="primary" disabled={busy || chosen.size === 0}
-          onClick={() => decide("approved")}>
+        <Button size="sm" variant="primary" disabled={state.busy || chosen.size === 0}
+          onClick={() => flow.decide("approved", [...chosen])}>
           Approve {countLabel(chosen.size, actions.length)}
         </Button>
-        <Button size="sm" variant="secondary" disabled={busy || chosen.size === 0}
-          onClick={() => decide("always")}
+        <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
+          onClick={() => flow.decide("always", [...chosen])}
           title="Approve these checks for this environment. Revoke under Settings → Standing approvals.">
           Always allow {countLabel(chosen.size, actions.length)}
         </Button>
-        <Button size="sm" variant="ghost" disabled={busy || chosen.size === 0}
-          onClick={() => decide("denied")}>
+        <Button size="sm" variant="ghost" disabled={state.busy || chosen.size === 0}
+          onClick={() => flow.decide("denied", [...chosen])}>
           Deny {countLabel(chosen.size, actions.length)}
         </Button>
       </div>

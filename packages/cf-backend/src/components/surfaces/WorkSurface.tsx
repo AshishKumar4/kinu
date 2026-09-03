@@ -104,6 +104,9 @@ export interface WorkSurfaceProps {
   /** Everything asynchronous waiting on the owner. One read feeds both the
    *  Work tab's queue and the one accent badge on the strip. */
   pendingActions: PendingAction[];
+  /** Re-read that read — what Work's queue calls after a decision, so a
+   *  decided row leaves on the click instead of on the next ambient poll. */
+  onRefreshQueue?: () => void;
   /** The changelog was seen inside Work — zero the unseen count upstream. */
   onChangelogSeen?: () => void;
   /** Dashboards Kinu published for this workspace. Appended after the host
@@ -222,6 +225,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {surface === "Work" && (
             <WorkTab
               pendingActions={props.pendingActions}
+              onRefreshQueue={props.onRefreshQueue}
               backgroundJobs={props.backgroundJobs}
               onRefreshJobs={props.onRefreshJobs}
               onOpenSurface={onSurface}

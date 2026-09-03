@@ -1864,6 +1864,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     refreshBackgroundJobs,
     /** Everything waiting on the owner: the Work queue and its strip badge. */
     pendingActions,
+    /** Re-read the queue — what Work's decide calls so a decided row leaves
+     *  the list the same moment its box unticks, not on the next poll. */
+    refreshPendingActions,
     /** Whether the gated tabs (Releases, Exploration) have content. */
     tabPresence,
     /** Agent-authored dashboards, as tabs. */
