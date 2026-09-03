@@ -225,6 +225,26 @@ export const PublishWorkSchema = v.strictObject({
 });
 export type PublishWork = v.InferOutput<typeof PublishWorkSchema>;
 
+/**
+ * The hydrate quantum: how much a single page-in miss brings back.
+ *
+ * MEASURED, NOT CHOSEN. R2 answers a 64 KiB range and a 1 MiB range in the
+ * same ~50-60 ms — a page-in is latency-bound, so a smaller window wastes the
+ * round trip — while 8 MiB amortises bandwidth better and multiplies the bytes
+ * one miss moves by eight (`bench/measure-first/MEASUREMENTS.md`, 2026-09-02).
+ * One MiB is that cliff.
+ */
+export const HYDRATE_PAGE_BYTES = 1024 * 1024;
+
+/**
+ * How long a clean page may sit untouched before an eviction sweep may drop
+ * it. The same window the pack ledger's retire-then-delete grace uses: a page
+ * and a retired pack are the same bet — that nothing still needs the bytes —
+ * and a box under disk pressure sweeps with the window set to zero, because
+ * the alternative is refusing the write.
+ */
+export const CLEAN_PAGE_IDLE_MS = 600_000;
+
 /** What one page-in miss cost: one coalesced range read per miss, and how far
  * the bytes fetched exceed the bytes the reader asked for. */
 export const HydrateWorkSchema = v.strictObject({
@@ -243,8 +263,14 @@ export const CompactionWorkSchema = v.strictObject({
 });
 export type CompactionWork = v.InferOutput<typeof CompactionWorkSchema>;
 
-/** What one GC cycle did: ledger-driven deletes, and the audit mark's pages
- * and bytes, which read node records only and never payload bytes. */
+/**
+ * What one GC cycle did.
+ *
+ * TWO SWEEPS, ONE ROW, because they are the same decision at two distances:
+ * `deletes` counts the ledger-driven deletes of retired packs AND the clean
+ * local pages an eviction dropped, and the mark counts what the sweep
+ * examined — node records and page rows, never a payload byte.
+ */
 export const GcWorkSchema = v.strictObject({
   deletes: CountSchema,
   markPages: CountSchema,
