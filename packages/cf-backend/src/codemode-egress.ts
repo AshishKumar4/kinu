@@ -17,6 +17,7 @@
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** The header a failed egress answers with. An exception thrown inside a
  *  loopback entrypoint reaches the caller as an opaque `internal error`, so the
@@ -29,8 +30,7 @@ export class CodemodeEgress extends WorkerEntrypoint {
     try {
       return await fetch(request);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      return new Response(message, { status: 502, headers: { [EGRESS_FAILURE_HEADER]: '1' } });
+      return new Response(renderThrownChain({ cause }), { status: 502, headers: { [EGRESS_FAILURE_HEADER]: '1' } });
     }
   }
 }
