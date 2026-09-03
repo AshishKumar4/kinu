@@ -292,20 +292,28 @@ export function createDeviceTunnelExecutor(
   // computer that.
   const getStatus = (): ExecutorStatus => {
     const s = transport.status();
-    const named = s.devices?.find((d) => d.connected) ?? s.devices?.[0];
+    const live = (s.devices ?? []).filter((d) => d.connected);
+    const named = live[0] ?? s.devices?.[0];
     const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
     if (named) identity.label = named.name;
-    if (s.workspaceGranted !== undefined) identity.granted = s.workspaceGranted;
+    // Reach for THE live machine, under the same "no the" rule the hub's own
+    // top-level field follows: a per-device answer is read only when exactly
+    // one machine is live, because a row that read the first of several would
+    // answer for a machine the label only half-names. The hub's top-level
+    // answer stays authoritative wherever it speaks — including an offline
+    // machine's remembered state — and says nothing for a caller with no
+    // workspace identity, which keeps the liveness reading it always had.
+    const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
+    const granted = perDeviceReach ?? s.workspaceGranted;
+    if (granted !== undefined) identity.granted = granted;
     // The one row the model reads before it decides where to put work, so it
     // carries what the machine will actually do with a command: the owner's
     // switch, what the machine proved, and this workspace's own home on it.
     if (s.sandbox !== undefined) identity.sandbox = s.sandbox;
     // Reach, not liveness. A connected machine this workspace holds no grant
     // on is not callable by the model: the first call raises the owner's card
-    // instead of running. `workspaceGranted` is absent for callers that have
-    // no workspace side to their identity, and those keep the row as it was —
-    // they were never routing on this field.
-    if (s.connected && s.workspaceGranted === false) {
+    // instead of running.
+    if (s.connected && granted === false) {
       return {
         configured: true, available: false, active: false, status: 'idle',
         reason: 'Connected, but this workspace has no access yet: the first command raises a consent card for the owner.',

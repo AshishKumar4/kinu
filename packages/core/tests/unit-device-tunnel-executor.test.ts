@@ -285,6 +285,37 @@ describe('createDeviceTunnelExecutor', () => {
     expect(status?.granted).toBeUndefined();
   });
 
+  test('a fleet entry answers reach for the machine it names, not the first one', () => {
+    const rpc: DeviceTransport['rpc'] = async () => 'unused';
+    // One live machine whose own entry says ungranted: the row reads reach
+    // from THAT entry, which is the machine the label names.
+    const single = staticTransport({
+      connected: true, registered: true, toolchain: null,
+      devices: [{ id: 'dev-1', name: 'studio', os: 'linux', hostname: 's', connected: true, granted: false }],
+    }, rpc);
+    expect(createDeviceTunnelExecutor(single).getStatus?.()).toMatchObject({
+      label: 'studio', granted: false, available: false, status: 'idle',
+    });
+  });
+
+  test('two live machines have no "the" machine, so the row keeps liveness', () => {
+    const rpc: DeviceTransport['rpc'] = async () => 'unused';
+    // The fleet model leaves the top-level reach fields ABSENT with several
+    // live machines, because there is no single machine to describe. The row
+    // degrades the same way a caller with no workspace identity does: the
+    // model learns both machines are there and names one when it calls.
+    const status = createDeviceTunnelExecutor(staticTransport({
+      connected: true, registered: true, toolchain: null,
+      devices: [
+        { id: 'dev-1', name: 'studio', os: 'linux', hostname: 's', connected: true, granted: false },
+        { id: 'dev-2', name: 'rig', os: 'linux', hostname: 'r', connected: true, granted: true },
+      ],
+    }, rpc)).getStatus?.();
+
+    expect(status).toMatchObject({ available: true, active: true, status: 'active' });
+    expect(status?.granted).toBeUndefined();
+  });
+
   test('hub/tunnel disconnect errors surface the connect guidance', async () => {
     const hubRejects = staticTransport({ connected: false, registered: true, toolchain: null }, async () => {
       throw new Error('no device connected');
