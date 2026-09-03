@@ -404,13 +404,11 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     const { surface } = await openRuntimeProbe('parity-prompt-projection');
     const system = surface.systemPrompt();
 
-    // The §9.5 precondition. `renderAgentStateSection` (core prompt.ts:236)
-    // renders the ladder only when `agents` is on `availableTools`, so a prompt
-    // assembled from a ToolSet that could not hold `agents` silently dropped it —
-    // and the exploration eval then scored a model on reaching for a capability
-    // its prompt never mentioned.
-    expect(system).toContain('## Delegation');
-    expect(system).toContain('action=swarm');
+    // The §9.5 precondition. The tool index names a builtin only when it is on
+    // `availableTools`, so a prompt assembled from a ToolSet that could not hold
+    // `agents` silently dropped it — and the exploration eval then scored a model
+    // on reaching for a capability its prompt never mentioned.
+    expect(system).toContain('- **agents** —');
     // Every builtin on the surface is NAMED in the prompt's tool section, so the
     // two projections cannot disagree about what exists.
     for (const name of surface.builtinTools) expect(system).toContain(name);
@@ -451,7 +449,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     expect(evidence.calls).toBeGreaterThan(0);
     expect(evidence.toolsOffered).toEqual(Object.keys(surface.tools).sort());
     expect(evidence.agentsOffered).toBe(true);
-    expect(evidence.delegationSectionShown).toBe(true);
+    expect(evidence.agentsIndexed).toBe(true);
     expect(evidence.systemChars).toBe(surface.systemPrompt().length);
     // The runtime is unchanged by observation — the wrapper forwards and reads,
     // it does not answer.

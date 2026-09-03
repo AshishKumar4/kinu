@@ -457,12 +457,12 @@ describe('Evolution Proof', () => {
     // projection would be cheapest to notice.
     console.log(`    request: ${String(result.request.calls)} call(s), tools offered `
       + `${result.request.toolsOffered.join(', ')}, agents=${String(result.request.agentsOffered)}, `
-      + `delegation ladder shown=${String(result.request.delegationSectionShown)}, `
+      + `agents indexed=${String(result.request.agentsIndexed)}, `
       + `system ${String(result.request.systemChars)} chars`);
     expect(result.request.calls).toBeGreaterThan(0);
     expect(result.request.toolsOffered).toEqual(Object.keys(surface.tools).sort());
     expect(result.request.agentsOffered).toBe(true);
-    expect(result.request.delegationSectionShown).toBe(true);
+    expect(result.request.agentsIndexed).toBe(true);
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -875,7 +875,7 @@ return report;`,
     // prompt whose section disappeared once `sectionOverrides` changed, would
     // otherwise pass on turn one and go unmeasured afterwards.
     const shownEveryTurn = [...session1Results, ...session2Results]
-      .every((turn) => turn.request.agentsOffered && turn.request.delegationSectionShown);
+      .every((turn) => turn.request.agentsOffered && turn.request.agentsIndexed);
     console.log(`    Delegation surface shown on every turn: ${String(shownEveryTurn)}`);
 
     // EXPOSURE first, because it is the denominator's precondition.
