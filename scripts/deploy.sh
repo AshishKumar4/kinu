@@ -231,7 +231,14 @@ GATE_DEADLINE_SECONDS=480
 # The launcher reads this table under `set -u`, so it exists even when no gate
 # has earned a different wall. A future deployed probe may add one only with its
 # matching declaration in `scripts/ladder.ts` and the deploy-contract proof.
-declare -A GATE_DEADLINES=()
+# The first-run tier is five DEPLOYED episodes — a real model, real daemons, a
+# real browser — and the shared wall above is calibrated against the slowest
+# SOURCE gate. Killing this one at 480s would report a product failure for a
+# harness deadline. Held equal to GATE_DEADLINES in scripts/ladder.ts by
+# deploy.test.ts: the runner is bash and cannot import the declaration.
+declare -A GATE_DEADLINES=(
+  ['bun run gate:first-run']=1800
+)
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
 # own file and is printed ONLY if it fails: 52 concurrent streams interleaved
@@ -766,6 +773,34 @@ if [ "$SMOKE_FAIL" -ne 0 ]; then
   echo -e "${RED}Smoke test failed.${NC}"
   exit 1
 fi
+
+# ── Step 4b: The first-run tier ──────────────────────────────────
+#
+# WHAT A NEW USER MEETS, on the build that just landed. Every gate above this
+# line ran BEFORE the upload, on this tree, over inputs their authors wrote. The
+# owner found four product defects by hand in two days that 33 such gates and an
+# 11,531-test census never touched — a crafted tool that would not run, an
+# Approve button that re-ticked every box, two machines flapping on one slot,
+# Enter not sending in the TUI — and every one of them had a green test, because
+# each test exercised what its author wrote instead of what a user brings.
+#
+# So this tier drives the DEPLOYED product the way a person does: a fresh
+# workspace per case over the public REST, the real model, a real click in
+# Chrome, two real daemons, real pty bytes. One case per defect, hard assertions
+# only, red on any of them.
+#
+# AFTER THE SMOKE GATE, because the smoke gate answers a cheaper question first:
+# did the deploy land at all. Running this against an origin that is not serving
+# would report five product failures for one deployment failure.
+#
+# ALONE, in its own wave, and `SERIAL_GATES` in scripts/ladder.ts carries the
+# reason: it attaches real machines to the account and drives a real browser
+# session as the same identity `gate:infra` authenticates with. Two gates on one
+# account is how a fleet case measures a sibling's daemons.
+run_required_gate "First-run tier" bun run gate:first-run
+
+# BARRIER.
+flush_gates
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
 #

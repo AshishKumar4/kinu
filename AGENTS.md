@@ -50,6 +50,21 @@ the code is wrong, or the gate's own fixture is stale. Find out which and fix th
 conclude the RULE is wrong, that is a decision to surface with evidence, never to take while
 clearing your own path.
 
+**A defect the owner finds by hand gets a first-run row before its fix ships.** Every gate above
+runs BEFORE a deploy, on this tree, over inputs its own author wrote — so the whole ladder can be
+green while the product a person meets is red, which is the set-equality failure above at the
+largest scale it has. It happened four times in two days: a crafted tool whose body would not run,
+an Approve button that re-ticked every box it had just cleared, two machines flapping on one
+executor slot, and Enter not sending in the TUI. Each had a green test that exercised an
+`async (args) =>` body, a fixture queue, one fake daemon and a CR byte, while a user brings the
+model, the click, the second machine and the LF byte. So `tests/first-run/` holds one case per
+such defect, driven the way a user drives it — a fresh workspace over the public REST, the real
+model, a real click, real daemons, real pty bytes — with hard assertions only, and
+`bun run gate:first-run` runs the tier from `scripts/deploy.sh` after the smoke gate. The row is
+written and proved RED against the deployed build that still has the bug, and the fix is what
+turns it green; a row added after the fix proves only that the author could describe what they
+already repaired. State which sha you proved red against, or state that you could not and why.
+
 **And a gate that runs but can no longer fail is worse than a red one, because it reads green.**
 Three arrived that way in one day: `unitWords` kept running after every claim that could trigger it
 was deleted; a citation test's live fixture and its absent fixture became the same string once the

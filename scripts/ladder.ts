@@ -1477,6 +1477,56 @@ export const LADDER: readonly Gate[] = [
       + 'UNKNOWN and fail, because a machine that could not look at the admin plane\'s outer gate '
       + 'has not verified it.',
   },
+  {
+    run: 'bun run gate:first-run',
+    tier: 'deploy',
+    // 3.4s MEASURED, and it is the floor rather than the cost: five suites
+    // collected and refused, credential-free, on the 24-thread box on
+    // 2026-09-03 (`bun --bun vitest run --config vitest.first-run.config.ts`,
+    // 5 skipped, 3.17s reported / 3.41s wall). What that number covers is every
+    // part of this tier that does not need a deployment — module import, plan
+    // resolution, the refusal — and it is declared because the alternative,
+    // zero, is what made `verify:lean`'s cost line fiction for weeks.
+    //
+    // THE DEPLOYED FIGURE IS OWED, and this row says so rather than averaging
+    // the two into one that describes neither run: nobody has yet run this tier
+    // against a deployment, because doing so needs the eval-service bearer AND
+    // the deployment's DEV_IDENTITY_SECRET, neither of which is on the machine
+    // this branch was written on. The first credentialed run replaces this
+    // number:
+    //   KINU_EVAL_TOKEN=… KINU_EVAL_WEB_IDENTITY=… \
+    //   KINU_EVAL_ORIGIN=https://kinu.run KINU_EVAL_ALLOW_PROD=1 \
+    //     bash scripts/first-run-tier.sh
+    // Its own wall is declared in GATE_DEADLINES below, which is what stops the
+    // shared 480s source-gate deadline killing a tier of deployed episodes.
+    seconds: 3.4,
+    catches: 'a product defect a USER meets on the build that just deployed, which every other '
+      + 'gate in this ladder is structurally unable to see: they all run BEFORE the upload, on '
+      + 'this tree, over inputs their own authors wrote. Between 2026-09-01 and 2026-09-03 the '
+      + 'owner found four by hand — a crafted tool whose body would not run, an Approve button '
+      + 're-ticking every box it had just cleared, two connected machines flapping on one '
+      + 'executor slot, and Enter not sending in the TUI — and every one had a green test, '
+      + 'because each test supplied an `async (args) =>` body, a fixture queue, ONE fake daemon '
+      + 'and a CR byte. The model, the click, the second machine and the LF byte are what a '
+      + 'user brings. This tier brings them: a fresh workspace per case over the public REST, '
+      + 'the real model, a real click in Chrome, two real daemons under their own homes, and '
+      + 'real pty bytes into the shipped TUI against a deployed workspace. Hard assertions '
+      + 'only — a `tool_outcome` row that closed clean, a decided row GONE from the queue, the '
+      + 'other machine\'s exec log EMPTY, a user turn durable in the deployment\'s own '
+      + 'transcript, a file\'s exact bytes off the Files tab\'s own read. Three of the five red '
+      + 'directions are proved against the deployed builds that had the bug (675444233, '
+      + 'd894de564, 4e1122d2d).',
+    blind: 'everything a first run does not reach, and the list is long on purpose: it drives '
+      + 'five paths, not the product. It cannot see a defect on any surface no case names, a '
+      + 'defect that needs a second user or a second account, or one that needs a machine that '
+      + 'is not this one — both daemons are this host wearing two names, so a real '
+      + 'cross-platform fleet is unmeasured. It runs AFTER the upload, so its red is a '
+      + 'deployed red: the bad build is already serving when this fails, and the tier reports '
+      + 'rather than prevents. It is not a regression net either — a green here says these '
+      + 'five mechanisms work, never that the deploy is good. And its model cases depend on a '
+      + 'model choosing to use the capability it was asked for, so a refusal is red and reads '
+      + 'identically to a broken one until somebody reads the transcript the record keeps.',
+  },
 ];
 
 /**
@@ -1511,6 +1561,13 @@ export const SERIAL_GATES = {
     + '`npx wrangler whoami` is its precondition, and its place in the order carries meaning: '
     + 'everything before it proves the SOURCE is deployable and it proves the ACCOUNT is. '
     + 'Running it early would spend account calls on a tree that has not been shown to compile.',
+  'bun run gate:first-run':
+    'runs alone, and AFTER the deploy — the only gate here whose subject is the DEPLOYED '
+    + 'build rather than this tree. It attaches real machines to the account, opens a real '
+    + 'browser session and creates workspaces as the same identity `gate:infra` '
+    + 'authenticates with, so anything beside it would be inside the fleet one of its cases '
+    + 'is measuring: the two-machines case asserts that exactly two machines are live and a '
+    + "sibling's daemon would make that three.",
 } satisfies Record<string, string>;
 
 /**
@@ -1584,10 +1641,19 @@ export function deployWaves(
  * shared figure would take the wall off every source gate at once. None is
  * wired until its acceptance run is green.
  */
-export const GATE_DEADLINES: Readonly<Record<string, {
-  readonly seconds: number;
-  readonly why: string;
-}>> = {};
+export const GATE_DEADLINES = {
+  'bun run gate:first-run': {
+    seconds: 1_800,
+    why: 'is five DEPLOYED episodes, not a source gate: two of them wait on a real model over a '
+      + 'real socket, two attach real daemons and wait for the deployment to report each machine '
+      + 'connected (20s apiece by the product\'s own connect deadline), and one drives Chrome '
+      + 'against the deployed app. The shared 480s wall is calibrated against the slowest SOURCE '
+      + 'gate and would kill this tier mid-episode, which reads as a product failure and is a '
+      + 'harness one. The figure is a BOUND rather than a measurement — nobody has run this tier '
+      + 'against a deployment yet, and the run that does owes both this number and the row\'s '
+      + 'cost in LADDER.',
+  },
+} satisfies Readonly<Record<string, { readonly seconds: number; readonly why: string }>>;
 
 /**
  * The `['key']=value` rows of ONE named bash associative array.
@@ -1746,6 +1812,12 @@ export const CI_EXEMPT = {
     'needs the elan toolchain and a 15-minute Lean build. It runs in the path-filtered '
     + 'lean-verify workflow on pull requests and as a main-push gate, which is where '
     + 'that cost belongs.',
+  'bun run gate:first-run':
+    'has nothing to run against at CI. Its subject is the deployment that just went up, so it '
+    + 'runs AFTER the upload and the smoke gate, on a build that exists — at CI there is no such '
+    + 'build, and pointing it at the previous one would report the last deploy\'s product under '
+    + "this pull request's name. It also creates workspaces, links real machines and spends "
+    + 'model calls on a shared account, none of which belongs on a pull request.',
 } satisfies Record<string, string>;
 
 /** Every gate at or below `tier`. At `deploy`, anything deploy.sh runs that no

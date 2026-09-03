@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
-  EXCLUSION_GROUPS, GATE_DEADLINES, SERIAL_GATES, deployDeadlines, deployExclusions, deployWaves,
+  EXCLUSION_GROUPS, GATE_DEADLINES, SERIAL_GATES, deployDeadlines, deployExclusions,
+  deployGates, deployWaves,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
@@ -104,6 +105,24 @@ const REQUIRED_GATES = [
   "bun run verify:lean",
   "bun run gate:hammer",
   "bun run gate:infra",
+] as const;
+
+/**
+ * The gates that run AFTER the upload, in file order.
+ *
+ * A SECOND LIST, and the split is the claim rather than bookkeeping. Everything
+ * in `REQUIRED_GATES` runs before the first build mutation, which is what the
+ * fixture below proves by failing the build and comparing the event log. A
+ * post-deploy gate cannot appear in that comparison at all — the fixture's
+ * build stub exits non-zero on purpose, so the pipeline never reaches step 4 —
+ * and adding one to that list would turn a correct pipeline red.
+ *
+ * What IS asserted about these is structural and stronger for it: they are in
+ * the parse of deploy.sh, they sit after the smoke test in the file, and each
+ * runs in a wave of its own.
+ */
+const POST_DEPLOY_GATES = [
+  "bun run gate:first-run",
 ] as const;
 
 afterEach(() => {
@@ -318,11 +337,17 @@ describe("deploy gate", () => {
     // nobody can derive gets edited without being read. The property is the
     // same either way, because a gate that leaves the middle wave has to appear
     // in `SERIAL_GATES` to satisfy the assertion above it.
-    expect(waves.length).toBe(4);
+    // FIVE waves: preflight, one concurrent source block, the hammer,
+    // infrastructure, and — after the upload and the smoke test — the first-run
+    // tier. The last one is the only wave that runs against the DEPLOYED build,
+    // and it is alone for the reason SERIAL_GATES states: it links real
+    // machines to the account a sibling gate authenticates against.
+    expect(waves.length).toBe(5);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
-    expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length);
+    expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length + 1);
     expect(waves[2]).toEqual(["bun run gate:hammer"]);
     expect(waves[3]).toEqual(["bun run gate:infra"]);
+    expect(waves[4]).toEqual([...POST_DEPLOY_GATES]);
   });
 
   // The Worker version is what a persisted error names, so it has to name the
@@ -354,7 +379,10 @@ describe("deploy gate", () => {
     );
     expect(deployDeadlines(source)).toEqual(declared);
     for (const [run, entry] of Object.entries(GATE_DEADLINES)) {
-      const gates: string[] = [...REQUIRED_GATES];
+      // Both lists: a post-deploy gate needs its own wall for the same reason
+      // a pre-deploy one might, and a deadline naming no gate is a stale
+      // declaration whichever half it belongs to.
+      const gates: string[] = [...REQUIRED_GATES, ...POST_DEPLOY_GATES];
       expect(gates, `${run} has a deadline and is not a gate`).toContain(run);
       expect(entry.seconds, `${run} declares no longer than the shared deadline`)
         .toBeGreaterThan(480);
@@ -447,7 +475,10 @@ describe("deploy gate", () => {
     // set-equality test above already holds, so position is the exact mapping.
     const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
     const waveOfGate = waves.flatMap((wave, index) => wave.map(() => index));
-    expect(waveOfGate).toHaveLength(REQUIRED_GATES.length);
+    // Every gate deploy.sh declares, pre- and post-deploy: the mapping below is
+    // by POSITION, and the pre-deploy gates come first in file order, so
+    // `REQUIRED_GATES.indexOf` stays the exact index into it.
+    expect(waveOfGate).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
     for (const gate of REQUIRED_GATES) {
       const run = runDeploy({ failingGate: gate });
 
@@ -479,6 +510,46 @@ describe("deploy gate", () => {
       }
     }
   }, 60_000);
+
+  // ── After the upload ──────────────────────────────────────────
+  //
+  // The first-run tier is the only gate whose subject is the DEPLOYED build, so
+  // it is the only one this fixture cannot execute: the build stub fails on
+  // purpose and the pipeline never reaches step 4. What is checkable here is
+  // the wiring, and it is checked at the same three sites the census demands —
+  // deploy.sh runs it, `scripts/ladder.ts` declares it, and this list names it.
+  test("the first-run tier runs after the smoke test, alone, and nothing runs after it", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    for (const gate of POST_DEPLOY_GATES) {
+      expect(deployGates(source)).toContain(gate);
+      // AFTER the smoke test: a tier that judged the product before the smoke
+      // gate had said the deploy landed would report five product failures for
+      // one deployment failure.
+      const smokeAt = source.indexOf("Step 4: Post-deploy smoke test");
+      const gateAt = source.indexOf(`run_required_gate "First-run tier" ${gate}`);
+      expect(smokeAt).toBeGreaterThan(0);
+      expect(gateAt).toBeGreaterThan(smokeAt);
+      // And after the upload itself, which is what makes it a statement about
+      // the build that just shipped rather than about the previous one.
+      expect(gateAt).toBeGreaterThan(source.indexOf("Step 3: Deploying Kinu"));
+      // Alone, and declared alone: the wave assertion above proves the first,
+      // and SERIAL_GATES is where the reason lives.
+      expect(Object.keys(SERIAL_GATES)).toContain(gate);
+    }
+    // The pre- and post-deploy lists together are exactly what deploy.sh runs.
+    // Neither list may grow without the other being read, which is the property
+    // a single list stopped being able to state once a gate ran after the
+    // upload.
+    // By COUNT and by TAIL rather than by set equality: deploy.sh spells one
+    // pre-deploy gate with a glob and `REQUIRED_GATES` carries what bash
+    // expands it to, so the two lists are equal as gates and unequal as text —
+    // which the set-equality test above already establishes for the pre-deploy
+    // half. What is this test's own to say is that the post-deploy half is
+    // exactly these gates, and that nothing else joined the file unnoticed.
+    const parsed = deployGates(source);
+    expect(parsed).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
+    expect(parsed.slice(-POST_DEPLOY_GATES.length)).toEqual([...POST_DEPLOY_GATES]);
+  });
 
   test("a dirty checkout is rejected before verification or mutation", () => {
     const run = runDeploy({ dirty: true });
@@ -658,7 +729,14 @@ describe("deploy gate", () => {
     // so an account that cannot be proved never reaches Wrangler deployment.
     const infraWave = waves.findIndex((wave) => wave.includes('bun run gate:infra'));
     expect(waves[infraWave]).toEqual(['bun run gate:infra']);
-    expect(infraWave).toBe(waves.length - 1);
+    // THE LAST WAVE BEFORE THE UPLOAD. It used to be the last wave outright,
+    // and the first-run tier now runs after the deploy — so the property is
+    // stated against the thing it always meant: an account that cannot be
+    // proved never reaches Wrangler deployment. Everything after this wave is
+    // post-deploy by construction.
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    const preDeployWaves = deployWaves(source.slice(0, source.indexOf('Step 2: Building Kinu')));
+    expect(infraWave).toBe(preDeployWaves.length - 1);
     expect(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")).toContain(
       'run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra',
     );
