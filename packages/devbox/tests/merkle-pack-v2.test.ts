@@ -21,6 +21,7 @@ import { openSidecar, readTree } from './support/sidecar-fixture';
 import type { SidecarFixture } from './support/sidecar-fixture';
 import {
   Seeded,
+  LiveTree,
   compareTrees,
   describeMismatches,
   fidelityTree,
@@ -121,6 +122,42 @@ describe('a v2 generation publishes what the fence found, and serves it back', (
     // third commit failed. There is no index here, and the proof is that the
     // third head reads back whole.
     expect(third.length).toBeGreaterThan(second.length);
+  });
+  test('a generation over a restored parent keeps an untouched file separate', async () => {
+    const first = openSidecar({ bootId: 'boot-first' });
+    first.daemon.plant(textTree({
+      'notes.txt': 'generation one',
+      'src.txt': 'export const one = 1;',
+    }));
+    await publish(first, 'the parent generation');
+
+    const shared = {
+      daemon: first.daemon,
+      payload: first.payload,
+      envelopes: first.envelopes,
+      control: first.control,
+    };
+    const secondTree = new LiveTree();
+    first.daemon.adopt(secondTree);
+    const second = openSidecar({ bootId: 'boot-second', share: shared });
+    expect((await second.core.attach()).kind).toBe('attached');
+    await second.core.materialize((entries) => secondTree.plant(entries));
+
+    second.daemon.write('notes.txt', new TextEncoder().encode('generation two'));
+    second.daemon.write('extra.txt', new TextEncoder().encode('added by the second commit'));
+    await publish(second, 'the child generation');
+
+    const restored = new LiveTree();
+    second.daemon.adopt(restored);
+    const wake = openSidecar({ bootId: 'boot-third', share: shared });
+    expect((await wake.core.attach()).kind).toBe('attached');
+    await wake.core.materialize((entries) => restored.plant(entries));
+
+    const untouched = restored.node('src.txt');
+    if (untouched?.kind !== 'file' || untouched.content?.kind !== 'dense') {
+      throw new Error('the restored parent lost src.txt');
+    }
+    expect(new TextDecoder().decode(untouched.content.bytes)).toBe('export const one = 1;');
   });
 
   test('full fidelity survives a v2 generation: mode, owner, times, xattrs, symlinks, hardlinks, holes', async () => {

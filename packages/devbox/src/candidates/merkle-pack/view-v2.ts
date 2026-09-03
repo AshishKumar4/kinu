@@ -270,6 +270,20 @@ export async function openMerkleV2(
 
 
   const records = new Map<string, Promise<RecordV2>>();
+  /**
+   * A kernel inode number belongs to one restored filesystem. Fresh and reused
+   * records can carry the same number, while hardlinked names share one record.
+   */
+  const materializedInodes = new Map<RecordV2, number>();
+  let nextMaterializedInode = 1;
+  const materializedInodeOf = (record: RecordV2): number => {
+    const held = materializedInodes.get(record);
+    if (held !== undefined) return held;
+    const assigned = nextMaterializedInode;
+    nextMaterializedInode += 1;
+    materializedInodes.set(record, assigned);
+    return assigned;
+  };
   const loadRecord = async (ref: RecordRefV2): Promise<RecordV2> => {
     const bytes = await fetchRange({ key: ref.pack, offset: ref.offset, length: ref.length, sha256: ref.sha256 });
     if (hashNodeV2Bytes(bytes) !== ref.id) {
@@ -387,19 +401,21 @@ export async function openMerkleV2(
       if (held === null) return null;
       const node = held.node;
       if (node.kind === 'file') {
-        return { kind: 'file', mode: node.mode, size: node.size, ino: node.ino, metadata: node.metadata };
+        return { kind: 'file', mode: node.mode, size: node.size, ino: materializedInodeOf(held), metadata: node.metadata };
       }
       if (node.kind === 'symlink') {
         return {
           kind: 'symlink',
           mode: node.mode,
-          ino: node.ino,
+          ino: materializedInodeOf(held),
           size: new TextEncoder().encode(node.target).byteLength,
           target: node.target,
           metadata: node.metadata,
         };
       }
-      if (node.kind === 'dir') return { kind: 'dir', mode: node.mode, ino: node.ino, size: 0, metadata: node.metadata };
+      if (node.kind === 'dir') {
+        return { kind: 'dir', mode: node.mode, ino: materializedInodeOf(held), size: 0, metadata: node.metadata };
+      }
       throw new MerklePackError('malformed-node', `${JSON.stringify(path)} resolves to an extent page`);
     },
     async readdir(path: string): Promise<readonly string[]> {

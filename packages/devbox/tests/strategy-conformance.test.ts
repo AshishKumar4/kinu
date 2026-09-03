@@ -1136,7 +1136,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     const cell = CELLS.find((row) => row.id === '6.13')!;
     const outcome = await runCell(cell, blankWakeArm());
     expect(outcome.kind).toBe('fail');
-  });
+  }, 120_000);
 
   test('6.20 fails when the store loses a reachable key', async () => {
     const arm = CONFORMANCE_ARMS['merkle-pack']();

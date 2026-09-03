@@ -27,7 +27,7 @@ import type { CompactionWork, ObjectRangeRef } from '../../durability/contracts'
 import { MerklePackError } from './errors';
 import { PackWriter } from './pack-layout';
 import type { BuiltPack, ResolvePack, Slot } from './pack-layout';
-import type { MerkleV2View } from './view-v2';
+import type { MerkleV2View, RecordV2 } from './view-v2';
 import { encodeNodeV2, extentPagesV2, hashNodeV2Bytes } from './wire';
 import type { DirEntryV2, ExtentPageRefV2, ExtentV2, NodeV2, RecordRefV2 } from './wire';
 
@@ -70,6 +70,7 @@ function reference(slot: Slot, id: string): (resolve: ResolvePack) => RecordRefV
 export async function compactMerklePacks(input: CompactionInput): Promise<CompactionBuild | null> {
   const writer = new PackWriter(input.maxPackBytes);
   const relocated = new Map<string, Slot>();
+  const rewrittenFiles = new Map<RecordV2, Rewritten>();
   const touched = new Set<string>();
   let bytesRewritten = 0;
   let nodesRewritten = 0;
@@ -108,6 +109,8 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
       throw new MerklePackError('malformed-node', `${JSON.stringify(path)} resolves to an extent page`);
     }
     if (node.kind === 'file') {
+      const prior = rewrittenFiles.get(record);
+      if (prior !== undefined) return prior;
       const extents = await input.view.fileExtents(path);
       const moved = await relocateExtents(extents);
       if (moved === null) return { ref: () => record.ref, moved: false };
@@ -133,7 +136,9 @@ export async function compactMerklePacks(input: CompactionInput): Promise<Compac
         return encoded;
       });
       nodesRewritten += 1;
-      return { ref: reference(slot, id), moved: true };
+      const result = { ref: reference(slot, id), moved: true };
+      rewrittenFiles.set(record, result);
+      return result;
     }
 
     const children: { readonly entry: DirEntryV2; readonly rewritten: Rewritten }[] = [];
