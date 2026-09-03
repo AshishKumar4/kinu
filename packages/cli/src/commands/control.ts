@@ -381,7 +381,7 @@ function printCreatedWebhook(created: CloudWebhookTrigger, origin: string): void
   // by the server — and this is the only time it is shown.
   if (created.secret) {
     console.log(`${DIM('secret')} ${created.secret}`);
-    console.log(DIM('store it now: the secret is shown once and cannot be read back'));
+    console.log(DIM('Store it now: the secret is shown once and cannot be read again'));
   }
 }
 

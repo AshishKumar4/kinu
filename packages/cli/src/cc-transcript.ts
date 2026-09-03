@@ -507,7 +507,7 @@ function finishTurns(drafts: ReadonlyArray<DraftTurn>, skips: MineSkips): Corpus
         userMessage: evidenceWindow(draft.userMessage, EVIDENCE_BUDGETS.storedUserMessage),
         assistantResponse: evidenceWindow(
           response === ''
-            ? `(no text response — ${draft.toolCalls.length} tool call${draft.toolCalls.length === 1 ? '' : 's'})`
+            ? `(no text response, ${draft.toolCalls.length} tool call${draft.toolCalls.length === 1 ? '' : 's'})`
             : response,
           EVIDENCE_BUDGETS.storedAssistantResponse,
         ),

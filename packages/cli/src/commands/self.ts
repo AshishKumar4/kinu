@@ -69,6 +69,6 @@ export async function doctorCommand(): Promise<void> {
   const servedLabel = !served
     ? WARN('unreachable')
     : isSameBuild(VERSION, served.version) ? OK(`${served.version} (current)`)
-    : WARN(`${served.version} — run: kinu update`);
+    : WARN(`${served.version}. Run: kinu update`);
   console.log(`${DIM('Version:')} ${VERSION} ${DIM('· served:')} ${servedLabel}`);
 }

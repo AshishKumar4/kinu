@@ -413,7 +413,7 @@ export interface AdoptLegacyAgentOptions {
 export function adoptLegacyLocalAgent(name: string, opts: AdoptLegacyAgentOptions = {}): LocalAgentRef {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
-    throw new Error(`Workspace "${name}" not found at ${dbPath}; there is nothing to adopt.`);
+    throw new Error(`Workspace "${name}" not found at ${dbPath}.`);
   }
   const existing = loadConfigFile().agents?.[name];
   if (existing && existing.mode !== 'local') {
@@ -464,7 +464,7 @@ export interface ResolveLocalAgentOptions {
 export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {
   const ref = resolveAgentRef(input);
   if (ref && ref.mode !== 'local') {
-    throw new Error(`"${input}" is a cloud workspace; it has no local database.`);
+    throw new Error(`"${input}" is a cloud workspace; this needs a local one.`);
   }
   const name = ref?.localName ?? ref?.name ?? input;
   const dbPath = agentDbPath(name);
@@ -846,7 +846,8 @@ export function requireLLMConfig(opts?: {
   throw new Error(
     'No LLM configured.\n' +
     '  Run kinu auth to use your Cloudflare AI,\n' +
-    '  run kinu setup to configure a local provider, or sign in to Claude Code and pass --model claude/<model>,\n' +
+    '  run kinu setup to configure a local provider,\n' +
+    '  sign in to Claude Code and pass --model claude/<model>,\n' +
     '  or pass --base-url for an advanced override.'
   );
 }

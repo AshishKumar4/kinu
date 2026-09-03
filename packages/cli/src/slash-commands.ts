@@ -41,7 +41,7 @@ export const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/fork', description: 'Walk back: fork the conversation before an earlier message', usage: '/fork [number]' },
   { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints' },
   { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls' },
-  { name: '/instructions', description: 'Approve which AGENTS.md and skill files are followed as instructions', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls' },
+  { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls' },
   { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls' },
   { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]' },
   { name: '/exit', description: 'Exit chat' },
@@ -155,7 +155,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/cancel':
       return { kind: 'cancel' };
     case '/rename': {
-      if (!client.rename) return { kind: 'text', text: 'This agent cannot be renamed from this client.' };
+      if (!client.rename) return { kind: 'text', text: 'You cannot rename this agent from this client.' };
       if (!arg) return { kind: 'text', text: 'Usage: /rename <name>' };
       const renamed = await client.rename(arg);
       return { kind: 'text', text: `Renamed to ${renamed.displayName}.` };
@@ -180,7 +180,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       const content = await client.readMemory();
       if (!content) return { kind: 'text', text: 'Memory is empty.' };
       const shown = content.length > 1500
-        ? `${content.slice(0, 1500)}\n… [+${content.length - 1500} chars — read memory/MEMORY.md for the rest]`
+        ? `${content.slice(0, 1500)}\n… [+${content.length - 1500} chars: read memory/MEMORY.md for the rest]`
         : content;
       return { kind: 'text', text: `Memory:\n${shown}` };
     }
@@ -188,14 +188,14 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       if (rest[0] === 'revert') {
         const n = Number.parseInt(rest[1] ?? '', 10);
         if (!Number.isInteger(n) || n < 1) {
-          return { kind: 'text', text: 'Usage: /changelog revert <n> — n is the index from the /changelog listing.' };
+          return { kind: 'text', text: 'Usage: /changelog revert <n>. Take n from the /changelog listing.' };
         }
         // Re-fetch so the index resolves against the same ordering the
         // listing showed; the revert itself is id-addressed.
         const view = await client.changelog();
         const entry = view.entries[n - 1];
-        if (!entry) return { kind: 'text', text: `No changelog entry ${n} — /changelog lists ${view.entries.length}.` };
-        if (!entry.revert) return { kind: 'text', text: `Entry ${n} is informational (${entry.kind}) — nothing to revert.` };
+        if (!entry) return { kind: 'text', text: `No changelog entry ${n}. /changelog lists ${view.entries.length}.` };
+        if (!entry.revert) return { kind: 'text', text: `Entry ${n} is informational (${entry.kind}). Nothing to revert.` };
         const result = await client.revertChangelogEntry(entry.id);
         return {
           kind: 'text',
@@ -231,9 +231,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
           return {
             kind: 'text',
             text: `Read it first: /refine show ${located.requestRef} ${located.editRef}\n`
-              + `Then repeat the digest it prints: /refine ${decision} ${located.requestRef} ${located.editRef} <digest>\n`
-              + 'The digest is what makes the decision about those exact bytes rather than about a '
-              + 'position in a list that may have moved.',
+              + `Then repeat the digest it prints: /refine ${decision} ${located.requestRef} ${located.editRef} <digest>\n`,
           };
         }
         const result = await client.decideRefinement({
@@ -255,13 +253,13 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     case '/takes': {
       const set = await client.latestTakes();
       if (!set || set.candidates.length < 2) {
-        return { kind: 'text', text: 'No alternate takes yet — they appear when an agents.swarm search with a depth converges on near-tied approaches, or when a /branch redirect settles against the live turn.' };
+        return { kind: 'text', text: 'No alternate takes yet. They appear when an agents.swarm search with a depth converges on near-tied approaches, or when a /branch redirect settles.' };
       }
       if (!arg) return { kind: 'takes', set };
       const n = Number.parseInt(arg, 10);
       const candidate = Number.isInteger(n) ? set.candidates[n - 1] : undefined;
       if (!candidate) {
-        return { kind: 'text', text: `No take "${arg}" — /takes lists ${set.candidates.length}.` };
+        return { kind: 'text', text: `No take "${arg}". /takes lists ${set.candidates.length}.` };
       }
       return { kind: 'text', text: describeTakePick(await client.pickTake(set.id, candidate.nodeId), n) };
     }
@@ -285,7 +283,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       if (!client.localControls) return { kind: 'unknown', command: cmd };
       const providers = await client.localControls.listModelProviders();
       if (providers.length === 0) {
-        return { kind: 'text', text: 'No local provider registry is configured for this session.' };
+        return { kind: 'text', text: 'This session has no local provider registry.' };
       }
       const lines = ['Providers:'];
       for (const provider of providers) {
@@ -298,7 +296,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
         if (menu.models.length > 40) lines.push(`  … ${menu.models.length - 40} more`);
       }
       for (const failure of menu.failures) {
-        lines.push(`  ! ${failure.label ?? failure.provider} could not be listed — ${failure.reason}`);
+        lines.push(`  ! ${failure.label ?? failure.provider} could not be listed: ${failure.reason}`);
       }
       return { kind: 'text', text: lines.join('\n') };
     }
@@ -341,7 +339,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       };
       const cursor = pageCursor(sub === 'page' ? pageToken : undefined);
       if (cursor === 'invalid') {
-        return { kind: 'text', text: 'That instruction page cursor is invalid; start again with /instructions.' };
+        return { kind: 'text', text: 'That page reference is not valid. Run /instructions again.' };
       }
       const page = await client.localControls.listInstructionApprovals(
         cursor === null ? {} : { cursor },
@@ -360,7 +358,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
         return {
           kind: 'text',
           text: [
-            'Instruction files the agent can write. Only the contents you approve are followed.',
+            'Instruction files the agent can write. The agent follows only what you approve.',
             ...rows.map((row, index) => {
               const state = row.reason !== undefined
                 ? `not readable: ${row.reason}`
@@ -378,7 +376,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       }
       const actionCursor = pageCursor(pageToken);
       if (actionCursor === 'invalid') {
-        return { kind: 'text', text: 'That instruction page cursor is invalid; start again with /instructions.' };
+        return { kind: 'text', text: 'That page reference is not valid. Run /instructions again.' };
       }
       const actionPage = await client.localControls.listInstructionApprovals(
         actionCursor === null ? {} : { cursor: actionCursor },
@@ -389,7 +387,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
         return { kind: 'text', text: `That instruction row is no longer on this page; list it again before acting.` };
       }
       if (rowToken === undefined || !/^[A-Za-z0-9_-]+$/.test(rowToken)) {
-        return { kind: 'text', text: 'That instruction action lacks the row identity; list the page again before acting.' };
+        return { kind: 'text', text: 'That command is missing the row token. List the page again to copy it.' };
       }
       const reviewedPath = Buffer.from(rowToken, 'base64url').toString('utf8');
       if (reviewedPath !== row.path) {
@@ -415,7 +413,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       }
       if (sub === 'approve') {
         if (reviewedDigest === undefined) {
-          return { kind: 'text', text: 'Read the file first; approve requires the digest you reviewed.' };
+          return { kind: 'text', text: 'Read the file first: approving needs the digest it prints.' };
         }
         const decided = await client.localControls.approveInstruction(row.path, reviewedDigest);
         if (!decided.ok) return { kind: 'text', text: `Nothing was approved: ${decided.error}` };
@@ -424,7 +422,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       if (sub === 'revoke') {
         const decided = await client.localControls.revokeInstruction(row.path);
         if (!decided.ok) return { kind: 'text', text: `Nothing was revoked: ${decided.error}` };
-        return { kind: 'text', text: `Revoked ${row.path}. It is passed to the agent as reference material now.` };
+        return { kind: 'text', text: `Revoked ${row.path}. The agent now sees it as reference material.` };
       }
       return { kind: 'text', text: 'Usage: /instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]' };
     }
@@ -439,15 +437,15 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       return {
         kind: 'text',
         text: config.advisorEnabled
-          ? `Advisor: on. The minimum severity is ${config.advisorMinSeverity}. The advisor adds one model call per turn.`
-          : `Advisor: off. The minimum severity is ${config.advisorMinSeverity}. /advisor on adds one model call per turn.`,
+          ? `Advisor: on. Minimum severity ${config.advisorMinSeverity}. It adds one model call per turn.`
+          : `Advisor: off. Minimum severity ${config.advisorMinSeverity}. /advisor on adds one model call per turn.`,
       };
     }
     case '/mcts':
     case '/tree': {
       const nodes = await client.searchNodes();
       if (nodes.length === 0) {
-        return { kind: 'text', text: 'No MCTS nodes yet. Use /evolve or ask complex questions.' };
+        return { kind: 'text', text: 'No MCTS nodes yet. Run /evolve, or ask something that needs a search.' };
       }
       return { kind: 'text', text: `MCTS Tree (${nodes.length} nodes):\n${renderSearchTree(nodes)}` };
     }
@@ -574,14 +572,14 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   const turns = groupCheckpointsByTurn(entries);
   if (turns.length === 0) {
     return {
-      text: 'No file checkpoints yet. One is taken automatically before the first change to a file on '
-        + 'YOUR machine each turn; work the agent does in its own workspace or in a sandbox is not covered.',
+      text: 'No file checkpoints yet. Kinu takes one each turn, before the agent first changes '
+        + 'a file on YOUR machine.',
       restored: false,
     };
   }
   const n = ref ? Number.parseInt(ref, 10) : 1;
   if (!Number.isInteger(n) || n < 1 || n > turns.length) {
-    const lines = [`Usage: /undo [n] — n is turns back (1–${turns.length} available):`];
+    const lines = [`Usage: /undo [n], where n is turns back (1–${turns.length} available):`];
     turns.slice(0, 10).forEach((group, i) => {
       const at = new Date(group[0]!.at).toLocaleString();
       lines.push(`  ${i + 1}. ${at}  ${group.map((e) => e.dir).join(', ')}`);
@@ -607,7 +605,7 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   for (const entry of group) {
     const plan = await surface.plan(entry.dir, entry.id);
     if (plan.files.length === 0) {
-      lines.push(`${entry.dir} — already matches that checkpoint, nothing to restore.`);
+      lines.push(`${entry.dir} already matches that checkpoint. Nothing to restore.`);
       continue;
     }
     const { modified, created, deleted } = summarizeRestorePlan(plan.files);
@@ -636,7 +634,7 @@ export function renderTakesText(set: AlternateTakeSet): string {
     lines.push(`  ${i + 1}. ${marker} [${takeEvidence(candidate)}]`);
     lines.push(`       ${candidate.text.replace(/\s+/g, ' ').slice(0, 160)}`);
   });
-  lines.push('Pick with /takes <n> — your pick becomes a real preference signal.');
+  lines.push('Pick with /takes <n>. Your pick becomes a preference signal.');
   return lines.join('\n');
 }
 
@@ -653,8 +651,8 @@ function renderStagedSkill(view: StagedSkillView, requestRef: string, editRef: s
     `digest ${view.digest}`,
     view.intact
       ? ''
-      : 'WARNING: these bytes are not the ones the refinement recorded — something rewrote the '
-        + 'staging. Approving is refused until the refinement is re-run.',
+      : 'WARNING: these bytes are not the ones the refinement recorded. '
+        + 'Re-run the refinement before approving.',
     '',
     view.source,
     '',
@@ -689,12 +687,12 @@ function resolveRefinementEdit(
   }
   const request = view.requests[n - 1];
   if (!request) {
-    return { ok: false, error: `No refinement ${n} — /refine lists ${view.requests.length}.` };
+    return { ok: false, error: `No refinement ${n}. /refine lists ${view.requests.length}.` };
   }
   if (!request.routes[edit - 1]) {
     return {
       ok: false,
-      error: `Refinement ${n} has no edit ${edit} — it lists ${request.routes.length}.`,
+      error: `Refinement ${n} has no edit ${edit}. It lists ${request.routes.length}.`,
     };
   }
   return {
@@ -761,20 +759,20 @@ export function describeBranchStatus(event: BranchStatusEvent): string {
   const task = event.task.replace(/\s+/g, ' ').slice(0, 80);
   switch (event.status) {
     case 'running':
-      return `⎇ branching — running "${task}" in parallel (the live turn continues)`;
+      return `⎇ branching: running "${task}" in parallel (the live turn continues)`;
     case 'settled':
-      return '⎇ branch settled into alternate takes — /takes to compare and pick';
+      return '⎇ branch settled into alternate takes. /takes to compare and pick';
     case 'error':
-      return `⎇ branch discarded — ${event.message}`;
+      return `⎇ branch discarded: ${event.message}`;
   }
 }
 
 /** What a pick did, for the surfaces' confirmation line. */
 export function describeTakePick(result: TakePickOutcome, n: number): string {
   if (!result.changedAnswer) {
-    return `Take ${n} confirmed — the answered approach stays, recorded as an explicit preference.`;
+    return `Take ${n} confirmed. The answered approach stays as an explicit preference.`;
   }
-  return `Take ${n} picked — preference recorded, convergence re-pointed` +
+  return `Take ${n} picked. Preference recorded, convergence re-pointed` +
     (result.continuationQueued ? ', and the agent will continue with this approach.' : '.');
 }
 

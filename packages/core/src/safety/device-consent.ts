@@ -36,14 +36,14 @@ export type DeviceConsentAnswer = Exclude<DeviceConsentDecision, 'timeout'>;
 
 /** The owner said no. A policy decision: asking again immediately is noise. */
 export const DEVICE_CONSENT_DENIED =
-  'device use was not approved — the owner declined this request';
+  'device use was not approved: the owner declined';
 
 /** Nobody answered before the prompt expired. Deliberately worded so a model
  *  reading it cannot mistake it for a refusal: the capability is intact and
  *  the request is worth making again when someone is around. */
 export const DEVICE_CONSENT_UNANSWERED =
-  'device use is still unapproved: the consent prompt expired with no answer, so nobody has decided yet. '
-  + 'This is NOT a refusal — the owner was away. Carry on with what does not need the device, and ask again later.';
+  'device use is still unapproved: the consent prompt expired with no answer, so nobody decided. '
+  + 'Continue without the device and ask again later.';
 
 /** The pseudo-method a device request carries when there is no machine to
  *  act on yet — the card asks the owner to LINK one (the `kinu connect`
@@ -63,12 +63,11 @@ export const DEVICE_PROVISION_METHOD = 'connect';
  */
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
   'Connecting installs the Kinu daemon on this machine and links it to your account.',
-  'A workspace you approve then runs commands here in a sandbox: the agent gets its own',
-  'home directory plus the folders you consented, and your own files stay invisible to it.',
-  'Access is per workspace: you approve each one once, and you can revoke it any time',
-  'under Account settings → Devices. The same page has one Sandbox switch per device;',
-  'turning it off gives the agent full access to this machine, as you — not root.',
-  'The daemon dials out over one WebSocket; it opens no inbound ports.',
+  'A workspace you approve runs commands in a sandbox: its own home plus folders you pick.',
+  'Your other files stay invisible to it.',
+  'You approve each workspace once. Revoke it under Account settings → Devices.',
+  'That page has one Sandbox switch per device. Off means this whole machine, as your user.',
+  'The daemon dials out and opens no inbound ports.',
 ];
 
 export interface DeviceActionSummary {

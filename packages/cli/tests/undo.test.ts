@@ -191,7 +191,7 @@ describe('performUndo', () => {
       await engine.ensureCheckpoint(work);
       const result = await performUndo(client);
       expect(result.restored).toBe(false);
-      expect(result.text).toContain('nothing to restore');
+      expect(result.text).toContain('Nothing to restore');
     } finally { cleanup(); }
   });
 
@@ -325,22 +325,22 @@ describe('/advisor command surface', () => {
 
   test('reports the state, and the report names the floor and the per-turn cost', async () => {
     expect(await advisorText(advisorClient(), '/advisor')).toBe(
-      `Advisor: off. The minimum severity is ${DEFAULT_ADVISOR_MIN_SEVERITY}. /advisor on adds one model call per turn.`,
+      `Advisor: off. Minimum severity ${DEFAULT_ADVISOR_MIN_SEVERITY}. /advisor on adds one model call per turn.`,
     );
   });
 
   test('on, off and severity write through, and each write keeps the other field', async () => {
     const client = advisorClient();
     expect(await advisorText(client, '/advisor on')).toBe(
-      `Advisor: on. The minimum severity is ${DEFAULT_ADVISOR_MIN_SEVERITY}. The advisor adds one model call per turn.`,
+      `Advisor: on. Minimum severity ${DEFAULT_ADVISOR_MIN_SEVERITY}. It adds one model call per turn.`,
     );
     expect(await advisorText(client, '/advisor')).toContain('Advisor: on.');
 
     expect(await advisorText(client, '/advisor severity blocker')).toBe(
-      'Advisor: on. The minimum severity is blocker. The advisor adds one model call per turn.',
+      'Advisor: on. Minimum severity blocker. It adds one model call per turn.',
     );
     expect(await advisorText(client, '/advisor off')).toBe(
-      'Advisor: off. The minimum severity is blocker. /advisor on adds one model call per turn.',
+      'Advisor: off. Minimum severity blocker. /advisor on adds one model call per turn.',
     );
     expect(await advisorText(client, '/advisor severity nit')).toContain('Advisor: off.');
   });

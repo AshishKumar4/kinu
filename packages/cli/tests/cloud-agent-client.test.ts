@@ -803,7 +803,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
     const result = await turn;
     expect(result.hadError).toBe(true);
-    expect(events.some((e) => e.type === 'error' && e.message.includes('no resumable stream'))).toBe(true);
+    expect(events.some((e) => e.type === 'error' && e.message.includes('no stream to resume'))).toBe(true);
     // The partial output is kept — it is what this process really saw — but the
     // turn is NOT reported as a completed one.
     expect(result.text).toBe('starting');

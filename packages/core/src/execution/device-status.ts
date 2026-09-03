@@ -182,32 +182,30 @@ export function effectiveDeviceMode(
 }
 
 /** The fix for each reason, in the words the owner needs. `kinu connect`
- *  prints it, and the Settings device row shows the same sentence. */
+ *  prints it, and the Settings device row shows the same sentence. Each one
+ *  states the action and stops: no UI surface prints the reason code itself
+ *  (the CLI line and the Settings row both drop it), so this sentence carries
+ *  everything the owner can act on. Commands stay in
+ *  backticks, which the Settings row renders as code. */
 const SANDBOX_REASON_FIX = {
   no_bwrap:
     'Install bubblewrap: `sudo apt install bubblewrap`, `sudo dnf install bubblewrap`, '
     + 'or `sudo pacman -S bubblewrap`.',
   no_userns:
-    'bwrap cannot create a user namespace. On Ubuntu 23.10 and later, install the packaged '
-    + 'bubblewrap — it carries the AppArmor profile — or run '
+    'Install the packaged bubblewrap (Ubuntu 23.10 and later), or run '
     + '`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.',
-  wsl1:
-    'WSL1 has no user namespaces. Run `wsl --set-version <distro> 2`, then connect again.',
-  no_sandbox_exec:
-    'This macOS build has no /usr/bin/sandbox-exec. Turn Sandbox off for this device to run '
-    + 'commands on it.',
+  wsl1: 'Run `wsl --set-version <distro> 2`, then connect again.',
+  no_sandbox_exec: 'Turn Sandbox off for this device to run commands.',
   unsupported_platform:
-    'Kinu sandboxes commands on Linux and macOS only. Turn Sandbox off for this device to run '
-    + 'commands on it.',
-  daemon_outdated:
-    'update the Kinu CLI and run `kinu connect` again',
+    'The sandbox needs Linux or macOS. Turn Sandbox off for this device to run commands.',
+  daemon_outdated: 'Update the Kinu CLI, then run `kinu connect` again.',
 } satisfies Record<DeviceSandboxReason, string>;
 
 /** What the owner can do about a reason. A machine that named no reason gets
- *  the one honest sentence: nobody knows yet. */
+ *  the one action that can still answer the question. */
 export function sandboxReasonFix(reason: DeviceSandboxReason | null): string {
   return reason === null
-    ? 'The daemon did not say why. Run `kinu connect` on that machine to probe it again.'
+    ? 'Run `kinu connect` on that machine to retry.'
     : SANDBOX_REASON_FIX[reason];
 }
 

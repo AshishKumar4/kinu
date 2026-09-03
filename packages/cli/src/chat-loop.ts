@@ -82,7 +82,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     try {
       await Promise.race([client.close(), cap.promise]);
     } catch (err) {
-      console.log(WARN('\n  This session did not close cleanly — its last evolution window may not have flushed.'));
+      console.log(WARN('\n  This session did not close cleanly. Its last evolution window may not have flushed.'));
       console.log(formatFailure({ cause: err }));
     }
     // A session daemon lives as long as the chat it was started for.
@@ -131,7 +131,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       const text = input.slice('/queue'.length).trim();
       if (text) {
         queuedInputs.push(text);
-        console.log(DIM(`  ⧗ queued — sends after this turn (${queuedInputs.length} waiting)`));
+        console.log(DIM(`  ⧗ queued: sends after this turn (${queuedInputs.length} waiting)`));
       } else {
         console.log(DIM('  Usage while a turn runs: /queue <text>'));
       }
@@ -139,15 +139,15 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     }
     if (command === '/branch') {
       const text = input.slice('/branch'.length).trim();
-      if (!text) console.log(DIM('  Usage while a turn runs: /branch <text> — runs the redirect in parallel.'));
+      if (!text) console.log(DIM('  Usage while a turn runs: /branch <text>. It runs the redirect in parallel.'));
       else if (!client.branch(text, { cwd: process.cwd() })) {
         queuedInputs.push(text);
-        console.log(DIM('  ⧗ the turn just finished — queued to send next'));
+        console.log(DIM('  ⧗ the turn just finished. Queued to send next.'));
       }
       return;
     }
     if (input.startsWith('/')) {
-      console.log(DIM('  A turn is running — type to steer it, or use /queue <text>, /branch <text>, /stop.'));
+      console.log(DIM('  A turn is running. Type to steer it, or use /queue <text>, /branch <text>, /stop.'));
       return;
     }
     const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
@@ -157,7 +157,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       console.log(DIM('  ↪ steering the running turn'));
     } else {
       queuedInputs.push(input);
-      console.log(DIM('  ⧗ the turn just finished — queued to send next'));
+      console.log(DIM('  ⧗ the turn just finished. Queued to send next.'));
     }
   };
   rl.on('line', async (line) => {
@@ -248,7 +248,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       candidates.forEach((candidate, i) => {
         console.log(`  ${ACCENT(String(i + 1))} ${clipText(candidate.text.replace(/\s+/g, ' '), 100)}`);
       });
-      console.log(DIM('Fork with /fork <number> — the conversation restarts just before that message.\n'));
+      console.log(DIM('Fork with /fork <number>. The conversation restarts just before that message.\n'));
       return;
     }
     const index = Number.parseInt(ref, 10) - 1;
@@ -269,7 +269,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       await client.connect();
       await previous.close();
     }
-    console.log(`\n${DIM('Forked')} ${ACCENT(result.label)} ${DIM('— edit the message and press Enter to resend.')}\n`);
+    console.log(`\n${DIM('Forked')} ${ACCENT(result.label)}${DIM('. Edit the message and press Enter to resend.')}\n`);
     pendingPrefill = picked.text;
   };
 
@@ -290,13 +290,13 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         const outcome = await executeSlashCommand(client, input);
         if (outcome.kind === 'queue') {
           if (outcome.text) queuedInputs.push(outcome.text);
-          else console.log(DIM('  Usage: /queue <text> — it sends after the running turn (or immediately when idle).'));
+          else console.log(DIM('  Usage: /queue <text>. It sends after the running turn, or at once when idle.'));
           continue;
         }
         if (outcome.kind === 'branch') {
           // Idle — there is no live turn to branch from; run it normally.
           if (outcome.text) await runTurn(outcome.text);
-          else console.log(DIM('  Usage: /branch <text> — runs a redirect as a parallel branch while a turn is running.'));
+          else console.log(DIM('  Usage: /branch <text>. It runs a redirect as a parallel branch during a turn.'));
           continue;
         }
         if (outcome.kind === 'fork') {
@@ -367,14 +367,13 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
 async function maybeOfferDeviceConnect(rl: readline.Interface, tty: boolean): Promise<void> {
   if (!(await shouldOfferDeviceConnect())) return;
   if (!tty) {
-    console.log(MUTED('No PC is connected for device access. Connect one with: kinu connect'));
+    console.log(MUTED('No PC connected. Connect one with: kinu connect'));
     return;
   }
   console.log(`${WARN('Let this agent use this PC?')}`);
-  console.log(MUTED(`  No PC is connected to your account yet. Linking installs the Kinu daemon`));
-  console.log(MUTED(`  and registers this machine as "${defaultDeviceName()}". A workspace you grant`));
-  console.log(MUTED('  access to can then run commands and read files here, as you — you approve'));
-  console.log(MUTED('  each workspace once, and can revoke it in Account settings → Devices.'));
+  console.log(MUTED(`  Linking installs the Kinu daemon and registers this machine as "${defaultDeviceName()}".`));
+  console.log(MUTED('  A workspace you approve runs commands here in a sandbox.'));
+  console.log(MUTED('  You approve each workspace once, and revoke it in Account settings → Devices.'));
   await promptDeviceConnect(rl, { allowDismiss: true });
   console.log('');
 }
@@ -446,7 +445,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'changelog':
       console.log(`\n${MUTED(renderChangelogText(outcome.view.entries, { unseenCount: outcome.view.unseenCount }))}`);
       if (outcome.view.entries.some((entry) => entry.revert)) {
-        console.log(MUTED('Revert a line with /changelog revert <n>. Keeping is the default — no action needed.'));
+        console.log(MUTED('Revert a line with /changelog revert <n>. Keeping is the default.'));
       }
       console.log('');
       return 'ok';
@@ -472,7 +471,7 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
         if (menu.models.length > 40) console.log(DIM(`  … ${menu.models.length - 40} more`));
       }
       for (const failure of menu.failures) {
-        console.log(WARN(`  ! ${failure.label ?? failure.provider} could not be listed — ${failure.reason}`));
+        console.log(WARN(`  ! ${failure.label ?? failure.provider} could not be listed: ${failure.reason}`));
       }
       console.log('');
       return 'ok';

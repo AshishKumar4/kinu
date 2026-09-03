@@ -70,7 +70,7 @@ async function createToken(positionalName: string | undefined, opts: TokensOpts)
   console.log('');
   console.log(`  ${created.token}`);
   console.log('');
-  console.log(WARN('This token is shown once — store it as a CI secret now.'));
+  console.log(WARN('This token is shown once. Store it as a CI secret now.'));
   console.log(DIM('Use it headlessly:'));
   console.log(DIM(`  KINU_TOKEN=${created.token.slice(0, 12)}… kinu exec --workspace <name> --json "task"`));
 }

@@ -331,7 +331,7 @@ async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
   }
   if (result.selectionWarning) console.log(`${WARN('exploratory')} ${result.selectionWarning}`);
   console.log(result.proposed
-    ? `${OK('proposed')} scaffold v${result.pendingVersion} — resolved by the shadow eval`
+    ? `${OK('proposed')} scaffold v${result.pendingVersion}, resolved by the shadow eval`
     : DIM(`  no proposal: ${result.skipReason ?? 'no strictly better candidate'}`));
 }
 

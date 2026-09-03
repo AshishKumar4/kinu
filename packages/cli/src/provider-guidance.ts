@@ -27,10 +27,10 @@ export interface GuidedFailure {
 const PROVIDER_LIST_HINT = 'See what is connected: kinu provider list';
 
 const CREDENTIAL_HINT =
-  `The provider rejected the credential. Reconnect it: kinu provider connect <provider> — ${PROVIDER_LIST_HINT}`;
+  `The provider rejected the credential. Reconnect it: kinu provider connect <provider>. ${PROVIDER_LIST_HINT}`;
 const ACCOUNT_HINT =
   'The provider account cannot serve requests (billing or quota). Fix it with the provider, '
-  + `or switch: kinu provider connect <provider> — ${PROVIDER_LIST_HINT}`;
+  + `or switch: kinu provider connect <provider>. ${PROVIDER_LIST_HINT}`;
 const MODEL_HINT =
   'That model is not available on the connected provider. Pick another with /model in chat, '
   + 'or pass --model <provider>/<id>.';

@@ -21,7 +21,7 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     const auth = await requireAuthOrLogin();
     const name = await confirmConnect(opts.label);
     if (!name) {
-      console.log(`${DIM('Nothing was installed — this machine is not linked.')}`);
+      console.log(`${DIM('Nothing was installed. This machine is not linked.')}`);
       return;
     }
     let waiting = false;
@@ -80,8 +80,7 @@ async function confirmConnect(label?: string): Promise<string | null> {
   console.log('');
   if (!canPrompt()) {
     throw new Error(
-      'Linking a machine needs a terminal: kinu states what access it grants and asks you to confirm. '
-      + 'Re-run `kinu connect` from a terminal.',
+      'Linking a machine needs a terminal. Re-run `kinu connect` from one.',
     );
   }
   const name = label?.trim() || await ask('Name this device', defaultDeviceName());

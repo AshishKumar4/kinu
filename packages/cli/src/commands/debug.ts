@@ -909,7 +909,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     for (const e of summary.errors.slice(0, 20)) console.log(`  ${DIM(e.runId.slice(0, 8))} ${e.message.slice(0, 140)}`);
   }
   if (summary.sectionFailures.length > 0) {
-    console.log(`\n${ERR('Section failures')} (${summary.sectionFailures.length}) — these sections are MISSING from the bundle, not empty`);
+    console.log(`\n${ERR('Section failures')} (${summary.sectionFailures.length}). These sections are MISSING from the bundle, not empty`);
     for (const s of summary.sectionFailures.slice(0, 20)) console.log(`  ${ACCENT(s.section)} ${s.message.slice(0, 200)}`);
   }
   console.log('');

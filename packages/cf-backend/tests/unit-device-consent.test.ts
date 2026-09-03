@@ -31,7 +31,7 @@ describe('device consent prompt data', () => {
     // expired prompt only means nobody was at the keyboard. They used to be
     // the same sentence, so an AFK moment became a permanent capability loss.
     expect(DEVICE_CONSENT_UNANSWERED).not.toBe(DEVICE_CONSENT_DENIED);
-    expect(DEVICE_CONSENT_UNANSWERED).toContain('NOT a refusal');
+    expect(DEVICE_CONSENT_UNANSWERED).toContain('nobody decided');
     expect(DEVICE_CONSENT_UNANSWERED).toContain('ask again later');
     expect(DEVICE_CONSENT_DENIED).toContain('declined');
     expect(DEVICE_CONSENT_DENIED).not.toContain('later');
@@ -45,7 +45,7 @@ describe('device consent prompt data', () => {
     const text = DEVICE_CONNECT_DISCLOSURE.join(' ');
     expect(text).toContain('sandbox');
     expect(text).toContain('Sandbox switch');
-    expect(text).toContain('per workspace');
+    expect(text).toContain('each workspace');
     expect(text).toContain('no inbound ports');
   });
 });

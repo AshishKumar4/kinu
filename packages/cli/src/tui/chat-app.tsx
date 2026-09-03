@@ -488,7 +488,7 @@ function ChatScene({
         return [...kept, {
           id: `msg-${++msgIdRef.current}`,
           role: 'system',
-          content: `Forked ${result.label} — edit the message and press Enter to resend.`,
+          content: `Forked ${result.label}. Edit the message and press Enter to resend.`,
         }];
       });
 
@@ -738,7 +738,7 @@ function ChatScene({
     setReady(false);
     try {
       if (!entry.revert) {
-        addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}) — nothing to revert.` });
+        addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}). Nothing to revert.` });
         return;
       }
       const result = await client.revertChangelogEntry(entry.id);
@@ -845,8 +845,8 @@ function ChatScene({
           commands: 'Command palette closed.',
           hub: 'Agent hub closed.',
           model: 'Model selection cancelled.',
-          changelog: 'Changelog closed — everything kept.',
-          takes: 'Takes closed — the answered take stays.',
+          changelog: 'Changelog closed. Everything kept.',
+          takes: 'Takes closed. The answered take stays.',
         } satisfies Record<NonNullable<ActiveSurface>['kind'], string>;
         setActiveSurface(null);
         addMessage({ role: 'system', content: cancelled[activeSurface.kind] });
@@ -922,12 +922,12 @@ function ChatScene({
         if (clientGenerationRef.current !== generation) return;
         if (outcome.kind === 'queue') {
           if (outcome.text) await runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
-          else addMessage({ role: 'system', content: 'Usage: /queue <text> — it sends after the running turn (or immediately when idle).' });
+          else addMessage({ role: 'system', content: 'Usage: /queue <text>. It sends after the running turn, or at once when idle.' });
           return;
         }
         if (outcome.kind === 'branch') {
           if (outcome.text) await performBranch(outcome.text);
-          else addMessage({ role: 'system', content: `Usage: /branch <text> (or ${keybindings.hint('conversation.branch')} on a draft) — runs the redirect as a parallel branch of the running turn.` });
+          else addMessage({ role: 'system', content: `Usage: /branch <text> (or ${keybindings.hint('conversation.branch')} on a draft). It runs the redirect as a parallel branch of the running turn.` });
           return;
         }
         if (outcome.kind === 'fork') {
@@ -1038,7 +1038,7 @@ function ChatScene({
               && hintedTakesRef.current !== set.id
             ) {
               hintedTakesRef.current = set.id;
-              addMessage({ role: 'system', content: `${set.candidates.length} takes — /takes to compare` });
+              addMessage({ role: 'system', content: `${set.candidates.length} takes: /takes to compare` });
             }
           } catch (takesError) {
             if (clientGenerationRef.current === generation) {

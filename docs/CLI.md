@@ -41,7 +41,7 @@ kinu <command> [options]
 
 | Command | What it does |
 | --- | --- |
-| [`kinu run <name> [prompt...]`](#kinu-run-name-prompt) | Run a workspace once, or open chat when no prompt is provided |
+| [`kinu run <name> [prompt...]`](#kinu-run-name-prompt) | Run a workspace once, or open chat with no prompt |
 | [`kinu chat [name]`](#kinu-chat-name) | Interactive conversation with a workspace |
 | [`kinu acp <name>`](#kinu-acp-name) | Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim) |
 | [`kinu exec [prompt...]`](#kinu-exec-prompt) | Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`) |
@@ -82,7 +82,7 @@ kinu <command> [options]
 
 | Command | What it does |
 | --- | --- |
-| [`kinu connect`](#kinu-connect) | Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days) |
+| [`kinu connect`](#kinu-connect) | Link this computer as the desktop execution daemon (the link renews while the daemon connects; re-run after 180 idle days) |
 | [`kinu desktop [action]`](#kinu-desktop-action) | Connect or inspect the local desktop execution daemon |
 | [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Manage the local scheduler daemon: start, stop, restart, status, logs, tick |
 | [`kinu doctor`](#kinu-doctor) | Inspect local Kinu CLI installation state |
@@ -165,11 +165,11 @@ Create a new workspace.
 
 | Option | What it does |
 | --- | --- |
-| `--purpose <text>` | Mission — what this workspace is for (seeds SOUL.md) |
+| `--purpose <text>` | Mission: what this workspace is for (seeds SOUL.md) |
 | `--mode <mode>` | Workspace mode: cloud or local |
 | `--alias <name>` | Create an executable alias command |
 | `--origin <url>` | Kinu app origin for first-use sign-in |
-| `--join` | Add an agent to the workspace already here, inheriting its mission — no name or purpose needed |
+| `--join` | Add an agent to the workspace already here, inheriting its mission (no name or purpose needed) |
 | `--no-alias-shim` | Do not create an alias shim |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
@@ -227,7 +227,7 @@ Restore a workspace archive into a local workspace.
 
 ### kinu run <name> [prompt...]
 
-Run a workspace once, or open chat when no prompt is provided.
+Run a workspace once, or open chat with no prompt.
 
 | Option | What it does |
 | --- | --- |
@@ -499,7 +499,7 @@ Inspect the governed release lane: sources, changes, checks, approvals, deployme
 
 ### kinu connect
 
-Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days).
+Link this computer as the desktop execution daemon (the link renews while the daemon connects; re-run after 180 idle days).
 
 | Option | What it does |
 | --- | --- |

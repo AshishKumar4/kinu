@@ -79,7 +79,7 @@ function reachableFromTheInternet(baseURL: string): boolean {
 
 function reportStored(where: 'account' | 'local', label: string, model: string): void {
   console.log(where === 'account'
-    ? `${OK('✓')} Connected ${label} to your Kinu account — no key stored on this machine.`
+    ? `${OK('✓')} Connected ${label} to your Kinu account. No key stored on this machine.`
     : `${OK('✓')} Saved ${label} credentials to this machine.`);
   console.log(DIM(`Default model: ${model}`));
 }
@@ -104,7 +104,7 @@ export async function setupCommand(opts: {
   let cloudReady = Boolean(config.accessToken);
   if (cloudReady) {
     console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
-    console.log(DIM('Local workspaces you create while signed in run on your Cloudflare account via Workers AI — no API key on this machine.'));
+    console.log(DIM('While you are signed in, new local workspaces run on your Cloudflare account via Workers AI. No API key on this machine.'));
   }
 
   if (!opts.skipCloud && !config.accessToken) {
@@ -121,7 +121,7 @@ export async function setupCommand(opts: {
   if (opts.accountOnly) {
     if (cloudReady) {
       console.log(`${OK('✓')} Kinu account ready.`);
-      console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account when Cloudflare sign-in granted AI permissions.'));
+      console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account, if you granted AI permissions at sign-in.'));
       console.log(DIM('Run kinu provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
     } else {
       console.log(`${WARN('!')} Kinu account was not connected.`);
@@ -133,7 +133,7 @@ export async function setupCommand(opts: {
   if (!opts.yes && !opts.provider && !opts.localModel && !canPrompt()) {
     if (cloudReady) {
       console.log(`${OK('✓')} Kinu account ready.`);
-      console.log(DIM('Workers AI is tied to the Cloudflare account used during browser sign-in.'));
+      console.log(DIM('Workers AI uses the Cloudflare account you signed in with.'));
     } else {
       console.log(`${WARN('!')} Kinu account was not connected (no interactive terminal).`);
       console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''} when you are ready.`));
@@ -170,7 +170,7 @@ export async function setupCommand(opts: {
     updateConfigFile((config) => { delete config.model; });
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
     console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
-    console.log(DIM('No API key on this machine — requests go through your Kinu account.'));
+    console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));
     return;
   }
 
@@ -317,7 +317,7 @@ export async function setupCommand(opts: {
     }));
     console.log(`${OK('✓')} Connected OpenCode`);
     console.log(DIM(`Default model: opencode/${model}`));
-    console.log(DIM('Models and auth are read from your local opencode installation at request time.'));
+    console.log(DIM('Kinu reads models and auth from your local opencode install at request time.'));
     return;
   }
 
@@ -362,12 +362,12 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
   console.log(`  ${ACCENT('6')} OpenAI-compatible`);
   console.log(`  ${ACCENT('7')} OpenCode (share your opencode auth & models)`);
   console.log(`  ${ACCENT('8')} Skip`);
-  if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account — run kinu auth first.'));
+  if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account. Run kinu auth first.'));
   // No-friction discovery: the Claude Code subscription stores no credential
   // here (the binary owns its own login), so mention it inline rather than as a
   // step — only when it is actually usable on this machine.
   if ((await checkClaudeAvailability()).loggedIn) {
-    console.log(DIM('  Claude Code detected — or use --model claude/claude-opus-4-x for your subscription.'));
+    console.log(DIM('  Claude Code detected. Or use --model claude/claude-opus-4-x for your subscription.'));
   }
   const value = await ask('Choice', '1');
   return value;

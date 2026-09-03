@@ -55,7 +55,7 @@ export function canPrompt(): boolean {
  *  refuse with instructions instead of rendering a frozen screen. */
 export function requireInteractiveTerminal(): void {
   if (process.stdin.isTTY && process.stdout.isTTY) return;
-  throw new Error('The Kinu TUI needs an interactive terminal. Re-run from a terminal, or use kinu run/exec (or chat --classic) for non-interactive use.');
+  throw new Error('The Kinu TUI needs an interactive terminal. Re-run from a terminal, or use kinu run/exec (or chat --classic).');
 }
 
 /** Blocking canonical-mode line read: each read(2) returns at most one line,

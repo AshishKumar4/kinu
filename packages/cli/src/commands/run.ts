@@ -137,7 +137,7 @@ function resolveExecWorkspaceName(explicit?: string): string {
   if (agents.length === 1) return agents[0]!.name;
   throw new Error(agents.length === 0
     ? 'No workspaces configured. Create one with: kinu create <name>, or pass --workspace <name>.'
-    : `Multiple workspaces configured — pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
+    : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
 /**

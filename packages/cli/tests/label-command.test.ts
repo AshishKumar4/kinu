@@ -221,7 +221,7 @@ describe('kinu label', () => {
 
     const ingested = runCli(home, ['label', 'ingest', 'demo', file]);
     expect(ingested.exitCode).toBe(1);
-    expect(ingested.stdout).toContain('nothing was stored');
+    expect(ingested.stdout).toContain('Nothing was stored');
     expect(ingested.stdout).toContain('is not a verdict');
     expect(runCli(home, ['label', 'report', 'demo']).stdout).toContain('uncalibrated');
   // Measured 3.3 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
@@ -272,7 +272,7 @@ describe('kinu label', () => {
   test('unknown actions and missing arguments say what to type', () => {
     const { home } = seedWorkspace('demo');
     expect(runCli(home, ['label', 'summarise', 'demo']).stdout)
-      .toContain('use export, ingest, ensemble, report, mine, or score');
+      .toContain('Use export, ingest, ensemble, report, mine, or score');
     expect(runCli(home, ['label', 'ingest', 'demo']).stdout).toContain('kinu label ingest <agent> <file>');
   // Measured 3.3 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
   // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound

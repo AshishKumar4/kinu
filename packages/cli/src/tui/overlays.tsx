@@ -324,7 +324,7 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
     };
   });
   const failureLines = (failures ?? []).map((failure) =>
-    `! ${failure.label ?? failure.provider} unavailable — ${failure.reason}`);
+    `! ${failure.label ?? failure.provider} unavailable: ${failure.reason}`);
   const paletteHeight = Math.min(
     Math.max(models.length + failureLines.length + 7, 11),
     Math.max(3, terminal.height - 2),
@@ -371,7 +371,7 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
             : failureLines.length > 0
               ? compact
                 ? `${String(failureLines.length)} provider${failureLines.length === 1 ? '' : 's'} unavailable. Resize for details.`
-                : 'Every connected provider failed to list — see below.'
+                : 'Every connected provider failed to list. See below.'
               : 'No connected model providers. Run kinu provider connect.'}
           width={innerWidth}
           color={colors.text.muted}

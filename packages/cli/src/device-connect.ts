@@ -193,7 +193,7 @@ export async function deviceStatusLine(): Promise<string> {
       return `Connected: ${named.join(', ')}`;
     }
     if (devices.length > 0) return `${devices.length} registered device${devices.length === 1 ? '' : 's'}, none connected.`;
-    return 'No devices are registered for your account yet.';
+    return 'No devices on your account yet.';
   } catch (err) {
     return `Device status unavailable: ${renderThrownChain({ cause: err })}`;
   }
@@ -205,7 +205,7 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
     case 'already-running':
       return result.connected
         ? { ok: true, message: 'This PC is already connected.' }
-        : { ok: false, message: 'A connect daemon is installed but not connected. Run: kinu connect' };
+        : { ok: false, message: 'The daemon is installed here but not connected. Run: kinu connect' };
     case 'timeout':
       return { ok: false, message: `The daemon did not connect within ${DEVICE_CONNECT_DEADLINE_MS / 1000}s. Check: kinu desktop logs` };
     case 'connected':
@@ -221,26 +221,26 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
 /**
  * What the machine reported about its own sandbox, in the words the owner
  * needs. One line while the sandbox is on or off. Three lines when the machine
- * cannot sandbox, because then there is a cause, a fix, and a consequence. The
- * fix sentence lives in `@kinu.run/core`, so every surface prints the same one.
+ * cannot sandbox: the state, the fix, and what stays blocked meanwhile. The
+ * reason code the daemon reported (`no_bwrap`, `no_userns`) is deliberately
+ * NOT printed: it names our own implementation, and the fix sentence is the
+ * half the owner can act on. The fix lives in `@kinu.run/core`, so every
+ * surface prints the same one.
  */
 export function describeDeviceSandbox(sandbox: CloudDeviceSandbox): string[] {
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed':
       return [
-        'Sandbox on: commands run in a sandbox — agent home plus the folders you consented,'
-        + ` your own files invisible. GPU: ${describeGpuNodes(sandbox.gpu)}.`,
+        'Sandbox on: agent home plus the folders you picked, your files invisible.'
+        + ` GPU: ${describeGpuNodes(sandbox.gpu)}.`,
       ];
     case 'raw':
-      return ['Sandbox OFF for this device: commands run as you, with full access to this machine.'];
+      return ['Sandbox OFF for this device: commands run as you, with full access.'];
     case 'files_only':
       return [
-        sandbox.reason === null
-          ? 'This machine cannot sandbox.'
-          : `This machine cannot sandbox: ${sandbox.reason}.`,
+        'This machine cannot sandbox.',
         sandboxReasonFix(sandbox.reason),
-        'No commands run on this machine until that is fixed, or until Sandbox is off for this'
-        + ' device under Account settings → Devices.',
+        'Nothing runs here until you fix that, or turn Sandbox off for this device.',
       ];
   }
 }
@@ -251,7 +251,7 @@ function sandboxStateTag(sandbox: CloudDeviceSandbox): string {
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed': return 'sandbox on';
     case 'raw': return 'sandbox OFF';
-    case 'files_only': return sandbox.reason === null ? 'cannot sandbox' : `cannot sandbox: ${sandbox.reason}`;
+    case 'files_only': return 'cannot sandbox';
   }
 }
 
@@ -717,7 +717,7 @@ function processAlive(pid: number): boolean {
 
 function assertDaemonPlatformSupported(): void {
   if (process.platform === 'linux' || process.platform === 'darwin') return;
-  throw new KinuError('unsupported', 'The desktop daemon supports Linux and macOS.');
+  throw new KinuError('unsupported', 'The daemon runs on Linux and macOS only.');
 }
 
 /**

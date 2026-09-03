@@ -36,7 +36,7 @@ interface LocalCredential {
 
 const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
 const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
-const CLAUDE_READY = 'Claude subscription ready — use kinu create --model claude/claude-opus-4-x';
+const CLAUDE_READY = 'Claude subscription ready. Use kinu create --model claude/claude-opus-4-x';
 
 export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
   origin?: string;
@@ -68,7 +68,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   if (provider === 'cloudflare') {
     console.log('');
     console.log(ACCENT('Connect Cloudflare'));
-    console.log(DIM('Browser sign-in attaches your Cloudflare account for Workers AI and AI Gateway usage.'));
+    console.log(DIM('Browser sign-in attaches your Cloudflare account for Workers AI and AI Gateway.'));
     console.log(DIM('The OAuth consent must include User Details, Account Settings, Workers AI, and AI Gateway scopes.'));
     await authCommand({ origin: opts.origin });
     return;
@@ -101,7 +101,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
 async function connectClaude(): Promise<void> {
   console.log('');
   console.log(ACCENT('Claude subscription (via Claude Code)'));
-  console.log(DIM('Drives the official `claude` binary with your Claude Code login. Local workspaces only.'));
+  console.log(DIM('Drives the `claude` binary with your Claude Code login. Local workspaces only.'));
   const { binary, loggedIn } = await checkClaudeAvailability();
   console.log('');
   if (binary && loggedIn) {
@@ -117,7 +117,7 @@ async function connectClaude(): Promise<void> {
     console.log(`${WARN('!')} ${CLAUDE_INSTALL_HINT}`);
     console.log(DIM('Then run `claude` once to sign in.'));
   }
-  console.log(DIM('Cloud workspaces cannot use the subscription — connect an Anthropic API key for those.'));
+  console.log(DIM('Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.'));
 }
 
 /** opencode bridge "connect" — probes the local opencode CLI for
@@ -141,7 +141,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
     console.log(`${WARN('!')} opencode CLI not found.`);
     console.log(DIM(INSTALL_HINT_OPENCODE));
   }
-  console.log(DIM('Cloud workspaces cannot use opencode — they need their own provider credentials.'));
+  console.log(DIM('Cloud workspaces cannot use opencode. They need their own provider credentials.'));
 }
 
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
@@ -230,7 +230,7 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
 async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
   if (provider === 'cloudflare') {
-    console.log(`${WARN('!')} The Cloudflare/Workers AI connection rides your Kinu account.`);
+    console.log(`${WARN('!')} Cloudflare and Workers AI connect through your Kinu account.`);
     console.log(DIM('  Sign out with: kinu logout'));
     console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Kinu account settings.'));
     return;
@@ -238,7 +238,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (provider === 'claude' || provider === 'opencode') {
     const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
     const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
-    console.log(`${WARN('!')} Kinu stores no ${tool} credential — it drives the ${tool} login.`);
+    console.log(`${WARN('!')} Kinu stores no ${tool} credential. It drives the ${tool} login.`);
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
     clearDefaultModelFor(provider);
     // Kinu holds no credential for these two, but the user ran this command
@@ -249,7 +249,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   }
 
   const credential = LOCAL_CREDENTIALS.get(provider);
-  if (!credential) throw new Error(`No local credential is stored for ${provider}.`);
+  if (!credential) throw new Error(`No local credential for ${provider}.`);
 
   let removed = false;
   updateConfigFile((config) => {
@@ -271,7 +271,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     }
   }
 
-  if (!removed) console.log(`${WARN('!')} ${provider} was not connected — nothing to remove.`);
+  if (!removed) console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
 
   clearDefaultModelFor(provider);
   // Published whether or not a row was found: the command's whole job is to
@@ -282,7 +282,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   const live = credential.envVars.filter((name) => process.env[name]);
   if (live.length > 0) {
     console.log(`${WARN('!')} ${live.join(' and ')} ${live.length > 1 ? 'are' : 'is'} still set in this environment.`);
-    console.log(DIM('  Environment credentials win over the config file — unset them to fully disconnect.'));
+    console.log(DIM('  Environment credentials win over the config file. Unset them to disconnect.'));
   }
 }
 
@@ -401,14 +401,14 @@ async function printProviders(): Promise<void> {
 
   if (config.accessToken) {
     connected('Kinu account', config.user?.email);
-    console.log(`    ${DIM('Cloud workspaces use your Cloudflare Workers AI quota when Cloudflare sign-in granted AI permissions.')}`);
-    console.log(`    ${DIM('Signed-in local workspaces reach the same Workers AI through the proxy, with no key on this machine.')}`);
+    console.log(`    ${DIM('Cloud workspaces use your Workers AI quota, if you granted AI permissions at sign-in.')}`);
+    console.log(`    ${DIM('Local workspaces reach the same Workers AI while you are signed in, with no key on this machine.')}`);
   } else {
     missing('Kinu account', 'kinu provider connect cloudflare');
   }
   if ('unreachable' in account) {
     console.log(`    ${WARN('!')} Could not read the keys stored in your account (${account.unreachable}).`);
-    console.log(`    ${DIM('The lines below therefore show only what is on this machine.')}`);
+    console.log(`    ${DIM('The lines below show only what is on this machine.')}`);
   }
 
   const claude = await checkClaudeAvailability();
@@ -450,7 +450,7 @@ async function printProviders(): Promise<void> {
   else missing('OpenCode', 'kinu provider connect opencode');
 
   console.log('');
-  console.log(DIM('  Keys connect to your Kinu account by default — no copy on this disk.'));
+  console.log(DIM('  Keys connect to your Kinu account by default. No copy on this disk.'));
   console.log(DIM('  Keep one here instead: kinu provider connect <name> --local'));
   console.log(DIM('  Remove a stored credential: kinu provider disconnect <name>'));
   console.log('');

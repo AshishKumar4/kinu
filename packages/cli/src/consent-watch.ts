@@ -76,7 +76,7 @@ export function watchDeviceConsents(
         try {
           await consents.resolve(consent.consentId, 'deny');
         } catch (err) {
-          opts.note('error', `Could not withdraw the PC access request — the device waits out its timeout: ${renderThrownChain({ cause: err })}`);
+          opts.note('error', `Could not withdraw the PC access request. The device waits out its timeout: ${renderThrownChain({ cause: err })}`);
         }
         return;
       }
@@ -94,7 +94,7 @@ export function watchDeviceConsents(
     }
   };
 
-  // The interval is the watcher’s process-level owner. Retain every started
+  // The interval is the watcher's process-level owner. Retain every started
   // poll through its settlement so a slow poll is never detached from the
   // watcher merely because the next interval fired. Each link resolves to void,
   // releasing the previous settled outcome instead of retaining poll history.

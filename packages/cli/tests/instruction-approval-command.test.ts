@@ -122,7 +122,7 @@ describe('/instructions page actions', () => {
 
     const outcome = await executeSlashCommand(client, `/instructions approve ${LATER_TOKEN} 1 ${LATER_ROW_TOKEN}`);
     if (outcome.kind !== 'text') throw new Error('expected text');
-    expect(outcome.text).toContain('requires the digest you reviewed');
+    expect(outcome.text).toContain('needs the digest it prints');
     expect(reads).toEqual([]);
   });
 

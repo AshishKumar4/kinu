@@ -172,7 +172,7 @@ describe('the miner reconstructs turns from the live conversation', () => {
       .write(root, 'p', 's');
 
     expect(mineTranscripts({ root }).turns[0].item.assistantResponse)
-      .toBe('(no text response — 1 tool call)');
+      .toBe('(no text response, 1 tool call)');
   });
 });
 

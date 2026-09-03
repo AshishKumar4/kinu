@@ -492,7 +492,7 @@ export class CloudAgentClient implements AgentClient {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
     const rows = await this.transcript();
     const pivot = findForkPivot(rows, point);
-    if (pivot < 0) throw new Error('Could not locate that message in the agent’s chat history.');
+    if (pivot < 0) throw new Error("Could not locate that message in the agent's chat history.");
     if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud workspace.');
     const untilId = rows[pivot - 1]!.id;
     const forkName = v.parse(ForkAgentResultSchema, await this.callRpc('forkAgent', [untilId]))?.name;
@@ -960,7 +960,7 @@ export class CloudAgentClient implements AgentClient {
       if (payload.replay === true && unbound) {
         this.emit({
           type: 'error',
-          message: 'The cloud workspace holds no resumable stream under this turn\'s request id.'
+          message: 'The cloud workspace has no stream to resume for this turn.'
             + ' Read the workspace transcript before sending it again.',
         });
         active.settle(true);
@@ -1018,7 +1018,7 @@ export class CloudAgentClient implements AgentClient {
       this.emit({
         type: 'error',
         message: 'The cloud workspace connection dropped again before this turn could be resumed.'
-          + ' It is still running there — its answer lands in the workspace transcript.',
+          + ' It is still running there. Its answer lands in the workspace transcript.',
       });
       turn.settle(true);
     }

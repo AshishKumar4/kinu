@@ -161,7 +161,7 @@ export async function resolvePromptAttachments(
       const reason = found.size > limitBytes
         ? `${formatBytes(found.size)}; max ${formatBytes(limitBytes)} per message`
         : `the ${formatBytes(limitBytes)} per-message budget is already used`;
-      errors.push(`${filename} is too large to attach (${reason}) — left as a path reference.`);
+      errors.push(`${filename} is too large to attach (${reason}). Left as a path reference.`);
       attached.push({ path: found.path, filename, mediaType: null, size: found.size });
       continue;
     }

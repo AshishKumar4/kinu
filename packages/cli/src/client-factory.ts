@@ -65,12 +65,12 @@ export async function createAgentClient(
 function rejectLocalLlmFlags(opts: AgentClientFlags): void {
   if (opts.model) {
     throw new Error(
-      '--model is a session-scoped override for local workspaces and does not apply to cloud workspaces.\n' +
-      '  Change the cloud workspace durably with: kinu model <workspace> <spec> (or /model in chat).',
+      '--model is a session override for local workspaces only.\n' +
+      '  Change a cloud workspace with: kinu model <workspace> <spec> (or /model in chat).',
     );
   }
   if (opts.baseUrl || opts.auth) {
-    throw new Error('--base-url and --auth configure local model access and do not apply to cloud workspaces.');
+    throw new Error('--base-url and --auth apply to local workspaces only.');
   }
   if (opts.noAutoEvolve) {
     throw new Error('--no-auto-evolve applies to local workspaces; cloud turns run under the workspace\'s own evolution settings.');

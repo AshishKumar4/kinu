@@ -269,7 +269,7 @@ describe('a backend is stated, not inferred from a file', () => {
     upsertAgentConfig({ name: 'twin', mode: 'cloud', cloudName: 'twin' });
 
     expect(resolveAgentTarget('twin').mode).toBe('cloud');
-    expect(messageOf(() => resolveLocalAgent('twin'))).toContain('has no local database');
+    expect(messageOf(() => resolveLocalAgent('twin'))).toContain('this needs a local one');
   });
 
   test('an unconfigured name addressing both is refused, naming both candidates', () => {
@@ -358,7 +358,7 @@ describe('a legacy workspace is adopted one at a time', () => {
   });
 
   test('adopting a name with no database is refused', () => {
-    expect(messageOf(() => adoptLegacyLocalAgent('never-existed'))).toContain('nothing to adopt');
+    expect(messageOf(() => adoptLegacyLocalAgent('never-existed'))).toContain('not found at');
   });
 });
 

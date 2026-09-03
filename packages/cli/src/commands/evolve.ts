@@ -73,12 +73,12 @@ export async function evolveCommand(name: string, opts: {
     printSearchTree(nodes);
 
     if (result.converged) {
-      console.log(`${OK('✓')} Converged — winner score: ${ACCENT(result.winnerValue.toFixed(3))}`);
+      console.log(`${OK('✓')} Converged. Winner score: ${ACCENT(result.winnerValue.toFixed(3))}`);
     } else {
-      console.log(`${WARN('○')} Did not converge — best score: ${ACCENT(result.winnerValue.toFixed(3))}`);
+      console.log(`${WARN('○')} Did not converge. Best score: ${ACCENT(result.winnerValue.toFixed(3))}`);
     }
     if (failed > 0) {
-      console.log(`${WARN('!')} ${plural(failed, 'branch failure')} — those branches scored 0, so this result understates the ideas.`);
+      console.log(`${WARN('!')} ${plural(failed, 'branch failure')}. Those branches scored 0, so this result understates the ideas.`);
     }
 
     const memory = await rt.memory.read('memory/MEMORY.md');
@@ -98,7 +98,7 @@ export async function evolveCommand(name: string, opts: {
     printError(
       renderThrownChain({ cause: err }),
       failed > 0
-        ? `${plural(failed, 'branch failure')} preceded it — see the lines above.`
+        ? `${plural(failed, 'branch failure')} preceded it. See the lines above.`
         : undefined,
     );
     process.exitCode = 1;

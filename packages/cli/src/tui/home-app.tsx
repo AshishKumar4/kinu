@@ -217,7 +217,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
       const detail = renderThrownChain({ cause: err });
       const current = defaultModel || 'provider default';
       const message = `Catalog unavailable: ${detail} Current default: ${current}. ${keybindings.hint('modal.close')} keeps it.`;
-      setCatalogHint('Catalog unavailable — the current default remains active.');
+      setCatalogHint('Catalog unavailable. The current default stays active.');
       setModelPicker({ menu: EMPTY_MODEL_MENU, loading: false, error: message });
     }
   }, [defaultModel, keybindings, mode, opts]);

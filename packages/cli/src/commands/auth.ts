@@ -99,7 +99,7 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
     }
     if (!revoked) {
       bumpProviderRevision();
-      console.log(`${OK('✓')} Logged out locally — session NOT revoked`);
+      console.log(`${OK('✓')} Logged out locally. Session NOT revoked`);
       console.log(DIM(`Run \`kinu logout\` again when reachable, or \`kinu sessions\` from any machine to revoke by inventory.`));
       return;
     }

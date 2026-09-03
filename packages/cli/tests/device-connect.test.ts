@@ -404,18 +404,19 @@ describe('the agent-home root the daemon reports', () => {
 });
 
 describe('the sandbox state the machine reported', () => {
-  /** One phrase out of each documented fix. A fix that stops naming its own
-   *  remedy fails here; a reason with no row fails the key check below. */
+  /** One phrase out of each documented fix: the remedy, or the platform fact
+   *  that decides there is none. A fix that stops naming either fails here; a
+   *  reason with no row fails the key check below. */
   const REASON_FIX_MARKER = {
     no_bwrap: 'sudo apt install bubblewrap',
     no_userns: 'kernel.apparmor_restrict_unprivileged_userns=0',
     wsl1: 'wsl --set-version',
-    no_sandbox_exec: '/usr/bin/sandbox-exec',
-    unsupported_platform: 'Linux and macOS only',
-    daemon_outdated: 'update the Kinu CLI',
+    no_sandbox_exec: 'Turn Sandbox off',
+    unsupported_platform: 'Linux or macOS',
+    daemon_outdated: 'Update the Kinu CLI',
   } satisfies Record<DeviceSandboxReason, string>;
-  const NO_COMMANDS_LINE = 'No commands run on this machine until that is fixed, or until Sandbox'
-    + ' is off for this device under Account settings → Devices.';
+  const NO_COMMANDS_LINE =
+    'Nothing runs here until you fix that, or turn Sandbox off for this device.';
 
   test('every reason a machine cannot sandbox prints its documented fix', () => {
     expect(Object.keys(REASON_FIX_MARKER).sort()).toEqual([...DEVICE_SANDBOX_REASONS].sort());
@@ -426,19 +427,20 @@ describe('the sandbox state the machine reported', () => {
       expect(fix.length).toBeGreaterThan(20);
       expect(fix).toContain(REASON_FIX_MARKER[reason]);
       expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason, gpu: [] }))
-        .toEqual([`This machine cannot sandbox: ${reason}.`, fix, NO_COMMANDS_LINE]);
+        .toEqual(['This machine cannot sandbox.', fix, NO_COMMANDS_LINE]);
     }
   });
 
   test('the user-namespace fix is core\'s sentence, never a second copy here', () => {
     const source = readFileSync(resolve(repoRoot, 'packages/cli/src/device-connect.ts'), 'utf8');
-    expect(sandboxReasonFix('no_userns')).toContain('AppArmor');
-    expect(source).not.toContain('AppArmor');
+    const SYSCTL = 'kernel.apparmor_restrict_unprivileged_userns=0';
+    expect(sandboxReasonFix('no_userns')).toContain(SYSCTL);
+    expect(source).not.toContain(SYSCTL);
     expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', gpu: [] })[1])
-      .toContain('AppArmor');
+      .toContain(SYSCTL);
   });
 
-  test('a machine that named no reason says exactly that', () => {
+  test('a machine that cannot sandbox says so, and the reason code stays out of it', () => {
     expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: null, gpu: [] }))
       .toEqual(['This machine cannot sandbox.', sandboxReasonFix(null), NO_COMMANDS_LINE]);
   });
@@ -447,8 +449,8 @@ describe('the sandbox state the machine reported', () => {
     expect(describeDeviceSandbox({
       tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: ['/dev/nvidia0', '/dev/nvidiactl'],
     })).toEqual([
-      'Sandbox on: commands run in a sandbox — agent home plus the folders you consented,'
-      + ' your own files invisible. GPU: nvidia0, nvidiactl.',
+      'Sandbox on: agent home plus the folders you picked, your files invisible.'
+      + ' GPU: nvidia0, nvidiactl.',
     ]);
     expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'sandboxed', reason: null, gpu: [] })[0])
       .toContain('GPU: none.');
@@ -457,7 +459,7 @@ describe('the sandbox state the machine reported', () => {
   test('sandbox off says the agent runs with full access, whatever the machine proved', () => {
     for (const capability of DEVICE_SANDBOX_CAPABILITIES) {
       expect(describeDeviceSandbox({ tier: 'raw', capability, reason: null, gpu: [] }))
-        .toEqual(['Sandbox OFF for this device: commands run as you, with full access to this machine.']);
+        .toEqual(['Sandbox OFF for this device: commands run as you, with full access.']);
     }
   });
 
@@ -484,7 +486,7 @@ describe('the sandbox state the machine reported', () => {
     `);
 
     expect(out.trim())
-      .toBe('Connected: studio (sandbox on), tower (sandbox OFF), vm (cannot sandbox: no_userns)');
+      .toBe('Connected: studio (sandbox on), tower (sandbox OFF), vm (cannot sandbox)');
   });
 
   test('a device row from a hub too old to report the switch still lists', async () => {
@@ -608,7 +610,7 @@ describe('device-connect install hardening', () => {
       }
     `);
 
-    expect(out.trim()).toContain('supports Linux and macOS');
+    expect(out.trim()).toContain('runs on Linux and macOS only');
     expect(stub.hits.register).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
   });
@@ -939,7 +941,7 @@ describe('classic cloud chat connect prompt', () => {
       proc.exited,
     ]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('No PC is connected for device access. Connect one with: kinu connect');
+    expect(stdout).toContain('No PC connected. Connect one with: kinu connect');
     expect(stub.hits.register).toBe(0);
   });
 });
@@ -1000,7 +1002,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     const connect = spawnConnectInPty(home);
     // The terms come BEFORE anything is installed.
     await connect.waitFor('Connecting installs the Kinu daemon on this machine');
-    await connect.waitFor('you can revoke it any time');
+    await connect.waitFor('Revoke it under Account settings');
     await connect.waitFor('one Sandbox switch per device');
     await connect.waitFor('Name this device');
     expect(stub.hits.register).toBe(0);
@@ -1013,7 +1015,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     await connect.send('y');
     await connect.waitFor('Connected this machine as');
     // The machine's own report reaches the terminal.
-    await connect.waitFor('Sandbox on: commands run in a sandbox');
+    await connect.waitFor('Sandbox on: agent home plus the folders you picked');
     await connect.proc.exited;
     await connect.drained;
 

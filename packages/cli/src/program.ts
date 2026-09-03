@@ -138,11 +138,11 @@ export function buildProgram(): Command {
       .command('create [name]')
       .helpGroup(WORKSPACES)
       .description('Create a new workspace')
-      .option('--purpose <text>', 'Mission — what this workspace is for (seeds SOUL.md)')
+      .option('--purpose <text>', 'Mission: what this workspace is for (seeds SOUL.md)')
       .option('--mode <mode>', 'Workspace mode: cloud or local')
       .option('--alias <name>', 'Create an executable alias command')
       .option('--origin <url>', 'Kinu app origin for first-use sign-in')
-      .option('--join', 'Add an agent to the workspace already here, inheriting its mission — no name or purpose needed')
+      .option('--join', 'Add an agent to the workspace already here, inheriting its mission (no name or purpose needed)')
       .option('--no-alias-shim', 'Do not create an alias shim'),
   ).action(wrapAction(createCommand));
 
@@ -206,7 +206,7 @@ export function buildProgram(): Command {
     program
       .command('run <name> [prompt...]')
       .helpGroup(RUNNING)
-      .description('Run a workspace once, or open chat when no prompt is provided')
+      .description('Run a workspace once, or open chat with no prompt')
       .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
       .option('--transcript-dir <dir>', 'Override transcript storage directory')
       .option('--no-transcript', 'Do not record a transcript for this run'),
@@ -444,7 +444,7 @@ export function buildProgram(): Command {
   program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
-    .description('Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days)')
+    .description('Link this computer as the desktop execution daemon (the link renews while the daemon connects; re-run after 180 idle days)')
     .option('--label <name>', 'Name for this device (default: user@hostname); skips the name prompt')
     .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 

@@ -158,7 +158,7 @@ export async function labelCommand(
     case 'score': return scoreCorpus(target, opts);
     default:
       throw new Error(
-        `Unknown action "${action ?? ''}" — use export, ingest, ensemble, report, mine, or score.`,
+        `Unknown action "${action ?? ''}". Use export, ingest, ensemble, report, mine, or score.`,
       );
   }
 }
@@ -173,7 +173,7 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
 
   if (items.length === 0) {
     console.log(`${WARN('nothing to label')} ${target.name} has no classifier-graded turns left to check.`);
-    console.log(DIM('The classifier grades a turn once the user sends a follow-up. Chat with the agent first.'));
+    console.log(DIM('The classifier grades a turn once you send a follow-up. Chat with the agent first.'));
     return;
   }
 
@@ -187,16 +187,13 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   console.log(`${OK('drew')} ${items.length} turn${items.length === 1 ? '' : 's'} → ${ACCENT(path)}` +
     DIM(`  (~${Math.round(items.length * 0.35)}–${Math.round(items.length * 0.5)} minutes)`));
   console.log('');
-  console.log('  1. Open it and put one letter after each `verdict:` —');
+  console.log('  1. Open it and put one letter after each `verdict:`');
   console.log(DIM('       a accepted   c corrected   f frustrated   b abandoned   ? unclear'));
   console.log(DIM('     In vim: /^verdict:  then  n  to step, then  A <letter> Esc.'));
   console.log(`  2. ${ACCENT(`kinu label ingest ${target.requestedName} ${path}`)}`);
   console.log(`  3. ${ACCENT(`kinu label report ${target.requestedName}`)}`);
   console.log(DIM(`     …and ${`kinu label ensemble ${target.requestedName}`} to find out whether two models`));
   console.log(DIM('     could have done this for you next time.'));
-  console.log('');
-  console.log(DIM("The classifier's own verdicts are not in the file on purpose — seeing them"));
-  console.log(DIM('first would anchor yours, and the gap between the two is the measurement.'));
 }
 
 // ── ingest ───────────────────────────────────────────────────────
@@ -212,7 +209,7 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
   // is fixed in one pass.
   if (parsed.errors.length > 0) {
     throw new Error(
-      `${parsed.errors.length} problem${parsed.errors.length === 1 ? '' : 's'} in ${path} — nothing was stored:\n` +
+      `${parsed.errors.length} problem${parsed.errors.length === 1 ? '' : 's'} in ${path}. Nothing was stored:\n` +
       parsed.errors.map((problem) => `  ${problem}`).join('\n'),
     );
   }
@@ -252,9 +249,8 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
     .filter((spec) => spec !== '');
 
   if (!opts.json) {
-    console.log(DIM('Each judge sees the same clipped turn you did and nothing else — not the'));
-    console.log(DIM("classifier's verdict, not yours, not the other judge's. This costs one model"));
-    console.log(DIM('call per judge per labeled turn.'));
+    console.log(DIM('Each judge sees only the clipped turn, with no verdicts.'));
+    console.log(DIM('This costs one model call per judge per labeled turn.'));
     console.log('');
   }
 
@@ -337,7 +333,7 @@ async function mineCorpus(opts: LabelOpts): Promise<void> {
   console.log(markdown);
   console.log(`${OK('wrote')} ${ACCENT(path)}`);
   if (report.stats.labeled === 0) {
-    console.log(`${WARN('no labels')} no rule fired on any mined turn — nothing to score a rater against.`);
+    console.log(`${WARN('no labels')} no rule fired on any mined turn. Nothing to score a rater against.`);
     return;
   }
   console.log(DIM(`Score the classifier and the panel against these with:  ` +
@@ -353,8 +349,7 @@ const DEFAULT_SCORE_LIMIT = 25;
 async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> {
   if (target.mode !== 'local') {
     throw new Error(
-      `The transcript corpus lives on this machine, so it is scored with a local agent's models — ` +
-      `"${target.requestedName}" is a cloud agent.`,
+      `"${target.requestedName}" is a cloud agent. Score the corpus with a local one.`,
     );
   }
   const limit = parsePositiveInt(opts.limit, DEFAULT_SCORE_LIMIT, 'limit');
@@ -374,8 +369,8 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
     return;
   }
   if (!opts.json) {
-    console.log(DIM(`Scoring ${scored.size} labeled turn${scored.size === 1 ? '' : 's'} — one classifier`));
-    console.log(DIM('call plus one call per judge each. Every rater sees only the turn, never a rule.'));
+    console.log(DIM(`Scoring ${scored.size} labeled turn${scored.size === 1 ? '' : 's'}: one classifier`));
+    console.log(DIM('call, plus one call per judge. Every rater sees only the turn, never a rule.'));
     console.log('');
   }
 

@@ -92,7 +92,7 @@ export function shouldCheckForUpdate(ctx: NoticeContext): boolean {
 /** The one muted line, or null when the installed build is current. */
 export function updateNotice(installed: string, served: ServedVersion | null): string | null {
   if (!served || isSameBuild(installed, served.version)) return null;
-  return `A newer Kinu is available (${served.version}) — run: kinu update`;
+  return `A newer Kinu is available (${served.version}). Run: kinu update`;
 }
 
 /**

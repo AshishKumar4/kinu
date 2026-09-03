@@ -86,8 +86,8 @@ export async function daemonCommand(action: string | undefined, agent?: string):
       const refs = listLocalRefsAllProjects();
       const due = agent ? refs.filter((ref) => ref.name === agent) : refs;
       if (agent && due.length === 0) {
-        throw new Error(`No local agent "${agent}" is placed in a project — `
-          + 'create it with `kinu create` or adopt it with `kinu adopt`.');
+        throw new Error(`No local agent "${agent}" is placed in a project. `
+          + 'Create it with `kinu create` or adopt it with `kinu adopt`.');
       }
       const now = Date.now();
       for (const ref of due) {
