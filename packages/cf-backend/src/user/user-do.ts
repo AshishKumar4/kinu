@@ -2059,6 +2059,10 @@ export class UserDO extends Agent<Env> {
     const bounded = (axis: number, fallback: number): number => (
       Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
     );
+    // The gate FIRST, before any device state is read. deviceRpc takes the
+    // same tier below, but a caller it would refuse must not learn whether a
+    // machine is connected on the way out.
+    await this.requireTier(caller, 'device.rpc');
     const session = `pty-${nanoid(16)}`;
     const target = this._devices.connectedDeviceId(deviceId);
     if (!target) throw new Error(NO_DEVICE_CONNECTED);
