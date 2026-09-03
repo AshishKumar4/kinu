@@ -231,7 +231,9 @@ describe('a terminal is confined exactly as a command is', () => {
     await ws.response('rpc-abcdefghij-10');
     // No bwrap in the argv: the hub that sent this has not been told about the
     // Sandbox switch, and the daemon does not invent a confinement it was
-    // never given the home for. This mirrors planFromFrame's own rule.
+    // never given the home for. planFromFrame holds this rule for exec; the
+    // pty frame carries the same field, so the same absence means the same
+    // thing here. The assertion observes the argv the daemon built.
     expect(plans[0].argv[0]).toBe('bash');
   }, TEST_MS);
 });
