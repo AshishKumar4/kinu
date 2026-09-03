@@ -626,6 +626,109 @@ async function scenario(name: string, body: (facts: MatrixFacts, checks: Check[]
   }
 }
 
+async function checkSealedFiles(sealed: SealedFence, first: Fence, ctx: {
+    readonly facts: MatrixFacts;
+    readonly mount: string;
+    readonly journal: string;
+    readonly root: string;
+  }, checks: Check[]): Promise<void> {
+  /* Every fact this function checks was proven where the delta design
+   * guarantees it: in the manifest row, not in a copied stage. Extracted
+   * from posix-fence-continuity so that scenario's body stays
+   * orchestration and these checks stay nameable. */
+  ctx.facts.firstFence = {
+    cut: first.cut,
+    generation: first.generation,
+    entries: sealed.manifest.entries.length,
+    files: sealed.files,
+    extents: sealed.extents,
+    stagedBytes: sealed.bytes,
+    ops: sealed.manifest.metadataOps.length,
+    wholeFiles: sealed.wholeFiles,
+  };
+  assert(checks, 'fence-reply-matches-its-manifest',
+    sealed.manifest.generation === first.generation && sealed.manifest.cut === first.cut,
+    `manifest=${sealed.manifest.cut}/${sealed.manifest.generation} reply=${first.cut}/${first.generation}`);
+
+  const text = (await stagedBytes(sealed.manifest, 'posix/create.txt', 20)).toString('utf8');
+  assert(checks, 'sealed-content-verifies', text === 'hello sealed journal', `text=${text}`);
+
+  /* A hole the writer never filled stays a hole in the stage, and its runs
+   * are the only bytes the manifest names.  This is the first generation,
+   * so there are no published boundaries to resync from and the file is
+   * staged whole — which is exactly what `whole` says. */
+  const holey = stagedFile(sealed.manifest, 'posix/sparse-keep.bin');
+  const holes = holey.ranges ?? [];
+  assert(checks, 'sealed-sparse-extents',
+    holey.size === 4 * 1024 * 1024 && holey.whole === true && holes.length === 2 &&
+    holes.every((range) => range.length === 4096) &&
+    holes[0]?.offset === 0 && holes[1]?.offset === 3 * 1024 * 1024,
+    `ranges=${JSON.stringify(holes.map((range) => [range.offset, range.length]))} whole=${holey.whole}`);
+
+  const bulky = stagedFile(sealed.manifest, 'posix/big.bin');
+  const bulkyRanges = bulky.ranges ?? [];
+  assert(checks, 'sealed-extent-cap',
+    bulkyRanges.length === 3 && bulkyRanges.every((range) => range.length === MAX_EXTENT_BYTES),
+    `ranges=${bulkyRanges.map((range) => range.length).join(',')}`);
+
+  /* The symlink is described, never copied: a delta stage holds file bytes
+   * and the directories above them, and nothing else. */
+  const outside = entryOf(sealed.manifest, 'posix/outside-link');
+  const stagedLink = await Bun.file(join(sealed.manifest.stageRoot, 'posix/outside-link')).exists();
+  assert(checks, 'sealed-symlink-is-not-followed',
+    outside.kind === 'symlink' && outside.target === '/etc' && !stagedLink,
+    `kind=${outside.kind} target=${outside.target ?? 'none'} staged=${stagedLink}`);
+
+  /* A hardlink reaches the manifest once per touched name.  The rows are
+   * collapsed into one record downstream, so they have to agree on the
+   * inode and on every attribute of it. */
+  const hardlinks = sealed.manifest.entries.filter((entry) => entry.path === 'posix/link-first' || entry.path === 'posix/link-second');
+  assert(checks, 'hardlink-rows-share-one-inode',
+    hardlinks.length === 2 && hardlinks[0]?.ino === hardlinks[1]?.ino
+    && hardlinks[0]?.atimeNs === '1000000123456789'
+    && hardlinks[0]?.atimeNs === hardlinks[1]?.atimeNs
+    && hardlinks[0]?.mtimeNs === hardlinks[1]?.mtimeNs
+    && hardlinks[0]?.size === hardlinks[1]?.size,
+    `rows=${JSON.stringify(hardlinks.map((entry) => [entry.path, entry.ino, entry.atimeNs, entry.size]))}`);
+
+  /* Modes and extended attributes used to be proven by copying them into
+   * the stage.  A delta stage holds no metadata at all, so the same two
+   * facts are proven where they now live: in the manifest row. */
+  const moded = entryOf(sealed.manifest, 'posix/metadata.txt');
+  assert(checks, 'manifest-mode-is-exact', moded.mode === 0o640, `mode=${moded.mode.toString(8)}`);
+  const attributed = entryOf(sealed.manifest, 'posix/sealed-xattr.txt');
+  assert(checks, 'manifest-xattr-round-trips',
+    attributed.xattrs['user.kinu.seal'] === Buffer.from('sealed').toString('base64'),
+    `xattrs=${JSON.stringify(attributed.xattrs)}`);
+
+  const hostile = sealed.manifest.entries.filter((entry) => entry.path.includes('\t'));
+  assert(checks, 'hostile-name-round-trips', hostile.length === 1 && hostile[0]?.kind === 'file',
+    `paths=${JSON.stringify(hostile.map((entry) => entry.path))}`);
+
+  const manifestBytes = (await readFile(first.manifestPath)).byteLength;
+  ctx.facts.manifestBytes = manifestBytes;
+  assert(checks, 'manifest-carries-no-payload', manifestBytes * 8 < sealed.bytes,
+    `manifestBytes=${manifestBytes} stagedBytes=${sealed.bytes}`);
+
+  assert(checks, 'no-post-cut-entry', !sealed.manifest.entries.some((entry) => entry.path === 'after-cut.txt'),
+    'after-cut.txt is absent from the sealed manifest');
+
+  /* Every write the journal shows is either described by an entry or is a
+   * path that no longer exists at the cut, whose removal the operation list
+   * carries.  A write to a file that IS still there and is not described is
+   * a lost write, which is the whole failure this cell exists to catch. */
+  const written = new Set(parseJournal(await readFile(ctx.journal))
+    .filter((record) => record.kind === 'W' && record.sequence <= first.cut)
+    .map((record) => record.path.replace(/^\//, '')));
+  const describedFiles = new Set(sealed.manifest.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.path));
+  const missed = [...written].filter((path) => !describedFiles.has(path) && existsSync(join(ctx.root, path)));
+  const retired = [...written].filter((path) => !describedFiles.has(path) && !existsSync(join(ctx.root, path)));
+  assert(checks, 'every-surviving-journaled-write-is-described', missed.length === 0,
+    `written=${written.size} described=${describedFiles.size} goneAtTheCut=${retired.length} ` +
+    `missed=${missed.slice(0, 5).join(',')}`);
+
+}
+
 /* ----------------------------------------------------------- scenarios --- */
 
 async function posixAndFence(): Promise<void> {
@@ -677,96 +780,9 @@ async function posixAndFence(): Promise<void> {
       await waitForRounds(mapping, 2, first.endedAt);
 
       const sealed = await verifyManifest(first);
-      facts.firstFence = {
-        cut: first.cut,
-        generation: first.generation,
-        entries: sealed.manifest.entries.length,
-        files: sealed.files,
-        extents: sealed.extents,
-        stagedBytes: sealed.bytes,
-        ops: sealed.manifest.metadataOps.length,
-        wholeFiles: sealed.wholeFiles,
-      };
-      assert(checks, 'fence-reply-matches-its-manifest',
-        sealed.manifest.generation === first.generation && sealed.manifest.cut === first.cut,
-        `manifest=${sealed.manifest.cut}/${sealed.manifest.generation} reply=${first.cut}/${first.generation}`);
-
-      const text = (await stagedBytes(sealed.manifest, 'posix/create.txt', 20)).toString('utf8');
-      assert(checks, 'sealed-content-verifies', text === 'hello sealed journal', `text=${text}`);
-
-      /* A hole the writer never filled stays a hole in the stage, and its runs
-       * are the only bytes the manifest names.  This is the first generation,
-       * so there are no published boundaries to resync from and the file is
-       * staged whole — which is exactly what `whole` says. */
-      const holey = stagedFile(sealed.manifest, 'posix/sparse-keep.bin');
-      const holes = holey.ranges ?? [];
-      assert(checks, 'sealed-sparse-extents',
-        holey.size === 4 * 1024 * 1024 && holey.whole === true && holes.length === 2 &&
-        holes.every((range) => range.length === 4096) &&
-        holes[0]?.offset === 0 && holes[1]?.offset === 3 * 1024 * 1024,
-        `ranges=${JSON.stringify(holes.map((range) => [range.offset, range.length]))} whole=${holey.whole}`);
-
-      const bulky = stagedFile(sealed.manifest, 'posix/big.bin');
-      const bulkyRanges = bulky.ranges ?? [];
-      assert(checks, 'sealed-extent-cap',
-        bulkyRanges.length === 3 && bulkyRanges.every((range) => range.length === MAX_EXTENT_BYTES),
-        `ranges=${bulkyRanges.map((range) => range.length).join(',')}`);
-
-      /* The symlink is described, never copied: a delta stage holds file bytes
-       * and the directories above them, and nothing else. */
-      const outside = entryOf(sealed.manifest, 'posix/outside-link');
-      const stagedLink = await Bun.file(join(sealed.manifest.stageRoot, 'posix/outside-link')).exists();
-      assert(checks, 'sealed-symlink-is-not-followed',
-        outside.kind === 'symlink' && outside.target === '/etc' && !stagedLink,
-        `kind=${outside.kind} target=${outside.target ?? 'none'} staged=${stagedLink}`);
-
-      /* A hardlink reaches the manifest once per touched name.  The rows are
-       * collapsed into one record downstream, so they have to agree on the
-       * inode and on every attribute of it. */
-      const hardlinks = sealed.manifest.entries.filter((entry) => entry.path === 'posix/link-first' || entry.path === 'posix/link-second');
-      assert(checks, 'hardlink-rows-share-one-inode',
-        hardlinks.length === 2 && hardlinks[0]?.ino === hardlinks[1]?.ino
-        && hardlinks[0]?.atimeNs === '1000000123456789'
-        && hardlinks[0]?.atimeNs === hardlinks[1]?.atimeNs
-        && hardlinks[0]?.mtimeNs === hardlinks[1]?.mtimeNs
-        && hardlinks[0]?.size === hardlinks[1]?.size,
-        `rows=${JSON.stringify(hardlinks.map((entry) => [entry.path, entry.ino, entry.atimeNs, entry.size]))}`);
-
-      /* Modes and extended attributes used to be proven by copying them into
-       * the stage.  A delta stage holds no metadata at all, so the same two
-       * facts are proven where they now live: in the manifest row. */
-      const moded = entryOf(sealed.manifest, 'posix/metadata.txt');
-      assert(checks, 'manifest-mode-is-exact', moded.mode === 0o640, `mode=${moded.mode.toString(8)}`);
-      const attributed = entryOf(sealed.manifest, 'posix/sealed-xattr.txt');
-      assert(checks, 'manifest-xattr-round-trips',
-        attributed.xattrs['user.kinu.seal'] === Buffer.from('sealed').toString('base64'),
-        `xattrs=${JSON.stringify(attributed.xattrs)}`);
-
-      const hostile = sealed.manifest.entries.filter((entry) => entry.path.includes('\t'));
-      assert(checks, 'hostile-name-round-trips', hostile.length === 1 && hostile[0]?.kind === 'file',
-        `paths=${JSON.stringify(hostile.map((entry) => entry.path))}`);
-
-      const manifestBytes = (await readFile(first.manifestPath)).byteLength;
-      facts.manifestBytes = manifestBytes;
-      assert(checks, 'manifest-carries-no-payload', manifestBytes * 8 < sealed.bytes,
-        `manifestBytes=${manifestBytes} stagedBytes=${sealed.bytes}`);
-
-      assert(checks, 'no-post-cut-entry', !sealed.manifest.entries.some((entry) => entry.path === 'after-cut.txt'),
-        'after-cut.txt is absent from the sealed manifest');
-
-      /* Every write the journal shows is either described by an entry or is a
-       * path that no longer exists at the cut, whose removal the operation list
-       * carries.  A write to a file that IS still there and is not described is
-       * a lost write, which is the whole failure this cell exists to catch. */
-      const written = new Set(parseJournal(await readFile(space.journal))
-        .filter((record) => record.kind === 'W' && record.sequence <= first.cut)
-        .map((record) => record.path.replace(/^\//, '')));
-      const describedFiles = new Set(sealed.manifest.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.path));
-      const missed = [...written].filter((path) => !describedFiles.has(path) && existsSync(join(space.root, path)));
-      const retired = [...written].filter((path) => !describedFiles.has(path) && !existsSync(join(space.root, path)));
-      assert(checks, 'every-surviving-journaled-write-is-described', missed.length === 0,
-        `written=${written.size} described=${describedFiles.size} goneAtTheCut=${retired.length} ` +
-        `missed=${missed.slice(0, 5).join(',')}`);
+      await checkSealedFiles(sealed, first, {
+        facts, mount: space.mount, journal: space.journal, root: space.root,
+      }, checks);
 
       adopt(checks, await runProbe(['stage', sealed.manifest.stageRoot]), 'stage');
 

@@ -1535,6 +1535,59 @@ function handlePtyFrame(msg, ctx) {
   }
 }
 
+/** Open one terminal session: the SAME plan derivation `exec` uses, from the
+ *  same frame. The tier the owner set, the agent home the hub computed, the
+ *  roots they consented to, and a refusal when the machine cannot honour a
+ *  sandboxed frame. A terminal is device access, so it is confined exactly as
+ *  a command is. */
+function openTerminalSession(msg, ws, id, params, ctx) {
+  assertSupervisionSupported();
+  assertCommandShellPresent();
+  if (!ctx || !ctx.sessions) throw new Error('this daemon was started without terminal support');
+  const plan = planFromFrame(msg, SESSION_COMMAND, sessionSource());
+  const opened = ctx.sessions.open({
+    session: params[0],
+    cols: params[1],
+    rows: params[2],
+    argv: plan.argv,
+    env: leaderEnvironment(plan),
+    send: (frame) => sendPtyFrame(ws, frame),
+  });
+  rpc(ws, id, { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows });
+}
+
+/** Run one command, joining a re-delivered request to its existing supervisor.
+ *  The plan is computed once, HERE: a re-delivered exec must not re-plan, or
+ *  the same request could run under two policies. */
+function execCommand(msg, ws, id, params, ctx) {
+  const cmd = parseString(params[0], 'exec expects a command string');
+  const checkpoints = ctx && ctx.checkpoints;
+  assertSupervisionSupported();
+  assertCommandShellPresent();
+  if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
+  const dir = requestDirectory(INFLIGHT_ROOT, id);
+  /** @param {unknown} error */
+  function reportExecReplyFailure(error) {
+    log('Could not report exec command result', id, error);
+  }
+  (async () => {
+    try {
+      if (fs.existsSync(dir)) {
+        await waitForFile(path.join(dir, 'state'));
+      } else {
+        const supervisor = startSupervisor(id, cmd, planFromFrame(msg, cmd));
+        await waitForSupervisorState(supervisor.dir, supervisor.child);
+        inFlight.register(id, supervisor.dir);
+      }
+      const completed = await inFlight.result(id);
+      if (!completed) throw new Error(`missing in-flight command ${id}`);
+      rpc(ws, id, completed.result);
+    } catch (err) {
+      rpc(ws, id, null, err instanceof Error ? err.message : String(err));
+    }
+  })().catch(reportExecReplyFailure);
+}
+
 function handle(msg, ws, ctx) {
   const { id, method, params } = msg;
   const checkpoints = ctx && ctx.checkpoints;
@@ -1543,52 +1596,9 @@ function handle(msg, ws, ctx) {
   if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
   try {
     if (method === PTY_OPEN_METHOD) {
-      assertSupervisionSupported();
-      assertCommandShellPresent();
-      if (!ctx || !ctx.sessions) throw new Error('this daemon was started without terminal support');
-      // The SAME derivation `exec` uses, from the same frame: the tier the
-      // owner set, the agent home the hub computed, the roots they consented
-      // to, and a refusal when the machine cannot honour a sandboxed frame.
-      // A terminal is device access, so it is confined exactly as a command is.
-      const plan = planFromFrame(msg, SESSION_COMMAND, sessionSource());
-      const opened = ctx.sessions.open({
-        session: params[0],
-        cols: params[1],
-        rows: params[2],
-        argv: plan.argv,
-        env: leaderEnvironment(plan),
-        send: (frame) => sendPtyFrame(ws, frame),
-      });
-      rpc(ws, id, { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows });
+      openTerminalSession(msg, ws, id, params, ctx);
     } else if (method === 'exec') {
-      const cmd = parseString(params[0], 'exec expects a command string');
-      assertSupervisionSupported();
-      assertCommandShellPresent();
-      if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
-      const dir = requestDirectory(INFLIGHT_ROOT, id);
-      /** @param {unknown} error */
-      function reportExecReplyFailure(error) {
-        log('Could not report exec command result', id, error);
-      }
-      (async () => {
-        try {
-          if (fs.existsSync(dir)) {
-            await waitForFile(path.join(dir, 'state'));
-          } else {
-            // Computed once, HERE: a re-delivered exec joins the existing
-            // directory above and must not re-plan, or the same request could
-            // run under two policies.
-            const supervisor = startSupervisor(id, cmd, planFromFrame(msg, cmd));
-            await waitForSupervisorState(supervisor.dir, supervisor.child);
-            inFlight.register(id, supervisor.dir);
-          }
-          const completed = await inFlight.result(id);
-          if (!completed) throw new Error(`missing in-flight command ${id}`);
-          rpc(ws, id, completed.result);
-        } catch (err) {
-          rpc(ws, id, null, err instanceof Error ? err.message : String(err));
-        }
-      })().catch(reportExecReplyFailure);
+      execCommand(msg, ws, id, params, ctx);
     } else if (method === CANCEL_METHOD || method === EXEC_ACK_METHOD) {
       const requested = params[0];
       const target = String(requested);

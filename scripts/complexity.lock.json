@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-03",
-  "files": 1952,
-  "functions": 50375,
+  "files": 1978,
+  "functions": 51350,
   "ceiling": 125,
   "line": 39,
   "inventory": [
@@ -51,7 +51,7 @@
     },
     {
       "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
-      "complexity": 66
+      "complexity": 65
     },
     {
       "key": "packages/devbox/src/candidates/merkle-pack/build.ts#buildMerklePack",
@@ -102,6 +102,10 @@
       "complexity": 51
     },
     {
+      "key": "packages/devbox/src/candidates/merkle-pack/build-v2.ts#buildMerkleDelta",
+      "complexity": 50
+    },
+    {
       "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
       "complexity": 50
     },
@@ -122,15 +126,15 @@
       "complexity": 48
     },
     {
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
+      "complexity": 47
+    },
+    {
       "key": "lean/check-traceability.mjs#tsScan",
       "complexity": 46
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
-      "complexity": 46
-    },
-    {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
       "complexity": 46
     },
     {
@@ -144,6 +148,10 @@
     {
       "key": "scripts/bench-r2-workspace.ts#main",
       "complexity": 46
+    },
+    {
+      "key": "packages/devbox/tests/journal-daemon-runtime-matrix.ts#verifyManifest",
+      "complexity": 45
     },
     {
       "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
@@ -199,10 +207,6 @@
     },
     {
       "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
-      "complexity": 39
-    },
-    {
-      "key": "packages/devbox/tests/journal-daemon-runtime-matrix.ts#posixAndFence>scenario",
       "complexity": 39
     },
     {
